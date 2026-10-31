@@ -122,9 +122,10 @@ excluded from v1, **OOS** = out of scope (deprecated or not applicable).
 | Multiple decoration values | Shipped | Bitmask parsing |
 | Decoration paint from declaring element | Shipped | CSS §3 |
 | Decoration stroke | Shipped | |
-| `text-decoration-color` | Deferred | Uses fill color |
-| `text-decoration-style` | Deferred | Solid only |
-| `text-decoration-thickness` | Deferred | Uses font metrics |
+| `text-decoration-line` | Shipped | `PropertyRegistry_tests`, `text_decoration_style_tests` |
+| `text-decoration-color` | Shipped | Replaces the declaring fill when specified |
+| `text-decoration-style` | Shipped | Solid, double, dotted, dashed, wavy |
+| `text-decoration-thickness` | Shipped | `text_decoration_thickness_tests` |
 
 #### CSS Writing Modes Level 4
 

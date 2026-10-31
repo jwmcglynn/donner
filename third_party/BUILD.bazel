@@ -26,11 +26,8 @@ exports_files(
     visibility = ["//tools:__pkg__"],
 )
 
-# Perf-sensitive wrappers for external deps that are shared between the Skia
-# rendering pipeline (built in opt via _force_opt_transition) and the rest of
-# the project.  By routing ALL usages through these wrappers the dep is always
-# in the same (opt) configuration, eliminating cross-configuration link
-# conflicts.
+# Shared dependency facades preserve a common configuration; speed settings apply only
+# to a rule's own sources and do not propagate through these dependency-only targets.
 
 donner_perf_sensitive_cc_library(
     name = "zlib",

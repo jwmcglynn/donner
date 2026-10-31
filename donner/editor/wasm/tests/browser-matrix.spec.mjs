@@ -1596,7 +1596,7 @@ test("catalog browser gate admits resource failure and warm update acceptance wi
     "welcome picker paints before asynchronously rendering real SVG thumbnails",
     "WGPU diagnostics do not block the first carousel interaction",
     "required resource failure stays readable and prevents application startup",
-    "code-only updates transfer no unchanged essential resource bodies",
+    "code-only updates transfer no unchanged essential resource bodies from a populated cache",
   ];
   for (const title of expected) assert.ok(titles.includes(title), `${title} must remain declared`);
   assert.deepEqual(

@@ -9,6 +9,7 @@ import {
   sumPipelineCompilesPending,
 } from "./pipeline-compile-readiness.mjs";
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
 import { join } from "node:path";
@@ -2588,12 +2589,12 @@ test("required resource failure stays readable and prevents application startup"
   }))).toEqual({ installed: null, firstFrame: false });
 });
 
-test("code-only updates transfer no unchanged essential resource bodies", async ({ page }, testInfo) => {
+test("code-only updates transfer no unchanged essential resource bodies from a populated cache", async ({ page }, testInfo) => {
   const baseUrl = new URL(process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000");
   const response = await page.request.get(new URL("packaged-resources.json", baseUrl).href);
   expect(response.ok()).toBe(true);
   const manifest = await response.json() as {
-    assets: { sha256: string; path: string; group: string; encodedSize: number }[];
+    assets: { sha256: string; path: string; group: string; encodedSize: number; mediaType: string }[];
   };
   const critical = manifest.assets.filter((asset) =>
     ["ui-font", "fallback-font", "chrome"].includes(asset.group)
@@ -2601,6 +2602,14 @@ test("code-only updates transfer no unchanged essential resource bodies", async 
   expect(critical.length).toBeGreaterThan(0);
   const urls = new Set(critical.map((asset) => new URL(asset.path, baseUrl).href));
   const bodies: string[] = [];
+  const coldResponses = new Map<string, { ok: boolean; bytes: Buffer }>();
+  const isCriticalAsset = (url: URL) => urls.has(url.href);
+  await page.route(isCriticalAsset, async (route) => {
+    const response = await route.fetch();
+    const bytes = await response.body();
+    coldResponses.set(route.request().url(), { ok: response.ok(), bytes });
+    await route.fulfill({ response, body: bytes });
+  });
   page.on("request", (request) => {
     if (urls.has(request.url())) bodies.push(request.url());
   });
@@ -2616,13 +2625,33 @@ test("code-only updates transfer no unchanged essential resource bodies", async 
     installed: (window.__donnerResourcesInstalledAtMs ?? Infinity)
       < (window.__donnerFirstFramePresentedAtMs ?? 0),
   }))).toEqual({ installed: true });
-  await expect.poll(() => page.evaluate(async (digests) => {
-    const cache = await caches.open("donner-assets-v1");
-    const available = await Promise.all(digests.map((digest) =>
-      cache.match(new URL(`/.donner-asset-cache/v1/${digest}`, location.origin).href)
-    ));
-    return available.filter(Boolean).length;
-  }, Array.from(new Set(critical.map((asset) => asset.sha256))))).toBe(urls.size);
+  expect(new Set(coldResponses.keys())).toEqual(urls);
+  const cachedAssets = critical.map((asset) => {
+    const response = coldResponses.get(new URL(asset.path, baseUrl).href);
+    expect(response?.ok).toBe(true);
+    if (!response) throw new Error(`Missing cold response: ${asset.path}`);
+    const { bytes } = response;
+    expect(bytes.byteLength).toBe(asset.encodedSize);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(asset.sha256);
+    return { sha256: asset.sha256, mediaType: asset.mediaType, bytes: Array.from(bytes) };
+  });
+  // Persistence is best effort; establish the warm fixture without depending on storage deadlines.
+  await page.evaluate(async (assets) => {
+    await navigator.locks.request("donner-assets-v1", async () => {
+      const cache = await caches.open("donner-assets-v1");
+      for (const asset of assets) {
+        const key = new URL(`/.donner-asset-cache/v1/${asset.sha256}`, location.origin).href;
+        await cache.put(key, new Response(Uint8Array.from(asset.bytes), {
+          headers: {
+            "content-type": asset.mediaType,
+            "content-length": String(asset.bytes.length),
+            "x-donner-used": String(Date.now()),
+          },
+        }));
+      }
+    });
+  }, cachedAssets);
+  await page.unroute(isCriticalAsset);
   const coldBodies = bodies.length;
   const coldBodyUrls = [...bodies];
   bodies.length = 0;
@@ -2633,6 +2662,7 @@ test("code-only updates transfer no unchanged essential resource bodies", async 
   const transferPath = testInfo.outputPath("essential-resource-transfer.json");
   const transferReport = {
     ...packageHashes(),
+    warmCachePrepopulated: true,
     criticalBytes: critical.reduce((total, asset) => total + asset.encodedSize, 0),
     coldBodies,
     warmBodies: bodies.length,

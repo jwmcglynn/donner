@@ -138,7 +138,11 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `font-synthesis-style` | \ref fontSynthesisStyle | `auto` |
  * | `white-space` | \ref whiteSpace | `normal` |
  * | `text-anchor` | \ref textAnchor | `start` |
- * | `text-decoration` | \ref textDecoration | `none` |
+ * | `text-decoration` | shorthand for the four longhands below | `none` |
+ * | `text-decoration-line` | \ref textDecoration | `none` |
+ * | `text-decoration-style` | \ref textDecorationStyle | `solid` |
+ * | `text-decoration-color` | \ref textDecorationColor | (declaring element's fill) |
+ * | `text-decoration-thickness` | \ref textDecorationThickness | `auto` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
  * | `inline-size` | \ref inlineSize | `0` |
  * | `text-indent` | \ref textIndent | `0px` |
@@ -421,10 +425,24 @@ public:
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
       "text-anchor", []() -> std::optional<TextAnchor> { return TextAnchor::Start; }};
 
-  /// `text-decoration` property, which determines decoration lines drawn on text.
+  /// `text-decoration-line`, which determines decoration lines drawn on text. The
+  /// `text-decoration` shorthand also sets it, and the property keeps the shorthand's name.
   /// Not inherited. Defaults to \ref TextDecoration::None.
   Property<TextDecoration> textDecoration{
       "text-decoration", []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
+
+  /// `text-decoration-style` of decorations originating on this element; not inherited.
+  Property<TextDecorationStyle> textDecorationStyle{
+      "text-decoration-style", []() { return std::optional(TextDecorationStyle::Solid); }};
+
+  /// `text-decoration-color` of decorations originating on this element; not inherited.
+  ///
+  /// SVG 2 (section 11.11) paints a decoration with the fill and stroke of the element that
+  /// declares it. An unset value (the initial state) keeps that fill; an author-specified color,
+  /// including `currentcolor`, replaces the decoration's fill paint and leaves its stroke as SVG 2
+  /// defines it.
+  Property<css::Color> textDecorationColor{
+      "text-decoration-color", []() -> std::optional<css::Color> { return std::nullopt; }};
 
   /// CSS thickness of decorations originating on this element; not inherited.
   Property<TextDecorationThickness> textDecorationThickness{
@@ -538,10 +556,10 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
         fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, textTransform,
-        overflowWrap, whiteSpace, textAnchor, textDecoration, textDecorationThickness,
-        dominantBaseline, writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing,
-        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder,
-        textIndent);
+        overflowWrap, whiteSpace, textAnchor, textDecoration, textDecorationStyle,
+        textDecorationColor, textDecorationThickness, dominantBaseline, writingMode,
+        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
+        mixBlendMode, isolation, imageRendering, paintOrder, textIndent);
   }
 
   /**

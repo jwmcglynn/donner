@@ -31,6 +31,37 @@ enum class TextDecoration : uint8_t {
   LineThrough = 1 << 2,  ///< Draw a line through the middle of the text.
 };
 
+/**
+ * The `text-decoration-style` property: how each decoration line is drawn.
+ *
+ * CSS Text Decoration 3 leaves exact proportions to the user agent. Donner derives every style
+ * from the solid band of thickness `t`: `Double` draws two bands of thickness `t` separated by a
+ * gap of `t`, `Dotted` draws round dots of diameter `t` every `2t`, `Dashed` draws dashes `3t`
+ * long every `5t`, and `Wavy` draws a band of thickness `t` that follows a wave of amplitude `t`
+ * with a half-period near `2t`.
+ *
+ * @see https://www.w3.org/TR/css-text-decor-3/#text-decoration-style-property
+ */
+enum class TextDecorationStyle : uint8_t {
+  Solid,   ///< [DEFAULT] A single line.
+  Double,  ///< Two parallel lines.
+  Dotted,  ///< A series of round dots.
+  Dashed,  ///< A series of dashes.
+  Wavy,    ///< A wavy line.
+};
+
+/// Print a CSS `text-decoration-style` keyword.
+inline std::ostream& operator<<(std::ostream& os, TextDecorationStyle style) {
+  switch (style) {
+    case TextDecorationStyle::Solid: return os << "solid";
+    case TextDecorationStyle::Double: return os << "double";
+    case TextDecorationStyle::Dotted: return os << "dotted";
+    case TextDecorationStyle::Dashed: return os << "dashed";
+    case TextDecorationStyle::Wavy: return os << "wavy";
+  }
+  UTILS_UNREACHABLE();
+}
+
 /// CSS thickness of decoration lines originating on an element.
 struct TextDecorationThickness {
   /// Select automatic font metrics, preferred underline metrics, or an explicit dimension.

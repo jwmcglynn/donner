@@ -43,15 +43,15 @@ struct ParseAllocationBudget {
 constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
     .allocationCalls = 16'500,
     .allocationBytes = 7'900'000,
-    .liveBytes = 7'500'000,
-    .peakLiveBytes = 7'500'000,
+    .liveBytes = 7'550'000,
+    .peakLiveBytes = 7'550'000,
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
-// Fixed inset clip storage and corner radii in each style slot raise bytes, not allocation calls.
+// Clip and decoration properties add fixed storage to each style slot, not allocation calls.
 constexpr ParseAllocationBudget kDonnerSplashBudget = {
     .allocationCalls = 26'500,
-    .allocationBytes = 10'800'000,
+    .allocationBytes = 10'850'000,
     .liveBytes = 9'900'000,
     .peakLiveBytes = 9'900'000,
 };

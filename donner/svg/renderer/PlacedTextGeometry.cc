@@ -6,7 +6,9 @@
 #include <limits>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/DecorationWorkBudget.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/text/TextPathWarp.h"
 
@@ -347,6 +349,153 @@ bool AppendDecorationRect(PathBuilder& builder, double left, double top, double 
   return true;
 }
 
+/// Sanity bound on dash, dot or half-wave elements in one segment, which keeps the integer element
+/// counts in range. The per-draw work allowance, charged point by point, is the effective limit.
+constexpr double kMaximumStyledDecorationElements =
+    static_cast<double>(Path::kMaximumGeometryQueryWork);
+
+/// Number of dashes, dots or half-waves a styled segment draws; 1 for solid and double lines.
+double StyledElementCount(TextDecorationStyle style, double length, double width) {
+  switch (style) {
+    case TextDecorationStyle::Solid:
+    case TextDecorationStyle::Double: return 1;
+    // Dashes three thicknesses long, starting every five.
+    case TextDecorationStyle::Dashed: return std::ceil(length / (5 * width));
+    // Round dots of diameter `width`, one every two thicknesses; at least one dot.
+    case TextDecorationStyle::Dotted: return std::max(1.0, std::floor((length / width + 1) / 2));
+    // Half-waves near 2 * width long that exactly divide the segment.
+    case TextDecorationStyle::Wavy: return std::max(1.0, std::round(length / (2 * width)));
+  }
+  UTILS_UNREACHABLE();
+}
+
+/// Points \ref AppendStyledDecoration adds for one segment, or 0 when it draws nothing. Callers
+/// size their bounded builders and charge the shared work allowance with this count.
+std::size_t StyledDecorationPoints(TextDecorationStyle style, double length, double width) {
+  if (!(length > 0 && width > 0) || !std::isfinite(length) || !std::isfinite(width)) {
+    return 0;
+  }
+  const double count = StyledElementCount(style, length, width);
+  if (!(count <= kMaximumStyledDecorationElements)) {
+    return 0;
+  }
+  constexpr std::size_t kRectPoints = 4;     // moveTo and three lineTo.
+  constexpr std::size_t kCirclePoints = 13;  // moveTo and four cubic segments.
+  const auto elements = static_cast<std::size_t>(count);
+  switch (style) {
+    case TextDecorationStyle::Solid: return kRectPoints;
+    case TextDecorationStyle::Double: return 2 * kRectPoints;
+    case TextDecorationStyle::Dashed: return elements * kRectPoints;
+    case TextDecorationStyle::Dotted: return elements * kCirclePoints;
+    // Two edges of quadratic half-waves, the start point and the joining line.
+    case TextDecorationStyle::Wavy: return 2 + 4 * elements;
+  }
+  UTILS_UNREACHABLE();
+}
+
+/// Charge `points` against the shared work allowance; exhaust it and refuse when it is too small.
+bool ChargeDecorationWork(std::size_t points, std::size_t& remainingWork) {
+  if (points > remainingWork) {
+    remainingWork = 0;
+    return false;
+  }
+  remainingWork -= points;
+  return true;
+}
+
+/// Two bands of thickness `width` with a gap of `width`: the second lies away from the text, and a
+/// line-through straddles its solid position.
+bool AppendDoubleDecoration(PathBuilder& builder, TextDecoration line, double left, double top,
+                            double right, double width) {
+  double first = top;
+  double second = top + 2 * width;
+  if (line == TextDecoration::Overline) {
+    second = top - 2 * width;
+  } else if (line == TextDecoration::LineThrough) {
+    first = top - width;
+    second = top + width;
+  }
+  const bool appendedFirst = AppendDecorationRect(builder, left, first, right, first + width);
+  const bool appendedSecond = AppendDecorationRect(builder, left, second, right, second + width);
+  return appendedFirst || appendedSecond;
+}
+
+/// `count` dashes three thicknesses long, starting every five; the last dash ends at `right`. The
+/// position is computed from the index rather than accumulated, so a period below the coordinate
+/// precision cannot stall the loop or exceed the counted points.
+bool AppendDashedDecoration(PathBuilder& builder, double left, double top, double right,
+                            double width, int count) {
+  bool appended = false;
+  for (int i = 0; i < count; ++i) {
+    const double x = left + 5 * width * i;
+    appended |= AppendDecorationRect(builder, x, top, std::min(x + 3 * width, right), top + width);
+  }
+  return appended;
+}
+
+/// `count` round dots of diameter `width`, one every two thicknesses.
+bool AppendDottedDecoration(PathBuilder& builder, double left, double top, double width,
+                            int count) {
+  const double radius = width / 2;
+  for (int i = 0; i < count; ++i) {
+    builder.addCircle({left + radius + 2 * width * i, top + radius}, radius);
+  }
+  return true;
+}
+
+/// A band of thickness `width` between two copies of the same wave, built from `halfWaves`
+/// quadratic half-waves of amplitude `width` that exactly divide [left, right], so the wave starts
+/// and ends on its center line.
+bool AppendWavyDecoration(PathBuilder& builder, double left, double top, double right, double width,
+                          int halfWaves) {
+  const double half = (right - left) / halfWaves;
+  const double lower = top + width;
+  const auto control = [&](int index, double base) {
+    // Even half-waves bulge toward -y and odd ones toward +y. A quadratic curve reaches half of
+    // its control offset, so the control sits at twice the amplitude.
+    const double direction = index % 2 == 0 ? -1.0 : 1.0;
+    return Vector2d(left + half * (index + 0.5), base + direction * 2 * width);
+  };
+  builder.moveTo({left, top});
+  for (int i = 0; i < halfWaves; ++i) {
+    builder.quadTo(control(i, top), {left + half * (i + 1), top});
+  }
+  builder.lineTo({right, lower});
+  for (int i = halfWaves - 1; i >= 0; --i) {
+    builder.quadTo(control(i, lower), {left + half * i, lower});
+  }
+  builder.closePath();
+  return true;
+}
+
+/**
+ * Append one decoration line in segment coordinates. The solid band spans x in [left, right] and y
+ * in [top, top + width]; the other styles derive their geometry from that band as documented on
+ * \ref TextDecorationStyle.
+ */
+bool AppendStyledDecoration(PathBuilder& builder, TextDecorationStyle style, TextDecoration line,
+                            double left, double top, double right, double width) {
+  const std::array<double, 4> extents = {left, right, top - 2 * width, top + 3 * width};
+  if (StyledDecorationPoints(style, right - left, width) == 0 ||
+      !std::all_of(extents.begin(), extents.end(), ValidDecorationCoordinate)) {
+    return false;
+  }
+  const int count = static_cast<int>(StyledElementCount(style, right - left, width));
+  switch (style) {
+    case TextDecorationStyle::Solid:
+      return AppendDecorationRect(builder, left, top, right, top + width);
+    case TextDecorationStyle::Double:
+      return AppendDoubleDecoration(builder, line, left, top, right, width);
+    case TextDecorationStyle::Dashed:
+      return AppendDashedDecoration(builder, left, top, right, width, count);
+    case TextDecorationStyle::Dotted:
+      return AppendDottedDecoration(builder, left, top, width, count);
+    case TextDecorationStyle::Wavy:
+      return AppendWavyDecoration(builder, left, top, right, width, count);
+  }
+  UTILS_UNREACHABLE();
+}
+
 double DecorationEnd(const TextRun& run, std::size_t index) {
   const auto& glyph = run.glyphs[index];
   const auto next =
@@ -379,6 +528,7 @@ double MultipleDecorationAdjustment(TextDecoration line, TextDecoration lines,
 }
 struct DecorationBand {
   TextDecoration line;
+  TextDecorationStyle style;
   TextDecoration lines;
   TextDecorationThickness thickness;
   std::size_t originCount;
@@ -404,7 +554,7 @@ std::pair<double, double> ResolveDecorationBand(const DecorationBand& band,
 }
 
 void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
-                           const Transform2d& deviceFromLocal,
+                           const Transform2d& deviceFromLocal, std::size_t& remainingWork,
                            const std::function<void(const Path&)>& emit) {
   for (std::size_t index = 0; index < run.glyphs.size(); ++index) {
     const auto& glyph = run.glyphs[index];
@@ -418,9 +568,16 @@ void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
           localFromSegment;
     }
     const auto [top, width] = ResolveDecorationBand(band, localFromSegment * deviceFromLocal);
-    PathBuilder builder(4);
-    if (!AppendDecorationRect(builder, 0, top, DecorationEnd(run, index) - glyph.xPosition,
-                              top + width)) {
+    const double length = DecorationEnd(run, index) - glyph.xPosition;
+    const std::size_t points = StyledDecorationPoints(band.style, length, width);
+    if (points == 0) {
+      continue;
+    }
+    if (!ChargeDecorationWork(points, remainingWork)) {
+      return;
+    }
+    PathBuilder builder(points);
+    if (!AppendStyledDecoration(builder, band.style, band.line, 0, top, length, width)) {
       continue;
     }
     const Path path = builder.build().transformed(localFromSegment);
@@ -432,8 +589,10 @@ void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
   }
 }
 
-void EmitStraightDecoration(const TextRun& run, double top, double width,
-                            const std::function<void(const Path&)>& emit) {
+/// Call `segment(left, baseline, right)` for each straight decoration segment of a run: one span
+/// from the first to the last rendered glyph when they share a baseline, else one per glyph.
+template <typename SegmentFn>
+void ForEachStraightSegment(const TextRun& run, const SegmentFn& segment) {
   const auto first = std::find_if(run.glyphs.begin(), run.glyphs.end(), DecorationGlyphVisible);
   const auto last = std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), DecorationGlyphVisible);
   if (first == run.glyphs.end() || last == run.glyphs.rend()) {
@@ -444,19 +603,35 @@ void EmitStraightDecoration(const TextRun& run, double top, double width,
         return !DecorationGlyphVisible(glyph) ||
                std::abs(glyph.yPosition - first->yPosition) < 1e-6;
       });
-  PathBuilder builder(run.glyphs.size() * 4);
   if (sameBaseline) {
-    (void)AppendDecorationRect(builder, first->xPosition, first->yPosition + top,
-                               last->xPosition + last->xAdvance, first->yPosition + top + width);
-  } else {
-    for (std::size_t index = 0; index < run.glyphs.size(); ++index) {
-      const auto& glyph = run.glyphs[index];
-      if (DecorationGlyphVisible(glyph)) {
-        (void)AppendDecorationRect(builder, glyph.xPosition, glyph.yPosition + top,
-                                   DecorationEnd(run, index), glyph.yPosition + top + width);
-      }
+    segment(first->xPosition, first->yPosition, last->xPosition + last->xAdvance);
+    return;
+  }
+  for (std::size_t index = 0; index < run.glyphs.size(); ++index) {
+    const auto& glyph = run.glyphs[index];
+    if (DecorationGlyphVisible(glyph)) {
+      segment(glyph.xPosition, glyph.yPosition, DecorationEnd(run, index));
     }
   }
+}
+
+void EmitStraightDecoration(const TextRun& run, const DecorationBand& band, double top,
+                            double width, std::size_t& remainingWork,
+                            const std::function<void(const Path&)>& emit) {
+  // Size the bounded builder for every segment before appending any of them.
+  detail::DecorationWorkBudget<std::size_t> budget(remainingWork);
+  ForEachStraightSegment(run, [&](double left, double, double right) {
+    budget.add(StyledDecorationPoints(band.style, right - left, width));
+  });
+  remainingWork = budget.remaining();
+  if (budget.exceeded() || budget.points() == 0) {
+    return;
+  }
+  PathBuilder builder(budget.points());
+  ForEachStraightSegment(run, [&](double left, double baseline, double right) {
+    (void)AppendStyledDecoration(builder, band.style, band.line, left, baseline + top, right,
+                                 width);
+  });
   if (!builder.empty()) {
     emit(builder.build());
   }
@@ -495,18 +670,14 @@ void EmitTextDecorationPaths(const TextRun& run, const components::TextDecoratio
     const double automatic = line == TextDecoration::LineThrough && metrics.strikeWidth > 0
                                  ? metrics.strikeWidth
                                  : metrics.automaticWidth;
-    const DecorationBand band{line,
-                              origin.lines,
-                              origin.thickness,
-                              originCount,
-                              automatic,
-                              metrics.underlineWidth,
-                              DecorationOffset(line, metrics)};
+    const DecorationBand band{
+        line,        origin.style, origin.lines,           origin.thickness,
+        originCount, automatic,    metrics.underlineWidth, DecorationOffset(line, metrics)};
     if (rotated) {
-      EmitRotatedDecoration(run, band, deviceFromLocal, emit);
+      EmitRotatedDecoration(run, band, deviceFromLocal, remainingWork, emit);
     } else {
       const auto [top, width] = ResolveDecorationBand(band, deviceFromLocal);
-      EmitStraightDecoration(run, top, width, emit);
+      EmitStraightDecoration(run, band, top, width, remainingWork, emit);
     }
   }
 }

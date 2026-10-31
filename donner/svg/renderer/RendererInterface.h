@@ -565,6 +565,9 @@ public:
   static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
   /// Default cap on charged outline-decode work per frame.
   static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
+  /// Default cap on text-decoration geometry work per frame, shared by every text draw so many
+  /// decorated elements cannot each spend a full per-draw allowance.
+  static constexpr std::size_t kMaximumDecorationWork = 4 * 1024 * 1024;
 
   /// Aggregate limits or conservative charges for text work and storage.
   struct Cost {
@@ -595,7 +598,24 @@ public:
     bytes_ = 0;
     decodeWork_ = 0;
     glyphOccurrences_ = 0;
+    decorationWork_ = 0;
     rejected_ = false;
+  }
+
+  /// Decoration geometry work still available in this frame. Exhausting it drops later
+  /// decorations without rejecting the frame's text.
+  [[nodiscard]] std::size_t remainingDecorationWork() const {
+    return decorationWork_ >= decorationWorkLimit_ ? 0 : decorationWorkLimit_ - decorationWork_;
+  }
+
+  /// Charges decoration geometry work a text draw consumed, saturating at the frame limit.
+  void consumeDecorationWork(std::size_t work) {
+    decorationWork_ += std::min(work, remainingDecorationWork());
+  }
+
+  /// Tightens the decoration work cap for a test without raising it.
+  void setDecorationWorkLimitForTesting(std::size_t maximum) {
+    decorationWorkLimit_ = std::min(decorationWorkLimit_, maximum);
   }
 
   /// Charges bounded text work and storage, or latches rejection when a limit is exceeded.
@@ -701,6 +721,8 @@ private:
   std::size_t decodeWork_ = 0;
   std::size_t glyphOccurrences_ = 0;
   std::size_t glyphOccurrenceLimit_ = 0;
+  std::size_t decorationWork_ = 0;
+  std::size_t decorationWorkLimit_ = kMaximumDecorationWork;
   bool rejected_ = false;
 };
 

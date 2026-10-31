@@ -2959,7 +2959,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     tinyStroke.lineJoin = toTinyLineJoin(params.strokeParams.lineJoin);
   }
 
-  std::size_t decorationWorkRemaining = Path::kMaximumGeometryQueryWork;
+  // Each draw spends at most the per-draw geometry allowance, and only what the frame has left.
+  std::size_t decorationWorkRemaining = std::min(
+      Path::kMaximumGeometryQueryWork, textMaterializationBudget_->remainingDecorationWork());
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
 
@@ -3163,9 +3165,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
               // The decoration's own fill/stroke order is the declaring element's `paint-order`.
               PaintFillAndStroke(decoration.paintOrder, fillDecoration, strokeDecoration);
             };
+            const std::size_t workBefore = decorationWorkRemaining;
             EmitTextDecorationPaths(run, decoration, emittedLines, origins.size(), spanFontSizePx,
                                     textEngine, deviceFromLocalTransform_, decorationWorkRemaining,
                                     drawDecoPath);
+            textMaterializationBudget_->consumeDecorationWork(workBefore - decorationWorkRemaining);
           });
     };
 
