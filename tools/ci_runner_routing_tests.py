@@ -226,7 +226,8 @@ class CiRunnerRoutingTest(unittest.TestCase):
         turnstile = self._job_body("linux-self-hosted-turnstile")
         self_hosted = self._job_body("linux-self-hosted")
 
-        self.assertIn("outputs.use_self_hosted_linux != 'true'", hosted)
+        admission = hosted.split("    steps:\n", 1)[0]
+        self.assertIn("outputs.use_self_hosted_linux != 'true'", admission)
         self.assertIn("outputs.use_self_hosted_linux == 'true'", turnstile)
         self.assertIn("outputs.use_self_hosted_linux == 'true'", self_hosted)
 

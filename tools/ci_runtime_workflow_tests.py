@@ -207,6 +207,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertLess(job.index("name: Test (Geode editor lane)"),
                         job.index("name: Diagnose Chromium context lifecycle"))
 
+    def test_all_arm64_linux_test_phases_retain_failure_artifacts(self):
+        job = self._job_body("linux-self-hosted")
+        upload = self._step_body(job, "Upload Bazel test failure artifacts")
+        condition = next(line.strip() for line in upload.splitlines() if line.strip().startswith("if:"))
+        self.assertTrue(condition.startswith("if: failure() && "))
+        for step_id in ("test", "wgpu_resvg_reference", "deterministic_soak_probe", "local_xvfb"):
+            with self.subTest(step=step_id):
+                self.assertIn("steps.%s.outcome == 'failure'" % step_id, condition)
+        self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", upload)
+
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
         for lane in ("macos", "macos-browser", "macos-self-hosted", "macos-metal"):
             with self.subTest(lane=lane):
@@ -795,6 +805,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("github.event_name == 'push'", admission)
         self.assertIn("github.ref != 'refs/heads/main'", admission)
         consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
+        self.assertEqual(consumer.split("\n\n", 1)[0],
+                         self._step_body(self._job_body("linux-self-hosted"),
+                                         "Build and test CMake consumer").split("\n\n", 1)[0])
         self.assertIn("python3 tools/cmake/gen_cmakelists.py --check", consumer)
         self.assertIn("cmake -S examples/cmake_consumer -B build -G Ninja", consumer)
         self.assertIn("cmake --build build --target donner_cmake_consumer", consumer)
@@ -835,14 +848,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("\n  %s:\n" % redundant, self.main)
         self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
 
-    def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
+    def test_native_window_gate_runs_on_arm64_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
-        local = hosted
         remote = self._job_body("linux-self-hosted")
-        self.assertNotIn("use_self_hosted_linux", hosted.split("steps:", 1)[0])
-        self.assertIn("use_self_hosted_linux == 'true'", self._step_body(local, "Test local Xvfb targets"))
+        local = remote
+        self.assertIn("use_self_hosted_linux != 'true'", hosted.split("steps:", 1)[0])
+        self.assertIn("use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
+        self.assertNotIn("Test local Xvfb targets", hosted)
         self.assertIn("xvfb xauth", hosted)
-        self.assertIn("xvfb xauth", local)
         self.assertIn("-local-gpu-isolated", remote)
         target = self.editor_tests_build.split(
             'name = "editor_window_vulkan_surface_tests",', 1
@@ -890,6 +903,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     ambient_bash.chmod(0o755)
                     args_file = root / "args.txt"
                     env = {**os.environ, "BAZEL_ARGS": str(args_file),
+                           "BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS":
+                               self._variables(local)["BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS"],
                            "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
                     result = self._run_script(script, [], cwd=root, env=env)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
