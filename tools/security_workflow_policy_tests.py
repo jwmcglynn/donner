@@ -72,8 +72,6 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos-metal", "Configure BuildBuddy remote cache", None,
@@ -105,6 +103,7 @@ REVIEWED_WORKFLOW_CALLS = {
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
     (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
+    (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "macos-metal"): "use_self_hosted_macos",
@@ -120,6 +119,9 @@ SELF_HOSTED_STATUS_PREFIX = {
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
 SELF_HOSTED_NARROWING = {
+    (".github/workflows/main.yml", "macos-browser"):
+        " && (needs.determine-targets.outputs.fallback == 'true' || "
+        "needs.determine-targets.outputs.browser_affected == 'true')",
     (".github/workflows/main.yml", "macos-vm-qualification"):
         " && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
     (".github/workflows/main.yml", "macos-hosted-parity"):
@@ -300,7 +302,7 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/github_hosted_nightly.yml", "build"),
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
-    # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
+    # Native desktop browser partition for trusted maintainer PRs.
     (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/main.yml", "macos-self-hosted"),
     (".github/workflows/main.yml", "macos-metal"),
@@ -312,7 +314,8 @@ BUILDBUDDY_JOBS = {
 # The self-hosted lanes on BuildBuddy: the macOS fast lane and its hosted-parity subset. They run
 # only for trusted maintainer pull requests, so each holds the read-write key and no Renovate
 # reader, and its last step removes the key from the persistent runner whatever the job's outcome.
-SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-self-hosted"),
+SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-browser"),
+                               (".github/workflows/main.yml", "macos-self-hosted"),
                                (".github/workflows/main.yml", "macos-metal"),
                                (".github/workflows/main.yml", "macos-hosted-parity")}
 BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
@@ -2288,7 +2291,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(save, _steps(job)[-1], where)
                 # tools/ci_runner_loss_rerun.py treats a step of this name as post-job cleanup.
                 self.assertEqual("Save Bazel action cache", _step_key(save, "name", 8), where)
-        self.assertEqual(4, restoring)
+        self.assertEqual(3, restoring)
 
     def test_only_main_pushes_save_actions_caches(self):
         self.assertEqual([], _cache_write_violations(self.supply_chain_files))
@@ -4539,28 +4542,19 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIsNone(problem)
                 self.assertEqual(expected, sets)
 
-    def test_hosted_browser_subset_stays_hosted_and_never_writes_caches(self):
-        # The trusted-PR hosted macOS browser subset reads the self-hosted routing output only to
-        # run when the self-hosted macOS lane replaced the hosted one. It must stay on the hosted
-        # image, and as a pull-request-only job it restores main's Actions caches without saving
-        # any. Its BuildBuddy steps are the reviewed `macos` ones, checked by the BuildBuddy
-        # policy above; no other step reads a secret.
+    def test_native_browser_subset_is_trusted_and_removes_credentials(self):
         main = ".github/workflows/main.yml"
         workflow = _workflows(self.supply_chain_files)[main]
         job = _jobs(workflow)["macos-browser"]
-        self.assertEqual("xcode-27", _job_key(job, "runs-on"))
-        self.assertNotIn((main, "macos-browser"), SELF_HOSTED_JOBS)
-        condition = _job_key(job, "if")
-        self.assertIn("github.event_name == 'pull_request'", condition)
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
-        self.assertIn("cache-save: false", job)
-        self.assertNotRegex(job, r"uses: actions/cache(?:/save)?@")
+        self.assertEqual("[self-hosted, macOS, ARM64]", _job_key(job, "runs-on"))
+        self.assertEqual("use_self_hosted_macos", SELF_HOSTED_JOBS[(main, "macos-browser")])
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", _job_key(job, "if"))
+        for forbidden in ("actions/cache", "cache-save:", "BUILDBUDDY_API_KEY_READONLY"):
+            self.assertNotIn(forbidden, job)
         readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
                    if _secret_reads(step)}
-        self.assertEqual(readers, {
-            "Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"},
-            "Configure BuildBuddy read-only cache": {"BUILDBUDDY_API_KEY_READONLY"},
-        })
+        self.assertEqual(readers, {"Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"}})
+        self.assertTrue(job.rstrip("\n").endswith(BUILDBUDDY_CLEANUP.rstrip("\n")))
         self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())
 
     def test_self_hosted_policy_rejects_ungated_or_mutable_runner_selection(self):

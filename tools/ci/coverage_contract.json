@@ -215,6 +215,16 @@
           "when": "browser_affected",
           "counterparts": [
             {
+              "job": "macos-self-hosted",
+              "step": "browser_preflight"
+            }
+          ]
+        },
+        "desktop-browser": {
+          "when": "browser_affected",
+          "description": "Desktop-session browser targets run once on the native macOS runner.",
+          "counterparts": [
+            {
               "job": "macos-browser",
               "step": "browser_preflight"
             }
@@ -224,7 +234,17 @@
       "Test (browser targets)": {
         "browser": {
           "when": "browser_affected",
-          "description": "Browser tests, run on the hosted image by the macos-browser subset.",
+          "description": "Headless browser targets, excluding desktop-session cases, run once in the macOS VM.",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "browser_test"
+            }
+          ]
+        },
+        "desktop-browser": {
+          "when": "browser_affected",
+          "description": "Desktop-session browser targets run once on the native macOS runner.",
           "counterparts": [
             {
               "job": "macos-browser",

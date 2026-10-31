@@ -72,6 +72,18 @@ During the per-span layout loop, spans with `pathData` set enter the text-on-pat
    encounters any `<textPath>` element, even if it's not a valid direct child of `<text>`.
    Content inside a nested (invalid) textPath is marked `textPathFailed` and hidden.
 
+### Character endpoints
+
+Character endpoint queries accumulate a path cluster's signed advance vectors from its first
+alignment point. The direction includes the writing mode, authored rotation, and path rotation;
+zero-advance marks retain the cluster endpoint. Both aligned and stretched text use the placed
+advance direction, including when the outline follows a bend.
+
+`//donner/svg/tests:svg_tests` and its `_text_full` and `_geode` variants cover vertical and
+sloped paths, authored rotation, upright CJK with combining marks, and a contour-corner control
+for `getEndPositionOfChar`. The controls also retain unrotated flat-text behavior and authored
+textLength checks.
+
 ### Error Handling
 
 - **Missing/invalid href**: Span marked `textPathFailed`, glyphs hidden entirely.
@@ -106,9 +118,9 @@ Any golden or tolerance change requires explicit human approval after visual ret
 |------|--------|
 | 007 | `method=stretch` not implemented |
 | 008 | `spacing=auto` not implemented |
-| 012 | Bug: Kerning on textPath |
+| 012 | Reference disagreement: SVG 2 geometric endpoint continuation |
 | 016 | Link to `<rect>` (SVG 2 feature) |
-| 021 | `writing-mode=tb` on textPath (deferred) |
+| 021 | Vertical path frames supported; upright CJK origin parity remains |
 | 030 | Vertical text + circular path (deferred) |
 | 033 | UB: baseline-shift + rotate interaction |
 | 040 | Filter on textPath not implemented |
@@ -130,8 +142,11 @@ Any golden or tolerance change requires explicit human approval after visual ret
 ## Future Work
 
 ### Open Issues
-- [ ] **012**: Kerning on textPath — mixed textPath/tspan/textPath continuation has
-  positioning errors in the flat text between path segments.
+- [x] **012**: Mixed textPath/tspan/textPath continuation follows the SVG 2 text layout
+  algorithm: unanchored text after each path starts at that path's geometric endpoint. The
+  historical reference instead continues from the occupied text extent, so it remains skipped.
+  Independent renderer controls compare both continuations against explicit endpoint positions in
+  `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and `_text_full` variants.
 
 ### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.
@@ -139,4 +154,9 @@ Any golden or tolerance change requires explicit human approval after visual ret
 - [ ] Support `side=right` (SVG 2) for text on the opposite side of the path.
 - [ ] Support `path` attribute (SVG 2) for inline path data.
 - [ ] Handle text across discontinuous subpaths correctly.
-- [ ] Support `writing-mode=tb` (vertical text) on textPath.
+- [x] Map vertical inline advances, glyph offsets, rotation, and textLength into the path frame.
+  `//donner/svg/renderer/tests:text_engine_scripted_tests` covers upright glyph offsets, cluster
+  rotation, and textLength. `//donner/svg/renderer/tests:text_path_convergence_tests` and its
+  `_geode` and `_text_full` variants compare the straight-path vertical layout and textLength
+  against ordinary vertical text, with visible-ink negative controls.
+- [ ] Resolve upright CJK glyph-origin differences between text backends and the reference.
