@@ -83,6 +83,27 @@ TEST(GeomTest, RectFromLtrbRejectsInvalidBounds) {
   EXPECT_THAT(tiny_skia::Rect::fromLTRB(1.0f, 2.0f, 1.0f, 1.0f), testing::Eq(std::nullopt));
 }
 
+TEST(GeomTest, RectRoundingRejectsBoundsWiderThanAnIntRect) {
+  // The saturated coordinates fit int32 individually, but their difference does not.
+  constexpr float kExtreme = 2147483520.0f;
+  const auto rect = tiny_skia::Rect::fromLTRB(-kExtreme, -kExtreme, kExtreme, kExtreme);
+  ASSERT_THAT(rect, testing::Ne(std::nullopt));
+  EXPECT_THAT(rect->roundOut(), testing::Eq(std::nullopt));
+  EXPECT_THAT(rect->round(), testing::Eq(std::nullopt));
+}
+
+TEST(GeomTest, RectRoundingPreservesRepresentableBounds) {
+  const auto rect = tiny_skia::Rect::fromLTRB(3.0f, 4.0f, 5.0f, 6.0f);
+  ASSERT_THAT(rect, testing::Ne(std::nullopt));
+  for (const auto rounded : {rect->roundOut(), rect->round()}) {
+    ASSERT_THAT(rounded, testing::Ne(std::nullopt));
+    EXPECT_EQ(rounded->x(), 3);
+    EXPECT_EQ(rounded->y(), 4);
+    EXPECT_EQ(rounded->width(), 2u);
+    EXPECT_EQ(rounded->height(), 2u);
+  }
+}
+
 TEST(GeomTest, PathModuleWrappersRouteToUnderlyingImplementations) {
   const auto rectDirect = tiny_skia::Rect::fromXYWH(1.0f, 2.0f, 3.0f, 4.0f);
   const auto rectWrapped = tiny_skia::pathRectRs::fromXYWH(1.0f, 2.0f, 3.0f, 4.0f);
