@@ -3691,9 +3691,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "      - name: Prepare self-hosted macOS toolchain\n", 1),
                 "does not pair one writer with no reader"),
             "Bazel before the self-hosted cache": (main, files[main].replace(
-                "      # build fails here rather than building with another Xcode.\n"
+                "      # an unexpected build fails here rather than selecting another toolchain.\n"
                 "      - name: Select pinned Xcode\n",
-                "      # build fails here rather than building with another Xcode.\n"
+                "      # an unexpected build fails here rather than selecting another toolchain.\n"
                 "      - name: Early build\n        run: bazelisk --nohome_rc build //donner/base\n\n"
                 "      - name: Select pinned Xcode\n", 1),
                 "runs Bazel before configuring BuildBuddy"),

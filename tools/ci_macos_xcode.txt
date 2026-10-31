@@ -1,13 +1,6 @@
-# The Xcode every macOS CI job builds with: "<version> <build>".
-#
-# Objective-C compile, archive and link actions carry the selected Xcode's
-# version and build in their environment, but C++ compiles reach Xcode's
-# compiler and SDK through the host, so their keys need not change with it.
-# The macOS lanes therefore share one remote cache partition named after this
-# Xcode, and every macOS job must build with it. The GitHub-hosted xcode-27
-# image ships this version and build, and the self-hosted macOS runner must
-# have the same one; where each installs it does not matter.
-# tools/ci_select_macos_xcode.sh reads this line and fails any macOS job whose
-# runner does not have exactly this Xcode, so update it only to a version and
-# build the hosted image ships, together with the self-hosted runner.
+# Approved Xcode version/build pairs, in preference order (at most two).
+# Only an absent preferred version permits fallback. Discovery errors, ambiguous
+# installations and build mismatches fail closed. Each selected tuple has its own
+# action/test identity and remote cache partition.
 27.1 27A9275
+27.2 27B52
