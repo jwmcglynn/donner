@@ -1,3 +1,4 @@
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 donner_cc_library(
@@ -93,6 +94,17 @@ donner_cc_library(
         "//donner/svg/renderer:text_full_enabled": [":text_backend_full"],
         "//conditions:default": [],
     }),
+)
+
+configured_dependency_audit_test(
+    name = "basic_text_engine_dependency_audit_test",
+    forbidden = [
+        ":text_backend_full",
+        "@harfbuzz//:harfbuzz",
+    ],
+    required = [":text_backend_simple"],
+    target = ":text_engine",
+    text_configuration = "basic",
 )
 
 # text_backend_full is only pulled in from text_engine via a select() on
