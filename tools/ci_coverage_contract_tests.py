@@ -40,7 +40,8 @@ _COMPLETE = {
         "build": _ran(), "test": _ran(), "local_xvfb": _ran(),
         "deterministic_soak_probe": _ran(1), "cmake_consumer": _ran()}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
-        "build": _ran(), "test": _ran(), "geode_test": _ran(6)}),
+        "build": _ran(), "test": _ran(), "geode_test": _ran(6),
+        "browser_preflight": _ran(), "browser_test": _ran(2)}),
     "macos-metal": _receipt("macos-metal", {
         "metal_profile": _ran(), "metal_preflight": _ran(), "metal_native": _ran(10)}),
     "macos-browser": _receipt("macos-browser", {
@@ -134,6 +135,16 @@ class CoverageContractTest(unittest.TestCase):
                 problems, _ = self._check(receipts)
                 self.assertEqual(1, len(problems), problems)
                 self.assertIn("linux-self-hosted / " + step, problems[0])
+
+    def test_each_browser_partition_requires_its_own_receipt(self):
+        for job in ("macos-self-hosted", "macos-browser"):
+            for step in ("browser_preflight", "browser_test"):
+                with self.subTest(job=job, step=step):
+                    receipts = copy.deepcopy(_COMPLETE)
+                    receipts[job]["steps"][step] = _SKIPPED
+                    problems, _ = self._check(receipts)
+                    self.assertEqual(1, len(problems), problems)
+                    self.assertIn(job + " / " + step, problems[0])
 
     def test_removing_a_parity_partition_fails(self):
         for step in ("test", "geode_test"):
