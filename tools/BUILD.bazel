@@ -1097,7 +1097,12 @@ py_test(
     name = "ci_workflow_targets_tests",
     size = "small",
     srcs = ["ci_workflow_targets_tests.py"],
-    data = ["//:github_action_definitions"],
+    data = [
+        "//:github_action_definitions",
+        "//donner/gpu/metal/tests:BUILD.bazel",
+        "//tools/ci:BUILD.bazel",
+        "//tools/ci:coverage_contract.json",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 
