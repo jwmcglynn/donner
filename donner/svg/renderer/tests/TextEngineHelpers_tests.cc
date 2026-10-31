@@ -1392,7 +1392,7 @@ TEST_F(TextEngineLayoutTest, VerticalTextPathKeepsMixedOrientationContract) {
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine_->layout(text, params);
 
-  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphRotateDegreesIs(DoubleEq(90.0))))));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphRotateDegreesIs(DoubleEq(0.0))))));
 }
 
 TEST_F(TextEngineLayoutTest, OrientationTransitionResetsCrossSpanKerning) {

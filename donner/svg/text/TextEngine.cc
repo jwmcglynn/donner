@@ -1216,8 +1216,15 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
           {runIndex, gi, gi + 1, charIndex, state.advance, defaultY + state.dy});
     }
     TextPathCluster& cluster = state.clusters.back();
-    glyph.xPosition = state.advance - cluster.pathOffset + (vertical ? 0.0 : glyph.xPosition);
-    glyph.yPosition = vertical ? 0.0 : glyph.yPosition;
+    if (vertical) {
+      const double localX = glyph.xPosition;
+      glyph.xPosition = state.advance - cluster.pathOffset + glyph.yPosition;
+      glyph.yPosition = -localX;
+      glyph.rotateDegrees -= 90.0;
+      glyph.xAdvance = glyph.yAdvance;
+    } else {
+      glyph.xPosition += state.advance - cluster.pathOffset;
+    }
     state.advance += glyph.xAdvance;
     cluster.glyphEnd = gi + 1;
     cluster.advance = state.advance - cluster.pathOffset;
@@ -1346,7 +1353,7 @@ Path::PointOnPath SampleTextPathCluster(const Path::MeasuredPath& path, double s
 /// Samples each cluster and places all of its glyphs with their shaped offsets.
 void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, bool closed,
                            std::vector<TextRun>& runs, const std::vector<TextPathCluster>& clusters,
-                           components::TextPathMethod method) {
+                           components::TextPathMethod method, bool vertical) {
   for (const TextPathCluster& cluster : clusters) {
     const double halfAdvance = cluster.advance * 0.5;
     const auto sample = SampleTextPathCluster(path, startOffset, cluster.pathOffset + halfAdvance,
@@ -1359,13 +1366,15 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
                                 std::cos(sample.angle) * cluster.baselineOffset);
       for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
         TextGlyph& glyph = run.glyphs[gi];
-        const double angle = sample.angle + glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+        const double offsetRotation =
+            glyph.rotateDegrees + (vertical && !glyph.sideways ? 90.0 : 0.0);
+        const double angle = sample.angle + offsetRotation * MathConstants<double>::kDegToRad;
         const double localX = glyph.xPosition;
         const double localY = glyph.yPosition;
         if (method == components::TextPathMethod::Stretch) {
           // Turn the shaped offset by the authored rotate in path-local space, matching align's
           // placement; the warp then rotates only the outline about this origin.
-          const double localRotate = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+          const double localRotate = offsetRotation * MathConstants<double>::kDegToRad;
           const double pathLocalX = localX * std::cos(localRotate) - localY * std::sin(localRotate);
           const double pathLocalY = localX * std::sin(localRotate) + localY * std::cos(localRotate);
           glyph.textPathOrigin = cluster.pathOffset + pathLocalX;
@@ -1402,7 +1411,7 @@ void placeTextPath(const components::ComputedTextComponent& text, const TextLayo
   AnchorTextPathClusters(text, path.clusters);
   const auto& firstSpan = text.spans[path.firstRun];
   PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
-                        path.clusters, firstSpan.textPathMethod);
+                        path.clusters, firstSpan.textPathMethod, isVertical(params.writingMode));
   if (firstSpan.textPathMethod == components::TextPathMethod::Stretch) {
     std::vector<double> segmentEnds = path.measuredPath.segmentEndDistances();
     auto mapping = std::make_shared<StretchedTextPath>(StretchedTextPath{
@@ -2038,7 +2047,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         auto& glyph = run.glyphs[glyphIndex];
         glyph.xPosition *= scope.scale;
         glyph.xAdvance *= scope.scale;
-        glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+        StretchGlyphAlongInlineAxis(glyph, scope.scale, vertical);
       }
     }
   }
@@ -5540,6 +5549,7 @@ private:
     if (!groupX && !groupY) {
       if (glyphIndex == 0 && crossKern.applied) {
         state.penY += crossKern.value;
+        state.pathBoundaryKern = crossKern.value;
       } else if (glyphIndex != 0) {
         state.penY += shapedGlyph.yKern;
       }
@@ -5624,6 +5634,11 @@ private:
     glyph.font = prepared.face(glyphIndex);
     orientVerticalGlyph(state, shapedGlyph, codepoint, charIndex, glyph);
     glyph.xPosition += state.verticalBaselineOffset;
+    if (state.span->pathSpline) {
+      glyph.xPosition -= state.penX;
+      glyph.yPosition -= state.penY;
+      glyph.xKern = shapedGlyph.yKern;
+    }
     state.run.glyphs.push_back(glyph);
     advanceVerticalPen(state, prepared, glyphIndex, codepoint, glyph);
   }

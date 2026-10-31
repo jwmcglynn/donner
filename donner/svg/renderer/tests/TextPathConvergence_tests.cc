@@ -17,16 +17,19 @@ void ComparePathScene(std::string_view actual, std::string_view expected,
   auto document = instantiateSubtree(actual, parser::SVGParser::Options(), Vector2i(220, 200));
   auto control = instantiateSubtree(expected, parser::SVGParser::Options(), Vector2i(220, 200));
   editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
-                                      RenderDocumentWithActiveBackend(control), checkpoint,
-                                      editor::tests::PixelmatchIdentityParams());
+                                       RenderDocumentWithActiveBackend(control), checkpoint,
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextPathConvergence, VerticalStraightPathMatchesOrdinaryVerticalText) {
-  ComparePathScene(
-      "<path id='p' d='M80 30V190'/><text font-size='24' writing-mode='vertical-rl'>"
-      "<textPath href='#p'>AV</textPath></text>",
-      "<text x='80' y='30' font-size='24' writing-mode='vertical-rl'>AV</text>",
-      "vertical_path_frame");
+  for (std::string_view attributes : {"", "textLength='80' lengthAdjust='spacingAndGlyphs'"}) {
+    SCOPED_TRACE(attributes);
+    const std::string style =
+        " font-size='24' writing-mode='vertical-rl' " + std::string(attributes);
+    ComparePathScene(
+        "<path id='p' d='M80 30V190'/><text" + style + "><textPath href='#p'>AV</textPath></text>",
+        "<text x='80' y='30'" + style + ">AV</text>", "vertical_path_frame");
+  }
 }
 
 TEST(TextPathConvergence, MixedChildrenContinueAtEachGeometricEndpoint) {

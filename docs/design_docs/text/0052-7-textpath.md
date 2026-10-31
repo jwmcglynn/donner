@@ -106,9 +106,9 @@ Any golden or tolerance change requires explicit human approval after visual ret
 |------|--------|
 | 007 | `method=stretch` not implemented |
 | 008 | `spacing=auto` not implemented |
-| 012 | Bug: Kerning on textPath |
+| 012 | Reference disagreement: SVG 2 geometric endpoint continuation |
 | 016 | Link to `<rect>` (SVG 2 feature) |
-| 021 | `writing-mode=tb` on textPath (deferred) |
+| 021 | Vertical path frames supported; upright CJK origin parity remains |
 | 030 | Vertical text + circular path (deferred) |
 | 033 | UB: baseline-shift + rotate interaction |
 | 040 | Filter on textPath not implemented |
@@ -130,8 +130,10 @@ Any golden or tolerance change requires explicit human approval after visual ret
 ## Future Work
 
 ### Open Issues
-- [ ] **012**: Kerning on textPath — mixed textPath/tspan/textPath continuation has
-  positioning errors in the flat text between path segments.
+- [x] **012**: Mixed textPath/tspan/textPath continuation follows the SVG 2 text layout
+  algorithm: unanchored text after each path starts at that path's geometric endpoint. The
+  historical reference instead continues from the occupied text extent, so it remains skipped.
+  Independent renderer controls compare both continuations against explicit endpoint positions.
 
 ### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.
@@ -139,4 +141,6 @@ Any golden or tolerance change requires explicit human approval after visual ret
 - [ ] Support `side=right` (SVG 2) for text on the opposite side of the path.
 - [ ] Support `path` attribute (SVG 2) for inline path data.
 - [ ] Handle text across discontinuous subpaths correctly.
-- [ ] Support `writing-mode=tb` (vertical text) on textPath.
+- [x] Map vertical inline advances, glyph offsets, rotation, and textLength into the path frame.
+  Independent geometry and renderer controls preserve the straight-path vertical layout.
+- [ ] Resolve upright CJK glyph-origin differences between text backends and the reference.

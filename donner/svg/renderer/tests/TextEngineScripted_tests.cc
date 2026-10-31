@@ -2115,20 +2115,42 @@ TEST(TextEngineScriptedTest, VerticalTextPathPreservesInlineAdvancesAndGlyphOffs
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
   components::ComputedTextComponent text;
   auto span = MakeSpan("\xe6\x97\xa5\xe6\x9c\xac");
-  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0))
-                        .lineTo(Vector2d(0.0, 100.0)).build();
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
   span.textPathSourceEntity = registry.create();
   text.spans.push_back(std::move(span));
   TextLayoutParams params = MakeTextParams(20.0);
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine.layout(text, params);
-  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
-      AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)),
-            GlyphYPositionIs(DoubleNear(3.0, 1e-9)),
-            GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))),
-      AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)),
-            GlyphYPositionIs(DoubleNear(17.0, 1e-9)),
-            GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(3.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))),
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(17.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalTextPathLengthScalesInlineOffsetsWithoutScalingNormalOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xe6\x97\xa5\xe6\x9c\xac");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.textLength = Lengthd(52.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(6.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))),
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(34.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
