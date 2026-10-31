@@ -14,6 +14,7 @@ execution configuration.
 
 from pathlib import Path
 import os
+import plistlib
 import re
 import shlex
 import subprocess
@@ -675,7 +676,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def _select(self, discovered=("{root}/Xcode-any-name.app/Contents/Developer",),
                 reported="Xcode {version}\nBuild version {build}", locator_status=0,
-                missing_xcrun=False, args=(), runner="github-hosted"):
+                missing_xcrun=False, args=(), runner="github-hosted", registered=None,
+                registration_status=0, post_locator_status=None, registration_error=""):
         """Runs the selection script with a fake LaunchServices probe and xcodebuild.
 
         `discovered` lists the developer directories the probe reports for the pinned version;
@@ -695,9 +697,21 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                                   "printf '%%s' '%s'\n" % fill(reported), encoding="utf-8")
             xcodebuild.chmod(0o755)
             locator = root / "xcode-locator"
-            locator.write_text("#!/bin/sh\nprintf '%s'\nexit %d\n" % (
-                "".join(fill(line) + "\\n" for line in discovered), locator_status or 0),
-                encoding="utf-8")
+            marker = root / "registered"
+            before = "".join(fill(line) + "\\n" for line in discovered)
+            after = "".join(fill(line) + "\\n" for line in (
+                discovered if registered is None else registered))
+            locator.write_text(
+                '#!/bin/sh\nif [ "${2:-}" = --register-installed ]; then\n'
+                '  [ "$3" = %s ] || exit 41\n'
+                '  touch %s\n  printf "%%s" %s >&2\n  exit %d\nfi\n'
+                'if [ -f %s ]; then\n  printf %s\n  exit %d\nfi\n'
+                'printf %s\nexit %d\n' % (
+                    shlex.quote(build), shlex.quote(str(marker)),
+                    shlex.quote(fill(registration_error)), registration_status,
+                    shlex.quote(str(marker)), shlex.quote(after),
+                    locator_status or 0 if post_locator_status is None else post_locator_status,
+                    shlex.quote(before), locator_status or 0), encoding="utf-8")
             locator.chmod(0o755)
             xcrun = root / "xcrun"
             if not missing_xcrun:
@@ -764,6 +778,97 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 code, _, _, log, _, _, root = self._select(runner="self-hosted", **arguments)
                 self.assertEqual(1, code, log)
                 self.assertNotIn(str(root), log)
+
+    def test_select_registers_missing_xcode_then_uses_authoritative_lookup(self):
+        code, env, output, log, version, build, root = self._select(
+            discovered=(), registered=("{root}/Installed.app/Contents/Developer",))
+        self.assertEqual(0, code, log)
+        self.assertIn("DEVELOPER_DIR=%s/Installed.app/Contents/Developer" % root, env)
+        self.assertEqual(output, "cache_partition=macos-ARM64-xcode-%s-%s\n" % (version, build))
+        # Healthy discovery and ambiguity never trigger registration.
+        self.assertEqual(0, self._select(registration_status=3)[0])
+        code, env, output, log, *_ = self._select(
+            discovered=("{root}/A.app/Contents/Developer", "{root}/B.app/Contents/Developer"),
+            registration_status=3)
+        self.assertIn("is ambiguous", log)
+        self.assertEqual((1, "", ""), (code, env, output))
+
+    def test_registration_failures_export_no_selection_or_private_diagnostics(self):
+        cases = [
+            dict(registration_status=3, registration_error="cannot access {root}/private.app"),
+            dict(registration_status=142),
+            dict(registered=("{root}/A.app/Contents/Developer",), post_locator_status=2),
+            dict(registered=("{root}/A.app/Contents/Developer",), reported="Xcode {version}\nBuild version 99Z999"),
+            dict(registered=("{root}/A.app/Contents/Developer", "{root}/B.app/Contents/Developer")),
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                code, env, output, log, _, _, root = self._select(
+                    discovered=(), runner="self-hosted", **case)
+                self.assertEqual((1, "", ""), (code, env, output))
+                self.assertIn("::error::", log)
+                self.assertNotIn(str(root), log)
+        code, _, _, log, *_ = self._select(discovered=(), locator_status=2, registration_status=3)
+        self.assertEqual(1, code)
+        self.assertIn("probe failed (exit 2)", log)
+        self.assertNotIn("could not be registered", log)
+
+    @unittest.skipUnless(sys.platform == "darwin", "uses the native macOS Security framework")
+    def test_registration_rejects_untrusted_and_mismatched_bundles(self):
+        version, build = [line for line in _read(PIN_FILE).splitlines()
+                          if line.strip() and not line.startswith("#")][0].split()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            driver = root / "registration-test.m"
+            driver.write_text(
+                '#define main locatorMain\n#import "%s"\n#undef main\n'
+                'int main(int argc, const char* argv[]) { @autoreleasepool {\n'
+                '  return RegisterInstalled(@(argv[2]), @(argv[3]),\n'
+                '      [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES]);\n}}\n' %
+                _path("tools/ci_xcode_discoverable.m"), encoding="utf-8")
+            binary = root / "registration-test"
+            result = subprocess.run(
+                ["/usr/bin/xcrun", "clang", "-fobjc-arc", "-framework", "Foundation",
+                 "-framework", "CoreServices", "-framework", "Security", str(driver),
+                 "-o", str(binary)], capture_output=True, timeout=test_timing.STALL_GUARD_SECONDS)
+            self.assertEqual(0, result.returncode, "native registration test failed to compile")
+            applications = root / "Applications"
+            applications.mkdir()
+            app = applications / "Candidate.app"
+            contents = app / "Contents"
+            executable = contents / "MacOS" / "Xcode"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(binary.read_bytes())
+            executable.chmod(0o755)
+            info = {"CFBundleIdentifier": "com.apple.dt.Xcode", "CFBundleExecutable": "Xcode",
+                    "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version}
+            metadata = {"CFBundleShortVersionString": version, "ProductBuildVersion": build}
+
+            def probe():
+                return subprocess.run([str(binary), str(applications), version, build],
+                                      capture_output=True,
+                                      timeout=test_timing.STALL_GUARD_SECONDS).returncode
+
+            def write_metadata():
+                (contents / "Info.plist").write_bytes(plistlib.dumps(info))
+                (contents / "version.plist").write_bytes(plistlib.dumps(metadata))
+
+            write_metadata()
+            result = subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(app)],
+                                    capture_output=True, timeout=test_timing.STALL_GUARD_SECONDS)
+            self.assertEqual(0, result.returncode, "cannot create ad-hoc signed test fixture")
+            self.assertEqual(3, probe(), "a valid ad-hoc signature must not claim Apple identity")
+            metadata["ProductBuildVersion"] = "99Z999"
+            write_metadata()
+            self.assertEqual(0, probe(), "wrong builds must not be registered")
+            metadata["ProductBuildVersion"] = build
+            info["CFBundleShortVersionString"] = 123
+            write_metadata()
+            self.assertEqual(0, probe(), "malformed versions must not be registered")
+            info["CFBundleShortVersionString"] = version
+            info["CFBundleIdentifier"] = "org.example.other"
+            write_metadata()
+            self.assertEqual(0, probe(), "other apps must not be registered")
 
     def test_probe_sdk_failure_keeps_diagnostics_before_scratch_cleanup(self):
         code, env, output, log, *_ = self._select(locator_status=None)
