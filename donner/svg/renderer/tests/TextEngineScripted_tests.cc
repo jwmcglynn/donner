@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstddef>
 #include <iterator>
-#include <iomanip>
 #include <map>
 #include <memory>
 #include <optional>
@@ -3426,11 +3425,8 @@ TEST(TextEngineScriptedTest, VerticalTextPathCachedLengthUsesOneInlineAdvance) {
       if (method == components::TextPathMethod::Stretch) {
         const Vector2d start = engine.getStartPositionOfChar(handle, 0);
         const Vector2d end = engine.getEndPositionOfChar(handle, 0);
-        SCOPED_TRACE(testing::Message() << std::setprecision(17) << "start=(" << start.x << ", "
-                                       << start.y << "), end=(" << end.x << ", " << end.y
-                                       << "), endpoint error=(" << end.x - start.x << ", "
-                                       << end.y - (start.y + advance) << ")");
-        EXPECT_THAT(end, Eq(Vector2d(start.x, start.y + advance)));
+        EXPECT_THAT(end, AllOf(Field("x", &Vector2d::x, DoubleEq(start.x)),
+                               Field("y", &Vector2d::y, DoubleEq(start.y + advance))));
       }
       const auto& cached = registry.get<components::ComputedTextGeometryComponent>(root);
       ASSERT_THAT(cached.runs, SizeIs(1));
