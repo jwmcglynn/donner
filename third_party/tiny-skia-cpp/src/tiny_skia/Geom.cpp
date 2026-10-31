@@ -152,8 +152,10 @@ std::optional<IntRect> Rect::roundOut() const {
   const auto right = saturateCeilToI32(right_);
   const auto bottom = saturateCeilToI32(bottom_);
 
-  const auto width = std::max<std::int64_t>(1, static_cast<std::int64_t>(right - left));
-  const auto height = std::max<std::int64_t>(1, static_cast<std::int64_t>(bottom - top));
+  const auto width = std::max<std::int64_t>(
+      1, static_cast<std::int64_t>(right) - static_cast<std::int64_t>(left));
+  const auto height = std::max<std::int64_t>(
+      1, static_cast<std::int64_t>(bottom) - static_cast<std::int64_t>(top));
   if (width > std::numeric_limits<std::uint32_t>::max() ||
       height > std::numeric_limits<std::uint32_t>::max()) {
     return std::nullopt;
@@ -169,8 +171,10 @@ std::optional<IntRect> Rect::round() const {
   const auto right = saturateRoundToI32(right_);
   const auto bottom = saturateRoundToI32(bottom_);
 
-  const auto width = std::max<std::int64_t>(1, static_cast<std::int64_t>(right - left));
-  const auto height = std::max<std::int64_t>(1, static_cast<std::int64_t>(bottom - top));
+  const auto width = std::max<std::int64_t>(
+      1, static_cast<std::int64_t>(right) - static_cast<std::int64_t>(left));
+  const auto height = std::max<std::int64_t>(
+      1, static_cast<std::int64_t>(bottom) - static_cast<std::int64_t>(top));
   if (width > std::numeric_limits<std::uint32_t>::max() ||
       height > std::numeric_limits<std::uint32_t>::max()) {
     return std::nullopt;
