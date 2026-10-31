@@ -156,7 +156,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lint wrapper ") as directory:
             root = Path(directory)
             binary = root / "bazelisk"
-            binary.write_text('#!/bin/sh\nprintf '%s\\n' "$@"\n')
+            binary.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
             binary.chmod(0o755)
             path_file = root / "github-path"
             result = subprocess.run(
