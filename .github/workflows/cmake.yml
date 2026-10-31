@@ -131,16 +131,16 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: build/_deps
-          key: cmake-deps-macos-tiny_skia-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
+          key: cmake-deps-macos-tiny_skia-${{ env.DONNER_CI_XCODE_IDENTITY }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
       - name: Restore compiler outputs
         id: ccache
         uses: actions/cache/restore@v6
         with:
           path: .ccache
-          key: ccache-macos-tiny_skia-${{ github.sha }}
+          key: ccache-macos-tiny_skia-${{ env.DONNER_CI_XCODE_IDENTITY }}-${{ github.sha }}
           restore-keys: |
-            ccache-macos-tiny_skia-
+            ccache-macos-tiny_skia-${{ env.DONNER_CI_XCODE_IDENTITY }}-
 
       - name: Build with CMake (tiny_skia)
         run: tools/ci/cmake_consumer.sh build --ccache

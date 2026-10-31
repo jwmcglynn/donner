@@ -1306,10 +1306,10 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every macOS lane builds with the Xcode pinned in tools/ci_macos_xcode.txt,
-      # so their action keys and remote cache partition match. The xcode-27
-      # image ships it beside other Xcodes; the step fails the job when the
-      # runner does not have exactly that version and build.
+      # Every macOS lane selects an approved tuple from tools/ci_macos_xcode.txt.
+      # Lanes selecting the same version/build share action keys and a remote
+      # cache partition; different tuples remain isolated. Missing all approved
+      # versions or finding an ambiguous installation/build mismatch fails closed.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
@@ -2040,9 +2040,9 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt, so action keys
-      # match the hosted macOS lanes'. A runner without exactly that version and
-      # build fails here rather than building with another Xcode.
+      # When this lane selects the same approved tuple as a hosted lane, their
+      # action keys match. Missing all approved versions, ambiguous discovery or
+      # an unexpected build fails here rather than selecting another toolchain.
       - name: Select pinned Xcode
         id: xcode
         shell: bash

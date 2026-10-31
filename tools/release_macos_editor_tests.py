@@ -38,6 +38,36 @@ class NativeEditorReleaseContractTest(unittest.TestCase):
 
 
 class MacosEditorPackageTest(unittest.TestCase):
+    def test_native_toolchain_records_actual_approved_fallback(self):
+        from unittest import mock
+        (self.root / "tools/ci_macos_xcode.txt").write_text("27.1 27A9275\n27.2 27B52\n")
+        with mock.patch.object(self.native, "_tool", side_effect=[
+                "Xcode 27.2\nBuild version 27B52\n", "27.2\n"]):
+            self.assertEqual({"xcode": "27.2 27B52", "macos_sdk": "27.2"},
+                             self.native._native_toolchain(self.root))
+
+    def test_toolchain_verifier_accepts_approved_producer_not_its_own_host(self):
+        from unittest import mock
+        (self.root / "tools/ci_macos_xcode.txt").write_text("27.1 27A9275\n27.2 27B52\n")
+        with mock.patch.object(self.native, "_tool", side_effect=AssertionError("host probe")):
+            self.native._check_toolchain(self.root, {"xcode": "27.2 27B52", "macos_sdk": "27.2"})
+
+    def test_toolchain_policy_rejects_bad_or_unbounded_metadata(self):
+        pin = self.root / "tools/ci_macos_xcode.txt"
+        for policy in ["", "27.1 27A9275\n27.1 27B52\n", "invalid\n",
+                       "27.1 27A9275\n27.2 27B52\n27.3 27C1\n"]:
+            with self.subTest(policy=policy):
+                pin.write_text(policy)
+                with self.assertRaisesRegex(ValueError, "policy"):
+                    self.native._check_toolchain(self.root,
+                                                 {"xcode": "27.1 27A9275", "macos_sdk": "27.1"})
+
+    def test_toolchain_policy_rejects_rc_and_crossed_version_build_pairs(self):
+        (self.root / "tools/ci_macos_xcode.txt").write_text("27.1 27A9275\n27.2 27B52\n")
+        for pair in ["27.2 27B48", "27.1 27B52", "27.2 27A9275", "27.3 27C1"]:
+            with self.subTest(pair=pair), self.assertRaisesRegex(ValueError, "policy"):
+                self.native._check_toolchain(self.root, {"xcode": pair, "macos_sdk": "27.2"})
+
     def setUp(self):
         import tempfile
         from pathlib import Path

@@ -382,16 +382,21 @@ there still fails fast.
 and system headers. Those files are not Bazel action inputs, so a runner image update changes no
 cache key. The action therefore sets `--remote_instance_name` to the runner image and version, and
 an entry is reused only on the image that produced it. After an image update the first runs on the
-new image start cold. The macOS lanes instead build with the Xcode pinned in
-`tools/ci_macos_xcode.txt` and use a partition named after it: C++ compiles reach Xcode's compiler
-and SDK through the host, so their keys alone cannot tell two Xcodes apart, and `--config=ci-macos`
-pins the action `PATH`, so the hosted and self-hosted macOS runners produce identical build action
-keys. Test results stay per lane: each lane names itself in its test environment, because a result
-depends on the runner's GPU. `tools/ci_select_macos_xcode.sh` finds the pinned version through
-LaunchServices, as Bazel's Xcode locator does, so the install path may differ between runners, and
-it fails the job unless exactly one such Xcode is registered and it reports the pinned build. The
-GitHub-hosted macOS jobs run on the `xcode-27` image, which ships the pinned Xcode beside other
-versions; a self-hosted macOS runner must have the same version and build. The sanitizer lanes use
+new image start cold. The macOS lanes select the first installed approved version/build from
+`tools/ci_macos_xcode.txt` and partition the remote cache by that actual tuple. The selector also
+exports a public toolchain identity that `.bazelrc` includes in action, host-action and test
+keys, so disk and Actions caches cannot reuse outputs across approved Xcodes even when the
+remote cache is unavailable. Test results also remain per lane because they depend on its GPU.
+
+`tools/ci_select_macos_xcode.sh` uses LaunchServices, as Bazel's Xcode locator does. Only a missing
+preferred version permits fallback; probe errors, multiple installations claiming the same
+version, and unexpected builds fail the job. An RC build is not interchangeable with an
+approved final build. The selected `DEVELOPER_DIR` and explicit `--xcode_version` identify the
+actual compiler. CMake dependency and compiler-cache families also include that tuple. Native
+package metadata records the producer's actual approved tuple; verification checks it against
+the source policy rather than substituting the verifier's local Xcode.
+
+The sanitizer lanes use
 the hermetic LLVM toolchain (`--config=latest_llvm`), whose compiler and sysroot are action inputs.
 
 **Interplay with the GitHub Actions cache.** Only `main` saves Actions caches. They remain the

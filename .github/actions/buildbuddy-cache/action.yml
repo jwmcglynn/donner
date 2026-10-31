@@ -56,7 +56,7 @@ inputs:
     description: >-
       Remote cache partition (`--remote_instance_name`) to use instead of the
       runner image identity. The macOS lanes pass the `cache_partition` output
-      of tools/ci_select_macos_xcode.sh, which names the pinned Xcode, so the
+      of tools/ci_select_macos_xcode.sh, which names the selected approved Xcode, so the
       macOS lanes key their cache on the toolchain rather than on the weekly
       runner image.
     required: false
@@ -163,8 +163,8 @@ runs:
         # headers, which are not action inputs, so an image update changes no
         # cache key. Partition the cache per runner image so an entry is only
         # ever reused on the image that produced it. The macOS lanes instead
-        # name the pinned Xcode (tools/ci_macos_xcode.txt), which every macOS
-        # runner builds with.
+        # name their selected approved Xcode (tools/ci_macos_xcode.txt).
+        # Different approved tuples never share this remote partition.
         # A self-hosted runner has no image identity: its partition must come
         # from the pinned Xcode, so a self-hosted job without one is an error.
         if [[ -n "${CACHE_PARTITION:-}" ]]; then
