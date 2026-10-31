@@ -1591,13 +1591,18 @@ test("catalog browser gate admits resource failure and warm update acceptance wi
   assert.ok(pattern, "the gate must declare its selected smoke cases");
   const titles = [...spec.matchAll(/^test(?:\.\w+)?\(\s*"([^"]+)"/gm)].map(([, title]) => title);
   const expected = [
-    "catalog font loading records only fixed GPU acquisition markers",
     "catalog font loading adopts deferred WOFF2 without authored edits",
     "welcome picker paints before asynchronously rendering real SVG thumbnails",
     "WGPU diagnostics do not block the first carousel interaction",
     "required resource failure stays readable and prevents application startup",
     "code-only updates transfer no unchanged essential resource bodies from a populated cache",
   ];
+  const pureTitle = "catalog font loading records only fixed GPU acquisition markers";
+  const unitSpec = readFileSync(path.join(testDirectory, "browser-diagnostic-policy.spec.mjs"), "utf8");
+  const selectors = readFileSync(path.join(testDirectory, "selector-tests.mjs"), "utf8");
+  assert.ok(!titles.includes(pureTitle), "pure marker validation must not start a browser");
+  assert.ok(unitSpec.includes(pureTitle), "the marker assertion must remain in the Node suite");
+  assert.ok(selectors.includes('./browser-diagnostic-policy.spec.mjs'), "normal Node tests must include it");
   for (const title of expected) assert.ok(titles.includes(title), `${title} must remain declared`);
   assert.deepEqual(
     titles.filter((title) => new RegExp(pattern).test(title)).sort(),
