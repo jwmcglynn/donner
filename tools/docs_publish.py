@@ -557,6 +557,8 @@ def _verified_previous(artifact_id: int, plan: dict, work: Path) -> None:
                                 work / "rollback.zip", download, "rollback upload")
     candidate._extract_verified(work / "rollback.zip", {"artifact.tar": plan["previous_archive_sha256"]},
                                 work / "rollback-verified")
+    site.validate_pages_archive(work / "pages/artifact.tar")
+    site.validate_pages_archive(work / "rollback-verified/artifact.tar")
 
 
 def promote(work: Path, previous_id: int, api=None) -> dict:
