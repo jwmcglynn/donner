@@ -104,6 +104,50 @@ class DocsPublishTest(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 publish.validate_bootstrap({**good, **change})
 
+    def test_standalone_composition_does_not_read_or_replace_an_existing_store(self):
+        from tools import docs_fixture
+        inputs = self.root / "inputs"
+        inputs.mkdir()
+        source = docs_fixture.source(inputs, "release")
+        work = self.root / "standalone"
+
+        def release_source(reference, digest, output):
+            (output / "release-candidate.json").write_text("{}")
+            (output / "record-attestation.json").write_text("[]")
+            return source
+
+        with mock.patch.object(publish, "release_source", side_effect=release_source), \
+             mock.patch.object(publish, "main_source", return_value=source):
+            publish.prepare(work, "1/1", "2/1", "a" * 64, None, self.api)
+        selected = site.read_json(work / "payload/selection.json")
+        self.assertIsNone(selected["base_snapshot_commit"])
+        self.assertIsNone(selected["previous_composition"])
+        self.assertIsNone(selected["bootstrap"])
+        self.assertEqual(set(selected["releases"]), {"0.8.0"})
+        self.assertEqual(selected["source_inputs"], {"main": source[1], "0.8.0": source[1]})
+        self.assertEqual(site.verify_site(work / "site")["manifest_sha256"],
+                         site.digest((work / "site/_docs/versions.json").read_bytes()))
+        self.assertEqual(self.api.mock_calls, [])
+
+    def test_standalone_composition_still_cannot_publish_over_an_existing_store(self):
+        record = {**self.record, "base_snapshot_commit": None, "previous_composition": None}
+        with self.assertRaisesRegex(ValueError, "snapshot branch advanced"):
+            publish._preflight_record(record, None, self.root / "blocked", self.api)
+        self.api.file.assert_not_called()
+        self.api.call.assert_not_called()
+
+    def test_bound_composition_still_requires_bootstrap_for_an_unactivated_seed(self):
+        state = {"schema": 1, "releases": {"0.8.0": {}}, "current": None, "previous": None}
+        self.api.file.return_value = site.canonical(state)
+        with mock.patch.object(publish, "release_source") as release, \
+             mock.patch.object(publish, "main_source") as main, \
+             self.assertRaisesRegex(ValueError, "unactivated seed"):
+            publish.prepare(self.root / "bound", "1/1", "2/1", "a" * 64,
+                            "e" * 40, self.api)
+        release.assert_not_called()
+        main.assert_not_called()
+        self.api.call.assert_not_called()
+
     def test_seed_is_only_allowed_before_the_snapshot_branch_exists(self):
         with mock.patch.object(publish, "fetch_composition") as fetch, self.assertRaisesRegex(ValueError, "before the snapshot"):
             publish.seed_recovery("1/1", "c" * 64, self.approval(), self.root / "seed", self.api)
