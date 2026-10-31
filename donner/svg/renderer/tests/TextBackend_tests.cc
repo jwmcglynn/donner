@@ -678,9 +678,13 @@ TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrig
     ASSERT_THAT(glyph.glyphIndex, Gt(0));
     EXPECT_THAT(glyph.xOffset, DoubleEq(-500));
     const size_t index = static_cast<size_t>(glyph.glyphIndex);
-    ASSERT_LT(index, longMetrics);
-    ASSERT_LE(index * 4 + 4, vmtx->size());
-    EXPECT_THAT(ReadBe16(*vmtx, index * 4), testing::Eq(1000));
+    ASSERT_THAT(longMetrics, Gt(0u));
+    const size_t advanceOffset = std::min(index, longMetrics - 1) * 4;
+    const size_t bearingOffset =
+        index < longMetrics ? index * 4 + 2 : longMetrics * 4 + (index - longMetrics) * 2;
+    ASSERT_LE(advanceOffset + 2, vmtx->size());
+    ASSERT_LE(bearingOffset + 2, vmtx->size());
+    EXPECT_THAT(ReadBe16(*vmtx, advanceOffset), testing::Eq(1000));
     const std::string character = index == 4868 ? "日" : "本";
     const auto horizontal = backend.shapeRun(font, 1000.0f, character, 0, character.size(), false,
                                              FontVariant::Normal, false);
@@ -688,7 +692,7 @@ TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrig
     EXPECT_THAT(horizontal.glyphs[0].xAdvance, DoubleEq(1000));
     const Path outline = backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
     ASSERT_THAT(outline.commands(), Not(IsEmpty()));
-    EXPECT_THAT(-outline.bounds().topLeft.y + static_cast<int16_t>(ReadBe16(*vmtx, index * 4 + 2)),
+    EXPECT_THAT(-outline.bounds().topLeft.y + static_cast<int16_t>(ReadBe16(*vmtx, bearingOffset)),
                 DoubleEq(860));
   }
   // vmtx origin 860 and advance 1000 at 100px place alphabetic origins at 96 and 196.
