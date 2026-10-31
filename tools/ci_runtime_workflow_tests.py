@@ -1398,6 +1398,110 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             % (covered,),
         )
 
+    def test_vm_jobs_bound_aggregate_local_work_without_weakening_test_selection(self):
+        normal = self._job_body("macos-self-hosted")
+        qualification = self._job_body("macos-vm-qualification")
+        for name, job in (("normal", normal), ("qualification", qualification)):
+            options = list(bazelrc_configs.commands(job, self.configs, self._variables(job)))
+            workload = [flags for command, flags, _ in options if command in ("build", "test")]
+            self.assertTrue(workload, name)
+            for flags in workload:
+                with self.subTest(job=name, flags=flags):
+                    for flag in ("--jobs=4", "--local_resources=cpu=4",
+                                 "--local_resources=memory=4096"):
+                        self.assertIn(flag, flags)
+            self.assertNotIn("--jobs=6", job)
+        self.assertIn("instance: [1, 2, 3, 4, 5, 6]", qualification)
+        self.assertIn("--nocache_test_results", qualification)
+        self.assertIn("--noskip_incompatible_explicit_targets", qualification)
+        parity = self._job_body("macos-hosted-parity")
+        for step in ("Test", "Test (Geode editor lane)"):
+            flags = self._test_options(self._step_body(parity, step), parity)
+            self.assertIn("--jobs=3", flags)
+            self.assertIn("--local_resources=memory=4802", flags)
+
+    def _qualification_targets(self):
+        return {"donner/base/base_tests": 10,
+                "donner/gpu/metal/tests/metal_buffer_bounds_tests": 1,
+                "donner/gpu/metal/tests/metal_color_matrix_tests": 2,
+                "donner/gpu/metal/tests/metal_queue_writes_tests": 1}
+
+    def _qualification_case_script(self):
+        job = self._job_body("macos-vm-qualification")
+        step = self._step_body(job, "Require four executed qualification tests")
+        script = textwrap.dedent(step.split("run: |\n", 1)[1])
+        match = re.search(r"<<'PYCODE'\n(.*?)\nPYCODE", script, re.DOTALL)
+        self.assertIsNotNone(match)
+        return match.group(1)
+
+    def _qualification_fixture_xml(self, root, fault):
+        valid = '<testsuite tests="1"><testcase name="case" status="run" result="completed"/></testsuite>'
+        for target, shards in self._qualification_targets().items():
+            for shard in range(1, shards + 1):
+                report = root / "bazel-testlogs" / target / (
+                    "shard_%d_of_%d/test.xml" % (shard, shards) if shards > 1 else "test.xml")
+                report.parent.mkdir(parents=True)
+                report.write_text(valid)
+        report = root / "bazel-testlogs/donner/gpu/metal/tests/metal_color_matrix_tests/shard_2_of_2/test.xml"
+        replacements = {
+            "zero": '<testsuite tests="0"/>',
+            "skipped": '<testsuite><testcase><skipped/></testcase></testsuite>',
+            "failed": '<testsuite><testcase><failure/></testcase></testsuite>',
+            "notrun": valid.replace('status="run"', 'status="notrun"'),
+            "invalid": '<invalid',
+            "mixed-skipped": valid.replace('</testsuite>', '<testcase><skipped/></testcase></testsuite>'),
+        }
+        if fault in replacements:
+            report.write_text(replacements[fault])
+        elif fault == "missing":
+            report.unlink()
+        elif fault == "missing-shard":
+            (root / "bazel-testlogs/donner/base/base_tests/shard_10_of_10/test.xml").unlink()
+
+    def _run_qualification_case_fixture(self, root, fault):
+        receipt = root / "coverage-receipt/coverage-receipt.json"
+        receipt.parent.mkdir()
+        receipt.write_text(json.dumps({"steps": {"qualification": {
+            "executed": 3 if fault == "cached" else 4, "tests": 4}}}))
+        self._qualification_fixture_xml(root, fault)
+        return subprocess.run([sys.executable, "-c", self._qualification_case_script()], cwd=root,
+                              env=dict(os.environ, RUNNER_TEMP=str(root)),
+                              capture_output=True, text=True, timeout=10)
+
+    def test_vm_qualification_case_proof_matches_every_current_shard(self):
+        metal_build = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
+        base_build = _repository_text("donner/base/BUILD.bazel")
+        for target, shards in self._qualification_targets().items():
+            rule = _rule_text(base_build if target.startswith("donner/base/") else metal_build,
+                              target.rsplit("/", 1)[-1])
+            selected = re.search(r"shard_count = ([0-9]+)", rule)
+            self.assertEqual(shards, int(selected[1]) if selected else 1)
+        job = self._job_body("macos-vm-qualification")
+        artifact = self._step_body(job, "Retain VM qualification execution evidence")
+        self.assertIn("qualification-test-cases.json", artifact)
+
+    def test_vm_qualification_case_proof_retains_executions_and_capability_skips(self):
+        for fault in (None, "mixed-skipped"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = self._run_qualification_case_fixture(root, fault)
+                self.assertEqual(0, result.returncode, result.stderr)
+                evidence = json.loads((root / "qualification-test-cases.json").read_text())
+                self.assertEqual(set(self._qualification_targets()), set(evidence))
+                shards = list(itertools.chain.from_iterable(evidence.values()))
+                self.assertEqual(14, len(shards))
+                self.assertTrue(all(item["executed_cases"] == 1 and len(item["xml_sha256"]) == 64
+                                    for item in shards))
+                self.assertEqual(int(fault == "mixed-skipped"), sum(item["skipped_cases"] for item in shards))
+
+    def test_vm_qualification_refuses_cached_missing_empty_skipped_or_failed_shards(self):
+        for fault in ("cached", "missing", "zero", "skipped", "failed", "notrun", "invalid", "missing-shard"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = self._run_qualification_case_fixture(root, fault)
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse((root / "qualification-test-cases.json").exists())
+
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.
 

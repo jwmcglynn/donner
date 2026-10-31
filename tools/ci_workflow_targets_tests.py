@@ -91,7 +91,7 @@ class WorkflowTargetsTest(unittest.TestCase):
         self.assertNotIn("continue-on-error:", native)
         self.assertIn("macos-metal", jobs["coverage-contract"].split("steps:", 1)[0])
         fast = jobs["macos-self-hosted"]
-        for flag in ("--jobs=6", "--local_resources=cpu=6", "--local_resources=memory=6144"):
+        for flag in ("--jobs=4", "--local_resources=cpu=4", "--local_resources=memory=4096"):
             for command in re.findall(r"(?m)^.*bazelisk .* (?:test|build) .*", fast):
                 self.assertIn(flag, command)
         manifest = json.loads(Path(resolver.Rlocation(
@@ -100,14 +100,14 @@ class WorkflowTargetsTest(unittest.TestCase):
             self.assertEqual(manifest["lanes"]["macos"]["Test"][kind]["counterparts"][0]["job"],
                              "macos-metal")
 
-    def test_vm_qualification_is_an_explicit_trusted_four_job_matrix(self):
+    def test_vm_qualification_is_an_explicit_trusted_six_job_matrix(self):
         source = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).read_text()
         qualification = source.split("  macos-vm-qualification:\n", 1)[1].split("\n  macos-metal:", 1)[0]
         self.assertIn("runs-on: [self-hosted, macOS-vm-qualification, ARM64]", qualification)
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", qualification)
         self.assertIn("contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
                       qualification)
-        self.assertIn("instance: [1, 2, 3, 4]", qualification)
+        self.assertIn("instance: [1, 2, 3, 4, 5, 6]", qualification)
         self.assertIn("fail-fast: false", qualification)
         self.assertIn("--nocache_test_results", qualification)
         self.assertIn("--noskip_incompatible_explicit_targets", qualification)
