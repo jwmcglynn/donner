@@ -322,6 +322,46 @@ TEST(SVGTextElementPublicApiTests, AlignEndpointFollowsTheSlopedPathFrame) {
   }
 }
 
+TEST(SVGTextElementPublicApiTests, PathEndpointIncludesAuthoredRotationInBothWritingModes) {
+  for (const std::string_view method : {"align", "stretch"}) {
+    for (const std::string_view writingMode : {"horizontal-tb", "vertical-rl"}) {
+      SCOPED_TRACE(method);
+      SCOPED_TRACE(writingMode);
+      SVGDocument document = instantiateSubtree(
+          std::string("<path id='p' d='M20 20L180 140'/><text id='t' font-size='20' ") +
+              "textLength='20' lengthAdjust='spacingAndGlyphs' rotate='90' writing-mode='" +
+              std::string(writingMode) + "'><textPath href='#p' method='" + std::string(method) +
+              "'>A</textPath></text>",
+          kExperimentalOptions);
+      auto element = document.querySelector("#t");
+      ASSERT_THAT(element, Optional(testing::_));
+      auto text = element->cast<SVGTextElement>();
+      ASSERT_THAT(text.getComputedTextLength(), testing::DoubleNear(20.0, 1e-6));
+      const Vector2d start = text.getStartPositionOfChar(0);
+      EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(start.x - 12.0, start.y + 16.0));
+    }
+  }
+}
+
+TEST(SVGTextElementPublicApiTests, FlatEndpointsKeepTheirWritingModeAdvance) {
+  for (const std::string_view writingMode : {"horizontal-tb", "vertical-rl"}) {
+    SCOPED_TRACE(writingMode);
+    SVGDocument document = instantiateSubtree(
+        std::string("<text id='t' x='20' y='40' font-size='20' textLength='20' ") +
+            "lengthAdjust='spacingAndGlyphs' writing-mode='" + std::string(writingMode) +
+            "'>A</text>",
+        kExperimentalOptions);
+    auto element = document.querySelector("#t");
+    ASSERT_THAT(element, Optional(testing::_));
+    auto text = element->cast<SVGTextElement>();
+    ASSERT_THAT(text.getComputedTextLength(), testing::DoubleNear(20.0, 1e-6));
+    const Vector2d start = text.getStartPositionOfChar(0);
+    const Vector2d expected = writingMode == "horizontal-tb" ? Vector2d(start.x + 20.0, start.y)
+                                                             : Vector2d(start.x, start.y + 20.0);
+    EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(expected.x, expected.y));
+  }
+}
+
 TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 120 40">
