@@ -1,7 +1,8 @@
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test", "donner_perf_sensitive_cc_library")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
-donner_cc_library(
+# Font admission walks bounded charstrings before text can render.
+donner_perf_sensitive_cc_library(
     name = "sfnt_utils",
     srcs = [
         "CffOutlineComplexity.cc",
