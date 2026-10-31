@@ -315,6 +315,7 @@ py_test(
         "//:.github/workflows/main.yml",
         "//:github_action_definitions",
         "//build_defs:BUILD.bazel",
+        "//donner/base:BUILD.bazel",
         "//donner/editor/tests:BUILD.bazel",
         "//donner/editor/tests:RunEditorWindowVulkanSurfaceTests.sh",
         "//donner/editor/wasm:wasm_package_size_test_arguments",

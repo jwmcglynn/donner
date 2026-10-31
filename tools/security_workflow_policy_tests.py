@@ -622,7 +622,7 @@ def _cited_environment_violations(where, job):
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
 # the runner's effective configuration, so they never leave the runner.
-SELF_HOSTED_UPLOAD_FILES = {"coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
+SELF_HOSTED_UPLOAD_FILES = {"qualification-test-cases.json", "coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
                             "stall.txt", "target-list.txt"}
 
 # Triggers that run with repository credentials on behalf of an event someone else controls.
@@ -4624,8 +4624,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         main = _jobs(files[".github/workflows/main.yml"])
         uploads = _upload_paths(main["linux-self-hosted"])
         self.assertEqual(2, len(uploads))
+        qualification_uploads = _upload_paths(main["macos-vm-qualification"])
+        self.assertEqual([["${{ runner.temp }}/coverage-receipt/coverage-receipt.json",
+                           "${{ runner.temp }}/qualification-test-cases.json"]], qualification_uploads)
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
-                         {entry.rsplit("/", 1)[-1] for entry in uploads[0] + uploads[1]})
+                         {entry.rsplit("/", 1)[-1] for entry in
+                          uploads[0] + uploads[1] + qualification_uploads[0]})
         self.assertIn(["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"], uploads)
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):

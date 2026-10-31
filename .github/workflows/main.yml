@@ -2066,26 +2066,34 @@ jobs:
           step = json.loads(path.read_text())["steps"]["qualification"]
           if step.get("executed", 0) != 4 or step.get("tests", 0) != 4:
               raise SystemExit("Expected four executed qualification tests")
-          targets = (
-              "donner/base/base_tests",
-              "donner/gpu/metal/tests/metal_buffer_bounds_tests",
-              "donner/gpu/metal/tests/metal_color_matrix_tests",
-              "donner/gpu/metal/tests/metal_queue_writes_tests",
-          )
+          targets = {
+              "donner/base/base_tests": 10,
+              "donner/gpu/metal/tests/metal_buffer_bounds_tests": 1,
+              "donner/gpu/metal/tests/metal_color_matrix_tests": 2,
+              "donner/gpu/metal/tests/metal_queue_writes_tests": 1,
+          }
           proof = {}
-          for target in targets:
-              report = Path("bazel-testlogs") / target / "test.xml"
-              if report.stat().st_size > 16 * 1024 * 1024:
-                  raise SystemExit("Qualification test XML exceeds its bound")
-              data = report.read_bytes()
-              cases = list(ET.fromstring(data).iter("testcase"))
-              if not cases or any(
-                  case.find("skipped") is not None or case.find("failure") is not None
-                  or case.find("error") is not None or case.get("status", "run") != "run"
-                  or case.get("result", "completed") != "completed" for case in cases
-              ):
-                  raise SystemExit("Qualification needs actual passing cases in every target")
-              proof[target] = {"executed_cases": len(cases), "xml_sha256": hashlib.sha256(data).hexdigest()}
+          for target, shards in targets.items():
+              reports = [Path("bazel-testlogs") / target / (
+                  "shard_%d_of_%d/test.xml" % (shard, shards) if shards > 1 else "test.xml"
+              ) for shard in range(1, shards + 1)]
+              shard_proofs = []
+              for report in reports:
+                  if report.stat().st_size > 16 * 1024 * 1024:
+                      raise SystemExit("Qualification test XML exceeds its bound")
+                  data = report.read_bytes()
+                  cases = list(ET.fromstring(data).iter("testcase"))
+                  skipped = [case for case in cases if case.find("skipped") is not None]
+                  executed = [case for case in cases if case not in skipped]
+                  if not executed or any(
+                      case.find("failure") is not None or case.find("error") is not None
+                      or case.get("status", "run") != "run"
+                      or case.get("result", "completed") != "completed" for case in executed
+                  ):
+                      raise SystemExit("Qualification needs actual passing cases in every shard")
+                  shard_proofs.append({"executed_cases": len(executed), "skipped_cases": len(skipped),
+                                       "xml_sha256": hashlib.sha256(data).hexdigest()})
+              proof[target] = shard_proofs
           (temporary / "qualification-test-cases.json").write_text(json.dumps(proof, indent=2) + "\n")
           PYCODE
 

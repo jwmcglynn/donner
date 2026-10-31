@@ -1426,22 +1426,32 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         script = textwrap.dedent(step.split("run: |\n", 1)[1])
         match = re.search(r"<<'PYCODE'\n(.*?)\nPYCODE", script, re.DOTALL)
         self.assertIsNotNone(match)
-        targets = ("donner/base/base_tests", "donner/gpu/metal/tests/metal_buffer_bounds_tests",
-                   "donner/gpu/metal/tests/metal_color_matrix_tests",
-                   "donner/gpu/metal/tests/metal_queue_writes_tests")
+        targets = {"donner/base/base_tests": 10,
+                   "donner/gpu/metal/tests/metal_buffer_bounds_tests": 1,
+                   "donner/gpu/metal/tests/metal_color_matrix_tests": 2,
+                   "donner/gpu/metal/tests/metal_queue_writes_tests": 1}
+        metal_build = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
+        base_build = _repository_text("donner/base/BUILD.bazel")
+        for target, shards in targets.items():
+            rule = _rule_text(base_build if target.startswith("donner/base/") else metal_build,
+                              target.rsplit("/", 1)[-1])
+            selected = re.search(r"shard_count = ([0-9]+)", rule)
+            self.assertEqual(shards, int(selected[1]) if selected else 1)
         valid = '<testsuite tests="1"><testcase name="case" status="run" result="completed"/></testsuite>'
-        for fault in (None, "cached", "missing", "zero", "skipped", "failed", "notrun", "invalid"):
+        for fault in (None, "cached", "missing", "zero", "skipped", "failed", "notrun", "invalid", "missing-shard", "mixed-skipped"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 receipt = root / "coverage-receipt/coverage-receipt.json"
                 receipt.parent.mkdir()
                 receipt.write_text(json.dumps({"steps": {"qualification": {
                     "executed": 3 if fault == "cached" else 4, "tests": 4}}}))
-                for target in targets:
-                    report = root / "bazel-testlogs" / target / "test.xml"
-                    report.parent.mkdir(parents=True)
-                    report.write_text(valid)
-                report = root / "bazel-testlogs" / targets[-1] / "test.xml"
+                for target, shards in targets.items():
+                    for shard in range(1, shards + 1):
+                        report = root / "bazel-testlogs" / target / (
+                            "shard_%d_of_%d/test.xml" % (shard, shards) if shards > 1 else "test.xml")
+                        report.parent.mkdir(parents=True)
+                        report.write_text(valid)
+                report = root / "bazel-testlogs/donner/gpu/metal/tests/metal_color_matrix_tests/shard_2_of_2/test.xml"
                 if fault == "missing": report.unlink()
                 elif fault == "zero": report.write_text('<testsuite tests="0"/>')
                 elif fault in ("skipped", "failed"):
@@ -1449,16 +1459,23 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     report.write_text('<testsuite><testcase><%s/></testcase></testsuite>' % element)
                 elif fault == "notrun": report.write_text(valid.replace('status="run"', 'status="notrun"'))
                 elif fault == "invalid": report.write_text('<invalid')
+                elif fault == "missing-shard":
+                    (root / "bazel-testlogs/donner/base/base_tests/shard_10_of_10/test.xml").unlink()
+                elif fault == "mixed-skipped":
+                    report.write_text(valid.replace('</testsuite>', '<testcase><skipped/></testcase></testsuite>'))
                 result = subprocess.run([sys.executable, "-c", match.group(1)], cwd=root,
                                         env=dict(os.environ, RUNNER_TEMP=str(root)),
                                         capture_output=True, text=True, timeout=10)
                 proof = root / "qualification-test-cases.json"
-                if fault is None:
+                if fault in (None, "mixed-skipped"):
                     self.assertEqual(0, result.returncode, result.stderr)
                     evidence = json.loads(proof.read_text())
                     self.assertEqual(set(targets), set(evidence))
+                    self.assertEqual(14, sum(len(items) for items in evidence.values()))
                     self.assertTrue(all(item["executed_cases"] == 1 and len(item["xml_sha256"]) == 64
-                                        for item in evidence.values()))
+                                        for items in evidence.values() for item in items))
+                    self.assertEqual(int(fault == "mixed-skipped"), sum(
+                        item["skipped_cases"] for items in evidence.values() for item in items))
                 else:
                     self.assertNotEqual(0, result.returncode)
                     self.assertFalse(proof.exists())
