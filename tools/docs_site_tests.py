@@ -129,6 +129,22 @@ class DocsSiteTest(unittest.TestCase):
                     site.validate_pages_archive(archive)
                 site.unpack(archive, self.root / ("legacy-" + str(len(names))))
 
+    def test_pages_transport_rejects_unsafe_members_and_unreadable_files(self):
+        for kind in ("traversal", "link", "duplicate", "unreadable", "empty"):
+            with self.subTest(kind=kind):
+                archive = self.root / (kind + ".tar")
+                with tarfile.open(archive, "w:") as tar:
+                    if kind != "empty":
+                        info = tarfile.TarInfo("./../escape" if kind == "traversal" else "./index.html")
+                        info.mode = 0o600 if kind == "unreadable" else 0o644
+                        if kind == "link":
+                            info.type, info.linkname = tarfile.SYMTYPE, "./target"
+                        tar.addfile(info)
+                        if kind == "duplicate":
+                            tar.addfile(info)
+                with self.assertRaises(ValueError):
+                    site.validate_pages_archive(archive)
+
     def test_pages_transport_accepts_prefixed_long_paths(self):
         root = self.root / "long"
         root.mkdir()

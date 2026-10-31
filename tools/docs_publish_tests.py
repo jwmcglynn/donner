@@ -260,8 +260,11 @@ class DocsPublishTest(unittest.TestCase):
         import shutil
         import tarfile
         import zipfile
+        original_root = self.root
         for invalid in ("candidate", "recovery"):
             with self.subTest(invalid=invalid):
+                self.root = original_root / invalid
+                self.root.mkdir()
                 work, record, plan, commit, restore = self.transaction()
                 previous = work / "previous.tar"
                 site.pack(work / "site", previous)
