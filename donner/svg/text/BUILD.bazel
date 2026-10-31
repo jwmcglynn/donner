@@ -99,10 +99,10 @@ donner_cc_library(
 configured_dependency_audit_test(
     name = "basic_text_engine_dependency_audit_test",
     forbidden = [
-        ":text_backend_full",
+        "//donner/svg/text:text_backend_full",
         "@harfbuzz//:harfbuzz",
     ],
-    required = [":text_backend_simple"],
+    required = ["//donner/svg/text:text_backend_simple"],
     target = ":text_engine",
     text_configuration = "basic",
 )
