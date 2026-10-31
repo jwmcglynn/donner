@@ -351,41 +351,69 @@ TEST(SVGTextElementPublicApiTests, UprightPathEndpointIncludesAuthoredRotation) 
   const auto bytes = std::make_shared<const std::vector<uint8_t>>(
       std::istreambuf_iterator<char>(fontFile), std::istreambuf_iterator<char>());
   ASSERT_THAT(bytes->empty(), testing::IsFalse());
+  for (const bool withMark : {false, true}) {
+    SCOPED_TRACE(withMark);
+    for (const std::string_view method : {"align", "stretch"}) {
+      SCOPED_TRACE(method);
+      SVGDocument document = instantiateSubtree(
+          std::string("<path id='p' d='M20 20L180 140'/><text id='t' font-size='20' ") +
+              "font-family='EndpointCjk' textLength='20' lengthAdjust='spacingAndGlyphs' "
+              "rotate='90' writing-mode='vertical-rl'><textPath href='#p' method='" +
+              std::string(method) + "'>\xe6\x97\xa5</textPath></text>",
+          kExperimentalOptions);
+      FontManager manager(document.registry());
+      css::FontFace face;
+      face.familyName = RcString("EndpointCjk");
+      css::FontFaceSource source;
+      source.kind = css::FontFaceSource::Kind::Data;
+      source.payload = bytes;
+      source.trusted = true;
+      face.sources.push_back(std::move(source));
+      manager.addFontFace(face);
+      const FontHandle font = manager.findFont("EndpointCjk");
+      ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+      auto element = document.querySelector("#t");
+      ASSERT_THAT(element, Optional(testing::_));
+      auto text = element->cast<SVGTextElement>();
+      ASSERT_THAT(text.getComputedTextLength(), testing::DoubleNear(20.0, 1e-6));
+      const auto* geometry = document.registry().try_get<components::ComputedTextGeometryComponent>(
+          element->unsafeEntityHandle().entity());
+      ASSERT_THAT(geometry, testing::NotNull());
+      const auto run =
+          std::find_if(geometry->runs.begin(), geometry->runs.end(),
+                       [](const TextRun& value) { return value.onPath && !value.glyphs.empty(); });
+      ASSERT_THAT(run, Ne(geometry->runs.end()));
+      ASSERT_THAT(run->font, Eq(font));
+      ASSERT_THAT(run->glyphs, testing::SizeIs(withMark ? 2 : 1));
+      ASSERT_THAT(run->glyphs[0].glyphIndex, testing::Gt(0));
+      if (withMark) {
+        ASSERT_THAT(run->glyphs[1].glyphIndex, testing::Gt(0));
+        ASSERT_THAT(run->glyphs[1].xAdvance, testing::DoubleEq(0.0));
+        ASSERT_THAT(run->glyphs[1].yAdvance, testing::DoubleEq(0.0));
+        EXPECT_THAT(text.getEndPositionOfChar(1), Eq(text.getEndPositionOfChar(0)));
+      }
+      const Vector2d start = text.getStartPositionOfChar(0);
+      EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(start.x - 12.0, start.y + 16.0));
+    }
+  }
+}
+
+TEST(SVGTextElementPublicApiTests, PathEndpointUsesAdvanceDirectionAcrossAContourCorner) {
   for (const std::string_view method : {"align", "stretch"}) {
     SCOPED_TRACE(method);
     SVGDocument document = instantiateSubtree(
-        std::string("<path id='p' d='M20 20L180 140'/><text id='t' font-size='20' ") +
-            "font-family='EndpointCjk' textLength='20' lengthAdjust='spacingAndGlyphs' "
-            "rotate='90' writing-mode='vertical-rl'><textPath href='#p' method='" +
-            std::string(method) + "'>\xe6\x97\xa5</textPath></text>",
+        std::string("<path id='p' d='M0 0H100V100'/><text id='t' font-size='20' ") +
+            "textLength='20' lengthAdjust='spacingAndGlyphs'><textPath href='#p' "
+            "startOffset='85' method='" +
+            std::string(method) + "'>A</textPath></text>",
         kExperimentalOptions);
-    FontManager manager(document.registry());
-    css::FontFace face;
-    face.familyName = RcString("EndpointCjk");
-    css::FontFaceSource source;
-    source.kind = css::FontFaceSource::Kind::Data;
-    source.payload = bytes;
-    source.trusted = true;
-    face.sources.push_back(std::move(source));
-    manager.addFontFace(face);
-    const FontHandle font = manager.findFont("EndpointCjk");
-    ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
     auto element = document.querySelector("#t");
     ASSERT_THAT(element, Optional(testing::_));
     auto text = element->cast<SVGTextElement>();
     ASSERT_THAT(text.getComputedTextLength(), testing::DoubleNear(20.0, 1e-6));
-    const auto* geometry = document.registry().try_get<components::ComputedTextGeometryComponent>(
-        element->unsafeEntityHandle().entity());
-    ASSERT_THAT(geometry, testing::NotNull());
-    const auto run =
-        std::find_if(geometry->runs.begin(), geometry->runs.end(),
-                     [](const TextRun& value) { return value.onPath && !value.glyphs.empty(); });
-    ASSERT_THAT(run, Ne(geometry->runs.end()));
-    ASSERT_THAT(run->font, Eq(font));
-    ASSERT_THAT(run->glyphs, testing::SizeIs(1));
-    ASSERT_THAT(run->glyphs[0].glyphIndex, testing::Gt(0));
+    ASSERT_THAT(text.getRotationOfChar(0), testing::DoubleNear(0.0, 1e-6));
     const Vector2d start = text.getStartPositionOfChar(0);
-    EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(start.x - 12.0, start.y + 16.0));
+    EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(start.x + 20.0, start.y));
   }
 }
 
