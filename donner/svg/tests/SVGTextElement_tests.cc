@@ -299,11 +299,26 @@ TEST(SVGTextElementPublicApiTests, VerticalTextPathLengthMatchesStraightTextAdva
       ASSERT_THAT(advance, testing::Gt(0.0));
       EXPECT_THAT(onPath.getComputedTextLength(), testing::DoubleNear(advance, 1e-6));
       EXPECT_THAT(onPath.getSubStringLength(0, 1), testing::DoubleNear(advance, 1e-6));
-      if (method == "stretch") {
-        const Vector2d start = onPath.getStartPositionOfChar(0);
-        EXPECT_THAT(onPath.getEndPositionOfChar(0), Vector2Near(start.x, start.y + advance));
-      }
+      const Vector2d start = onPath.getStartPositionOfChar(0);
+      EXPECT_THAT(onPath.getEndPositionOfChar(0), Vector2Near(start.x, start.y + advance));
     }
+  }
+}
+
+TEST(SVGTextElementPublicApiTests, AlignEndpointFollowsTheSlopedPathFrame) {
+  for (const std::string_view writingMode : {"horizontal-tb", "vertical-rl"}) {
+    SCOPED_TRACE(writingMode);
+    SVGDocument document = instantiateSubtree(
+        std::string("<path id='p' d='M20 20L180 140'/><text id='t' font-size='20' ") +
+            "textLength='20' lengthAdjust='spacingAndGlyphs' writing-mode='" +
+            std::string(writingMode) + "'><textPath href='#p'>A</textPath></text>",
+        kExperimentalOptions);
+    auto element = document.querySelector("#t");
+    ASSERT_THAT(element, Optional(testing::_));
+    auto text = element->cast<SVGTextElement>();
+    ASSERT_THAT(text.getComputedTextLength(), testing::DoubleNear(20.0, 1e-6));
+    const Vector2d start = text.getStartPositionOfChar(0);
+    EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(start.x + 16.0, start.y + 12.0));
   }
 }
 
