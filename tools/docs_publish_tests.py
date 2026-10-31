@@ -20,6 +20,9 @@ class DocsPublishTest(unittest.TestCase):
         self.api = mock.Mock()
         self.api.tip.return_value = "e" * 40
         self.api.call.return_value = {"status": "succeed"}
+        execution = mock.patch.dict(os.environ, {"GITHUB_SHA": "b" * 40})
+        execution.start()
+        self.addCleanup(execution.stop)
 
     def test_attestation_failures_keep_bounded_redacted_diagnostics(self):
         tokens = {"GH_TOKEN": "example-gh-secret", "GITHUB_TOKEN": "example-github-secret",
@@ -298,6 +301,78 @@ class DocsPublishTest(unittest.TestCase):
         def restore(record, output, read):
             shutil.copyfile(work / "pages/artifact.tar", output)
         return work, record, plan, commit, restore
+
+    def publication_plan(self):
+        work, record, plan, commit, restore = self.transaction()
+        plan.update(record=record, previous_archive_sha256=record["archive_sha256"])
+        (work / "preflight.json").write_bytes(site.canonical(plan))
+        return work, record, plan, commit, restore
+
+    def publication_uploads(self, work, execution):
+        import shutil
+        import zipfile
+        uploads, metadata = {}, {}
+        for artifact_id, role in ((9, "rollback"), (11, "candidate")):
+            uploads[artifact_id] = work / (role + "-upload.zip")
+            with zipfile.ZipFile(uploads[artifact_id], "w") as zipped:
+                zipped.write(work / "pages/artifact.tar", "artifact.tar")
+            metadata[artifact_id] = {"expired": False, "name": "docs-" + role + "-1",
+                "digest": "sha256:" + publish.bcr_source.digest(uploads[artifact_id]),
+                "workflow_run": {"id": 123, "head_sha": execution}}
+        def download(artifact_id, output):
+            shutil.copyfile(uploads[artifact_id], output)
+        return metadata, download
+
+    def test_normal_promotion_uses_current_upload_and_execution_sha(self):
+        work, record, plan, commit, restore = self.publication_plan()
+        execution = "c" * 40
+        metadata, download = self.publication_uploads(work, execution)
+        environment = {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
+                       "GITHUB_SHA": execution, "VERIFIED_CANDIDATE_ARTIFACT_ID": "11"}
+        with mock.patch.dict(os.environ, environment), \
+             mock.patch.object(publish.store, "index", return_value=plan["current"]), \
+             mock.patch.object(publish, "_live_identity", return_value=True), \
+             mock.patch.object(publish, "github_json", side_effect=lambda path: metadata[int(path.rsplit("/", 1)[1])]), \
+             mock.patch.object(publish, "download", side_effect=download), \
+             mock.patch.object(publish.store, "commit", side_effect=commit), \
+             mock.patch.object(publish.store, "restore", side_effect=restore), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy", return_value="91") as deploy:
+            result = publish.promote(work, 9, self.api)
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(deploy.call_args.args[:2], (11, execution))
+        self.assertEqual(record["artifact_id"], 7)
+        self.assertEqual(record["workflow_commit"], "b" * 40)
+
+    def test_promotion_consumers_reject_candidate_scope_before_retention(self):
+        work, record, plan, _, _ = self.publication_plan()
+        wrong_attempt = {"expired": False, "name": "docs-candidate-0",
+                         "workflow_run": {"id": 123, "head_sha": "b" * 40}}
+        for event in ("workflow_dispatch", "workflow_run"):
+            with self.subTest(event=event), \
+                 mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_RUN_ID": "123",
+                     "GITHUB_RUN_ATTEMPT": "1", "VERIFIED_CANDIDATE_ARTIFACT_ID": "11"}), \
+                 mock.patch.object(publish.store, "index", return_value=plan["current"]), \
+                 mock.patch.object(publish, "_live_identity", return_value=True), \
+                 mock.patch.object(publish, "_verified_previous"), \
+                 mock.patch.object(publish, "github_json", return_value=wrong_attempt), \
+                 mock.patch.object(publish, "_retain_and_deploy") as retain:
+                with self.assertRaisesRegex(ValueError, "candidate upload is not from this trusted run"):
+                    publish.promote(work, 9, self.api)
+                retain.assert_not_called()
+                self.api.call.assert_not_called()
+
+    def test_recovery_uses_execution_sha_without_changing_signed_source(self):
+        execution = "c" * 40
+        with mock.patch.dict(os.environ, {"GITHUB_SHA": execution}), \
+             mock.patch.object(publish, "_live_identity", return_value=False), \
+             mock.patch.object(publish, "live_marker", return_value={"manifest_sha256": "a" * 64}), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy", return_value="92") as deploy:
+            result = publish._recover(self.record, self.prior, 7, self.api, "unhealthy", "e" * 40, "91")
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(deploy.call_args.args[:2], (7, execution))
+        self.assertEqual(self.record["workflow_commit"], "b" * 40)
 
     def test_transport_rejection_blocks_retention_for_candidate_and_recovery(self):
         import io
