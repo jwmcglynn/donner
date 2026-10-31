@@ -247,16 +247,21 @@ build:macos --macos_minimum_os=13.3
 # a local test stages every file of the tree anyway.
 build:macos --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*
 
-# macOS CI lanes that share one remote cache. Every macOS CI job passes
-# --config=ci-macos (through BAZEL_MACOS_BUILD_FLAGS in main.yml) so that the
-# GitHub-hosted and the self-hosted macOS runners compute identical action
-# keys. Without a fixed PATH, Bazel copies the client's PATH into every action
+# The selector exports the actual approved Xcode tuple. Compiler/host-tool actions
+# and tests inherit it, including disk/Actions caches with no remote cache service.
+build --action_env=DONNER_CI_XCODE_IDENTITY
+build --host_action_env=DONNER_CI_XCODE_IDENTITY
+test --test_env=DONNER_CI_XCODE_IDENTITY
+
+# macOS CI lanes selecting the same approved tuple can share a remote cache.
+# The main.yml lanes pass --config=ci-macos through BAZEL_MACOS_BUILD_FLAGS
+# so GitHub-hosted and self-hosted runners on that tuple compute identical keys. Without a fixed PATH, Bazel copies the client's PATH into every action
 # environment, and it differs per runner (runner home directories, image tool
 # paths and the Bazelisk download directory, which Bazelisk prepends), so no
 # compile action matched across runners. The value keeps every directory either
 # lane relied on before this was pinned. The selected Xcode is pinned
-# separately, in tools/ci_macos_xcode.txt, because its version and build are
-# part of every Apple toolchain action key. Runner-only settings (remote cache
+# separately, in tools/ci_macos_xcode.txt; the actual tuple also binds action
+# and test keys through DONNER_CI_XCODE_IDENTITY. Runner-only settings (remote cache
 # endpoint, timeouts, --jobs) stay out of this config because they do not
 # affect action keys. //tools:macos_cache_key_parity_tests enforces this.
 build:ci-macos --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
