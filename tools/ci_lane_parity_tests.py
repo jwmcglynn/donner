@@ -68,6 +68,8 @@ TRIGGER_ALLOWLIST = {
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
     ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
+    ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
+    ("lint.yml", "cmake-validate", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
@@ -210,6 +212,12 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
+    ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
+        "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
+    ("lint.yml", "cmake-validate", "lint-self-hosted",
+     "actions/checkout@v7 [('persist-credentials', 'false')]", "step-main-only", ""):
+        "The shared lint checkout retains full history for changed-method complexity checks; "
+        "the generator consumes the same event source tree.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
         "The native macos-browser partition runs desktop-session tests separately; "

@@ -77,6 +77,11 @@ A site without `docs-site.json` has no modern composition identity. If its origi
 artifact has expired, the initializer uses a separately approved recovery destination. It does
 not claim a landing-page fingerprint is a backup of that historical site.
 
+Standalone composition is read-only and can be prepared even when the archive branch already
+exists. It does not read or replace that branch. A standalone artifact cannot be seeded over an
+existing archive branch or published without the matching live storage and recovery guards; an
+existing store needs a separately reviewed, explicitly approved append-only correction.
+
 First assemble a complete recovery composition with `snapshot_commit: "none"`, `bootstrap: null`,
 and the same signed stable-release source for both routes: select that release's docs build as
 `main_run` and its signed release-candidate record. The resulting selector explicitly labels
