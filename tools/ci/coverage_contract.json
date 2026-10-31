@@ -147,7 +147,8 @@
           "counterparts": [
             {
               "job": "macos-hosted-parity",
-              "step": "test"
+              "step": "test",
+              "min_tests": 1
             }
           ]
         },

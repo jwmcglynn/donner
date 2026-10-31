@@ -3970,8 +3970,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual({(main, "linux", "Configure BuildBuddy remote cache", '"true"')},
                          opted_in)
         self.assertEqual({(main, "linux", step) for step in (
-            "Verify BuildBuddy remote execution", "Build", "Test",
-            "Test (hosted parity subset)")}, consumers)
+            "Verify BuildBuddy remote execution", "Build", "Test")}, consumers)
 
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci

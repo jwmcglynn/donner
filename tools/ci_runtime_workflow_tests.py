@@ -838,14 +838,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("\n  %s:\n" % redundant, self.main)
         self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
 
-    def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
+    def test_native_window_gate_runs_on_arm64_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
-        local = hosted
         remote = self._job_body("linux-self-hosted")
-        self.assertNotIn("use_self_hosted_linux", hosted.split("steps:", 1)[0])
-        self.assertIn("use_self_hosted_linux == 'true'", self._step_body(local, "Test local Xvfb targets"))
+        local = remote
+        self.assertIn("use_self_hosted_linux != 'true'", hosted.split("steps:", 1)[0])
+        self.assertIn("use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
+        self.assertNotIn("Test local Xvfb targets", hosted)
         self.assertIn("xvfb xauth", hosted)
-        self.assertIn("xvfb xauth", local)
         self.assertIn("-local-gpu-isolated", remote)
         target = self.editor_tests_build.split(
             'name = "editor_window_vulkan_surface_tests",', 1
@@ -893,6 +893,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     ambient_bash.chmod(0o755)
                     args_file = root / "args.txt"
                     env = {**os.environ, "BAZEL_ARGS": str(args_file),
+                           "BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS":
+                               self._variables(local)["BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS"],
                            "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
                     result = self._run_script(script, [], cwd=root, env=env)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
