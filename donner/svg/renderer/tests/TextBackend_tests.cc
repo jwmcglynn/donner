@@ -617,7 +617,9 @@ TEST(TextBackendFullCapabilities, PackagedCffFontShapesOutlinesAndRendersThrough
   ASSERT_THAT(outline.commands(), Not(IsEmpty()));
   auto control =
       instantiateSubtree("<path id='glyph' transform='translate(16 48)'/>", {}, {80, 80});
-  auto path = control.querySelector("#glyph")->cast<SVGPathElement>();
+  auto element = control.querySelector("#glyph");
+  ASSERT_THAT(element.has_value(), testing::IsTrue());
+  auto path = element->cast<SVGPathElement>();
   path.setSpline(outline);
   auto empty = instantiateSubtree("<g/>", {}, {80, 80});
   const auto actual = RenderDocumentWithActiveBackend(document);

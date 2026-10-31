@@ -727,7 +727,8 @@ origins and GPOS offsets remain per-glyph shaping results; font-wide `vhea` asce
 transversal metric and does not replace an inline glyph origin. The size-optimized HarfBuzz
 configuration enables vertical metrics while retaining the variation and variation-composite
 exclusions. A compile guard keeps its unsupported OpenType variation-origin branch disabled;
-Donner constructs FreeType-backed fonts.
+Donner constructs FreeType-backed fonts. Outline extraction, including packaged CFF fonts, uses
+FreeType; unused HarfBuzz drawing and CFF-outline APIs stay disabled.
 
 Untrusted vertical metric callbacks charge validated glyph complexity before delegating to
 FreeType. One synchronous shape call, or calls sharing a shaping context, share the expansion and
