@@ -1949,9 +1949,11 @@ INSTANTIATE_TEST_SUITE_P(
                 // them at that size (provenance in third_party/resvg-test-suite/BUILD.bazel).
                 {"inheritance.svg", Params().setCanvasSize(300, 300)},
                 {"japanese-with-tb.svg",
-                 Params().onlyTextFull().withMaxPixelsDifferent(600).withReason(
-                     "Bug #1172: upright CJK sits 0.026em lower than resvg (vhea ascender "
-                     "vertical origin vs resvg centering on hhea ascent/descent)")},
+                 Params::Skip(
+                     "Reference/spec disagreement: available vmtx origin is 860; historical PNG "
+                     "places upright glyphs lower. Covered by TextBackendFullVerticalOrigin."
+                     "SvgUprightPlacementUsesAvailableVerticalOrigins")
+                     .onlyTextFull()},
                 {"mixed-languages-with-tb-and-underline.svg",
                  Params::Skip("Bug #1172: per-cluster fallback draws every glyph, but without "
                               "bidi runs the Arabic word shares the left-to-right Amiri run with "

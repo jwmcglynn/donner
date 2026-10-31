@@ -80,6 +80,15 @@ public:
   /// Total range bytes actually supplied to shaping, including fallback and analysis calls.
   [[nodiscard]] std::size_t shapedBytesForTesting() const { return shapedBytes_; }
 
+  /// Number of admitted untrusted-font vertical-origin parent callbacks.
+  [[nodiscard]] std::size_t delegatedVerticalOriginCallsForTesting() const {
+    return delegatedVerticalOriginCalls_;
+  }
+  /// Number of admitted untrusted-font vertical-advance parent callbacks.
+  [[nodiscard]] std::size_t delegatedVerticalAdvanceCallsForTesting() const {
+    return delegatedVerticalAdvanceCalls_;
+  }
+
 private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
@@ -94,6 +103,8 @@ private:
   /// See \ref detectedContextBytesForTesting.
   mutable std::size_t detectedContextBytes_ = 0;
   mutable std::size_t shapedBytes_ = 0;
+  mutable std::size_t delegatedVerticalOriginCalls_ = 0;
+  mutable std::size_t delegatedVerticalAdvanceCalls_ = 0;
 
   /// Cache entry stored on the font entity.
   struct HbFontEntry;

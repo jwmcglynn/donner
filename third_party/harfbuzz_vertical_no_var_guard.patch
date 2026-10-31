@@ -1,0 +1,19 @@
+--- a/src/hb-ot-font.cc
++++ b/src/hb-ot-font.cc
+@@ -720,6 +720,7 @@
+     return true;
+   }
+ 
++#ifndef HB_NO_VAR
+   /* If and only if `vmtx` is present and it's a `glyf` font,
+    * we use the top phantom point, deduced from vmtx,glyf[,gvar]. */
+   const auto &vmtx = *ot_face->vmtx;
+@@ -760,6 +761,8 @@
+     ot_font->v_origin.release_origin_cache (origin_cache);
+     return true;
+   }
++
++#endif
+ 
+   /* Otherwise, use glyph extents to center the glyph vertically.
+    * If getting glyph extents failed, just use the font ascender. */

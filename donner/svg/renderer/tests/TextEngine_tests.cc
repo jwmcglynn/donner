@@ -1988,8 +1988,7 @@ TEST(TextEngineTest, VerticalAnchorsMeasurePenExtentForEndSidewaysFirstAndUprigh
     EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
   }
 
-  // The all-upright control checks the same length from drawn positions alone: the first and last
-  // glyphs carry the same origin offset, which cancels.
+  // Per-glyph origins can differ, so compare pen positions rather than drawn origins.
   const auto uprightStart = [&] {
     components::ComputedTextComponent text;
     auto span = MakeSpan(cases[2].text);
@@ -2003,7 +2002,9 @@ TEST(TextEngineTest, VerticalAnchorsMeasurePenExtentForEndSidewaysFirstAndUprigh
   }();
   ASSERT_THAT(uprightStart, ElementsAre(RunGlyphsAre(SizeIs(3))));
   const auto& upright = uprightStart[0].glyphs;
-  EXPECT_THAT(upright.back().yPosition + upright.back().yAdvance - upright.front().yPosition,
+  EXPECT_THAT(upright.back().yPosition - upright.back().verticalOriginOffset +
+                  upright.back().yAdvance -
+                  (upright.front().yPosition - upright.front().verticalOriginOffset),
               DoubleNear(60.0, 1e-9));
 }
 
@@ -2043,9 +2044,10 @@ TEST(TextEngineTest, VerticalSpacingAndGlyphsScalesUprightGlyphsFromTheirPenPosi
   // The upright glyphs sit below their pen positions, so a scale about the first drawn origin
   // would differ from a scale about the pen.
   ASSERT_THAT(natural[0].glyphs.front(), GlyphYPositionIs(Gt(0.0)));
-  const double naturalLength = natural[0].glyphs.back().yPosition +
-                               natural[0].glyphs.back().yAdvance -
-                               natural[0].glyphs.front().yPosition;
+  const auto& first = natural[0].glyphs.front();
+  const auto& last = natural[0].glyphs.back();
+  const double naturalLength = last.yPosition - last.verticalOriginOffset + last.yAdvance -
+                               (first.yPosition - first.verticalOriginOffset);
   std::vector<double> expected;
   for (const TextGlyph& glyph : natural[0].glyphs) {
     expected.push_back(glyph.yPosition * kScale);

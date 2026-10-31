@@ -32,9 +32,8 @@ cc_library(
         "-Wno-missing-field-initializers",
         "-Wno-cast-function-type-strict",
     ],
-    # HB_TINY strips many features for binary size. We override HB_NO_DRAW
-    # (set by HB_TINY) because we need the draw API for glyph outline extraction.
-    # HAVE_FREETYPE enables hb-ft.cc for FreeType-backed hinted glyph outlines.
+    # HB_TINY strips unused APIs; the override enables file I/O and vertical metrics.
+    # HAVE_FREETYPE enables hb-ft.cc. Donner extracts CFF and TrueType outlines with FreeType.
     defines = [
         "HB_TINY",
         "HAVE_STDBOOL_H",

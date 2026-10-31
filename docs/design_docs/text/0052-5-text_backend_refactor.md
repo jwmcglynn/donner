@@ -720,19 +720,30 @@ Phase 3 introduced `TextBackendFull` as a port of `TextShaper`'s HarfBuzz+FreeTy
 following 9 resvg tests initially regressed. **All have been resolved** — the full resvg suite
 passes on both `--config=text-full` and the default config as of 2026-04-04.
 
-### Vertical CJK layout (`a-writing-mode-012`)
+### Vertical CJK layout
 
-Japanese text (`日本`) with `writing-mode: tb` using Mplus 1p font. Diff: 11928px (threshold 600).
+`TextBackendFull` shapes vertical text through FreeType-backed HarfBuzz font functions. Upright
+origins and GPOS offsets remain per-glyph shaping results; font-wide `vhea` ascent is a
+transversal metric and does not replace an inline glyph origin. The size-optimized HarfBuzz
+configuration enables vertical metrics while retaining the variation and variation-composite
+exclusions. A compile guard keeps its unsupported OpenType variation-origin branch disabled;
+Donner constructs FreeType-backed fonts. Outline extraction, including packaged CFF fonts, uses
+FreeType; unused HarfBuzz drawing and CFF-outline APIs stay disabled.
 
-**Root cause:** The engine always shapes in LTR mode and uses `spanFontSizePx` as fallback
-vertical advance for CJK glyphs. The old `TextShaper` shaped with `HB_DIRECTION_TTB` and used
-HarfBuzz's vertical metrics directly. For CJK fonts with proper vmtx/vhea tables, the advance
-from vertical shaping may differ from the em-height fallback.
+Untrusted vertical metric callbacks charge validated glyph complexity before delegating to
+FreeType. One synchronous shape call, or calls sharing a shaping context, share the expansion and
+work ceilings. Refusal suppresses origin fallback and discards the entire shaped result. Trusted
+application fonts retain their existing decoding authority; byte/context admission and later
+geometry materialization budgets still apply. The basic backend retains its em-height CJK
+fallback and does not acquire the full shaping dependency.
 
-**Fix plan:** For upright CJK glyphs in vertical mode, query the font's vertical advance from
-HarfBuzz using `hb_font_get_glyph_v_advance()` instead of falling back to em height. This can
-be done either in `TextBackendFull::shapeRun()` (shape each CJK segment in TTB) or by adding a
-`glyphVAdvance()` method to `TextBackend`.
+`//donner/svg/renderer/tests:text_backend_tests` and its `_text_full` variant cover independent
+vertical side bearings, untrusted mark positioning and small-cap scale changes, zero/nonzero
+aggregate refusal, and trusted bitmap preservation. `//donner/svg/renderer/tests:text_engine_tests`
+covers pen-based anchors and textLength with distinct drawn origins.
+`//donner/svg/text:basic_text_engine_dependency_audit_test` checks the basic dependency closure.
+The enforcing shipped full-text consumer is `//tools/ci:editor_wasm_size_tests` under
+`--config=editor-wasm`.
 
 ### Emoji bitmap glyphs (`e-text-027`, `e-text-028`, `e-text-029`)
 
