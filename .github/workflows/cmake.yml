@@ -250,8 +250,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          command -v cmake
-          command -v ninja
+          command -v cmake >/dev/null
+          command -v ninja >/dev/null
 
       - name: Isolate nested Bazel invocations
         shell: bash
