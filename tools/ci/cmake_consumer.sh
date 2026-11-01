@@ -6,11 +6,12 @@
 #
 #   tools/ci/cmake_consumer.sh install-tools
 #       Install ccache and ninja with Homebrew when either is missing (hosted macOS images).
-#   tools/ci/cmake_consumer.sh build [--check] [--ccache] [--parallel N]
+#   tools/ci/cmake_consumer.sh build [--check] [--ccache] [--release-bazel-server] [--parallel N]
 #       --check     first validate the checked-in generator output (gen_cmakelists.py --check)
 #       --ccache    compile through ccache, capped at $CCACHE_MAXSIZE, and report its statistics
+#       --release-bazel-server  stop this lane's query/build server before native compilation
 #       --parallel  build with N jobs; without it CMake's own default applies
-#   (--check --parallel 2 matches the CMake consumer step of the main CI workflow.)
+#   Main CI uses --check --release-bazel-server --parallel 4.
 #
 # Each phase is a collapsible `::group::` in the GitHub Actions log, and when
 # $GITHUB_STEP_SUMMARY is set the phases and their results are appended to the job summary.
@@ -39,12 +40,13 @@ install_tools() {
 }
 
 build() {
-  local check=0 use_ccache=0
+  local check=0 use_ccache=0 release_bazel_server=0
   local parallel=(--parallel)
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --check) check=1 ;;
       --ccache) use_ccache=1 ;;
+      --release-bazel-server) release_bazel_server=1 ;;
       --parallel)
         [[ $# -ge 2 ]] || usage
         parallel=(--parallel "$2")
@@ -74,6 +76,9 @@ build() {
     lane_phase "Validate generated CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py --check
   fi
   lane_phase "Generate CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py
+  if [[ ${release_bazel_server} -eq 1 ]]; then
+    lane_phase "Release Bazel server memory" bazel shutdown
+  fi
   lane_phase "Configure" "${configure[@]}"
   lane_phase "Build donner_cmake_consumer" \
     cmake --build build --target donner_cmake_consumer "${parallel[@]}"
