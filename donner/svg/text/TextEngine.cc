@@ -4519,8 +4519,10 @@ private:
         const char32_t cp = IsBlankShapingControl(decoded) ? U' ' : decoded;
         const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
         appendCharacter(span, spanIndex, position, start, sourceByte, cp, previousJoiner);
-        previousJoiner = cp == 0x200d;
-        position += !BidiParagraph::IsControl(cp);
+        if (!BidiParagraph::IsControl(cp)) {
+          previousJoiner = cp == 0x200d;
+          ++position;
+        }
       }
     }
     mapping.end = characters.size();
@@ -7015,11 +7017,20 @@ private:
     if (!state.fullWidthText) {
       return;
     }
-    const auto sourceCluster = [&state](uint32_t byte) -> uint32_t {
-      if (byte >= state.indexMappings.byteToCharIdx.size()) {
+    // Positioning and path staging have consumed the addressable map; reuse its allocation.
+    auto byteToSourceByte = std::move(state.indexMappings.byteToCharIdx);
+    size_t scalar = 0;
+    for (size_t byte = 0; byte < state.text.size();) {
+      const size_t start = byte;
+      decodeUtf8(state.text, byte);
+      std::fill(byteToSourceByte.begin() + start, byteToSourceByte.begin() + byte,
+                state.fullWidthText->sourceByteOffsets[scalar++]);
+    }
+    const auto sourceCluster = [&state, &byteToSourceByte](uint32_t byte) -> uint32_t {
+      if (byte >= byteToSourceByte.size()) {
         return static_cast<uint32_t>(state.span->end - state.span->start);
       }
-      return state.fullWidthText->sourceByteOffsets[state.indexMappings.byteToCharIdx[byte]];
+      return byteToSourceByte[byte];
     };
     for (auto& glyph : state.run.glyphs) {
       glyph.cluster = sourceCluster(glyph.cluster);
