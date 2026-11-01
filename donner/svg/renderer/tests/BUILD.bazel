@@ -863,12 +863,58 @@ donner_cc_test(
     name = "text_path_convergence_tests",
     srcs = ["TextPathConvergence_tests.cc"],
     opens_gpu_device = True,
-    variants = ["text_full", "geode"],
+    variants = [
+        "text_full",
+        "geode",
+    ],
     deps = [
         ":renderer_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_test(
+    name = "text_bidi_convergence_tests_impl",
+    srcs = ["TextBidiConvergence_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":renderer_test_backend",
+        "//donner/base:base_test_utils",
+        "//donner/css",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_backend_full",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_variant_cc_test(
+    name = "text_bidi_convergence_tests",
+    dep = ":text_bidi_convergence_tests_impl",
+    named_variants = [
+        {
+            "name": "tiny_full",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "true",
+        },
+        {
+            "name": "geode_full",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "true",
+        },
+    ],
+    opens_gpu_device = True,
 )
 
 donner_cc_test(
@@ -1418,11 +1464,11 @@ configured_dependency_audit_test(
 donner_cc_fuzzer(
     name = "svg_document_render_fuzzer",
     testonly = True,
-    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = [
         "SVGDocumentRender_fuzzer.cc",
     ],
     corpus = "svg_document_render_corpus",
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     tags = [
         "fuzz_geode",
         "fuzz_text_full",
@@ -1450,11 +1496,11 @@ filegroup(
 donner_cc_fuzzer(
     name = "svg_document_raster_fuzzer",
     testonly = True,
-    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = [
         "SVGDocumentRaster_fuzzer.cc",
     ],
     corpus = ":svg_document_raster_fuzzer_seeds",
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     tags = ["fuzz_text_full"],
     deps = [
         "//donner/base:packaged_resource_test_fixture",
