@@ -1,11 +1,43 @@
-.docs-version { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font: normal .875rem var(--font-family, sans-serif); }
-.docs-version label { font-size: .8rem; color: var(--page-secondary-foreground-color, #555); }
-.docs-version select { font: inherit; color: var(--page-foreground-color, #222); background: var(--page-background-color, #fff); border: 1px solid var(--separator-color, #aaa); border-radius: .35rem; padding: .3rem .5rem; max-width: 100%; }
+.docs-version { position: fixed; top: 24px; right: 96px; z-index: 101; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: 0; max-width: 200px; font: normal .875rem var(--font-family, sans-serif); }
+.docs-version label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.docs-version select { font: inherit; color: var(--page-foreground-color, #222); background: var(--page-background-color, #fff); border: 1px solid var(--separator-color, #aaa); border-radius: .35rem; padding: .3rem .5rem; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .docs-version select:focus-visible { outline: 2px solid var(--primary-color, #0071bc); outline-offset: 2px; }
 .docs-version-links { font-size: .8rem; display: flex; gap: .5rem; }
 .docs-version-ready .docs-version-links { display: none; }
 .docs-version-notice { padding: .75rem; margin: .5rem; border: 1px solid var(--separator-color, #aaa); border-radius: .35rem; font: normal .875rem sans-serif; }
 .docs-version-notice button { margin-left: .5rem; font: inherit; cursor: pointer; }
-@media (max-width: 600px) { .docs-version { align-items: flex-start; flex-direction: column; } }
 
-.docs-source { font-size: .8rem; color: var(--page-secondary-foreground-color, #555); }
+.docs-source, #projectnumber { display: none; }
+html { --code-font-size: 13px; }
+
+/* Stored release pages keep their original theme, so size the shared navigation here. */
+#titlearea table { table-layout: fixed; width: 100%; }
+#projectlogo { width: 48px; vertical-align: top; padding-top: 2px; }
+#projectrow #projectlogo img { width: 48px; min-width: 48px; min-height: 0; }
+#projectname { font-size: 20px; }
+#projectbrief { font-size: 12px; line-height: 1.4; }
+
+@media screen and (min-width: 768px) {
+  html {
+    --side-nav-fixed-width: 256px;
+    --top-height: calc(5.5rem + 2 * var(--spacing-medium) + var(--searchbar-height) + var(--spacing-small));
+  }
+  #nav-sync { left: calc(var(--side-nav-fixed-width) - 35px); }
+  div.header .title { padding-right: 220px; }
+}
+
+@media screen and (max-width: 767px) {
+  .docs-version { position: static; float: right; max-width: 120px; font-size: .75rem; }
+  #projectlogo { width: 36px; }
+  #projectrow #projectlogo img { width: 36px; min-width: 36px; }
+  #projectname { display: flow-root; font-size: 18px; }
+  #projectbrief { padding-top: 4px; }
+  #doc-content { overflow-wrap: anywhere; }
+  #doc-content img { max-width: 100%; height: auto; }
+  #doc-content table { max-width: 100%; }
+  #doc-content th, #doc-content td { white-space: normal; }
+  #doc-content :is(table.params, table.tparams, table.retval, table.exception) { display: table; width: 100%; table-layout: fixed; }
+  #doc-content :is(.params, .tparams, .retval, .exception) tbody { display: table-row-group; }
+  #doc-content :is(.params, .tparams, .retval, .exception) .paramname { width: 33%; }
+  #doc-content code, #doc-content span.tt, div.fragment .line, pre.fragment { white-space: pre-wrap; overflow-wrap: anywhere; }
+}

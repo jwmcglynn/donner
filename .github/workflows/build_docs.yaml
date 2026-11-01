@@ -54,7 +54,7 @@ jobs:
         run: python3 -B -m tools.pages_artifact summary --archive "$RUNNER_TEMP/artifact.tar"
 
       - name: Setup Bazel for the module graph record
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
           repository-cache: true

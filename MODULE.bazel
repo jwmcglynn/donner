@@ -198,7 +198,7 @@ single_version_override(
 
 # rules_nodejs registers the Node runtime toolchains that aspect_rules_js and emsdk use. Tests that
 # run Node take it from that toolchain instead of the host. Matches the version emsdk requires.
-bazel_dep(name = "rules_nodejs", version = "6.7.3", dev_dependency = True)
+bazel_dep(name = "rules_nodejs", version = "6.7.7", dev_dependency = True)
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(

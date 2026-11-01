@@ -66,7 +66,7 @@ jobs:
           distribution: "microsoft"
 
       - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
           # Coverage already keeps large instrumented objects, profraw files,
