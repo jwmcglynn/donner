@@ -11,6 +11,7 @@ Version: 3.16.0
 URL: https://github.com/skypjack/entt
 License: MIT
 
+License text [1]:
 The MIT License (MIT)
 
 Copyright (c) 2017-2025 Michele Caini, author of EnTT
@@ -37,6 +38,7 @@ SOFTWARE.
 Package: libpng
 License: libpng-2.0
 
+License text [2]:
 COPYRIGHT NOTICE, DISCLAIMER, and LICENSE
 =========================================
 
@@ -177,6 +179,7 @@ Package: Public Sans
 URL: https://github.com/uswds/public-sans
 License: OFL-1.1
 
+License text [3]:
 This repository is a fork of Libre Franklin: https://github.com/impallari/Libre-Franklin
 
 ## License for USWDS’s Modified Version
@@ -299,6 +302,7 @@ Version: 3.0.0
 URL: https://github.com/Tehreer/SheenBidi
 License: Apache-2.0
 
+License text [4]:
 
                                  Apache License
                            Version 2.0, January 2004
@@ -507,6 +511,7 @@ Package: stb
 URL: https://github.com/nothings/stb
 License: MIT
 
+License text [5]:
 This software is available under 2 licenses -- choose whichever you prefer.
 ------------------------------------------------------------------------------
 ALTERNATIVE A - MIT License
@@ -550,6 +555,7 @@ Package: tiny-skia-cpp
 URL: https://github.com/jwmcglynn/tiny-skia-cpp
 License: BSD-3-Clause
 
+License text [6]:
 Copyright (c) 2011 Google Inc. All rights reserved.
 Copyright (c) 2020 Yevhenii Reizner All rights reserved.
 Copyright (c) 2025 Jeff McGlynn and tiny-skia-cpp contributors. All rights reserved.
@@ -586,6 +592,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Package: zlib
 License: Zlib
 
+License text [7]:
 Copyright notice:
 
  (C) 1995-2026 Jean-loup Gailly and Mark Adler
