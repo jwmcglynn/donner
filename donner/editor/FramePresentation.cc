@@ -758,7 +758,8 @@ bool SameTextFrameViewport(const ViewportState& lhs, const ViewportState& rhs) {
 bool FramePresentation::sameTextEditingSession(const FramePresentationInput& input) const {
   const auto& text = input.decorations.textEditing;
   return input.includeChrome && input.detail == SelectionChromeDetail::EditingChromeOnly && text &&
-         textEditingSubject_ == text->subject && !input.desired &&
+         textEditingSubject_ == text->subject && !input.desired && !input.suppressSelectionPixels &&
+         input.suppressedLayerEntity == entt::null &&
          SameSelection(selectionCapture_->selection(), input.selection);
 }
 
@@ -830,9 +831,14 @@ bool FramePresentation::applyDecorations(const FramePresentationInput& input,
   chrome_.penPreviewSegmentDoc = input.decorations.penPreviewSegmentDoc;
   chrome_.penCloseAffordanceDoc = input.decorations.penCloseAffordanceDoc;
   chrome_.textBoxDragPreviewDoc = input.decorations.textBoxDragPreviewDoc;
+  if (input.detail != SelectionChromeDetail::EditingChromeOnly || input.selection.empty()) {
+    return true;
+  }
   const auto& current = input.decorations.textEditing;
-  if (input.detail != SelectionChromeDetail::EditingChromeOnly || !current ||
-      !ContainsSelection(input.selection, current->subject)) {
+  if (!current) {
+    return false;
+  }
+  if (!ContainsSelection(input.selection, current->subject)) {
     return true;
   }
   if (applyMeasuredTextDecorations(input)) {

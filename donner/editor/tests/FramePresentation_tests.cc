@@ -839,12 +839,15 @@ TEST(FramePresentationTest, TextEditingHoldRequiresTheSameSessionResourcesAndCam
   check([](auto& value) { value.decorations.textEditing.reset(); });
   check([](auto& value) { value.includeChrome = false; });
   check([](auto& value) { value.detail = SelectionChromeDetail::Full; });
+  check([](auto& value) { value.suppressSelectionPixels = true; });
+  check([](auto& value) { value.suppressedLayerEntity = value.selection.front(); });
   check([](auto& value) { value.viewport.zoom *= 2; });
   check([](auto& value) { ++value.viewport.panDocPoint.x; });
   check([](auto& value) { ++value.paneClipRect.bottomRight.x; });
 
   auto nonediting = input;
   nonediting.decorations.textEditing.reset();
+  nonediting.detail = SelectionChromeDetail::Full;
   const auto ended = FramePresentation::Build(resources, nonediting, nullptr, frame).frame;
   ASSERT_THAT(ended, Ne(nullptr));
   EXPECT_THAT(ended->chrome().textFrameCornersDoc, Eq(std::nullopt));

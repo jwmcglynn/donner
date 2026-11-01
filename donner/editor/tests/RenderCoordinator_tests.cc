@@ -977,8 +977,7 @@ TEST(RenderCoordinatorTest, MissingInitialTextMeasurementRecoversAndEndedSession
   CapturedPresentation::TextEditing measured{.identity = capture->identity(),
                                              .canvasSize = capture->canvasSize(),
                                              .subject = capture->selection().front()};
-  ++measured.identity.documentRevision;
-  coordinator.setTextEditingChrome(measured);
+  coordinator.setTextEditingChrome(std::nullopt);
   EXPECT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
                          SelectionChromeDetail::EditingChromeOnly),
               testing::Eq(nullptr));
@@ -992,8 +991,8 @@ TEST(RenderCoordinatorTest, MissingInitialTextMeasurementRecoversAndEndedSession
   coordinator.setTextEditingChrome(std::nullopt);
   QuerySelector(app, "#r1").setAttribute("x", "12");
   const auto latest = AcceptCapturedScene(coordinator, app);
-  const auto ended = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
-                                SelectionChromeDetail::EditingChromeOnly);
+  const auto ended =
+      BuildFrame(coordinator, app, tool, MakeViewport(app), textures, SelectionChromeDetail::Full);
   ASSERT_THAT(ended, testing::Ne(nullptr));
   EXPECT_THAT(ended->identity(), testing::Eq(latest->identity()));
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
