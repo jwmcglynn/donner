@@ -612,9 +612,10 @@ std::optional<std::vector<const TextGlyph*>> VisualDecorationGlyphs(const TextRu
   for (const auto& glyph : run.glyphs) {
     result.push_back(&glyph);
   }
-  std::stable_sort(result.begin(), result.end(), [](const TextGlyph* a, const TextGlyph* b) {
-    return a->visualOrder.value_or(std::numeric_limits<uint32_t>::max()) <
-           b->visualOrder.value_or(std::numeric_limits<uint32_t>::max());
+  // All references belong to one glyph vector; address order preserves source order on ties.
+  std::sort(result.begin(), result.end(), [](const TextGlyph* a, const TextGlyph* b) {
+    return std::pair(a->visualOrder.value_or(std::numeric_limits<uint32_t>::max()), a) <
+           std::pair(b->visualOrder.value_or(std::numeric_limits<uint32_t>::max()), b);
   });
   return result;
 }
