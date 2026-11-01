@@ -2312,14 +2312,26 @@ TEST(TextEngineTest, SmallCapsSynthesisNoneRetainsRealOpenTypeSmallCaps) {
   EXPECT_FLOAT_EQ(runs.front().glyphs[0].fontSizeScale, 1.0f);
 }
 
-// A fallback item is one part of its chunk: in a right-to-left chunk the neutral parentheses
-// around an Arabic word that falls back to another face still take the chunk's direction, so they
-// mirror, and the items keep visual order.
-TEST(TextEngineTest, FallbackItemsInRightToLeftChunkMirrorNeutralsInVisualOrder) {
+// Fallback items retain their resolved level's direction. Normal paragraph base zero leaves the
+// outer parentheses left to right; an explicit RTL embedding reverses and mirrors them.
+TEST(TextEngineTest, FallbackItemsUseResolvedDirectionsForNeutralMirroringAndVisualOrder) {
   Registry registry;
   FontManager fontManager(registry);
-  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
-  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+  const auto primary = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  const auto fallback = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
+  ASSERT_THAT(static_cast<bool>(primary), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(fallback), testing::IsTrue());
+
+  TextBackendFull direct(fontManager, registry);
+  const auto missing = direct.shapeRun(primary, 20, "مر", 0, 4, false, FontVariant::Normal, false);
+  const auto supported =
+      direct.shapeRun(fallback, 20, "مر", 0, 4, false, FontVariant::Normal, false);
+  ASSERT_THAT(missing.glyphs, SizeIs(2));
+  EXPECT_THAT(missing.glyphs,
+              Each(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, Eq(0))));
+  ASSERT_THAT(supported.glyphs, SizeIs(2));
+  EXPECT_THAT(supported.glyphs,
+              Each(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, Gt(0))));
 
   const auto glyphIndexOf = [&](std::string_view utf8) {
     const auto runs = LayOutFull(registry, fontManager, utf8, {RcString("Noto Sans")});
@@ -2329,18 +2341,33 @@ TEST(TextEngineTest, FallbackItemsInRightToLeftChunkMirrorNeutralsInVisualOrder)
   const int closeParen = glyphIndexOf(")");
   ASSERT_THAT(openParen, Gt(0));
   ASSERT_THAT(closeParen, Gt(0));
+  ASSERT_THAT(openParen, Not(Eq(closeParen)));
 
-  // "(" at byte 0, Arabic meem at 1, reh at 3, ")" at 5.
-  const auto runs =
-      LayOutFull(registry, fontManager, "(\xD9\x85\xD8\xB1)", {RcString("Noto Sans")});
-  ASSERT_THAT(runs, SizeIs(1));
-  std::vector<uint32_t> clusters;
-  for (const TextGlyph& glyph : runs[0].glyphs) {
-    clusters.push_back(glyph.cluster);
+  for (bool embedded : {false, true}) {
+    SCOPED_TRACE(embedded);
+    const std::string_view source = embedded ? "\u202b(مر)\u202c" : "(مر)";
+    const auto runs = LayOutFull(registry, fontManager, source, {RcString("Noto Sans")});
+    ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    std::vector<uint32_t> clusters;
+    for (const TextGlyph& glyph : runs[0].glyphs) {
+      clusters.push_back(glyph.cluster);
+      EXPECT_THAT(glyph.glyphIndex, Gt(0));
+    }
+    if (embedded) {
+      // RLE uses bytes 0-2; '(' starts at 3, meem at 4, reh at 6, ')' at 8, PDF at 9.
+      EXPECT_THAT(clusters, ElementsAre(8u, 6u, 4u, 3u));
+    } else {
+      // Level-zero parentheses at bytes 0, 5 surround the reversed Arabic bytes 3, 1.
+      EXPECT_THAT(clusters, ElementsAre(0u, 3u, 1u, 5u));
+    }
+    // In the embedding the leftmost logical ')' takes '(' glyph, and '(' takes ')' glyph.
+    EXPECT_THAT(runs[0].glyphs,
+                ElementsAre(GlyphIndexIs(openParen), _, _, GlyphIndexIs(closeParen)));
+    EXPECT_THAT(GlyphFont(runs[0], runs[0].glyphs.front()), Eq(primary));
+    EXPECT_THAT(GlyphFont(runs[0], runs[0].glyphs[1]), Eq(fallback));
+    EXPECT_THAT(GlyphFont(runs[0], runs[0].glyphs[2]), Eq(fallback));
+    EXPECT_THAT(GlyphFont(runs[0], runs[0].glyphs.back()), Eq(primary));
   }
-  EXPECT_THAT(clusters, ElementsAre(5u, 3u, 1u, 0u));
-  // Visually leftmost is the logical ")" drawn mirrored, rightmost the logical "(" mirrored.
-  EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(openParen), _, _, GlyphIndexIs(closeParen)));
 }
 
 // Shaping each fallback item in its chunk's context must not rescan the whole chunk per item: a
