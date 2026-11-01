@@ -7288,6 +7288,7 @@ private:
   struct BidiPen {
     double x = 0;
     double y = 0;
+    size_t paragraphOrigin = 0;
     uint32_t visualOrder = 0;
     bool firstVisual = true;
     bool absoluteInline = false;
@@ -7407,11 +7408,38 @@ private:
     }
   }
 
+  std::pair<bool, bool> applyBidiGroupPosition(const BidiPlacement& item,
+                                               std::optional<size_t> previous, BidiPen& pen) {
+    if (item.character == pen.paragraphOrigin ||
+        (previous && bidiPlacements_[*previous].character == item.character)) {
+      return {};
+    }
+    const auto& source = normalBidi_.characters[item.character];
+    const auto& span = text_.spans[source.span];
+    const auto x = bidiAuthoredPosition(source, span.xList, Lengthd::Extent::X);
+    const auto y = bidiAuthoredPosition(source, span.yList, Lengthd::Extent::Y);
+    if (x) {
+      pen.x = *x;
+    }
+    if (y) {
+      pen.y = *y;
+    }
+    if (x || y) {
+      chunkBoundaries_.push_back(
+          {item.run, item.glyph, span.textAnchor, x.has_value(), y.has_value(), pen.x + source.dx});
+      chunkBoundaries_.back().visualFirstGlyph = std::pair(item.run, item.glyph);
+    }
+    return {x.has_value(), y.has_value()};
+  }
+
   bool placeBidiGlyph(size_t index, std::optional<size_t> previous, BidiPen& pen) {
     const auto& item = bidiPlacements_[index];
     const auto& source = normalBidi_.characters[item.character];
     auto& glyph = runs_[item.run].glyphs[item.glyph];
-    pen.x += item.kern + bidiCrossSpanKern(item, previous);
+    const auto [absoluteX, absoluteY] = applyBidiGroupPosition(item, previous, pen);
+    if (!absoluteX && !absoluteY) {
+      pen.x += item.kern + bidiCrossSpanKern(item, previous);
+    }
     if (normalBidi_.work.rejected) {
       return normalBidi_.reject();
     }
@@ -7419,7 +7447,7 @@ private:
     glyph.yPosition = pen.y + item.baseline + item.offsetY + source.dy;
     glyph.rightToLeft = source.level % 2 != 0;
     glyph.visualOrder = pen.visualOrder++;
-    glyph.absoluteInlinePosition = pen.firstVisual && pen.absoluteInline;
+    glyph.absoluteInlinePosition = absoluteX || (pen.firstVisual && pen.absoluteInline);
     pen.firstVisual = false;
     rotateBidiMark(glyph, item, previous);
     if (!HasFiniteFlatGlyphGeometry(glyph)) {
@@ -7435,6 +7463,7 @@ private:
     if (!first) {
       return true;
     }
+    pen.paragraphOrigin = *first;
     beginBidiParagraph(order, normalBidi_.characters[*first], pen);
     std::optional<size_t> previous;
     for (size_t index : order) {
