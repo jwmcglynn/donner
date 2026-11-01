@@ -44,7 +44,7 @@ class CMakeConsumerTest(unittest.TestCase):
         # PATH means a runner's own cmake, ccache or ninja can never stand in for a fake.
         cls.host = cls.executables.path / "host"
         cls.host.mkdir()
-        for tool in ("dirname", "sed"):
+        for tool in ("dirname", "sed", "mktemp"):
             os.symlink(shutil.which(tool), cls.host / tool)
         cls.bash = shutil.which("bash")
 
@@ -134,6 +134,13 @@ class CMakeConsumerTest(unittest.TestCase):
         self.assertEqual(protocol[2][6:], ["cmake", "--build", "build", "--target", "donner_cmake_consumer", "--parallel", "4"])
         self.assertEqual(protocol[3][6:], ["ctest", "--test-dir", "build", "--output-on-failure", "--no-tests=error", "--output-junit", str(self.repo.resolve() / "build/cmake-consumer-tests.xml")])
         self.assertNotIn(["ccache", "--zero-stats"], calls)
+
+    def test_contributor_receipt_uses_the_private_context_directory(self):
+        result, calls = self._run("build", "--cache", RUNNER_TEMP="", TMPDIR=str(self.work))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = Path(calls[1][4])
+        self.assertEqual(str(context.parent / "cmake-cache-receipt.json"), calls[-1][-1])
+        self.assertEqual(0o700, context.parent.stat().st_mode & 0o777)
 
     def test_failed_shutdown_stops_before_native_compilation(self):
         result, calls = self._run("build", "--release-bazel-server", "--parallel", "4",

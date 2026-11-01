@@ -86,7 +86,9 @@ build() {
     lane_phase "Release Bazel server memory" bazel shutdown
   fi
   if [[ ${use_cache} -eq 1 ]]; then
-    local context="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/donner-cmake-cache-$$.json"
+    local context_dir
+    context_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/donner-cmake-XXXXXX")"
+    local context="$context_dir/context.json"
     local client=(python3 tools/ci/cmake_cache.py)
     lane_phase "Prepare compiler and dependency caches" "${client[@]}" prepare --context "$context"
     lane_phase "Configure" "${client[@]}" configure --context "$context" -- "${configure[@]}"
@@ -96,7 +98,7 @@ build() {
       ctest --test-dir build --output-on-failure --no-tests=error \
       --output-junit "$PWD/build/cmake-consumer-tests.xml"
     lane_phase "Compiler cache statistics" "${client[@]}" statistics --context "$context" \
-      --receipt "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/cmake-cache-receipt.json"
+      --receipt "${RUNNER_TEMP:-$context_dir}/cmake-cache-receipt.json"
   else
     lane_phase "Configure" "${configure[@]}"
     lane_phase "Build donner_cmake_consumer" \
