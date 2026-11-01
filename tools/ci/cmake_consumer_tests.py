@@ -12,7 +12,7 @@ from python.runfiles import runfiles
 from tools import test_timing
 from tools.test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 
-_TOOLS = ("brew", "ccache", "cmake", "ctest", "ninja", "python3")
+_TOOLS = ("bazel", "brew", "ccache", "cmake", "ctest", "ninja", "python3")
 
 
 class CMakeConsumerTest(unittest.TestCase):
@@ -109,6 +109,25 @@ class CMakeConsumerTest(unittest.TestCase):
             ["cmake", "--build", "build", "--target", "donner_cmake_consumer", "--parallel", "2"],
             ["ctest", "--test-dir", "build", "--output-on-failure"],
         ])
+
+    def test_bazel_server_is_released_after_generation_before_four_worker_build(self):
+        result, calls = self._run("build", "--check", "--release-bazel-server", "--parallel", "4")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["python3", "tools/cmake/gen_cmakelists.py", "--check"],
+            ["python3", "tools/cmake/gen_cmakelists.py"],
+            ["bazel", "shutdown"],
+            self._configure(),
+            ["cmake", "--build", "build", "--target", "donner_cmake_consumer", "--parallel", "4"],
+            ["ctest", "--test-dir", "build", "--output-on-failure"],
+        ])
+
+    def test_failed_shutdown_stops_before_native_compilation(self):
+        result, calls = self._run("build", "--release-bazel-server", "--parallel", "4",
+                                  fail="bazel=7")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(calls[-1], ["bazel", "shutdown"])
+        self.assertNotIn("cmake", [call[0] for call in calls])
 
     def test_a_failing_phase_stops_the_lane_with_its_status(self):
         for fail, last in (("ctest=8", "ctest"), ("cmake:--build=3", "cmake"),
