@@ -1508,7 +1508,7 @@ void ExpectVisibleJoinerSourceGlyph(const std::vector<TextGlyph>& actual, const 
   EXPECT_THAT(found->rotateDegrees, DoubleNear(expected.rotateDegrees, 1e-5));
 }
 
-void CheckJoinerControlTransparency(bool full) {
+void CheckJoinerControlTransparency(bool full, bool absoluteY = false) {
   Registry registry;
   FontManager fonts(registry);
   ASSERT_THAT(LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Bidi Font"), Not(Eq(FontHandle{})));
@@ -1522,7 +1522,12 @@ void CheckJoinerControlTransparency(bool full) {
   const auto layout = [&](const std::string& value) {
     components::ComputedTextComponent text;
     auto span = MakeSpan(value);
-    span.xList = {Lengthd(0), Lengthd(0), Lengthd(100)};
+    if (absoluteY) {
+      span.xList = {Lengthd(0)};
+      span.yList = {Lengthd(20), Lengthd(20), Lengthd(100)};
+    } else {
+      span.xList = {Lengthd(0), Lengthd(0), Lengthd(100)};
+    }
     text.spans.push_back(std::move(span));
     auto params = MakeTextParams(24);
     params.fontFamilies = {RcString("Bidi Font")};
@@ -1543,7 +1548,7 @@ void CheckJoinerControlTransparency(bool full) {
   ASSERT_THAT(first->glyphIndex, Gt(0));
   ASSERT_THAT(last->glyphIndex, Gt(0));
   EXPECT_THAT(first->glyphIndex, Not(Eq(last->glyphIndex)));
-  EXPECT_THAT(last->xPosition, DoubleEq(100));
+  EXPECT_THAT(absoluteY ? last->yPosition : last->xPosition, DoubleEq(100));
   for (const std::string& controls : {std::string("\u200e"), std::string("\u200e\u200f\u061c")}) {
     SCOPED_TRACE(controls);
     const auto actual = layout("A\u200d" + controls + "B");
@@ -1562,6 +1567,56 @@ TEST(TextEngineTest, BidiJoinerControlsPreserveFollowingVisibleGlyphInBasicText)
 
 TEST(TextEngineTest, BidiJoinerControlsPreserveFollowingVisibleGlyphInFullText) {
   CheckJoinerControlTransparency(true);
+}
+
+TEST(TextEngineTest, BidiJoinerControlsPreserveAuthoredYInBothTextBackends) {
+  CheckJoinerControlTransparency(false, true);
+  CheckJoinerControlTransparency(true, true);
+}
+
+TEST(TextEngineTest, BidiControlsDoNotReapplyTheLogicalRtlParagraphOrigin) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Bidi Font"), Not(Eq(FontHandle{})));
+  for (bool full : {false, true}) {
+    SCOPED_TRACE(full);
+    std::unique_ptr<TextBackend> backend;
+    if (full) {
+      backend = std::make_unique<TextBackendFull>(fonts, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fonts, registry);
+    }
+    TextEngine engine(fonts, registry, std::move(backend));
+    const auto layout = [&](const std::string& value) {
+      components::ComputedTextComponent text;
+      auto span = MakeSpan(value);
+      span.xList = {Lengthd(100)};
+      text.spans.push_back(std::move(span));
+      auto params = MakeTextParams(24);
+      params.fontFamilies = {RcString("Bidi Font")};
+      params.fontKerning = FontKerning::None;
+      std::vector<TextGlyph> glyphs;
+      for (const auto& run : engine.layout(text, params)) {
+        glyphs.insert(glyphs.end(), run.glyphs.begin(), run.glyphs.end());
+      }
+      return glyphs;
+    };
+    const auto ordinary = layout("אב");
+    ASSERT_THAT(ordinary, SizeIs(2));
+    const auto left = std::find_if(ordinary.begin(), ordinary.end(),
+                                   [](const auto& glyph) { return glyph.cluster == 2; });
+    const auto right = std::find_if(ordinary.begin(), ordinary.end(),
+                                    [](const auto& glyph) { return glyph.cluster == 0; });
+    ASSERT_NE(left, ordinary.end());
+    ASSERT_NE(right, ordinary.end());
+    ASSERT_THAT(left->glyphIndex, Gt(0));
+    ASSERT_THAT(right->glyphIndex, Gt(0));
+    EXPECT_THAT(left->xPosition, DoubleEq(100));
+    EXPECT_THAT(right->xPosition, Gt(left->xPosition));
+    const auto actual = layout("א\u200fב");
+    ExpectVisibleJoinerSourceGlyph(actual, *left, 5u);
+    ExpectVisibleJoinerSourceGlyph(actual, *right, 0u);
+  }
 }
 
 TEST(TextEngineTest, BidiExcludedFullWidthDomControlsKeepSupplementaryAliasesAndPositionSlots) {
