@@ -2,7 +2,7 @@ import { expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { PNG } from "pngjs";
-import { runBitmapComparator } from "./browser-bitmap-comparator";
+import { compareGpuTransferSamples } from "./gpu-image-transfer-comparison";
 
 interface TransferSample {
   sequence: number;
@@ -265,25 +265,7 @@ export async function inspectGpuImageTransfer(
     }
   }, completionProgress);
   expect(failure, "GPU transfer must complete every bounded stage").toBeNull();
-  const comparator = process.env.DONNER_BROWSER_GOLDEN_COMPARE;
-  expect(comparator, "Bazel must provide the shared pixelmatch comparator").toBeTruthy();
-  const comparatorEnvironment = { ...process.env };
-  delete comparatorEnvironment.UPDATE_GOLDEN_IMAGES_DIR;
-  delete comparatorEnvironment.DONNER_BROWSER_COMPARE_MODE;
-  for (const sample of saved.values()) {
-    if (!sample.actualPath || !sample.expectedPath) continue;
-    const { matched, detail } = runBitmapComparator({
-      executable: comparator!,
-      comparison: {
-        DONNER_ACTUAL_PNG: String(sample.actualPath),
-        DONNER_GOLDEN_PNG: String(sample.expectedPath),
-      },
-      reportPath: path.join(outputDirectory, `${sample.sequence}-compare.json`),
-      inheritedEnvironment: comparatorEnvironment,
-    });
-    expect(matched, detail).toBe(true);
-    sample.pixelChecked = true;
-  }
+  compareGpuTransferSamples(saved.values(), outputDirectory);
   const samples = Array.from(saved.values());
   fs.writeFileSync(path.join(outputDirectory, "samples.json"), JSON.stringify(samples, null, 2));
   expect(samples.filter((sample) => sample.pixelChecked)).toHaveLength(12);

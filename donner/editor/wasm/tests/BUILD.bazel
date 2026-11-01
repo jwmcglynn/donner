@@ -158,7 +158,6 @@ playwright_bin.playwright_test(
         "failure-canvas-evidence.ts",
         "flat-capture-retake.mjs",
         "gesture-streams.ts",
-        "gpu-image-transfer-canary.ts",
         "gpu-session-console.ts",
         "overlay-bitmap-compare.ts",
         "package.json",
@@ -301,6 +300,7 @@ playwright_bin.playwright_test(
         "first-click-breakdown.mjs",
         "flat-capture-retake.mjs",
         "gpu-image-transfer-canary.ts",
+        "gpu-image-transfer-comparison.ts",
         "gpu-session-console.ts",
         "latency-gates.mjs",
         "package.json",
@@ -1367,6 +1367,35 @@ playwright_bin.playwright_test(
 # Build-only tool: platform executables are pinned by the npm lockfiles.
 esbuild_bin.esbuild_binary(
     name = "esbuild",
+)
+
+genrule(
+    name = "gpu_image_transfer_comparison_node",
+    testonly = True,
+    srcs = [
+        "browser-bitmap-comparator.ts",
+        "gpu-image-transfer-comparison.ts",
+    ],
+    outs = ["gpu-image-transfer-comparison.cjs"],
+    cmd = "$(location :esbuild) $(location gpu-image-transfer-comparison.ts) --bundle --platform=node --format=cjs --outfile=$@",
+    tools = [":esbuild"],
+)
+
+js_test(
+    name = "gpu_image_transfer_comparison_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        ":gpu_image_transfer_comparison_node",
+        ":node_modules/pngjs",
+        "//donner/editor/tests:standalone_geode_browser_png_compare",
+    ],
+    entry_point = "gpu-image-transfer-comparison_tests.mjs",
+    env = {
+        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
+        "DONNER_GPU_TRANSFER_COMPARISON": "$(rootpath :gpu_image_transfer_comparison_node)",
+    },
+    node_options = ["--test"],
 )
 
 js_test(
