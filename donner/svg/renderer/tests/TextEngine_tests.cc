@@ -1403,6 +1403,204 @@ TEST(TextEngineTest, BidiNormalExcludedScopesKeepControlsOutOfPositionListIndice
   }
 }
 
+std::vector<TextGlyph> LayoutFullWidthControlFixture(TextEngine& engine, const std::string& value,
+                                                     bool vertical) {
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  span.textTransform = TextTransform::FullWidth;
+  span.xList = {Lengthd(20)};
+  span.yList = {Lengthd(80)};
+  span.dxList = {Lengthd(0), Lengthd(1), Lengthd(2)};
+  span.rotateList = {0, 10, 20};
+  span.overflowWrap = OverflowWrap::Anywhere;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(24);
+  params.fontFamilies = {RcString("Bidi Font")};
+  params.fontKerning = FontKerning::None;
+  if (vertical) {
+    params.writingMode = WritingMode::VerticalRl;
+  } else {
+    params.inlineSizePx = 32;
+  }
+  std::vector<TextGlyph> glyphs;
+  for (const auto& run : engine.layout(text, params)) {
+    glyphs.insert(glyphs.end(), run.glyphs.begin(), run.glyphs.end());
+  }
+  return glyphs;
+}
+
+void CheckFullWidthControlSourceClusters(bool vertical) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Bidi Font"), Not(Eq(FontHandle{})));
+  struct SourceCase {
+    std::string ordinary;
+    std::string controlled;
+    std::vector<uint32_t> clusters;
+  };
+  const std::vector<SourceCase> cases = {
+      {"AB", "A\u200eB", {0u, 4u}},
+      {"A\U0001f600B", "A\U0001f600\u200e\u200fB", {0u, 1u, 11u}},
+  };
+  for (bool full : {false, true}) {
+    SCOPED_TRACE(full);
+    std::unique_ptr<TextBackend> backend;
+    if (full) {
+      backend = std::make_unique<TextBackendFull>(fonts, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fonts, registry);
+    }
+    TextEngine engine(fonts, registry, std::move(backend));
+    for (const auto& source : cases) {
+      SCOPED_TRACE(source.controlled);
+      const auto ordinary = LayoutFullWidthControlFixture(engine, source.ordinary, vertical);
+      ASSERT_THAT(ordinary, SizeIs(source.clusters.size()));
+      ASSERT_THAT(ordinary.front().glyphIndex, Gt(0));
+      ASSERT_THAT(ordinary.back().glyphIndex, Gt(0));
+      EXPECT_THAT(ordinary.front().glyphIndex, Not(Eq(ordinary.back().glyphIndex)));
+      const auto actual = LayoutFullWidthControlFixture(engine, source.controlled, vertical);
+      ASSERT_THAT(actual, SizeIs(ordinary.size()));
+      std::vector<uint32_t> clusters;
+      for (size_t index = 0; index < actual.size(); ++index) {
+        const auto& expected = ordinary[index];
+        const auto& glyph = actual[index];
+        clusters.push_back(glyph.cluster);
+        EXPECT_THAT(glyph.glyphIndex, Eq(expected.glyphIndex));
+        EXPECT_THAT(glyph.xPosition, DoubleNear(expected.xPosition, 1e-5));
+        EXPECT_THAT(glyph.yPosition, DoubleNear(expected.yPosition, 1e-5));
+        EXPECT_THAT(glyph.rotateDegrees, DoubleNear(expected.rotateDegrees, 1e-5));
+      }
+      EXPECT_THAT(clusters, testing::ElementsAreArray(source.clusters));
+      if (!vertical) {
+        EXPECT_THAT(ordinary.back().yPosition, Gt(ordinary.front().yPosition));
+      }
+    }
+  }
+}
+
+TEST(TextEngineTest, BidiExcludedFullWidthVerticalControlsRetainSourceClusters) {
+  CheckFullWidthControlSourceClusters(true);
+}
+
+TEST(TextEngineTest, BidiExcludedFullWidthWrappingControlsRetainSourceClusters) {
+  CheckFullWidthControlSourceClusters(false);
+}
+
+void CheckJoinerControlTransparency(bool full) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Bidi Font"), Not(Eq(FontHandle{})));
+  std::unique_ptr<TextBackend> backend;
+  if (full) {
+    backend = std::make_unique<TextBackendFull>(fonts, registry);
+  } else {
+    backend = std::make_unique<TextBackendSimple>(fonts, registry);
+  }
+  TextEngine engine(fonts, registry, std::move(backend));
+  const auto layout = [&](const std::string& value) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(value);
+    span.xList = {Lengthd(0), Lengthd(0), Lengthd(100)};
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(24);
+    params.fontFamilies = {RcString("Bidi Font")};
+    params.fontKerning = FontKerning::None;
+    std::vector<TextGlyph> glyphs;
+    for (const auto& run : engine.layout(text, params)) {
+      glyphs.insert(glyphs.end(), run.glyphs.begin(), run.glyphs.end());
+    }
+    return glyphs;
+  };
+  const auto ordinary = layout("A\u200dB");
+  const auto first = std::find_if(ordinary.begin(), ordinary.end(),
+                                  [](const auto& glyph) { return glyph.cluster == 0; });
+  const auto last = std::find_if(ordinary.begin(), ordinary.end(),
+                                 [](const auto& glyph) { return glyph.cluster == 4; });
+  ASSERT_NE(first, ordinary.end());
+  ASSERT_NE(last, ordinary.end());
+  ASSERT_THAT(first->glyphIndex, Gt(0));
+  ASSERT_THAT(last->glyphIndex, Gt(0));
+  EXPECT_THAT(first->glyphIndex, Not(Eq(last->glyphIndex)));
+  EXPECT_THAT(last->xPosition, Lt(100));
+  for (const std::string& controls : {std::string("\u200e"), std::string("\u200e\u200f\u061c")}) {
+    SCOPED_TRACE(controls);
+    const auto actual = layout("A\u200d" + controls + "B");
+    EXPECT_THAT(actual, SizeIs(ordinary.size()));
+    for (const auto& expected : ordinary) {
+      const uint32_t cluster = expected.cluster < 4
+                                   ? expected.cluster
+                                   : expected.cluster + static_cast<uint32_t>(controls.size());
+      const auto found = std::find_if(actual.begin(), actual.end(), [cluster](const auto& glyph) {
+        return glyph.cluster == cluster;
+      });
+      EXPECT_NE(found, actual.end()) << "Missing source cluster " << cluster;
+      if (found == actual.end()) {
+        continue;
+      }
+      EXPECT_THAT(found->glyphIndex, Eq(expected.glyphIndex));
+      EXPECT_THAT(found->xPosition, DoubleNear(expected.xPosition, 1e-5));
+      EXPECT_THAT(found->yPosition, DoubleNear(expected.yPosition, 1e-5));
+      EXPECT_THAT(found->xAdvance, DoubleNear(expected.xAdvance, 1e-5));
+    }
+  }
+}
+
+TEST(TextEngineTest, BidiJoinerControlsPreserveFollowingVisibleGlyphInBasicText) {
+  CheckJoinerControlTransparency(false);
+}
+
+TEST(TextEngineTest, BidiJoinerControlsPreserveFollowingVisibleGlyphInFullText) {
+  CheckJoinerControlTransparency(true);
+}
+
+TEST(TextEngineTest, BidiExcludedFullWidthDomControlsKeepSupplementaryAliasesAndPositionSlots) {
+  for (bool vertical : {false, true}) {
+    SCOPED_TRACE(vertical);
+    const auto geometry = [&](std::string_view source) {
+      ParseWarningSink warnings;
+      const std::string style = vertical ? "writing-mode:vertical-rl" : "inline-size:1000px";
+      auto parsed = parser::SVGParser::ParseSVG(
+          "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'>"
+          "<text id='t' x='20' y='80' dx='0 1 2' rotate='0 10 20' "
+          "font-family='Bidi Font' font-size='24' style='text-transform:full-width;" +
+              style + "'>A<tspan>" + std::string(source) + "</tspan></text></svg>",
+          warnings);
+      if (parsed.hasError()) {
+        ADD_FAILURE() << "Fixture SVG did not parse";
+        return std::vector<std::tuple<Vector2d, Vector2d, double>>{};
+      }
+      auto document = std::move(parsed).result();
+      const auto target = document.querySelector("#t");
+      if (!target) {
+        ADD_FAILURE() << "Fixture text element is missing";
+        return std::vector<std::tuple<Vector2d, Vector2d, double>>{};
+      }
+      Registry& registry = document.registry();
+      FontManager fonts(registry);
+      EXPECT_THAT(LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Bidi Font"), Not(Eq(FontHandle{})));
+      TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+      const auto handle = target->unsafeEntityHandle();
+      engine.prepareForElement(handle, warnings);
+      EXPECT_THAT(engine.ensureComputedTextGeometryComponent(handle).runs, Not(IsEmpty()));
+      EXPECT_THAT(engine.getNumberOfChars(handle), Eq(4));
+      EXPECT_THAT(engine.getStartPositionOfChar(handle, 1),
+                  Eq(engine.getStartPositionOfChar(handle, 2)));
+      std::vector<std::tuple<Vector2d, Vector2d, double>> result;
+      for (size_t index = 0; index < 4; ++index) {
+        result.emplace_back(engine.getStartPositionOfChar(handle, index),
+                            engine.getEndPositionOfChar(handle, index),
+                            engine.getRotationOfChar(handle, index));
+      }
+      return result;
+    };
+    const auto ordinary = geometry("\U0001f600B");
+    ASSERT_THAT(ordinary, SizeIs(4));
+    EXPECT_THAT(std::get<0>(ordinary.back()), Not(Eq(std::get<1>(ordinary.back()))));
+    EXPECT_THAT(std::get<2>(ordinary.back()), DoubleEq(20));
+    EXPECT_THAT(geometry("\U0001f600\u200eB"), testing::ContainerEq(ordinary));
+  }
+}
+
 TEST(TextEngineTest, BidiNormalPositionOnJoinerCannotSplitTheShapingChunk) {
   Registry registry;
   FontManager fonts(registry);
