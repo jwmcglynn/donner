@@ -841,6 +841,7 @@ donner_cc_test(
         "TextIndent_tests.cc",
     ],
     data = ["//third_party/resvg-test-suite:fonts"],
+    shard_count = 4,
     variants = ["text_full"],
     deps = [
         ":mock_renderer_interface",
