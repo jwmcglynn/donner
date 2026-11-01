@@ -2664,42 +2664,78 @@ async function waitForPressReadiness(
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
-test("GPU transfer native comparisons preserve caller test protocol files", async ({ page }, info) => {
-  const failures = await openEditor(page);
-  const protocolFiles = {
-    XML_OUTPUT_FILE: info.outputPath("caller-test.xml"),
-    TEST_PREMATURE_EXIT_FILE: info.outputPath("caller-premature-exit"),
-    TEST_SHARD_STATUS_FILE: info.outputPath("caller-shard-status"),
-    TEST_WARNINGS_OUTPUT_FILE: info.outputPath("caller-warnings"),
-  };
-  const sentinel = "caller test protocol sentinel\n";
-  for (const file of Object.values(protocolFiles)) await writeFile(file, sentinel);
-  const environmentNames = new Set([
-    ...Object.keys(protocolFiles),
-    ...Object.keys(process.env).filter((name) =>
-      name.startsWith("GTEST_") || name.startsWith("TESTBRIDGE_")
-    ),
-  ]);
-  const originalEnvironment = new Map(
-    [...environmentNames].map((name) => [name, process.env[name]]),
-  );
-  try {
-    for (const name of environmentNames) delete process.env[name];
-    Object.assign(process.env, protocolFiles);
-    const samples = await inspectGpuImageTransfer(page, info.outputPath("canary-native-isolation"));
-    expect(samples.filter((sample) => sample.pixelChecked)).toHaveLength(12);
-    for (const file of Object.values(protocolFiles)) {
-      expect(await readFile(file, "utf8"), "the native comparator must preserve caller files")
-        .toBe(sentinel);
+test(
+  "GPU transfer native comparisons preserve caller test protocol files",
+  async ({ page }, info) => {
+    const failures = await openEditor(page);
+    const protocolFiles = {
+      XML_OUTPUT_FILE: info.outputPath("caller-test.xml"),
+      TEST_PREMATURE_EXIT_FILE: info.outputPath("caller-premature-exit"),
+      TEST_SHARD_STATUS_FILE: info.outputPath("caller-shard-status"),
+      TEST_WARNINGS_OUTPUT_FILE: info.outputPath("caller-warnings"),
+      GTEST_SHARD_STATUS_FILE: info.outputPath("caller-gtest-shard-status"),
+    };
+    const callerReport = info.outputPath("caller-gtest-report.json");
+    const hostileEnvironment = {
+      ...protocolFiles,
+      GTEST_FILTER: "NoSuchSuite.NoSuchCase",
+      GTEST_REPEAT: "0",
+      GTEST_TOTAL_SHARDS: "4",
+      GTEST_SHARD_INDEX: "3",
+      GTEST_LIST_TESTS: "1",
+      GTEST_OUTPUT: `json:${callerReport}`,
+      TESTBRIDGE_TEST_ONLY: "NoSuchSuite.NoSuchCase",
+    };
+    const callerFiles = [...Object.values(protocolFiles), callerReport];
+    const sentinel = "caller test protocol sentinel\n";
+    for (const file of callerFiles) await writeFile(file, sentinel);
+    const environmentNames = new Set([
+      ...Object.keys(hostileEnvironment),
+      ...Object.keys(process.env).filter((name) =>
+        name.startsWith("GTEST_") || name.startsWith("TESTBRIDGE_")
+      ),
+    ]);
+    const originalEnvironment = new Map(
+      [...environmentNames].map((name) => [name, process.env[name]]),
+    );
+    try {
+      for (const name of environmentNames) delete process.env[name];
+      Object.assign(process.env, hostileEnvironment);
+      const outputDirectory = info.outputPath("canary-native-isolation");
+      const samples = await inspectGpuImageTransfer(page, outputDirectory);
+      const compared = samples.filter((sample) => sample.pixelChecked);
+      expect(compared).toHaveLength(12);
+      for (const sample of compared) {
+        const report = JSON.parse(
+          await readFile(
+            info.outputPath("canary-native-isolation", `${sample.sequence}-compare.json`),
+            "utf8",
+          ),
+        );
+        expect(report).toMatchObject({ tests: 1, failures: 0, disabled: 0, errors: 0 });
+        expect(report.testsuites).toHaveLength(1);
+        expect(report.testsuites[0].testsuite).toEqual([
+          expect.objectContaining({
+            classname: "StandaloneGeodeBrowserPngCompare",
+            name: "CanvasMatchesGolden",
+            status: "RUN",
+            result: "COMPLETED",
+          }),
+        ]);
+      }
+      for (const file of callerFiles) {
+        expect(await readFile(file, "utf8"), "the native comparator must preserve caller files")
+          .toBe(sentinel);
+      }
+    } finally {
+      for (const [name, value] of originalEnvironment) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
-  } finally {
-    for (const [name, value] of originalEnvironment) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
-  expect(failures).toEqual([]);
-});
+    expect(failures).toEqual([]);
+  },
+);
 
 test("native overlay pixelmatch retains a one-pixel artwork regression", async () => {
   const golden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");

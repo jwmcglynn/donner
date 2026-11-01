@@ -1,8 +1,8 @@
 import { expect, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { PNG } from "pngjs";
+import { runBitmapComparator } from "./browser-bitmap-comparator";
 
 interface TransferSample {
   sequence: number;
@@ -272,15 +272,16 @@ export async function inspectGpuImageTransfer(
   delete comparatorEnvironment.DONNER_BROWSER_COMPARE_MODE;
   for (const sample of saved.values()) {
     if (!sample.actualPath || !sample.expectedPath) continue;
-    execFileSync(path.resolve(comparator!), [], {
-      env: {
-        ...comparatorEnvironment,
+    const { matched, detail } = runBitmapComparator({
+      executable: comparator!,
+      comparison: {
         DONNER_ACTUAL_PNG: String(sample.actualPath),
         DONNER_GOLDEN_PNG: String(sample.expectedPath),
       },
-      stdio: "inherit",
-      timeout: 10000,
+      reportPath: path.join(outputDirectory, `${sample.sequence}-compare.json`),
+      inheritedEnvironment: comparatorEnvironment,
     });
+    expect(matched, detail).toBe(true);
     sample.pixelChecked = true;
   }
   const samples = Array.from(saved.values());
