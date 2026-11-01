@@ -3060,6 +3060,57 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
       "text_typing_flicker", [](auto& options) { options.workerRenderDelayMsForTesting = 25; });
 }
 
+TEST(GlRnrReplayTest, UnmeasuredTypingCaptureKeepsWholeFrameAndRecoversAfterIdleMeasurement) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
+  }
+  const auto outputDir = DiagnosticOutputDir() / "typing_measurement_gap";
+  const auto replayPath = WriteTextTypingIntoExistingTextReplay(outputDir, "text_typing.rnr");
+  ASSERT_THAT(replayPath, testing::Optional(testing::_));
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.maxFrame = kTypingLastFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.driveDocumentSpaceInput = true;
+  options.workerDocumentAccessHoldStartFrame = 18;
+  options.workerDocumentAccessHoldEndFrame = 20;
+  options.textChromeMeasurementHoldStartFrame = 19;
+  options.textChromeMeasurementHoldEndFrame = 21;
+  for (std::uint64_t frame = kTypingBaselineFrame; frame <= kTypingLastFrame; ++frame) {
+    options.captureFrames.insert(frame);
+  }
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_THAT(repro::RunGlRnrReplay(options, &result, &error), testing::IsTrue()) << error;
+  PrintTypingFrameDiagnostics(result);
+  const auto baseline = LoadCaptureBitmap(result, kTypingBaselineFrame);
+  ASSERT_THAT(baseline, testing::Optional(testing::_));
+  const int green = CountGreenTextPixels(*baseline);
+  const int chrome = CountSelectionChromePixels(*baseline);
+  ASSERT_THAT(green, testing::Gt(200));
+  ASSERT_THAT(chrome, testing::Gt(100));
+  bool heldUnmeasuredFrame = false;
+  for (std::uint64_t frame = kTypingBaselineFrame + 1; frame <= kTypingLastFrame; ++frame) {
+    ExpectTypedFrameKeepsTextAndChrome(result, frame, green, chrome);
+    const auto* diagnostics = FindFrameDiagnostics(result, frame);
+    ASSERT_THAT(diagnostics, testing::Ne(nullptr));
+    heldUnmeasuredFrame |=
+        diagnostics->frameRepairFailure == FramePresentationFailure::MissingTextEditingGeometry;
+  }
+  EXPECT_THAT(heldUnmeasuredFrame, testing::IsTrue());
+  const auto* settled = FindFrameDiagnostics(result, kTypingLastFrame);
+  ASSERT_THAT(settled, testing::Ne(nullptr));
+  EXPECT_THAT(settled->frameRepairFailure, testing::Eq(FramePresentationFailure::None));
+  EXPECT_THAT(settled->presentationIdentity.version, testing::Eq(settled->documentFrameVersion));
+  // The click at x60 lands after "He"; the replay inserts "altogether" at that caret.
+  EXPECT_THAT(settled->selectedTextContent, testing::Optional(testing::Eq("Healtogetherllo")));
+  const auto finalPixels = LoadCaptureBitmap(result, kTypingLastFrame);
+  ASSERT_THAT(finalPixels, testing::Optional(testing::_));
+  EXPECT_THAT(CountGreenTextPixels(*finalPixels), testing::Gt(green));
+}
+
 // A render posted for one keystroke reads the document only when its worker
 // acquires it. If the next keystroke flushes first, the raster shows that later
 // text while its request still names the earlier version, and the caret and

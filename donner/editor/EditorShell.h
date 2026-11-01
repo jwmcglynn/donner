@@ -235,6 +235,8 @@ struct LayerInspectorStatusReadback {
   std::uint64_t documentFrameVersion = 0;
   /// Last document frame version published to the presentation.
   std::uint64_t displayedDocVersion = 0;
+  /// Presentation proof missing on this frame, if any.
+  FramePresentationFailure frameRepairFailure = FramePresentationFailure::None;
   /// Document version represented by the current immediate overlay snapshot, if any.
   std::optional<std::uint64_t> immediateOverlayDocumentVersion;
   /// Identity of the sealed frame installed in both drawing passes.
@@ -367,6 +369,11 @@ public:
   ///
   /// @param visible True to open the source pane.
   void setSourcePaneVisibleForReplay(bool visible) { setSourcePaneVisible(visible); }
+  /// Model a frame where document contention prevents measuring text-editing chrome.
+  /// @param blocked True to retain the last measurement until a later replay frame.
+  void setTextChromeMeasurementBlockedForReplay(bool blocked) {
+    textChromeMeasurementBlockedForReplay_ = blocked;
+  }
   /// Estimate source and selection work before applying one semantic replay action.
   [[nodiscard]] repro::ReplaySemanticActionCost estimateReplayActionCostForTesting(
       const repro::ReproAction& action) const;
@@ -622,6 +629,7 @@ private:
   [[gnu::noinline]] void updateRenderPanePenPointer(bool penToolActive, bool spaceHeld,
                                                     double pointerHitTestPixelsPerDocUnit);
   [[gnu::noinline]] void updateRenderPaneTextChrome(bool textToolActive);
+  void measureRenderPaneTextChrome(bool textToolActive);
   [[nodiscard]] bool setActiveGestureCursor(
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderRenderPanePresentation(const ImVec2& contentRegion, const ImVec2& paneOriginImGui,
@@ -1042,6 +1050,7 @@ private:
 #ifndef __EMSCRIPTEN__
   std::optional<ViewportState> pendingViewportReplayOverride_;
   std::optional<EditorShellDocumentReplayInput> pendingDocumentSpaceReplayInput_;
+  bool textChromeMeasurementBlockedForReplay_ = false;
 #endif
   /// True while the save modal is being used for File → Export Viewport as SVG
   /// rather than an ordinary document save. Routes the dialog's write callback

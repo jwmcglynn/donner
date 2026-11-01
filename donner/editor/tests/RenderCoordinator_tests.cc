@@ -966,6 +966,76 @@ TEST(RenderCoordinatorTest, UnmeasuredTypingCaptureHoldsWholeFrameUntilChromeMat
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
 }
 
+TEST(RenderCoordinatorTest, MissingInitialTextMeasurementRecoversAndEndedSessionDoesNotFreeze) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  CapturedPresentation::TextEditing measured{.identity = capture->identity(),
+                                             .canvasSize = capture->canvasSize(),
+                                             .subject = capture->selection().front()};
+  ++measured.identity.documentRevision;
+  coordinator.setTextEditingChrome(measured);
+  EXPECT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Eq(nullptr));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+  measured.identity = capture->identity();
+  coordinator.setTextEditingChrome(measured);
+  ASSERT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Ne(nullptr));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+  coordinator.setTextEditingChrome(std::nullopt);
+  QuerySelector(app, "#r1").setAttribute("x", "12");
+  const auto latest = AcceptCapturedScene(coordinator, app);
+  const auto ended = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(ended, testing::Ne(nullptr));
+  EXPECT_THAT(ended->identity(), testing::Eq(latest->identity()));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+}
+
+TEST(RenderCoordinatorTest, MissingTextMeasurementRetiresAnIncompatibleEditingFrame) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto baseline = AcceptCapturedScene(coordinator, app);
+  CapturedPresentation::TextEditing measured{
+      .identity = baseline->identity(),
+      .canvasSize = baseline->canvasSize(),
+      .subject = baseline->selection().front(),
+      .frame = std::array<Vector2d, 4>{Vector2d(10, 10), Vector2d(30, 10), Vector2d(30, 30),
+                                       Vector2d(10, 30)}};
+  coordinator.setTextEditingChrome(measured);
+  ASSERT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Ne(nullptr));
+  app.setSelection(QuerySelector(app, "#r2"));
+  const auto other = AcceptCapturedScene(coordinator, app);
+  measured.subject = other->selection().front();
+  ++measured.identity.documentRevision;
+  coordinator.setTextEditingChrome(measured);
+  EXPECT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Eq(nullptr));
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot(), testing::Eq(std::nullopt));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+  measured.identity = other->identity();
+  coordinator.setTextEditingChrome(measured);
+  const auto recovered = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                    SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(recovered, testing::Ne(nullptr));
+  EXPECT_THAT(recovered->identity(), testing::Eq(other->identity()));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+}
+
 TEST(RenderCoordinatorTest, FrameRequiresAcceptedRasterResources) {
   EditorApp app;
   RenderCoordinator coordinator;

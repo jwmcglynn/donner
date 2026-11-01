@@ -12,6 +12,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/FrameCostBreakdown.h"
+#include "donner/editor/FramePresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #include "donner/editor/SelectTool.h"
@@ -65,6 +66,10 @@ struct GlRnrReplayOptions {
   int workerDocumentAccessHoldStartFrame = -1;
   /// Frame to release the document-acquisition hold and drain the submitted render.
   int workerDocumentAccessHoldEndFrame = -1;
+  /// First frame without UI text measurements, or -1 to disable fault injection.
+  int textChromeMeasurementHoldStartFrame = -1;
+  /// Resume measurements here, draining workers before this and subsequent frames.
+  int textChromeMeasurementHoldEndFrame = -1;
   /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
   bool driveDocumentSpaceInput = false;
   /// Set the source pane's animation target visible before the first frame.
@@ -186,6 +191,8 @@ struct GlRnrReplayFrameDiagnostics {
   std::uint64_t documentFrameVersion = 0;
   /// Last document frame version published to the presentation.
   std::uint64_t displayedDocVersion = 0;
+  /// Missing presentation proof, including an unmeasured editing revision.
+  FramePresentationFailure frameRepairFailure = FramePresentationFailure::None;
   /// Document version represented by the current immediate overlay snapshot, if any.
   std::optional<std::uint64_t> immediateOverlayDocumentVersion;
   /// Identity of the immutable frame shared by artwork and chrome.
