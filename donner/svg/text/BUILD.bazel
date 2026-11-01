@@ -8,11 +8,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "bidi_paragraph",
-    srcs = ["BidiParagraph.cc"],
+    name = "bidi_types",
     hdrs = ["BidiParagraph.h"],
     visibility = ["//donner/svg:__subpackages__"],
-    deps = [":bidi_control", "@sheenbidi"],
+    deps = [":bidi_control"],
+)
+
+donner_cc_library(
+    name = "bidi_paragraph",
+    srcs = ["BidiParagraph.cc"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":bidi_types",
+        "@sheenbidi",
+    ],
 )
 
 donner_cc_library(
@@ -53,14 +62,21 @@ donner_cc_library(
     name = "text_backend_simple",
     srcs = ["TextBackendSimple.cc"],
     hdrs = ["TextBackendSimple.h"],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
-        ":bidi_paragraph",
+        ":bidi_types",
         ":text_backend",
         "//donner/base",
         "//donner/svg/resources:font_manager",
         "@stb//:truetype",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
@@ -80,6 +96,9 @@ donner_cc_library(
         "TextTransform.h",
     ],
     defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }) + select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
@@ -88,7 +107,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
-        ":bidi_paragraph",
+        ":bidi_types",
         ":text_backend",
         ":text_backend_simple",
         ":text_layout_params",
@@ -107,6 +126,9 @@ donner_cc_library(
         "//donner/svg/components/text:text_system",
         "//donner/svg/resources:font_manager",
     ] + select({
+        "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
+        "//conditions:default": [],
+    }) + select({
         "//donner/svg/renderer:text_full_enabled": [":text_backend_full"],
         "//conditions:default": [],
     }),

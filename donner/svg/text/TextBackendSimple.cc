@@ -352,9 +352,12 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunInContext(
   if (context.work && !context.work->consume(byteLength)) {
     return {};
   }
+  bool backward = false;
+#ifdef DONNER_TEXT_ENABLED
+  backward = !isVertical && context.rightToLeft.value_or(false);
+#endif
   return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
-                      textOrientation, fontVariant, kerning, false,
-                      !isVertical && context.rightToLeft.value_or(false));
+                      textOrientation, fontVariant, kerning, false, backward);
 }
 
 namespace {
@@ -437,22 +440,29 @@ struct SimpleScalar {
 class SimpleScalarSequence {
 public:
   SimpleScalarSequence(std::string_view text, size_t offset, size_t length, bool backward)
-      : text_(text.substr(0, offset + length)), position_(offset), backward_(backward) {
+      : text_(text.substr(0, offset + length)), position_(offset) {
+#ifdef DONNER_TEXT_ENABLED
+    backward_ = backward;
     if (backward_) {
       prepareBackward();
     }
+#else
+    (void)backward;
+#endif
   }
 
   std::optional<SimpleScalar> next() {
-    if (!backward_) {
-      return nextForward();
+#ifdef DONNER_TEXT_ENABLED
+    if (backward_) {
+      if (next_ == ordered_.size()) {
+        return std::nullopt;
+      }
+      auto scalar = ordered_[next_++];
+      scalar.codepoint = BidiParagraph::Mirror(scalar.codepoint);
+      return scalar;
     }
-    if (next_ == ordered_.size()) {
-      return std::nullopt;
-    }
-    auto scalar = ordered_[next_++];
-    scalar.codepoint = BidiParagraph::Mirror(scalar.codepoint);
-    return scalar;
+#endif
+    return nextForward();
   }
 
 private:
@@ -467,6 +477,7 @@ private:
     return std::nullopt;
   }
 
+#ifdef DONNER_TEXT_ENABLED
   void prepareBackward() {
     std::vector<SimpleScalar> scalars;
     std::vector<std::pair<size_t, size_t>> groups;
@@ -486,11 +497,15 @@ private:
     }
   }
 
+#endif  // DONNER_TEXT_ENABLED
+
   std::string_view text_;
   size_t position_;
-  bool backward_;
+#ifdef DONNER_TEXT_ENABLED
+  bool backward_ = false;
   size_t next_ = 0;
   std::vector<SimpleScalar> ordered_;
+#endif
 };
 
 struct SimpleShapingMetrics {
@@ -566,10 +581,14 @@ double TextBackendSimple::crossSpanKern(FontHandle previousFont, float previousS
                                         uint32_t previousCodepoint, uint32_t currentCodepoint,
                                         bool vertical, TextOrientation orientation,
                                         const ShapingContext& context) const {
+#ifdef DONNER_TEXT_ENABLED
   if (context.rightToLeft.value_or(false)) {
     previousCodepoint = BidiParagraph::Mirror(previousCodepoint);
     currentCodepoint = BidiParagraph::Mirror(currentCodepoint);
   }
+#else
+  (void)context;
+#endif
   return crossSpanKern(previousFont, previousSize, currentFont, currentSize, previousCodepoint,
                        currentCodepoint, vertical, orientation);
 }

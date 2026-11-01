@@ -4225,6 +4225,7 @@ public:
   NormalBidiPlan& operator=(const NormalBidiPlan&) = delete;
 
   bool prepare(const components::ComputedTextComponent& text, const TextLayoutParams& params) {
+#ifdef DONNER_TEXT_ENABLED
     if (!ordinaryScope(text, params)) {
       return true;
     }
@@ -4262,6 +4263,12 @@ public:
     work.calls = input->count * 8u + 16u;
     resolveShifts(text, params);
     return true;
+#else
+    (void)text;
+    (void)params;
+    enabled = false;
+    return true;
+#endif
   }
 
   /// The returned view aliases immutable storage alive through this invocation.
@@ -4338,6 +4345,7 @@ private:
     size_t count = 0;
   };
 
+#ifdef DONNER_TEXT_ENABLED
   static bool ordinaryScope(const components::ComputedTextComponent& text,
                             const TextLayoutParams& params) {
     return !isVertical(params.writingMode) && params.inlineSizePx <= 0 &&
@@ -4430,6 +4438,7 @@ private:
     std::sort(paragraph.logical.begin(), paragraph.logical.end(),
               [](const auto& a, const auto& b) { return a.startByte < b.startByte; });
   }
+#endif  // DONNER_TEXT_ENABLED
 
   bool examineCandidate() {
     if (candidates_) {

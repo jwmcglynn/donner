@@ -444,6 +444,95 @@ class GeneratedCompileBudgetTest(unittest.TestCase):
                 os.chdir(previous_cwd)
 
 
+class BidiRuntimeFeatureBoundaryTest(unittest.TestCase):
+    @staticmethod
+    def _targets():
+        targets = {}
+        package = "donner/svg/text"
+        for config in g.CMAKE_CONFIGS:
+            attrs_by_name = {
+                "bidi_control": {"hdrs": [f"//{package}:BidiControl.h"]},
+                "bidi_types": {
+                    "hdrs": [f"//{package}:BidiParagraph.h"],
+                    "deps": [f"//{package}:bidi_control"],
+                },
+            }
+            for name, source in (("text_engine", "TextEngine.cc"),
+                                 ("text_backend_simple", "TextBackendSimple.cc")):
+                attrs = {"srcs": [f"//{package}:{source}"],
+                         "deps": [f"//{package}:bidi_types"], "defines": []}
+                if config.text:
+                    attrs["deps"].append(f"//{package}:bidi_paragraph")
+                    attrs["defines"].append("DONNER_TEXT_ENABLED")
+                if name == "text_engine" and config.text_full:
+                    attrs["defines"].append("DONNER_TEXT_FULL")
+                attrs_by_name[name] = attrs
+            if config.text:
+                attrs_by_name["bidi_paragraph"] = {
+                    "srcs": [f"//{package}:BidiParagraph.cc"],
+                    "deps": [f"//{package}:bidi_types", "@sheenbidi//:sheenbidi"],
+                }
+            for name, attrs in attrs_by_name.items():
+                info = g.ConfiguredTargetInfo(
+                    label=f"//{package}:{name}", package=package, name=name,
+                    kind="cc_library", attrs=attrs, compatible=True,
+                )
+                g._merge_configured_target(targets, info, config.name)
+        return targets
+
+    def _emit(self, name):
+        targets = self._targets()
+        target = targets[f"//donner/svg/text:{name}"]
+        output = io.StringIO()
+        g._emit_package_target(output, target.package, target, g._targets_by_cmake_name(targets))
+        return output.getvalue()
+
+    def test_types_remain_header_only_without_a_runtime_dependency(self):
+        text = self._emit("bidi_types")
+        self.assertIn("add_library(donner_svg_text_bidi_types INTERFACE)", text)
+        self.assertIn("BidiParagraph.h", text)
+        self.assertIn(
+            "target_link_libraries(donner_svg_text_bidi_types INTERFACE "
+            "donner_svg_text_bidi_control)", text,
+        )
+        self.assertNotIn("if(DONNER_TEXT", text)
+        self.assertNotIn("SheenBidi", text)
+        self.assertNotIn("donner_svg_text_bidi_paragraph", text)
+
+    def test_runtime_target_and_external_link_are_guarded_by_text(self):
+        text = self._emit("bidi_paragraph")
+        self.assertTrue(text.startswith("if(DONNER_TEXT)\nadd_library("))
+        self.assertIn("BidiParagraph.cc", text)
+        self.assertIn("SheenBidi", text)
+        self.assertTrue(text.endswith("endif() # DONNER_TEXT\n"))
+
+    def test_always_present_text_callers_guard_the_runtime_and_compile_definition(self):
+        for name in ("text_engine", "text_backend_simple"):
+            with self.subTest(name=name):
+                text = self._emit(name)
+                cmake_name = f"donner_svg_text_{name}"
+                self.assertTrue(text.startswith(f"add_library({cmake_name}\n"))
+                self.assertIn(
+                    f"target_link_libraries({cmake_name} PUBLIC donner_svg_text_bidi_types)", text,
+                )
+                self.assertIn(
+                    "if(DONNER_TEXT)\n"
+                    f"  target_compile_definitions({cmake_name} PUBLIC DONNER_TEXT_ENABLED)\n"
+                    "endif()", text,
+                )
+                self.assertIn(
+                    "if(DONNER_TEXT)\n"
+                    f"  target_link_libraries({cmake_name} PUBLIC donner_svg_text_bidi_paragraph)\n"
+                    "endif()", text,
+                )
+                if name == "text_engine":
+                    self.assertIn(
+                        "if(DONNER_TEXT_FULL)\n"
+                        f"  target_compile_definitions({cmake_name} PUBLIC DONNER_TEXT_FULL)\n"
+                        "endif()", text,
+                    )
+
+
 class NativeSpeedOptionsTest(unittest.TestCase):
     def test_configured_speed_option_is_private_and_preserves_caller_options(self):
         values = g._target_value_map()
