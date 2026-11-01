@@ -403,6 +403,22 @@ def ctest_counts(path):
     return counts
 
 
+def replace_receipt(path, data):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None and (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                             or info.st_nlink != 1 or info.st_mode & 0o022):
+        raise CacheError("existing receipt is not a private owned regular file")
+    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
+    write_new(temporary, data)
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def statistics(context, receipt):
     value = load_context(context)
     env = {k: v for k, v in os.environ.items() if not k.startswith("CCACHE_")}
@@ -428,7 +444,7 @@ def statistics(context, receipt):
     result["head_sha"] = event.get("pull_request", {}).get("head", {}).get("sha", result["checkout_sha"])
     result["run_id"] = os.environ.get("GITHUB_RUN_ID", "")
     result["run_attempt"] = os.environ.get("GITHUB_RUN_ATTEMPT", "")
-    write_new(receipt, canonical(result))
+    replace_receipt(receipt, canonical(result))
     print("CMake compiler cache: %d hits, %d misses; dependency sources: %d hits, %d misses" %
           (result["hits"], result["misses"], result["source_hits"], result["source_misses"]))
     if os.environ.get("GITHUB_STEP_SUMMARY"):

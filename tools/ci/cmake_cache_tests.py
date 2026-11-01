@@ -84,6 +84,29 @@ class CMakeCacheTests(unittest.TestCase):
         with self.assertRaises(m.CacheError):
             m.ctest_counts(path)
 
+    def test_repeated_statistics_safely_replaces_the_same_receipt(self):
+        (self.root / "build").mkdir()
+        xml = self.root / "build/cmake-consumer-tests.xml"
+        xml.write_text('<testsuite><testcase/><testcase/></testsuite>')
+        context = self.root / "context.json"
+        context.write_text(json.dumps({"schema": 1, "source": str(self.root), "tool": None,
+                                      "environment": {}, "persistent": False, "source_hits": 0, "source_misses": 0}))
+        receipt = self.root / "receipt.json"
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(m, "command", return_value="a" * 40):
+            m.statistics(context, receipt)
+            xml.write_text('<testsuite><testcase><failure/></testcase><testcase/></testsuite>')
+            m.statistics(context, receipt)
+        self.assertEqual(1, json.loads(receipt.read_text())["test_failures"])
+        self.assertEqual(0o600, receipt.stat().st_mode & 0o777)
+        self.assertEqual([], list(self.root.glob("*.tmp-*")))
+
+    def test_replacing_a_receipt_never_follows_a_symlink(self):
+        outside = self.root / "outside"; outside.write_bytes(b"preserve")
+        receipt = self.root / "receipt.json"; receipt.symlink_to(outside)
+        with self.assertRaises(m.CacheError):
+            m.replace_receipt(receipt, b"new")
+        self.assertEqual(b"preserve", outside.read_bytes())
+
     def test_tool_download_is_digest_pinned_before_execution(self):
         with mock.patch.object(m, "download", return_value=archive({"package/ccache": b"untrusted"})):
             with self.assertRaisesRegex(m.CacheError, "checksum mismatch"):
