@@ -67,7 +67,7 @@ jobs:
           python3 -B -m tools.docs_publish finalize --work "$RUNNER_TEMP/docs-site" \
             --archive "$RUNNER_TEMP/artifact.tar" --artifact-id "$PAGES_ARTIFACT_ID"
       - name: Attest the composition record and exact Pages archive
-        uses: actions/attest-build-provenance@v3.2.0
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/docs-site/payload/composition.json
@@ -245,7 +245,7 @@ jobs:
       - name: Attest the automatic composition and exact archive
         id: attest
         if: steps.prepare.outputs.ready == 'true'
-        uses: actions/attest-build-provenance@v3.2.0
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/docs-auto/candidate/payload/composition.json

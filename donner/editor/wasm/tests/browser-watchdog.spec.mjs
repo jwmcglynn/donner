@@ -485,36 +485,50 @@ test("fresh late samples cannot erase a latched teardown deadline", async () => 
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 test("a later session's launch ends the previous session's teardown deadline", async () => {
-  // A case that runs no application heartbeat must not inherit the previous case's teardown
-  // deadline: once the next case starts, that teardown finished.
   const outputDir = directory();
   const heartbeatFile = path.join(outputDir, "heartbeat");
-  const acknowledged = path.join(outputDir, "teardown-observed");
-  fs.writeFileSync(
-    heartbeatFile,
-    JSON.stringify({ phase: "teardown", sessionId: "first", atMs: Date.now() }),
+  const completed = path.join(outputDir, "second-session-completed");
+  const { writeHeartbeat, refreshIdleHeartbeat } = createRequire(import.meta.url)(
+    "./browser-heartbeat.cjs",
   );
-  const writer = createRequire(import.meta.url).resolve("./browser-heartbeat.cjs");
   const script = `const fs=require('node:fs');
-    const {writeHeartbeat,refreshIdleHeartbeat}=require(${JSON.stringify(writer)});
-    const file=process.env.DONNER_WATCHDOG_HEARTBEAT;
     const wait=setInterval(()=>{
-      if(!fs.existsSync(${JSON.stringify(acknowledged)})) return;
-      clearInterval(wait);
-      writeHeartbeat(file,{phase:'launch',sessionId:'second',atMs:Date.now()});
-      const idle=setInterval(()=>refreshIdleHeartbeat(file),20);
-      setTimeout(()=>{clearInterval(idle);},600);
+      if(fs.existsSync(${JSON.stringify(completed)})) clearInterval(wait);
     },20);`;
+  let samples = 0;
+  let secondLaunchAtMs;
   const result = await supervise(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
     intervalMs: 20,
     teardownLimitMs: 200,
     deadlineMs: 5000,
-    writeReceipt: () => fs.writeFileSync(acknowledged, "observed"),
+    sampleProcesses: () => {
+      const rows = processRows();
+      // Keep child startup and process-listing latency outside the teardown transition.
+      if (samples++ === 0) {
+        writeHeartbeat(heartbeatFile, { phase: "teardown", sessionId: "first", atMs: Date.now() });
+      } else if (secondLaunchAtMs === undefined) {
+        secondLaunchAtMs = Date.now();
+        writeHeartbeat(heartbeatFile, { phase: "launch", sessionId: "second", atMs: secondLaunchAtMs });
+      } else {
+        refreshIdleHeartbeat(heartbeatFile);
+        if (Date.now() - secondLaunchAtMs >= 600) fs.writeFileSync(completed, "completed");
+      }
+      return rows;
+    },
   });
+  assert.equal(result.samples[0]?.application?.phase, "teardown");
+  assert.equal(result.samples[0]?.application?.sessionId, "first");
+  assert.equal(result.samples[1]?.application?.phase, "launch");
+  assert.equal(result.samples[1]?.application?.sessionId, "second");
+  assert.ok(result.samples.some((row) =>
+    row.application?.phase === "launch" && row.application?.sessionId === "second"
+    && row.atMs - result.samples[0].atMs > 200
+  ), "the second session must outlive the previous teardown cap");
   assert.equal(result.reason, null);
   assert.equal(result.exit.code, 0);
+  assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 test("termination is issued once even when the stop and exit paths both run", async () => {
   const original = process.kill;
