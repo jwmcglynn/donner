@@ -19,7 +19,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import uuid
-import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 
 VERSION = "4.14.2"
 RELEASE = "https://github.com/ccache/ccache/releases/download/v" + VERSION + "/"
@@ -387,6 +387,22 @@ def run_context(context, args, configure=False):
     return subprocess.call(args, env=env)
 
 
+def ctest_counts(path):
+    counts = {"testcase": 0, "failure": 0, "error": 0, "skipped": 0}
+    parser = expat.ParserCreate()
+    def start(name, attributes):
+        if name in counts:
+            counts[name] += 1
+    def reject(*_):
+        raise CacheError("CTest XML declarations are forbidden")
+    parser.StartElementHandler = start
+    parser.StartDoctypeDeclHandler = reject
+    parser.EntityDeclHandler = reject
+    parser.ExternalEntityRefHandler = lambda *_: 0
+    parser.Parse(read_file(path, 4 * 1024 * 1024), True)
+    return counts
+
+
 def statistics(context, receipt):
     value = load_context(context)
     env = {k: v for k, v in os.environ.items() if not k.startswith("CCACHE_")}
@@ -397,10 +413,10 @@ def statistics(context, receipt):
     result = {"persistent": value["persistent"] and bool(value["tool"]), "enabled": bool(value["tool"]), "source_hits": value["source_hits"], "source_misses": value["source_misses"],
               "hits": counters["direct_cache_hit"] + counters["preprocessed_cache_hit"], "misses": counters["cache_miss"]}
     result["cacheable_calls"] = result["hits"] + result["misses"]
-    tests = ET.parse(Path(value["source"]) / "build/cmake-consumer-tests.xml").getroot()
-    result["tests"] = len(list(tests.iter("testcase")))
-    result["test_failures"] = len(list(tests.iter("failure"))) + len(list(tests.iter("error")))
-    result["test_skips"] = len(list(tests.iter("skipped")))
+    tests = ctest_counts(Path(value["source"]) / "build/cmake-consumer-tests.xml")
+    result["tests"] = tests["testcase"]
+    result["test_failures"] = tests["failure"] + tests["error"]
+    result["test_skips"] = tests["skipped"]
     try:
         result["checkout_sha"] = command(["git", "rev-parse", "HEAD"])
     except subprocess.SubprocessError:

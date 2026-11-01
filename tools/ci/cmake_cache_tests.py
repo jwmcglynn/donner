@@ -76,6 +76,14 @@ class CMakeCacheTests(unittest.TestCase):
         self.assertEqual(b"67890", new.read_bytes())
         self.assertEqual(b"preserve", unrelated.read_bytes())
 
+    def test_ctest_counts_real_cases_and_rejects_entity_declarations(self):
+        path = self.root / "ctest.xml"
+        path.write_text('<testsuite><testcase/><testcase><skipped/></testcase></testsuite>')
+        self.assertEqual({"testcase": 2, "failure": 0, "error": 0, "skipped": 1}, m.ctest_counts(path))
+        path.write_text('<!DOCTYPE x [<!ENTITY test "value">]><testsuite/>')
+        with self.assertRaises(m.CacheError):
+            m.ctest_counts(path)
+
     def test_tool_download_is_digest_pinned_before_execution(self):
         with mock.patch.object(m, "download", return_value=archive({"package/ccache": b"untrusted"})):
             with self.assertRaisesRegex(m.CacheError, "checksum mismatch"):
