@@ -136,6 +136,17 @@ class DocsSiteTest(unittest.TestCase):
         self.assertIn(b"././@LongLink", archive.read_bytes())
         site.validate_pages_archive(archive)
 
+    def test_pages_transport_rejects_regular_root_aliases(self):
+        for alias in (".", "./", "./.", "././"):
+            with self.subTest(alias=alias):
+                archive = self.root / (str(len(alias)) + ".tar")
+                with tarfile.open(archive, "w:", format=tarfile.GNU_FORMAT) as tar:
+                    info = tarfile.TarInfo(alias)
+                    info.mode, info.size = 0o644, 4
+                    tar.addfile(info, io.BytesIO(b"site"))
+                with self.assertRaises(ValueError):
+                    site.validate_pages_archive(archive)
+
     def test_pages_transport_rejects_missing_root_or_parent_directory(self):
         for root_present in (False, True):
             with self.subTest(root_present=root_present):
