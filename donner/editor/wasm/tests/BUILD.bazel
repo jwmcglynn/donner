@@ -158,6 +158,7 @@ playwright_bin.playwright_test(
         "failure-canvas-evidence.ts",
         "flat-capture-retake.mjs",
         "gesture-streams.ts",
+        "gpu-image-transfer-canary.ts",
         "gpu-session-console.ts",
         "overlay-bitmap-compare.ts",
         "package.json",

@@ -41,6 +41,7 @@ import {
   kFailureEvidenceBudgetMs,
 } from "./failure-canvas-evidence";
 import { waitForAppliedPointer } from "./gesture-streams";
+import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
@@ -2662,6 +2663,43 @@ async function waitForPressReadiness(
 }
 
 test.use({ viewport: { width: 1600, height: 900 } });
+
+test("GPU transfer native comparisons preserve caller test protocol files", async ({ page }, info) => {
+  const failures = await openEditor(page);
+  const protocolFiles = {
+    XML_OUTPUT_FILE: info.outputPath("caller-test.xml"),
+    TEST_PREMATURE_EXIT_FILE: info.outputPath("caller-premature-exit"),
+    TEST_SHARD_STATUS_FILE: info.outputPath("caller-shard-status"),
+    TEST_WARNINGS_OUTPUT_FILE: info.outputPath("caller-warnings"),
+  };
+  const sentinel = "caller test protocol sentinel\n";
+  for (const file of Object.values(protocolFiles)) await writeFile(file, sentinel);
+  const environmentNames = new Set([
+    ...Object.keys(protocolFiles),
+    ...Object.keys(process.env).filter((name) =>
+      name.startsWith("GTEST_") || name.startsWith("TESTBRIDGE_")
+    ),
+  ]);
+  const originalEnvironment = new Map(
+    [...environmentNames].map((name) => [name, process.env[name]]),
+  );
+  try {
+    for (const name of environmentNames) delete process.env[name];
+    Object.assign(process.env, protocolFiles);
+    const samples = await inspectGpuImageTransfer(page, info.outputPath("canary-native-isolation"));
+    expect(samples.filter((sample) => sample.pixelChecked)).toHaveLength(12);
+    for (const file of Object.values(protocolFiles)) {
+      expect(await readFile(file, "utf8"), "the native comparator must preserve caller files")
+        .toBe(sentinel);
+    }
+  } finally {
+    for (const [name, value] of originalEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  expect(failures).toEqual([]);
+});
 
 test("native overlay pixelmatch retains a one-pixel artwork regression", async () => {
   const golden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
