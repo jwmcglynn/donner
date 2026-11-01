@@ -42,11 +42,15 @@ class CMakeCacheTests(unittest.TestCase):
         cold = self.root / "producer.json"
         cold.write_text(json.dumps(receipt))
         m.qualify(cold, "producer")
+        cold.write_text(json.dumps(dict(receipt, hits=1)))
+        with self.assertRaises(m.CacheError):
+            m.qualify(cold, "producer")
+        cold.write_text(json.dumps(receipt))
         warm = dict(receipt, hits=99, misses=1, source_hits=8)
         path = self.root / "consumer.json"
         path.write_text(json.dumps(warm))
         m.qualify(path, "consumer", cold)
-        for change in ({"persistent": False}, {"tests": 0}, {"test_skips": 1}, {"hits": 0}, {"run_attempt": "2"}):
+        for change in ({"persistent": False}, {"enabled": False}, {"tests": 0}, {"test_failures": 1}, {"test_skips": 1}, {"hits": 79}, {"source_hits": 0}, {"run_attempt": "2"}, {"head_sha": "c" * 40}, {"checkout_sha": "d" * 40}, {"run_id": "2"}):
             path.write_text(json.dumps(dict(warm, **change)))
             with self.subTest(change=change), self.assertRaises(m.CacheError):
                 m.qualify(path, "consumer", cold)
