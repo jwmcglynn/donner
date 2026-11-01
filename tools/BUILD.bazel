@@ -40,6 +40,21 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
+py_test(
+    name = "render_notice_tests",
+    size = "small",
+    srcs = [
+        "render_notice.py",
+        "render_notice_tests.py",
+    ],
+    data = [
+        "//third_party/licenses:roboto.LICENSE.txt",
+        "//third_party/licenses:sheenbidi.LICENSE.txt",
+    ],
+    main = "render_notice_tests.py",
+    deps = ["@rules_python//python/runfiles"],
+)
+
 # Genrule to execute the embed_resources.py script
 genrule(
     name = "generate_embedded_test_resources",
