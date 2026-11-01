@@ -63,7 +63,7 @@ jobs:
             libgl1-mesa-dev
 
       - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
           # Dedicated cache slot for the asan-fuzzer toolchain so it doesn't
@@ -105,7 +105,7 @@ jobs:
         run: tools/ci_select_macos_xcode.sh
 
       - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
           # Dedicated cache slot for the asan-fuzzer toolchain so it doesn't
