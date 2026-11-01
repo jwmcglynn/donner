@@ -747,6 +747,60 @@ TEST(FramePresentationTest, TextChromeUsesAnnotationMeasuredAtTheCapturedRevisio
   EXPECT_THAT(unmatched->chrome().textFrameCornersDoc, Eq(std::nullopt));
 }
 
+TEST(FramePresentationTest, UnmeasuredTextRevisionCannotReplaceACompleteEditingFrame) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kRect), IsTrue());
+  const auto subject = app.document().document().querySelector("#rect");
+  ASSERT_THAT(subject, testing::Optional(testing::_));
+  app.setSelection(*subject);
+  SelectTool tool;
+  const std::array<Vector2d, 4> box{Vector2d(10, 10), Vector2d(30, 10), Vector2d(30, 30),
+                                    Vector2d(10, 30)};
+  const auto baseline = Capture(app, 1);
+  ASSERT_THAT(baseline, Ne(nullptr));
+  const CapturedPresentation::TextEditing measured{.identity = baseline->identity(),
+                                                   .canvasSize = baseline->canvasSize(),
+                                                   .subject = baseline->selection().front(),
+                                                   .frame = box};
+  auto input = Input(app, tool, 1);
+  input.detail = SelectionChromeDetail::EditingChromeOnly;
+  input.decorations.textEditing = measured;
+  input.decorations.measuredTextEditing = {measured};
+  const auto resources = [&](const auto& capture) {
+    return FramePresentationTestAccess::resources(
+        capture, {RectTile(capture->selection().front(), 10.0, 0.0)});
+  };
+  const auto previous = FramePresentation::Build(resources(baseline), input).frame;
+  ASSERT_THAT(previous, Ne(nullptr));
+  EXPECT_THAT(previous->chrome().textFrameCornersDoc, Eq(std::optional(box)));
+
+  // The worker consumes an edit that has not yet supplied a measured annotation.
+  subject->setAttribute("x", "12");
+  const auto unmeasured = Capture(app, 2);
+  ASSERT_THAT(unmeasured, Ne(nullptr));
+  ASSERT_THAT(unmeasured->identity().documentRevision, Ne(measured.identity.documentRevision));
+  ASSERT_THAT(unmeasured->textEditing(), Eq(std::nullopt));
+  input.documentIdentity = unmeasured->identity();
+  input.frameId = 2;
+  const auto incomplete = FramePresentation::Build(resources(unmeasured), input, nullptr, previous);
+  EXPECT_THAT(incomplete.frame, Eq(nullptr));
+  EXPECT_THAT(incomplete.failure, Eq(FramePresentationFailure::MissingSelectionGeometry));
+  EXPECT_THAT(previous->chrome().textFrameCornersDoc, Eq(std::optional(box)));
+
+  // A later measurement permits the matching pixels and chrome to advance together.
+  auto recovered = measured;
+  recovered.identity = unmeasured->identity();
+  recovered.frame = box;
+  input.decorations.textEditing = recovered;
+  input.decorations.measuredTextEditing.push_back(recovered);
+  input.frameId = 3;
+  const auto complete = FramePresentation::Build(resources(unmeasured), input, nullptr, previous);
+  ASSERT_THAT(complete.frame, Ne(nullptr));
+  EXPECT_THAT(complete.failure, Eq(FramePresentationFailure::None));
+  EXPECT_THAT(complete.frame->identity(), Eq(unmeasured->identity()));
+  EXPECT_THAT(complete.frame->chrome().textFrameCornersDoc, Eq(std::optional(box)));
+}
+
 TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverride) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));

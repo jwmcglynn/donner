@@ -921,6 +921,47 @@ std::shared_ptr<const FramePresentation> BuildFrame(
       detail);
 }
 
+TEST(RenderCoordinatorTest, UnmeasuredTypingCaptureHoldsWholeFrameUntilChromeMatches) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  const auto subject = QuerySelector(app, "#r1");
+  app.setSelection(subject);
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto baseline = AcceptCapturedScene(coordinator, app);
+  const std::array<Vector2d, 4> box{Vector2d(10, 10), Vector2d(30, 10), Vector2d(30, 30),
+                                    Vector2d(10, 30)};
+  CapturedPresentation::TextEditing measured{.identity = baseline->identity(),
+                                             .canvasSize = baseline->canvasSize(),
+                                             .subject = baseline->selection().front(),
+                                             .frame = box};
+  coordinator.setTextEditingChrome(measured);
+  const auto previous = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                   SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(previous, testing::Ne(nullptr));
+  ASSERT_THAT(previous->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
+
+  subject.setAttribute("x", "12");
+  const auto unmeasured = AcceptCapturedScene(coordinator, app);
+  ASSERT_THAT(unmeasured->identity().documentRevision,
+              testing::Ne(measured.identity.documentRevision));
+  const auto held = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                               SelectionChromeDetail::EditingChromeOnly);
+  EXPECT_THAT(held, testing::Eq(previous));
+  EXPECT_THAT(held->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+
+  measured.identity = unmeasured->identity();
+  coordinator.setTextEditingChrome(measured);
+  const auto recovered = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                    SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(recovered, testing::Ne(nullptr));
+  EXPECT_THAT(recovered->identity(), testing::Eq(unmeasured->identity()));
+  EXPECT_THAT(recovered->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+}
+
 TEST(RenderCoordinatorTest, FrameRequiresAcceptedRasterResources) {
   EditorApp app;
   RenderCoordinator coordinator;
