@@ -37,6 +37,9 @@ start cold, then reuse at least 80 percent of cacheable compiler calls and at le
 one dependency download. Receipts bind the source/head and run/attempt; both jobs
 must run both CTests without failures or skips. Verify actual distinct runner
 identities separately when accepting a shared-runner deployment.
+Rerun all jobs when retrying this paired qualification. Artifacts are scoped to
+each attempt and earlier receipts remain intact; a consumer-only retry cannot
+satisfy the current-attempt producer requirement.
 
 One native macOS fresh-directory comparison compiled 318 cacheable calls cold in
 169.112 seconds for the whole lane, then reused all 318 calls and eight dependency

@@ -1561,6 +1561,30 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         actual = native.split(first, 1)[1].split("      # Hosted FetchContent", 1)[0].strip()
         self.assertEqual(expected, actual)
 
+    def test_cmake_cache_qualification_artifacts_are_attempt_scoped(self):
+        producer = self._job_body("cmake-cache-producer", self.cmake)
+        consumer = self._job_body("cmake-cache-consumer", self.cmake)
+        self.assertIn("needs: [gatekeeper, cmake-cache-producer]", consumer)
+        for job in (producer, consumer):
+            self.assertIn("${{ github.run_id }}-${{ github.run_attempt }}", job)
+            self.assertNotIn("overwrite:", job)
+        uploads = [self._step_body(job, "Upload cache receipt")
+                   for job in (producer, consumer)]
+        download = self._step_body(consumer, "Download producer receipt")
+        names = [re.search(r"^ +name: (.+)$", step, re.M).group(1)
+                 for step in [*uploads, download]]
+        seen = set()
+        for attempt in (1, 2):
+            rendered = [name.replace("${{ github.run_attempt }}", str(attempt))
+                        for name in names]
+            self.assertEqual(rendered[0], rendered[2])
+            self.assertEqual(len(set(rendered[:2])), 2)
+            self.assertFalse(seen.intersection(rendered[:2]))
+            seen.update(rendered[:2])
+            self.assertEqual(rendered[:2], ["cmake-cache-producer-%s" % attempt,
+                                            "cmake-cache-consumer-%s" % attempt])
+        self.assertNotIn("pattern:", download)
+
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
         for workflow_name, workflow in (
