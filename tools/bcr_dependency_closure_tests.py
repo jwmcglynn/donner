@@ -15,13 +15,14 @@ from tools import bcr_dependency_closure as closure
 
 MODULE = '''
 bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "sheenbidi", version = "3.0.0")
 bazel_dep(name = "googletest", dev_dependency = True, repo_name = "com_google_gtest")
 bazel_dep(name = "rules_rust", dev_dependency = True)
 local_repository(name = "entt", path = "third_party/entt")
 new_local_repository(name = "stb", path = "third_party/stb", build_file = "//:BUILD.stb")
 private = use_extension("//:dev.bzl", "private", dev_dependency = True)
 private.repo(name = "wgpu_native")
-use_repo(private, "harfbuzz", browser = "playwright")
+use_repo(private, "harfbuzz", "sheenbidi_unicode_data", browser = "playwright")
 '''
 
 # A passing `cquery --output=label_kind` result: the four libraries, the default renderer and
@@ -34,6 +35,10 @@ BASE_ROWS = (
     "cc_library rule @donner//donner/svg/renderer:renderer (5a7f3c1)",
     "cc_library rule @donner//donner/svg/renderer:renderer_tiny_skia (5a7f3c1)",
     "source file @donner//donner/svg/renderer:RendererTinySkiaBackend.cc (null)",
+    "cc_library rule @donner//donner/svg/text:bidi_paragraph (5a7f3c1)",
+    "source file @donner//donner/svg/text:BidiParagraph.cc (null)",
+    "cc_library rule @@sheenbidi+//:sheenbidi (5a7f3c1)",
+    "source file @@sheenbidi+//:Source/SheenBidi.c (null)",
     "cc_library rule @donner//donner/svg/text:text_backend_simple (5a7f3c1)",
     "source file @donner//donner/svg/text:TextBackendSimple.cc (null)",
     "cc_library rule @@donner++_repo_rules+tiny-skia-cpp//src:tiny_skia_lib (5a7f3c1)",
@@ -68,8 +73,9 @@ class DependencyClosureTest(unittest.TestCase):
 
     def test_dev_repo_discovery_keeps_production_vendored_repos(self) -> None:
         self.assertTrue({"googletest", "com_google_gtest", "rules_rust",
-                         "wgpu_native", "harfbuzz", "browser", "playwright"} <= self.dev)
-        self.assertFalse({"entt", "stb", "rules_cc"} & self.dev)
+                         "wgpu_native", "harfbuzz", "sheenbidi_unicode_data",
+                         "browser", "playwright"} <= self.dev)
+        self.assertFalse({"entt", "stb", "rules_cc", "sheenbidi"} & self.dev)
 
     def test_accepts_tiny_skia_with_base_text_and_production_vendor_repos(self) -> None:
         closure.check_closure(parse(BASE), self.dev)
@@ -82,9 +88,17 @@ class DependencyClosureTest(unittest.TestCase):
                 text += f"cc_library rule @@trustfall{separator}//:trust (5a7f3c1)\n"
                 closure.check_closure(parse(text), self.dev)
 
+    def test_requires_runtime_bidi_adapter_and_external_c_implementation(self) -> None:
+        for fragment in ("text:bidi_paragraph", "text:BidiParagraph.cc", ":sheenbidi (",
+                         ":Source/SheenBidi.c"):
+            with self.subTest(fragment=fragment), self.assertRaisesRegex(
+                    ValueError, "base-text|SheenBidi"):
+                closure.check_closure(without(fragment), self.dev)
+
     def test_rejects_dev_repos_even_when_root_consumer_has_them(self) -> None:
         for label in (
             "@com_google_gtest//:gtest",
+            "@@donner++private+sheenbidi_unicode_data//:conformance",
             "@@rules_rust+//:toolchain",
             "@@donner++private+wgpu_native//:library",
         ):
@@ -106,6 +120,11 @@ class DependencyClosureTest(unittest.TestCase):
             with self.subTest(label=label), \
                     self.assertRaisesRegex(ValueError, "Geode|WebGPU|full-text"):
                 closure.check_closure(with_rows(f"cc_library rule {label} (5a7f3c1)"), self.dev)
+
+    def test_rejects_full_text_freetype_in_the_basic_consumer(self) -> None:
+        with self.assertRaisesRegex(ValueError, "full-text FreeType"):
+            closure.check_closure(
+                with_rows("cc_library rule @@freetype+//:freetype (5a7f3c1)"), self.dev)
 
     def test_rejects_rust_namespaces_outside_declared_dev_repos(self) -> None:
         for label in (
@@ -269,9 +288,9 @@ class RepositoryModuleTest(unittest.TestCase):
         expected = {"clang_format_linux_aarch64", "clang_format_linux_x86_64",
                     "clang_format_macos_arm64", "com_google_gtest", "llvm_toolchain",
                     "llvm_toolchain_linux_aarch64", "llvm_toolchain_linux_x86_64",
-                    "sysroot_linux_aarch64", "sysroot_linux_x86_64"}
+                    "sysroot_linux_aarch64", "sysroot_linux_x86_64", "sheenbidi_unicode_data"}
         self.assertEqual(expected - dev, set(), "development-only repositories not found")
-        self.assertEqual(dev & {"entt", "rules_cc", "stb", "tiny-skia-cpp", "zlib"}, set(),
+        self.assertEqual(dev & {"entt", "rules_cc", "stb", "tiny-skia-cpp", "zlib", "sheenbidi"}, set(),
                          "production repositories classified as development-only")
 
 

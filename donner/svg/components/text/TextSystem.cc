@@ -24,6 +24,7 @@
 #include "donner/svg/core/Display.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/parser/PathParser.h"
+#include "donner/svg/text/BidiControl.h"
 
 namespace donner::svg::components {
 
@@ -34,7 +35,7 @@ size_t countCodepoints(std::string_view utf8) {
   while (!utf8.empty()) {
     const auto [codepoint, length] = Utf8::NextCodepoint(utf8);
     utf8.remove_prefix(static_cast<size_t>(length));
-    ++count;
+    count += !IsBidiControlCodepoint(codepoint);
   }
   return count;
 }

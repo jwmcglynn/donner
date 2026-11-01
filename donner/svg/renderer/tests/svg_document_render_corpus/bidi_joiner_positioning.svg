@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="80">
+  <text x="8 44 90" y="26" dx="0 2 3 4" rotate="0 10 20 30" font-size="18">אב&#x200d;ג</text>
+  <text x="8" y="60" font-size="18">a&#x200c;b&#x034f; <tspan fill="blue">مر</tspan></text>
+</svg>

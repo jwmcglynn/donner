@@ -295,6 +295,8 @@ public:
     };
     /// Aliases a planner-owned budget alive through all synchronous fragment shaping calls.
     WorkBudget* work = nullptr;
+    /// Resolved horizontal embedding parity; overrides every guessed shaping direction.
+    std::optional<bool> rightToLeft;
   };
 
   /**
@@ -351,6 +353,16 @@ public:
                                bool isVertical, TextOrientation textOrientation) const {
     return crossSpanKern(prevFont, prevSizePx, curFont, curSizePx, prevCodepoint, curCodepoint,
                          isVertical);
+  }
+
+  /// Resolve a visual neighboring pair inside one shared directional shaping context.
+  virtual double crossSpanKern(FontHandle previousFont, float previousSize, FontHandle currentFont,
+                               float currentSize, uint32_t previousCodepoint,
+                               uint32_t currentCodepoint, bool vertical,
+                               TextOrientation orientation, const ShapingContext& context) const {
+    (void)context;
+    return crossSpanKern(previousFont, previousSize, currentFont, currentSize, previousCodepoint,
+                         currentCodepoint, vertical, orientation);
   }
 
   /// Compute cross-span kerning with kerning disabled.

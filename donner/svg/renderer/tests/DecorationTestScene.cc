@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "donner/base/Utf8.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -63,10 +64,16 @@ DecorationBackend::ShapedRun DecorationBackend::shapeRun(FontHandle, float, std:
                                                          size_t begin, size_t length, bool,
                                                          FontVariant, bool) const {
   ShapedRun run;
-  for (size_t index = begin; index < std::min(text.size(), begin + length); ++index) {
+  const size_t end = std::min(text.size(), begin + length);
+  for (size_t index = begin; index < end;) {
+    const size_t start = index;
+    const auto [codepoint, bytes] = Utf8::NextCodepoint(text.substr(index, end - index));
+    (void)codepoint;
+    index += bytes;
     run.glyphs.push_back(
-        {.glyphIndex = 3, .xAdvance = 10, .yAdvance = 10, .cluster = static_cast<uint32_t>(index)});
+        {.glyphIndex = 3, .xAdvance = 10, .yAdvance = 10, .cluster = static_cast<uint32_t>(start)});
   }
+
   return run;
 }
 

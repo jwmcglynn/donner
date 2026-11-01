@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Length.h"
@@ -79,8 +80,11 @@ struct ChunkBoundary {
   size_t runIndex = 0;    ///< Index of the run that starts this chunk.
   size_t glyphIndex = 0;  ///< Glyph index within the run where the chunk begins.
   TextAnchor textAnchor = TextAnchor::Start;  ///< Effective text-anchor for the chunk.
-  bool absoluteX = false;  ///< This boundary applies an authored absolute x position.
-  bool absoluteY = false;  ///< This boundary applies an authored absolute y position.
+  bool absoluteX = false;                ///< This boundary applies an authored absolute x position.
+  bool absoluteY = false;                ///< This boundary applies an authored absolute y position.
+  std::optional<double> anchorPosition;  ///< Explicit inline origin, independent of run storage.
+  /// First visual glyph used to carry a y-only continuation through textLength adjustment.
+  std::optional<std::pair<size_t, size_t>> visualFirstGlyph;
 };
 
 /// An authored inline displacement consumed by one positioned glyph group.

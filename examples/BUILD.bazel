@@ -410,10 +410,14 @@ exports_files(
         forbidden = [
             "//examples:" + name + "_resources",
             "//third_party/public-sans:public-sans_resource_files",
+            "//donner/svg/text:bidi_paragraph",
+            "@sheenbidi//:sheenbidi",
         ] if tier == "none" else [],
         required = ["//examples:" + name] + ([
             "//examples:" + name + "_resources",
             "//third_party/public-sans:public-sans_resource_files",
+            "//donner/svg/text:bidi_paragraph",
+            "@sheenbidi//:sheenbidi",
         ] if tier == "basic" else []),
         target = "//examples:" + name,
         text_configuration = tier,
@@ -485,10 +489,14 @@ donner_multi_transitioned_test(
         forbidden = [
             "//examples:geode_embed_resources",
             "//third_party/public-sans:public-sans_resource_files",
+            "//donner/svg/text:bidi_paragraph",
+            "@sheenbidi//:sheenbidi",
         ] if tier == "none" else [],
         required = ["//examples:geode_embed"] + ([
             "//examples:geode_embed_resources",
             "//third_party/public-sans:public-sans_resource_files",
+            "//donner/svg/text:bidi_paragraph",
+            "@sheenbidi//:sheenbidi",
         ] if tier == "basic" else []),
         tags = ["manual"],
         target = "//examples:geode_embed",

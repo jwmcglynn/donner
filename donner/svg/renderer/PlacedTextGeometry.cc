@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -589,10 +590,108 @@ void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
   }
 }
 
+/// Orders source-span glyph references after admitting the sort and temporary reference storage.
+std::optional<std::vector<const TextGlyph*>> VisualDecorationGlyphs(const TextRun& run,
+                                                                    std::size_t& remainingWork) {
+  const bool visual = std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                                  [](const auto& glyph) { return glyph.visualOrder.has_value(); });
+  std::vector<const TextGlyph*> result;
+  if (!visual) {
+    return result;
+  }
+  const size_t count = run.glyphs.size();
+  const size_t perGlyph = std::bit_width(count) + 1;
+  if (count > remainingWork / perGlyph) {
+    remainingWork = 0;
+    return std::nullopt;
+  }
+  if (!ChargeDecorationWork(count * perGlyph, remainingWork)) {
+    return std::nullopt;
+  }
+  result.reserve(count);
+  for (const auto& glyph : run.glyphs) {
+    result.push_back(&glyph);
+  }
+  std::stable_sort(result.begin(), result.end(), [](const TextGlyph* a, const TextGlyph* b) {
+    return a->visualOrder.value_or(std::numeric_limits<uint32_t>::max()) <
+           b->visualOrder.value_or(std::numeric_limits<uint32_t>::max());
+  });
+  return result;
+}
+
+struct StraightDecorationSegment {
+  std::optional<uint32_t> previousOrder;
+  bool active = false;
+  double left = 0;
+  double right = 0;
+  double baseline = 0;
+  double rotation = 0;
+
+  template <typename Fn>
+  void flush(const Fn& segment) {
+    if (active) {
+      segment(left, baseline, right);
+    }
+    active = false;
+  }
+
+  bool consecutive(const TextGlyph& glyph) const {
+    return previousOrder && glyph.visualOrder &&
+           *previousOrder < std::numeric_limits<uint32_t>::max() &&
+           *glyph.visualOrder == *previousOrder + 1;
+  }
+
+  template <typename Fn>
+  void add(const TextGlyph& glyph, const Fn& segment) {
+    if (active &&
+        (std::abs(glyph.yPosition - baseline) >= 1e-6 || glyph.rotateDegrees != rotation)) {
+      flush(segment);
+    }
+    if (!active) {
+      left = glyph.xPosition;
+      right = glyph.xPosition + glyph.xAdvance;
+      baseline = glyph.yPosition;
+      rotation = glyph.rotateDegrees;
+      active = true;
+      return;
+    }
+    left = std::min(left, glyph.xPosition);
+    right = std::max(right, glyph.xPosition + glyph.xAdvance);
+  }
+
+  template <typename Fn>
+  void advance(const TextGlyph& glyph, const Fn& segment) {
+    if (!consecutive(glyph)) {
+      flush(segment);
+    }
+    previousOrder = glyph.visualOrder;
+    if (DecorationGlyphVisible(glyph)) {
+      add(glyph, segment);
+    }
+  }
+};
+
+/// Global visual adjacency proves that a source span's segment contains no other span's glyphs.
+/// Zero-advance marks participate in adjacency without changing the typographic band extent.
+template <typename SegmentFn>
+void ForEachVisualStraightSegment(std::span<const TextGlyph* const> glyphs,
+                                  const SegmentFn& segment) {
+  StraightDecorationSegment current;
+  for (const auto* glyph : glyphs) {
+    current.advance(*glyph, segment);
+  }
+  current.flush(segment);
+}
+
 /// Call `segment(left, baseline, right)` for each straight decoration segment of a run: one span
 /// from the first to the last rendered glyph when they share a baseline, else one per glyph.
 template <typename SegmentFn>
-void ForEachStraightSegment(const TextRun& run, const SegmentFn& segment) {
+void ForEachStraightSegment(const TextRun& run, std::span<const TextGlyph* const> visual,
+                            const SegmentFn& segment) {
+  if (!visual.empty()) {
+    ForEachVisualStraightSegment(visual, segment);
+    return;
+  }
   const auto first = std::find_if(run.glyphs.begin(), run.glyphs.end(), DecorationGlyphVisible);
   const auto last = std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), DecorationGlyphVisible);
   if (first == run.glyphs.end() || last == run.glyphs.rend()) {
@@ -618,9 +717,13 @@ void ForEachStraightSegment(const TextRun& run, const SegmentFn& segment) {
 void EmitStraightDecoration(const TextRun& run, const DecorationBand& band, double top,
                             double width, std::size_t& remainingWork,
                             const std::function<void(const Path&)>& emit) {
+  const auto visual = VisualDecorationGlyphs(run, remainingWork);
+  if (!visual) {
+    return;
+  }
   // Size the bounded builder for every segment before appending any of them.
   detail::DecorationWorkBudget<std::size_t> budget(remainingWork);
-  ForEachStraightSegment(run, [&](double left, double, double right) {
+  ForEachStraightSegment(run, *visual, [&](double left, double, double right) {
     budget.add(StyledDecorationPoints(band.style, right - left, width));
   });
   remainingWork = budget.remaining();
@@ -628,7 +731,7 @@ void EmitStraightDecoration(const TextRun& run, const DecorationBand& band, doub
     return;
   }
   PathBuilder builder(budget.points());
-  ForEachStraightSegment(run, [&](double left, double baseline, double right) {
+  ForEachStraightSegment(run, *visual, [&](double left, double baseline, double right) {
     (void)AppendStyledDecoration(builder, band.style, band.line, left, baseline + top, right,
                                  width);
   });

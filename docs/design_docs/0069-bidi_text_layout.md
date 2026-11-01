@@ -7,12 +7,12 @@
 
 ## Summary
 
-Donner renders right-to-left scripts, but it does not run the Unicode Bidirectional Algorithm
-(UAX #9). A text chunk is shaped with one direction that HarfBuzz guesses from its content, the
-`direction` and `unicode-bidi` properties are parsed as unsupported presentation attributes and
-ignored, and the simple text tier lays every chunk out left to right. Mixed-direction text
-therefore renders in the wrong visual order, `direction="rtl"` does not move the anchor edge, and
-`unicode-bidi` overrides and isolates have no effect.
+The original baseline rendered right-to-left scripts without running the Unicode Bidirectional
+Algorithm (UAX #9). HarfBuzz guessed one direction for each text chunk, and the simple text tier
+laid every chunk out left to right. Mixed-direction text therefore rendered in the wrong visual
+order. The `direction` and `unicode-bidi` properties remain recognized but unsupported;
+`direction="rtl"` does not move the anchor edge, and property-based overrides and isolates have
+no effect.
 
 This design adds CSS bidi layout to SVG text: typed `direction` and `unicode-bidi` properties,
 UAX #9 analysis per anchored text chunk with embeddings and isolates injected from the span tree,
@@ -24,11 +24,46 @@ It is the detailed design for the bidirectional-text part of Milestone 12 of
 [0062-svg_parity_completion](0062-svg_parity_completion.md), whose plan it amends (see
 [Amendments to 0062](#amendments-to-0062)), and for the F11 row of
 [0021-resvg_feature_gaps](0021-resvg_feature_gaps.md). It builds on the per-cluster font fallback
-and context shaping of the unmerged [#2098](https://github.com/jwmcglynn/donner/pull/2098), which
-updates [0008-css_fonts](0008-css_fonts.md), and replaces that change's direction heuristics with
+and context shaping of [#2098](https://github.com/jwmcglynn/donner/pull/2098), which
+updated [0008-css_fonts](0008-css_fonts.md), and replaces that change's direction heuristics with
 resolved bidi levels. The text stack it changes is described in
 [0010-text_rendering](0010-text_rendering.md) and
 [text/0052-5-text_backend_refactor](text/0052-5-text_backend_refactor.md).
+
+## Current implementation scope
+
+The first implementation slice resolves ordinary, unwrapped horizontal text at explicit paragraph
+level zero in both text tiers. It uses SheenBidi 3.0.0 with Unicode 17 data, passes resolved run
+direction to shaping, and places glyphs in visual order while retaining one source run per span.
+Byte clusters, codepoint positioning values and UTF-16 DOM aliases remain distinct. Source bidi
+controls affect analysis without consuming SVG character positions; joiners and combining marks
+retain their shaping roles. Compatible paint-only span boundaries retain Arabic shaping context.
+
+The slice uses cumulative limits for source scalars, paragraphs, visual runs, lookup work, owner
+traversal and placed glyphs. Resource refusal rejects the entire layout. Decorations use visual
+adjacency to split a span into consecutive segments without bridging another span's glyphs.
+
+Flat `textLength` and visually contiguous nested length owners use the existing adjustment policy,
+including fixed child lengths and the trailing-gap convention. Visual scopes measure the initial
+minimum and maximum typographic cell endpoints. Spacing distributes the target delta between
+groups; authored positions that backtrack can leave the final visual extent different from the
+requested length. Actual visual bounds and logical continuation are recorded separately.
+If an authored parent length target
+contains a resolved child whose visual glyphs form separated islands interleaved with other
+ownership, the text subtree retains its prior layout. This boundary does not exclude flat length
+adjustment or every nested owner. Prior layout is also retained for a managed
+`spacingAndGlyphs` ancestor whose resolved descendant contains a negative authored horizontal
+`dx`, or an authored `x` after that descendant's first addressable source character. This
+conservative predicate includes potential backtracking across paint spans: the additive fixed-child
+scaling profile cannot represent arbitrary overlapping child extents and logical carry. Flat
+negative positioning, spacing parents and ordinary nested scaling remain in the new path.
+
+Wrapped text, preserved line layout, vertical writing and textPath retain their existing placement.
+Typed `direction` and `unicode-bidi` cascade support, visual caret movement and the remaining
+milestones below are separate work. The simple tier gains ordering and mirroring, not Arabic
+joining. The three normal mixed-script resvg cases are the initial convergence target; this slice
+does not complete the full design or tracking issue. Existing package and module limits remain
+unchanged and must be checked on the actual configured products.
 
 ## Goals
 
@@ -72,11 +107,11 @@ resolved bidi levels. The text stack it changes is described in
 
 ## Next Steps
 
-- Maintainer decisions on the [Open Questions](#open-questions): dependency scope and the Wasm
-  ceilings.
-- This design depends on [#2098](https://github.com/jwmcglynn/donner/pull/2098), whose code it
-  describes and replaces. The design itself is published as an ordinary pull request against `main`;
-  Milestone 1 starts after #2098 merges.
+- Qualify the ordinary horizontal slice against focused engine and DOM tests, independent
+  renderer controls, Unicode conformance data and actual configured dependency/package consumers.
+- Extend the profile through the remaining CSS properties, line layout and editor milestones.
+  The detailed milestone plan below describes the full design, rather than the delivery order of
+  the narrower first slice.
 
 ## Implementation Plan
 
@@ -961,12 +996,13 @@ not dev-only, `bazel_dep`, linked only by `//donner/svg/text:text_engine`.
 
 ### Size budget
 
-After #2098 the editor Geode package has 16,513 compressed and 28,255 raw bytes of headroom.
+The original post-#2098 probe reported 16,513 compressed and 28,255 raw bytes of headroom.
+These historical figures do not qualify a later product or establish its current headroom.
 SheenBidi with mirroring measures about 8,150 compressed and 26,098 raw bytes before any Donner
 code, so the adapter, the restructured layout, and the properties likely exceed the raw ceiling.
-Milestone 1 measures the restructured layout alone against every gate (compressed, raw, function
-body, total raw, and data segments); Milestone 2 measures the real package again and asks for a
-ceiling decision before publication.
+Each implementation slice measures the actual configured package against every applicable gate
+(compressed, raw, function body, total raw and data segments). These limits are not increased by
+this design or by the ordinary horizontal slice.
 
 ### Integration checklist
 
@@ -1011,16 +1047,12 @@ property, and conformance data together.
 
 ## Open Questions
 
-1. **Dependency scope.** Approve SheenBidi 3.0.0 from the Bazel Central Registry as a regular (not
-   dev-only) dependency of the text engine in both tiers?
-2. **Editor package ceilings.** Milestone 2 likely exceeds the 28,255 raw bytes of headroom and may
-   exceed the 16,513 compressed bytes. May both ceilings rise by the measured amounts, or should
-   bidi first find offsetting savings?
-3. **Standalone renderer ceiling.** The two property parsers would land in a module with 705 bytes
-   of headroom. Raise that ceiling by the measured amount, or compile the typed `direction` and
-   `unicode-bidi` properties only when text is enabled, so text-off builds keep treating them as
-   recognized but unsupported?
-4. **`text/direction/rtl` reference.** The plan is a reviewed project-owned golden rendered with the
+1. **Interleaved length owners.** Define parent adjustment when a fixed child occupies visually
+   separated islands. The first slice preserves prior layout for this narrow case.
+2. **Future property costs.** Measure typed `direction` and `unicode-bidi` on actual editor and
+   standalone products before selecting their implementation. Historical probe headroom is not a
+   current size allowance, and existing ceilings remain unchanged.
+3. **`text/direction/rtl` reference.** The plan is a reviewed project-owned golden rendered with the
    vendored Arabic face. Is a project golden acceptable here, or should the row stay skipped as a
    harness mismatch?
 

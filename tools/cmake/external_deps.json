@@ -72,6 +72,11 @@
       "reason": "Donner's vendored tiny-skia-cpp CMakeLists exposes one tiny_skia target."
     },
     {
+      "labels": ["@sheenbidi//:sheenbidi", "@sheenbidi"],
+      "cmake": "SheenBidi",
+      "reason": "FetchContent SheenBidi is shared by both text backends when DONNER_TEXT is enabled."
+    },
+    {
       "labels": ["@woff2//:woff2_decode"],
       "cmake": "woff2dec",
       "reason": "FetchContent woff2 builds woff2dec."

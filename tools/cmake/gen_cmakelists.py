@@ -1083,6 +1083,29 @@ def generate_root() -> None:
             f.write(f"  GIT_TAG        {revision}\n)\n")
             f.write(f"FetchContent_MakeAvailable({name})\n\n")
 
+        sheenbidi_version = extract_versions_from_module_bazel()["sheenbidi"]
+        if sheenbidi_version != "3.0.0":
+            raise RuntimeError("Update the SheenBidi archive hash with its module version")
+        f.write("if(DONNER_TEXT)\n")
+        # A function scopes upstream's generic option names and C++ settings.
+        f.write("function(donner_fetch_sheenbidi)\n")
+        for option, value in (
+            ("BUILD_TESTING", "OFF"), ("BUILD_GENERATOR", "OFF"),
+            ("SB_CONFIG_EXPERIMENTAL_TEXT_API", "OFF"), ("SB_CONFIG_UNITY", "ON"),
+            ("ENABLE_COVERAGE", "OFF"), ("ENABLE_ASAN", "OFF"), ("ENABLE_UBSAN", "OFF"),
+        ):
+            f.write(f"  set({option} {value})\n")
+        f.write(
+            "  FetchContent_Declare(sheenbidi\n"
+            f"    URL https://github.com/Tehreer/SheenBidi/archive/refs/tags/v{sheenbidi_version}.tar.gz\n"
+            "    URL_HASH SHA256=86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786\n"
+            "  )\n"
+            "  FetchContent_MakeAvailable(sheenbidi)\n"
+            "endfunction()\n"
+            "donner_fetch_sheenbidi()\n"
+            "endif() # DONNER_TEXT\n\n"
+        )
+
         # Build / install rules for STB (header-only + impl)
         f.write("# STB libraries (locally vendored)\n")
         f.write(
@@ -1796,6 +1819,7 @@ _KNOWN_EXTERNAL_TARGETS: Set[str] = {
     "nlohmann_json::nlohmann_json",
     "pixelmatch-cpp17",
     "zlib", "zlibstatic",
+    "SheenBidi",
     "rules_cc_runfiles",
     # Abseil (pattern: absl::*)
     # Skia/tiny-skia backends

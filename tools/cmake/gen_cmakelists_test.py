@@ -63,7 +63,7 @@ class ModuleBazelExtractionTest(unittest.TestCase):
         # third_party/entt, so there's no bazel_dep/git_repository block to
         # read. The CMake FetchContent entry comes from _HARDCODED_FETCHCONTENT.
         required = ["googletest", "nlohmann_json", "zlib",
-                    "rules_cc", "pixelmatch-cpp17", "woff2"]
+                    "rules_cc", "pixelmatch-cpp17", "woff2", "sheenbidi"]
         for dep in required:
             self.assertIn(dep, versions, f"Missing dep: {dep}")
 
@@ -106,6 +106,13 @@ class ExternalDepManifestTest(unittest.TestCase):
     def test_maps_cmake_target_dependency(self):
         dep = g._resolve_external_dep("@zlib//:z")
         self.assertEqual(dep, g.ExternalDepResolution("target", "zlib"))
+
+    def test_maps_shared_bidi_runtime(self):
+        self.assertEqual(
+            g._resolve_external_dep("@sheenbidi//:sheenbidi"),
+            g.ExternalDepResolution("target", "SheenBidi"),
+        )
+        self.assertIn("SheenBidi", g._KNOWN_EXTERNAL_TARGETS)
 
     def test_maps_mask_color_space_without_filter_configuration(self):
         dep = g._resolve_external_dep("@tiny-skia-cpp//src/tiny_skia/filter:color_space")
@@ -336,7 +343,7 @@ class GeneratedRootCmakeTest(unittest.TestCase):
                     with mock.patch.object(
                         g,
                         "extract_versions_from_module_bazel",
-                        return_value={},
+                        return_value={"sheenbidi": "3.0.0"},
                     ):
                         with mock.patch.object(
                             g, "get_cmake_targets", return_value={"//:donner": root_target}
@@ -367,6 +374,22 @@ class GeneratedRootCmakeTest(unittest.TestCase):
                 f'  {directory} "${{FETCHCONTENT_BASE_DIR}}/brotli-{release.group(1)}-{suffix}"',
                 contents,
             )
+
+        bidi = contents.split("if(DONNER_TEXT)\n", 1)[1].split("endif() # DONNER_TEXT", 1)[0]
+        self.assertIn("function(donner_fetch_sheenbidi)", bidi)
+        self.assertIn("endfunction()\ndonner_fetch_sheenbidi()", bidi)
+        self.assertIn(
+            "URL https://github.com/Tehreer/SheenBidi/archive/refs/tags/v3.0.0.tar.gz", bidi)
+        self.assertIn(
+            "URL_HASH SHA256=86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786",
+            bidi,
+        )
+        self.assertIn("FetchContent_MakeAvailable(sheenbidi)", bidi)
+        for option, value in (("BUILD_TESTING", "OFF"), ("BUILD_GENERATOR", "OFF"),
+                              ("SB_CONFIG_EXPERIMENTAL_TEXT_API", "OFF"),
+                              ("SB_CONFIG_UNITY", "ON")):
+            self.assertIn(f"set({option} {value})", bidi)
+            self.assertNotIn(f"set({option} {value} CACHE", bidi)
 
         self.assertNotIn("DONNER_BUILD_EXAMPLES", contents)
         # Issue #1212: the generated root must not advertise a test contract
@@ -419,6 +442,95 @@ class GeneratedCompileBudgetTest(unittest.TestCase):
                 return Path("donner/gpu/shader/CMakeLists.txt").read_text()
             finally:
                 os.chdir(previous_cwd)
+
+
+class BidiRuntimeFeatureBoundaryTest(unittest.TestCase):
+    @staticmethod
+    def _targets():
+        targets = {}
+        package = "donner/svg/text"
+        for config in g.CMAKE_CONFIGS:
+            attrs_by_name = {
+                "bidi_control": {"hdrs": [f"//{package}:BidiControl.h"]},
+                "bidi_types": {
+                    "hdrs": [f"//{package}:BidiParagraph.h"],
+                    "deps": [f"//{package}:bidi_control"],
+                },
+            }
+            for name, source in (("text_engine", "TextEngine.cc"),
+                                 ("text_backend_simple", "TextBackendSimple.cc")):
+                attrs = {"srcs": [f"//{package}:{source}"],
+                         "deps": [f"//{package}:bidi_types"], "defines": []}
+                if config.text:
+                    attrs["deps"].append(f"//{package}:bidi_paragraph")
+                    attrs["defines"].append("DONNER_TEXT_ENABLED")
+                if name == "text_engine" and config.text_full:
+                    attrs["defines"].append("DONNER_TEXT_FULL")
+                attrs_by_name[name] = attrs
+            if config.text:
+                attrs_by_name["bidi_paragraph"] = {
+                    "srcs": [f"//{package}:BidiParagraph.cc"],
+                    "deps": [f"//{package}:bidi_types", "@sheenbidi//:sheenbidi"],
+                }
+            for name, attrs in attrs_by_name.items():
+                info = g.ConfiguredTargetInfo(
+                    label=f"//{package}:{name}", package=package, name=name,
+                    kind="cc_library", attrs=attrs, compatible=True,
+                )
+                g._merge_configured_target(targets, info, config.name)
+        return targets
+
+    def _emit(self, name):
+        targets = self._targets()
+        target = targets[f"//donner/svg/text:{name}"]
+        output = io.StringIO()
+        g._emit_package_target(output, target.package, target, g._targets_by_cmake_name(targets))
+        return output.getvalue()
+
+    def test_types_remain_header_only_without_a_runtime_dependency(self):
+        text = self._emit("bidi_types")
+        self.assertIn("add_library(donner_svg_text_bidi_types INTERFACE)", text)
+        self.assertIn("BidiParagraph.h", text)
+        self.assertIn(
+            "target_link_libraries(donner_svg_text_bidi_types INTERFACE "
+            "donner_svg_text_bidi_control)", text,
+        )
+        self.assertNotIn("if(DONNER_TEXT", text)
+        self.assertNotIn("SheenBidi", text)
+        self.assertNotIn("donner_svg_text_bidi_paragraph", text)
+
+    def test_runtime_target_and_external_link_are_guarded_by_text(self):
+        text = self._emit("bidi_paragraph")
+        self.assertTrue(text.startswith("if(DONNER_TEXT)\nadd_library("))
+        self.assertIn("BidiParagraph.cc", text)
+        self.assertIn("SheenBidi", text)
+        self.assertTrue(text.endswith("endif() # DONNER_TEXT\n"))
+
+    def test_always_present_text_callers_guard_the_runtime_and_compile_definition(self):
+        for name in ("text_engine", "text_backend_simple"):
+            with self.subTest(name=name):
+                text = self._emit(name)
+                cmake_name = f"donner_svg_text_{name}"
+                self.assertTrue(text.startswith(f"add_library({cmake_name}\n"))
+                self.assertIn(
+                    f"target_link_libraries({cmake_name} PUBLIC donner_svg_text_bidi_types)", text,
+                )
+                self.assertIn(
+                    "if(DONNER_TEXT)\n"
+                    f"  target_compile_definitions({cmake_name} PUBLIC DONNER_TEXT_ENABLED)\n"
+                    "endif()", text,
+                )
+                self.assertIn(
+                    "if(DONNER_TEXT)\n"
+                    f"  target_link_libraries({cmake_name} PUBLIC donner_svg_text_bidi_paragraph)\n"
+                    "endif()", text,
+                )
+                if name == "text_engine":
+                    self.assertIn(
+                        "if(DONNER_TEXT_FULL)\n"
+                        f"  target_compile_definitions({cmake_name} PUBLIC DONNER_TEXT_FULL)\n"
+                        "endif()", text,
+                    )
 
 
 class NativeSpeedOptionsTest(unittest.TestCase):
@@ -483,7 +595,8 @@ class NativeSpeedOptionsTest(unittest.TestCase):
                 )
                 with (
                     mock.patch.object(g, "get_fetchcontent_externals", return_value=[]),
-                    mock.patch.object(g, "extract_versions_from_module_bazel", return_value={}),
+                    mock.patch.object(g, "extract_versions_from_module_bazel",
+                                      return_value={"sheenbidi": "3.0.0"}),
                     mock.patch.object(g, "get_cmake_targets", return_value={"//:donner": target}),
                 ):
                     g.generate_root()

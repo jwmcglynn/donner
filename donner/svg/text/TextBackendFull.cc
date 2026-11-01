@@ -1054,6 +1054,19 @@ hb_direction_t ShapingDirection(hb_direction_t detected, bool verticalShaping,
   return HB_DIRECTION_LTR;
 }
 
+bool ContextAddsShapingInformation(const TextBackend::ShapingContext& context, size_t rangeLength) {
+  return context.byteLength > rangeLength || context.rightToLeft.has_value();
+}
+
+hb_direction_t ResolvedShapingDirection(const TextBackend::ShapingContext* context,
+                                        hb_direction_t detected, bool vertical,
+                                        unsigned int bufferLength, bool inContext) {
+  if (context && context->rightToLeft && !vertical) {
+    return *context->rightToLeft ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+  }
+  return ShapingDirection(detected, vertical, bufferLength, inContext);
+}
+
 /**
  * Adds [\p rangeStart, \p rangeEnd) of \p text, which starts at \p byteOffset of \p spanText, to
  * \p buf. With a context, the context's other characters become the buffer's pre- and
@@ -1352,13 +1365,17 @@ bool ShapeWithMetricAdmission(hb_font_t* parent, hb_buffer_t* buffer, const hb_f
 /// Returns the first advance of a bounded pair/solo probe without retaining callback state.
 std::optional<double> ShapeFirstAdvance(hb_font_t* font, std::span<const uint32_t> codepoints,
                                         hb_direction_t direction, double pixelScaleX,
-                                        double pixelScaleY, VerticalMetricAdmission& admission) {
+                                        double pixelScaleY, VerticalMetricAdmission& admission,
+                                        const TextBackend::ShapingContext* context = nullptr,
+                                        bool enableKerning = true) {
   hb_buffer_t* buffer = hb_buffer_create();
   hb_buffer_add_codepoints(buffer, codepoints.data(), codepoints.size(), 0, codepoints.size());
   hb_buffer_set_direction(buffer, direction);
-  hb_buffer_set_script(buffer, HB_SCRIPT_LATIN);
+  hb_buffer_set_script(buffer, context ? HB_SCRIPT_INVALID : HB_SCRIPT_LATIN);
   hb_buffer_guess_segment_properties(buffer);
-  if (!ShapeWithMetricAdmission(font, buffer, nullptr, 0, admission)) {
+  const hb_feature_t withoutKerning{HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
+  if (!ShapeWithMetricAdmission(font, buffer, enableKerning ? nullptr : &withoutKerning,
+                                enableKerning ? 0 : 1, admission)) {
     hb_buffer_destroy(buffer);
     return std::nullopt;
   }
@@ -1372,6 +1389,39 @@ std::optional<double> ShapeFirstAdvance(hb_font_t* font, std::span<const uint32_
   }
   hb_buffer_destroy(buffer);
   return advance;
+}
+
+hb_direction_t PairShapingDirection(const TextBackend::ShapingContext* context, bool vertical,
+                                    TextOrientation orientation, uint32_t codepoint) {
+  const bool upright = vertical && !UsesSidewaysMetrics(orientation, codepoint);
+  const auto fallback = upright ? HB_DIRECTION_TTB : HB_DIRECTION_LTR;
+  return ResolvedShapingDirection(context, fallback, upright, 2, context != nullptr);
+}
+
+std::array<uint32_t, 2> LogicalPair(uint32_t previous, uint32_t current, hb_direction_t direction) {
+  return direction == HB_DIRECTION_RTL ? std::array{current, previous}
+                                       : std::array{previous, current};
+}
+
+/// The same substitutions in both probes isolate positioning from already-contextual joining.
+double ContextPairAdjustment(hb_font_t* font, std::span<const uint32_t> pair,
+                             hb_direction_t direction, double scaleX, double scaleY,
+                             VerticalMetricAdmission& admission,
+                             const TextBackend::ShapingContext& context) {
+  if (context.work && !context.work->consume(pair.size() * 2)) {
+    return 0;
+  }
+  const auto enabled =
+      ShapeFirstAdvance(font, pair, direction, scaleX, scaleY, admission, &context, true);
+  const auto disabled =
+      ShapeFirstAdvance(font, pair, direction, scaleX, scaleY, admission, &context, false);
+  return enabled && disabled ? *enabled - *disabled : 0;
+}
+
+bool ValidKerningFaces(const FontManager& manager, FontHandle previous, FontHandle current,
+                       float currentSize) {
+  return manager.fontsShareFamily(previous, current) && std::isfinite(currentSize) &&
+         currentSize > 0;
 }
 
 bool AdmitContextualShaping(const TextBackend::ShapingContext* context, size_t bytes) {
@@ -1439,7 +1489,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
   shapedBytes_ += byteLength;
   const ShapingContext* const featureContext = context;
   // A context that adds no characters leaves the range shaped as without one.
-  if (context && context->byteLength <= byteLength) {
+  if (context && !ContextAddsShapingInformation(*context, byteLength)) {
     context = nullptr;
   }
   hb_font_t* hbFont = getOrCreateHbFont(font);
@@ -1484,8 +1534,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     const int64_t clusterOffset =
         AddShapingRange(buf, text, rangeStart, rangeEnd, spanText, byteOffset, shapingContext);
 
-    const auto direction = ShapingDirection(detectedDirection, useVerticalShaping,
-                                            hb_buffer_get_length(buf), shapingContext != nullptr);
+    const auto direction =
+        ResolvedShapingDirection(featureContext, detectedDirection, useVerticalShaping,
+                                 hb_buffer_get_length(buf), shapingContext != nullptr);
     order.observe(direction);
     hb_buffer_set_direction(buf, direction);
     hb_buffer_set_script(buf, detectedScript);
@@ -1539,8 +1590,25 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
                                       float curSizePx, uint32_t prevCodepoint,
                                       uint32_t curCodepoint, bool isVertical,
                                       TextOrientation textOrientation) const {
-  if (!fontManager_.fontsShareFamily(prevFont, curFont) || !std::isfinite(curSizePx) ||
-      curSizePx <= 0.0f) {
+  return crossSpanKernImpl(prevFont, prevSizePx, curFont, curSizePx, prevCodepoint, curCodepoint,
+                           isVertical, textOrientation, nullptr);
+}
+
+double TextBackendFull::crossSpanKern(FontHandle previousFont, float previousSize,
+                                      FontHandle currentFont, float currentSize,
+                                      uint32_t previousCodepoint, uint32_t currentCodepoint,
+                                      bool vertical, TextOrientation orientation,
+                                      const ShapingContext& context) const {
+  return crossSpanKernImpl(previousFont, previousSize, currentFont, currentSize, previousCodepoint,
+                           currentCodepoint, vertical, orientation, &context);
+}
+
+double TextBackendFull::crossSpanKernImpl(FontHandle prevFont, float prevSizePx, FontHandle curFont,
+                                          float curSizePx, uint32_t prevCodepoint,
+                                          uint32_t curCodepoint, bool isVertical,
+                                          TextOrientation textOrientation,
+                                          const ShapingContext* context) const {
+  if (!ValidKerningFaces(fontManager_, prevFont, curFont, curSizePx)) {
     return 0.0;
   }
   hb_font_t* hbFont = getOrCreateHbFont(prevFont);
@@ -1556,14 +1624,18 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   const double pixelScaleX = pixelScaleForPpem(ftFace, prevSizePx, true);
   const double pixelScaleY = pixelScaleForPpem(ftFace, prevSizePx, false);
 
-  TextBackend::ShapingContext::WorkBudget metricWork{0, 0};
+  TextBackend::ShapingContext::WorkBudget localWork{0, 0};
+  auto& metricWork = SelectMetricWork(context, localWork);
   VerticalMetricAdmission metricAdmission{fontManager_, prevFont, metricWork,
                                           delegatedVerticalOriginCalls_,
                                           delegatedVerticalAdvanceCalls_};
 
-  const bool sideways = UsesSidewaysMetrics(textOrientation, curCodepoint);
-  const hb_direction_t direction = isVertical && !sideways ? HB_DIRECTION_TTB : HB_DIRECTION_LTR;
-  const std::array pair{prevCodepoint, curCodepoint};
+  const auto direction = PairShapingDirection(context, isVertical, textOrientation, curCodepoint);
+  const auto pair = LogicalPair(prevCodepoint, curCodepoint, direction);
+  if (context) {
+    return ContextPairAdjustment(hbFont, pair, direction, pixelScaleX, pixelScaleY, metricAdmission,
+                                 *context);
+  }
   const auto paired =
       ShapeFirstAdvance(hbFont, pair, direction, pixelScaleX, pixelScaleY, metricAdmission);
   if (!paired) {

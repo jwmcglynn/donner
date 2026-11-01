@@ -104,6 +104,11 @@ struct TextGlyph {
   bool emergencyLineStart = false;
   /// Preserved logical end space hanging before a backward line's visual content.
   bool hangingBefore = false;
+  bool rightToLeft = false;  ///< Resolved horizontal source-character direction.
+  /// Global visual adjacency for source-span decoration continuity; absent on legacy layouts.
+  std::optional<uint32_t> visualOrder;
+  /// This visual chunk origin applies an authored horizontal absolute position.
+  bool absoluteInlinePosition = false;
 };
 
 /**
