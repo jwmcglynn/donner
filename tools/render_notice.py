@@ -39,6 +39,16 @@ def _build_lookup(pairs: list[str]) -> dict[str, Path]:
     return lookup
 
 
+def _license_text_lines(text: str, text_ids: dict[str, int]) -> list[str]:
+    """Keep one complete body per exact processed text, with numbered references."""
+    text_id = text_ids.get(text)
+    if text_id is not None:
+        return [f"License text: see [{text_id}] above."]
+    text_id = len(text_ids) + 1
+    text_ids[text] = text_id
+    return [f"License text [{text_id}]:", text]
+
+
 def render(manifest_path: Path, output_path: Path, lookup: dict[str, Path]) -> None:
     manifest = json.loads(manifest_path.read_text())
     entries = sorted(
@@ -56,6 +66,7 @@ def render(manifest_path: Path, output_path: Path, lookup: dict[str, Path]) -> N
         "",
     ]
 
+    license_text_ids: dict[str, int] = {}
     for entry in entries:
         lines.append("-" * 72)
         lines.append(f"Package: {entry.get('package_name') or entry['label']}")
@@ -79,7 +90,7 @@ def render(manifest_path: Path, output_path: Path, lookup: dict[str, Path]) -> N
                 f"render_notice: failed to read license text {sandbox_path} "
                 f"(manifest short_path={short!r}): {exc}"
             )
-        lines.append(text)
+        lines.extend(_license_text_lines(text, license_text_ids))
         lines.append("")
 
     output_path.write_text("\n".join(lines))
