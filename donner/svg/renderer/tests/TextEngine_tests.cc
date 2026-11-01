@@ -2433,6 +2433,83 @@ TEST(TextEngineTest, BidiNormalLeadingControlPaintSpanKeepsTheFirstVisibleParagr
   EXPECT_THAT(runs[1].glyphs, Each(Field("rightToLeft", &TextGlyph::rightToLeft, true)));
 }
 
+TEST(TextEngineTest, BidiNormalContinuationOriginOwnsItsLeadingEmbeddingControls) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto primary = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Latin primary");
+  const auto fallback = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Arabic fallback");
+  ASSERT_THAT(static_cast<bool>(primary), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(fallback), testing::IsTrue());
+  TextBackendFull direct(fonts, registry);
+  const auto prefix =
+      direct.shapeRunNoKerning(primary, 20, "A", 0, 1, false, FontVariant::Normal, false);
+  const auto open =
+      direct.shapeRunNoKerning(primary, 20, "(", 0, 1, false, FontVariant::Normal, false);
+  const auto close =
+      direct.shapeRunNoKerning(primary, 20, ")", 0, 1, false, FontVariant::Normal, false);
+  const auto joined =
+      direct.shapeRunNoKerning(fallback, 20, "مر", 0, 4, false, FontVariant::Normal, false);
+  ASSERT_THAT(joined.glyphs, SizeIs(2));
+  ASSERT_THAT(joined.glyphs,
+              Each(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, Gt(0))));
+  ASSERT_THAT(prefix.glyphs, SizeIs(1));
+  ASSERT_THAT(open.glyphs, SizeIs(1));
+  ASSERT_THAT(close.glyphs, SizeIs(1));
+  ASSERT_THAT(prefix.glyphs[0].xAdvance, Gt(0));
+  ASSERT_THAT(open.glyphs[0].glyphIndex, Gt(0));
+  ASSERT_THAT(close.glyphs[0].glyphIndex, Gt(0));
+  ASSERT_THAT(open.glyphs[0].glyphIndex, Not(Eq(close.glyphs[0].glyphIndex)));
+  for (bool embedded : {false, true}) {
+    for (int origin : {0, 1, 2, 3}) {
+      SCOPED_TRACE(testing::Message() << embedded << ": " << origin);
+      TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+      components::ComputedTextComponent text;
+      auto first = MakeSpan("A");
+      first.xList = {Lengthd(10)};
+      first.yList = {Lengthd(20)};
+      text.spans.push_back(std::move(first));
+      auto continuation = MakeSpan(embedded ? "\u202b(مر)\u202c" : "(مر)");
+      continuation.startsNewChunk = false;
+      if (origin & 1) {
+        continuation.xList = {Lengthd(100)};
+      }
+      if (origin & 2) {
+        continuation.yList = {Lengthd(100)};
+      }
+      text.spans.push_back(std::move(continuation));
+      auto params = MakeTextParams(20);
+      params.fontFamilies = {RcString("Latin primary"), RcString("Arabic fallback")};
+      params.fontKerning = FontKerning::None;
+      const auto runs = engine.layout(text, params);
+      ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(4))));
+      EXPECT_THAT(runs[0].glyphs[0].xPosition, DoubleEq(10));
+      EXPECT_THAT(runs[0].glyphs[0].yPosition, DoubleEq(20));
+      const double expectedX = (origin & 1) ? 100 : 10 + prefix.glyphs[0].xAdvance;
+      const double expectedY = (origin & 2) ? 100 : 20;
+      EXPECT_THAT(runs[1].glyphs.front().xPosition, DoubleEq(expectedX));
+      EXPECT_THAT(runs[1].glyphs.front().yPosition, DoubleEq(expectedY));
+      EXPECT_THAT(runs[1].glyphs.back().yPosition, DoubleEq(expectedY));
+      EXPECT_THAT(runs[1].glyphs[1].yPosition, DoubleEq(expectedY + joined.glyphs[0].yOffset));
+      EXPECT_THAT(runs[1].glyphs[2].yPosition, DoubleEq(expectedY + joined.glyphs[1].yOffset));
+      const std::vector<TextRun> tail{runs[1]};
+      if (embedded) {
+        EXPECT_THAT(VisualClusters(tail), ElementsAre(8u, 6u, 4u, 3u));
+      } else {
+        EXPECT_THAT(VisualClusters(tail), ElementsAre(0u, 3u, 1u, 5u));
+      }
+      EXPECT_THAT(runs[1].glyphs,
+                  ElementsAre(GlyphIndexIs(open.glyphs[0].glyphIndex), GlyphIndexIs(Gt(0)),
+                              GlyphIndexIs(Gt(0)), GlyphIndexIs(close.glyphs[0].glyphIndex)));
+      EXPECT_THAT(GlyphFont(runs[1], runs[1].glyphs.front()), Eq(primary));
+      EXPECT_THAT(GlyphFont(runs[1], runs[1].glyphs[1]), Eq(fallback));
+      EXPECT_THAT(GlyphFont(runs[1], runs[1].glyphs[2]), Eq(fallback));
+      EXPECT_THAT(GlyphFont(runs[1], runs[1].glyphs.back()), Eq(primary));
+      EXPECT_THAT(runs[1].glyphs.front().rightToLeft, Eq(embedded));
+      EXPECT_THAT(runs[1].glyphs.back().rightToLeft, Eq(embedded));
+    }
+  }
+}
+
 // Shaping each fallback item in its chunk's context must not rescan the whole chunk per item: a
 // chunk that alternates faces on every character detects its context's direction and script once.
 TEST(TextEngineTest, AlternatingFallbackChunkDetectsItsContextOnce) {

@@ -4472,9 +4472,9 @@ private:
     if (!paragraphs.back().hasAddressable) {
       return false;
     }
+    const bool spanOrigin = byte == 0 && (span.startsNewChunk || hasAbsolutePosition(span, 0));
     const bool absolute = !BidiParagraph::IsControl(cp) && hasAbsolutePosition(span, position);
-    return !IsTypographicMiddle(cp, position, previousJoiner) &&
-           (absolute || (byte == 0 && span.startsNewChunk));
+    return !IsTypographicMiddle(cp, position, previousJoiner) && (absolute || spanOrigin);
   }
 
   void appendCharacter(const TextSpan& span, size_t spanIndex, uint32_t position, size_t byte,
