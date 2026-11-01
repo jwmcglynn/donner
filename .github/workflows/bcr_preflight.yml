@@ -357,7 +357,7 @@ jobs:
       - name: Verify the exact preflight source and CLI bytes
         run: python3 -B -m tools.bcr_preflight verify --with-source
       - name: Attest the preflight build artifacts
-        uses: actions/attest-build-provenance@v3.2.0
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip
