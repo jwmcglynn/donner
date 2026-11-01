@@ -4,7 +4,7 @@ bazel_dep(name = "donner", version = "0.8.0")
 
 # Register the Apple toolchain before rules_cc selects its generic host toolchain.
 bazel_dep(name = "apple_support", version = "2.10.1")
-bazel_dep(name = "rules_cc", version = "0.2.26")
+bazel_dep(name = "rules_cc", version = "0.2.27")
 
 bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True, repo_name = "com_google_gtest")
 bazel_dep(name = "pixelmatch-cpp17", version = "2.0.0", dev_dependency = True)
