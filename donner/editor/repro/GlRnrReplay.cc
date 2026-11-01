@@ -403,7 +403,10 @@ std::optional<TexturePixelStats> TexturePixelStatsForSnapshot(
 [[nodiscard]] bool WaitForReplayWorkerBeforeFrame(const GlRnrReplayOptions& options,
                                                   EditorShell& shell, const ReproFrame& frame,
                                                   std::string* error) {
-  if (!ShouldDrainWorkerBeforeFrame(options.workerScheduling)) {
+  const bool measurementRecovery =
+      options.textChromeMeasurementHoldEndFrame >= 0 &&
+      frame.index >= static_cast<std::uint64_t>(options.textChromeMeasurementHoldEndFrame);
+  if (!ShouldDrainWorkerBeforeFrame(options.workerScheduling) && !measurementRecovery) {
     return true;
   }
 
@@ -415,6 +418,33 @@ std::optional<TexturePixelStats> TexturePixelStatsForSnapshot(
 
   return SetError(
       error, "timed out waiting for replay worker before frame " + std::to_string(frame.index));
+}
+
+bool ValidateReplayDocumentHold(const GlRnrReplayOptions& options, std::string* error) {
+  if (options.workerDocumentAccessHoldStartFrame != -1 ||
+      options.workerDocumentAccessHoldEndFrame != -1) {
+    if (options.workerDocumentAccessHoldStartFrame < 0 ||
+        options.workerDocumentAccessHoldEndFrame <= options.workerDocumentAccessHoldStartFrame ||
+        options.workerScheduling != GlRnrReplayWorkerScheduling::Realtime) {
+      return SetError(
+          error, "document-access hold requires an increasing frame range and realtime scheduling");
+    }
+  }
+  return true;
+}
+
+bool ValidateReplayTextMeasurementHold(const GlRnrReplayOptions& options, std::string* error) {
+  if (options.textChromeMeasurementHoldStartFrame != -1 ||
+      options.textChromeMeasurementHoldEndFrame != -1) {
+    if (options.textChromeMeasurementHoldStartFrame < 0 ||
+        options.textChromeMeasurementHoldEndFrame <= options.textChromeMeasurementHoldStartFrame ||
+        options.workerDocumentAccessHoldStartFrame < 0 ||
+        options.textChromeMeasurementHoldEndFrame <= options.workerDocumentAccessHoldEndFrame) {
+      return SetError(error,
+                      "text measurement hold requires an increasing range across worker release");
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -468,14 +498,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   if (options.captureFrames.empty() && !options.captureLeftMouseDownOrdinal.has_value()) {
     return SetError(error, "at least one GL capture selector is required");
   }
-  if (options.workerDocumentAccessHoldStartFrame != -1 ||
-      options.workerDocumentAccessHoldEndFrame != -1) {
-    if (options.workerDocumentAccessHoldStartFrame < 0 ||
-        options.workerDocumentAccessHoldEndFrame <= options.workerDocumentAccessHoldStartFrame ||
-        options.workerScheduling != GlRnrReplayWorkerScheduling::Realtime) {
-      return SetError(
-          error, "document-access hold requires an increasing frame range and realtime scheduling");
-    }
+  if (!ValidateReplayDocumentHold(options, error) ||
+      !ValidateReplayTextMeasurementHold(options, error)) {
+    return false;
   }
   if (options.holdFramesBehind < 0) {
     return SetError(error, "holdFramesBehind must be non-negative");
@@ -582,7 +607,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   // canvas-commit throttle and raster-settle window read a clock, and on the steady clock an
   // unpaced replay crosses them on whichever frame the host happens to reach in time, so the
   // same recording can post a render one frame later on a faster host. Read recorded frame time.
-  const bool recordedTimeScheduling = ShouldDrainWorkerBeforeFrame(options.workerScheduling);
+  const bool recordedTimeScheduling = ShouldDrainWorkerBeforeFrame(options.workerScheduling) ||
+                                      options.textChromeMeasurementHoldStartFrame >= 0;
   const std::chrono::steady_clock::time_point replayClockEpoch = std::chrono::steady_clock::now();
   const auto replayClockNow =
       std::make_shared<std::chrono::steady_clock::time_point>(replayClockEpoch);
@@ -662,6 +688,10 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       return false;
     }
 
+    shell.setTextChromeMeasurementBlockedForReplay(
+        options.textChromeMeasurementHoldStartFrame >= 0 &&
+        frame.index >= static_cast<std::uint64_t>(options.textChromeMeasurementHoldStartFrame) &&
+        frame.index < static_cast<std::uint64_t>(options.textChromeMeasurementHoldEndFrame));
     const std::uint64_t holdPollCountBefore = replayRenderer.replayResultHoldPollCountForTesting();
     window.pollEvents();
     shell.prepareFrame();
@@ -729,6 +759,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .duplicateLiveTextureCount = layerStatus.duplicateLiveTextureCount,
         .documentFrameVersion = layerStatus.documentFrameVersion,
         .displayedDocVersion = layerStatus.displayedDocVersion,
+        .frameRepairFailure = layerStatus.frameRepairFailure,
         .immediateOverlayDocumentVersion = layerStatus.immediateOverlayDocumentVersion,
         .presentationFrameId = layerStatus.presentationFrameId,
         .presentationIdentity = layerStatus.presentationIdentity,

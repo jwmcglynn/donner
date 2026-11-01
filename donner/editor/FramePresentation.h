@@ -56,7 +56,8 @@ enum class FramePresentationFailure {
   IncompatiblePose,
   InsufficientCoverage,
   MissingSelectionGeometry,
-  UploadRefused
+  UploadRefused,
+  MissingTextEditingGeometry
 };
 
 /// A sealed frame, when available, and the exact work needed to complete its presentation.
@@ -200,6 +201,14 @@ public:
   }
   /// Whether selection geometry belongs to this frame's selected object set.
   [[nodiscard]] bool hasSelectionGeometry() const { return hasSelectionGeometry_; }
+  /**
+   * Whether this entire frame can remain visible while an editing capture lacks annotations.
+   * @param input Current editing session and camera.
+   * @param capture New raster whose text annotations are incomplete.
+   * @return True only for the same editing subject, document, resources, canvas and camera.
+   */
+  [[nodiscard]] bool canRetainTextEditingFrame(const FramePresentationInput& input,
+                                               const CapturedPresentation& capture) const;
   /// Whether the frame applied pointer intent to independently movable captured pixels.
   [[nodiscard]] bool followsPointer() const { return followsPointer_; }
   /// Chosen absolute object poses, also used to derive selection geometry.
@@ -223,7 +232,7 @@ private:
   void projectSelectionGeometry();
   void resolveSelectionBounds(const FramePresentationInput& input);
   void resolveTiles(const FramePresentationInput& input);
-  void finishChrome(const FramePresentationInput& input, const FramePresentation* previous);
+  bool finishChrome(const FramePresentationInput& input, const FramePresentation* previous);
   bool canUseLivePathReplacement(const FramePresentationInput& input) const;
   std::optional<SelectionChromeSnapshot> livePathReplacementChrome(
       const FramePresentationInput& input) const;
@@ -232,7 +241,9 @@ private:
                         std::span<const Entity> selection) const;
   bool textMeasuresFrameDocument(const CapturedPresentation::TextEditing& text,
                                  std::span<const Entity> selection) const;
-  void applyDecorations(const FramePresentationInput& input, const FramePresentation* previous);
+  bool sameTextEditingSession(const FramePresentationInput& input) const;
+  bool applyMeasuredTextDecorations(const FramePresentationInput& input);
+  bool applyDecorations(const FramePresentationInput& input, const FramePresentation* previous);
   void applyDetail(SelectionChromeDetail detail);
   std::optional<SelectionChromeSnapshot> liveAdornment(
       const CapturedPresentation::Adornment& item) const;
@@ -257,6 +268,8 @@ private:
   std::vector<Box2d> selectionBounds_;
   std::optional<SelectionChromeSnapshot> replacementPaint_;
   std::shared_ptr<const CapturedPresentation> livePathCapture_;
+  std::optional<Entity>
+      textEditingSubject_;  //!< Subject with a matched text annotation, even blank.
   bool hasSelectionGeometry_ = false;
   bool followsPointer_ = false;
 };

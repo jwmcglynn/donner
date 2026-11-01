@@ -369,6 +369,10 @@ public:
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
   /// Request a missing coherent frame without invalidating already-running work.
   [[nodiscard]] bool frameRepairPending() const { return presentationNeedsRender_; }
+  /// Missing proof currently keeping a newly captured frame from presentation.
+  [[nodiscard]] FramePresentationFailure frameRepairFailureForDiagnostics() const {
+    return pendingRepair_ ? pendingRepair_->failure : FramePresentationFailure::None;
+  }
   /// Whether the sealed frame represents the input considered by the latest UI frame.
   [[nodiscard]] bool frameRepresentsCurrentIntent() const { return frameRepresentsCurrentIntent_; }
 
@@ -686,6 +690,9 @@ private:
   std::optional<FramePresentationInput> reusableFrameInput_;
   std::shared_ptr<const GlTextureCache::PresentationResources> reusableFrameResources_;
   std::shared_ptr<const CapturedPresentation> reusableSelectionCapture_;
+  void retireIncompatibleTextFrame(const FramePresentationInput& input,
+                                   const CapturedPresentation& capture,
+                                   FramePresentationFailure failure);
   void updateFrameRepairStatus(
       const FramePresentationInput& input,
       const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,

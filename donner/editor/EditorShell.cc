@@ -2024,6 +2024,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
       .documentFrameVersion = app_.document().currentFrameVersion(),
       .displayedDocVersion = renderCoordinator_.displayedDocVersionForDiagnostics(),
+      .frameRepairFailure = renderCoordinator_.frameRepairFailureForDiagnostics(),
       .immediateOverlayDocumentVersion =
           renderCoordinator_.immediateOverlayDocumentVersionForDiagnostics(),
       .selectedCompositedEntity =
@@ -2282,6 +2283,9 @@ void EditorShell::updateReplayPenChrome(const EditorShellDocumentReplayInput& in
 }
 
 void EditorShell::updateReplayTextChrome() {
+  if (textChromeMeasurementBlockedForReplay_) {
+    return;
+  }
   // Text-editing chrome for document-space input, mirroring the live-pointer
   // update in renderRenderPane.
   if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
@@ -5458,6 +5462,15 @@ void EditorShell::updateRenderPanePenPointer(bool penToolActive, bool spaceHeld,
 }
 
 void EditorShell::updateRenderPaneTextChrome(bool textToolActive) {
+#ifndef __EMSCRIPTEN__
+  if (textChromeMeasurementBlockedForReplay_) {
+    return;
+  }
+#endif
+  measureRenderPaneTextChrome(textToolActive);
+}
+
+void EditorShell::measureRenderPaneTextChrome(bool textToolActive) {
   const auto screenToDocument = [this](const ImVec2& screenPoint) -> Vector2d {
     return interactionController_.viewport().screenToDocument(
         Vector2d(screenPoint.x, screenPoint.y));

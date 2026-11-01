@@ -1573,6 +1573,18 @@ void RenderCoordinator::installFrameDecision(
   }
 }
 
+void RenderCoordinator::retireIncompatibleTextFrame(const FramePresentationInput& input,
+                                                    const CapturedPresentation& capture,
+                                                    FramePresentationFailure failure) {
+  if (failure == FramePresentationFailure::MissingTextEditingGeometry &&
+      framePresentation_ != nullptr &&
+      !framePresentation_->canRetainTextEditingFrame(input, capture)) {
+    framePresentation_.reset();
+    immediateOverlaySnapshot_.reset();
+    selectionBoundsCache_.displayedBoundsDoc.clear();
+  }
+}
+
 std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentation(
     EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
     SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit) {
@@ -1610,6 +1622,7 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
       FramePresentation::Build(resources, input, selectedSceneCapture_, framePresentation_);
   PrepareCandidateFrame(outcome, admit);
   auto next = outcome.frame;
+  retireIncompatibleTextFrame(input, *resources->capture(), outcome.failure);
   updateFrameRepairStatus(input, resources, outcome);
   if (next != nullptr) {
     installFrameDecision(input, resources, std::move(next));

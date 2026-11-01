@@ -451,7 +451,9 @@ FramePresentationBuildResult FramePresentation::Build(
   frame->projectSelectionGeometry();
   frame->resolveSelectionBounds(input);
   frame->resolveTiles(input);
-  frame->finishChrome(input, previous.get());
+  if (!frame->finishChrome(input, previous.get())) {
+    return {.failure = FramePresentationFailure::MissingTextEditingGeometry};
+  }
   return FinishFrameResult(std::move(frame), input);
 }
 
@@ -569,7 +571,7 @@ void FramePresentation::resolveTiles(const FramePresentationInput& input) {
   });
 }
 
-void FramePresentation::finishChrome(const FramePresentationInput& input,
+bool FramePresentation::finishChrome(const FramePresentationInput& input,
                                      const FramePresentation* previous) {
   if (!hasSelectionGeometry_) {
     ClearSelectionGeometry(chrome_);
@@ -578,12 +580,15 @@ void FramePresentation::finishChrome(const FramePresentationInput& input,
   applyCapturedAdornments(input);
   selectionBounds_ = chrome_.aabbsDoc;
   applyDetail(input.detail);
-  applyDecorations(input, previous);
+  if (!applyDecorations(input, previous)) {
+    return false;
+  }
   chrome_.devicePixelRatio = input.viewport.devicePixelRatio;
   const double pixelsPerDocUnit = std::max(std::abs(input.viewport.pixelsPerDocUnit()), 1e-9);
   OverlayRenderer::cullSnapshot(
       chrome_,
       input.viewport.screenToDocument(input.paneClipRect).inflatedBy(64.0 / pixelsPerDocUnit));
+  return true;
 }
 
 bool FramePresentation::canUseLivePathReplacement(const FramePresentationInput& input) const {
@@ -735,6 +740,43 @@ void FramePresentation::applyDetail(SelectionChromeDetail detail) {
   }
 }
 
+namespace {
+bool SameTextFrameContext(const PresentationIdentity& lhs, const PresentationIdentity& rhs) {
+  return lhs.documentGeneration == rhs.documentGeneration &&
+         lhs.fontResourceRevision == rhs.fontResourceRevision &&
+         lhs.presentationEpoch == rhs.presentationEpoch;
+}
+
+bool SameTextFrameViewport(const ViewportState& lhs, const ViewportState& rhs) {
+  return lhs.paneOrigin == rhs.paneOrigin && lhs.paneSize == rhs.paneSize &&
+         lhs.documentViewBox == rhs.documentViewBox &&
+         lhs.devicePixelRatio == rhs.devicePixelRatio && lhs.zoom == rhs.zoom &&
+         lhs.panDocPoint == rhs.panDocPoint && lhs.panScreenPoint == rhs.panScreenPoint;
+}
+}  // namespace
+
+bool FramePresentation::sameTextEditingSession(const FramePresentationInput& input) const {
+  const auto& text = input.decorations.textEditing;
+  return input.includeChrome && input.detail == SelectionChromeDetail::EditingChromeOnly && text &&
+         textEditingSubject_ == text->subject && !input.desired && !input.suppressSelectionPixels &&
+         input.suppressedLayerEntity == entt::null &&
+         SameSelection(selectionCapture_->selection(), input.selection);
+}
+
+bool FramePresentation::canRetainTextEditingFrame(const FramePresentationInput& input,
+                                                  const CapturedPresentation& capture) const {
+  if (!sameTextEditingSession(input)) {
+    return false;
+  }
+  const auto& text = *input.decorations.textEditing;
+  return SameTextFrameContext(identity_, input.documentIdentity) &&
+         SameTextFrameContext(identity_, capture.identity()) &&
+         SameTextFrameContext(identity_, text.identity) && capture.pose(text.subject).has_value() &&
+         selectionCapture_->canvasSize() == capture.canvasSize() &&
+         text.canvasSize == capture.canvasSize() && paneClipRect_ == input.paneClipRect &&
+         SameTextFrameViewport(viewport_, input.viewport);
+}
+
 bool FramePresentation::textMatchesFrame(const CapturedPresentation::TextEditing& text,
                                          std::span<const Entity> selection) const {
   return text.identity.sameScene(identity_) && text.canvasSize == selectionCapture_->canvasSize() &&
@@ -755,37 +797,61 @@ bool FramePresentation::textMeasuresFrameDocument(const CapturedPresentation::Te
          ContainsSelection(selection, text.subject);
 }
 
-void FramePresentation::applyDecorations(const FramePresentationInput& input,
+bool FramePresentation::applyMeasuredTextDecorations(const FramePresentationInput& input) {
+  const auto& current = *input.decorations.textEditing;
+  if (textMatchesFrame(current, input.selection)) {
+    ApplyTextEditing(chrome_, current);
+    textEditingSubject_ = current.subject;
+    return true;
+  }
+  const auto& captured = selectionCapture_->textEditing();
+  if (captured && ContainsSelection(input.selection, captured->subject)) {
+    ApplyTextEditing(chrome_, *captured);
+    textEditingSubject_ = captured->subject;
+    return true;
+  }
+  const auto& history = input.decorations.measuredTextEditing;
+  const auto measured = std::ranges::find_if(history, [&](const auto& entry) {
+    return textMeasuresFrameDocument(entry, input.selection);
+  });
+  if (measured == history.end()) {
+    return false;
+  }
+  ApplyTextEditing(chrome_, *measured);
+  textEditingSubject_ = measured->subject;
+  return true;
+}
+
+bool FramePresentation::applyDecorations(const FramePresentationInput& input,
                                          const FramePresentation* previous) {
   if (!input.includeChrome) {
-    return;
+    return true;
   }
   chrome_.marqueeDoc = input.decorations.marqueeDoc;
   chrome_.penPreviewSegmentDoc = input.decorations.penPreviewSegmentDoc;
   chrome_.penCloseAffordanceDoc = input.decorations.penCloseAffordanceDoc;
   chrome_.textBoxDragPreviewDoc = input.decorations.textBoxDragPreviewDoc;
-  if (input.detail != SelectionChromeDetail::EditingChromeOnly) {
-    return;
+  if (input.detail != SelectionChromeDetail::EditingChromeOnly || input.selection.empty()) {
+    return true;
   }
-  const auto& text = selectionCapture_->textEditing();
-  const auto& measuredHistory = input.decorations.measuredTextEditing;
-  const auto measured =
-      std::ranges::find_if(measuredHistory, [&](const CapturedPresentation::TextEditing& entry) {
-        return textMeasuresFrameDocument(entry, input.selection);
-      });
-  if (text.has_value() && ContainsSelection(input.selection, text->subject)) {
-    ApplyTextEditing(chrome_, *text);
-  } else if (measured != measuredHistory.end()) {
-    ApplyTextEditing(chrome_, *measured);
-  } else if (previous != nullptr && previous->identity_ == identity_ &&
-             SameSelection(previous->selectionCapture_->selection(),
-                           selectionCapture_->selection())) {
+  const auto& current = input.decorations.textEditing;
+  if (!current) {
+    return false;
+  }
+  if (!ContainsSelection(input.selection, current->subject)) {
+    return true;
+  }
+  if (applyMeasuredTextDecorations(input)) {
+    return textEditingSubject_ == current->subject;
+  }
+  if (previous != nullptr && previous->identity_ == identity_ &&
+      previous->textEditingSubject_ == current->subject &&
+      SameSelection(previous->selectionCapture_->selection(), selectionCapture_->selection())) {
     CopyTextDecorations(chrome_, previous->chrome_);
+    textEditingSubject_ = previous->textEditingSubject_;
+    return true;
   }
-  const auto& currentText = input.decorations.textEditing;
-  if (currentText.has_value() && textMatchesFrame(*currentText, input.selection)) {
-    ApplyTextEditing(chrome_, *currentText);
-  }
+  return false;
 }
 
 }  // namespace donner::editor
