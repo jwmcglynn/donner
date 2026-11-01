@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <sstream>
@@ -37,6 +38,7 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/text/BidiParagraph.h"
 #include "donner/svg/text/GraphemeBreak.h"
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
@@ -413,9 +415,8 @@ size_t TextSpanCodepointCount(const components::ComputedTextComponent::TextSpan&
   size_t offset = 0;
   while (offset < text.size()) {
     const auto [codepoint, bytes] = Utf8::NextCodepoint(text.substr(offset));
-    (void)codepoint;
     offset += static_cast<size_t>(bytes);
-    ++count;
+    count += !BidiParagraph::IsControl(codepoint);
   }
   return count;
 }
@@ -1007,6 +1008,9 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
   while (scanPos < spanText.size()) {
     const size_t byteStart = scanPos;
     const uint32_t cp = decodeUtf8(spanText, scanPos);
+    if (BidiParagraph::IsControl(cp)) {
+      continue;
+    }
     const bool middle = codepointIndex != 0 && (isNonSpacing(cp) || previousWasJoiner);
     const bool hasAbsX = codepointIndex < xList.size() && xList[codepointIndex].has_value();
     const bool hasAbsY = codepointIndex < yList.size() && yList[codepointIndex].has_value();
@@ -1028,11 +1032,11 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   size_t byteIndex = 0;
   while (byteIndex < spanText.size()) {
     const size_t startIndex = byteIndex;
-    decodeUtf8(spanText, byteIndex);
+    const uint32_t cp = decodeUtf8(spanText, byteIndex);
     for (size_t i = startIndex; i < byteIndex; ++i) {
       result.byteToCharIdx[i] = codepointIndex;
     }
-    ++codepointIndex;
+    codepointIndex += !BidiParagraph::IsControl(cp);
   }
   return result;
 }
@@ -2405,6 +2409,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   if (!bounds.initialized) {
     return finite;
   }
+  if (range.begin.anchorPosition) {
+    bounds.initial = *range.begin.anchorPosition;
+  }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
   finite &= std::isfinite(shift);
@@ -3089,6 +3096,9 @@ ApiCharacterIndexMappings BuildApiCharacterIndexMappings(std::string_view text,
   while (position < text.size()) {
     const size_t start = position;
     const uint32_t codepoint = decodeUtf8(text, position);
+    if (BidiParagraph::IsControl(codepoint)) {
+      continue;
+    }
     const bool startsCluster =
         std::find(shapedClusterStarts.begin() + start, shapedClusterStarts.begin() + position, 1) !=
         shapedClusterStarts.begin() + position;
@@ -3584,6 +3594,275 @@ struct ClusterFallback {
   int stretch = 5;
 };
 
+/// Owns the scalar, byte and span identities used by one ordinary horizontal layout.
+class NormalBidiPlan {
+public:
+  using TextSpan = components::ComputedTextComponent::TextSpan;
+  struct Character {
+    size_t span = 0;
+    uint32_t byte = 0;
+    uint32_t sourceByte = 0;
+    uint32_t position = 0;
+    char32_t codepoint = 0;
+    uint32_t paragraph = 0;
+    uint32_t rank = 0;
+    uint8_t level = 0;
+    double dx = 0;
+    double dy = 0;
+  };
+  struct Span {
+    size_t byte = 0;
+    size_t endByte = 0;
+    size_t first = 0;
+    size_t end = 0;
+  };
+  struct Paragraph {
+    size_t first = 0;
+    size_t end = 0;
+    std::vector<BidiParagraph::Run> visual;
+    std::vector<TextBackend::ShapingContext> contexts;
+  };
+  struct Item {
+    ChunkRange range;
+    size_t contextStart;
+    size_t contextEnd;
+    const TextBackend::ShapingContext* context;
+  };
+
+  explicit NormalBidiPlan(Registry& registry) : family_(TextPathResourceFamily(registry)) {}
+  ~NormalBidiPlan() {
+    family_->release(components::DocumentResourceFamilyBudget::Kind::Geometry, admittedBytes_);
+  }
+  NormalBidiPlan(const NormalBidiPlan&) = delete;
+  NormalBidiPlan& operator=(const NormalBidiPlan&) = delete;
+
+  bool prepare(const components::ComputedTextComponent& text, const TextLayoutParams& params) {
+    if (isVertical(params.writingMode) || params.inlineSizePx > 0 ||
+        std::any_of(text.spans.begin(), text.spans.end(), [](const TextSpan& span) {
+          const std::string_view value(span.text.data() + span.start, span.end - span.start);
+          return span.pathSpline || (PreservesSegmentBreaks(span.whiteSpace) &&
+                                     value.find_first_of("\n\t") != std::string_view::npos);
+        })) {
+      return true;
+    }
+    size_t count = 0;
+    size_t bytes = 0;
+    for (const auto& span : text.spans) {
+      const std::string_view value(span.text.data() + span.start, span.end - span.start);
+      if (value.size() > 64u * 1024u * 1024u - bytes) {
+        return reject();
+      }
+      bytes += value.size();
+      if (span.hidden || span.textPathFailed) {
+        continue;
+      }
+      for (size_t byte = 0; byte < value.size();) {
+        const char32_t cp = decodeUtf8(value, byte);
+        if (++count > budget.remaining.codepoints) {
+          return reject();
+        }
+        enabled |= BidiParagraph::NeedsAnalysis(cp) || BidiParagraph::IsControl(cp);
+      }
+    }
+    if (!enabled) {
+      return true;
+    }
+    // Include source copies, glyph staging, line storage and the library's simultaneous scratch.
+    constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
+    constexpr size_t kPerByte =
+        8u * (sizeof(TextGlyph) + sizeof(TextBackend::ShapedGlyph) + sizeof(FontHandle) + 128u);
+    if (bytes > kMaximumBytes / kPerByte || count > kMaximumBytes / 256u ||
+        text.spans.size() > kMaximumBytes / 256u) {
+      return reject();
+    }
+    const size_t reservation = bytes * kPerByte + count * 256u + text.spans.size() * 256u;
+    if (reservation > kMaximumBytes ||
+        !family_->reserve(components::DocumentResourceFamilyBudget::Kind::Geometry, reservation)) {
+      return reject();
+    }
+    admittedBytes_ = reservation;
+    spans.reserve(text.spans.size());
+    characters.reserve(count);
+    source.reserve(bytes * 3u);
+    for (size_t index = 0; index < text.spans.size(); ++index) {
+      appendSpan(text.spans[index], index);
+    }
+    if (!characters.empty()) {
+      paragraphs.back().end = characters.size();
+    }
+    for (auto& paragraph : paragraphs) {
+      std::vector<char32_t> codepoints;
+      codepoints.reserve(paragraph.end - paragraph.first);
+      for (size_t index = paragraph.first; index < paragraph.end; ++index) {
+        codepoints.push_back(characters[index].codepoint);
+      }
+      auto resolved = BidiParagraph::Analyze(std::move(codepoints), budget);
+      if (!resolved) {
+        return reject();
+      }
+      auto runs = resolved->visualRuns(0, paragraph.end - paragraph.first, budget);
+      if (!runs) {
+        return reject();
+      }
+      paragraph.visual = std::move(*runs);
+      paragraph.contexts.reserve(paragraph.visual.size());
+      for (const auto& run : paragraph.visual) {
+        const size_t begin = byteAt(paragraph.first + run.start);
+        const size_t end = byteAt(paragraph.first + run.end);
+        TextBackend::ShapingContext context{begin, end - begin};
+        context.rightToLeft = run.level % 2 != 0;
+        context.work = &work;
+        paragraph.contexts.push_back(context);
+      }
+      uint32_t rank = 0;
+      for (const auto& run : paragraph.visual) {
+        for (size_t offset = run.start; offset < run.end; ++offset) {
+          const size_t index =
+              paragraph.first + (run.level % 2 ? run.end - 1 - (offset - run.start) : offset);
+          characters[index].rank = rank++;
+          characters[index].level = run.level;
+        }
+      }
+    }
+    work.bytes = bytes * 64u + 4096u;
+    work.calls = count * 8u + 16u;
+    resolveShifts(text, params);
+    return true;
+  }
+
+  /// The returned view aliases immutable storage alive through this invocation.
+  std::string_view spanText(size_t span) const UTILS_LIFETIME_BOUND {
+    return std::string_view(source).substr(spans[span].byte,
+                                           spans[span].endByte - spans[span].byte);
+  }
+
+  size_t byteAt(size_t character) const {
+    return character == characters.size() ? source.size() : characters[character].byte;
+  }
+
+  std::optional<size_t> characterAt(size_t span, uint32_t localByte) const {
+    const auto& range = spans[span];
+    const size_t byte = range.byte + localByte;
+    const auto begin = characters.begin() + range.first;
+    const auto end = characters.begin() + range.end;
+    const auto found =
+        std::lower_bound(begin, end, byte,
+                         [](const Character& value, size_t target) { return value.byte < target; });
+    return found != end && found->byte == byte ? std::optional<size_t>(found - characters.begin())
+                                               : std::nullopt;
+  }
+
+  std::vector<Item> items(size_t span, const ChunkRange& range) const {
+    std::vector<Item> result;
+    const auto first = characterAt(span, range.byteStart);
+    if (!first) {
+      return result;
+    }
+    const auto& paragraph = paragraphs[characters[*first].paragraph];
+    for (size_t runIndex = 0; runIndex < paragraph.visual.size(); ++runIndex) {
+      const auto& run = paragraph.visual[runIndex];
+      const size_t begin = byteAt(paragraph.first + run.start);
+      const size_t end = byteAt(paragraph.first + run.end);
+      const size_t start = std::max(begin, spans[span].byte + range.byteStart);
+      const size_t limit = std::min(end, spans[span].byte + range.byteEnd);
+      if (start < limit) {
+        result.push_back({{start - spans[span].byte, limit - spans[span].byte},
+                          begin,
+                          end,
+                          &paragraph.contexts[runIndex]});
+      }
+    }
+    return result;
+  }
+
+  bool reject() {
+    budget.rejected = true;
+    return false;
+  }
+  BidiResourceBudget budget;
+  TextBackend::ShapingContext::WorkBudget work{0, 0};
+  bool enabled = false;
+  std::string source;
+  std::vector<Span> spans;
+  std::vector<Character> characters;
+  std::vector<Paragraph> paragraphs;
+
+private:
+  void appendSpan(const TextSpan& span, size_t spanIndex) {
+    Span mapping{source.size(), source.size(), characters.size(), characters.size()};
+    const std::string_view original(span.text.data() + span.start, span.end - span.start);
+    std::optional<text_transform::FullWidthText> transformed;
+    if (span.textTransform == TextTransform::FullWidth) {
+      transformed = text_transform::MakeFullWidth(
+          original, span.preservesSpaces || PreservesSpaces(span.whiteSpace));
+    }
+    const std::string_view value = transformed ? std::string_view(transformed->text) : original;
+    if (!span.hidden && !span.textPathFailed) {
+      uint32_t position = 0;
+      size_t scalar = 0;
+      bool previousJoiner = false;
+      for (size_t byte = 0; byte < value.size(); ++scalar) {
+        const size_t start = byte;
+        const char32_t cp = decodeUtf8(value, byte);
+        const bool addressable = !BidiParagraph::IsControl(cp);
+        const bool absolute =
+            addressable && ((position < span.xList.size() && span.xList[position]) ||
+                            (position < span.yList.size() && span.yList[position]));
+        const bool middle = BidiParagraph::IsNonspacing(cp) || previousJoiner;
+        if (paragraphs.empty() ||
+            (!characters.empty() && !middle && (absolute || (start == 0 && span.startsNewChunk)))) {
+          if (!paragraphs.empty()) {
+            paragraphs.back().end = characters.size();
+          }
+          paragraphs.push_back({characters.size(), characters.size(), {}, {}});
+        }
+        const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
+        characters.push_back({spanIndex, static_cast<uint32_t>(source.size()), sourceByte, position,
+                              cp, static_cast<uint32_t>(paragraphs.size() - 1)});
+        Utf8::Append(cp, std::back_inserter(source));
+        previousJoiner = cp == 0x200d;
+        position += addressable;
+      }
+    }
+    mapping.end = characters.size();
+    mapping.endByte = source.size();
+    spans.push_back(mapping);
+  }
+
+  void resolveShifts(const components::ComputedTextComponent& text,
+                     const TextLayoutParams& params) {
+    double dx = 0;
+    double dy = 0;
+    for (auto& character : characters) {
+      if (BidiParagraph::IsControl(character.codepoint)) {
+        character.dx = dx;
+        character.dy = dy;
+        continue;
+      }
+      const auto& span = text.spans[character.span];
+      const size_t index = character.position;
+      const auto value = [&](const auto& list, Lengthd::Extent extent) {
+        return index < list.size() && list[index]
+                   ? list[index]->toPixels(params.viewBox, params.fontMetrics, extent)
+                   : 0.0;
+      };
+      if (index < span.xList.size() && span.xList[index]) {
+        dx = 0;
+      }
+      if (index < span.yList.size() && span.yList[index]) {
+        dy = 0;
+      }
+      dx += value(span.dxList, Lengthd::Extent::X);
+      dy += value(span.dyList, Lengthd::Extent::Y);
+      character.dx = dx;
+      character.dy = dy;
+    }
+  }
+
+  std::shared_ptr<components::DocumentResourceFamilyBudget> family_;
+  size_t admittedBytes_ = 0;
+};
+
 bool BackwardShapedGroups(const TextBackend::ShapedRun& shaped);
 
 /// Shapes one span's chunks with its primary face, except clusters that face cannot render, which
@@ -3592,7 +3871,8 @@ class ChunkShaper {
 public:
   ChunkShaper(const TextBackend& backend, const TextRun& run, std::string_view text, bool vertical,
               TextOrientation orientation, FontVariant variant, FontSynthesisSmallCaps synthesis,
-              bool kerning, const ClusterFallback& fallback)
+              bool kerning, const ClusterFallback& fallback, NormalBidiPlan* bidi = nullptr,
+              size_t sourceSpan = 0)
       : backend_(backend),
         run_(run),
         text_(text),
@@ -3601,12 +3881,33 @@ public:
         variant_(variant),
         synthesis_(synthesis),
         kerning_(kerning),
-        fallback_(fallback) {}
+        fallback_(fallback),
+        bidi_(bidi),
+        sourceSpan_(sourceSpan) {}
 
   /// Shapes \p chunk, recording each glyph's fallback face in \p faces, which stays empty when the
   /// primary face draws every glyph.
   TextBackend::ShapedRun shape(const ChunkRange& chunk, std::vector<FontHandle>& faces) const {
-    return shapeFragment(chunk, nullptr, faces);
+    if (!bidi_) {
+      return shapeFragment(chunk, nullptr, faces);
+    }
+    TextBackend::ShapedRun result;
+    for (const auto& item : bidi_->items(sourceSpan_, chunk)) {
+      const auto& context = *item.context;
+      std::vector<FontHandle> itemFaces;
+      auto shaped = shapeFragment(item.range, &context, itemFaces);
+      const size_t oldSize = result.glyphs.size();
+      result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
+      if (!itemFaces.empty() || !faces.empty()) {
+        faces.resize(oldSize);
+        if (itemFaces.empty()) {
+          faces.resize(result.glyphs.size());
+        } else {
+          faces.insert(faces.end(), itemFaces.begin(), itemFaces.end());
+        }
+      }
+    }
+    return result;
   }
 
   /// Shape a complete fragment with original context, including face fallback.
@@ -3703,10 +4004,7 @@ private:
     const auto& context = suppliedContext ? *suppliedContext : fallbackContext;
     TextBackend::ShapedRun result;
     for (const Item& item : items) {
-      const TextBackend::ShapedRun shaped = backend_.shapeRunInContext(
-          item.face, run_.usedFontSizePx, text_, context, item.range.byteStart,
-          item.range.byteEnd - item.range.byteStart, vertical_, orientation_,
-          EffectiveSmallCapsVariant(backend_, item.face, variant_, synthesis_), kerning_);
+      const TextBackend::ShapedRun shaped = shapeWith(item.face, item.range, &context);
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       faces.resize(result.glyphs.size(), item.face == run_.font ? FontHandle() : item.face);
     }
@@ -3718,8 +4016,25 @@ private:
     const size_t length = chunk.byteEnd - chunk.byteStart;
     const FontVariant variant = EffectiveSmallCapsVariant(backend_, font, variant_, synthesis_);
     if (context) {
-      return backend_.shapeRunInContext(font, run_.usedFontSizePx, text_, *context, chunk.byteStart,
-                                        length, vertical_, orientation_, variant, kerning_);
+      const size_t offset = bidi_ ? bidi_->spans[sourceSpan_].byte : 0;
+      const std::string_view input = bidi_ ? std::string_view(bidi_->source) : text_;
+      auto shaped = backend_.shapeRunInContext(font, run_.usedFontSizePx, input, *context,
+                                               offset + chunk.byteStart, length, vertical_,
+                                               orientation_, variant, kerning_);
+      if (bidi_) {
+        if (shaped.glyphs.size() > length * 8u) {
+          bidi_->reject();
+          return {};
+        }
+        for (auto& glyph : shaped.glyphs) {
+          if (glyph.cluster < offset || glyph.cluster - offset >= text_.size()) {
+            bidi_->reject();
+            return {};
+          }
+          glyph.cluster -= offset;
+        }
+      }
+      return shaped;
     }
     return kerning_ ? backend_.shapeRun(font, run_.usedFontSizePx, text_, chunk.byteStart, length,
                                         vertical_, orientation_, variant, false)
@@ -3803,6 +4118,8 @@ private:
   FontSynthesisSmallCaps synthesis_;
   bool kerning_;
   const ClusterFallback& fallback_;
+  NormalBidiPlan* bidi_ = nullptr;
+  size_t sourceSpan_ = 0;
   /// Resolved faces keyed by cluster text, which views the span text.
   mutable std::unordered_map<std::string_view, FontHandle> clusterFaces_;
   mutable std::vector<FontHandle> candidates_;
@@ -4920,10 +5237,17 @@ public:
         text_(text),
         params_(params),
         resourceRejected_(resourceRejected),
-        fallbackCoverageEntries_(fallbackCoverageEntries) {}
+        fallbackCoverageEntries_(fallbackCoverageEntries),
+        normalBidi_(registry) {}
 
   std::vector<TextRun> run() {
     resolveBaseFont();
+    if (!normalBidi_.prepare(text_, params_)) {
+      if (resourceRejected_) {
+        *resourceRejected_ = true;
+      }
+      return {};
+    }
     prepareEmergency_ = params_.inlineSizePx > 0.0 &&
                         std::any_of(text_.spans.begin(), text_.spans.end(), [](const auto& span) {
                           return span.overflowWrap != OverflowWrap::Normal &&
@@ -4931,6 +5255,12 @@ public:
                         });
     for (const auto& span : text_.spans) {
       layoutSpan(span);
+    }
+    if (normalBidi_.enabled && !placeNormalBidi()) {
+      if (resourceRejected_) {
+        *resourceRejected_ = true;
+      }
+      return {};
     }
     finishTextPath();
     applyInlineWrap();
@@ -5177,6 +5507,10 @@ private:
   }
 
   bool prepareFullWidthShapingText(SpanState& state) {
+    if (normalBidi_.enabled) {
+      state.text = normalBidi_.spanText(state.span - text_.spans.data());
+      return true;
+    }
     if (state.span->textTransform == TextTransform::FullWidth) {
       const bool preserveSpaces =
           state.span->preservesSpaces || PreservesSpaces(state.span->whiteSpace);
@@ -5357,11 +5691,12 @@ private:
         static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
-                             fallback);
+                             fallback, normalBidi_.enabled ? &normalBidi_ : nullptr,
+                             state.span - text_.spans.data());
     EmergencyWrapOptions* emergency = emergencyOptions(state);
     state.shaping =
         PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings, emergency);
-    if (state.emergency.rejected) {
+    if (state.emergency.rejected || normalBidi_.budget.rejected || normalBidi_.work.rejected) {
       return rejectEmergencySpan();
     }
     std::sort(state.emergency.visualLineStarts.begin(), state.emergency.visualLineStarts.end());
@@ -5483,6 +5818,9 @@ private:
     const uint32_t positioningCluster = prepared.positioningClusters[glyphIndex];
     size_t clusterPosition = positioningCluster;
     const uint32_t codepoint = decodeUtf8(state.text, clusterPosition);
+    if (BidiParagraph::IsControl(codepoint)) {
+      return;
+    }
     const unsigned int charIndex = positioningCluster < state.indexMappings.byteToCharIdx.size()
                                        ? state.indexMappings.byteToCharIdx[positioningCluster]
                                        : 0;
@@ -5749,6 +6087,21 @@ private:
     TextGlyph glyph = makeHorizontalGlyph(state, shapedGlyph, positioningCluster, charIndex);
     glyph.font = prepared.face(glyphIndex);
     rotateDetachedMark(state, hasAbsoluteX, hasAbsoluteY, glyph);
+    if (normalBidi_.enabled) {
+      const size_t span = state.span - text_.spans.data();
+      const auto character = normalBidi_.characterAt(span, positioningCluster);
+      if (!character || !normalBidi_.budget.consume(normalBidi_.budget.remaining.glyphs, 1)) {
+        normalBidi_.reject();
+      } else {
+        double spacing = backend_.isCursive(codepoint) ? 0 : state.span->letterSpacingPx;
+        if (IsWordSpacingGroupEnd(prepared, glyphIndex, codepoint)) {
+          spacing += state.span->wordSpacingPx;
+        }
+        bidiPlacements_.push_back({runs_.size(), state.run.glyphs.size(), *character,
+                                   shapedGlyph.xOffset, shapedGlyph.yOffset, shapedGlyph.xKern,
+                                   shapedGlyph.xAdvance, spacing, state.defaultY});
+      }
+    }
     state.run.glyphs.push_back(glyph);
     advanceHorizontalPen(state, prepared, glyphIndex, codepoint, shapedGlyph);
   }
@@ -5799,6 +6152,20 @@ private:
   /// Restore source byte indices only after shaping and path staging have consumed transformed
   /// text.
   void restoreSourceClusters(SpanState& state) const {
+    if (normalBidi_.enabled) {
+      const size_t span = state.span - text_.spans.data();
+      for (auto& glyph : state.run.glyphs) {
+        if (const auto index = normalBidi_.characterAt(span, glyph.cluster)) {
+          glyph.cluster = normalBidi_.characters[*index].sourceByte;
+        }
+        if (glyph.positioningCluster) {
+          if (const auto index = normalBidi_.characterAt(span, *glyph.positioningCluster)) {
+            glyph.positioningCluster = normalBidi_.characters[*index].sourceByte;
+          }
+        }
+      }
+      return;
+    }
     if (!state.fullWidthText) {
       return;
     }
@@ -6049,6 +6416,136 @@ private:
                     TextAreaIndent(params_));
   }
 
+  bool placeNormalBidi() {
+    if (normalBidi_.budget.rejected || normalBidi_.work.rejected) {
+      return normalBidi_.reject();
+    }
+    std::vector<std::vector<size_t>> paragraphs(normalBidi_.paragraphs.size());
+    for (size_t index = 0; index < bidiPlacements_.size(); ++index) {
+      const auto& placed = bidiPlacements_[index];
+      paragraphs[normalBidi_.characters[placed.character].paragraph].push_back(index);
+    }
+    chunkBoundaries_.clear();
+    double penX = 0;
+    double penY = 0;
+    std::vector<bool> haveExtent(runs_.size(), false);
+    for (size_t paragraphIndex = 0; paragraphIndex < paragraphs.size(); ++paragraphIndex) {
+      auto& order = paragraphs[paragraphIndex];
+      const auto& paragraph = normalBidi_.paragraphs[paragraphIndex];
+      size_t first = paragraph.first;
+      while (first < paragraph.end &&
+             BidiParagraph::IsControl(normalBidi_.characters[first].codepoint)) {
+        ++first;
+      }
+      if (first == paragraph.end) {
+        continue;
+      }
+      const auto& initial = normalBidi_.characters[first];
+      const auto& initialSpan = text_.spans[initial.span];
+      const auto authored = [&](const auto& values,
+                                Lengthd::Extent extent) -> std::optional<double> {
+        return initial.position < values.size() && values[initial.position]
+                   ? std::optional(values[initial.position]->toPixels(params_.viewBox,
+                                                                      params_.fontMetrics, extent))
+                   : std::nullopt;
+      };
+      const auto x = authored(initialSpan.xList, Lengthd::Extent::X);
+      const auto y = authored(initialSpan.yList, Lengthd::Extent::Y);
+      if (x) {
+        penX = *x;
+      }
+      if (y) {
+        penY = *y;
+      }
+      if (order.empty()) {
+        continue;
+      }
+      const auto sourceFirst =
+          *std::min_element(order.begin(), order.end(), [&](size_t a, size_t b) {
+            const auto& lhs = bidiPlacements_[a];
+            const auto& rhs = bidiPlacements_[b];
+            return std::pair(lhs.run, lhs.glyph) < std::pair(rhs.run, rhs.glyph);
+          });
+      const auto& begin = bidiPlacements_[sourceFirst];
+      chunkBoundaries_.push_back({begin.run, begin.glyph, initialSpan.textAnchor, x.has_value(),
+                                  y.has_value(), penX + initial.dx});
+      std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return normalBidi_.characters[bidiPlacements_[a].character].rank <
+               normalBidi_.characters[bidiPlacements_[b].character].rank;
+      });
+      std::optional<size_t> previous;
+      for (const size_t index : order) {
+        const auto& item = bidiPlacements_[index];
+        const auto& source = normalBidi_.characters[item.character];
+        auto& run = runs_[item.run];
+        auto& glyph = run.glyphs[item.glyph];
+        penX += item.kern;
+        if (previous) {
+          const auto& prior = bidiPlacements_[*previous];
+          const auto& priorSource = normalBidi_.characters[prior.character];
+          const auto& priorSpan = text_.spans[prior.run];
+          const auto& span = text_.spans[item.run];
+          if (prior.run != item.run && priorSource.level == source.level &&
+              priorSpan.fontKerning.value_or(params_.fontKerning) != FontKerning::None &&
+              span.fontKerning.value_or(params_.fontKerning) != FontKerning::None) {
+            penX += backend_.crossSpanKern(
+                GlyphFont(runs_[prior.run], runs_[prior.run].glyphs[prior.glyph]),
+                runs_[prior.run].usedFontSizePx, GlyphFont(run, glyph), run.usedFontSizePx,
+                priorSource.codepoint, source.codepoint, false);
+          }
+        }
+        glyph.xPosition = penX + item.offsetX + source.dx;
+        glyph.yPosition = penY + item.baseline + item.offsetY + source.dy;
+        glyph.rightToLeft = source.level % 2 != 0;
+        if (previous && glyph.xAdvance == 0 && glyph.rotateDegrees != 0) {
+          const auto& prior = bidiPlacements_[*previous];
+          if (prior.character == item.character) {
+            const auto& base = runs_[prior.run].glyphs[prior.glyph];
+            const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+            const Vector2d offset(glyph.xPosition - base.xPosition,
+                                  glyph.yPosition - base.yPosition);
+            const Vector2d rotated = Transform2d::Rotate(angle).transformPosition(offset);
+            glyph.xPosition = base.xPosition + rotated.x;
+            glyph.yPosition = base.yPosition + rotated.y;
+          }
+        }
+        if (!HasFiniteFlatGlyphGeometry(glyph)) {
+          return normalBidi_.reject();
+        }
+        auto& extent = runExtents_[item.run];
+        const double left = glyph.xPosition - item.offsetX;
+        const double right = left + item.advance + item.spacing;
+        if (!haveExtent[item.run]) {
+          extent = {left, penY + item.baseline + source.dy, right,
+                    penY + item.baseline + source.dy};
+          haveExtent[item.run] = true;
+        } else {
+          extent.startX = std::min(extent.startX, left);
+          extent.endX = std::max(extent.endX, right);
+        }
+        penX += item.advance + item.spacing;
+        previous = index;
+      }
+    }
+    if (!normalBidi_.characters.empty()) {
+      const auto& last = normalBidi_.characters.back();
+      currentPenX_ = penX + last.dx;
+      currentPenY_ = penY + last.dy + previousDefaultY_;
+    }
+    return true;
+  }
+
+  struct BidiPlacement {
+    size_t run;
+    size_t glyph;
+    size_t character;
+    double offsetX;
+    double offsetY;
+    double kern;
+    double advance;
+    double spacing;
+    double baseline;
+  };
   bool firstFlatShaping_ = true;
   bool prepareEmergency_ = false;
   GraphemeBreaker graphemeUnits_;
@@ -6087,6 +6584,8 @@ private:
   bool* resourceRejected_ = nullptr;
   std::size_t* fallbackCoverageEntries_ = nullptr;
   FallbackCoverage fallbackCoverage_;
+  NormalBidiPlan normalBidi_;
+  std::vector<BidiPlacement> bidiPlacements_;
 };
 
 }  // namespace
@@ -6293,7 +6792,8 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
                                : std::nullopt;
   const Vector2d start = warpedStart.value_or(Vector2d(glyph.xPosition, glyph.yPosition));
   if (!charGeom.rendered) {
-    charGeom.startPosition = start;
+    charGeom.startPosition =
+        glyph.rightToLeft && !run.onPath ? start + Vector2d(glyph.xAdvance, glyph.yAdvance) : start;
     charGeom.endPosition = start;
     charGeom.rotation = glyph.rotateDegrees;
     charGeom.rendered = true;
@@ -6301,7 +6801,12 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
   if (run.onPath) {
     charGeom.endPosition += CachedTextPathAdvance(glyph, vertical);
   } else {
-    charGeom.endPosition = start + Vector2d(glyph.xAdvance, glyph.yAdvance);
+    if (glyph.rightToLeft) {
+      charGeom.startPosition.x = std::max(charGeom.startPosition.x, start.x + glyph.xAdvance);
+      charGeom.endPosition.x = std::min(charGeom.endPosition.x, start.x);
+    } else {
+      charGeom.endPosition = start + Vector2d(glyph.xAdvance, glyph.yAdvance);
+    }
   }
   charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
   if (!hasPaintedGlyphs) {

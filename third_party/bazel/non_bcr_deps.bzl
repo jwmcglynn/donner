@@ -8,6 +8,7 @@ Bazel Central Registry. The extension is imported from //MODULE.bazel with
 Each dep listed here is load-bearing for a feature that is opt-in and NOT
 shipped over BCR:
 
+- sheenbidi_unicode_data: Unicode BiDi conformance data (tests only)
 - harfbuzz        : Text shaping                (--config=text-full)
 - woff2           : WOFF2 font format           (--config=text-full)
 - wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_geode=true)
@@ -38,6 +39,15 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_r
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 def _non_bcr_deps_impl(_mctx):
+    # Data only; runtime SheenBidi is the regular BCR module in MODULE.bazel.
+    http_archive(
+        name = "sheenbidi_unicode_data",
+        build_file = "//third_party:BUILD.bidi_unicode_data",
+        sha256 = "86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786",
+        strip_prefix = "SheenBidi-3.0.0",
+        urls = ["https://github.com/Tehreer/SheenBidi/archive/refs/tags/v3.0.0.tar.gz"],
+    )
+
     # WOFF2 text support. Gated on //donner/svg/renderer:text_full_enabled.
     new_git_repository(
         name = "woff2",

@@ -2,6 +2,20 @@ load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 donner_cc_library(
+    name = "bidi_control",
+    hdrs = ["BidiControl.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "bidi_paragraph",
+    srcs = ["BidiParagraph.cc"],
+    hdrs = ["BidiParagraph.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [":bidi_control", "@sheenbidi"],
+)
+
+donner_cc_library(
     name = "text_types",
     hdrs = ["TextTypes.h"],
     visibility = ["//donner/svg:__subpackages__"],
@@ -41,6 +55,7 @@ donner_cc_library(
     hdrs = ["TextBackendSimple.h"],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
+        ":bidi_paragraph",
         ":text_backend",
         "//donner/base",
         "//donner/svg/resources:font_manager",
@@ -73,6 +88,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":bidi_paragraph",
         ":text_backend",
         ":text_backend_simple",
         ":text_layout_params",
@@ -102,7 +118,11 @@ configured_dependency_audit_test(
         "//donner/svg/text:text_backend_full",
         "@harfbuzz//:harfbuzz",
     ],
-    required = ["//donner/svg/text:text_backend_simple"],
+    required = [
+        "//donner/svg/text:text_backend_simple",
+        "//donner/svg/text:bidi_paragraph",
+        "@sheenbidi//:sheenbidi",
+    ],
     target = ":text_engine",
     text_configuration = "basic",
 )
@@ -262,6 +282,34 @@ donner_cc_test(
     data = ["tests/unicode/GraphemeBreakTest.txt"],
     deps = [
         ":text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "bidi_paragraph_tests",
+    srcs = ["tests/BidiParagraph_tests.cc"],
+    deps = [
+        ":bidi_paragraph",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "bidi_paragraph_conformance_tests",
+    srcs = ["tests/BidiParagraphConformance_tests.cc"],
+    data = [
+        "tests/unicode/LICENSE.txt",
+        "@sheenbidi_unicode_data//:conformance",
+    ],
+    shard_count = 16,
+    target_compatible_with = select({
+        "//donner/svg/renderer:resvg_test_suite_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":bidi_paragraph",
+        "//donner/base:runfiles",
         "@com_google_gtest//:gtest_main",
     ],
 )

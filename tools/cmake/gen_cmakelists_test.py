@@ -63,7 +63,7 @@ class ModuleBazelExtractionTest(unittest.TestCase):
         # third_party/entt, so there's no bazel_dep/git_repository block to
         # read. The CMake FetchContent entry comes from _HARDCODED_FETCHCONTENT.
         required = ["googletest", "nlohmann_json", "zlib",
-                    "rules_cc", "pixelmatch-cpp17", "woff2"]
+                    "rules_cc", "pixelmatch-cpp17", "woff2", "sheenbidi"]
         for dep in required:
             self.assertIn(dep, versions, f"Missing dep: {dep}")
 
@@ -106,6 +106,13 @@ class ExternalDepManifestTest(unittest.TestCase):
     def test_maps_cmake_target_dependency(self):
         dep = g._resolve_external_dep("@zlib//:z")
         self.assertEqual(dep, g.ExternalDepResolution("target", "zlib"))
+
+    def test_maps_shared_bidi_runtime(self):
+        self.assertEqual(
+            g._resolve_external_dep("@sheenbidi//:sheenbidi"),
+            g.ExternalDepResolution("target", "SheenBidi"),
+        )
+        self.assertIn("SheenBidi", g._KNOWN_EXTERNAL_TARGETS)
 
     def test_maps_mask_color_space_without_filter_configuration(self):
         dep = g._resolve_external_dep("@tiny-skia-cpp//src/tiny_skia/filter:color_space")
@@ -336,7 +343,7 @@ class GeneratedRootCmakeTest(unittest.TestCase):
                     with mock.patch.object(
                         g,
                         "extract_versions_from_module_bazel",
-                        return_value={},
+                        return_value={"sheenbidi": "3.0.0"},
                     ):
                         with mock.patch.object(
                             g, "get_cmake_targets", return_value={"//:donner": root_target}
@@ -367,6 +374,22 @@ class GeneratedRootCmakeTest(unittest.TestCase):
                 f'  {directory} "${{FETCHCONTENT_BASE_DIR}}/brotli-{release.group(1)}-{suffix}"',
                 contents,
             )
+
+        bidi = contents.split("if(DONNER_TEXT)\n", 1)[1].split("endif() # DONNER_TEXT", 1)[0]
+        self.assertIn("function(donner_fetch_sheenbidi)", bidi)
+        self.assertIn("endfunction()\ndonner_fetch_sheenbidi()", bidi)
+        self.assertIn(
+            "URL https://github.com/Tehreer/SheenBidi/archive/refs/tags/v3.0.0.tar.gz", bidi)
+        self.assertIn(
+            "URL_HASH SHA256=86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786",
+            bidi,
+        )
+        self.assertIn("FetchContent_MakeAvailable(sheenbidi)", bidi)
+        for option, value in (("BUILD_TESTING", "OFF"), ("BUILD_GENERATOR", "OFF"),
+                              ("SB_CONFIG_EXPERIMENTAL_TEXT_API", "OFF"),
+                              ("SB_CONFIG_UNITY", "ON")):
+            self.assertIn(f"set({option} {value})", bidi)
+            self.assertNotIn(f"set({option} {value} CACHE", bidi)
 
         self.assertNotIn("DONNER_BUILD_EXAMPLES", contents)
         # Issue #1212: the generated root must not advertise a test contract
@@ -483,7 +506,8 @@ class NativeSpeedOptionsTest(unittest.TestCase):
                 )
                 with (
                     mock.patch.object(g, "get_fetchcontent_externals", return_value=[]),
-                    mock.patch.object(g, "extract_versions_from_module_bazel", return_value={}),
+                    mock.patch.object(g, "extract_versions_from_module_bazel",
+                                      return_value={"sheenbidi": "3.0.0"}),
                     mock.patch.object(g, "get_cmake_targets", return_value={"//:donner": target}),
                 ):
                     g.generate_root()

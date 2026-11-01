@@ -1,0 +1,11 @@
+# Unicode 17 conformance data, distributed under Unicode License V3.
+# The license is retained in donner/svg/text/tests/unicode/LICENSE.txt.
+filegroup(
+    name = "conformance",
+    testonly = True,
+    srcs = [
+        "Tools/Unicode/BidiCharacterTest.txt",
+        "Tools/Unicode/BidiTest.txt",
+    ],
+    visibility = ["//visibility:public"],
+)

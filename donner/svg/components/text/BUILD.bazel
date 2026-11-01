@@ -76,6 +76,7 @@ cc_library(
     ],
     deps = [
         ":components",
+        "//donner/svg/text:bidi_control",
         "//donner/base",
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",

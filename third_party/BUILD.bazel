@@ -4,6 +4,7 @@ load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 exports_files(
     # buildifier: keep sorted
     [
+        "BUILD.bidi_unicode_data",
         "BUILD.cmark-gfm",
         "BUILD.css-parsing-tests",
         "BUILD.stb",

@@ -79,8 +79,9 @@ struct ChunkBoundary {
   size_t runIndex = 0;    ///< Index of the run that starts this chunk.
   size_t glyphIndex = 0;  ///< Glyph index within the run where the chunk begins.
   TextAnchor textAnchor = TextAnchor::Start;  ///< Effective text-anchor for the chunk.
-  bool absoluteX = false;  ///< This boundary applies an authored absolute x position.
-  bool absoluteY = false;  ///< This boundary applies an authored absolute y position.
+  bool absoluteX = false;                ///< This boundary applies an authored absolute x position.
+  bool absoluteY = false;                ///< This boundary applies an authored absolute y position.
+  std::optional<double> anchorPosition;  ///< Explicit inline origin, independent of run storage.
 };
 
 /// An authored inline displacement consumed by one positioned glyph group.

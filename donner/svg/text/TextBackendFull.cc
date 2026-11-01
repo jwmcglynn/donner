@@ -1439,7 +1439,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
   shapedBytes_ += byteLength;
   const ShapingContext* const featureContext = context;
   // A context that adds no characters leaves the range shaped as without one.
-  if (context && context->byteLength <= byteLength) {
+  if (context && context->byteLength <= byteLength && !context->rightToLeft) {
     context = nullptr;
   }
   hb_font_t* hbFont = getOrCreateHbFont(font);
@@ -1484,8 +1484,11 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     const int64_t clusterOffset =
         AddShapingRange(buf, text, rangeStart, rangeEnd, spanText, byteOffset, shapingContext);
 
-    const auto direction = ShapingDirection(detectedDirection, useVerticalShaping,
-                                            hb_buffer_get_length(buf), shapingContext != nullptr);
+    const auto direction =
+        featureContext && featureContext->rightToLeft && !useVerticalShaping
+            ? (*featureContext->rightToLeft ? HB_DIRECTION_RTL : HB_DIRECTION_LTR)
+            : ShapingDirection(detectedDirection, useVerticalShaping, hb_buffer_get_length(buf),
+                               shapingContext != nullptr);
     order.observe(direction);
     hb_buffer_set_direction(buf, direction);
     hb_buffer_set_script(buf, detectedScript);

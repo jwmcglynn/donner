@@ -26,6 +26,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "freetype.LICENSE.txt",
+    "sheenbidi.LICENSE.txt",
     "imgui.LICENSE.txt",
     "glfw.LICENSE.md",
     "tracy.LICENSE.txt",
@@ -66,6 +67,16 @@ license(
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@brotli//:LICENSE",
     package_url = "https://github.com/google/brotli",
+)
+
+# The BCR overlay does not export the upstream license file.
+license(
+    name = "sheenbidi",
+    package_name = "SheenBidi",
+    license_kinds = ["@rules_license//licenses/spdx:Apache-2.0"],
+    license_text = "sheenbidi.LICENSE.txt",
+    package_url = "https://github.com/Tehreer/SheenBidi",
+    package_version = "3.0.0",
 )
 
 license(
@@ -240,6 +251,7 @@ license(
 # correlate cquery results with the aggregated manifest.
 
 DEFAULT_LICENSES = [
+    ":sheenbidi",
     ":entt",
     ":public-sans",
     ":stb",
@@ -258,6 +270,7 @@ TEXT_FULL_LICENSES = DEFAULT_LICENSES + [
 SKIA_TEXT_FULL_LICENSES = []  # Removed: full-Skia backend no longer exists.
 
 ALL_KNOWN_LICENSES = [
+    ":sheenbidi",
     ":entt",
     ":stb",
     ":tiny-skia-cpp",

@@ -295,6 +295,8 @@ public:
     };
     /// Aliases a planner-owned budget alive through all synchronous fragment shaping calls.
     WorkBudget* work = nullptr;
+    /// Resolved horizontal embedding parity; overrides every guessed shaping direction.
+    std::optional<bool> rightToLeft;
   };
 
   /**

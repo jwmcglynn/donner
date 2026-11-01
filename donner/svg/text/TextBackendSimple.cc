@@ -1,8 +1,11 @@
 #include "donner/svg/text/TextBackendSimple.h"
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "donner/base/Utf8.h"
+#include "donner/svg/text/BidiParagraph.h"
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
 
@@ -342,6 +345,18 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunNoKerning(
                       textOrientation, fontVariant, false, forceLogicalOrder);
 }
 
+TextBackend::ShapedRun TextBackendSimple::shapeRunInContext(
+    FontHandle font, float fontSizePx, std::string_view spanText, const ShapingContext& context,
+    size_t byteOffset, size_t byteLength, bool isVertical, TextOrientation textOrientation,
+    FontVariant fontVariant, bool kerning) const {
+  if (context.work && !context.work->consume(byteLength)) {
+    return {};
+  }
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      textOrientation, fontVariant, kerning, false,
+                      !isVertical && context.rightToLeft.value_or(false));
+}
+
 namespace {
 
 bool UsesSidewaysMetrics(TextOrientation orientation, uint32_t codepoint) {
@@ -411,13 +426,12 @@ void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical,
 
 }  // namespace
 
-TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fontSizePx,
-                                                       std::string_view spanText, size_t byteOffset,
-                                                       size_t byteLength, bool isVertical,
-                                                       TextOrientation textOrientation,
-                                                       FontVariant fontVariant, bool enableKerning,
-                                                       bool /*forceLogicalOrder*/) const {
-  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f) {
+TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
+    FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
+    size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
+    bool enableKerning, bool /*forceLogicalOrder*/, bool backward) const {
+  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f || byteOffset > spanText.size() ||
+      byteLength > spanText.size() - byteOffset) {
     return {};
   }
   const stbtt_fontinfo* info = getFontInfo(font);
@@ -435,9 +449,40 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
   size_t pos = byteOffset;
   const size_t end = byteOffset + byteLength;
 
-  while (pos < end) {
-    const size_t startPos = pos;
-    uint32_t codepoint = decodeUtf8(spanText, pos);
+  struct Scalar {
+    size_t byte;
+    uint32_t codepoint;
+  };
+  std::vector<Scalar> ordered;
+  if (backward) {
+    std::vector<Scalar> scalars;
+    std::vector<std::pair<size_t, size_t>> groups;
+    bool previousJoiner = false;
+    while (pos < end) {
+      const size_t start = pos;
+      const uint32_t cp = decodeUtf8(spanText.substr(0, end), pos);
+      if (BidiParagraph::IsControl(cp)) {
+        continue;
+      }
+      if (groups.empty() || (!BidiParagraph::IsNonspacing(cp) && !previousJoiner)) {
+        groups.emplace_back(scalars.size(), scalars.size());
+      }
+      scalars.push_back({start, cp});
+      groups.back().second = scalars.size();
+      previousJoiner = cp == 0x200d;
+    }
+    ordered.reserve(scalars.size());
+    for (auto group = groups.rbegin(); group != groups.rend(); ++group) {
+      ordered.insert(ordered.end(), scalars.begin() + group->first,
+                     scalars.begin() + group->second);
+    }
+  }
+  result.backward = backward;
+  size_t next = 0;
+  while (backward ? next < ordered.size() : pos < end) {
+    const size_t startPos = backward ? ordered[next].byte : pos;
+    uint32_t codepoint = backward ? BidiParagraph::Mirror(ordered[next++].codepoint)
+                                  : decodeUtf8(spanText.substr(0, end), pos);
 
     // Small-caps synthesis: uppercase lowercase ASCII, apply reduced scale.
     bool smallCap = false;

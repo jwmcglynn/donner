@@ -45,6 +45,8 @@ REQUIRED_TARGETS = frozenset({
     "//donner/svg/renderer:renderer",
     "//donner/svg/renderer:renderer_tiny_skia",
     "//donner/svg/renderer:RendererTinySkiaBackend.cc",
+    "//donner/svg/text:bidi_paragraph",
+    "//donner/svg/text:BidiParagraph.cc",
     "//donner/svg/text:text_backend_simple",
     "//donner/svg/text:TextBackendSimple.cc",
 })
@@ -210,6 +212,10 @@ def check_backend(labels: set[str]) -> None:
     if not any("tiny-skia-cpp" in repository_parts(label)
                and local_target(label) == "//src:tiny_skia_lib" for label in labels):
         raise ValueError("default renderer has no tiny-skia library")
+    for target in ("//:sheenbidi", "//:Source/SheenBidi.c"):
+        if not any("sheenbidi" in repository_parts(label) and local_target(label) == target
+                   for label in labels):
+            raise ValueError("default renderer is missing the SheenBidi runtime dependency")
     if targets & FORBIDDEN_TARGETS or any(
         forbidden_package(target) or test_target(target) for target in targets
     ):
@@ -259,6 +265,8 @@ def check_external_repositories(labels: set[str], dev_repositories: set[str]) ->
         for label in labels for part in repository_parts(label)
     ):
         raise ValueError("closure includes Rust or WebGPU repositories")
+    if any("freetype" in repository_parts(label) for label in labels):
+        raise ValueError("base text includes the full-text FreeType dependency")
     if any(repository_parts(label) & dev_repositories for label in labels):
         raise ValueError("closure includes development-only repositories")
 

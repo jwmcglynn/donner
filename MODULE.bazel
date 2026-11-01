@@ -52,6 +52,7 @@ use_repo(
     "clang_format_linux_x86_64",
     "clang_format_macos_arm64",
     "harfbuzz",
+    "sheenbidi_unicode_data",
     "sysroot_linux_aarch64",
     "sysroot_linux_x86_64",
     "tracy",
@@ -95,6 +96,7 @@ bazel_dep(name = "rules_license", version = "1.0.0")
 # compiles everywhere and opens the Vulkan loader at run time instead of linking
 # it, so a build needs no Vulkan library; Linux products and tests execute it.
 bazel_dep(name = "vulkan_headers", version = "1.4.349")
+bazel_dep(name = "sheenbidi", version = "3.0.0")
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
 bazel_dep(name = "libpng", version = "1.6.58.bcr.1")
 
