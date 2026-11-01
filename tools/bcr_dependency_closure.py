@@ -204,6 +204,14 @@ def test_target(target: str) -> bool:
             or name.endswith(("_test", "_tests")) or name.startswith("test_"))
 
 
+def check_sheenbidi_runtime(labels: set[str]) -> None:
+    """Require both the public runtime target and its compiled C source in basic text."""
+    for target in ("//:sheenbidi", "//:Source/SheenBidi.c"):
+        if not any("sheenbidi" in repository_parts(label) and local_target(label) == target
+                   for label in labels):
+            raise ValueError("default renderer is missing the SheenBidi runtime dependency")
+
+
 def check_backend(labels: set[str]) -> None:
     donner_labels = {label for label in labels if "donner" in repository_parts(label)}
     targets = {local_target(label) for label in donner_labels}
@@ -212,10 +220,7 @@ def check_backend(labels: set[str]) -> None:
     if not any("tiny-skia-cpp" in repository_parts(label)
                and local_target(label) == "//src:tiny_skia_lib" for label in labels):
         raise ValueError("default renderer has no tiny-skia library")
-    for target in ("//:sheenbidi", "//:Source/SheenBidi.c"):
-        if not any("sheenbidi" in repository_parts(label) and local_target(label) == target
-                   for label in labels):
-            raise ValueError("default renderer is missing the SheenBidi runtime dependency")
+    check_sheenbidi_runtime(labels)
     if targets & FORBIDDEN_TARGETS or any(
         forbidden_package(target) or test_target(target) for target in targets
     ):

@@ -2723,13 +2723,19 @@ double TextAreaIndent(const TextLayoutParams& params) {
   return params.inlineSizePx > 0.0 ? params.textIndentPx : 0.0;
 }
 
+/// Bidi marks retain ink offsets without changing their base's typographic anchor extent.
+bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
+  return !glyph.visualOrder || (vertical ? glyph.yAdvance : glyph.xAdvance) != 0;
+}
+
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
                      const AnchorExclusions& exclusions, double indent) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
     finite &= HasFiniteFlatGlyphGeometry(glyph);
-    if (!IsExcludedAnchorGlyph(exclusions, runIndex, glyph)) {
+    if (!IsExcludedAnchorGlyph(exclusions, runIndex, glyph) &&
+        ContributesToAnchorExtent(glyph, vertical)) {
       bounds.include(InlinePenPosition(glyph, vertical),
                      vertical ? glyph.yAdvance : glyph.xAdvance);
     }
@@ -3927,6 +3933,7 @@ struct LengthOwnerRange {
   size_t end;
   bool spacingAndGlyphs = false;
   bool backtracking = false;
+  size_t authoredDepth = 0;
 };
 
 struct OwnerVisualSummary {
@@ -4043,6 +4050,72 @@ private:
   std::vector<size_t> addressable_;
 };
 
+/// Memoizes the authored ancestry inside the text builder's complete collected-owner inventory.
+/// A node enters the cache once; a bounded pending path also rejects malformed parent cycles.
+class AuthoredOwnerDepths {
+public:
+  AuthoredOwnerDepths(Registry& registry, const components::ComputedTextComponent& text,
+                      BidiResourceBudget& budget)
+      : registry_(registry), text_(text), budget_(budget) {
+    depths_.reserve(text.ownerSpanRanges.size());
+    pending_.reserve(text.ownerSpanRanges.size());
+  }
+
+  std::optional<size_t> depth(Entity owner) {
+    if (const auto cached = depths_.find(owner); cached != depths_.end()) {
+      return cached->second;
+    }
+    pending_.clear();
+    Entity current = owner;
+    if (!trace(current)) {
+      return std::nullopt;
+    }
+    size_t next = descendantDepth(current);
+    for (auto it = pending_.rbegin(); it != pending_.rend(); ++it) {
+      depths_.emplace(*it, next++);
+    }
+    const auto result = depths_.find(owner);
+    return result == depths_.end() ? std::nullopt : std::optional(result->second);
+  }
+
+private:
+  bool trace(Entity& current) {
+    while (text_.ownerSpanRanges.contains(current) && !depths_.contains(current)) {
+      if (!appendAncestor(current)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool appendAncestor(Entity& current) {
+    if (pending_.size() == text_.ownerSpanRanges.size() ||
+        !budget_.consume(budget_.remaining.ownerWork, 1)) {
+      budget_.rejected = true;
+      return false;
+    }
+    const auto* tree = registry_.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      budget_.rejected = true;
+      return false;
+    }
+    pending_.push_back(current);
+    current = tree->parent();
+    return true;
+  }
+
+  size_t descendantDepth(Entity parent) const {
+    const auto found = depths_.find(parent);
+    return found == depths_.end() ? 0 : found->second + 1;
+  }
+
+  Registry& registry_;
+  const components::ComputedTextComponent& text_;
+  BidiResourceBudget& budget_;
+  std::unordered_map<Entity, size_t> depths_;
+  std::vector<Entity> pending_;
+};
+
 void PruneLengthOwnerAncestors(const std::vector<LengthOwnerRange>& owners,
                                const LengthOwnerRange& owner, std::vector<size_t>& ancestors,
                                size_t& scalingAncestors) {
@@ -4056,7 +4129,13 @@ void PruneLengthOwnerAncestors(const std::vector<LengthOwnerRange>& owners,
 bool ContainsUnsupportedLengthOwner(std::vector<LengthOwnerRange> owners,
                                     const VisualOwnerIndex& index) {
   std::sort(owners.begin(), owners.end(), [](const auto& a, const auto& b) {
-    return a.begin != b.begin ? a.begin < b.begin : a.end > b.end;
+    if (a.begin != b.begin) {
+      return a.begin < b.begin;
+    }
+    if (a.end != b.end) {
+      return a.end > b.end;
+    }
+    return a.authoredDepth < b.authoredDepth;
   });
   std::vector<size_t> ancestors;
   ancestors.reserve(owners.size());
@@ -4454,11 +4533,14 @@ private:
     constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
     const size_t perScalar = sizeof(uint32_t) * (spanDepth + 2) + sizeof(size_t) * 3;
     const size_t perSpan = sizeof(std::vector<uint32_t>) * 2;
-    if (owners > kMaximumBytes / 64 || characters.size() > kMaximumBytes / perScalar ||
+    // Covers owner ranges, ancestor indexes, cached depth nodes/buckets and the pending path.
+    constexpr size_t kPerOwner = 192;
+    if (owners > kMaximumBytes / kPerOwner || characters.size() > kMaximumBytes / perScalar ||
         spans.size() > kMaximumBytes / perSpan) {
       return false;
     }
-    const size_t bytes = owners * 64 + characters.size() * perScalar + spans.size() * perSpan;
+    const size_t bytes =
+        owners * kPerOwner + characters.size() * perScalar + spans.size() * perSpan;
     if (bytes > kMaximumBytes - admittedBytes_) {
       return false;
     }
@@ -4506,8 +4588,8 @@ private:
   }
 
   std::optional<std::vector<LengthOwnerRange>> lengthOwners(
-      const components::ComputedTextComponent& text,
-      const AuthoredOwnerPositions& positions) const {
+      const components::ComputedTextComponent& text, const AuthoredOwnerPositions& positions) {
+    AuthoredOwnerDepths depths(registry_, text, budget);
     std::vector<LengthOwnerRange> owners;
     owners.reserve(text.ownerSpanRanges.size());
     for (const auto& [owner, range] : text.ownerSpanRanges) {
@@ -4517,11 +4599,16 @@ private:
       if (range.end > spans.size()) {
         return std::nullopt;
       }
+      const auto depth = depths.depth(owner);
+      if (!depth) {
+        return std::nullopt;
+      }
       const auto* component = registry_.try_get<components::TextComponent>(owner);
       const bool scaling = component && component->lengthAdjust == LengthAdjust::SpacingAndGlyphs;
       owners.push_back(
           {range.begin, range.end, scaling,
-           positions.potentialBacktracking(spans[range.begin].first, spans[range.end - 1].end)});
+           positions.potentialBacktracking(spans[range.begin].first, spans[range.end - 1].end),
+           *depth});
     }
     return owners;
   }

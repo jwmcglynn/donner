@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <tuple>
 #include <vector>
@@ -1641,6 +1642,24 @@ std::string BidiOwnerDomSource(std::string_view adjust, bool nested, bool interl
          "<tspan id='tail' " + std::string(tailAttributes) + ">X</tspan></text></svg>";
 }
 
+std::vector<uint32_t> OwnerSourceClusters(const components::ComputedTextComponent& text,
+                                          std::span<const TextRun> runs, Entity owner) {
+  size_t ownerSpans = 0;
+  std::vector<uint32_t> result;
+  for (size_t index = 0; index < text.spans.size() && index < runs.size(); ++index) {
+    if (text.spans[index].sourceEntity != owner) {
+      continue;
+    }
+    ++ownerSpans;
+    for (const auto& glyph : runs[index].glyphs) {
+      result.push_back(glyph.cluster);
+    }
+  }
+  EXPECT_THAT(ownerSpans, Gt(0u));
+  EXPECT_THAT(result, Not(IsEmpty()));
+  return result;
+}
+
 std::optional<BidiOwnerDomSnapshot> CaptureBidiOwnerDom(std::string_view adjust, bool nested,
                                                         bool interleaved,
                                                         std::string_view tailAttributes = "") {
@@ -1681,9 +1700,10 @@ std::optional<BidiOwnerDomSnapshot> CaptureBidiOwnerDom(std::string_view adjust,
       result.visualGlyphs += glyph.visualOrder.has_value();
     }
   }
-  for (const auto& glyph : geometry.runs.front().glyphs) {
-    result.firstSourceClusters.push_back(glyph.cluster);
-  }
+  const auto& text =
+      registry.get<components::ComputedTextComponent>(root->unsafeEntityHandle().entity());
+  result.firstSourceClusters =
+      OwnerSourceClusters(text, geometry.runs, owner->unsafeEntityHandle().entity());
   return result;
 }
 
@@ -1763,6 +1783,179 @@ public:
     return result;
   }
 };
+
+struct EqualRangeOwnerProfile {
+  std::vector<std::string_view> adjustments;
+  bool preserved;
+  bool negativeDx = true;
+};
+
+std::string EqualRangeOwnerSource(const EqualRangeOwnerProfile& profile, size_t precedingNodes) {
+  std::string result = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='-100 0 300 200'>";
+  for (size_t index = 0; index < precedingNodes; ++index) {
+    result += "<g/>";
+  }
+  for (size_t index = 0; index < profile.adjustments.size(); ++index) {
+    const std::string tag = index == 0 ? "text" : "tspan";
+    result += "<" + tag + " id='o" + std::to_string(index) + "' textLength='60' lengthAdjust='" +
+              std::string(profile.adjustments[index]) + "'";
+    if (index == 0) {
+      result += " x='0' y='80' font-size='20' font-kerning='none'";
+    }
+    if (index + 1 == profile.adjustments.size() && profile.negativeDx) {
+      result += " dx='0 -30 0'";
+    }
+    result += ">";
+  }
+  result += "AאB";
+  for (size_t index = profile.adjustments.size(); index-- > 0;) {
+    result += index == 0 ? "</text>" : "</tspan>";
+  }
+  return result + "</svg>";
+}
+
+/// Removing only empty spans preserves cells while making sole-child owner intervals identical.
+void RemoveEmptyOwnerSpans(components::ComputedTextComponent& text) {
+  std::vector<size_t> offsets{0};
+  decltype(text.spans) retained;
+  for (const auto& span : text.spans) {
+    if (span.start != span.end) {
+      retained.push_back(span);
+    }
+    offsets.push_back(retained.size());
+  }
+  for (auto& [owner, range] : text.ownerSpanRanges) {
+    (void)owner;
+    range = {offsets[range.begin], offsets[range.end]};
+  }
+  text.spans = std::move(retained);
+}
+
+std::vector<Entity> EqualRangeOwnerEntities(SVGDocument& document, size_t count) {
+  std::vector<Entity> owners;
+  for (size_t index = 0; index < count; ++index) {
+    const auto element = document.querySelector("#o" + std::to_string(index));
+    EXPECT_THAT(element, testing::Optional(_));
+    if (!element) {
+      return {};
+    }
+    owners.push_back(element->unsafeEntityHandle().entity());
+  }
+  return owners;
+}
+
+void ReorderEqualRangeOwners(components::ComputedTextComponent& text,
+                             std::span<const Entity> owners, std::span<const size_t> order,
+                             size_t buckets) {
+  auto original = std::move(text.ownerSpanRanges);
+  text.ownerSpanRanges.clear();
+  text.ownerSpanRanges.rehash(buckets);
+  for (const auto& [owner, range] : original) {
+    if (std::find(owners.begin(), owners.end(), owner) == owners.end()) {
+      text.ownerSpanRanges.emplace(owner, range);
+    }
+  }
+  const auto first = original.at(owners.front());
+  for (size_t index : order) {
+    const auto range = original.at(owners[index]);
+    EXPECT_THAT(range.begin, Eq(first.begin));
+    EXPECT_THAT(range.end, Eq(first.end));
+    text.ownerSpanRanges.emplace(owners[index], range);
+  }
+}
+
+std::optional<BidiOwnerDomSnapshot> CaptureEqualRangeOwnerProfile(
+    const EqualRangeOwnerProfile& profile, std::span<const size_t> order, size_t buckets,
+    size_t precedingNodes = 0) {
+  ParseWarningSink warnings;
+  auto parsed =
+      parser::SVGParser::ParseSVG(EqualRangeOwnerSource(profile, precedingNodes), warnings);
+  EXPECT_THAT(parsed, ParseResultIs(_));
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+  auto document = std::move(parsed).result();
+  const auto owners = EqualRangeOwnerEntities(document, profile.adjustments.size());
+  if (owners.size() != profile.adjustments.size()) {
+    return std::nullopt;
+  }
+  auto& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine(fonts, registry, std::make_unique<BidiBacktrackingBackend>());
+  engine.prepareForElement(EntityHandle(registry, owners.front()), warnings);
+  auto& text = registry.get<components::ComputedTextComponent>(owners.front());
+  RemoveEmptyOwnerSpans(text);
+  ReorderEqualRangeOwners(text, owners, order, buckets);
+  auto params = MakeTextParams(20);
+  params.textLength = Lengthd(60);
+  params.lengthAdjust = profile.adjustments.front() == "spacingAndGlyphs"
+                            ? LengthAdjust::SpacingAndGlyphs
+                            : LengthAdjust::Spacing;
+  const auto runs = engine.layout(text, params);
+  BidiOwnerDomSnapshot result;
+  result.preserved = engine.bidiNestedOwnersPreservedForTesting();
+  for (const auto& run : runs) {
+    for (const auto& glyph : run.glyphs) {
+      EXPECT_THAT(glyph.glyphIndex, Gt(0));
+      result.rootCells.emplace_back(glyph.xPosition, glyph.xPosition + glyph.xAdvance);
+      result.visualGlyphs += glyph.visualOrder.has_value();
+    }
+  }
+  return result;
+}
+
+void CheckEqualRangeOwnerOrders(const EqualRangeOwnerProfile& profile) {
+  std::vector<size_t> order;
+  for (size_t index = 0; index < profile.adjustments.size(); ++index) {
+    order.push_back(index);
+  }
+  do {
+    for (size_t buckets : {2u, 17u}) {
+      for (size_t precedingNodes : {0u, 1u}) {
+        SCOPED_TRACE(testing::Message()
+                     << testing::PrintToString(profile.adjustments) << ": "
+                     << testing::PrintToString(order) << ": " << buckets << ": " << precedingNodes);
+        const auto result = CaptureEqualRangeOwnerProfile(profile, order, buckets, precedingNodes);
+        ASSERT_THAT(result.has_value(), testing::IsTrue());
+        ASSERT_THAT(result->rootCells, SizeIs(3));
+        EXPECT_THAT(result->preserved, Eq(profile.preserved));
+        EXPECT_THAT(result->visualGlyphs, Eq(profile.preserved ? 0u : 3u));
+      }
+    }
+  } while (std::next_permutation(order.begin(), order.end()));
+}
+
+TEST(TextEngineTest, BidiNormalEqualRangeOwnersFollowAuthoredAncestryInEitherMapOrder) {
+  CheckEqualRangeOwnerOrders({{"spacingAndGlyphs", "spacing"}, true});
+  CheckEqualRangeOwnerOrders({{"spacing", "spacingAndGlyphs"}, false});
+  CheckEqualRangeOwnerOrders({{"spacingAndGlyphs", "spacing"}, false, false});
+}
+
+TEST(TextEngineTest, BidiNormalEqualRangeOwnersRetainMultipleManagedAncestorScopes) {
+  CheckEqualRangeOwnerOrders({{"spacingAndGlyphs", "spacing", "spacing"}, true});
+  CheckEqualRangeOwnerOrders({{"spacing", "spacingAndGlyphs", "spacing"}, true});
+  CheckEqualRangeOwnerOrders({{"spacing", "spacing", "spacingAndGlyphs"}, false});
+}
+
+TEST(TextEngineTest, BidiNormalEqualRangeDeepOwnerChainRetainsItsSupportedLeafScaling) {
+  EqualRangeOwnerProfile profile{std::vector<std::string_view>(64, "spacing"), false};
+  profile.adjustments.back() = "spacingAndGlyphs";
+  std::vector<size_t> order;
+  for (size_t index = 0; index < profile.adjustments.size(); ++index) {
+    order.push_back(index);
+  }
+  for (bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    if (reverse) {
+      std::reverse(order.begin(), order.end());
+    }
+    const auto result = CaptureEqualRangeOwnerProfile(profile, order, 17);
+    ASSERT_THAT(result.has_value(), testing::IsTrue());
+    EXPECT_THAT(result->preserved, testing::IsFalse());
+    EXPECT_THAT(result->rootCells, SizeIs(3));
+    EXPECT_THAT(result->visualGlyphs, Eq(3u));
+  }
+}
 
 std::optional<BidiOwnerDomSnapshot> CaptureBacktrackingOwnerProfile(bool bidi,
                                                                     bool laterPaintReset) {
