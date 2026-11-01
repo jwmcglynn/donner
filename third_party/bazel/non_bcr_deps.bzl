@@ -56,27 +56,25 @@ def _non_bcr_deps_impl(_mctx):
     #
     # The patch_cmds below create src/config-override.h to re-enable parts of
     # the HarfBuzz API that HB_TINY/HB_LEAN strip out. We need:
-    #   - the draw API for glyph outline extraction
-    #   - CFF outlines for our OTF fallback font (Public Sans)
     #   - file I/O for hb_face_create_from_file_or_fail
+    #   - vertical advances and per-glyph origins from FreeType
     http_archive(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
         sha256 = "3c2a9006a7e1bf58737e557014d7882c554c628fb379a9f00008f5ea53dbbdfb",
         strip_prefix = "harfbuzz-14.2.1",
+        patches = ["//third_party:harfbuzz_vertical_no_var_guard.patch"],
+        patch_args = ["-p1"],
         urls = ["https://github.com/harfbuzz/harfbuzz/archive/refs/tags/14.2.1.tar.gz"],
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
-// Re-enable the draw API for glyph outline extraction.
-// HB_TINY -> HB_LEAN -> HB_NO_DRAW -> HB_NO_OUTLINE, which strips these.
-#undef HB_NO_DRAW
-#undef HB_NO_OUTLINE
-// Re-enable CFF outlines (our fallback font Public Sans is OTF/CFF).
-#undef HB_NO_CFF
-#undef HB_NO_OT_FONT_CFF
 // Re-enable file I/O (hb_face_create_from_file_or_fail references
 // hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
 #undef HB_NO_OPEN
+// Preserve font-provided vertical advances and per-glyph origins.
+#undef HB_NO_VERTICAL
+// Keep variation composite decoding outside the shaping capability set.
+#define HB_NO_VAR_COMPOSITES
 HBEOF""",
         ],
     )
