@@ -4214,10 +4214,6 @@ public:
     std::vector<const Context*> logical;
     bool hasAddressable = false;
   };
-  struct Item {
-    ChunkRange range;
-    const Paragraph::Context* context;
-  };
 
   explicit NormalBidiPlan(Registry& registry, size_t* candidates, bool* preserved,
                           std::optional<size_t> candidateLimit)
@@ -4304,8 +4300,8 @@ public:
                                                : std::nullopt;
   }
 
-  std::vector<Item> items(size_t span, const ChunkRange& range) {
-    std::vector<Item> result;
+  std::vector<const Paragraph::Context*> items(size_t span, const ChunkRange& range) {
+    std::vector<const Paragraph::Context*> result;
     const auto first = characterAt(span, range.byteStart);
     if (!first) {
       return result;
@@ -4326,12 +4322,9 @@ public:
       if (context->shaping.byteOffset >= end) {
         break;
       }
-      const size_t start = std::max(context->shaping.byteOffset, begin);
-      const size_t limit = std::min(context->endByte(), end);
-      result.push_back({{start - spans[span].byte, limit - spans[span].byte}, context});
+      result.push_back(context);
     }
-    std::sort(result.begin(), result.end(),
-              [](const Item& a, const Item& b) { return a.context < b.context; });
+    std::sort(result.begin(), result.end());
     return result;
   }
 
@@ -4854,11 +4847,15 @@ public:
       return shapeFragment(chunk, nullptr, faces, orientation_);
     }
     TextBackend::ShapedRun result;
-    for (const auto& item : bidi_->items(sourceSpan_, chunk)) {
-      const auto& context = item.context->shaping;
+    const size_t sourceOffset = bidi_->spans[sourceSpan_].byte;
+    for (const auto* item : bidi_->items(sourceSpan_, chunk)) {
+      const auto& context = item->shaping;
+      const size_t start = std::max(context.byteOffset, sourceOffset + chunk.byteStart);
+      const size_t limit = std::min(item->endByte(), sourceOffset + chunk.byteEnd);
+      const ChunkRange range{start - sourceOffset, limit - sourceOffset};
       std::vector<FontHandle> itemFaces;
-      auto shaped = shapeFragment(item.range, &context, itemFaces,
-                                  item.context->orientation.value_or(orientation_));
+      auto shaped =
+          shapeFragment(range, &context, itemFaces, item->orientation.value_or(orientation_));
       const size_t oldSize = result.glyphs.size();
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       if (!itemFaces.empty() || !faces.empty()) {
