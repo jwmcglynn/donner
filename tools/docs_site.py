@@ -231,11 +231,10 @@ def decorate(root: Path, current: str, identity: dict, versions: list[str], base
 
 
 def _validate_pages_member(member: tarfile.TarInfo, seen: set[str], directories: set[str]) -> None:
-    root = member.name == "." and member.isdir()
-    require(root or member.name.startswith("./"), "Pages archive members must start with ./")
+    require(member.name == "." or member.name.startswith("./"), "Pages archive members must start with ./")
     normalized = pages_artifact.validate_member(member, seen)
-    if root:
-        require(len(seen) == 1, "Pages archive root must be first")
+    if str(normalized) == ".":
+        require(member.isdir() and len(seen) == 1, "Pages archive root must be a first directory")
     else:
         safe_path(str(normalized))
         require(all(str(parent) in directories for parent in normalized.parents),
