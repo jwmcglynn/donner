@@ -29,6 +29,7 @@ class TextBidiConvergence : public testing::Test {
 protected:
   struct PaintedOutline {
     Path path;
+    Transform2d textFromGlyph;
     std::string fill;
     unsigned paintGroup;
   };
@@ -112,7 +113,7 @@ protected:
         const Transform2d textFromGlyph =
             Transform2d::Translate(penX_ + glyph.xOffset, 64 + glyph.yOffset);
         const unsigned group = splitPaint && glyph.cluster >= 4 ? 1u : 0u;
-        outlines_.push_back({outline.transformed(textFromGlyph),
+        outlines_.push_back({std::move(outline), textFromGlyph,
                              splitPaint ? (group == 0 ? "red" : "blue") : "black", group});
       }
       penX_ += glyph.xAdvance + letterSpacing;
@@ -135,7 +136,9 @@ protected:
       auto element = document.querySelector("#glyph" + std::to_string(index));
       EXPECT_THAT(element.has_value(), testing::IsTrue());
       if (element) {
-        element->cast<SVGPathElement>().setSpline(outlines_[index].path);
+        auto path = element->cast<SVGPathElement>();
+        path.setSpline(outlines_[index].path);
+        path.setTransform(outlines_[index].textFromGlyph);
       }
     }
     return RenderDocumentWithActiveBackend(document);
