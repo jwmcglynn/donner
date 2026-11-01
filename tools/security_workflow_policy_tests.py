@@ -1994,7 +1994,7 @@ DOCS_BUILD_WORKFLOW = ".github/workflows/build_docs.yaml"
 DOCS_DEPLOY_STEPS = ("Verify the attested composition and durable prior site",
                      "Restore and verify the durable rollback selection",
                      "Retain the verified prior Pages archive for recovery",
-                     "Upload the verified durable rollback candidate",
+                     "Upload the verified publication candidate",
                      "Publish the verified complete site with approved recovery",
                      "Roll back the complete site with approved recovery",
                      "Retain publication and recovery evidence")
@@ -2008,6 +2008,25 @@ DOCS_AUTO_GUARD = ("github.event_name == 'workflow_run' && github.ref == 'refs/h
     "github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && "
     "github.event.workflow_run.conclusion == 'success' && "
     "github.event.workflow_run.head_repository.full_name == github.repository")
+
+
+def _docs_candidate_handoff_violations(job, work, publish_name, automatic):
+    upload = _named_step(job, "Upload the verified publication candidate")
+    publish = _named_step(job, publish_name)
+    conditional = ("if: steps.prepare.outputs.ready == 'true'" in upload if automatic
+                   else "        if:" not in upload)
+    return _failed([
+        ("id: candidate" in upload and "actions/upload-artifact@" in upload,
+         "docs publication must upload its verified candidate in this attempt"),
+        ("name: docs-candidate-${{ github.run_attempt }}" in upload and conditional,
+         "docs candidate upload must match the publication mode and attempt"),
+        ("path: ${{ runner.temp }}/" + work + "/pages/artifact.tar" in upload,
+         "docs candidate upload must use the already verified archive"),
+        ("VERIFIED_CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}" in publish,
+         "docs publication must bind its current candidate artifact"),
+        ("${{ runner.temp }}/" + work + "/candidate-deployment.json" in job,
+         "docs deployment identity must survive publication failure"),
+    ])
 
 
 def _docs_automatic_violations(workflow):
@@ -2035,7 +2054,10 @@ def _docs_automatic_violations(workflow):
              and "github.event.workflow_run.head_sha" not in body for body in (assemble, deploy)),
          "automatic code must come only from trusted main"),
     ])
-    return failures + _docs_automatic_gates(assemble, deploy) + _docs_automatic_commands(assemble, deploy)
+    return (failures + _docs_automatic_gates(assemble, deploy) +
+            _docs_automatic_commands(assemble, deploy) +
+            _docs_candidate_handoff_violations(deploy, "docs-auto-publish",
+                "Publish only the verified development-docs update", True))
 
 
 def _docs_automatic_gates(assemble, deploy):
@@ -2101,7 +2123,8 @@ def _docs_deploy_violations(workflow):
         (_docs_runs_quoted((deploy, assemble, seed)),
          "docs run blocks must use quoted environment values"),
     ])
-    return failures
+    return failures + _docs_candidate_handoff_violations(deploy, "docs-publish",
+        "Publish the verified complete site with approved recovery", False)
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
@@ -4967,6 +4990,29 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "          BRANCH: ${{ github.head_ref }}\n", 1)
         self.assertNotEqual(safe, files[path])
         self.assertEqual([], _script_injection_violations({path: safe}))
+
+
+    def test_docs_candidate_handoff_and_failure_receipts_cannot_be_removed(self):
+        jobs = _jobs(self.supply_chain_files[DOCS_WORKFLOW])
+        modes = (("deploy", "docs-publish", "Publish the verified complete site with approved recovery", False),
+                 ("auto-deploy", "docs-auto-publish", "Publish only the verified development-docs update", True))
+        for name, work, publish_name, automatic in modes:
+            job = jobs[name]
+            self.assertEqual([], _docs_candidate_handoff_violations(job, work, publish_name, automatic))
+            for token in ("VERIFIED_CANDIDATE_ARTIFACT_ID:", "candidate-deployment.json",
+                          "name: docs-candidate-${{ github.run_attempt }}", "/pages/artifact.tar"):
+                with self.subTest(job=name, removed=token):
+                    changed = job.replace(token, "removed", 1)
+                    self.assertNotEqual(changed, job)
+                    self.assertTrue(_docs_candidate_handoff_violations(changed, work, publish_name, automatic))
+
+    def test_docs_candidate_upload_cannot_retain_a_rollback_only_guard(self):
+        job = _jobs(self.supply_chain_files[DOCS_WORKFLOW])["deploy"]
+        changed = job.replace("        id: candidate\n",
+                              "        id: candidate\n        if: inputs.selection == 'rollback'\n", 1)
+        self.assertNotEqual(changed, job)
+        self.assertTrue(_docs_candidate_handoff_violations(changed, "docs-publish",
+            "Publish the verified complete site with approved recovery", False))
 
 
 if __name__ == "__main__":

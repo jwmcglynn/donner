@@ -423,7 +423,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish.store, "restore", side_effect=restore), \
              mock.patch.object(publish, "deploy", side_effect=subprocess.TimeoutExpired("gh", 180)), \
              self.assertRaisesRegex(ValueError, "inspect result.json"):
-            publish._retain_and_deploy(record, plan, 9, work, self.api)
+            publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(site.read_json(work / "result.json")["status"], "recovery-required")
 
     def test_actual_activation_timeout_does_not_revert_healthy_content(self):
@@ -433,7 +433,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish.store, "restore", side_effect=restore), \
              mock.patch.object(publish, "deploy", return_value="91") as deploy, \
              mock.patch.object(publish, "_verify_live"), self.assertRaisesRegex(ValueError, "inspect result.json"):
-            publish._retain_and_deploy(record, plan, 9, work, self.api)
+            publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(site.read_json(work / "result.json")["status"], "recovery-required")
         self.assertEqual(deploy.call_count, 1)
 
@@ -610,7 +610,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish, "deploy", side_effect=ValueError("rejected before cutover")), \
              mock.patch.object(publish, "_recover", return_value={"status": "unchanged"}), \
              self.assertRaisesRegex(ValueError, "inspect result.json"):
-            publish._retain_and_deploy(record, plan, 9, work, self.api)
+            publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(save.call_count, 1)
         self.assertEqual(save.call_args.args[3]["releases"], plan["current"]["releases"])
         self.assertEqual(site.read_json(work / "result.json")["status"], "unchanged")
@@ -627,7 +627,7 @@ class DocsPublishTest(unittest.TestCase):
                      mock.patch.object(publish, "deploy", side_effect=ValueError("unhealthy")), \
                      mock.patch.object(publish, "_recover", return_value={"status": "restored"}), \
                      self.assertRaisesRegex(ValueError, "inspect result.json"):
-                    publish._retain_and_deploy(record, plan, 9, work, self.api)
+                    publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
                 result = site.read_json(work / "result.json")
                 self.assertEqual(result["status"], "recovery-required" if failed_activation else "recovered-to-bootstrap")
                 self.assertEqual(save.call_args.args[3]["current"], "a" * 64)
@@ -643,7 +643,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish, "_verify_live", side_effect=[ValueError("old site"), None]), \
              mock.patch.object(publish.time, "sleep") as pause, \
              mock.patch.object(publish, "_recover", return_value={"status": "recovery-required"}) as recover:
-            result = publish._retain_and_deploy(record, plan, 9, work, self.api)
+            result = publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(result["status"], "published")
         pause.assert_called_once_with(5)
         recover.assert_not_called()
@@ -848,7 +848,7 @@ class DocsPublishTest(unittest.TestCase):
             self.assertEqual(api.call.call_args_list[0].args[2]["environment"], expected)
             api.require_protection.assert_called_once()
 
-    def test_pages_build_version_is_the_exact_source_commit(self):
+    def test_pages_build_version_is_the_exact_execution_commit(self):
         commit = "b" * 40
         for artifact_id in (7, 8):
             with self.subTest(artifact_id=artifact_id):
@@ -862,14 +862,14 @@ class DocsPublishTest(unittest.TestCase):
                 self.assertEqual(request["pages_build_version"], commit)
                 self.assertEqual(request["artifact_id"], artifact_id)
                 self.assertEqual(site.read_json(receipt), {
-                    "deployment_id": commit, "artifact_id": artifact_id})
+                    "deployment_id": commit, "artifact_id": artifact_id, "execution_commit": commit})
 
     def test_pages_rejects_a_non_commit_build_version_before_credentials_or_requests(self):
         for commit in ("b" * 40 + "-7", "main", "b" * 39, None):
             with self.subTest(commit=commit):
                 api = mock.Mock()
                 with mock.patch.object(publish, "_oidc_token") as token, \
-                     self.assertRaisesRegex(ValueError, "invalid Pages source commit"):
+                     self.assertRaisesRegex(ValueError, "invalid Pages execution commit"):
                     publish.deploy(7, commit, api)
                 token.assert_not_called()
                 api.call.assert_not_called()
@@ -930,7 +930,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish.store, "restore", side_effect=restore), \
              mock.patch.object(publish, "deploy", return_value="91"), \
              mock.patch.object(publish, "_verify_live"):
-            result = publish._retain_and_deploy(record, plan, 9, work, self.api)
+            result = publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(result["status"], "published")
         self.assertEqual(save.call_args_list[0].args[1], "c" * 40)
         self.assertEqual(save.call_args_list[1].args[1], "e" * 40)
