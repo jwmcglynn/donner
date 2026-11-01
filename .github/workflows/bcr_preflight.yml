@@ -166,7 +166,7 @@ jobs:
           package-manager-cache: false
 
       - name: Generate the candidate BCR entry without publishing
-        uses: bazel-contrib/publish-to-bcr@v1.5.1
+        uses: bazel-contrib/publish-to-bcr@v1.6.0
         with:
           tag: v${{ steps.archive.outputs.version }}
           module-version: ${{ steps.archive.outputs.version }}
