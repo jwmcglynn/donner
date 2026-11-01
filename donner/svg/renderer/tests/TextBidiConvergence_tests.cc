@@ -114,19 +114,9 @@ protected:
     return RenderDocumentWithActiveBackend(document);
   }
 
-  void compare(const RendererBitmap& actual, const std::string& name) {
-    SCOPED_TRACE(ActiveRendererBackendName());
-    const auto expected = renderOutlines();
-    auto emptyDocument = instantiateSubtree("<g/>", {}, {260, 100});
-    const auto empty = RenderDocumentWithActiveBackend(emptyDocument);
-    ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(260, 100)));
-    ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
-    EXPECT_NONFATAL_FAILURE(
-        editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_visible_outline",
-                                             editor::tests::PixelmatchIdentityParams()),
-        "pixels differ");
-    editor::tests::CompareBitmapToBitmap(actual, expected, name,
-                                         editor::tests::PixelmatchIdentityParams());
+  RendererBitmap renderEmpty() const {
+    auto document = instantiateSubtree("<g/>", {}, {260, 100});
+    return RenderDocumentWithActiveBackend(document);
   }
 
 private:
@@ -141,26 +131,69 @@ private:
 
 TEST_F(TextBidiConvergence, LatinOutlineControlMatchesText) {
   appendRun("AB.");
-  compare(renderText("AB."), "bidi_latin_outline_control");
+  const auto actual = renderText("AB.");
+  const auto expected = renderOutlines();
+  const auto empty = renderEmpty();
+  SCOPED_TRACE(ActiveRendererBackendName());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(260, 100)));
+  ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_latin_outline_control_visible",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_latin_outline_control",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(TextBidiConvergence, LatinArabicAndPunctuationKeepTheirOwnDirectionsWithSpacing) {
   appendRun("AB ", 5);
   appendRun("مر");
   appendRun(".", 5);
-  compare(renderText("AB مر.", 5), "bidi_mixed_scripts_spacing");
+  const auto actual = renderText("AB مر.", 5);
+  const auto expected = renderOutlines();
+  const auto empty = renderEmpty();
+  SCOPED_TRACE(ActiveRendererBackendName());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(260, 100)));
+  ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_mixed_scripts_spacing_visible",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_mixed_scripts_spacing",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(TextBidiConvergence, ArabicFirstKeepsLatinAndPunctuationInLeftToRightParagraphOrder) {
   appendRun("مر");
   appendRun(" AB.");
-  compare(renderText("مر AB."), "bidi_arabic_first_paragraph");
+  const auto actual = renderText("مر AB.");
+  const auto expected = renderOutlines();
+  const auto empty = renderEmpty();
+  SCOPED_TRACE(ActiveRendererBackendName());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(260, 100)));
+  ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_arabic_first_paragraph_visible",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_arabic_first_paragraph",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(TextBidiConvergence, ArabicJoiningAcrossPaintSpansPreservesSourceColors) {
   appendRun("مرحبا", 0, true);
-  compare(renderText("<tspan fill='red'>مر</tspan><tspan fill='blue'>حبا</tspan>"),
-          "bidi_arabic_span_paint");
+  const auto actual = renderText("<tspan fill='red'>مر</tspan><tspan fill='blue'>حبا</tspan>");
+  const auto expected = renderOutlines();
+  const auto empty = renderEmpty();
+  SCOPED_TRACE(ActiveRendererBackendName());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(260, 100)));
+  ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_arabic_span_paint_visible",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_arabic_span_paint",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace
