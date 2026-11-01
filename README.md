@@ -29,7 +29,9 @@ own application.
 - **Two backends, one API**: a compact tiny_skia CPU renderer (the default) and Geode, a GPU
   renderer for Vulkan, Metal, and WebGPU that drives the editor canvas.
 - **Text**: `<text>`, `<tspan>`, and `<textPath>` with a compact built-in font stack, or an
-  optional full stack with FreeType, HarfBuzz shaping, and WOFF2 web fonts.
+  optional full stack with FreeType, HarfBuzz shaping, and WOFF2 web fonts. Both stacks resolve
+  bidirectional ordering for ordinary unwrapped horizontal text; the full stack also joins Arabic
+  across compatible paint spans. See the [text layout profile](docs/design_docs/0069-bidi_text_layout.md#current-implementation-scope).
 - **Security**: designed for untrusted input, with bounded parsing and decoding, continuous
   fuzzing, and no network access unless the host application supplies a resource loader.
 - **Embedding**: a C++20 Bazel module with an exception-free, RTTI-free API, a size-optimized

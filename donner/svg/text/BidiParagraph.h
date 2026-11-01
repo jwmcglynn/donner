@@ -19,6 +19,8 @@ struct BidiResourceBudget {
   struct Limits {
     size_t codepoints = 1000000;
     size_t runs = 65536;
+    size_t runCandidates = 8000000;
+    size_t ownerWork = 8000000;
     size_t paragraphs = 65536;
     size_t glyphs = 1000000;
   };

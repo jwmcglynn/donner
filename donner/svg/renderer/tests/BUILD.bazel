@@ -1780,6 +1780,7 @@ donner_cc_library(
     hdrs = ["DecorationTestScene.h"],
     deps = [
         ":renderer_test_backend",
+        "//donner/base",
         "//donner/svg",
         "//donner/svg/renderer",
         "//donner/svg/resources:font_manager",

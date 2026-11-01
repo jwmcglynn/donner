@@ -96,6 +96,17 @@ public:
     return fallbackCoverageEntries_;
   }
 
+  /// Run candidates examined by paragraph intersections, including binary-search comparisons.
+  [[nodiscard]] std::size_t bidiRunCandidatesForTesting() const { return bidiRunCandidates_; }
+
+  /// Set a per-layout allowance for deterministic candidate-admission tests on this engine.
+  void setBidiRunCandidateLimitForTesting(std::size_t limit) { bidiRunCandidateLimit_ = limit; }
+
+  /// Whether the last layout preserved legacy ordering for unsupported nested length owners.
+  [[nodiscard]] bool bidiNestedOwnersPreservedForTesting() const {
+    return bidiNestedOwnersPreserved_;
+  }
+
   /// Span bounding-box entries examined while building or answering object-box queries.
   [[nodiscard]] std::size_t objectBoundingBoxSpanVisitsForTesting() const {
     return objectBoundingBoxSpanVisits_;
@@ -247,6 +258,9 @@ private:
   uint64_t observedFontResourceRevision_ = 0;
   std::size_t layoutCallCount_ = 0;
   std::size_t fallbackCoverageEntries_ = 0;
+  std::size_t bidiRunCandidates_ = 0;
+  std::optional<std::size_t> bidiRunCandidateLimit_;
+  bool bidiNestedOwnersPreserved_ = false;
   mutable std::size_t objectBoundingBoxSpanVisits_ = 0;
 };
 

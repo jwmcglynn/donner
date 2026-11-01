@@ -1556,8 +1556,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/letter-spacing",
                 {
                     {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
-                    {"mixed-scripts.svg",
-                     Params::Skip("Needs BiDi: mixed LTR Latin + RTL Arabic in one span")},
+                    {"mixed-scripts.svg", Params().onlyTextFull().withReason("Arabic shaping")},
                     // resvg v0.49.0 quotes the family as 'Mplus 1p'; unquoted it is invalid
                     // and the snapshot's reference was drawn in a fallback face.
                     {"non-ASCII-character.svg", Params().setCanvasSize(300, 300)},
@@ -1573,7 +1572,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/text",
                 {
-                    {"bidi-reordering.svg", Params::Skip("Not impl: Bidirectional text shaping")},
+                    {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
                     {"complex-grapheme-split-by-tspan.svg",
                      Params::UndefinedBehavior("grapheme split by tspan")},
                     {"complex-graphemes-and-coordinates-list.svg",
@@ -1904,7 +1903,7 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/tspan",
             {
-                {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
+                {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
                 {"nested-whitespaces.svg",
                  Params().withMaxPixelsDifferent(400).withReason(
                      "Reference rasterizer generation: 4x4 supersampled coverage on the "

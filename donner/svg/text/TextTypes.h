@@ -80,6 +80,10 @@ struct TextGlyph {
   double rotateDegrees = 0;  ///< Per-glyph rotation in degrees.
   uint32_t cluster = 0;      ///< Byte offset into the span text for the glyph's source cluster.
   bool rightToLeft = false;  ///< Resolved horizontal source-character direction.
+  /// Global visual adjacency for source-span decoration continuity; absent on legacy layouts.
+  std::optional<uint32_t> visualOrder;
+  /// This visual chunk origin applies an authored horizontal absolute position.
+  bool absoluteInlinePosition = false;
   /// Byte offset of the SVG positioning group; absent uses the source cluster.
   std::optional<uint32_t> positioningCluster;
   /// Inline-axis distance from the pen position to an upright vertical glyph's origin, already

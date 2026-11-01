@@ -62,6 +62,11 @@ public:
                        uint32_t prevCodepoint, uint32_t curCodepoint, bool isVertical,
                        TextOrientation textOrientation) const override;
 
+  double crossSpanKern(FontHandle previousFont, float previousSize, FontHandle currentFont,
+                       float currentSize, uint32_t previousCodepoint, uint32_t currentCodepoint,
+                       bool vertical, TextOrientation orientation,
+                       const ShapingContext& context) const override;
+
 private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,

@@ -47,10 +47,36 @@ protected:
     ASSERT_THAT(static_cast<bool>(font_), testing::IsTrue());
   }
 
-  void addFont(FontManager& fonts) const {
+  std::shared_ptr<const std::vector<uint8_t>> readFont(std::string_view filename) const {
+    const std::string path = Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/" +
+                                                            std::string(filename));
+    std::ifstream file(path, std::ios::binary);
+    EXPECT_THAT(file.is_open(), testing::IsTrue());
+    return std::make_shared<const std::vector<uint8_t>>(std::istreambuf_iterator<char>(file),
+                                                        std::istreambuf_iterator<char>());
+  }
+
+  void expectHebrewFontSupport() const {
+    Registry registry;
+    FontManager fonts(registry);
+    addFont(fonts, readFont("MPLUS1p-Regular.ttf"));
+    const auto font = fonts.findFont("Bidi Control");
+    ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+    TextBackendFull backend(fonts, registry);
+    const std::string text = "אבג";
+    const auto shaped =
+        backend.shapeRun(font, 32, text, 0, text.size(), false, FontVariant::Normal, false);
+    ASSERT_THAT(shaped.glyphs, testing::SizeIs(3));
+    EXPECT_THAT(shaped.glyphs,
+                testing::Each(testing::Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex,
+                                             testing::Gt(0))));
+  }
+
+  void addFont(FontManager& fonts,
+               std::shared_ptr<const std::vector<uint8_t>> data = nullptr) const {
     css::FontFaceSource source;
     source.kind = css::FontFaceSource::Kind::Data;
-    source.payload = bytes_;
+    source.payload = data ? std::move(data) : bytes_;
     source.trusted = true;
     css::FontFace face;
     face.familyName = RcString("Bidi Control");
@@ -58,7 +84,8 @@ protected:
     fonts.addFontFace(face);
   }
 
-  RendererBitmap renderText(std::string_view text, double letterSpacing = 0) const {
+  RendererBitmap renderText(std::string_view text, double letterSpacing = 0,
+                            std::string_view fontFile = "Amiri-Regular.ttf") const {
     auto document = instantiateSubtree(
         "<text x='20' y='64' font-family='Bidi Control' font-size='32' font-kerning='none' "
         "letter-spacing='" +
@@ -66,7 +93,7 @@ protected:
         {}, {260, 100});
     auto& registry = document.registry();
     auto& fonts = registry.ctx().emplace<FontManager>(registry);
-    addFont(fonts);
+    addFont(fonts, fontFile == "Amiri-Regular.ttf" ? bytes_ : readFont(fontFile));
     registry.ctx().emplace<TextEngine>(fonts, registry,
                                        std::make_unique<TextBackendFull>(fonts, registry));
     return RenderDocumentWithActiveBackend(document);
@@ -193,6 +220,21 @@ TEST_F(TextBidiConvergence, ArabicJoiningAcrossPaintSpansPreservesSourceColors) 
                                            editor::tests::PixelmatchIdentityParams()),
       "pixels differ");
   editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_arabic_span_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(TextBidiConvergence, PositionOnJoinerDoesNotDiscardFollowingVisibleGlyphs) {
+  expectHebrewFontSupport();
+  const auto actual =
+      renderText("<tspan x='20 60 120'>אב\u200dג</tspan>", 0, "MPLUS1p-Regular.ttf");
+  const auto expected = renderText("<tspan x='20 60'>אב\u200dג</tspan>", 0, "MPLUS1p-Regular.ttf");
+  const auto empty = renderEmpty();
+  SCOPED_TRACE(ActiveRendererBackendName());
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_joiner_expected_visible",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_joiner_position_boundary",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

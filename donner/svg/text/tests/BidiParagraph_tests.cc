@@ -91,6 +91,20 @@ TEST(BidiParagraphTest, ExhaustionIsStickyAcrossParagraphsAndLineQueries) {
   EXPECT_THAT(runs.rejected, IsTrue());
 }
 
+TEST(BidiParagraphTest, ParagraphAdmissionPrecedesAnalysisAndAlsoChargesTheFastPath) {
+  for (bool force : {false, true}) {
+    SCOPED_TRACE(force);
+    BidiResourceBudget denied;
+    denied.remaining.paragraphs = 0;
+    EXPECT_THAT(BidiParagraph::Analyze({'a'}, denied, 0, force).has_value(), testing::IsFalse());
+    EXPECT_THAT(denied.rejected, IsTrue());
+    BidiResourceBudget accepted;
+    accepted.remaining.paragraphs = 1;
+    EXPECT_THAT(BidiParagraph::Analyze({'a'}, accepted, 0, force).has_value(), IsTrue());
+    EXPECT_THAT(accepted.remaining.paragraphs, testing::Eq(0u));
+  }
+}
+
 TEST(BidiParagraphTest, SourceControlsAndMirrorsHaveSeparateAddressability) {
   for (char32_t control : {0x061cu, 0x200eu, 0x200fu, 0x202au, 0x202bu, 0x202cu, 0x202du, 0x202eu,
                            0x2066u, 0x2067u, 0x2068u, 0x2069u}) {

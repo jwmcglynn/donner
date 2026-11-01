@@ -426,96 +426,152 @@ void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical,
 
 }  // namespace
 
+namespace {
+
+struct SimpleScalar {
+  size_t byte;
+  uint32_t codepoint;
+};
+
+/// Iterates a borrowed shaping range while its synchronous caller retains the source text.
+class SimpleScalarSequence {
+public:
+  SimpleScalarSequence(std::string_view text, size_t offset, size_t length, bool backward)
+      : text_(text.substr(0, offset + length)), position_(offset), backward_(backward) {
+    if (backward_) {
+      prepareBackward();
+    }
+  }
+
+  std::optional<SimpleScalar> next() {
+    if (!backward_) {
+      return nextForward();
+    }
+    if (next_ == ordered_.size()) {
+      return std::nullopt;
+    }
+    auto scalar = ordered_[next_++];
+    scalar.codepoint = BidiParagraph::Mirror(scalar.codepoint);
+    return scalar;
+  }
+
+private:
+  std::optional<SimpleScalar> nextForward() {
+    while (position_ < text_.size()) {
+      const size_t byte = position_;
+      const uint32_t cp = decodeUtf8(text_, position_);
+      if (!BidiParagraph::IsControl(cp)) {
+        return SimpleScalar{byte, cp};
+      }
+    }
+    return std::nullopt;
+  }
+
+  void prepareBackward() {
+    std::vector<SimpleScalar> scalars;
+    std::vector<std::pair<size_t, size_t>> groups;
+    bool previousJoiner = false;
+    while (const auto scalar = nextForward()) {
+      if (groups.empty() || (!BidiParagraph::IsNonspacing(scalar->codepoint) && !previousJoiner)) {
+        groups.emplace_back(scalars.size(), scalars.size());
+      }
+      scalars.push_back(*scalar);
+      groups.back().second = scalars.size();
+      previousJoiner = scalar->codepoint == 0x200d;
+    }
+    ordered_.reserve(scalars.size());
+    for (auto group = groups.rbegin(); group != groups.rend(); ++group) {
+      ordered_.insert(ordered_.end(), scalars.begin() + group->first,
+                      scalars.begin() + group->second);
+    }
+  }
+
+  std::string_view text_;
+  size_t position_;
+  bool backward_;
+  size_t next_ = 0;
+  std::vector<SimpleScalar> ordered_;
+};
+
+struct SimpleShapingMetrics {
+  const stbtt_fontinfo* info;
+  float fontSizePx;
+  float scale;
+  bool vertical;
+  TextOrientation orientation;
+  FontVariant variant;
+  bool kerning;
+
+  TextBackend::ShapedGlyph glyph(SimpleScalar scalar, int previousGlyph) const {
+    const bool smallCap =
+        variant == FontVariant::SmallCaps && scalar.codepoint >= 'a' && scalar.codepoint <= 'z';
+    if (smallCap) {
+      scalar.codepoint = scalar.codepoint - 'a' + 'A';
+    }
+    const int index = stbtt_FindGlyphIndex(info, static_cast<int>(scalar.codepoint));
+    int advanceWidth = 0;
+    int lsb = 0;
+    stbtt_GetGlyphHMetrics(info, index, &advanceWidth, &lsb);
+    const float glyphScale = smallCap ? scale * kSmallCapScale : scale;
+    const Vector2d pair = SimplePairKerning(info, previousGlyph, index, scale, vertical,
+                                            orientation, scalar.codepoint, kerning);
+    TextBackend::ShapedGlyph result;
+    result.glyphIndex = index;
+    result.cluster = static_cast<uint32_t>(scalar.byte);
+    result.fontSizeScale = smallCap ? kSmallCapScale : 1.0f;
+    result.xKern = pair.x;
+    result.yKern = pair.y;
+    SetSimpleGlyphAdvance(result, vertical, orientation, scalar.codepoint, info, index,
+                          advanceWidth, glyphScale, fontSizePx);
+    return result;
+  }
+};
+
+bool ValidSimpleShapingRange(float size, std::string_view text, size_t offset, size_t length) {
+  return std::isfinite(size) && size > 0 && offset <= text.size() && length <= text.size() - offset;
+}
+
+}  // namespace
+
 TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
     FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
     size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
     bool enableKerning, bool /*forceLogicalOrder*/, bool backward) const {
-  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f || byteOffset > spanText.size() ||
-      byteLength > spanText.size() - byteOffset) {
+  if (!ValidSimpleShapingRange(fontSizePx, spanText, byteOffset, byteLength)) {
     return {};
   }
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
   }
-
   const float scale = scaleForPixelHeight(font, fontSizePx);
-  if (scale == 0.0f) {
+  if (scale == 0) {
     return {};
   }
-
+  const SimpleShapingMetrics metrics{info,        fontSizePx,   scale, isVertical, textOrientation,
+                                     fontVariant, enableKerning};
+  SimpleScalarSequence sequence(spanText, byteOffset, byteLength, backward);
   ShapedRun result;
-  int prevGlyph = 0;
-  size_t pos = byteOffset;
-  const size_t end = byteOffset + byteLength;
-
-  struct Scalar {
-    size_t byte;
-    uint32_t codepoint;
-  };
-  std::vector<Scalar> ordered;
-  if (backward) {
-    std::vector<Scalar> scalars;
-    std::vector<std::pair<size_t, size_t>> groups;
-    bool previousJoiner = false;
-    while (pos < end) {
-      const size_t start = pos;
-      const uint32_t cp = decodeUtf8(spanText.substr(0, end), pos);
-      if (BidiParagraph::IsControl(cp)) {
-        continue;
-      }
-      if (groups.empty() || (!BidiParagraph::IsNonspacing(cp) && !previousJoiner)) {
-        groups.emplace_back(scalars.size(), scalars.size());
-      }
-      scalars.push_back({start, cp});
-      groups.back().second = scalars.size();
-      previousJoiner = cp == 0x200d;
-    }
-    ordered.reserve(scalars.size());
-    for (auto group = groups.rbegin(); group != groups.rend(); ++group) {
-      ordered.insert(ordered.end(), scalars.begin() + group->first,
-                     scalars.begin() + group->second);
-    }
-  }
   result.backward = backward;
-  size_t next = 0;
-  while (backward ? next < ordered.size() : pos < end) {
-    const size_t startPos = backward ? ordered[next].byte : pos;
-    uint32_t codepoint = backward ? BidiParagraph::Mirror(ordered[next++].codepoint)
-                                  : decodeUtf8(spanText.substr(0, end), pos);
-
-    // Small-caps synthesis: uppercase lowercase ASCII, apply reduced scale.
-    bool smallCap = false;
-    if (fontVariant == FontVariant::SmallCaps && codepoint >= 'a' && codepoint <= 'z') {
-      codepoint = codepoint - 'a' + 'A';
-      smallCap = true;
-    }
-
-    const int glyphIndex = stbtt_FindGlyphIndex(info, static_cast<int>(codepoint));
-    int advanceWidth = 0;
-    int lsb = 0;
-    stbtt_GetGlyphHMetrics(info, glyphIndex, &advanceWidth, &lsb);
-
-    const float glyphScale = smallCap ? scale * kSmallCapScale : scale;
-
-    const Vector2d kerning = SimplePairKerning(info, prevGlyph, glyphIndex, scale, isVertical,
-                                               textOrientation, codepoint, enableKerning);
-
-    ShapedGlyph glyph;
-    glyph.glyphIndex = glyphIndex;
-    glyph.cluster = static_cast<uint32_t>(startPos);
-    glyph.fontSizeScale = smallCap ? kSmallCapScale : 1.0f;
-    glyph.xKern = kerning.x;
-    glyph.yKern = kerning.y;
-
-    SetSimpleGlyphAdvance(glyph, isVertical, textOrientation, codepoint, info, glyphIndex,
-                          advanceWidth, glyphScale, fontSizePx);
-
-    result.glyphs.push_back(glyph);
-    prevGlyph = glyphIndex;
+  int previousGlyph = 0;
+  while (const auto scalar = sequence.next()) {
+    result.glyphs.push_back(metrics.glyph(*scalar, previousGlyph));
+    previousGlyph = result.glyphs.back().glyphIndex;
   }
-
   return result;
+}
+
+double TextBackendSimple::crossSpanKern(FontHandle previousFont, float previousSize,
+                                        FontHandle currentFont, float currentSize,
+                                        uint32_t previousCodepoint, uint32_t currentCodepoint,
+                                        bool vertical, TextOrientation orientation,
+                                        const ShapingContext& context) const {
+  if (context.rightToLeft.value_or(false)) {
+    previousCodepoint = BidiParagraph::Mirror(previousCodepoint);
+    currentCodepoint = BidiParagraph::Mirror(currentCodepoint);
+  }
+  return crossSpanKern(previousFont, previousSize, currentFont, currentSize, previousCodepoint,
+                       currentCodepoint, vertical, orientation);
 }
 
 double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,

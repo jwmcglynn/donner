@@ -89,7 +89,16 @@ public:
     return delegatedVerticalAdvanceCalls_;
   }
 
+  double crossSpanKern(FontHandle previousFont, float previousSize, FontHandle currentFont,
+                       float currentSize, uint32_t previousCodepoint, uint32_t currentCodepoint,
+                       bool vertical, TextOrientation orientation,
+                       const ShapingContext& context) const override;
+
 private:
+  double crossSpanKernImpl(FontHandle previousFont, float previousSize, FontHandle currentFont,
+                           float currentSize, uint32_t previousCodepoint, uint32_t currentCodepoint,
+                           bool vertical, TextOrientation orientation,
+                           const ShapingContext* context) const;
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
                          TextOrientation textOrientation, FontVariant fontVariant,

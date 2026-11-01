@@ -130,6 +130,49 @@ TEST(TextDecorationStyle, StyleAppliesPerOrigin) {
       "decoration_style_per_origin", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(TextDecorationStyle, BidiDecorationFixtureShapesUnicodeScalarsOnce) {
+  const auto actual = RenderDecorationScene("<text x='10' y='40' font-size='20'>א</text>");
+  const auto expected = RenderDecorationScene("<rect x='10' y='38' width='1' height='2'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_decoration_unicode_fixture",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationStyle, BidiDisjointSourceSpanDoesNotUnderlineAnotherPaintSpan) {
+  const auto actual = RenderDecorationScene(
+      "<text x='10' y='40' font-size='20'><tspan fill='red' "
+      "style='text-decoration:underline;text-decoration-thickness:2px'>ab אב</tspan>"
+      "<tspan fill='blue'>גד</tspan></text>");
+  const auto expected = RenderDecorationScene(
+      "<rect x='10' y='41' width='30' height='2' fill='red'/>"
+      "<rect x='60' y='41' width='20' height='2' fill='red'/>"
+      "<rect x='10' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='20' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='30' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='40' y='38' width='1' height='2' fill='blue'/>"
+      "<rect x='50' y='38' width='1' height='2' fill='blue'/>"
+      "<rect x='60' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='70' y='38' width='1' height='2' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_disjoint_underline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationStyle, BidiContiguousSourceSpanKeepsOneContinuousUnderline) {
+  const auto actual = RenderDecorationScene(
+      "<text x='10' y='40' font-size='20' fill='red' "
+      "style='text-decoration:underline;text-decoration-thickness:2px'>ab אבגד</text>");
+  const auto expected = RenderDecorationScene(
+      "<rect x='10' y='41' width='70' height='2' fill='red'/>"
+      "<rect x='10' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='20' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='30' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='40' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='50' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='60' y='38' width='1' height='2' fill='red'/>"
+      "<rect x='70' y='38' width='1' height='2' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_contiguous_underline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Emit one origin's underline for a single-glyph run and return the emitted paths' point counts.
 std::vector<std::size_t> EmitUnderline(TextDecorationStyle style, double x, double advance,
                                        double thickness,

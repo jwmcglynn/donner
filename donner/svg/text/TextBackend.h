@@ -355,6 +355,16 @@ public:
                          isVertical);
   }
 
+  /// Resolve a visual neighboring pair inside one shared directional shaping context.
+  virtual double crossSpanKern(FontHandle previousFont, float previousSize, FontHandle currentFont,
+                               float currentSize, uint32_t previousCodepoint,
+                               uint32_t currentCodepoint, bool vertical,
+                               TextOrientation orientation, const ShapingContext& context) const {
+    (void)context;
+    return crossSpanKern(previousFont, previousSize, currentFont, currentSize, previousCodepoint,
+                         currentCodepoint, vertical, orientation);
+  }
+
   /// Compute cross-span kerning with kerning disabled.
   virtual double crossSpanKernNoKerning(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
                                         bool) const {

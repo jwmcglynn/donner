@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="90">
+  <text x="10" y="28" font-size="16" textLength="150" lengthAdjust="spacingAndGlyphs"><tspan textLength="70">ab אב</tspan><tspan fill="blue">גד</tspan></text>
+  <text x="10" y="62" font-size="16" textLength="150"><tspan textLength="50">אב</tspan><tspan>גד</tspan></text>
+</svg>

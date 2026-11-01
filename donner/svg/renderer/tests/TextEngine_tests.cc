@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -1267,6 +1268,8 @@ TEST(TextEngineTest, BidiNormalDomIndicesKeepUtf16AliasesAndExcludeSourceControl
               testing::IsTrue());
   TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
   const auto handle = target->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  ASSERT_THAT(engine.ensureComputedTextGeometryComponent(handle).runs, Not(IsEmpty()));
   EXPECT_THAT(engine.getNumberOfChars(handle), Eq(6));
   EXPECT_THAT(engine.getStartPositionOfChar(handle, 1),
               Eq(engine.getStartPositionOfChar(handle, 2)));
@@ -1276,6 +1279,34 @@ TEST(TextEngineTest, BidiNormalDomIndicesKeepUtf16AliasesAndExcludeSourceControl
   EXPECT_THAT(engine.getStartPositionOfChar(handle, 3).x,
               Gt(engine.getEndPositionOfChar(handle, 3).x));
   EXPECT_THAT(engine.getEndPositionOfChar(handle, 3).x, DoubleEq(82));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 5).x, DoubleEq(144));
+}
+
+TEST(TextEngineTest, BidiNormalPreparedOrdinaryDomControlHasSupplementaryAliases) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'>"
+      "<text id='t' x='20 50 80 110 140' dx='0 1 2 3 4' y='80' "
+      "font-family='Bidi Font' font-size='32' rotate='0 10 20 30 40'>"
+      "A😀<tspan>BC</tspan><tspan></tspan>D</text></svg>",
+      warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  const auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  const auto handle = target->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  ASSERT_THAT(engine.ensureComputedTextGeometryComponent(handle).runs, Not(IsEmpty()));
+  EXPECT_THAT(engine.getNumberOfChars(handle), Eq(6));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 1),
+              Eq(engine.getStartPositionOfChar(handle, 2)));
+  EXPECT_THAT(engine.getRotationOfChar(handle, 3), DoubleEq(20));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 3).x, DoubleEq(82));
   EXPECT_THAT(engine.getStartPositionOfChar(handle, 5).x, DoubleEq(144));
 }
 
@@ -1369,6 +1400,668 @@ TEST(TextEngineTest, BidiNormalExcludedScopesKeepControlsOutOfPositionListIndice
     ASSERT_THAT(ordinary, SizeIs(3));
     EXPECT_THAT(layout("A😀\u200eB"), testing::ContainerEq(ordinary));
   }
+}
+
+TEST(TextEngineTest, BidiNormalPositionOnJoinerCannotSplitTheShapingChunk) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendSimple>(fonts, registry));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("אב\u200dג");
+  span.xList = {Lengthd(20), std::nullopt, Lengthd(120)};
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(32);
+  params.fontFamilies = {RcString("Bidi Font")};
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(4))));
+  std::vector<uint32_t> clusters;
+  for (const auto& glyph : runs.front().glyphs) {
+    clusters.push_back(glyph.cluster);
+    if (glyph.cluster != 4) {
+      EXPECT_THAT(glyph.glyphIndex, Gt(0));
+    }
+  }
+  std::sort(clusters.begin(), clusters.end());
+  EXPECT_THAT(clusters, ElementsAre(0u, 2u, 4u, 7u));
+}
+
+TEST(TextEngineTest, BidiNormalSimpleControlPreservesTheRealAvKerningPair) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendSimple>(fonts, registry));
+  auto params = MakeTextParams(64);
+  params.fontFamilies = {RcString("Bidi Font")};
+  const auto layout = [&](std::string_view value) {
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan(std::string(value)));
+    std::vector<std::tuple<int, double, double>> result;
+    for (const auto& run : engine.layout(text, params)) {
+      for (const auto& glyph : run.glyphs) {
+        result.emplace_back(glyph.glyphIndex, glyph.xPosition, glyph.xAdvance);
+      }
+    }
+    return result;
+  };
+  const auto ordinary = layout("AV");
+  ASSERT_THAT(ordinary, SizeIs(2));
+  EXPECT_THAT(std::get<1>(ordinary[1]), Lt(std::get<2>(ordinary[0])));
+  EXPECT_THAT(layout("A\u200eV"), testing::ContainerEq(ordinary));
+}
+
+TEST(TextEngineTest, BidiNormalManyPaintSpansExamineOnlyIndexedRunCandidates) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendSimple>(fonts, registry));
+  components::ComputedTextComponent text;
+  constexpr size_t kSpans = 512;
+  for (size_t index = 0; index < kSpans; ++index) {
+    auto span = MakeSpan(index % 2 ? "م" : "a");
+    span.startsNewChunk = index == 0;
+    span.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(span));
+  }
+  auto params = MakeTextParams(16);
+  params.fontFamilies = {RcString("Bidi Font")};
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(runs, SizeIs(kSpans));
+  EXPECT_THAT(runs, Each(RunGlyphsAre(SizeIs(1))));
+  // Include binary-search comparisons and the candidate that ends each intersection scan.
+  EXPECT_THAT(engine.bidiRunCandidatesForTesting(),
+              testing::AllOf(testing::Ge(kSpans), testing::Le(kSpans * 12)));
+}
+
+class BidiCandidateCountingBackend : public ScriptedTextBackend {
+public:
+  mutable size_t shapeCalls = 0;
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    ++shapeCalls;
+    return ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant,
+                                         logical);
+  }
+};
+
+TEST(TextEngineTest, BidiNormalCandidateRefusalStopsBeforeFurtherIntersectionsOrShaping) {
+  components::ComputedTextComponent text;
+  std::string value;
+  for (size_t index = 0; index < 16; ++index) {
+    value += "aא";
+  }
+  text.spans.push_back(MakeSpan(value));
+  for (size_t limit : {0u, 1u, 2u, 7u}) {
+    SCOPED_TRACE(limit);
+    Registry registry;
+    FontManager fonts(registry);
+    auto backend = std::make_unique<BidiCandidateCountingBackend>();
+    auto* counting = backend.get();
+    TextEngine engine(fonts, registry, std::move(backend));
+    engine.setBidiRunCandidateLimitForTesting(limit);
+    EXPECT_THAT(engine.layout(text, MakeTextParams(20)), IsEmpty());
+    EXPECT_THAT(engine.bidiRunCandidatesForTesting(), Eq(limit + 1));
+    EXPECT_THAT(counting->shapeCalls, Eq(0u));
+  }
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<BidiCandidateCountingBackend>();
+  auto* counting = backend.get();
+  TextEngine engine(fonts, registry, std::move(backend));
+  EXPECT_THAT(engine.layout(text, MakeTextParams(20)), Not(IsEmpty()));
+  EXPECT_THAT(counting->shapeCalls, Gt(0u));
+}
+
+std::vector<double> BidiLengthDomGeometry(std::string_view adjust, bool split) {
+  const std::string body =
+      split ? "<tspan fill='red'>אב</tspan><tspan fill='blue'>גד</tspan>" : "אבגד";
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 150'>"
+      "<text id='t' x='20' y='80' font-family='Length Font' font-size='32' font-kerning='none'>"
+      "<tspan id='owner' textLength='100' lengthAdjust='" +
+      std::string(adjust) + "'>" + body + "</tspan><tspan id='tail'>X</tspan></text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_THAT(parsed, ParseResultIs(_));
+  if (parsed.hasError()) {
+    return {};
+  }
+  auto document = std::move(parsed).result();
+  const auto root = document.querySelector("#t");
+  const auto owner = document.querySelector("#owner");
+  const auto tail = document.querySelector("#tail");
+  EXPECT_THAT(root, testing::Optional(_));
+  EXPECT_THAT(owner, testing::Optional(_));
+  EXPECT_THAT(tail, testing::Optional(_));
+  if (!root || !owner || !tail) {
+    return {};
+  }
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  const auto font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Length Font");
+  EXPECT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  engine.prepareForElement(root->unsafeEntityHandle(), warnings);
+  EXPECT_THAT(engine.getNumberOfChars(owner->unsafeEntityHandle()), Eq(4));
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(root->unsafeEntityHandle());
+  EXPECT_THAT(geometry.runs, Not(IsEmpty()));
+  std::vector<double> result{std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity(),
+                             engine.getStartPositionOfChar(tail->unsafeEntityHandle(), 0).x};
+  for (size_t index = 0; index < 4; ++index) {
+    const double start = engine.getStartPositionOfChar(owner->unsafeEntityHandle(), index).x;
+    const double end = engine.getEndPositionOfChar(owner->unsafeEntityHandle(), index).x;
+    result[0] = std::min({result[0], start, end});
+    result[1] = std::max({result[1], start, end});
+    result.push_back(start);
+    result.push_back(end);
+  }
+  return result;
+}
+
+TEST(TextEngineTest, BidiNormalTextLengthUsesVisualExtentAcrossRealDomPaintSpans) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Length Font");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendFull backend(fonts, registry);
+  const std::string word = "אבגד";
+  const auto native =
+      backend.shapeRunNoKerning(font, 32, word, 0, word.size(), false, FontVariant::Normal, false);
+  ASSERT_THAT(native.glyphs, SizeIs(4));
+  EXPECT_THAT(native.glyphs,
+              Each(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, Gt(0))));
+  double advance = 0;
+  for (const auto& glyph : native.glyphs) {
+    advance += glyph.xAdvance;
+  }
+  ASSERT_THAT(advance, Gt(0));
+  for (const std::string_view adjust : {"spacing", "spacingAndGlyphs"}) {
+    SCOPED_TRACE(adjust);
+    const auto whole = BidiLengthDomGeometry(adjust, false);
+    const auto split = BidiLengthDomGeometry(adjust, true);
+    ASSERT_THAT(whole, SizeIs(11));
+    ASSERT_THAT(split, SizeIs(11));
+    const double trailing = adjust == "spacing" ? (100 - advance) / 3 : 0;
+    EXPECT_THAT(whole[0], DoubleEq(20));
+    EXPECT_THAT(whole[1] - whole[0], DoubleEq(100));
+    EXPECT_THAT(whole[2], DoubleEq(120 + trailing));
+    for (size_t index = 0; index < whole.size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_THAT(split[index], DoubleEq(whole[index]));
+    }
+  }
+}
+
+struct BidiOwnerDomSnapshot {
+  bool preserved = false;
+  size_t visualGlyphs = 0;
+  std::vector<std::pair<double, double>> ownerCells;
+  std::vector<std::pair<double, double>> rootCells;
+  std::vector<uint32_t> firstSourceClusters;
+  double tailX = 0;
+};
+
+std::vector<std::pair<double, double>> DomInlineCells(TextEngine& engine, EntityHandle handle) {
+  std::vector<std::pair<double, double>> result;
+  const long count = engine.getNumberOfChars(handle);
+  for (long index = 0; index < count; ++index) {
+    result.emplace_back(engine.getStartPositionOfChar(handle, index).x,
+                        engine.getEndPositionOfChar(handle, index).x);
+  }
+  return result;
+}
+
+std::pair<double, double> DomInlineBounds(const std::vector<std::pair<double, double>>& cells) {
+  double left = std::numeric_limits<double>::infinity();
+  double right = -std::numeric_limits<double>::infinity();
+  for (const auto& [start, end] : cells) {
+    left = std::min({left, start, end});
+    right = std::max({right, start, end});
+  }
+  return {left, right};
+}
+
+std::string BidiOwnerDomSource(std::string_view adjust, bool nested, bool interleaved,
+                               std::string_view tailAttributes) {
+  const std::string parent =
+      nested ? " textLength='160' lengthAdjust='" + std::string(adjust) + "'" : "";
+  const std::string childAdjust = nested ? "spacingAndGlyphs" : std::string(adjust);
+  const std::string childBody = interleaved ? "ab אב" : "אבגד";
+  const std::string leading = interleaved ? "" : "A";
+  const std::string sibling = interleaved ? "<tspan>גד</tspan>" : "";
+  return "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 150'>"
+         "<text id='t' x='20' y='80' font-family='Length Font' font-size='32' font-kerning='none'" +
+         parent + ">" + leading + "<tspan id='owner' textLength='" + (nested ? "60" : "100") +
+         "' lengthAdjust='" + childAdjust + "'>" + childBody + "</tspan>" + sibling +
+         "<tspan id='tail' " + std::string(tailAttributes) + ">X</tspan></text></svg>";
+}
+
+std::optional<BidiOwnerDomSnapshot> CaptureBidiOwnerDom(std::string_view adjust, bool nested,
+                                                        bool interleaved,
+                                                        std::string_view tailAttributes = "") {
+  const std::string source = BidiOwnerDomSource(adjust, nested, interleaved, tailAttributes);
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_THAT(parsed, ParseResultIs(_));
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+  auto document = std::move(parsed).result();
+  const auto root = document.querySelector("#t");
+  const auto owner = document.querySelector("#owner");
+  const auto tail = document.querySelector("#tail");
+  if (!root || !owner || !tail) {
+    ADD_FAILURE() << "missing fixture text owner";
+    return std::nullopt;
+  }
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  const auto font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Length Font");
+  EXPECT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  engine.prepareForElement(root->unsafeEntityHandle(), warnings);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(root->unsafeEntityHandle());
+  EXPECT_THAT(geometry.runs, Not(IsEmpty()));
+  if (geometry.runs.empty()) {
+    return std::nullopt;
+  }
+  BidiOwnerDomSnapshot result;
+  result.ownerCells = DomInlineCells(engine, owner->unsafeEntityHandle());
+  result.rootCells = DomInlineCells(engine, root->unsafeEntityHandle());
+  result.tailX = engine.getStartPositionOfChar(tail->unsafeEntityHandle(), 0).x;
+  result.preserved = engine.bidiNestedOwnersPreservedForTesting();
+  for (const auto& run : geometry.runs) {
+    for (const auto& glyph : run.glyphs) {
+      EXPECT_THAT(glyph.glyphIndex, Gt(0));
+      result.visualGlyphs += glyph.visualOrder.has_value();
+    }
+  }
+  for (const auto& glyph : geometry.runs.front().glyphs) {
+    result.firstSourceClusters.push_back(glyph.cluster);
+  }
+  return result;
+}
+
+TEST(TextEngineTest, BidiNormalContiguousNestedLengthOwnersKeepTheFixedChildExtent) {
+  for (std::string_view adjust : {"spacing", "spacingAndGlyphs"}) {
+    SCOPED_TRACE(adjust);
+    const auto result = CaptureBidiOwnerDom(adjust, true, false);
+    ASSERT_THAT(result.has_value(), testing::IsTrue());
+    EXPECT_THAT(result->preserved, testing::IsFalse());
+    EXPECT_THAT(result->visualGlyphs, Gt(0));
+    ASSERT_THAT(result->ownerCells, SizeIs(4));
+    const auto [left, right] = DomInlineBounds(result->ownerCells);
+    EXPECT_THAT(right - left, DoubleEq(60));
+    const auto [outerLeft, outerRight] = DomInlineBounds(result->rootCells);
+    EXPECT_THAT(outerLeft, DoubleEq(20));
+    EXPECT_THAT(outerRight - outerLeft, DoubleEq(160));
+  }
+}
+
+TEST(TextEngineTest, BidiNormalInterleavedNestedLengthOwnerPreservesPriorLayoutCapability) {
+  const auto result = CaptureBidiOwnerDom("spacingAndGlyphs", true, true);
+  ASSERT_THAT(result.has_value(), testing::IsTrue());
+  EXPECT_THAT(result->preserved, testing::IsTrue());
+  EXPECT_THAT(result->visualGlyphs, Eq(0u));
+  EXPECT_THAT(result->firstSourceClusters, ElementsAre(0u, 1u, 2u, 3u, 5u));
+  ASSERT_THAT(result->ownerCells, SizeIs(5));
+  const auto [left, right] = DomInlineBounds(result->ownerCells);
+  EXPECT_THAT(right - left, DoubleEq(60));
+  const auto [outerLeft, outerRight] = DomInlineBounds(result->rootCells);
+  EXPECT_THAT(outerLeft, DoubleEq(20));
+  EXPECT_THAT(outerRight - outerLeft, DoubleEq(160));
+}
+
+TEST(TextEngineTest, BidiNormalSingleDisjointLengthOwnerKeepsItsTargetAndLogicalContinuation) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Length Font");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendFull backend(fonts, registry);
+  double natural = 0;
+  for (const std::string_view text : {"ab ", "אבגד"}) {
+    const auto shaped = backend.shapeRunNoKerning(font, 32, text, 0, text.size(), false,
+                                                  FontVariant::Normal, false);
+    ASSERT_THAT(shaped.glyphs, Not(IsEmpty()));
+    for (const auto& glyph : shaped.glyphs) {
+      natural += glyph.xAdvance;
+    }
+  }
+  for (const std::string_view adjust : {"spacing", "spacingAndGlyphs"}) {
+    for (const std::string_view tail : {"y='110'", "x='200' y='110'"}) {
+      SCOPED_TRACE(testing::Message() << adjust << ": " << tail);
+      const auto result = CaptureBidiOwnerDom(adjust, false, true, tail);
+      ASSERT_THAT(result.has_value(), testing::IsTrue());
+      EXPECT_THAT(result->preserved, testing::IsFalse());
+      EXPECT_THAT(result->visualGlyphs, Gt(0));
+      ASSERT_THAT(result->ownerCells, SizeIs(5));
+      const auto [left, right] = DomInlineBounds(result->ownerCells);
+      EXPECT_THAT(left, DoubleEq(20));
+      EXPECT_THAT(right - left, DoubleEq(100));
+      const double carry = adjust == "spacing" ? (100 - natural) / 4 : 0;
+      EXPECT_THAT(result->tailX, DoubleEq(tail.front() == 'x' ? 200 : 120 + carry));
+    }
+  }
+}
+
+class BidiBacktrackingBackend : public ScriptedTextBackend {
+public:
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    auto result =
+        ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
+    for (auto& glyph : result.glyphs) {
+      glyph.xKern = 0;
+      glyph.yAdvance = 0;
+    }
+    return result;
+  }
+};
+
+std::optional<BidiOwnerDomSnapshot> CaptureBacktrackingOwnerProfile(bool bidi,
+                                                                    bool laterPaintReset) {
+  const std::string middle = bidi ? "א" : "Z";
+  const std::string body =
+      laterPaintReset ? "A<tspan x='-10'>" + middle + "</tspan>B" : "A" + middle + "B";
+  const std::string displacement = laterPaintReset ? "" : " dx='0 -30 0'";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='-100 0 300 200'>"
+      "<text id='t' x='-20' y='80' font-size='20' font-kerning='none' textLength='100'"
+      " lengthAdjust='spacingAndGlyphs'>P<tspan id='owner' textLength='60'" +
+          displacement + ">" + body + "</tspan>Q</text></svg>",
+      warnings);
+  EXPECT_THAT(parsed, ParseResultIs(_));
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+  auto document = std::move(parsed).result();
+  const auto root = document.querySelector("#t");
+  const auto owner = document.querySelector("#owner");
+  if (!root || !owner) {
+    ADD_FAILURE() << "missing fixture owner";
+    return std::nullopt;
+  }
+  auto& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine(fonts, registry, std::make_unique<BidiBacktrackingBackend>());
+  engine.prepareForElement(root->unsafeEntityHandle(), warnings);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(root->unsafeEntityHandle());
+  EXPECT_THAT(geometry.runs, Not(IsEmpty()));
+  BidiOwnerDomSnapshot result;
+  result.preserved = engine.bidiNestedOwnersPreservedForTesting();
+  result.rootCells = DomInlineCells(engine, root->unsafeEntityHandle());
+  result.ownerCells = DomInlineCells(engine, owner->unsafeEntityHandle());
+  for (const auto& run : geometry.runs) {
+    for (const auto& glyph : run.glyphs) {
+      EXPECT_THAT(glyph.glyphIndex, Gt(0));
+      result.visualGlyphs += glyph.visualOrder.has_value();
+    }
+  }
+  return result;
+}
+
+TEST(TextEngineTest, BidiNormalScalingParentWithPotentiallyBacktrackingChildPreservesPriorLayout) {
+  for (bool laterPaintReset : {false, true}) {
+    SCOPED_TRACE(laterPaintReset);
+    const auto legacy = CaptureBacktrackingOwnerProfile(false, laterPaintReset);
+    const auto bidi = CaptureBacktrackingOwnerProfile(true, laterPaintReset);
+    ASSERT_THAT(legacy.has_value(), testing::IsTrue());
+    ASSERT_THAT(bidi.has_value(), testing::IsTrue());
+    ASSERT_THAT(legacy->rootCells, SizeIs(5));
+    ASSERT_THAT(legacy->ownerCells, SizeIs(3));
+    EXPECT_THAT(legacy->preserved, testing::IsFalse());
+    EXPECT_THAT(bidi->preserved, testing::IsTrue());
+    EXPECT_THAT(bidi->visualGlyphs, Eq(0u));
+    // Both scripts have the same independently specified ten-pixel metrics in this fixture.
+    EXPECT_THAT(bidi->rootCells, testing::ElementsAreArray(legacy->rootCells));
+    EXPECT_THAT(bidi->ownerCells, testing::ElementsAreArray(legacy->ownerCells));
+  }
+}
+
+BidiOwnerDomSnapshot CaptureSyntheticBacktrackingOwner(bool bidi) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine(fonts, registry, std::make_unique<BidiBacktrackingBackend>());
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(bidi ? "AאB" : "AZB");
+  span.xList = {Lengthd(-20)};
+  span.dxList = {Lengthd(0), Lengthd(-30), Lengthd(0)};
+  span.textLength = Lengthd(60);
+  span.lengthAdjust = LengthAdjust::Spacing;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.textLength = Lengthd(100);
+  params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  const auto runs = engine.layout(text, params);
+  BidiOwnerDomSnapshot result;
+  result.preserved = engine.bidiNestedOwnersPreservedForTesting();
+  for (const auto& run : runs) {
+    for (const auto& glyph : run.glyphs) {
+      result.rootCells.emplace_back(glyph.xPosition, glyph.xPosition + glyph.xAdvance);
+      result.visualGlyphs += glyph.visualOrder.has_value();
+    }
+  }
+  return result;
+}
+
+TEST(TextEngineTest, BidiNormalSyntheticScalingParentUsesTheSameBacktrackingCapabilityBoundary) {
+  const auto legacy = CaptureSyntheticBacktrackingOwner(false);
+  const auto bidi = CaptureSyntheticBacktrackingOwner(true);
+  ASSERT_THAT(legacy.rootCells, SizeIs(3));
+  EXPECT_THAT(legacy.preserved, testing::IsFalse());
+  EXPECT_THAT(bidi.preserved, testing::IsTrue());
+  EXPECT_THAT(bidi.visualGlyphs, Eq(0u));
+  EXPECT_THAT(bidi.rootCells, testing::ElementsAreArray(legacy.rootCells));
+}
+
+std::vector<TextRun> BidiBacktrackingDomLayout(std::string_view adjust) {
+  const std::string target =
+      adjust.empty() ? "" : " textLength='60' lengthAdjust='" + std::string(adjust) + "'";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='-100 0 300 200'>"
+      "<text id='t' x='-20' y='80' dx='0 -30 0' font-size='20' font-kerning='none'" +
+          target + ">AאB</text></svg>",
+      warnings);
+  EXPECT_THAT(parsed, ParseResultIs(_));
+  if (parsed.hasError()) {
+    return {};
+  }
+  auto document = std::move(parsed).result();
+  const auto targetElement = document.querySelector("#t");
+  EXPECT_THAT(targetElement, testing::Optional(_));
+  if (!targetElement) {
+    return {};
+  }
+  auto& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine(fonts, registry, std::make_unique<BidiBacktrackingBackend>());
+  const auto handle = targetElement->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  return engine.ensureComputedTextGeometryComponent(handle).runs;
+}
+
+std::vector<TextRun> BidiBacktrackingSyntheticLayout(std::string_view adjust) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine(fonts, registry, std::make_unique<BidiBacktrackingBackend>());
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AאB");
+  span.xList = {Lengthd(-20)};
+  span.dxList = {Lengthd(0), Lengthd(-30), Lengthd(0)};
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  if (!adjust.empty()) {
+    params.textLength = Lengthd(60);
+  }
+  params.lengthAdjust =
+      adjust == "spacingAndGlyphs" ? LengthAdjust::SpacingAndGlyphs : LengthAdjust::Spacing;
+  return engine.layout(text, params);
+}
+
+TEST(TextEngineTest, BidiNormalBacktrackingLengthUsesVisualBoundsAndAppliesTheTargetOnce) {
+  for (bool dom : {false, true}) {
+    for (std::string_view adjust : {"", "spacing", "spacingAndGlyphs"}) {
+      SCOPED_TRACE(testing::Message() << dom << ": " << adjust);
+      const auto runs =
+          dom ? BidiBacktrackingDomLayout(adjust) : BidiBacktrackingSyntheticLayout(adjust);
+      ASSERT_THAT(runs, SizeIs(1));
+      ASSERT_THAT(runs.front().glyphs, SizeIs(3));
+      std::vector<double> origins;
+      std::vector<double> advances;
+      for (const auto& glyph : runs.front().glyphs) {
+        origins.push_back(glyph.xPosition);
+        advances.push_back(glyph.xAdvance);
+      }
+      if (adjust.empty()) {
+        // The unadjusted cells have independently specified bounds [-20, 10].
+        EXPECT_THAT(origins, ElementsAre(0, -20, -10));
+        EXPECT_THAT(advances, Each(DoubleEq(10)));
+      } else if (adjust == "spacing") {
+        // Initial extent30 gives delta30 and15 per gap. Anchoring translates the new minimum.
+        EXPECT_THAT(origins, ElementsAre(-15, -20, 5));
+        EXPECT_THAT(advances, Each(DoubleEq(10)));
+      } else {
+        EXPECT_THAT(origins, ElementsAre(20, -20, 0));
+        EXPECT_THAT(advances, Each(DoubleEq(20)));
+      }
+    }
+  }
+}
+
+TEST(TextEngineTest, BidiNormalParentKeepsBacktrackingChildExtentAndLogicalCarrySeparate) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='-100 0 300 200'>"
+      "<text id='t' x='-20' y='80' font-size='20' font-kerning='none' textLength='100'>P"
+      "<tspan id='owner' textLength='60' dx='0 -30 0'>AאB</tspan>"
+      "<tspan id='tail'>Q</tspan></text></svg>",
+      warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  const auto root = document.querySelector("#t");
+  const auto owner = document.querySelector("#owner");
+  const auto tail = document.querySelector("#tail");
+  ASSERT_THAT(root, testing::Optional(_));
+  ASSERT_THAT(owner, testing::Optional(_));
+  ASSERT_THAT(tail, testing::Optional(_));
+  auto& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine(fonts, registry, std::make_unique<BidiBacktrackingBackend>());
+  engine.prepareForElement(root->unsafeEntityHandle(), warnings);
+  const auto cells = DomInlineCells(engine, owner->unsafeEntityHandle());
+  EXPECT_THAT(cells,
+              ElementsAre(std::pair(7.5, 17.5), std::pair(12.5, 2.5), std::pair(27.5, 37.5)));
+  const auto [childLeft, childRight] = DomInlineBounds(cells);
+  EXPECT_THAT(childRight - childLeft, DoubleEq(35));
+  const auto [left, right] = DomInlineBounds(DomInlineCells(engine, root->unsafeEntityHandle()));
+  EXPECT_THAT(left, DoubleEq(-20));
+  EXPECT_THAT(right, DoubleEq(80));
+  EXPECT_THAT(engine.getStartPositionOfChar(tail->unsafeEntityHandle(), 0).x, DoubleEq(70));
+}
+
+class BidiMarkEndpointBackend : public BidiBacktrackingBackend {
+public:
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    auto result = BidiBacktrackingBackend::shapeRun(font, size, text, offset, length, vertical,
+                                                    variant, logical);
+    for (auto& glyph : result.glyphs) {
+      const auto [cp, bytes] = Utf8::NextCodepoint(text.substr(glyph.cluster));
+      (void)bytes;
+      if (cp == 0x05b0) {
+        glyph.xAdvance = 0;
+        glyph.xOffset = -40;
+        glyph.yOffset = -20;
+      }
+    }
+    return result;
+  }
+};
+
+TEST(TextEngineTest, BidiNormalZeroAdvanceMarkInkDoesNotExpandTheBaseCharacterCell) {
+  for (bool markFirst : {false, true}) {
+    SCOPED_TRACE(markFirst);
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'>"
+        "<text id='t' x='20' y='80' font-size='20' font-kerning='none'>א\u05b0</text></svg>",
+        warnings);
+    ASSERT_THAT(parsed, ParseResultIs(_));
+    auto document = std::move(parsed).result();
+    const auto target = document.querySelector("#t");
+    ASSERT_THAT(target, testing::Optional(_));
+    auto& registry = document.registry();
+    FontManager fonts(registry);
+    auto backend = std::make_unique<BidiMarkEndpointBackend>();
+    backend->reverseClusters = markFirst;
+    TextEngine engine(fonts, registry, std::move(backend));
+    const auto handle = target->unsafeEntityHandle();
+    engine.prepareForElement(handle, warnings);
+    ASSERT_THAT(engine.getNumberOfChars(handle), Eq(2));
+    EXPECT_THAT(engine.getStartPositionOfChar(handle, 0), Vector2Eq(30, 80));
+    EXPECT_THAT(engine.getEndPositionOfChar(handle, 0), Vector2Eq(20, 80));
+    EXPECT_THAT(engine.getStartPositionOfChar(handle, 1), Vector2Eq(30, 80));
+    EXPECT_THAT(engine.getComputedTextLength(handle), DoubleEq(10));
+    const double inkLeft = markFirst ? -20 : -10;
+    EXPECT_THAT(engine.getExtentOfChar(handle, 0),
+                BoxEq(Vector2Eq(inkLeft, 52), Vector2Eq(26, 80)));
+  }
+}
+
+TEST(TextEngineTest, BidiNormalDirectedRealKerningMatchesPaintSplitAndHasANonzeroAdjustment) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto font = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Bidi Font");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  auto backend = std::make_unique<TextBackendFull>(fonts, registry);
+  TextBackend::ShapingContext context{0, 2};
+  context.rightToLeft = true;
+  const auto kerned = backend->shapeRunInContext(font, 64, "VA", context, 0, 2, false,
+                                                 TextOrientation::Mixed, FontVariant::Normal, true);
+  const auto unkerned = backend->shapeRunInContext(
+      font, 64, "VA", context, 0, 2, false, TextOrientation::Mixed, FontVariant::Normal, false);
+  ASSERT_THAT(kerned.glyphs, SizeIs(2));
+  ASSERT_THAT(unkerned.glyphs, SizeIs(2));
+  EXPECT_THAT(kerned.glyphs[0].xAdvance, Lt(unkerned.glyphs[0].xAdvance));
+  TextEngine engine(fonts, registry, std::move(backend));
+  auto params = MakeTextParams(64);
+  params.fontFamilies = {RcString("Bidi Font")};
+  const auto layout = [&](bool split) {
+    components::ComputedTextComponent text;
+    if (split) {
+      text.spans.push_back(MakeSpan("\u202eV"));
+      auto tail = MakeSpan("A\u202c");
+      tail.startsNewChunk = false;
+      text.spans.push_back(std::move(tail));
+    } else {
+      text.spans.push_back(MakeSpan("\u202eVA\u202c"));
+    }
+    std::vector<std::tuple<int, double, double>> result;
+    for (const auto& run : engine.layout(text, params)) {
+      for (const auto& glyph : run.glyphs) {
+        result.emplace_back(glyph.glyphIndex, glyph.xPosition, glyph.xAdvance);
+      }
+    }
+    std::sort(result.begin(), result.end(),
+              [](const auto& a, const auto& b) { return std::get<1>(a) < std::get<1>(b); });
+    // Cross-span pair adjustment may be represented before the next glyph rather than in advance.
+    for (size_t index = 0; index + 1 < result.size(); ++index) {
+      std::get<2>(result[index]) = std::get<1>(result[index + 1]) - std::get<1>(result[index]);
+    }
+    return result;
+  };
+  const auto whole = layout(false);
+  ASSERT_THAT(whole, SizeIs(2));
+  EXPECT_THAT(layout(true), testing::ContainerEq(whole));
 }
 
 TEST(TextEngineTest, SmallCapsSynthesisDoesNotLeakAcrossSimpleShapingRequests) {
