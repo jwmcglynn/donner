@@ -1067,6 +1067,119 @@ std::vector<TextRun> LayOutFull(Registry& registry, FontManager& fontManager, st
   return engine.layout(text, params);
 }
 
+/// Returns source clusters in horizontal visual order without assuming glyph storage order.
+std::vector<uint32_t> VisualClusters(const std::vector<TextRun>& runs) {
+  std::vector<std::pair<double, uint32_t>> positioned;
+  for (const TextRun& run : runs) {
+    for (const TextGlyph& glyph : run.glyphs) {
+      positioned.emplace_back(glyph.xPosition, glyph.cluster);
+    }
+  }
+  std::stable_sort(positioned.begin(), positioned.end());
+  std::vector<uint32_t> result;
+  for (const auto& entry : positioned) {
+    result.push_back(entry.second);
+  }
+  return result;
+}
+
+/// Lays out normal horizontal text through either font backend with the same paragraph inputs.
+std::vector<TextRun> LayOutNormalBidi(Registry& registry, FontManager& fonts,
+                                      std::string_view source, bool full) {
+  std::unique_ptr<TextBackend> backend;
+  if (full) {
+    backend = std::make_unique<TextBackendFull>(fonts, registry);
+  } else {
+    backend = std::make_unique<TextBackendSimple>(fonts, registry);
+  }
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan(std::string(source)));
+  auto params = MakeTextParams(32.0);
+  params.fontFamilies = {RcString("Bidi Font")};
+  return engine.layout(text, params);
+}
+
+TEST(TextEngineTest, BidiNormalLatinAndArabicUseSeparateRunDirections) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+
+  for (const bool full : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "full=" << full);
+    // The paragraph is left to right; only the two Arabic letters reverse visually.
+    const auto runs = LayOutNormalBidi(registry, fonts, "ab مر.", full);
+    EXPECT_THAT(VisualClusters(runs), ElementsAre(0u, 1u, 2u, 5u, 3u, 7u));
+  }
+}
+
+TEST(TextEngineTest, BidiNormalArabicFirstDoesNotReverseTheLatinRunOrFinalPunctuation) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+
+  for (const bool full : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "full=" << full);
+    // SVG's default paragraph direction stays left to right even when Arabic appears first.
+    const auto runs = LayOutNormalBidi(registry, fonts, "مر ab.", full);
+    EXPECT_THAT(VisualClusters(runs), ElementsAre(2u, 0u, 4u, 5u, 6u, 7u));
+  }
+}
+
+TEST(TextEngineTest, BidiPaintOnlySpanBoundaryPreservesArabicJoiningAndPlacement) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  auto params = MakeTextParams(32.0);
+  params.fontFamilies = {RcString("Bidi Font")};
+
+  components::ComputedTextComponent whole;
+  whole.spans.push_back(MakeSpan("مرحبا"));
+  components::ComputedTextComponent split;
+  split.spans.push_back(MakeSpan("مر"));
+  auto trailing = MakeSpan("حبا");
+  trailing.startsNewChunk = false;
+  trailing.paintOrder.order = {PaintComponent::Stroke, PaintComponent::Fill,
+                               PaintComponent::Markers};
+  split.spans.push_back(std::move(trailing));
+
+  const auto wholeRuns = engine.layout(whole, params);
+  const auto splitRuns = engine.layout(split, params);
+  ASSERT_THAT(wholeRuns, ElementsAre(RunGlyphsAre(Not(IsEmpty()))));
+  ASSERT_THAT(splitRuns, SizeIs(2));
+  const auto logicalGlyphs = [](const std::vector<TextRun>& runs,
+                                const components::ComputedTextComponent& text) {
+    std::vector<TextGlyph> result;
+    uint32_t byteOffset = 0;
+    for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+      for (TextGlyph glyph : runs[runIndex].glyphs) {
+        glyph.cluster += byteOffset;
+        result.push_back(glyph);
+      }
+      byteOffset += text.spans[runIndex].end - text.spans[runIndex].start;
+    }
+    std::stable_sort(result.begin(), result.end(),
+                     [](const TextGlyph& a, const TextGlyph& b) { return a.cluster < b.cluster; });
+    return result;
+  };
+  const auto expected = logicalGlyphs(wholeRuns, whole);
+  const auto actual = logicalGlyphs(splitRuns, split);
+  ASSERT_THAT(actual, SizeIs(expected.size()));
+  for (size_t index = 0; index < expected.size(); ++index) {
+    SCOPED_TRACE(testing::Message()
+                 << "glyph=" << index << ", cluster=" << expected[index].cluster);
+    EXPECT_THAT(actual[index], AllOf(Field("cluster", &TextGlyph::cluster, expected[index].cluster),
+                                     GlyphIndexIs(expected[index].glyphIndex),
+                                     GlyphXPositionIs(DoubleEq(expected[index].xPosition)),
+                                     GlyphYPositionIs(DoubleEq(expected[index].yPosition)),
+                                     GlyphXAdvanceIs(DoubleEq(expected[index].xAdvance))));
+  }
+}
+
 TEST(TextEngineTest, SmallCapsSynthesisDoesNotLeakAcrossSimpleShapingRequests) {
   Registry registry;
   FontManager manager(registry);
