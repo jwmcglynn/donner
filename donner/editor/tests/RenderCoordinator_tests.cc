@@ -924,7 +924,7 @@ std::shared_ptr<const FramePresentation> BuildFrame(
 TEST(RenderCoordinatorTest, UnmeasuredTypingCaptureHoldsWholeFrameUntilChromeMatches) {
   EditorApp app;
   ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
-  const auto subject = QuerySelector(app, "#r1");
+  auto subject = QuerySelector(app, "#r1");
   app.setSelection(subject);
   RenderCoordinator coordinator;
   SelectTool tool;
@@ -948,17 +948,21 @@ TEST(RenderCoordinatorTest, UnmeasuredTypingCaptureHoldsWholeFrameUntilChromeMat
               testing::Ne(measured.identity.documentRevision));
   const auto held = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
                                SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(held, testing::Ne(nullptr));
   EXPECT_THAT(held, testing::Eq(previous));
   EXPECT_THAT(held->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
 
   measured.identity = unmeasured->identity();
+  const std::array<Vector2d, 4> changedBox{Vector2d(12, 10), Vector2d(32, 10), Vector2d(32, 30),
+                                           Vector2d(12, 30)};
+  measured.frame = changedBox;
   coordinator.setTextEditingChrome(measured);
   const auto recovered = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
                                     SelectionChromeDetail::EditingChromeOnly);
   ASSERT_THAT(recovered, testing::Ne(nullptr));
   EXPECT_THAT(recovered->identity(), testing::Eq(unmeasured->identity()));
-  EXPECT_THAT(recovered->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
+  EXPECT_THAT(recovered->chrome().textFrameCornersDoc, testing::Eq(std::optional(changedBox)));
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
 }
 

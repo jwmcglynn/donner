@@ -750,7 +750,7 @@ TEST(FramePresentationTest, TextChromeUsesAnnotationMeasuredAtTheCapturedRevisio
 TEST(FramePresentationTest, UnmeasuredTextRevisionCannotReplaceACompleteEditingFrame) {
   EditorApp app;
   ASSERT_THAT(app.loadFromString(kRect), IsTrue());
-  const auto subject = app.document().document().querySelector("#rect");
+  auto subject = app.document().document().querySelector("#rect");
   ASSERT_THAT(subject, testing::Optional(testing::_));
   app.setSelection(*subject);
   SelectTool tool;
@@ -768,7 +768,7 @@ TEST(FramePresentationTest, UnmeasuredTextRevisionCannotReplaceACompleteEditingF
   input.decorations.measuredTextEditing = {measured};
   const auto resources = [&](const auto& capture) {
     return FramePresentationTestAccess::resources(
-        capture, {RectTile(capture->selection().front(), 10.0, 0.0)});
+        capture, {RectTile(capture->selection().front(), capture == baseline ? 10.0 : 12.0, 0.0)});
   };
   const auto previous = FramePresentation::Build(resources(baseline), input).frame;
   ASSERT_THAT(previous, Ne(nullptr));
@@ -790,7 +790,9 @@ TEST(FramePresentationTest, UnmeasuredTextRevisionCannotReplaceACompleteEditingF
   // A later measurement permits the matching pixels and chrome to advance together.
   auto recovered = measured;
   recovered.identity = unmeasured->identity();
-  recovered.frame = box;
+  const std::array<Vector2d, 4> changedBox{Vector2d(12, 10), Vector2d(32, 10), Vector2d(32, 30),
+                                           Vector2d(12, 30)};
+  recovered.frame = changedBox;
   input.decorations.textEditing = recovered;
   input.decorations.measuredTextEditing.push_back(recovered);
   input.frameId = 3;
@@ -798,7 +800,7 @@ TEST(FramePresentationTest, UnmeasuredTextRevisionCannotReplaceACompleteEditingF
   ASSERT_THAT(complete.frame, Ne(nullptr));
   EXPECT_THAT(complete.failure, Eq(FramePresentationFailure::None));
   EXPECT_THAT(complete.frame->identity(), Eq(unmeasured->identity()));
-  EXPECT_THAT(complete.frame->chrome().textFrameCornersDoc, Eq(std::optional(box)));
+  EXPECT_THAT(complete.frame->chrome().textFrameCornersDoc, Eq(std::optional(changedBox)));
 }
 
 TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverride) {
