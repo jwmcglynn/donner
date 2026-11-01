@@ -230,33 +230,61 @@ def decorate(root: Path, current: str, identity: dict, versions: list[str], base
     return {"identity": identity, "pages_sha256": digest(data)}
 
 
+def _validate_pages_member(member: tarfile.TarInfo, seen: set[str], directories: set[str]) -> None:
+    require(member.name == "." or member.name.startswith("./"), "Pages archive members must start with ./")
+    normalized = pages_artifact.validate_member(member, seen)
+    if str(normalized) == ".":
+        require(member.isdir() and len(seen) == 1, "Pages archive root must be a first directory")
+    else:
+        safe_path(str(normalized))
+        require(all(str(parent) in directories for parent in normalized.parents),
+                "Pages archive is missing a parent directory")
+    permissions = 0o005 if member.isdir() else 0o004
+    require(member.mode & permissions == permissions, "Pages archive member is not publicly readable")
+    if member.isdir():
+        require(member.size == 0, "Pages archive directory has data")
+        directories.add(str(normalized))
+
+
 def validate_pages_archive(archive: Path) -> None:
-    """Checks Pages transport rules without restricting historical archive restoration."""
+    """Checks the reference Pages layout without restricting historical restoration."""
     require(archive.is_file() and not archive.is_symlink() and 0 < archive.stat().st_size <= MAX_SITE,
             "missing or oversized Pages archive")
     seen: set[str] = set()
-    total = 0
+    directories: set[str] = set()
+    total, files = 0, 0
     with tarfile.open(archive, "r:") as tar:
         for member in tar:
-            require(member.name.startswith("./"), "Pages archive members must start with ./")
-            pages_artifact.validate_member(member, seen)
+            _validate_pages_member(member, seen, directories)
             require(len(seen) <= MAX_FILES, "too many Pages archive members")
-            permissions = 0o005 if member.isdir() else 0o004
-            require(member.mode & permissions == permissions, "Pages archive member is not publicly readable")
             if member.isfile():
+                files += 1
                 total += member.size
                 require(0 <= member.size <= MAX_FILE and total <= MAX_SITE, "Pages archive size limit exceeded")
-    require(bool(seen), "Pages archive is empty")
+    require(files > 0, "Pages archive is empty")
+
+
+def _add_pages_directory(tar: tarfile.TarFile, name: str) -> None:
+    info = tarfile.TarInfo(name)
+    info.type, info.mode = tarfile.DIRTYPE, 0o755
+    tar.addfile(info)
 
 
 def pack(root: Path, destination: Path) -> str:
     require(not destination.exists(), "archive output already exists")
-    with tarfile.open(destination, "w:", format=tarfile.PAX_FORMAT) as tar:
+    with tarfile.open(destination, "w:", format=tarfile.GNU_FORMAT) as tar:
         def group(name):
             if name == "docs-site.json" or name.startswith("_docs/"):
                 return 2
             return 1 if name.startswith("main/") else 0
+        _add_pages_directory(tar, "./")
+        directories = {"."}
         for name in sorted(inventory(root), key=lambda name: (group(name), name)):
+            for parent in reversed(PurePosixPath(name).parents):
+                directory = str(parent)
+                if directory not in directories:
+                    _add_pages_directory(tar, "./" + directory + "/")
+                    directories.add(directory)
             path = root / name
             info = tar.gettarinfo(str(path), arcname="./" + name)
             info.uid = info.gid = info.mtime = 0
