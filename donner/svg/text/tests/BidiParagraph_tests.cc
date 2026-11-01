@@ -33,6 +33,27 @@ TEST(BidiParagraphTest, DefaultSvgBaseIsExplicitLeftToRight) {
   EXPECT_THAT(paragraph->levelAt(5), testing::Eq(0));
 }
 
+TEST(BidiParagraphTest, BaseZeroSeparatorsKeepUniformLevelsWithoutForcingAnalysis) {
+  for (char32_t cp : {U'\n', U'\r', U'\u2029'}) {
+    EXPECT_THAT(BidiParagraph::NeedsAnalysis(cp), testing::IsFalse());
+  }
+  EXPECT_THAT(BidiParagraph::NeedsAnalysis(U'א'), IsTrue());
+  const std::u32string_view source = U"AB\nCD\r\nEF\u2029GH";
+  for (bool force : {false, true}) {
+    SCOPED_TRACE(force);
+    BidiResourceBudget budget;
+    auto paragraph = BidiParagraph::Analyze({source.begin(), source.end()}, budget, 0, force);
+    ASSERT_THAT(paragraph.has_value(), IsTrue());
+    const auto runs = paragraph->visualRuns(0, source.size(), budget);
+    ASSERT_THAT(runs.has_value(), IsTrue());
+    EXPECT_THAT(VisualOrder(*runs), ElementsAre(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u));
+    for (uint32_t index = 0; index < source.size(); ++index) {
+      EXPECT_THAT(paragraph->levelAt(index), testing::Eq(0));
+      EXPECT_THAT(paragraph->paragraphLevelAt(index), testing::Eq(0));
+    }
+  }
+}
+
 TEST(BidiParagraphTest, ParagraphSeparatorsAndCrLfDoNotDropFollowingText) {
   for (const std::u32string_view source : {U"אב\nגד", U"אב\r\nגד"}) {
     SCOPED_TRACE(source.size());

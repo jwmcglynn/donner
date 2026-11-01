@@ -2370,6 +2370,69 @@ TEST(TextEngineTest, FallbackItemsUseResolvedDirectionsForNeutralMirroringAndVis
   }
 }
 
+TEST(TextEngineTest, BidiNormalMixedScriptBlankControlsUseTheSameShapingSourceAsSpaces) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto primary = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Latin primary");
+  const auto fallback = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Arabic fallback");
+  ASSERT_THAT(static_cast<bool>(primary), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(fallback), testing::IsTrue());
+  const auto layout = [&](std::string_view source, WhiteSpace mode) {
+    TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(std::string(source));
+    span.whiteSpace = mode;
+    span.xList = {Lengthd(100)};
+    span.yList = {Lengthd(100)};
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(20);
+    params.fontFamilies = {RcString("Latin primary"), RcString("Arabic fallback")};
+    return engine.layout(text, params);
+  };
+  const auto cells = [](const TextRun& run) {
+    std::vector<std::tuple<uint32_t, int, FontHandle, double, double, double>> result;
+    for (const auto& glyph : run.glyphs) {
+      result.emplace_back(glyph.cluster, glyph.glyphIndex, GlyphFont(run, glyph), glyph.xPosition,
+                          glyph.yPosition, glyph.xAdvance);
+    }
+    return result;
+  };
+  for (WhiteSpace mode : {WhiteSpace::Normal, WhiteSpace::Nowrap}) {
+    const auto expected = layout("Aمر B", mode);
+    ASSERT_THAT(expected, ElementsAre(RunGlyphsAre(SizeIs(5))));
+    EXPECT_THAT(expected[0].glyphs, Each(GlyphIndexIs(Gt(0))));
+    EXPECT_THAT(GlyphFont(expected[0], expected[0].glyphs[1]), Eq(fallback));
+    EXPECT_THAT(GlyphFont(expected[0], expected[0].glyphs[2]), Eq(fallback));
+    for (std::string_view source : {"Aمر\nB", "Aمر\tB"}) {
+      SCOPED_TRACE(testing::Message() << static_cast<int>(mode) << ": " << source);
+      const auto actual = layout(source, mode);
+      ASSERT_THAT(actual, ElementsAre(RunGlyphsAre(SizeIs(5))));
+      EXPECT_THAT(cells(actual[0]), testing::ElementsAreArray(cells(expected[0])));
+    }
+  }
+}
+
+TEST(TextEngineTest, BidiNormalLeadingControlPaintSpanKeepsTheFirstVisibleParagraphOrigin) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto font = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Arabic");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("\u202b"));
+  auto visible = MakeSpan("(مر)\u202c");
+  visible.xList = {Lengthd(100)};
+  visible.yList = {Lengthd(100)};
+  text.spans.push_back(std::move(visible));
+  auto params = MakeTextParams(20);
+  params.fontFamilies = {RcString("Arabic")};
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(IsEmpty()), RunGlyphsAre(SizeIs(4))));
+  EXPECT_THAT(runs[1].glyphs, Each(GlyphIndexIs(Gt(0))));
+  EXPECT_THAT(VisualClusters(runs), ElementsAre(5u, 3u, 1u, 0u));
+  EXPECT_THAT(runs[1].glyphs, Each(Field("rightToLeft", &TextGlyph::rightToLeft, true)));
+}
+
 // Shaping each fallback item in its chunk's context must not rescan the whole chunk per item: a
 // chunk that alternates faces on every character detects its context's direction and script once.
 TEST(TextEngineTest, AlternatingFallbackChunkDetectsItsContextOnce) {

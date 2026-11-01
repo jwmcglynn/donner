@@ -160,6 +160,16 @@ TEST(FindChunkRangesTest, SingleChunkWhenNoAbsolutePositions) {
   EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 5u)));
 }
 
+TEST(FindChunkRangesTest, FirstAddressableOriginKeepsLeadingBidiControlsInItsChunk) {
+  SmallVector<std::optional<Lengthd>, 1> xList = {Lengthd(100)};
+  SmallVector<std::optional<Lengthd>, 1> yList = {Lengthd(100)};
+  const std::string_view source = "\u202b(مر)\u202c";
+  EXPECT_THAT(findChunkRanges(source, xList, yList), ElementsAre(ChunkRangeIs(0u, 12u)));
+  xList = {Lengthd(100), std::nullopt, Lengthd(150)};
+  EXPECT_THAT(findChunkRanges(source, xList, yList),
+              ElementsAre(ChunkRangeIs(0u, 6u), ChunkRangeIs(6u, 12u)));
+}
+
 TEST(FindChunkRangesTest, SplitsAtAbsoluteXPosition) {
   SmallVector<std::optional<Lengthd>, 1> xList = {std::nullopt, std::nullopt,
                                                   Lengthd(50.0, Lengthd::Unit::None)};

@@ -299,6 +299,11 @@ bool isNonSpacing(uint32_t cp) {
          IsPositioningVariationSelector(cp);
 }
 
+/// Existing shaping treats line feeds and tabs as blanks while retaining source byte offsets.
+bool IsBlankShapingControl(char32_t cp) {
+  return cp == '\n' || cp == '\t';
+}
+
 /// Identifies the same typographic interior for shaping and paragraph boundaries.
 bool IsTypographicMiddle(uint32_t cp, size_t position, bool previousJoiner) {
   return position != 0 && (isNonSpacing(cp) || previousJoiner);
@@ -1020,7 +1025,7 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
     const bool middle = IsTypographicMiddle(cp, codepointIndex, previousWasJoiner);
     const bool hasAbsX = codepointIndex < xList.size() && xList[codepointIndex].has_value();
     const bool hasAbsY = codepointIndex < yList.size() && yList[codepointIndex].has_value();
-    if (!middle && (hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
+    if (codepointIndex != 0 && !middle && (hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
       chunkRanges.push_back({currentChunkStart, byteStart});
       currentChunkStart = byteStart;
     }
@@ -4193,6 +4198,7 @@ public:
       size_t visualIndex;
     };
     std::vector<LogicalRun> logical;
+    bool hasAddressable = false;
   };
   struct Item {
     ChunkRange range;
@@ -4459,10 +4465,16 @@ private:
 
   bool startsParagraph(const TextSpan& span, size_t byte, size_t position, char32_t cp,
                        bool previousJoiner) const {
+    if (paragraphs.empty()) {
+      return true;
+    }
+    // The first addressable origin owns leading controls, including those in earlier paint spans.
+    if (!paragraphs.back().hasAddressable) {
+      return false;
+    }
     const bool absolute = !BidiParagraph::IsControl(cp) && hasAbsolutePosition(span, position);
-    return paragraphs.empty() ||
-           (!characters.empty() && !IsTypographicMiddle(cp, position, previousJoiner) &&
-            (absolute || (byte == 0 && span.startsNewChunk)));
+    return !IsTypographicMiddle(cp, position, previousJoiner) &&
+           (absolute || (byte == 0 && span.startsNewChunk));
   }
 
   void appendCharacter(const TextSpan& span, size_t spanIndex, uint32_t position, size_t byte,
@@ -4475,6 +4487,7 @@ private:
     }
     characters.push_back({spanIndex, static_cast<uint32_t>(source.size()), sourceByte, position, cp,
                           static_cast<uint32_t>(paragraphs.size() - 1)});
+    paragraphs.back().hasAddressable |= !BidiParagraph::IsControl(cp);
     Utf8::Append(cp, std::back_inserter(source));
   }
 
@@ -4493,7 +4506,8 @@ private:
       bool previousJoiner = false;
       for (size_t byte = 0; byte < value.size(); ++scalar) {
         const size_t start = byte;
-        const char32_t cp = decodeUtf8(value, byte);
+        const char32_t decoded = decodeUtf8(value, byte);
+        const char32_t cp = IsBlankShapingControl(decoded) ? U' ' : decoded;
         const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
         appendCharacter(span, spanIndex, position, start, sourceByte, cp, previousJoiner);
         previousJoiner = cp == 0x200d;
@@ -6384,7 +6398,7 @@ private:
       // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
       state.controlShapingText = std::string(state.text);
       for (char& c : state.controlShapingText) {
-        if (c == '\n' || c == '\t') {
+        if (IsBlankShapingControl(static_cast<unsigned char>(c))) {
           c = ' ';
         }
       }

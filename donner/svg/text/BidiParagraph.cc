@@ -147,10 +147,9 @@ BidiParagraph::BidiParagraph(BidiParagraph&&) noexcept = default;
 BidiParagraph& BidiParagraph::operator=(BidiParagraph&&) noexcept = default;
 
 bool BidiParagraph::NeedsAnalysis(char32_t codepoint) {
-  constexpr std::array<SBBidiType, 13> kAnalyzedTypes{
-      SBBidiTypeR,   SBBidiTypeAL,  SBBidiTypeAN,  SBBidiTypeLRE, SBBidiTypeRLE,
-      SBBidiTypeLRO, SBBidiTypeRLO, SBBidiTypePDF, SBBidiTypeLRI, SBBidiTypeRLI,
-      SBBidiTypeFSI, SBBidiTypePDI, SBBidiTypeB};
+  constexpr std::array<SBBidiType, 12> kAnalyzedTypes{
+      SBBidiTypeR,   SBBidiTypeAL,  SBBidiTypeAN,  SBBidiTypeLRE, SBBidiTypeRLE, SBBidiTypeLRO,
+      SBBidiTypeRLO, SBBidiTypePDF, SBBidiTypeLRI, SBBidiTypeRLI, SBBidiTypeFSI, SBBidiTypePDI};
   return std::find(kAnalyzedTypes.begin(), kAnalyzedTypes.end(),
                    SBCodepointGetBidiType(codepoint)) != kAnalyzedTypes.end();
 }
