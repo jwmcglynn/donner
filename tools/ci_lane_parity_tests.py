@@ -67,6 +67,7 @@ TRIGGER_ALLOWLIST = {
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
+    ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
     ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
     ("cmake.yml", "validate-generator", "trusted-pr"): "macos-self-hosted",
     ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
@@ -98,21 +99,8 @@ PARITY_SUBSETS = {
 # `hosted_parity` tests, because the PR skips main's step there. Keyed by (workflow, job,
 # scenario); the value is (PR step, main step). The hosted Linux job skips Build and Test on
 # trusted PRs (STEP_ALLOWLIST) and reruns its runner-sensitive tests on the hosted image.
-HOSTED_PARITY_STEPS = {
-    ("main.yml", "linux", "trusted-pr"): ("Test (hosted parity subset)", "Test"),
-}
-HOSTED_PARITY_STEP_ALLOWLIST = {
-    ("main.yml", "linux", "Test (hosted parity subset)", "tag-filter-pr-only", "hosted_parity"):
-        "The parity subset: only tests whose result can depend on the runner. Every other "
-        "selected test runs on the self-hosted ARM64 lane.",
-    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only", "--build_tests_only"):
-        "Build scope only: this step builds only what the selected tests need, because the "
-        "PR's Build step runs on the self-hosted lane.",
-    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only",
-     "--build_event_json_file=$RUNNER_TEMP/coverage-hosted_parity_test.bep.json"):
-        "Records how many parity tests ran, for the coverage contract's receipt; it changes "
-        "what Bazel reports, not what it tests.",
-}
+HOSTED_PARITY_STEPS = {}
+HOSTED_PARITY_STEP_ALLOWLIST = {}
 
 # Main's hosted lanes whose phases tools/ci/coverage_contract.json declares, and the phases there
 # that run no Bazel command.
@@ -198,7 +186,7 @@ HOSTED_PARITY_TESTS = {
         "Runs the Xcode selection probe against host tools (#1895).",
     ("tools/BUILD.bazel", "native_delivery_elf_tests"):
         "Inspects real x86-64 ELF source lines with host binutils; the ARM64 lane skips this "
-        "architecture-specific regression, so trusted PRs retain the hosted x86 execution.",
+        "architecture-specific regression. The maintainer accepts its absence on ARM64 PRs.",
 }
 
 # Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
@@ -320,7 +308,7 @@ SHARED_JOB_ALLOWLIST = {
     ("main.yml", "linux", scenario, step, "flag-main-only", flag):
         "Cloud execution requires the trusted writer key, so other PRs run the same build and "
         "test commands, with the same declared LLVM toolchain, on the hosted runner itself. "
-        "Trusted PRs exercise the cloud compile probe before merge."
+        "Trusted PRs use ARM64 and accept the x86_64 gap; the cloud probe remains on main."
     for scenario in ("untrusted-pr", "renovate-pr") for step in ("Build", "Test")
     for flag in _config_flags("buildbuddy-re", step.lower())
 }
@@ -366,10 +354,6 @@ SHARED_STEP_ALLOWLIST.update({
 })
 
 # Steps of one job that run on a main push but not on one kind of pull request.
-_TRUSTED_LINUX_REASON = (
-    "operator decision 2026-10-13: trusted PRs run the Linux Build and Test steps only on the "
-    "self-hosted lane, for speed; hosted Linux covers main pushes and untrusted PRs")
-
 _CACHE_WRITER_REASON = (
     "Remote cache wiring only: main and trusted PRs read and write the BuildBuddy cache, Renovate "
     "PRs read it through the read-only step, and other PRs build without it. A cache changes how "
@@ -386,10 +370,6 @@ STEP_ALLOWLIST = {
        for scenario in ("untrusted-pr", "renovate-pr")},
     # Accepted risk: the self-hosted Linux lane builds and tests on another architecture, so a
     # test failure specific to the hosted runner's architecture or speed first shows on main.
-    # The hosted job's cloud build step builds main's hosted toolchain configuration before
-    # merge, and its parity subset reruns the runner-sensitive tests.
-    ("main.yml", "linux", "Build", "trusted-pr"): _TRUSTED_LINUX_REASON,
-    ("main.yml", "linux", "Test", "trusted-pr"): _TRUSTED_LINUX_REASON,
 }
 
 # Steps main runs that a kind of pull request skips, but that a different job runs on that pull
@@ -441,8 +421,42 @@ COUNTERPART_ALLOWLIST = {
     ], "The self-hosted lane swaps each locally isolated GPU suite for its remote wrapper "
        "(tools/ci_remote_gpu_targets.py), which runs the same implementation and shards, so it "
        "keeps the remote wrappers and drops the local-only targets; hosted Linux does the "
-       "reverse. The local-display targets this drops run in the hosted job's Xvfb step."),
+       "reverse. The local-display targets this drops run in the self-hosted job's Xvfb step."),
 }
+
+# The replacement still compares portable phases; x86_64 execution stays on main.
+INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
+    *[(step, "flag-main-only", flag) for step in ("Build", "Test")
+      for flag in _config_flags("buildbuddy-re", step.lower())],
+    *[("*", "flag-pr-only", flag) for flag in (
+        "--strategy=TestRunner=remote", "--remote_local_fallback=false",
+        "--incompatible_remote_local_fallback_for_remote_cache=false", "--remote_timeout=60s")],
+    *[(step, "flag-pr-only", "--remote_download_outputs=minimal")
+      for step in ("Build", "Test")],
+    *[(step, "flag-pr-only", "--%s=$DIAG_DIR/%s/%s" % (flag, step.lower(), filename))
+      for step in ("Build", "Test")
+      for flag, filename in (("build_event_json_file", "bep.json"),
+                             ("execution_log_compact_file", "exec.log.zst"),
+                             ("profile", "profile.gz"))],
+    ("Test", "flag-pr-only", r"--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"),
+    ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
+    ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
+    ("Test", "target-main-only", SELECTED_TARGETS),
+    ("Test", "target-pr-only", "$(python3 tools/ci_remote_gpu_targets.py %s)" % SELECTED_TARGETS),
+], "The ARM64 runner uses its own remote backend, strict fallback policy and diagnostics. "
+   "Remote GPU wrappers retain the same implementation; native display checks run separately. "
+   "The maintainer accepts the x86_64 toolchain/runtime gap before merge."))
+INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
+    (step, "step-main-only", "") for step in (
+        "Configure BuildBuddy remote cache", "Install system dependencies", "Setup Bazel",
+        "Restore Bazel action cache", "Save Bazel action cache")
+], "The persistent ARM64 runner pre-provisions its tools and uses its own remote cache; "
+   "hosted setup and public cache credentials do not run there."))
+INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
+    (step, "step-main-only", "") for step in (
+        "Verify BuildBuddy remote execution", "Linker canary (non-lld linker support)")
+], "Maintainer decision 2026-10-31 accepts losing hosted x86_64 PR coverage. "
+   "Cloud executor and gold-linker qualification remain on hosted main."))
 
 # Each scenario sets every job output a condition reads; an output not modelled here raises.
 # `trusted_pr` and `renovate_pr` are the .github/actions/pr-trust outputs, which both the
@@ -1743,7 +1757,7 @@ class CiLaneParityTest(unittest.TestCase):
             "macos": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "macos-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
             "macos-metal": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
-            "linux": {"main-push": True, "trusted-pr": True, "untrusted-pr": True},
+            "linux": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "linux-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
         }
         for job, scenarios in expected.items():
@@ -1810,7 +1824,9 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(counterpart=counterpart):
                 for step in steps:
                     # A counterpart stands in for a main step the pull request skips.
-                    self.assertIn((name, job_name, step, scenario), STEP_ALLOWLIST)
+                    self.assertTrue(
+                        (name, job_name, step, scenario) in STEP_ALLOWLIST or
+                        JOB_REPLACEMENTS.get((name, job_name, scenario)) == counterpart)
                 self.assertTrue(job_gates(self.workflows[name], counterpart, scenario))
             workflow = self.workflows[name]
             for step, kind, value in invocation_differences(workflow, job_name, counterpart,

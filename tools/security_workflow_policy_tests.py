@@ -3415,7 +3415,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        step = _named_step(_jobs(workflow)["linux"], "Test deterministic fuzzer soak wrapper")
+        step = _named_step(_jobs(workflow)["linux-self-hosted"], "Test deterministic fuzzer soak wrapper")
         self.assertNotEqual("", step, "Linux PR gate must execute the deterministic soak probe")
         self.assertIsNone(_step_key(step, "if", 8))
         self.assertIsNone(_step_key(step, "continue-on-error", 8))
@@ -3425,6 +3425,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual([
             "set", "-euo", "pipefail", "bazelisk", "test", "--config=ci",
             "--config=latest_llvm", "--test_output=all",
+            "$BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS",
             "--test_tag_filters=", "--nocache_test_results",
             "--noskip_incompatible_explicit_targets",
             "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
@@ -3438,7 +3439,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_deterministic_soak_gate_rejects_exclusion_or_skip(self):
         path = ".github/workflows/main.yml"
         workflow = self.supply_chain_files[path]
-        step = _step_body(workflow, "Test deterministic fuzzer soak wrapper")
+        step = _named_step(_jobs(workflow)["linux-self-hosted"],
+                           "Test deterministic fuzzer soak wrapper")
         for old, new in [("--test_tag_filters= ", "--test_tag_filters=-fuzz_soak "),
                          ("--nocache_test_results", "--cache_test_results"),
                          ("--noskip_incompatible_explicit_targets",
@@ -4003,8 +4005,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual({(main, "linux", "Configure BuildBuddy remote cache", '"true"')},
                          opted_in)
         self.assertEqual({(main, "linux", step) for step in (
-            "Verify BuildBuddy remote execution", "Build", "Test",
-            "Test (hosted parity subset)")}, consumers)
+            "Verify BuildBuddy remote execution", "Build", "Test")}, consumers)
 
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci

@@ -10,13 +10,11 @@
       "Verify BuildBuddy remote execution": {
         "cloud-build": {
           "when": "always",
-          "description": "A cold compile on the cloud executor, then the whole tree built with main's cloud execution configuration. The hosted job runs this step on trusted pull requests as well.",
-          "counterparts": [
-            {
-              "job": "linux",
-              "step": "buildbuddy_verify"
-            }
-          ]
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-31",
+            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
+          }
         }
       },
       "Build": {
@@ -32,13 +30,11 @@
         },
         "hosted-toolchain": {
           "when": "always",
-          "description": "Main's hosted toolchain: the declared LLVM toolchain for x86_64, with the cloud execution that main's Build step uses, built for the whole tree on the hosted job before merge.",
-          "counterparts": [
-            {
-              "job": "linux",
-              "step": "buildbuddy_verify"
-            }
-          ]
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-31",
+            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
+          }
         }
       },
       "Test": {
@@ -54,43 +50,39 @@
         },
         "local-display": {
           "when": "always",
-          "description": "Tests that need the hosted runner's Xvfb display.",
+          "description": "Tests that need the self-hosted runner's Xvfb display.",
           "counterparts": [
             {
-              "job": "linux",
+              "job": "linux-self-hosted",
               "step": "local_xvfb"
             }
           ]
         },
         "hosted-parity": {
           "when": "hosted_parity_tests_affected",
-          "description": "`hosted_parity` tests, whose result can depend on the runner, also run on the hosted x86_64 image: no self-hosted x86_64 runner exists, so the hosted image is the only x86_64 venue (maintainer decision 2026-10-19, #1912).",
-          "counterparts": [
-            {
-              "job": "linux",
-              "step": "hosted_parity_test",
-              "min_tests": 1
-            }
-          ]
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-31",
+            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
+          }
         },
         "hosted-toolchain": {
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-13, recorded in tools/ci_lane_parity_tests.py (STEP_ALLOWLIST)",
-            "reason": "Trusted pull requests run every other test only on the self-hosted ARM64 lane, for speed; only `hosted_parity` tests also run on the hosted image."
+            "decision": "Maintainer decision 2026-10-31",
+            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
           }
         }
       },
       "Linker canary (non-lld linker support)": {
         "linker": {
           "when": "always",
-          "counterparts": [
-            {
-              "job": "linux",
-              "step": "linker_canary"
-            }
-          ]
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-31",
+            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
+          }
         }
       },
       "Build and test CMake consumer": {
@@ -98,7 +90,7 @@
           "when": "always",
           "counterparts": [
             {
-              "job": "linux",
+              "job": "linux-self-hosted",
               "step": "cmake_consumer"
             }
           ]
@@ -110,7 +102,7 @@
           "description": "The generated libFuzzer wrapper replays its seed and completes a deterministic 1024-run mutation probe on every normal PR.",
           "counterparts": [
             {
-              "job": "linux",
+              "job": "linux-self-hosted",
               "step": "deterministic_soak_probe",
               "min_tests": 1
             }

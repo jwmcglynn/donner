@@ -587,7 +587,7 @@ jobs:
     # One x86_64 workspace owns native, local-display, linker and closure checks.
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
     # runs allowed to write bind it, so other runs never receive that key.
     environment:
@@ -730,52 +730,6 @@ jobs:
             --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp \
             //tools/ci:linux_wgpu_resvg_reference
 
-      - name: Test local Xvfb targets
-        id: local_xvfb
-        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          if [[ -z "${TARGETS// /}" ]]; then
-            echo "::error::Empty target selection reached the local Xvfb test step."
-            exit 1
-          fi
-          tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --nocache_test_results \
-            --test_output=errors --test_tag_filters=requires_xvfb,-fuzz_soak \
-            --strategy=TestRunner=local $TARGETS
-
-      # Trusted PRs run the Build and Test steps above only on the self-hosted ARM64 lane. The
-      # runner-sensitive `hosted_parity` tests also run here, on the hosted x86_64 image main
-      # runs, when the change reaches one: main's Test step, narrowed to those tests.
-      - name: Test (hosted parity subset)
-        id: hosted_parity_test
-        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_tests_affected == 'true') }}
-        env:
-          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          if [[ -z "${TARGETS// /}" ]]; then
-            echo "::error::Empty target selection reached the hosted parity step."
-            exit 1
-          fi
-          tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm ${BUILDBUDDY_FLAGS} \
-            --test_output=errors \
-            --build_tests_only --build_event_json_file="$RUNNER_TEMP/coverage-hosted_parity_test.bep.json" \
-            --test_tag_filters=hosted_parity,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
-            $TARGETS
-
-      # Diagnostic only: disk, cache and memory use once the tests have run.
       - name: Probe runner resources after tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -810,25 +764,6 @@ jobs:
           ctest --test-dir build --output-on-failure
 
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
-      - name: Record coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
-        shell: bash
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: python3 tools/ci_coverage_contract.py receipt linux
-
-      - name: Upload coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-receipt-linux
-          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 3
-
-      # Last step, after every Bazel command: evicts the action cache to its budget and saves
-      # it on a main push.
       - name: Save Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
@@ -865,7 +800,7 @@ jobs:
           timeout-minutes: "150"
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for trusted operator PRs (extra architecture coverage).
+  # Replaces hosted Linux for trusted operator PRs; x86_64 remains on main.
   # Main pushes, Renovate, and non-operator runs stay hosted.
   # The runner host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and its own Bazel cache configuration, so there
@@ -1074,6 +1009,19 @@ jobs:
           EOF
           chmod +x "$DIAG_DIR/run_bazel_with_heartbeat.sh"
 
+      - name: Check native consumer tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for tool in xvfb-run Xvfb xauth cmake ninja; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Sync Bazel toolchain
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
         # not track in cc_configure's cache key; a stale @local_config_cc then
@@ -1207,6 +1155,49 @@ jobs:
             --execution_log_compact_file="$DIAG_DIR/test-wgpu/exec.log.zst" \
             //tools/ci:linux_wgpu_resvg_reference
 
+      - name: Test deterministic fuzzer soak wrapper
+        id: deterministic_soak_probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --config=latest_llvm \
+            --test_output=all $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
+            --test_tag_filters= --nocache_test_results \
+            --noskip_incompatible_explicit_targets \
+            --build_event_json_file="$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json" \
+            //tools/ci:deterministic_fuzzer_soak
+
+      - name: Test local Xvfb targets
+        id: local_xvfb
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the local Xvfb test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --nocache_test_results \
+            --test_output=errors --test_env=PATH --test_tag_filters=requires_xvfb,-fuzz_soak \
+            $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS --strategy=TestRunner=local $TARGETS
+
+      - name: Build and test CMake consumer
+        id: cmake_consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/cmake/gen_cmakelists.py --check
+          python3 tools/cmake/gen_cmakelists.py
+          cmake -S examples/cmake_consumer -B build -G Ninja \
+            -DDONNER_SOURCE_DIR="$PWD" \
+            -DDONNER_RENDERER_BACKEND=tiny_skia
+          cmake --build build --target donner_cmake_consumer --parallel 2
+          ctest --test-dir build --output-on-failure
+
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -1254,7 +1245,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
+        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
