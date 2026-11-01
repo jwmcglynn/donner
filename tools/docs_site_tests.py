@@ -104,6 +104,53 @@ class DocsSiteTest(unittest.TestCase):
         site.unpack(first, self.root / "restored")
         self.assertEqual(site.verify_site(self.root / "restored"), site.verify_site(output))
 
+    def test_pages_transport_accepts_reference_root_and_directories(self):
+        archive = self.root / "reference.tar"
+        with tarfile.open(archive, "w:", format=tarfile.GNU_FORMAT) as tar:
+            for name in ("./", "./nested/"):
+                info = tarfile.TarInfo(name)
+                info.type, info.mode = tarfile.DIRTYPE, 0o755
+                tar.addfile(info)
+            for name in ("./index.html", "./nested/" + "x" * 110 + ".html"):
+                info = tarfile.TarInfo(name)
+                info.mode, info.size = 0o644, 4
+                tar.addfile(info, io.BytesIO(b"site"))
+        site.validate_pages_archive(archive)
+        site.unpack(archive, self.root / "reference-restored")
+        self.assertEqual((self.root / "reference-restored/index.html").read_bytes(), b"site")
+
+    def test_packer_uses_reference_root_directories_and_gnu_long_names(self):
+        root = self.root / "input"
+        (root / "nested").mkdir(parents=True)
+        (root / "index.html").write_text("site")
+        (root / "nested" / ("x" * 110 + ".html")).write_text("long")
+        archive = self.root / "packed.tar"
+        site.pack(root, archive)
+        with tarfile.open(archive) as tar:
+            members = tar.getmembers()
+        self.assertEqual(members[0].name, ".")
+        self.assertTrue(members[0].isdir())
+        self.assertEqual({m.name for m in members if m.isdir()}, {".", "./nested"})
+        self.assertFalse(any(m.pax_headers for m in members))
+        self.assertEqual(archive.read_bytes()[257:265], b"ustar  \x00")
+        self.assertIn(b"././@LongLink", archive.read_bytes())
+        site.validate_pages_archive(archive)
+
+    def test_pages_transport_rejects_missing_root_or_parent_directory(self):
+        for root_present in (False, True):
+            with self.subTest(root_present=root_present):
+                archive = self.root / (str(root_present) + ".tar")
+                with tarfile.open(archive, "w:", format=tarfile.GNU_FORMAT) as tar:
+                    if root_present:
+                        info = tarfile.TarInfo("./")
+                        info.type, info.mode = tarfile.DIRTYPE, 0o755
+                        tar.addfile(info)
+                    info = tarfile.TarInfo("./nested/index.html")
+                    info.mode, info.size = 0o644, 4
+                    tar.addfile(info, io.BytesIO(b"site"))
+                with self.assertRaises(ValueError):
+                    site.validate_pages_archive(archive)
+
     def test_pages_archive_members_use_the_required_relative_prefix(self):
         output, _ = self.compose()
         archive = self.root / "pages.tar"
