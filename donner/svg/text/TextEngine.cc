@@ -4442,8 +4442,7 @@ private:
       return false;
     }
     paragraph.visual = std::move(*runs);
-    prepareRuns(paragraph, text, vertical);
-    return true;
+    return prepareRuns(paragraph, text, vertical);
   }
 
   std::pair<TextOrientation, bool> orientationKey(const components::ComputedTextComponent& text,
@@ -4495,7 +4494,6 @@ private:
     context.rightToLeft = backward;
     context.work = &work;
     paragraph.contexts.push_back({context, orientation});
-    paragraph.logical.push_back(&paragraph.contexts.back());
     for (size_t character = first; character < end; ++character) {
       characters[character].shapingRun = index;
     }
@@ -4523,7 +4521,22 @@ private:
     }
   }
 
-  void prepareRuns(Paragraph& paragraph, const components::ComputedTextComponent& text,
+  /// Controls may have no run identity; index only exact starts of remapped contexts.
+  bool indexLogicalContexts(Paragraph& paragraph) {
+    for (size_t index = paragraph.first; index < paragraph.end; ++index) {
+      const auto& character = characters[index];
+      if (character.shapingRun >= paragraph.contexts.size()) {
+        continue;
+      }
+      const auto* context = &paragraph.contexts[character.shapingRun];
+      if (context->shaping.byteOffset == character.byte) {
+        paragraph.logical.push_back(context);
+      }
+    }
+    return paragraph.logical.size() == paragraph.contexts.size();
+  }
+
+  bool prepareRuns(Paragraph& paragraph, const components::ComputedTextComponent& text,
                    bool vertical) {
     const size_t capacity = vertical ? paragraph.end - paragraph.first : paragraph.visual.size();
     paragraph.contexts.reserve(capacity);
@@ -4539,9 +4552,7 @@ private:
         characters[index].level = run.level;
       }
     }
-    std::sort(paragraph.logical.begin(), paragraph.logical.end(), [](const auto* a, const auto* b) {
-      return a->shaping.byteOffset < b->shaping.byteOffset;
-    });
+    return indexLogicalContexts(paragraph);
   }
 #endif  // DONNER_TEXT_ENABLED
 
