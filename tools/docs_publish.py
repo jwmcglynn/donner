@@ -377,7 +377,7 @@ def live_marker(url: str = SITE_URL, *, deadline: float | None = None) -> dict |
 
 
 def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | None = None) -> str:
-    site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid Pages source commit")
+    site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid Pages execution commit")
     api.require_protection()
     token = _oidc_token()
     value = api.call(store.REPO + "/pages/deployments", "POST", {
@@ -388,7 +388,8 @@ def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | 
     site.require(bool(__import__("re").fullmatch(r"[A-Za-z0-9-]{1,128}", deployment_id)),
                  "Pages returned an invalid deployment identity")
     if receipt is not None:
-        receipt.write_bytes(site.canonical({"deployment_id": deployment_id, "artifact_id": artifact_id}))
+        receipt.write_bytes(site.canonical({"deployment_id": deployment_id, "artifact_id": artifact_id,
+                                            "execution_commit": commit}))
     page_url = value.get("page_url", "")
     if page_url and not page_url.startswith("https://"):
         page_url = "https://" + page_url
@@ -576,10 +577,12 @@ def promote(work: Path, previous_id: int, api=None) -> dict:
                  "snapshot index changed after preflight")
     site.require(_live_identity(plan["prior_identity"]), "live site changed after preflight")
     _verified_previous(previous_id, plan, work)
+    candidate_id = int(os.environ["VERIFIED_CANDIDATE_ARTIFACT_ID"])
+    _verified_candidate(candidate_id, record["archive_sha256"], work)
     site.verify_site(work / "site", record["manifest_sha256"])
     site.require(bcr_source.digest(work / "pages/artifact.tar") == record["archive_sha256"],
                  "selected archive changed after preflight")
-    return _retain_and_deploy(record, plan, previous_id, work, api)
+    return _retain_and_deploy(record, plan, previous_id, work, api, candidate_id=candidate_id)
 
 
 def _retain_composition(record, work):
@@ -606,7 +609,7 @@ def _retain_composition(record, work):
     return durable, archive_record
 
 
-def _retain_and_deploy(record, plan, previous_id, work, api):
+def _retain_and_deploy(record, plan, previous_id, work, api, *, candidate_id):
     selected = site.read_json(work / "payload/selection.json")
     composition_id = record["archive_sha256"]
     if os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
@@ -622,7 +625,7 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
     store.restore(archive_record, work / "retained.tar", lambda path: api.file(tip, path))
     result = {"candidate": composition_id, "prior": plan["prior"], "snapshot_commit": tip}
     try:
-        result["deployment_id"] = deploy(record["artifact_id"], record["workflow_commit"], api,
+        result["deployment_id"] = deploy(candidate_id, os.environ["GITHUB_SHA"], api,
                                          receipt=work / "candidate-deployment.json")
         _wait_for_live({"kind": "composition", "marker": site.read_json(work / "site/docs-site.json")})
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
@@ -766,7 +769,7 @@ def _verified_candidate(artifact_id: int, expected: str, work: Path) -> None:
                  and meta["workflow_run"]["head_sha"] == os.environ["GITHUB_SHA"],
                  "candidate upload is not from this trusted run")
     candidate._download_checked(artifact_id, meta["digest"].removeprefix("sha256:"),
-                                work / "candidate.zip", download, "rollback candidate upload")
+                                work / "candidate.zip", download, "candidate upload")
     candidate._extract_verified(work / "candidate.zip", {"artifact.tar": expected}, work / "candidate-verified")
 
 
@@ -795,7 +798,7 @@ def _recover(record, prior_identity, previous_id, api, error, expected_tip=None,
         if observed is None or observed.get("manifest_sha256") != record["manifest_sha256"]:
             return {"status": "recovery-required", "error": error, "observed": observed}
         site.require(api.tip() == expected_tip, "snapshot branch advanced before recovery")
-        deployment_id = deploy(previous_id, record["workflow_commit"], api)
+        deployment_id = deploy(previous_id, os.environ["GITHUB_SHA"], api)
         _wait_for_live(recovery_identity or prior_identity)
         return {"status": "restored", "error": error, "recovery_deployment_id": deployment_id}
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as failure:

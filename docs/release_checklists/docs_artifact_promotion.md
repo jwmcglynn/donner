@@ -174,10 +174,12 @@ After maintainer publication approval, dispatch `selection: publish` with:
 ```
 
 The environment-protected job verifies both exact-workflow attestations and source bindings,
-restores and verifies the durable prior site, and confirms it is still live. It uploads that
-verified prior archive for bounded recovery, checks the returned artifact against this run and
-its exact bytes, persists the candidate and evidence to the protected branch, downloads that
-copy back, and only then requests Pages cutover. Normal publication does not build documentation.
+restores the durable prior site, and confirms it is still live. It uploads the already verified
+candidate and recovery archives in the publication attempt, then verifies both uploads' run,
+attempt, name, source commit, ZIP digest and inner archive hash. It persists the candidate and
+evidence to the protected branch, downloads and verifies that retained copy, and only then
+requests Pages cutover. The signed composition and source identities are unchanged; normal
+publication does not rebuild or repack documentation.
 
 Candidate and recovery tar members must start with `./`, as required by the Pages service.
 The publisher checks both exact transport archives before retaining the candidate or requesting
@@ -187,8 +189,9 @@ cannot be selected directly for deployment or recovery. Repacking changes the ar
 retain the original evidence and obtain a newly signed, explicitly selected composition rather
 than treating the replacement as the previously approved archive.
 
-The Pages build version is the verified source commit SHA, matching the official deployment
-action. Pages may reuse that SHA as a deployment ID across artifact uploads, so a terminal
+The Pages build version is the publication execution commit (`GITHUB_SHA`), matching its upload
+and OIDC job. The signed assembly retains its separate verified workflow/source identities.
+Pages may reuse that SHA as a deployment ID across artifact uploads, so a terminal
 SHA-addressed status cannot prove that the latest artifact request has stopped. If publication
 fails with such an ID, the job records `recovery-required` and does not automatically request a
 rollback. Preserve the candidate, prior archive and receipts; confirm the current request is no
@@ -201,7 +204,8 @@ allow a two-minute propagation window with a shared monotonic deadline, bounded 
 remaining-budget socket timeouts. The 45-minute manual deployment job leaves preparation and
 recovery allowance around both ten-minute Pages waits; it does not guarantee arbitrary slow
 transfers finish. Socket timeouts are cooperative and do not bound platform DNS resolution. Successful activation records the new current/prior pair in
-`docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight and result receipts.
+`docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight, result and candidate
+deployment receipts, including the requested artifact ID and execution commit.
 
 A failure receipt distinguishes `published`, `unchanged`, `restored`, `recovered-to-bootstrap`
 and `recovery-required`.

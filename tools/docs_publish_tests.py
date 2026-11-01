@@ -20,6 +20,9 @@ class DocsPublishTest(unittest.TestCase):
         self.api = mock.Mock()
         self.api.tip.return_value = "e" * 40
         self.api.call.return_value = {"status": "succeed"}
+        execution = mock.patch.dict(os.environ, {"GITHUB_SHA": "b" * 40})
+        execution.start()
+        self.addCleanup(execution.stop)
 
     def test_attestation_failures_keep_bounded_redacted_diagnostics(self):
         tokens = {"GH_TOKEN": "example-gh-secret", "GITHUB_TOKEN": "example-github-secret",
@@ -299,6 +302,78 @@ class DocsPublishTest(unittest.TestCase):
             shutil.copyfile(work / "pages/artifact.tar", output)
         return work, record, plan, commit, restore
 
+    def publication_plan(self):
+        work, record, plan, commit, restore = self.transaction()
+        plan.update(record=record, previous_archive_sha256=record["archive_sha256"])
+        (work / "preflight.json").write_bytes(site.canonical(plan))
+        return work, record, plan, commit, restore
+
+    def publication_uploads(self, work, execution):
+        import shutil
+        import zipfile
+        uploads, metadata = {}, {}
+        for artifact_id, role in ((9, "rollback"), (11, "candidate")):
+            uploads[artifact_id] = work / (role + "-upload.zip")
+            with zipfile.ZipFile(uploads[artifact_id], "w") as zipped:
+                zipped.write(work / "pages/artifact.tar", "artifact.tar")
+            metadata[artifact_id] = {"expired": False, "name": "docs-" + role + "-1",
+                "digest": "sha256:" + publish.bcr_source.digest(uploads[artifact_id]),
+                "workflow_run": {"id": 123, "head_sha": execution}}
+        def download(artifact_id, output):
+            shutil.copyfile(uploads[artifact_id], output)
+        return metadata, download
+
+    def test_normal_promotion_uses_current_upload_and_execution_sha(self):
+        work, record, plan, commit, restore = self.publication_plan()
+        execution = "c" * 40
+        metadata, download = self.publication_uploads(work, execution)
+        environment = {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
+                       "GITHUB_SHA": execution, "VERIFIED_CANDIDATE_ARTIFACT_ID": "11"}
+        with mock.patch.dict(os.environ, environment), \
+             mock.patch.object(publish.store, "index", return_value=plan["current"]), \
+             mock.patch.object(publish, "_live_identity", return_value=True), \
+             mock.patch.object(publish, "github_json", side_effect=lambda path: metadata[int(path.rsplit("/", 1)[1])]), \
+             mock.patch.object(publish, "download", side_effect=download), \
+             mock.patch.object(publish.store, "commit", side_effect=commit), \
+             mock.patch.object(publish.store, "restore", side_effect=restore), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy", return_value="91") as deploy:
+            result = publish.promote(work, 9, self.api)
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(deploy.call_args.args[:2], (11, execution))
+        self.assertEqual(record["artifact_id"], 7)
+        self.assertEqual(record["workflow_commit"], "b" * 40)
+
+    def test_promotion_consumers_reject_candidate_scope_before_retention(self):
+        work, record, plan, _, _ = self.publication_plan()
+        wrong_attempt = {"expired": False, "name": "docs-candidate-0",
+                         "workflow_run": {"id": 123, "head_sha": "b" * 40}}
+        for event in ("workflow_dispatch", "workflow_run"):
+            with self.subTest(event=event), \
+                 mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_RUN_ID": "123",
+                     "GITHUB_RUN_ATTEMPT": "1", "VERIFIED_CANDIDATE_ARTIFACT_ID": "11"}), \
+                 mock.patch.object(publish.store, "index", return_value=plan["current"]), \
+                 mock.patch.object(publish, "_live_identity", return_value=True), \
+                 mock.patch.object(publish, "_verified_previous"), \
+                 mock.patch.object(publish, "github_json", return_value=wrong_attempt), \
+                 mock.patch.object(publish, "_retain_and_deploy") as retain:
+                with self.assertRaisesRegex(ValueError, "candidate upload is not from this trusted run"):
+                    publish.promote(work, 9, self.api)
+                retain.assert_not_called()
+                self.api.call.assert_not_called()
+
+    def test_recovery_uses_execution_sha_without_changing_signed_source(self):
+        execution = "c" * 40
+        with mock.patch.dict(os.environ, {"GITHUB_SHA": execution}), \
+             mock.patch.object(publish, "_live_identity", return_value=False), \
+             mock.patch.object(publish, "live_marker", return_value={"manifest_sha256": "a" * 64}), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy", return_value="92") as deploy:
+            result = publish._recover(self.record, self.prior, 7, self.api, "unhealthy", "e" * 40, "91")
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(deploy.call_args.args[:2], (7, execution))
+        self.assertEqual(self.record["workflow_commit"], "b" * 40)
+
     def test_transport_rejection_blocks_retention_for_candidate_and_recovery(self):
         import io
         import shutil
@@ -348,7 +423,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish.store, "restore", side_effect=restore), \
              mock.patch.object(publish, "deploy", side_effect=subprocess.TimeoutExpired("gh", 180)), \
              self.assertRaisesRegex(ValueError, "inspect result.json"):
-            publish._retain_and_deploy(record, plan, 9, work, self.api)
+            publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(site.read_json(work / "result.json")["status"], "recovery-required")
 
     def test_actual_activation_timeout_does_not_revert_healthy_content(self):
@@ -358,7 +433,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish.store, "restore", side_effect=restore), \
              mock.patch.object(publish, "deploy", return_value="91") as deploy, \
              mock.patch.object(publish, "_verify_live"), self.assertRaisesRegex(ValueError, "inspect result.json"):
-            publish._retain_and_deploy(record, plan, 9, work, self.api)
+            publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(site.read_json(work / "result.json")["status"], "recovery-required")
         self.assertEqual(deploy.call_count, 1)
 
@@ -535,7 +610,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish, "deploy", side_effect=ValueError("rejected before cutover")), \
              mock.patch.object(publish, "_recover", return_value={"status": "unchanged"}), \
              self.assertRaisesRegex(ValueError, "inspect result.json"):
-            publish._retain_and_deploy(record, plan, 9, work, self.api)
+            publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(save.call_count, 1)
         self.assertEqual(save.call_args.args[3]["releases"], plan["current"]["releases"])
         self.assertEqual(site.read_json(work / "result.json")["status"], "unchanged")
@@ -552,7 +627,7 @@ class DocsPublishTest(unittest.TestCase):
                      mock.patch.object(publish, "deploy", side_effect=ValueError("unhealthy")), \
                      mock.patch.object(publish, "_recover", return_value={"status": "restored"}), \
                      self.assertRaisesRegex(ValueError, "inspect result.json"):
-                    publish._retain_and_deploy(record, plan, 9, work, self.api)
+                    publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
                 result = site.read_json(work / "result.json")
                 self.assertEqual(result["status"], "recovery-required" if failed_activation else "recovered-to-bootstrap")
                 self.assertEqual(save.call_args.args[3]["current"], "a" * 64)
@@ -568,7 +643,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish, "_verify_live", side_effect=[ValueError("old site"), None]), \
              mock.patch.object(publish.time, "sleep") as pause, \
              mock.patch.object(publish, "_recover", return_value={"status": "recovery-required"}) as recover:
-            result = publish._retain_and_deploy(record, plan, 9, work, self.api)
+            result = publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(result["status"], "published")
         pause.assert_called_once_with(5)
         recover.assert_not_called()
@@ -773,7 +848,7 @@ class DocsPublishTest(unittest.TestCase):
             self.assertEqual(api.call.call_args_list[0].args[2]["environment"], expected)
             api.require_protection.assert_called_once()
 
-    def test_pages_build_version_is_the_exact_source_commit(self):
+    def test_pages_build_version_is_the_exact_execution_commit(self):
         commit = "b" * 40
         for artifact_id in (7, 8):
             with self.subTest(artifact_id=artifact_id):
@@ -787,14 +862,14 @@ class DocsPublishTest(unittest.TestCase):
                 self.assertEqual(request["pages_build_version"], commit)
                 self.assertEqual(request["artifact_id"], artifact_id)
                 self.assertEqual(site.read_json(receipt), {
-                    "deployment_id": commit, "artifact_id": artifact_id})
+                    "deployment_id": commit, "artifact_id": artifact_id, "execution_commit": commit})
 
     def test_pages_rejects_a_non_commit_build_version_before_credentials_or_requests(self):
         for commit in ("b" * 40 + "-7", "main", "b" * 39, None):
             with self.subTest(commit=commit):
                 api = mock.Mock()
                 with mock.patch.object(publish, "_oidc_token") as token, \
-                     self.assertRaisesRegex(ValueError, "invalid Pages source commit"):
+                     self.assertRaisesRegex(ValueError, "invalid Pages execution commit"):
                     publish.deploy(7, commit, api)
                 token.assert_not_called()
                 api.call.assert_not_called()
@@ -855,7 +930,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish.store, "restore", side_effect=restore), \
              mock.patch.object(publish, "deploy", return_value="91"), \
              mock.patch.object(publish, "_verify_live"):
-            result = publish._retain_and_deploy(record, plan, 9, work, self.api)
+            result = publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
         self.assertEqual(result["status"], "published")
         self.assertEqual(save.call_args_list[0].args[1], "c" * 40)
         self.assertEqual(save.call_args_list[1].args[1], "e" * 40)
