@@ -369,7 +369,7 @@ new_local_repository(
 # third_party/resvg-test-suite/ so they ship in the source archive.
 
 # Resource generation is part of downstream library builds.
-bazel_dep(name = "rules_python", version = "2.4.2")
+bazel_dep(name = "rules_python", version = "2.4.6")
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local
