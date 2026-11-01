@@ -646,3 +646,10 @@ alias(
     actual = "//donner/base:base",
     visibility = ["//visibility:public"],
 )
+
+py_test(
+    name = "cmake_cache_tests",
+    srcs = ["cmake_cache_tests.py"],
+    data = ["cmake_cache.py"],
+    deps = ["@rules_python//python/runfiles"],
+)

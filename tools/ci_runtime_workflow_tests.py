@@ -822,7 +822,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                          self._step_body(self._job_body("linux-self-hosted"),
                                          "Build and test CMake consumer").split("\n\n", 1)[0])
         self.assertIn("run: tools/ci/cmake_consumer.sh build --check "
-                      "--release-bazel-server --parallel 4", consumer)
+                      "--cache --release-bazel-server --parallel 4", consumer)
         # The CMake workflow runs the same consumer through its lane script, whose commands
         # //tools/ci:cmake_consumer_tests pins.
         self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache\n", linux)
@@ -1549,7 +1549,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         native = self._job_body("macos-self-hosted", self.cmake)
         self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
         self.assertIn("run: tools/ci_select_macos_xcode.sh", native)
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --parallel 2", native)
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --cache --parallel 2", native)
         self.assertIn("command -v cmake", native)
         self.assertIn("command -v ninja", native)
         self.assertNotIn("install-tools", native)

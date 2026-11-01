@@ -102,6 +102,8 @@ REVIEWED_WORKFLOW_CALLS = {
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
+    (".github/workflows/cmake.yml", "cmake-cache-producer"): "use_self_hosted_linux",
+    (".github/workflows/cmake.yml", "cmake-cache-consumer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
@@ -120,6 +122,10 @@ SELF_HOSTED_STATUS_PREFIX = {
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
 SELF_HOSTED_NARROWING = {
+    (".github/workflows/cmake.yml", "cmake-cache-producer"):
+        " && contains(github.event.pull_request.labels.*.name, 'ci:cmake-cache-qualification')",
+    (".github/workflows/cmake.yml", "cmake-cache-consumer"):
+        " && contains(github.event.pull_request.labels.*.name, 'ci:cmake-cache-qualification')",
     (".github/workflows/main.yml", "macos-browser"):
         " && (needs.determine-targets.outputs.fallback == 'true' || "
         "needs.determine-targets.outputs.browser_affected == 'true')",
@@ -631,7 +637,7 @@ def _cited_environment_violations(where, job):
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
 # the runner's effective configuration, so they never leave the runner.
-SELF_HOSTED_UPLOAD_FILES = {"coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
+SELF_HOSTED_UPLOAD_FILES = {"cmake-cache-receipt.json", "coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
                             "stall.txt", "target-list.txt"}
 
 # Triggers that run with repository credentials on behalf of an event someone else controls.
@@ -4657,8 +4663,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         main = _jobs(files[".github/workflows/main.yml"])
         uploads = _upload_paths(main["linux-self-hosted"])
         self.assertEqual(2, len(uploads))
+        cmake = _jobs(files[".github/workflows/cmake.yml"])
+        receipts = _upload_paths(cmake["cmake-cache-producer"]) + _upload_paths(cmake["cmake-cache-consumer"])
+        self.assertEqual([["${{ runner.temp }}/cmake-cache-receipt.json"]] * 2, receipts)
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
-                         {entry.rsplit("/", 1)[-1] for entry in uploads[0] + uploads[1]})
+                         {entry.rsplit("/", 1)[-1] for group in [*uploads, *receipts] for entry in group})
         self.assertIn(["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"], uploads)
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):

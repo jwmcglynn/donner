@@ -276,4 +276,86 @@ jobs:
 
       # Hosted FetchContent trees contain absolute paths; start a fresh native consumer build.
       - name: Build with CMake (tiny_skia)
-        run: tools/ci/cmake_consumer.sh build --parallel 2
+        run: tools/ci/cmake_consumer.sh build --cache --parallel 2
+
+  cmake-cache-producer:
+    runs-on: [self-hosted, Linux, ARM64, cmake-cache-producer]
+    timeout-minutes: 45
+    needs: gatekeeper
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:cmake-cache-qualification') }}
+    env:
+      DONNER_CMAKE_CACHE_NAMESPACE: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Isolate nested Bazel invocations
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_binary="$(command -v bazelisk)"
+          wrapper_dir="${RUNNER_TEMP}/cmake-bazel"
+          mkdir -p "$wrapper_dir"
+          printf '#!/usr/bin/env bash\nexec %q --nohome_rc --nosystem_rc "$@"\n' "$bazel_binary" > "$wrapper_dir/bazel"
+          chmod +x "$wrapper_dir/bazel"
+          ln -s bazel "$wrapper_dir/bazelisk"
+          echo "$wrapper_dir" >> "$GITHUB_PATH"
+
+      - name: Build and test fresh CMake consumer
+        run: tools/ci/cmake_consumer.sh build --check --cache --release-bazel-server --parallel 4
+
+      - name: Verify producer cache evidence
+        run: python3 tools/ci/cmake_cache.py qualify --role producer --receipt "${RUNNER_TEMP}/cmake-cache-receipt.json"
+
+      - name: Upload cache receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: cmake-cache-producer
+          path: ${{ runner.temp }}/cmake-cache-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+  cmake-cache-consumer:
+    runs-on: [self-hosted, Linux, ARM64, cmake-cache-consumer]
+    timeout-minutes: 45
+    needs: [gatekeeper, cmake-cache-producer]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:cmake-cache-qualification') }}
+    env:
+      DONNER_CMAKE_CACHE_NAMESPACE: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Isolate nested Bazel invocations
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_binary="$(command -v bazelisk)"
+          wrapper_dir="${RUNNER_TEMP}/cmake-bazel"
+          mkdir -p "$wrapper_dir"
+          printf '#!/usr/bin/env bash\nexec %q --nohome_rc --nosystem_rc "$@"\n' "$bazel_binary" > "$wrapper_dir/bazel"
+          chmod +x "$wrapper_dir/bazel"
+          ln -s bazel "$wrapper_dir/bazelisk"
+          echo "$wrapper_dir" >> "$GITHUB_PATH"
+
+      - name: Build and test fresh CMake consumer
+        run: tools/ci/cmake_consumer.sh build --check --cache --release-bazel-server --parallel 4
+
+      - name: Download producer receipt
+        uses: actions/download-artifact@v8
+        with:
+          name: cmake-cache-producer
+          path: ${{ runner.temp }}/cmake-producer
+
+      - name: Verify consumer cache evidence
+        run: python3 tools/ci/cmake_cache.py qualify --role consumer --receipt "${RUNNER_TEMP}/cmake-cache-receipt.json" --producer "${RUNNER_TEMP}/cmake-producer/cmake-cache-receipt.json"
+
+      - name: Upload cache receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: cmake-cache-consumer
+          path: ${{ runner.temp }}/cmake-cache-receipt.json
+          if-no-files-found: error
+          retention-days: 7
