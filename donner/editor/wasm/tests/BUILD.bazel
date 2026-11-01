@@ -1,4 +1,4 @@
-load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
 load("@npm//donner/editor/wasm/tests:esbuild/package_json.bzl", esbuild_bin = "bin")
@@ -1369,7 +1369,7 @@ esbuild_bin.esbuild_binary(
     name = "esbuild",
 )
 
-genrule(
+js_run_binary(
     name = "gpu_image_transfer_comparison_node",
     testonly = True,
     srcs = [
@@ -1377,8 +1377,15 @@ genrule(
         "gpu-image-transfer-comparison.ts",
     ],
     outs = ["gpu-image-transfer-comparison.cjs"],
-    cmd = "$(location :esbuild) $(location gpu-image-transfer-comparison.ts) --bundle --platform=node --format=cjs --outfile=$@",
-    tools = [":esbuild"],
+    args = [
+        "gpu-image-transfer-comparison.ts",
+        "--bundle",
+        "--platform=node",
+        "--format=cjs",
+        "--outfile=gpu-image-transfer-comparison.cjs",
+    ],
+    chdir = package_name(),
+    tool = ":esbuild",
 )
 
 js_test(
