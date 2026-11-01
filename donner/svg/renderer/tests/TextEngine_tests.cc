@@ -1486,6 +1486,28 @@ TEST(TextEngineTest, BidiExcludedFullWidthWrappingControlsRetainSourceClusters) 
   CheckFullWidthControlSourceClusters(false);
 }
 
+void ExpectVisibleJoinerSourceGlyph(const std::vector<TextGlyph>& actual, const TextGlyph& expected,
+                                    uint32_t cluster) {
+  EXPECT_THAT(std::count_if(actual.begin(), actual.end(),
+                            [&expected](const auto& glyph) {
+                              return glyph.glyphIndex == expected.glyphIndex;
+                            }),
+              Eq(1));
+  const auto found =
+      std::find_if(actual.begin(), actual.end(), [cluster, &expected](const auto& glyph) {
+        return glyph.cluster == cluster && glyph.glyphIndex == expected.glyphIndex;
+      });
+  EXPECT_NE(found, actual.end()) << "Missing source cluster " << cluster;
+  if (found == actual.end()) {
+    return;
+  }
+  EXPECT_THAT(found->glyphIndex, Eq(expected.glyphIndex));
+  EXPECT_THAT(found->xPosition, DoubleNear(expected.xPosition, 1e-5));
+  EXPECT_THAT(found->yPosition, DoubleNear(expected.yPosition, 1e-5));
+  EXPECT_THAT(found->xAdvance, DoubleNear(expected.xAdvance, 1e-5));
+  EXPECT_THAT(found->rotateDegrees, DoubleNear(expected.rotateDegrees, 1e-5));
+}
+
 void CheckJoinerControlTransparency(bool full) {
   Registry registry;
   FontManager fonts(registry);
@@ -1521,26 +1543,15 @@ void CheckJoinerControlTransparency(bool full) {
   ASSERT_THAT(first->glyphIndex, Gt(0));
   ASSERT_THAT(last->glyphIndex, Gt(0));
   EXPECT_THAT(first->glyphIndex, Not(Eq(last->glyphIndex)));
-  EXPECT_THAT(last->xPosition, Lt(100));
+  EXPECT_THAT(last->xPosition, DoubleEq(100));
   for (const std::string& controls : {std::string("\u200e"), std::string("\u200e\u200f\u061c")}) {
     SCOPED_TRACE(controls);
     const auto actual = layout("A\u200d" + controls + "B");
-    EXPECT_THAT(actual, SizeIs(ordinary.size()));
-    for (const auto& expected : ordinary) {
-      const uint32_t cluster = expected.cluster < 4
-                                   ? expected.cluster
-                                   : expected.cluster + static_cast<uint32_t>(controls.size());
-      const auto found = std::find_if(actual.begin(), actual.end(), [cluster](const auto& glyph) {
-        return glyph.cluster == cluster;
-      });
-      EXPECT_NE(found, actual.end()) << "Missing source cluster " << cluster;
-      if (found == actual.end()) {
-        continue;
-      }
-      EXPECT_THAT(found->glyphIndex, Eq(expected.glyphIndex));
-      EXPECT_THAT(found->xPosition, DoubleNear(expected.xPosition, 1e-5));
-      EXPECT_THAT(found->yPosition, DoubleNear(expected.yPosition, 1e-5));
-      EXPECT_THAT(found->xAdvance, DoubleNear(expected.xAdvance, 1e-5));
+    for (const TextGlyph* expected : {&*first, &*last}) {
+      const uint32_t cluster = expected->cluster < 4
+                                   ? expected->cluster
+                                   : expected->cluster + static_cast<uint32_t>(controls.size());
+      ExpectVisibleJoinerSourceGlyph(actual, *expected, cluster);
     }
   }
 }
