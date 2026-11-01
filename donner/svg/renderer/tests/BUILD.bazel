@@ -934,6 +934,7 @@ donner_cc_test(
         "//donner/css",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
+        "//donner/svg/components:components_core",
         "//donner/svg/components/text:components",
         "//donner/svg/renderer:placed_text_geometry",
         "//donner/svg/resources:font_manager",

@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -21,6 +24,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
@@ -70,6 +74,70 @@ std::vector<TextGlyph> AllPositionedGlyphs(SVGDocument& document) {
   return glyphs;
 }
 
+uint16_t ReadFontWord(std::span<const uint8_t> data, size_t offset) {
+  EXPECT_THAT(offset + 2, testing::Le(data.size()));
+  return offset + 2 <= data.size() ? (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]
+                                   : 0;
+}
+
+std::optional<size_t> RangeCoverageIndex(std::span<const uint8_t> data, size_t offset,
+                                         uint16_t glyph) {
+  const uint16_t format = ReadFontWord(data, offset);
+  EXPECT_THAT(format, testing::Eq(2));
+  if (format != 2 || offset + 4 > data.size()) {
+    return std::nullopt;
+  }
+  const size_t count = ReadFontWord(data, offset + 2);
+  EXPECT_THAT(count, testing::Le((data.size() - offset - 4) / 6));
+  if (count > (data.size() - offset - 4) / 6) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    const size_t range = offset + 4 + 6 * i;
+    const uint16_t first = ReadFontWord(data, range);
+    const uint16_t last = ReadFontWord(data, range + 2);
+    if (first <= glyph && glyph <= last) {
+      return ReadFontWord(data, range + 4) + glyph - first;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int16_t> PairXAdvance(std::span<const uint8_t> data, size_t offset, uint16_t right) {
+  if (offset + 2 > data.size()) {
+    return std::nullopt;
+  }
+  const size_t count = ReadFontWord(data, offset);
+  EXPECT_THAT(count, testing::Le((data.size() - offset - 2) / 4));
+  if (count > (data.size() - offset - 2) / 4) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    const size_t pair = offset + 2 + 4 * i;
+    if (ReadFontWord(data, pair) == right) {
+      return static_cast<int16_t>(ReadFontWord(data, pair + 2));
+    }
+  }
+  return std::nullopt;
+}
+
+struct JaKerningOracle {
+  TextBackend::ShapedRun normal;
+  TextBackend::ShapedRun none;
+  TextBackend::ShapedRun cjk;
+};
+
+std::optional<TextGlyph> UniqueGlyph(SVGDocument& document, int glyphIndex) {
+  std::vector<TextGlyph> matches;
+  for (const auto& glyph : AllPositionedGlyphs(document)) {
+    if (glyph.glyphIndex == glyphIndex) {
+      matches.push_back(glyph);
+    }
+  }
+  EXPECT_THAT(matches, testing::SizeIs(1)) << "glyphIndex=" << glyphIndex;
+  return matches.size() == 1 ? std::optional(matches[0]) : std::nullopt;
+}
+
 class MultiAdvanceMarkBackend : public tests::DecorationBackend {
 public:
   ShapedRun shapeRun(FontHandle, float, std::string_view, size_t begin, size_t, bool, FontVariant,
@@ -80,6 +148,28 @@ public:
                      {.glyphIndex = 4, .xAdvance = 10, .cluster = cluster},
                      {.glyphIndex = 5, .xOffset = -5, .yOffset = -2, .cluster = cluster}};
     return result;
+  }
+};
+
+class ClusterContextBackend : public tests::DecorationBackend {
+public:
+  struct Call {
+    std::string input;
+    size_t contextStart;
+    size_t contextLength;
+    size_t begin;
+    size_t length;
+    TextOrientation orientation;
+  };
+  mutable std::vector<Call> calls;
+
+  ShapedRun shapeRunInContext(FontHandle font, float size, std::string_view input,
+                              const ShapingContext& context, size_t begin, size_t length,
+                              bool vertical, TextOrientation orientation, FontVariant variant,
+                              bool) const override {
+    calls.push_back(
+        {std::string(input), context.byteOffset, context.byteLength, begin, length, orientation});
+    return DecorationBackend::shapeRun(font, size, input, begin, length, vertical, variant, false);
   }
 };
 
@@ -270,6 +360,136 @@ protected:
       }
     }
     EXPECT_THAT(cjk, testing::ElementsAre(4977));
+  }
+
+  void expectMplusJaGpos(FontHandle font) const {
+    const auto table = fonts_.sfntTable(font, "GPOS");
+    ASSERT_THAT(table, testing::Optional(testing::_));
+    const auto data = *table;
+    const size_t features = ReadFontWord(data, 6);
+    ASSERT_THAT(ReadFontWord(data, features), testing::Gt(0));
+    ASSERT_THAT(features + 8, testing::Le(data.size()));
+    ASSERT_THAT(data.subspan(features + 2, 4), testing::ElementsAre('k', 'e', 'r', 'n'));
+    const size_t kern = features + ReadFontWord(data, features + 6);
+    ASSERT_THAT(ReadFontWord(data, kern + 2), testing::Eq(1));
+    ASSERT_THAT(ReadFontWord(data, kern + 4), testing::Eq(0));
+    const size_t lookups = ReadFontWord(data, 8);
+    ASSERT_THAT(ReadFontWord(data, lookups), testing::Gt(0));
+    const size_t lookup = lookups + ReadFontWord(data, lookups + 2);
+    ASSERT_THAT(ReadFontWord(data, lookup), testing::Eq(2));
+    ASSERT_THAT(ReadFontWord(data, lookup + 4), testing::Eq(1));
+    const size_t pairs = lookup + ReadFontWord(data, lookup + 6);
+    ASSERT_THAT(ReadFontWord(data, pairs), testing::Eq(1));
+    ASSERT_THAT(ReadFontWord(data, pairs + 4), testing::Eq(4));
+    ASSERT_THAT(ReadFontWord(data, pairs + 6), testing::Eq(0));
+    const auto coverage = RangeCoverageIndex(data, pairs + ReadFontWord(data, pairs + 2), 43);
+    ASSERT_THAT(coverage, testing::Optional(testing::_));
+    ASSERT_THAT(*coverage, testing::Lt(ReadFontWord(data, pairs + 8)));
+    const size_t pairSet = pairs + ReadFontWord(data, pairs + 10 + 2 * *coverage);
+    EXPECT_THAT(PairXAdvance(data, pairSet, 66), testing::Optional(testing::Eq(-10)));
+  }
+
+  void prepareJaOracle(JaKerningOracle& oracle) {
+    const FontHandle font = fonts_.findFont("Mixed Mplus");
+    ASSERT_THAT(font, testing::Not(testing::Eq(FontHandle())));
+    ASSERT_THAT(fonts_.fontData(font), testing::ElementsAreArray(*mplus_));
+    ASSERT_NO_FATAL_FAILURE(expectMplusJaGpos(font));
+    oracle.normal = backend_.shapeRun(font, 20, "Ja", 0, 2, false, FontVariant::Normal, false);
+    oracle.none =
+        backend_.shapeRunNoKerning(font, 20, "Ja", 0, 2, false, FontVariant::Normal, false);
+    for (const auto& shaped : {oracle.normal, oracle.none}) {
+      ASSERT_THAT(shaped.glyphs,
+                  testing::ElementsAre(
+                      testing::Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, 43),
+                      testing::Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, 66)));
+      ASSERT_THAT(shaped.glyphs,
+                  testing::Each(testing::Field("xAdvance", &TextBackend::ShapedGlyph::xAdvance,
+                                               testing::Gt(0))));
+    }
+    for (const auto& glyph : oracle.normal.glyphs) {
+      const Path outline =
+          backend_.glyphOutline(font, glyph.glyphIndex, backend_.scaleForEmToPixels(font, 20));
+      ASSERT_THAT(outline.commands(), testing::Not(testing::IsEmpty()));
+    }
+    ASSERT_THAT(oracle.normal.glyphs[0].xAdvance, testing::Lt(oracle.none.glyphs[0].xAdvance));
+    ASSERT_THAT(oracle.normal.glyphs[1].xAdvance,
+                testing::DoubleEq(oracle.none.glyphs[1].xAdvance));
+    TextBackend::ShapingContext::WorkBudget work{4096, 64};
+    TextBackend::ShapingContext context;
+    context.byteLength = std::string_view("日本").size();
+    context.work = &work;
+    oracle.cjk = backend_.shapeRunInContext(font, 20, "日本", context, 0, context.byteLength, true,
+                                            TextOrientation::Mixed, FontVariant::Normal, false);
+    ASSERT_THAT(work.rejected, testing::IsFalse());
+    ASSERT_THAT(oracle.cjk.glyphs,
+                testing::ElementsAre(
+                    testing::Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, 4868),
+                    testing::Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, 4977)));
+    ASSERT_THAT(oracle.cjk.glyphs,
+                testing::Each(testing::Field("yAdvance", &TextBackend::ShapedGlyph::yAdvance,
+                                             testing::DoubleEq(20))));
+  }
+
+  void expectFixedCjkOrigins(SVGDocument& document, const JaKerningOracle& oracle) const {
+    const auto* geometry = TextGeometry(document);
+    ASSERT_THAT(geometry, testing::NotNull());
+    const auto& fonts = document.registry().ctx().get<FontManager>();
+    for (const auto& run : geometry->runs) {
+      for (const auto& glyph : run.glyphs) {
+        if (glyph.glyphIndex == 4868 || glyph.glyphIndex == 4977 || glyph.glyphIndex == 43 ||
+            glyph.glyphIndex == 66) {
+          EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), testing::ElementsAreArray(*mplus_));
+        }
+      }
+    }
+    double pen = 30;
+    for (const auto& shaped : oracle.cjk.glyphs) {
+      const auto glyph = UniqueGlyph(document, shaped.glyphIndex);
+      ASSERT_THAT(glyph, testing::Optional(testing::_));
+      EXPECT_THAT(Vector2d(glyph->xPosition, glyph->yPosition),
+                  Vector2Eq(testing::DoubleNear(160 + shaped.xOffset, 1e-6),
+                            testing::DoubleNear(pen + shaped.yOffset, 1e-6)));
+      EXPECT_THAT(glyph->verticalOriginOffset, testing::DoubleNear(shaped.yOffset, 1e-6));
+      pen += shaped.yAdvance;
+    }
+  }
+
+  void expectJaKerningMode(SVGDocument& document, FontKerning expected) const {
+    ASSERT_THAT(TextGeometry(document), testing::NotNull());
+    const auto text = document.querySelector("#text");
+    ASSERT_THAT(text, testing::Optional(testing::_));
+    const auto* computed = document.registry().try_get<components::ComputedTextComponent>(
+        text->unsafeEntityHandle().entity());
+    ASSERT_THAT(computed, testing::NotNull());
+    auto resolved = *computed;
+    document.registry().ctx().get<TextEngine>().resolvePerSpanLayoutStyles(
+        text->unsafeEntityHandle(), resolved);
+    size_t nonempty = 0;
+    for (const auto& span : resolved.spans) {
+      if (span.end > span.start) {
+        ++nonempty;
+        ASSERT_THAT(span.fontKerning, testing::Optional(expected));
+      }
+    }
+    ASSERT_THAT(nonempty, testing::Gt(0));
+  }
+
+  void expectJaInlineFrame(SVGDocument& document, const TextBackend::ShapedRun& oracle) const {
+    const auto first = UniqueGlyph(document, 43);
+    const auto last = UniqueGlyph(document, 66);
+    ASSERT_THAT(first, testing::Optional(testing::_));
+    ASSERT_THAT(last, testing::Optional(testing::_));
+    EXPECT_THAT(first->rotateDegrees, testing::DoubleEq(90));
+    EXPECT_THAT(last->rotateDegrees, testing::DoubleEq(90));
+    EXPECT_THAT(first->verticalInlineOffset,
+                testing::Optional(testing::DoubleNear(oracle.glyphs[0].xOffset, 1e-6)));
+    EXPECT_THAT(last->verticalInlineOffset,
+                testing::Optional(testing::DoubleNear(oracle.glyphs[1].xOffset, 1e-6)));
+    const double firstPen = first->yPosition - oracle.glyphs[0].xOffset;
+    const double lastPen = last->yPosition - oracle.glyphs[1].xOffset;
+    EXPECT_THAT(lastPen - firstPen, testing::DoubleNear(oracle.glyphs[0].xAdvance, 1e-6));
+    EXPECT_THAT(lastPen + last->yAdvance - firstPen,
+                testing::DoubleNear(oracle.glyphs[0].xAdvance + oracle.glyphs[1].xAdvance, 1e-6));
   }
 
   Registry registry_;
@@ -566,7 +786,7 @@ TEST_F(MixedVerticalTextConvergence, RotatedPaintSpanMarksMatchHorizontalAttachm
 }
 
 TEST_F(MixedVerticalTextConvergence, JoinerDoesNotMoveALaterClustersRotationPivot) {
-  const auto oracle = shape("B́");
+  const auto oracle = shape("B\u0301");
   ASSERT_THAT(oracle.glyphs, testing::SizeIs(2));
   const auto& base = oracle.glyphs[0];
   const auto& mark = oracle.glyphs[1];
@@ -575,8 +795,8 @@ TEST_F(MixedVerticalTextConvergence, JoinerDoesNotMoveALaterClustersRotationPivo
   ASSERT_THAT(base.glyphIndex, testing::Gt(0));
   ASSERT_THAT(mark.glyphIndex, testing::Gt(0));
   ASSERT_THAT(mark.glyphIndex, testing::Ne(base.glyphIndex));
-  auto before = document("A&#x200d;B́ ب");
-  auto after = document("<tspan rotate='30'>A&#x200d;B́</tspan> ب");
+  auto before = document("A&#x200d;B\u0301 ب");
+  auto after = document("<tspan rotate='30'>A&#x200d;B\u0301</tspan> ب");
   const auto original = AllPositionedGlyphs(before);
   const auto rotated = AllPositionedGlyphs(after);
   const auto hasBase = testing::Contains(
@@ -660,6 +880,175 @@ TEST_F(MixedVerticalTextConvergence, VerticalLengthOwnerRetainsItsExistingLayout
               testing::DoubleNear(60, 1e-6));
   EXPECT_THAT(owned.registry().ctx().get<TextEngine>().bidiRunCandidatesForTesting(),
               testing::Eq(0));
+}
+
+TEST_F(MixedVerticalTextConvergence, MixedSidewaysJaKeepsHorizontalKerningAcrossPaintSpans) {
+  JaKerningOracle oracle;
+  ASSERT_NO_FATAL_FAILURE(prepareJaOracle(oracle));
+  auto joined = document("日本 Ja ب", true);
+  auto split = document("日本 <tspan fill='red'>J</tspan><tspan fill='blue'>a</tspan> ب", true);
+  auto joinedText = joined.querySelector("#text");
+  auto splitText = split.querySelector("#text");
+  ASSERT_THAT(joinedText, testing::Optional(testing::_));
+  ASSERT_THAT(splitText, testing::Optional(testing::_));
+  joinedText->setAttribute("style", "font-kerning: normal");
+  splitText->setAttribute("style", "font-kerning: normal");
+  {
+    SCOPED_TRACE("joined");
+    ASSERT_NO_FATAL_FAILURE(expectFixedCjkOrigins(joined, oracle));
+    ASSERT_NO_FATAL_FAILURE(expectJaKerningMode(joined, FontKerning::Normal));
+    expectJaInlineFrame(joined, oracle.normal);
+  }
+  {
+    SCOPED_TRACE("split paint");
+    ASSERT_NO_FATAL_FAILURE(expectFixedCjkOrigins(split, oracle));
+    ASSERT_NO_FATAL_FAILURE(expectJaKerningMode(split, FontKerning::Normal));
+    expectJaInlineFrame(split, oracle.normal);
+  }
+}
+
+TEST_F(MixedVerticalTextConvergence, MixedSidewaysJaWithoutKerningKeepsTheSameOrigins) {
+  JaKerningOracle oracle;
+  ASSERT_NO_FATAL_FAILURE(prepareJaOracle(oracle));
+  auto joined = document("日本 Ja ب", true);
+  auto split = document("日本 <tspan fill='red'>J</tspan><tspan fill='blue'>a</tspan> ب", true);
+  auto joinedText = joined.querySelector("#text");
+  auto splitText = split.querySelector("#text");
+  ASSERT_THAT(joinedText, testing::Optional(testing::_));
+  ASSERT_THAT(splitText, testing::Optional(testing::_));
+  joinedText->setAttribute("style", "font-kerning: none");
+  splitText->setAttribute("style", "font-kerning: none");
+  {
+    SCOPED_TRACE("joined");
+    ASSERT_NO_FATAL_FAILURE(expectFixedCjkOrigins(joined, oracle));
+    ASSERT_NO_FATAL_FAILURE(expectJaKerningMode(joined, FontKerning::None));
+    expectJaInlineFrame(joined, oracle.none);
+  }
+  {
+    SCOPED_TRACE("split paint");
+    ASSERT_NO_FATAL_FAILURE(expectFixedCjkOrigins(split, oracle));
+    ASSERT_NO_FATAL_FAILURE(expectJaKerningMode(split, FontKerning::None));
+    expectJaInlineFrame(split, oracle.none);
+  }
+}
+
+TEST_F(MixedVerticalTextConvergence, HeterogeneousJoinedGroupKeepsNativeUprightMetrics) {
+  JaKerningOracle oracle;
+  ASSERT_NO_FATAL_FAILURE(prepareJaOracle(oracle));
+  constexpr std::string_view joined = "J\u200D日";
+  const auto nativeGroup =
+      backend_.shapeRun(fonts_.findFont("Mixed Mplus"), 20, joined, 0, joined.size(), true,
+                        TextOrientation::Mixed, FontVariant::Normal, false);
+  const auto nativeCjk = std::find_if(
+      nativeGroup.glyphs.begin(), nativeGroup.glyphs.end(),
+      [&](const auto& glyph) { return glyph.glyphIndex == oracle.cjk.glyphs[0].glyphIndex; });
+  ASSERT_THAT(nativeCjk, testing::Ne(nativeGroup.glyphs.end()));
+  ASSERT_THAT(nativeCjk->cluster, testing::Eq(std::string_view("J\u200D").size()));
+  ASSERT_THAT(nativeCjk->yAdvance, testing::DoubleEq(oracle.cjk.glyphs[0].yAdvance));
+  ASSERT_THAT(nativeCjk->yOffset, testing::DoubleEq(oracle.cjk.glyphs[0].yOffset));
+  auto scene = document("J\u200D日 ب", true);
+  const auto* geometry = TextGeometry(scene);
+  ASSERT_THAT(geometry, testing::NotNull());
+  const auto glyph = UniqueGlyph(scene, oracle.cjk.glyphs[0].glyphIndex);
+  ASSERT_THAT(glyph, testing::Optional(testing::_));
+  const auto& native = oracle.cjk.glyphs[0];
+  EXPECT_THAT(glyph->rotateDegrees, testing::DoubleEq(0));
+  EXPECT_THAT(glyph->yAdvance, testing::DoubleEq(native.yAdvance));
+  EXPECT_THAT(glyph->verticalOriginOffset, testing::DoubleEq(native.yOffset));
+  EXPECT_THAT(glyph->xPosition, testing::DoubleNear(160 + native.xOffset, 1e-6));
+  const auto& fonts = scene.registry().ctx().get<FontManager>();
+  size_t occurrences = 0;
+  for (const auto& run : geometry->runs) {
+    for (const auto& placed : run.glyphs) {
+      if (placed.glyphIndex == native.glyphIndex) {
+        ++occurrences;
+        EXPECT_THAT(fonts.fontData(GlyphFont(run, placed)), testing::ElementsAreArray(*mplus_));
+      }
+    }
+  }
+  EXPECT_THAT(occurrences, testing::Eq(1));
+}
+
+TEST(MixedVerticalDecoration, OrientationContextsPreserveCompleteMarkSelectorAndJoinerGroups) {
+  const std::vector<std::tuple<std::string_view, std::string_view, TextOrientation>> cases = {
+      {"日\u0301Ja ب", "日\u0301", TextOrientation::Mixed},
+      {"日本 J\uFE0Fa ب", "J\uFE0F", TextOrientation::Sideways},
+      {"日本 J\u200D日a ب", "J\u200D日", TextOrientation::Mixed},
+      {"👩\u200D🔬Ja ب", "👩\u200D🔬", TextOrientation::Mixed},
+  };
+  for (const auto& [contents, group, orientation] : cases) {
+    SCOPED_TRACE(contents);
+    auto document = instantiateSubtree(
+        "<text id='text' x='80' y='10' font-size='20' writing-mode='vertical-rl'>" +
+            std::string(contents) + "</text>",
+        {}, {200, 200});
+    auto& registry = document.registry();
+    auto& fonts = registry.ctx().emplace<FontManager>(registry);
+    auto backend = std::make_unique<ClusterContextBackend>();
+    const auto* probe = backend.get();
+    auto& engine = registry.ctx().emplace<TextEngine>(fonts, registry, std::move(backend));
+    const auto glyphs = AllPositionedGlyphs(document);
+    ASSERT_THAT(glyphs, testing::Not(testing::IsEmpty()));
+    ASSERT_THAT(glyphs, testing::Each(
+                            testing::Field("glyphIndex", &TextGlyph::glyphIndex, testing::Gt(0))));
+    ASSERT_THAT(engine.bidiRunCandidatesForTesting(), testing::Gt(0));
+    ASSERT_THAT(probe->calls, testing::Not(testing::IsEmpty()));
+    size_t covered = 0;
+    for (const auto& call : probe->calls) {
+      const size_t start = call.input.find(group);
+      ASSERT_THAT(start, testing::Ne(std::string::npos));
+      const size_t end = start + group.size();
+      if (call.begin < end && call.begin + call.length > start) {
+        ++covered;
+        EXPECT_THAT(call.orientation, testing::Eq(orientation));
+        EXPECT_THAT(call.begin, testing::Le(start));
+        EXPECT_THAT(call.begin + call.length, testing::Ge(end));
+        EXPECT_THAT(call.contextStart, testing::Le(start));
+        EXPECT_THAT(call.contextStart + call.contextLength, testing::Ge(end));
+      }
+    }
+    EXPECT_THAT(covered, testing::Gt(0));
+  }
+}
+
+TEST(MixedVerticalDecoration, OrientationContextAdmissionRejectsBeforeShapingAndReleasesCharges) {
+  for (const bool constrained : {true, false}) {
+    SCOPED_TRACE(constrained);
+    Registry registry;
+    components::DocumentResourceFamilyBudget::Limits limits;
+    limits.geometryBytes = constrained ? 128 : 64u * 1024u * 1024u;
+    auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+    registry.ctx().emplace<components::DocumentResourceFamilyContext>(family);
+    FontManager fonts(registry);
+    auto backend = std::make_unique<ClusterContextBackend>();
+    const auto* probe = backend.get();
+    TextEngine engine(fonts, registry, std::move(backend));
+    components::ComputedTextComponent text;
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("日J日a日J日a ب");
+    span.start = 0;
+    span.end = span.text.size();
+    ASSERT_THAT(std::string_view(span.text.data() + span.start, span.end - span.start),
+                testing::HasSubstr("ب"));
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params;
+    params.fontSize = Lengthd(20, Lengthd::Unit::None);
+    params.viewBox = Box2d::FromXYWH(0, 0, 200, 200);
+    params.writingMode = WritingMode::VerticalRl;
+    const auto runs = engine.layout(text, params);
+    if (constrained) {
+      EXPECT_THAT(runs, testing::IsEmpty());
+      EXPECT_THAT(probe->calls, testing::IsEmpty());
+      EXPECT_THAT(family->securityStats().rejected, testing::IsTrue());
+    } else {
+      ASSERT_THAT(runs, testing::Not(testing::IsEmpty()));
+      EXPECT_THAT(runs[0].glyphs, testing::Not(testing::IsEmpty()));
+      EXPECT_THAT(probe->calls, testing::Not(testing::IsEmpty()));
+      EXPECT_THAT(family->securityStats().rejected, testing::IsFalse());
+    }
+    EXPECT_THAT(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
+                testing::Eq(0));
+  }
 }
 
 TEST(MixedVerticalDecoration, DeclaringFontBandUsesTheVerticalPenFrame) {

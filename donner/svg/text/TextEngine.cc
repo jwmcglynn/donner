@@ -4208,6 +4208,7 @@ public:
       size_t startByte;
       size_t endByte;
       size_t visualIndex;
+      std::optional<TextOrientation> orientation;
     };
     std::vector<LogicalRun> logical;
     bool hasAddressable = false;
@@ -4218,6 +4219,7 @@ public:
     size_t contextEnd;
     const TextBackend::ShapingContext* context;
     size_t visualIndex;
+    std::optional<TextOrientation> orientation;
   };
 
   explicit NormalBidiPlan(Registry& registry, size_t* candidates, bool* preserved,
@@ -4261,7 +4263,7 @@ public:
       paragraphs.back().end = characters.size();
     }
     for (auto& paragraph : paragraphs) {
-      if (!resolveParagraph(paragraph)) {
+      if (!resolveParagraph(paragraph, text, isVertical(params.writingMode))) {
         return reject();
       }
     }
@@ -4332,7 +4334,8 @@ public:
                         candidate->startByte,
                         candidate->endByte,
                         &paragraph.contexts[candidate->visualIndex],
-                        candidate->visualIndex});
+                        candidate->visualIndex,
+                        candidate->orientation});
     }
     std::sort(result.begin(), result.end(),
               [](const Item& a, const Item& b) { return a.visualIndex < b.visualIndex; });
@@ -4413,11 +4416,13 @@ private:
     constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
     constexpr size_t kPerByte =
         8u * (sizeof(TextGlyph) + sizeof(TextBackend::ShapedGlyph) + sizeof(FontHandle) + 128u);
-    if (input.bytes > kMaximumBytes / kPerByte || input.count > kMaximumBytes / 256u ||
+    constexpr size_t kPerScalar =
+        256u + sizeof(TextBackend::ShapingContext) + sizeof(Paragraph::LogicalRun);
+    if (input.bytes > kMaximumBytes / kPerByte || input.count > kMaximumBytes / kPerScalar ||
         spanCount > kMaximumBytes / 256u) {
       return false;
     }
-    const size_t bytes = input.bytes * kPerByte + input.count * 256u + spanCount * 256u;
+    const size_t bytes = input.bytes * kPerByte + input.count * kPerScalar + spanCount * 256u;
     if (bytes > kMaximumBytes ||
         !family_->reserve(components::DocumentResourceFamilyBudget::Kind::Geometry, bytes)) {
       return false;
@@ -4426,7 +4431,8 @@ private:
     return true;
   }
 
-  bool resolveParagraph(Paragraph& paragraph) {
+  bool resolveParagraph(Paragraph& paragraph, const components::ComputedTextComponent& text,
+                        bool vertical) {
     std::vector<char32_t> codepoints;
     codepoints.reserve(paragraph.end - paragraph.first);
     for (size_t index = paragraph.first; index < paragraph.end; ++index) {
@@ -4441,29 +4447,105 @@ private:
       return false;
     }
     paragraph.visual = std::move(*runs);
-    prepareRuns(paragraph);
+    prepareRuns(paragraph, text, vertical);
     return true;
   }
 
-  void prepareRuns(Paragraph& paragraph) {
-    paragraph.contexts.reserve(paragraph.visual.size());
-    paragraph.logical.reserve(paragraph.visual.size());
+  std::pair<TextOrientation, bool> orientationKey(const components::ComputedTextComponent& text,
+                                                  size_t index) const {
+    const auto& character = characters[index];
+    const auto orientation = text.spans[character.span].textOrientation;
+    return {orientation, orientation == TextOrientation::Sideways || character.codepoint < 0x2E80};
+  }
+
+  std::pair<size_t, std::optional<TextOrientation>> orientationCluster(
+      const components::ComputedTextComponent& text, size_t first, size_t end) const {
+    const auto key = orientationKey(text, first);
+    const size_t limit = ClusterEnd(source, byteAt(first), byteAt(end));
+    bool homogeneous = true;
+    size_t next = first + 1;
+    while (next < end && byteAt(next) < limit) {
+      const auto candidate = orientationKey(text, next);
+      homogeneous &= candidate.first == key.first &&
+                     (isNonSpacing(characters[next].codepoint) || candidate.second == key.second);
+      ++next;
+    }
+    return {next, homogeneous ? std::optional(key.second ? TextOrientation::Sideways
+                                                         : TextOrientation::Mixed)
+                              : std::nullopt};
+  }
+
+  std::pair<size_t, std::optional<TextOrientation>> nextOrientationBoundary(
+      const components::ComputedTextComponent& text, size_t first, size_t end) const {
+    auto result = orientationCluster(text, first, end);
+    if (!result.second) {
+      return result;
+    }
+    while (result.first < end) {
+      const auto next = orientationCluster(text, result.first, end);
+      if (next.second != result.second) {
+        break;
+      }
+      result.first = next.first;
+    }
+    return result;
+  }
+
+  void appendShapingContext(Paragraph& paragraph, size_t first, size_t end, bool backward,
+                            std::optional<TextOrientation> orientation) {
+    const size_t index = paragraph.contexts.size();
+    const size_t beginByte = byteAt(first);
+    const size_t endByte = byteAt(end);
+    TextBackend::ShapingContext context{beginByte, endByte - beginByte};
+    context.rightToLeft = backward;
+    context.work = &work;
+    paragraph.contexts.push_back(context);
+    paragraph.logical.push_back({beginByte, endByte, index, orientation});
+    for (size_t character = first; character < end; ++character) {
+      characters[character].shapingRun = index;
+    }
+  }
+
+  void prepareRunContexts(Paragraph& paragraph, const BidiParagraph::Run& run,
+                          const components::ComputedTextComponent& text, bool vertical) {
+    const size_t first = paragraph.first + run.start;
+    const size_t end = paragraph.first + run.end;
+    const bool backward = run.level % 2 != 0;
+    const size_t contextStart = paragraph.contexts.size();
+    for (size_t begin = first; begin < end;) {
+      const auto boundary = vertical ? nextOrientationBoundary(text, begin, end)
+                                     : std::pair(end, std::optional<TextOrientation>());
+      appendShapingContext(paragraph, begin, boundary.first, backward, boundary.second);
+      begin = boundary.first;
+    }
+    if (backward) {
+      std::reverse(paragraph.contexts.begin() + contextStart, paragraph.contexts.end());
+      std::reverse(paragraph.logical.begin() + contextStart, paragraph.logical.end());
+      const size_t contextEnd = paragraph.contexts.size();
+      for (size_t index = contextStart; index < contextEnd; ++index) {
+        paragraph.logical[index].visualIndex = index;
+      }
+      for (size_t index = first; index < end; ++index) {
+        characters[index].shapingRun =
+            contextEnd - 1 - (characters[index].shapingRun - contextStart);
+      }
+    }
+  }
+
+  void prepareRuns(Paragraph& paragraph, const components::ComputedTextComponent& text,
+                   bool vertical) {
+    const size_t capacity = vertical ? paragraph.end - paragraph.first : paragraph.visual.size();
+    paragraph.contexts.reserve(capacity);
+    paragraph.logical.reserve(capacity);
     uint32_t rank = 0;
     for (size_t runIndex = 0; runIndex < paragraph.visual.size(); ++runIndex) {
       const auto& run = paragraph.visual[runIndex];
-      const size_t begin = byteAt(paragraph.first + run.start);
-      const size_t end = byteAt(paragraph.first + run.end);
-      TextBackend::ShapingContext context{begin, end - begin};
-      context.rightToLeft = run.level % 2 != 0;
-      context.work = &work;
-      paragraph.contexts.push_back(context);
-      paragraph.logical.push_back({begin, end, runIndex});
+      prepareRunContexts(paragraph, run, text, vertical);
       for (size_t offset = run.start; offset < run.end; ++offset) {
         const size_t index =
             paragraph.first + (run.level % 2 ? run.end - 1 - (offset - run.start) : offset);
         characters[index].rank = rank++;
         characters[index].level = run.level;
-        characters[index].shapingRun = runIndex;
       }
     }
     std::sort(paragraph.logical.begin(), paragraph.logical.end(),
@@ -4770,13 +4852,14 @@ public:
   /// primary face draws every glyph.
   TextBackend::ShapedRun shape(const ChunkRange& chunk, std::vector<FontHandle>& faces) const {
     if (!bidi_) {
-      return shapeFragment(chunk, nullptr, faces);
+      return shapeFragment(chunk, nullptr, faces, orientation_);
     }
     TextBackend::ShapedRun result;
     for (const auto& item : bidi_->items(sourceSpan_, chunk)) {
       const auto& context = *item.context;
       std::vector<FontHandle> itemFaces;
-      auto shaped = shapeFragment(item.range, &context, itemFaces);
+      auto shaped =
+          shapeFragment(item.range, &context, itemFaces, item.orientation.value_or(orientation_));
       const size_t oldSize = result.glyphs.size();
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       if (!itemFaces.empty() || !faces.empty()) {
@@ -4791,14 +4874,21 @@ public:
     return result;
   }
 
-  /// Shape a complete fragment with original context, including face fallback.
   TextBackend::ShapedRun shapeFragment(const ChunkRange& chunk,
                                        const TextBackend::ShapingContext* context,
                                        std::vector<FontHandle>& faces) const {
+    return shapeFragment(chunk, context, faces, orientation_);
+  }
+
+  /// Shape a complete fragment with original context, including face fallback.
+  TextBackend::ShapedRun shapeFragment(const ChunkRange& chunk,
+                                       const TextBackend::ShapingContext* context,
+                                       std::vector<FontHandle>& faces,
+                                       TextOrientation orientation) const {
     if (run_.usedFontSizePx == 0.0f) {
       return ShapeAddressableZeroSizeText(text_, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
     }
-    TextBackend::ShapedRun primary = shapeWith(run_.font, chunk, context);
+    TextBackend::ShapedRun primary = shapeWith(run_.font, chunk, context, orientation);
     PrimaryClusters clusters = primaryClusters(primary, chunk);
     if (!clusters.anyNotdef) {
       return primary;
@@ -4812,7 +4902,7 @@ public:
         primary.glyphs.front().cluster > primary.glyphs.back().cluster) {
       std::reverse(items.begin(), items.end());
     }
-    auto result = shapeItems(items, chunk, context, faces);
+    auto result = shapeItems(items, chunk, context, faces, orientation);
     result.backward = BackwardShapedGroups(primary);
     return result;
   }
@@ -4879,13 +4969,14 @@ private:
   /// faces and script-neutral items take the chunk's direction.
   TextBackend::ShapedRun shapeItems(const std::vector<Item>& items, const ChunkRange& chunk,
                                     const TextBackend::ShapingContext* suppliedContext,
-                                    std::vector<FontHandle>& faces) const {
+                                    std::vector<FontHandle>& faces,
+                                    TextOrientation orientation) const {
     const TextBackend::ShapingContext fallbackContext{chunk.byteStart,
                                                       chunk.byteEnd - chunk.byteStart};
     const auto& context = suppliedContext ? *suppliedContext : fallbackContext;
     TextBackend::ShapedRun result;
     for (const Item& item : items) {
-      const TextBackend::ShapedRun shaped = shapeWith(item.face, item.range, &context);
+      const TextBackend::ShapedRun shaped = shapeWith(item.face, item.range, &context, orientation);
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       faces.resize(result.glyphs.size(), item.face == run_.font ? FontHandle() : item.face);
     }
@@ -4893,7 +4984,8 @@ private:
   }
 
   TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk,
-                                   const TextBackend::ShapingContext* context) const {
+                                   const TextBackend::ShapingContext* context,
+                                   TextOrientation orientation) const {
     const size_t length = chunk.byteEnd - chunk.byteStart;
     const FontVariant variant = EffectiveSmallCapsVariant(backend_, font, variant_, synthesis_);
     if (context) {
@@ -4901,7 +4993,7 @@ private:
       const std::string_view input = bidi_ ? std::string_view(bidi_->source) : text_;
       auto shaped = backend_.shapeRunInContext(font, run_.usedFontSizePx, input, *context,
                                                offset + chunk.byteStart, length, vertical_,
-                                               orientation_, variant, kerning_);
+                                               orientation, variant, kerning_);
       if (bidi_) {
         if (shaped.glyphs.size() > length * 8u) {
           bidi_->reject();
@@ -4918,9 +5010,9 @@ private:
       return shaped;
     }
     return kerning_ ? backend_.shapeRun(font, run_.usedFontSizePx, text_, chunk.byteStart, length,
-                                        vertical_, orientation_, variant, false)
+                                        vertical_, orientation, variant, false)
                     : backend_.shapeRunNoKerning(font, run_.usedFontSizePx, text_, chunk.byteStart,
-                                                 length, vertical_, orientation_, variant, false);
+                                                 length, vertical_, orientation, variant, false);
   }
 
   /// The face for a cluster whose primary glyphs include `.notdef`. Repeated clusters reuse the
