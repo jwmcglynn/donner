@@ -7334,10 +7334,9 @@ private:
     const auto& begin = bidiPlacements_[sourceFirst];
     chunkBoundaries_.push_back({begin.run, begin.glyph, span.textAnchor, x.has_value(),
                                 y.has_value(), pen.x + initial.dx});
-    // Placement indices retain source glyph order for marks sharing one visual character rank.
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-      return std::pair(normalBidi_.characters[bidiPlacements_[a].character].rank, a) <
-             std::pair(normalBidi_.characters[bidiPlacements_[b].character].rank, b);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+      return normalBidi_.characters[bidiPlacements_[a].character].rank <
+             normalBidi_.characters[bidiPlacements_[b].character].rank;
     });
     const auto& firstVisual = bidiPlacements_[order.front()];
     chunkBoundaries_.back().visualFirstGlyph = std::pair(firstVisual.run, firstVisual.glyph);
