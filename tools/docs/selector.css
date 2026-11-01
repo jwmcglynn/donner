@@ -8,6 +8,7 @@
 .docs-version-notice button { margin-left: .5rem; font: inherit; cursor: pointer; }
 
 .docs-source, #projectnumber { display: none; }
+html { --code-font-size: 13px; }
 
 /* Stored release pages keep their original theme, so size the shared navigation here. */
 #titlearea table { table-layout: fixed; width: 100%; }
@@ -31,4 +32,12 @@
   #projectrow #projectlogo img { width: 36px; min-width: 36px; }
   #projectname { display: flow-root; font-size: 18px; }
   #projectbrief { padding-top: 4px; }
+  #doc-content { overflow-wrap: anywhere; }
+  #doc-content img { max-width: 100%; height: auto; }
+  #doc-content table { max-width: 100%; }
+  #doc-content th, #doc-content td { white-space: normal; }
+  #doc-content :is(table.params, table.tparams, table.retval, table.exception) { display: table; width: 100%; table-layout: fixed; }
+  #doc-content :is(.params, .tparams, .retval, .exception) tbody { display: table-row-group; }
+  #doc-content :is(.params, .tparams, .retval, .exception) .paramname { width: 33%; }
+  #doc-content code, #doc-content span.tt, div.fragment .line, pre.fragment { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
