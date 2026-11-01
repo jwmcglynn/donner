@@ -4203,23 +4203,20 @@ public:
     size_t first = 0;
     size_t end = 0;
     std::vector<BidiParagraph::Run> visual;
-    std::vector<TextBackend::ShapingContext> contexts;
-    struct LogicalRun {
-      size_t startByte;
-      size_t endByte;
-      size_t visualIndex;
+    struct Context {
+      TextBackend::ShapingContext shaping;
       std::optional<TextOrientation> orientation;
+
+      size_t endByte() const { return shaping.byteOffset + shaping.byteLength; }
     };
-    std::vector<LogicalRun> logical;
+    std::vector<Context> contexts;
+    /// Source-order references alias the pre-reserved context storage for this paragraph.
+    std::vector<const Context*> logical;
     bool hasAddressable = false;
   };
   struct Item {
     ChunkRange range;
-    size_t contextStart;
-    size_t contextEnd;
-    const TextBackend::ShapingContext* context;
-    size_t visualIndex;
-    std::optional<TextOrientation> orientation;
+    const Paragraph::Context* context;
   };
 
   explicit NormalBidiPlan(Registry& registry, size_t* candidates, bool* preserved,
@@ -4325,20 +4322,16 @@ public:
       if (!examineCandidate()) {
         return {};
       }
-      if (candidate->startByte >= end) {
+      const auto* context = *candidate;
+      if (context->shaping.byteOffset >= end) {
         break;
       }
-      const size_t start = std::max(candidate->startByte, begin);
-      const size_t limit = std::min(candidate->endByte, end);
-      result.push_back({{start - spans[span].byte, limit - spans[span].byte},
-                        candidate->startByte,
-                        candidate->endByte,
-                        &paragraph.contexts[candidate->visualIndex],
-                        candidate->visualIndex,
-                        candidate->orientation});
+      const size_t start = std::max(context->shaping.byteOffset, begin);
+      const size_t limit = std::min(context->endByte(), end);
+      result.push_back({{start - spans[span].byte, limit - spans[span].byte}, context});
     }
     std::sort(result.begin(), result.end(),
-              [](const Item& a, const Item& b) { return a.visualIndex < b.visualIndex; });
+              [](const Item& a, const Item& b) { return a.context < b.context; });
     return result;
   }
 
@@ -4416,8 +4409,17 @@ private:
     constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
     constexpr size_t kPerByte =
         8u * (sizeof(TextGlyph) + sizeof(TextBackend::ShapedGlyph) + sizeof(FontHandle) + 128u);
-    constexpr size_t kPerScalar =
-        256u + sizeof(TextBackend::ShapingContext) + sizeof(Paragraph::LogicalRun);
+    struct SourceIndexAllowance {
+      size_t startByte;
+      size_t endByte;
+      size_t visualIndex;
+      std::optional<TextOrientation> orientation;
+    };
+    constexpr size_t kContextStorage =
+        sizeof(TextBackend::ShapingContext) + sizeof(SourceIndexAllowance);
+    static_assert(kContextStorage >=
+                  sizeof(Paragraph::Context) + sizeof(const Paragraph::Context*));
+    constexpr size_t kPerScalar = 256u + kContextStorage;
     if (input.bytes > kMaximumBytes / kPerByte || input.count > kMaximumBytes / kPerScalar ||
         spanCount > kMaximumBytes / 256u) {
       return false;
@@ -4499,8 +4501,8 @@ private:
     TextBackend::ShapingContext context{beginByte, endByte - beginByte};
     context.rightToLeft = backward;
     context.work = &work;
-    paragraph.contexts.push_back(context);
-    paragraph.logical.push_back({beginByte, endByte, index, orientation});
+    paragraph.contexts.push_back({context, orientation});
+    paragraph.logical.push_back(&paragraph.contexts.back());
     for (size_t character = first; character < end; ++character) {
       characters[character].shapingRun = index;
     }
@@ -4520,11 +4522,7 @@ private:
     }
     if (backward) {
       std::reverse(paragraph.contexts.begin() + contextStart, paragraph.contexts.end());
-      std::reverse(paragraph.logical.begin() + contextStart, paragraph.logical.end());
       const size_t contextEnd = paragraph.contexts.size();
-      for (size_t index = contextStart; index < contextEnd; ++index) {
-        paragraph.logical[index].visualIndex = index;
-      }
       for (size_t index = first; index < end; ++index) {
         characters[index].shapingRun =
             contextEnd - 1 - (characters[index].shapingRun - contextStart);
@@ -4548,8 +4546,9 @@ private:
         characters[index].level = run.level;
       }
     }
-    std::sort(paragraph.logical.begin(), paragraph.logical.end(),
-              [](const auto& a, const auto& b) { return a.startByte < b.startByte; });
+    std::sort(paragraph.logical.begin(), paragraph.logical.end(), [](const auto* a, const auto* b) {
+      return a->shaping.byteOffset < b->shaping.byteOffset;
+    });
   }
 #endif  // DONNER_TEXT_ENABLED
 
@@ -4569,7 +4568,7 @@ private:
       }
       const size_t step = count / 2;
       const size_t candidate = first + step;
-      if (paragraph.logical[candidate].endByte <= byte) {
+      if (paragraph.logical[candidate]->endByte() <= byte) {
         first = candidate + 1;
         count -= step + 1;
       } else {
@@ -4856,10 +4855,10 @@ public:
     }
     TextBackend::ShapedRun result;
     for (const auto& item : bidi_->items(sourceSpan_, chunk)) {
-      const auto& context = *item.context;
+      const auto& context = item.context->shaping;
       std::vector<FontHandle> itemFaces;
-      auto shaped =
-          shapeFragment(item.range, &context, itemFaces, item.orientation.value_or(orientation_));
+      auto shaped = shapeFragment(item.range, &context, itemFaces,
+                                  item.context->orientation.value_or(orientation_));
       const size_t oldSize = result.glyphs.size();
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       if (!itemFaces.empty() || !faces.empty()) {
@@ -7519,7 +7518,7 @@ private:
         GlyphFont(runs_[item.run], runs_[item.run].glyphs[item.glyph]),
         runs_[item.run].usedFontSizePx, priorSource.codepoint, source.codepoint,
         isVertical(params_.writingMode), text_.spans[item.run].textOrientation,
-        normalBidi_.paragraphs[source.paragraph].contexts[source.shapingRun]);
+        normalBidi_.paragraphs[source.paragraph].contexts[source.shapingRun].shaping);
   }
 
   void rotateBidiMark(TextGlyph& glyph, const BidiPlacement& item,
