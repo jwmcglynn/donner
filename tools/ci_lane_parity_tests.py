@@ -215,15 +215,15 @@ MAIN_ONLY_JOBS = {}
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
     ("cmake.yml", "macos", "macos-self-hosted", "Build with CMake (tiny_skia)",
-     "step-changed", "dceee0c1aa1f6a9e"):
-        "The same consumer configure/build/CTest runs with two build tasks and no ccache launcher; "
+     "step-changed", "e04392c28e167107"):
+        "The same consumer configure/build/CTest runs with two build tasks and persistent ccache; "
         "native tool provisioning is checked rather than installed during a PR.",
     ("cmake.yml", "macos", "macos-self-hosted", "Install build tools", "step-main-only", ""):
         "The persistent runner must already provide CMake and Ninja; CI does not install host tools.",
     ("cmake.yml", "macos", "macos-self-hosted", "Restore CMake dependencies", "step-main-only", ""):
-        "Hosted FetchContent trees embed absolute paths, so native builds resolve fresh dependencies.",
+        "Native builds extract verified source archives into fresh build directories.",
     ("cmake.yml", "macos", "macos-self-hosted", "Restore compiler outputs", "step-main-only", ""):
-        "The bounded native consumer runs without the hosted ccache launcher or snapshot.",
+        "The bounded native consumer uses persistent ccache instead of hosted snapshots.",
     ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
         "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
     ("lint.yml", "cmake-validate", "lint-self-hosted",

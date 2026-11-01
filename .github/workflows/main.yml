@@ -753,7 +753,7 @@ jobs:
       - name: Build and test CMake consumer
         id: cmake_consumer
         shell: bash
-        run: tools/ci/cmake_consumer.sh build --check --release-bazel-server --parallel 4
+        run: tools/ci/cmake_consumer.sh build --check --cache --release-bazel-server --parallel 4
 
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Save Bazel action cache
@@ -1180,7 +1180,7 @@ jobs:
       - name: Build and test CMake consumer
         id: cmake_consumer
         shell: bash
-        run: tools/ci/cmake_consumer.sh build --check --release-bazel-server --parallel 4
+        run: tools/ci/cmake_consumer.sh build --check --cache --release-bazel-server --parallel 4
 
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt

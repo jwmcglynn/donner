@@ -44,7 +44,7 @@ class CMakeConsumerTest(unittest.TestCase):
         # PATH means a runner's own cmake, ccache or ninja can never stand in for a fake.
         cls.host = cls.executables.path / "host"
         cls.host.mkdir()
-        for tool in ("dirname", "sed"):
+        for tool in ("dirname", "sed", "mktemp"):
             os.symlink(shutil.which(tool), cls.host / tool)
         cls.bash = shutil.which("bash")
 
@@ -122,6 +122,26 @@ class CMakeConsumerTest(unittest.TestCase):
             ["ctest", "--test-dir", "build", "--output-on-failure"],
         ])
 
+    def test_persistent_cache_wraps_every_native_phase_and_tests_still_execute(self):
+        result, calls = self._run("build", "--cache", "--release-bazel-server", "--parallel", "4", RUNNER_TEMP=str(self.work))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[:2], [["python3", "tools/cmake/gen_cmakelists.py"], ["bazel", "shutdown"]])
+        protocol = calls[2:]
+        self.assertEqual(["prepare", "configure", "run", "run", "statistics"], [call[2] for call in protocol])
+        context = protocol[0][4]
+        self.assertTrue(all(call[3:5] == ["--context", context] for call in protocol))
+        self.assertEqual(protocol[1][6:], self._configure())
+        self.assertEqual(protocol[2][6:], ["cmake", "--build", "build", "--target", "donner_cmake_consumer", "--parallel", "4"])
+        self.assertEqual(protocol[3][6:], ["ctest", "--test-dir", "build", "--output-on-failure", "--no-tests=error", "--output-junit", str(self.repo.resolve() / "build/cmake-consumer-tests.xml")])
+        self.assertNotIn(["ccache", "--zero-stats"], calls)
+
+    def test_contributor_receipt_uses_the_private_context_directory(self):
+        result, calls = self._run("build", "--cache", RUNNER_TEMP="", TMPDIR=str(self.work))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = Path(calls[1][4])
+        self.assertEqual(str(context.parent / "cmake-cache-receipt.json"), calls[-1][-1])
+        self.assertEqual(0o700, context.parent.stat().st_mode & 0o777)
+
     def test_failed_shutdown_stops_before_native_compilation(self):
         result, calls = self._run("build", "--release-bazel-server", "--parallel", "4",
                                   fail="bazel=7")
@@ -164,7 +184,7 @@ class CMakeConsumerTest(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_invalid_usage_runs_nothing(self):
-        for args in ((), ("bogus",), ("build", "--parallel"), ("build", "--jobs"),
+        for args in ((), ("bogus",), ("build", "--parallel"), ("build", "--jobs"), ("build", "--cache", "--ccache"),
                      ("install-tools", "extra")):
             with self.subTest(args=args):
                 result, calls = self._run(*args)

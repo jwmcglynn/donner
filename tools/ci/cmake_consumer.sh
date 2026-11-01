@@ -6,10 +6,11 @@
 #
 #   tools/ci/cmake_consumer.sh install-tools
 #       Install ccache and ninja with Homebrew when either is missing (hosted macOS images).
-#   tools/ci/cmake_consumer.sh build [--check] [--ccache] [--release-bazel-server] [--parallel N]
+#   tools/ci/cmake_consumer.sh build [--check] [--ccache | --cache] [--release-bazel-server] [--parallel N]
 #       --check     first validate the checked-in generator output (gen_cmakelists.py --check)
 #       --ccache    compile through ccache, capped at $CCACHE_MAXSIZE, and report its statistics
 #       --release-bazel-server  stop this lane's query/build server before native compilation
+#       --cache     use pinned ccache and bounded persistent compiler/source caches
 #       --parallel  build with N jobs; without it CMake's own default applies
 #   Main CI uses --check --release-bazel-server --parallel 4.
 #
@@ -40,12 +41,13 @@ install_tools() {
 }
 
 build() {
-  local check=0 use_ccache=0 release_bazel_server=0
+  local check=0 use_ccache=0 release_bazel_server=0 use_cache=0
   local parallel=(--parallel)
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --check) check=1 ;;
       --ccache) use_ccache=1 ;;
+      --cache) use_cache=1 ;;
       --release-bazel-server) release_bazel_server=1 ;;
       --parallel)
         [[ $# -ge 2 ]] || usage
@@ -59,6 +61,10 @@ build() {
   if [[ ${use_ccache} -eq 1 && -z "${CCACHE_MAXSIZE:-}" ]]; then
     echo "cmake_consumer.sh: --ccache needs CCACHE_MAXSIZE" >&2
     exit 2
+  fi
+
+  if [[ ${use_cache} -eq 1 && ${use_ccache} -eq 1 ]]; then
+    usage
   fi
 
   local configure=(cmake -S examples/cmake_consumer -B build -G Ninja
@@ -79,10 +85,26 @@ build() {
   if [[ ${release_bazel_server} -eq 1 ]]; then
     lane_phase "Release Bazel server memory" bazel shutdown
   fi
-  lane_phase "Configure" "${configure[@]}"
-  lane_phase "Build donner_cmake_consumer" \
-    cmake --build build --target donner_cmake_consumer "${parallel[@]}"
-  lane_phase "Test" ctest --test-dir build --output-on-failure
+  if [[ ${use_cache} -eq 1 ]]; then
+    local context_dir
+    context_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/donner-cmake-XXXXXX")"
+    local context="$context_dir/context.json"
+    local client=(python3 tools/ci/cmake_cache.py)
+    lane_phase "Prepare compiler and dependency caches" "${client[@]}" prepare --context "$context"
+    lane_phase "Configure" "${client[@]}" configure --context "$context" -- "${configure[@]}"
+    lane_phase "Build donner_cmake_consumer" "${client[@]}" run --context "$context" -- \
+      cmake --build build --target donner_cmake_consumer "${parallel[@]}"
+    lane_phase "Test" "${client[@]}" run --context "$context" -- \
+      ctest --test-dir build --output-on-failure --no-tests=error \
+      --output-junit "$PWD/build/cmake-consumer-tests.xml"
+    lane_phase "Compiler cache statistics" "${client[@]}" statistics --context "$context" \
+      --receipt "${RUNNER_TEMP:-$context_dir}/cmake-cache-receipt.json"
+  else
+    lane_phase "Configure" "${configure[@]}"
+    lane_phase "Build donner_cmake_consumer" \
+      cmake --build build --target donner_cmake_consumer "${parallel[@]}"
+    lane_phase "Test" ctest --test-dir build --output-on-failure
+  fi
   if [[ ${use_ccache} -eq 1 ]]; then
     lane_phase "ccache statistics" ccache --show-stats
   fi
