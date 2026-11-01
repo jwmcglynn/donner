@@ -354,7 +354,7 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunInContext(
   }
   bool backward = false;
 #ifdef DONNER_TEXT_ENABLED
-  backward = !isVertical && context.rightToLeft.value_or(false);
+  backward = context.rightToLeft.value_or(false);
 #endif
   return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
                       textOrientation, fontVariant, kerning, false, backward);
@@ -542,6 +542,22 @@ struct SimpleShapingMetrics {
   }
 };
 
+/// Keep upright ranges in their vertical shaping profile; sideways runs use horizontal ordering.
+bool SimpleRangeUsesSidewaysComposition(std::string_view text, TextOrientation orientation) {
+  if (orientation == TextOrientation::Sideways) {
+    return true;
+  }
+  if (orientation != TextOrientation::Mixed) {
+    return false;
+  }
+  for (size_t byte = 0; byte < text.size();) {
+    if (!UsesSidewaysMetrics(orientation, decodeUtf8(text, byte))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ValidSimpleShapingRange(float size, std::string_view text, size_t offset, size_t length) {
   return std::isfinite(size) && size > 0 && offset <= text.size() && length <= text.size() - offset;
 }
@@ -554,6 +570,10 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
     bool enableKerning, bool /*forceLogicalOrder*/, bool backward) const {
   if (!ValidSimpleShapingRange(fontSizePx, spanText, byteOffset, byteLength)) {
     return {};
+  }
+  if (backward && isVertical) {
+    backward = SimpleRangeUsesSidewaysComposition(spanText.substr(byteOffset, byteLength),
+                                                  textOrientation);
   }
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {

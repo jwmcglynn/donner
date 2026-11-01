@@ -671,6 +671,105 @@ struct StraightDecorationSegment {
   }
 };
 
+/// Resolve decoration extents in a horizontal frame whose quarter turn restores vertical layout.
+TextGlyph VerticalDecorationGlyph(const TextGlyph& glyph, double central) {
+  TextGlyph result = glyph;
+  result.xPosition =
+      glyph.yPosition - glyph.verticalInlineOffset.value_or(glyph.verticalOriginOffset);
+  result.yPosition = central - (glyph.xPosition - glyph.verticalCrossOffset);
+  result.xAdvance = glyph.yAdvance;
+  result.yAdvance = 0;
+  result.rotateDegrees -= glyph.sideways ? 90 : 0;
+  return result;
+}
+
+template <typename SegmentFn>
+void ForEachVerticalSegment(const TextRun& run, std::span<const TextGlyph* const> visual,
+                            double central, const SegmentFn& segment) {
+  StraightDecorationSegment current;
+  const auto withRotation = [&](double left, double baseline, double right) {
+    segment(left, baseline, right, current.rotation);
+  };
+  const auto add = [&](const TextGlyph& source) {
+    const TextGlyph glyph = VerticalDecorationGlyph(source, central);
+    if (!visual.empty()) {
+      current.advance(glyph, withRotation);
+    } else if (DecorationGlyphVisible(glyph)) {
+      current.add(glyph, withRotation);
+    }
+    if (DecorationGlyphVisible(glyph) && glyph.rotateDegrees != 0) {
+      current.flush(withRotation);
+    }
+  };
+  if (visual.empty()) {
+    for (const auto& glyph : run.glyphs) {
+      add(glyph);
+    }
+  } else {
+    for (const auto* glyph : visual) {
+      add(*glyph);
+    }
+  }
+  current.flush(withRotation);
+}
+
+Transform2d VerticalLocalFromBand(double left, double baseline, double rotation) {
+  Transform2d localFromHorizontal;
+  localFromHorizontal.data[0] = 0;
+  localFromHorizontal.data[1] = 1;
+  localFromHorizontal.data[2] = -1;
+  localFromHorizontal.data[3] = 0;
+  return Transform2d::Rotate(rotation * MathConstants<double>::kDegToRad) *
+         Transform2d::Translate(left, baseline) * localFromHorizontal;
+}
+
+void EmitVerticalSegment(const DecorationBand& band, double left, double baseline, double right,
+                         double rotation, const Transform2d& deviceFromLocal,
+                         const std::function<void(const Path&)>& emit) {
+  const Transform2d localFromBand = VerticalLocalFromBand(left, baseline, rotation);
+  const auto [top, width] = ResolveDecorationBand(band, localFromBand * deviceFromLocal);
+  const double length = right - left;
+  const std::size_t points = StyledDecorationPoints(band.style, length, width);
+  if (points == 0) {
+    return;
+  }
+  PathBuilder builder(points);
+  if (!AppendStyledDecoration(builder, band.style, band.line, 0, top, length, width)) {
+    return;
+  }
+  const Path path = builder.build().transformed(localFromBand);
+  if (std::all_of(path.points().begin(), path.points().end(), [](const Vector2d& point) {
+        return ValidDecorationCoordinate(point.x) && ValidDecorationCoordinate(point.y);
+      })) {
+    emit(path);
+  }
+}
+
+void EmitVerticalDecoration(const TextRun& run, const DecorationBand& band, double central,
+                            const Transform2d& deviceFromLocal, std::size_t& remainingWork,
+                            const std::function<void(const Path&)>& emit) {
+  const auto visual = VisualDecorationGlyphs(run, remainingWork);
+  if (!visual) {
+    return;
+  }
+  detail::DecorationWorkBudget<std::size_t> budget(remainingWork);
+  ForEachVerticalSegment(
+      run, *visual, central, [&](double left, double baseline, double right, double rotation) {
+        const Transform2d localFromBand = VerticalLocalFromBand(left, baseline, rotation);
+        const auto [top, width] = ResolveDecorationBand(band, localFromBand * deviceFromLocal);
+        (void)top;
+        budget.add(StyledDecorationPoints(band.style, right - left, width));
+      });
+  remainingWork = budget.remaining();
+  if (budget.exceeded() || budget.points() == 0) {
+    return;
+  }
+  ForEachVerticalSegment(
+      run, *visual, central, [&](double left, double baseline, double right, double rotation) {
+        EmitVerticalSegment(band, left, baseline, right, rotation, deviceFromLocal, emit);
+      });
+}
+
 /// Global visual adjacency proves that a source span's segment contains no other span's glyphs.
 /// Zero-advance marks participate in adjacency without changing the typographic band extent.
 template <typename SegmentFn>
@@ -776,7 +875,10 @@ void EmitTextDecorationPaths(const TextRun& run, const components::TextDecoratio
     const DecorationBand band{
         line,        origin.style, origin.lines,           origin.thickness,
         originCount, automatic,    metrics.underlineWidth, DecorationOffset(line, metrics)};
-    if (rotated) {
+    if (isVertical(run.writingMode) && !run.onPath) {
+      EmitVerticalDecoration(run, band, (metrics.ascent + metrics.descent) * 0.5, deviceFromLocal,
+                             remainingWork, emit);
+    } else if (rotated) {
       EmitRotatedDecoration(run, band, deviceFromLocal, remainingWork, emit);
     } else {
       const auto [top, width] = ResolveDecorationBand(band, deviceFromLocal);

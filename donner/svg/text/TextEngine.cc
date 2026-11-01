@@ -1460,11 +1460,17 @@ bool IsFiniteTextPosition(const Vector2d& position) {
   return std::isfinite(position.x) && std::isfinite(position.y);
 }
 
+bool HasFiniteVerticalPenOffsets(const TextGlyph& glyph) {
+  return std::isfinite(glyph.verticalOriginOffset) && std::isfinite(glyph.verticalCrossOffset) &&
+         (!glyph.verticalInlineOffset || std::isfinite(*glyph.verticalInlineOffset));
+}
+
 /// A quarantined flat glyph must not enter logical metrics, ink, or object bounds.
 bool HasFiniteFlatGlyphGeometry(const TextGlyph& glyph) {
   return std::isfinite(glyph.xPosition) && std::isfinite(glyph.yPosition) &&
          std::isfinite(glyph.xAdvance) && std::isfinite(glyph.yAdvance) &&
-         std::isfinite(glyph.rotateDegrees) && std::isfinite(glyph.xPosition + glyph.xAdvance) &&
+         std::isfinite(glyph.rotateDegrees) && HasFiniteVerticalPenOffsets(glyph) &&
+         std::isfinite(glyph.xPosition + glyph.xAdvance) &&
          std::isfinite(glyph.yPosition + glyph.yAdvance);
 }
 
@@ -1569,10 +1575,11 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
   }
 }
 
-/// A glyph's pen position on the inline axis. An upright vertical glyph is drawn past its pen
-/// position by its face's vertical origin.
+/// A glyph's inline pen position excludes its intrinsic vertical shaping offset.
 double InlinePenPosition(const TextGlyph& glyph, bool vertical) {
-  return vertical ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+  return vertical
+             ? glyph.yPosition - glyph.verticalInlineOffset.value_or(glyph.verticalOriginOffset)
+             : glyph.xPosition;
 }
 
 /**
@@ -1582,7 +1589,10 @@ double InlinePenPosition(const TextGlyph& glyph, bool vertical) {
 void PlaceStretchedGlyph(TextGlyph& glyph, double pen, double scale, bool vertical) {
   if (vertical) {
     glyph.verticalOriginOffset *= scale;
-    glyph.yPosition = pen + glyph.verticalOriginOffset;
+    if (glyph.verticalInlineOffset) {
+      *glyph.verticalInlineOffset *= scale;
+    }
+    glyph.yPosition = pen + glyph.verticalInlineOffset.value_or(glyph.verticalOriginOffset);
     glyph.yAdvance *= scale;
   } else {
     glyph.xPosition = pen;
@@ -3285,7 +3295,8 @@ void PlaceWrappedGlyph(TextGlyph& glyph, const WrappingGlyph& item, const TextLa
                        double shift, double lineHeightPx) {
   const double lineOffset = static_cast<double>(item.lineOffset) * lineHeightPx;
   if (isVertical(params.writingMode)) {
-    glyph.yPosition = item.origin + item.x + shift + glyph.verticalOriginOffset;
+    glyph.yPosition = item.origin + item.x + shift +
+                      glyph.verticalInlineOffset.value_or(glyph.verticalOriginOffset);
     glyph.xPosition =
         item.originalY + (params.writingMode == WritingMode::VerticalRl ? -lineOffset : lineOffset);
     glyph.yAdvance = item.advance;
@@ -4164,7 +4175,7 @@ bool ContainsUnsupportedLengthOwner(std::vector<LengthOwnerRange> owners,
   return false;
 }
 
-/// Owns the scalar, byte and span identities used by one ordinary horizontal layout.
+/// Owns scalar, byte and span identities for one ordinary inline layout.
 class NormalBidiPlan {
 public:
   using TextSpan = components::ComputedTextComponent::TextSpan;
@@ -4180,6 +4191,7 @@ public:
     uint32_t shapingRun = 0;
     double dx = 0;
     double dy = 0;
+    uint32_t positioningGroup = 0;
   };
   struct Span {
     size_t byte = 0;
@@ -4346,14 +4358,33 @@ private:
   };
 
 #ifdef DONNER_TEXT_ENABLED
-  static bool ordinaryScope(const components::ComputedTextComponent& text,
-                            const TextLayoutParams& params) {
-    return !isVertical(params.writingMode) && params.inlineSizePx <= 0 &&
-           std::none_of(text.spans.begin(), text.spans.end(), [](const TextSpan& span) {
+  bool ordinaryScope(const components::ComputedTextComponent& text,
+                     const TextLayoutParams& params) const {
+    if (isVertical(params.writingMode) && hasVerticalLengthOwner(text, params)) {
+      return false;
+    }
+    return params.inlineSizePx <= 0 &&
+           std::none_of(text.spans.begin(), text.spans.end(), [&](const TextSpan& span) {
              const std::string_view value(span.text.data() + span.start, span.end - span.start);
-             return span.pathSpline || (PreservesSegmentBreaks(span.whiteSpace) &&
-                                        value.find_first_of("\n\t") != std::string_view::npos);
+             return span.pathSpline ||
+                    (isVertical(params.writingMode) &&
+                     span.textOrientation == TextOrientation::Upright) ||
+                    (PreservesSegmentBreaks(span.whiteSpace) &&
+                     value.find_first_of("\n\t") != std::string_view::npos);
            });
+  }
+
+  bool hasVerticalLengthOwner(const components::ComputedTextComponent& text,
+                              const TextLayoutParams& params) const {
+    if (params.textLength && params.textLength->value >= 0) {
+      return true;
+    }
+    return std::any_of(text.spans.begin(), text.spans.end(),
+                       [](const TextSpan& span) {
+                         return span.textLength && span.textLength->value >= 0;
+                       }) ||
+           std::any_of(text.ownerSpanRanges.begin(), text.ownerSpanRanges.end(),
+                       [&](const auto& owner) { return managedLengthOwner(owner.first); });
   }
 
   std::optional<InputSize> scanInputs(const components::ComputedTextComponent& text) {
@@ -4494,8 +4525,14 @@ private:
       }
       paragraphs.push_back({characters.size(), characters.size(), {}, {}, {}});
     }
+    const uint32_t current = static_cast<uint32_t>(characters.size());
+    const bool continues = current > paragraphs.back().first && !BidiParagraph::IsControl(cp) &&
+                           !BidiParagraph::IsControl(characters.back().codepoint) &&
+                           isNonSpacing(cp);
+    const uint32_t group = continues ? characters.back().positioningGroup : current;
     characters.push_back({spanIndex, static_cast<uint32_t>(source.size()), sourceByte, position, cp,
                           static_cast<uint32_t>(paragraphs.size() - 1)});
+    characters.back().positioningGroup = group;
     paragraphs.back().hasAddressable |= !BidiParagraph::IsControl(cp);
     Utf8::Append(cp, std::back_inserter(source));
   }
@@ -6240,6 +6277,7 @@ private:
     state.fontSizePx = AdjustFontSize(backend_, state.font, state.fontSizePx, state.fontSizeAdjust);
     state.run.font = state.font;
     state.run.usedFontSizePx = state.fontSizePx;
+    state.run.writingMode = params_.writingMode;
     state.scale = UsedSpanEmScale(backend_, state.font, state.fontSizePx);
   }
 
@@ -6820,12 +6858,15 @@ private:
     glyph.positioningCluster = positioningCluster;
     glyph.font = prepared.face(glyphIndex);
     orientVerticalGlyph(state, shapedGlyph, codepoint, charIndex, glyph);
+    glyph.verticalCrossOffset = glyph.xPosition - state.penX;
+    glyph.verticalInlineOffset = glyph.yPosition - state.penY;
     glyph.xPosition += state.verticalBaselineOffset;
     if (state.span->pathSpline) {
       glyph.xPosition -= state.penX;
       glyph.yPosition -= state.penY;
       glyph.xKern = shapedGlyph.yKern;
     }
+    recordBidiPlacement(state, prepared, glyphIndex, codepoint, positioningCluster, glyph);
     state.run.glyphs.push_back(glyph);
     advanceVerticalPen(state, prepared, glyphIndex, codepoint, glyph);
   }
@@ -6935,23 +6976,34 @@ private:
     TextGlyph glyph = makeHorizontalGlyph(state, shapedGlyph, positioningCluster, charIndex);
     glyph.font = prepared.face(glyphIndex);
     rotateDetachedMark(state, hasAbsoluteX, hasAbsoluteY, glyph);
-    if (normalBidi_.enabled) {
-      const size_t span = state.span - text_.spans.data();
-      const auto character = normalBidi_.characterAt(span, positioningCluster);
-      if (!character || !normalBidi_.budget.consume(normalBidi_.budget.remaining.glyphs, 1)) {
-        normalBidi_.reject();
-      } else {
-        double spacing = backend_.isCursive(codepoint) ? 0 : state.span->letterSpacingPx;
-        if (IsWordSpacingGroupEnd(prepared, glyphIndex, codepoint)) {
-          spacing += state.span->wordSpacingPx;
-        }
-        bidiPlacements_.push_back({runs_.size(), state.run.glyphs.size(), *character,
-                                   shapedGlyph.xOffset, shapedGlyph.yOffset, shapedGlyph.xKern,
-                                   shapedGlyph.xAdvance, spacing, state.defaultY});
-      }
-    }
+    recordBidiPlacement(state, prepared, glyphIndex, codepoint, positioningCluster, glyph);
     state.run.glyphs.push_back(glyph);
     advanceHorizontalPen(state, prepared, glyphIndex, codepoint, shapedGlyph);
+  }
+
+  void recordBidiPlacement(const SpanState& state, const PreparedSpanChunk& prepared,
+                           size_t glyphIndex, uint32_t codepoint, uint32_t positioningCluster,
+                           const TextGlyph& glyph) {
+    if (!normalBidi_.enabled) {
+      return;
+    }
+    const size_t span = state.span - text_.spans.data();
+    const auto character = normalBidi_.characterAt(span, positioningCluster);
+    if (!character || !normalBidi_.budget.consume(normalBidi_.budget.remaining.glyphs, 1)) {
+      normalBidi_.reject();
+      return;
+    }
+    double spacing = backend_.isCursive(codepoint) ? 0 : state.span->letterSpacingPx;
+    if (IsWordSpacingGroupEnd(prepared, glyphIndex, codepoint)) {
+      spacing += state.span->wordSpacingPx;
+    }
+    const auto& shaped = prepared.shaped.glyphs[glyphIndex];
+    bidiPlacements_.push_back({runs_.size(), state.run.glyphs.size(), *character,
+                               state.vertical ? glyph.xPosition - state.penX : shaped.xOffset,
+                               state.vertical ? glyph.yPosition - state.penY : shaped.yOffset,
+                               state.vertical ? shaped.yKern : shaped.xKern,
+                               state.vertical ? glyph.yAdvance : shaped.xAdvance, spacing,
+                               state.defaultY});
   }
 
   void updateChunkPredecessor(SpanState& state, const PreparedSpanChunk& prepared) const {
@@ -7334,7 +7386,8 @@ private:
       pen.y = *y;
     }
     pen.firstVisual = true;
-    pen.absoluteInline = x.has_value();
+    const bool vertical = isVertical(params_.writingMode);
+    pen.absoluteInline = vertical ? y.has_value() : x.has_value();
     if (order.empty()) {
       return;
     }
@@ -7345,7 +7398,7 @@ private:
     });
     const auto& begin = bidiPlacements_[sourceFirst];
     chunkBoundaries_.push_back({begin.run, begin.glyph, span.textAnchor, x.has_value(),
-                                y.has_value(), pen.x + initial.dx});
+                                y.has_value(), vertical ? pen.y + initial.dy : pen.x + initial.dx});
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
       return normalBidi_.characters[bidiPlacements_[a].character].rank <
              normalBidi_.characters[bidiPlacements_[b].character].rank;
@@ -7372,8 +7425,8 @@ private:
         GlyphFont(runs_[prior.run], runs_[prior.run].glyphs[prior.glyph]),
         runs_[prior.run].usedFontSizePx,
         GlyphFont(runs_[item.run], runs_[item.run].glyphs[item.glyph]),
-        runs_[item.run].usedFontSizePx, priorSource.codepoint, source.codepoint, false,
-        TextOrientation::Mixed,
+        runs_[item.run].usedFontSizePx, priorSource.codepoint, source.codepoint,
+        isVertical(params_.writingMode), text_.spans[item.run].textOrientation,
         normalBidi_.paragraphs[source.paragraph].contexts[source.shapingRun]);
   }
 
@@ -7394,17 +7447,106 @@ private:
     glyph.yPosition = base.yPosition + rotated.y;
   }
 
+  void rotateVerticalMark(TextGlyph& glyph, const TextGlyph& base) const {
+    const double rotation = glyph.rotateDegrees - (glyph.sideways ? 90 : 0);
+    const Vector2d offset(glyph.xPosition - base.xPosition, glyph.yPosition - base.yPosition);
+    const Vector2d rotated =
+        Transform2d::Rotate(rotation * MathConstants<double>::kDegToRad).transformPosition(offset);
+    const Vector2d position(base.xPosition + rotated.x, base.yPosition + rotated.y);
+    glyph.verticalCrossOffset += position.x - glyph.xPosition;
+    glyph.verticalInlineOffset = glyph.verticalInlineOffset.value_or(glyph.verticalOriginOffset) +
+                                 position.y - glyph.yPosition;
+    glyph.xPosition = position.x;
+    glyph.yPosition = position.y;
+  }
+
+  /// Aliases run storage after layout has finished appending runs.
+  TextGlyph& bidiGlyph(size_t index) UTILS_LIFETIME_BOUND {
+    const auto& item = bidiPlacements_[index];
+    return runs_[item.run].glyphs[item.glyph];
+  }
+
+  bool preserveVerticalGroupMarkOrder(std::span<const size_t> order) {
+    std::optional<size_t> previous;
+    for (size_t index : order) {
+      auto& glyph = bidiGlyph(index);
+      const double rotation = glyph.rotateDegrees - (glyph.sideways ? 90 : 0);
+      if (previous && glyph.yAdvance == 0 && rotation != 0 &&
+          bidiPlacements_[*previous].character == bidiPlacements_[index].character) {
+        rotateVerticalMark(glyph, bidiGlyph(*previous));
+        if (!HasFiniteFlatGlyphGeometry(glyph)) {
+          return normalBidi_.reject();
+        }
+      }
+      previous = index;
+    }
+    return true;
+  }
+
+  bool rotateVerticalGroupMarks(std::span<const size_t> order) {
+    const TextGlyph* base = nullptr;
+    for (size_t index : order) {
+      const auto& glyph = bidiGlyph(index);
+      if (glyph.yAdvance > 0) {
+        if (base) {
+          return preserveVerticalGroupMarkOrder(order);
+        }
+        base = &glyph;
+      }
+    }
+    if (!base) {
+      return preserveVerticalGroupMarkOrder(order);
+    }
+    for (size_t index : order) {
+      auto& glyph = bidiGlyph(index);
+      const double rotation = glyph.rotateDegrees - (glyph.sideways ? 90 : 0);
+      if (glyph.yAdvance == 0 && rotation != 0) {
+        rotateVerticalMark(glyph, *base);
+        if (!HasFiniteFlatGlyphGeometry(glyph)) {
+          return normalBidi_.reject();
+        }
+      }
+    }
+    return true;
+  }
+
+  uint32_t verticalPositioningGroup(size_t index) const {
+    return normalBidi_.characters[bidiPlacements_[index].character].positioningGroup;
+  }
+
+  bool rotateVerticalParagraphMarks(std::span<const size_t> order) {
+    for (size_t first = 0; first < order.size();) {
+      size_t end = first + 1;
+      while (end < order.size() &&
+             verticalPositioningGroup(order[end]) == verticalPositioningGroup(order[first])) {
+        ++end;
+      }
+      if (!rotateVerticalGroupMarks(order.subspan(first, end - first))) {
+        return false;
+      }
+      first = end;
+    }
+    return true;
+  }
+
   void updateBidiExtent(const BidiPlacement& item, const NormalBidiPlan::Character& source,
                         const TextGlyph& glyph, BidiPen& pen) {
     auto& extent = runExtents_[item.run];
-    const double left = glyph.xPosition - item.offsetX;
-    const double right = left + item.advance + item.spacing;
+    const bool vertical = isVertical(params_.writingMode);
+    const double begin = vertical ? glyph.yPosition - item.offsetY : glyph.xPosition - item.offsetX;
+    const double end = begin + item.advance + item.spacing;
+    const double cross =
+        vertical ? glyph.xPosition - item.offsetX : pen.y + item.baseline + source.dy;
     if (!pen.haveExtent[item.run]) {
-      extent = {left, pen.y + item.baseline + source.dy, right, pen.y + item.baseline + source.dy};
+      extent = vertical ? RunPenExtent{cross, begin, cross, end}
+                        : RunPenExtent{begin, cross, end, cross};
       pen.haveExtent[item.run] = true;
+    } else if (vertical) {
+      extent.startY = std::min(extent.startY, begin);
+      extent.endY = std::max(extent.endY, end);
     } else {
-      extent.startX = std::min(extent.startX, left);
-      extent.endX = std::max(extent.endX, right);
+      extent.startX = std::min(extent.startX, begin);
+      extent.endX = std::max(extent.endX, end);
     }
   }
 
@@ -7426,7 +7568,8 @@ private:
     }
     if (x || y) {
       chunkBoundaries_.push_back(
-          {item.run, item.glyph, span.textAnchor, x.has_value(), y.has_value(), pen.x + source.dx});
+          {item.run, item.glyph, span.textAnchor, x.has_value(), y.has_value(),
+           isVertical(params_.writingMode) ? pen.y + source.dy : pen.x + source.dx});
       chunkBoundaries_.back().visualFirstGlyph = std::pair(item.run, item.glyph);
     }
     return {x.has_value(), y.has_value()};
@@ -7438,7 +7581,12 @@ private:
     auto& glyph = runs_[item.run].glyphs[item.glyph];
     const auto [absoluteX, absoluteY] = applyBidiGroupPosition(item, previous, pen);
     if (!absoluteX && !absoluteY) {
-      pen.x += item.kern + bidiCrossSpanKern(item, previous);
+      const double kern = item.kern + bidiCrossSpanKern(item, previous);
+      if (isVertical(params_.writingMode)) {
+        pen.y += kern;
+      } else {
+        pen.x += kern;
+      }
     }
     if (normalBidi_.work.rejected) {
       return normalBidi_.reject();
@@ -7447,14 +7595,21 @@ private:
     glyph.yPosition = pen.y + item.baseline + item.offsetY + source.dy;
     glyph.rightToLeft = source.level % 2 != 0;
     glyph.visualOrder = pen.visualOrder++;
-    glyph.absoluteInlinePosition = absoluteX || (pen.firstVisual && pen.absoluteInline);
+    glyph.absoluteInlinePosition = (isVertical(params_.writingMode) ? absoluteY : absoluteX) ||
+                                   (pen.firstVisual && pen.absoluteInline);
     pen.firstVisual = false;
-    rotateBidiMark(glyph, item, previous);
+    if (!isVertical(params_.writingMode)) {
+      rotateBidiMark(glyph, item, previous);
+    }
     if (!HasFiniteFlatGlyphGeometry(glyph)) {
       return normalBidi_.reject();
     }
     updateBidiExtent(item, source, glyph, pen);
-    pen.x += item.advance + item.spacing;
+    if (isVertical(params_.writingMode)) {
+      pen.y += item.advance + item.spacing;
+    } else {
+      pen.x += item.advance + item.spacing;
+    }
     return true;
   }
 
@@ -7472,7 +7627,7 @@ private:
       }
       previous = index;
     }
-    return true;
+    return !isVertical(params_.writingMode) || rotateVerticalParagraphMarks(order);
   }
 
   bool placeNormalBidi() {
@@ -7735,8 +7890,8 @@ Vector2d CachedTextPathAdvance(const TextGlyph& glyph, bool vertical) {
 
 void UpdateRtlCharacterEdges(
     const TextGlyph& glyph, const Vector2d& start,
-    components::ComputedTextGeometryComponent::CharacterGeometry& character) {
-  if (glyph.xAdvance == 0) {
+    components::ComputedTextGeometryComponent::CharacterGeometry& character, bool vertical) {
+  if ((vertical ? glyph.yAdvance : glyph.xAdvance) == 0) {
     return;
   }
   if (character.advance == 0) {
@@ -7744,8 +7899,13 @@ void UpdateRtlCharacterEdges(
     character.endPosition = start;
     return;
   }
-  character.startPosition.x = std::max(character.startPosition.x, start.x + glyph.xAdvance);
-  character.endPosition.x = std::min(character.endPosition.x, start.x);
+  if (vertical) {
+    character.startPosition.y = std::max(character.startPosition.y, start.y + glyph.yAdvance);
+    character.endPosition.y = std::min(character.endPosition.y, start.y);
+  } else {
+    character.startPosition.x = std::max(character.startPosition.x, start.x + glyph.xAdvance);
+    character.endPosition.x = std::min(character.endPosition.x, start.x);
+  }
 }
 
 void UpdateCachedCharacterGeometry(
@@ -7766,7 +7926,7 @@ void UpdateCachedCharacterGeometry(
     charGeom.endPosition += CachedTextPathAdvance(glyph, vertical);
   } else {
     if (glyph.rightToLeft) {
-      UpdateRtlCharacterEdges(glyph, start, charGeom);
+      UpdateRtlCharacterEdges(glyph, start, charGeom, vertical);
     } else {
       charGeom.endPosition = start + Vector2d(glyph.xAdvance, glyph.yAdvance);
     }
