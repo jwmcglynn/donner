@@ -1547,10 +1547,27 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("install-recommends must be true or false", result.stderr)
             self.assertEqual(recorded, [])
 
+    def test_native_cmake_retains_consumer_and_generator_without_installing_tools(self):
+        native = self._job_body("macos-self-hosted", self.cmake)
+        self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
+        self.assertIn("run: tools/ci_select_macos_xcode.sh", native)
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --parallel 2", native)
+        self.assertIn("command -v cmake", native)
+        self.assertIn("command -v ninja", native)
+        self.assertNotIn("install-tools", native)
+        self.assertNotIn("actions/cache", native)
+        self.assertIn("needs: gatekeeper", native)
+        source = self._job_body("validate-generator", self.cmake)
+        first = "      - id: cmake-generator-check\n"
+        expected = source.split(first, 1)[1].strip()
+        actual = native.split(first, 1)[1].split("      # Hosted FetchContent", 1)[0].strip()
+        self.assertEqual(expected, actual)
+
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
         for workflow_name, workflow in (
-                ("CMake", self._job_body("validate-generator", self.cmake)),
+                ("CMake hosted", self._job_body("validate-generator", self.cmake)),
+                ("CMake native", self._job_body("macos-self-hosted", self.cmake)),
                 ("Lint hosted", self._job_body("cmake-validate", self.lint)),
                 ("Lint ARM64", self._job_body("lint-self-hosted", self.lint))):
             with self.subTest(workflow=workflow_name):

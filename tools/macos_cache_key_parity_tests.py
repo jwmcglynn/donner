@@ -645,7 +645,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual({owner for owner, *_ in _macos_jobs(files)}, {
             ".github/workflows/" + job for job in (
                 "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
-                "main.yml:" + PARITY, "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos", "editor_wasm.yml:build",
+                "main.yml:" + PARITY, "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos", "cmake.yml:macos-self-hosted", "editor_wasm.yml:build",
                 "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
                 "perf.yml:perf", "sign_macos_release.yml:sign", "sign_macos_release.yml:verify")})
         cmake, wasm = ".github/workflows/cmake.yml", ".github/workflows/editor_wasm.yml"
