@@ -67,9 +67,12 @@ class CMakeCacheTests(unittest.TestCase):
 
     def test_download_eviction_keeps_newer_owned_entries_and_unknown_files(self):
         old, new = self.root / ("a" * 64 + ".tar"), self.root / ("b" * 64 + ".tar")
-        old.write_bytes(b"12345"); new.write_bytes(b"67890")
-        os.utime(old, (1, 1)); os.utime(new, (2, 2))
-        unrelated = self.root / "unmanaged.tar"; unrelated.write_bytes(b"preserve")
+        old.write_bytes(b"12345")
+        new.write_bytes(b"67890")
+        os.utime(old, (1, 1))
+        os.utime(new, (2, 2))
+        unrelated = self.root / "unmanaged.tar"
+        unrelated.write_bytes(b"preserve")
         with mock.patch.object(m, "DOWNLOAD_BUDGET", 5):
             m.trim_downloads(self.root)
         self.assertFalse(old.exists())
@@ -101,8 +104,10 @@ class CMakeCacheTests(unittest.TestCase):
         self.assertEqual([], list(self.root.glob("*.tmp-*")))
 
     def test_replacing_a_receipt_never_follows_a_symlink(self):
-        outside = self.root / "outside"; outside.write_bytes(b"preserve")
-        receipt = self.root / "receipt.json"; receipt.symlink_to(outside)
+        outside = self.root / "outside"
+        outside.write_bytes(b"preserve")
+        receipt = self.root / "receipt.json"
+        receipt.symlink_to(outside)
         with self.assertRaises(m.CacheError):
             m.replace_receipt(receipt, b"new")
         self.assertEqual(b"preserve", outside.read_bytes())
