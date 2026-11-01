@@ -45,3 +45,10 @@ One native macOS fresh-directory comparison compiled 318 cacheable calls cold in
 169.112 seconds for the whole lane, then reused all 318 calls and eight dependency
 archives in 16.127 seconds. Both runs executed and passed both tests. This is a
 same-source measurement, not a general PR runtime guarantee.
+
+A [Linux CI comparison](https://github.com/jwmcglynn/donner/actions/runs/41280903498)
+at c1e1260144110b2d0a0ebefe77e194e221bab0df used distinct producer and consumer
+runners with a fresh run/attempt namespace. The whole consumer step fell from
+791 seconds cold to 147 seconds warm: 318 compiler misses became 318 hits, and
+all eight dependency sources were reused. Both fresh builds passed both CTests
+without skips. These timings include generation, configure, build and test.
