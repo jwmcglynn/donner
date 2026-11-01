@@ -1,5 +1,6 @@
 """Build the real composer output used by the selector browser tests."""
 import argparse
+import html
 import io
 from pathlib import Path
 import tarfile
@@ -19,6 +20,10 @@ def source(root: Path, channel: str) -> tuple[Path, dict]:
              + '</body></html>',
              "docs-build.json": site.canonical({"source_commit": "a" * 40,
                  "source_run_id": 123, "source_attempt": 1}).decode()}
+    code = 'donner::svg::parser::SVGParser::ParseSVG(svgContents, disabled); // <img src=x>'
+    files["code-wrap.html"] = (header + '<div id="doc-content"><pre class="fragment" '
+                               'id="wrap-sample"><code>' + html.escape(code)
+                               + '</code></pre></div></body></html>')
     if channel == "main":
         files["main-only.html"] = header + '<h1>Development only</h1></body></html>'
     archive = root / (channel + ".tar")
