@@ -158,8 +158,10 @@ class DocsSiteTest(unittest.TestCase):
         with tarfile.open(archive) as tar:
             members = tar.getmembers()
         self.assertTrue(members)
-        self.assertTrue(all(member.name.startswith("./") for member in members))
-        self.assertEqual({member.name.removeprefix("./") for member in members},
+        self.assertTrue(members[0].isdir())
+        self.assertEqual(members[0].name, ".")
+        self.assertTrue(all(member.name.startswith("./") for member in members[1:]))
+        self.assertEqual({member.name.removeprefix("./") for member in members if member.isfile()},
                          set(site.inventory(output)))
 
     def test_pages_transport_rejects_bare_and_mixed_names_but_legacy_restore_still_works(self):
@@ -167,6 +169,9 @@ class DocsSiteTest(unittest.TestCase):
             with self.subTest(names=names):
                 archive = self.root / (str(len(names)) + ".tar")
                 with tarfile.open(archive, "w:") as tar:
+                    root = tarfile.TarInfo("./")
+                    root.type, root.mode = tarfile.DIRTYPE, 0o755
+                    tar.addfile(root)
                     for name in names:
                         member = tarfile.TarInfo(name)
                         member.mode = 0o644
@@ -182,6 +187,9 @@ class DocsSiteTest(unittest.TestCase):
                 archive = self.root / (kind + ".tar")
                 with tarfile.open(archive, "w:") as tar:
                     if kind != "empty":
+                        root = tarfile.TarInfo("./")
+                        root.type, root.mode = tarfile.DIRTYPE, 0o755
+                        tar.addfile(root)
                         info = tarfile.TarInfo("./../escape" if kind == "traversal" else "./index.html")
                         info.mode = 0o600 if kind == "unreadable" else 0o644
                         if kind == "link":
@@ -200,7 +208,8 @@ class DocsSiteTest(unittest.TestCase):
         site.pack(root, archive)
         site.validate_pages_archive(archive)
         with tarfile.open(archive) as tar:
-            self.assertTrue(tar.getmembers()[0].pax_headers)
+            self.assertTrue(all(not member.pax_headers for member in tar.getmembers()))
+            self.assertIn("./" + "x" * 110 + ".html", tar.getnames())
 
     def test_archive_metadata_and_order_keep_stable_chunks_before_main(self):
         import os
@@ -212,7 +221,7 @@ class DocsSiteTest(unittest.TestCase):
         self.assertEqual(site.pack(output, self.root / "second.tar"), expected)
         with tarfile.open(first) as archive:
             members = archive.getmembers()
-        names = [member.name.removeprefix("./") for member in members]
+        names = [member.name.removeprefix("./") for member in members if member.isfile()]
         main = [i for i, name in enumerate(names) if name.startswith("main/")]
         stable = [i for i, name in enumerate(names) if not name.startswith(("main/", "_docs/")) and name != "docs-site.json"]
         metadata = [i for i, name in enumerate(names) if name.startswith("_docs/") or name == "docs-site.json"]

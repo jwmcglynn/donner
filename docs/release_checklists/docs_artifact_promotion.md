@@ -181,7 +181,12 @@ evidence to the protected branch, downloads and verifies that retained copy, and
 requests Pages cutover. The signed composition and source identities are unchanged; normal
 publication does not rebuild or repack documentation.
 
-Candidate and recovery tar members must start with `./`, as required by the Pages service.
+Candidate and recovery archives follow the reference upload layout: an explicit `./` root
+(directory `.` when read), relative `./` members with parent-directory entries, and GNU
+long-name records. This is our reference-aligned transport profile, not a claim about every
+format the Pages backend supports. Traversal, links, duplicate members, unreadable entries
+and size limits remain rejected. Historical archive restoration is separate and does not
+rewrite retained archives.
 The publisher checks both exact transport archives before retaining the candidate or requesting
 cutover. It also rejects unsafe/duplicate members, unreadable files and exceeded size limits.
 Historical archives remain readable for provenance and composition, but a bare-path archive
