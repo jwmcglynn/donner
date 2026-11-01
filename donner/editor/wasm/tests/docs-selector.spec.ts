@@ -73,3 +73,38 @@ test('keyboard and narrow dark layout keep version and search controls separate'
   expect(box!.x + box!.width).toBeLessThanOrEqual(320);
   expect(box!.y + box!.height).toBeLessThanOrEqual(search!.y);
 });
+
+
+test('mobile code wraps between tokens without changing source text', async ({page}) => {
+  await page.setViewportSize({width: 1280, height: 720});
+  await page.goto('http://localhost/donner/main/code-wrap.html');
+  const sample = page.locator('#wrap-sample');
+  const source = await sample.textContent();
+  expect(source).toContain('SVGParser::ParseSVG');
+  expect(source).toContain('<img src=x>');
+  for (const width of [390, 1280, 320]) {
+    await page.setViewportSize({width, height: 720});
+    await expect(sample).toHaveText(source!);
+    expect(await sample.textContent()).toBe(source);
+    await expect(page.locator('#doc-content img')).toHaveCount(0);
+    if (width < 768) {
+      await expect.poll(() => sample.evaluate(element => element.scrollWidth <= element.clientWidth))
+        .toBe(true);
+      const splitIdentifiers = await sample.evaluate(element => {
+        const split: string[] = [];
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          for (const match of node.textContent!.matchAll(/[A-Za-z_][A-Za-z_0-9]*/g)) {
+            const range = document.createRange();
+            range.setStart(node, match.index!);
+            range.setEnd(node, match.index! + match[0].length);
+            if (range.getClientRects().length > 1) split.push(match[0]);
+          }
+        }
+        return split;
+      });
+      expect(splitIdentifiers).toEqual([]);
+    }
+  }
+});
