@@ -171,6 +171,7 @@ public:
       glyph.cluster = run.glyphs.back().cluster;
       glyph.xKern = 0.0;
       glyph.yKern = 0.0;
+      glyph.yAdvance = 0.0;
       glyph.xOffset = -7.0;
       glyph.yOffset = -4.0;
     }
@@ -2109,6 +2110,74 @@ TEST(TextEngineScriptedTest, TextPathClusterSpacingRespectsNestedLengthOwners) {
           GlyphXPositionIs(DoubleNear(50.5, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
 }
 
+TEST(TextEngineScriptedTest, VerticalTextPathPreservesInlineAdvancesAndGlyphOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xe6\x97\xa5\xe6\x9c\xac");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+  span.textPathSourceEntity = registry.create();
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(3.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))),
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(17.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalTextPathRotatesUprightCombiningClusterOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->clusterCombiningMarks = true;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xe6\x97\xa5\xcc\x81");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.rotateList = {90.0};
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(-3.0, 1e-9)), GlyphYPositionIs(DoubleNear(2.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9))),
+          AllOf(GlyphXPositionIs(DoubleNear(-8.0, 1e-9)), GlyphYPositionIs(DoubleNear(-7.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9)))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalTextPathLengthScalesInlineOffsetsWithoutScalingNormalOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xe6\x97\xa5\xe6\x9c\xac");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.textLength = Lengthd(52.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(6.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))),
+          AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(34.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
+}
+
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
   Registry registry;
   FontManager fontManager(registry);
@@ -3320,6 +3389,51 @@ TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
                                 RunGlyphsAre(IsEmpty()),
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(70.0))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalTextPathCachedLengthUsesOneInlineAdvance) {
+  for (const auto method :
+       {components::TextPathMethod::Align, components::TextPathMethod::Stretch}) {
+    for (const bool adjusted : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(method));
+      SCOPED_TRACE(adjusted);
+      Registry registry;
+      FontManager manager(registry);
+      TextEngine engine = MakeScriptedEngine(registry, manager);
+      const std::string value("\xe6\x97\xa5");
+      auto span = MakeSpan(value);
+      span.pathSpline =
+          PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+      span.textPathSourceEntity = registry.create();
+      span.textPathMethod = method;
+      if (adjusted) {
+        span.textLength = Lengthd(24.0, Lengthd::Unit::None);
+        span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+      }
+      const Entity root = MakeTextRootWithSpan(registry, value, std::move(span));
+      if (adjusted) {
+        auto& owner = registry.get<components::TextComponent>(root);
+        owner.textLength = Lengthd(24.0, Lengthd::Unit::None);
+        owner.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+      }
+      registry.get<components::ComputedStyleComponent>(root).properties->writingMode.set(
+          WritingMode::VerticalRl, css::Specificity::Override());
+      const EntityHandle handle(registry, root);
+      const double advance = adjusted ? 24.0 : 12.0;
+      EXPECT_THAT(engine.getComputedTextLength(handle), DoubleEq(advance));
+      EXPECT_THAT(engine.getSubStringLength(handle, 0, 1), DoubleEq(advance));
+      if (method == components::TextPathMethod::Stretch) {
+        const Vector2d start = engine.getStartPositionOfChar(handle, 0);
+        const Vector2d end = engine.getEndPositionOfChar(handle, 0);
+        EXPECT_THAT(end, AllOf(Field("x", &Vector2d::x, DoubleEq(start.x)),
+                               Field("y", &Vector2d::y, DoubleEq(start.y + advance))));
+      }
+      const auto& cached = registry.get<components::ComputedTextGeometryComponent>(root);
+      ASSERT_THAT(cached.runs, SizeIs(1));
+      EXPECT_THAT(cached.runs.front().glyphs, ElementsAre(AllOf(GlyphXAdvanceIs(DoubleEq(advance)),
+                                                                GlyphYAdvanceIs(DoubleEq(0.0)))));
+    }
+  }
 }
 
 TEST(TextEngineScriptedTest, DomUtf16SupplementaryUnitsShareGlyphGeometry) {

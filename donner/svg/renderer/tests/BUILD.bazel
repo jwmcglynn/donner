@@ -860,6 +860,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_path_convergence_tests",
+    srcs = ["TextPathConvergence_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["text_full", "geode"],
+    deps = [
+        ":renderer_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_engine_scripted_tests",
     srcs = ["TextEngineScripted_tests.cc"],
     deps = [

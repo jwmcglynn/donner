@@ -36,15 +36,12 @@ _SKIPPED = {"outcome": "skipped"}
 
 # The receipts of a trusted pull request whose lanes ran every phase the manifest names.
 _COMPLETE = {
-    "linux": _receipt("linux", {
-        "buildbuddy_verify": _ran(), "build": _SKIPPED, "test": _SKIPPED, "local_xvfb": _ran(),
-        "deterministic_soak_probe": _ran(1),
-        "hosted_parity_test": _ran(1),
-        "linker_canary": _ran(),
-        "cmake_consumer": _ran()}),
-    "linux-self-hosted": _receipt("linux-self-hosted", {"build": _ran(), "test": _ran()}),
+    "linux-self-hosted": _receipt("linux-self-hosted", {
+        "build": _ran(), "test": _ran(), "local_xvfb": _ran(),
+        "deterministic_soak_probe": _ran(1), "cmake_consumer": _ran()}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
-        "build": _ran(), "test": _ran(), "geode_test": _ran(6)}),
+        "build": _ran(), "test": _ran(), "geode_test": _ran(6),
+        "browser_preflight": _ran(), "browser_test": _ran(2)}),
     "macos-metal": _receipt("macos-metal", {
         "metal_profile": _ran(), "metal_preflight": _ran(), "metal_native": _ran(10)}),
     "macos-browser": _receipt("macos-browser", {
@@ -71,7 +68,7 @@ class CoverageContractTest(unittest.TestCase):
         for step in (_SKIPPED, _ran(0)):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
-                receipts["linux"]["steps"]["deterministic_soak_probe"] = step
+                receipts["linux-self-hosted"]["steps"]["deterministic_soak_probe"] = step
                 problems, _ = self._check(receipts)
                 self.assertIn(
                     "linux / Test deterministic fuzzer soak wrapper / deterministic-wrapper",
@@ -93,7 +90,7 @@ class CoverageContractTest(unittest.TestCase):
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
         # Each gap the manifest accepts is reported on every run, with its owner.
-        self.assertEqual(4, len(excepted))
+        self.assertEqual(8, len(excepted))
         for line in excepted:
             self.assertIn("owner jwmcglynn", line)
         for exception in ("hosted-equivalent", "hosted-shader-validation"):
@@ -120,32 +117,34 @@ class CoverageContractTest(unittest.TestCase):
                 problems, _ = self._check(receipts)
                 self.assertTrue(any("native-metal" in problem for problem in problems), problems)
 
-    def test_replayed_skipped_hosted_linux_test_fails(self):
-        # Negative control from #1889: the trusted pull request's hosted Linux job skipped
-        # `Test` and ran only its Xvfb partition, while the ordinary tests ran on the self-hosted
-        # ARM64 lane. Its change reached a host-tool probe test (`hosted_parity`), whose result
-        # differed on the hosted x86_64 image, and main went red.
-        receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux"]["steps"].pop("hosted_parity_test")
-        problems, _ = self._check(receipts)
-        self.assertEqual(problems, [
-            "linux / Test / hosted-parity ran on main but not on this pull request; expected an "
-            "executed linux / hosted_parity_test"])
-        # Skipping the step fails the same way as omitting it.
-        receipts["linux"]["steps"]["hosted_parity_test"] = _SKIPPED
-        self.assertEqual(problems, self._check(receipts)[0])
+    def test_x86_gaps_are_visible_without_a_hosted_receipt(self):
+        problems, excepted = self._check(_COMPLETE)
+        self.assertEqual([], problems)
+        for phase in ("Verify BuildBuddy remote execution / cloud-build",
+                      "Build / hosted-toolchain", "Test / hosted-parity",
+                      "Test / hosted-toolchain", "Linker canary (non-lld linker support) / linker"):
+            with self.subTest(phase=phase):
+                self.assertTrue(any(line.startswith("linux / " + phase + ": ")
+                                    and "2026-10-31" in line for line in excepted), excepted)
 
-    def test_skipped_cloud_build_fails(self):
-        # Main's hosted Linux Build runs with the cloud execution configuration. A trusted pull
-        # request that did not build the tree that way before merge cannot claim that toolchain.
-        receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux"]["steps"]["buildbuddy_verify"] = _SKIPPED
-        problems, _ = self._check(receipts)
-        gap = ("ran on main but not on this pull request; expected an executed linux / "
-               "buildbuddy_verify")
-        self.assertEqual(problems, [
-            "linux / Build / hosted-toolchain " + gap,
-            "linux / Verify BuildBuddy remote execution / cloud-build " + gap])
+    def test_portable_linux_phases_require_self_hosted_receipts(self):
+        for step in ("local_xvfb", "cmake_consumer", "deterministic_soak_probe"):
+            with self.subTest(step=step):
+                receipts = copy.deepcopy(_COMPLETE)
+                receipts["linux-self-hosted"]["steps"][step] = _SKIPPED
+                problems, _ = self._check(receipts)
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn("linux-self-hosted / " + step, problems[0])
+
+    def test_each_browser_partition_requires_its_own_receipt(self):
+        for job in ("macos-self-hosted", "macos-browser"):
+            for step in ("browser_preflight", "browser_test"):
+                with self.subTest(job=job, step=step):
+                    receipts = copy.deepcopy(_COMPLETE)
+                    receipts[job]["steps"][step] = _SKIPPED
+                    problems, _ = self._check(receipts)
+                    self.assertEqual(1, len(problems), problems)
+                    self.assertIn(job + " / " + step, problems[0])
 
     def test_removing_a_parity_partition_fails(self):
         for step in ("test", "geode_test"):
@@ -191,31 +190,25 @@ class CoverageContractTest(unittest.TestCase):
         receipts = copy.deepcopy(_COMPLETE)
         del receipts["macos-hosted-parity"]
         del receipts["macos-browser"]
-        receipts["linux"]["steps"].pop("hosted_parity_test")
         self.assertEqual([], self._check(receipts, {"always": True, "self_hosted_macos": True})[0])
         # A //... fallback selects every class.
-        self.assertEqual(5, len(self._check(receipts, {"always": True, "fallback": True,
+        self.assertEqual(4, len(self._check(receipts, {"always": True, "fallback": True,
                                                        "self_hosted_macos": True})[0]))
 
     def test_hosted_macos_routing_still_checks_linux(self):
         # With the ci:hosted-macos label (or the macOS runner disabled), main's hosted macOS job
         # ran on the pull request itself, so the macOS lane needs no counterparts. Linux still
-        # ran on the self-hosted lane, and the #1889 control must still fail.
+        # ran on the self-hosted lane, whose native test phase remains required.
         receipts = {job: receipt for job, receipt in copy.deepcopy(_COMPLETE).items()
                     if job.startswith("linux")}
         selection = dict(_EVERYTHING, self_hosted_macos=False)
         problems, excepted = self._check(receipts, selection)
         self.assertEqual([], problems)
         self.assertFalse(any(line.startswith("macos /") for line in excepted))
-        receipts["linux"]["steps"]["hosted_parity_test"] = _SKIPPED
+        receipts["linux-self-hosted"]["steps"]["test"] = _SKIPPED
         self.assertEqual(1, len(self._check(receipts, selection)[0]))
         # A fallback does not change routing.
         self.assertEqual(1, len(self._check(receipts, dict(selection, fallback=True))[0]))
-
-    def test_a_parity_step_that_ran_no_tests_does_not_count(self):
-        receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux"]["steps"]["hosted_parity_test"] = _ran(0)
-        self.assertEqual(1, len(self._check(receipts)[0]))
 
     def test_bep_counts_separate_executed_from_cached_results(self):
         events = [
@@ -293,7 +286,7 @@ class CoverageContractTest(unittest.TestCase):
                 path.write_text(json.dumps(receipt), encoding="utf-8")
             manifest = runfiles.Create().Rlocation("donner/tools/ci/coverage_contract.json")
             self.assertEqual(0, contract.main(["check", "--manifest", manifest]))
-            (receipts / "coverage-receipt-linux" / "coverage-receipt.json").unlink()
+            (receipts / "coverage-receipt-linux-self-hosted" / "coverage-receipt.json").unlink()
             self.assertEqual(1, contract.main(["check", "--manifest", manifest]))
 
 

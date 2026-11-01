@@ -149,6 +149,41 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def test_self_hosted_lint_isolates_both_nested_bazel_commands(self):
+        job = self._job_body("lint-self-hosted", self.lint)
+        step = self._step_body(job, "Isolate nested Bazel invocations")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory(prefix="lint wrapper ") as directory:
+            root = Path(directory)
+            binary = root / "bazelisk"
+            binary.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            binary.chmod(0o755)
+            path_file = root / "github-path"
+            result = subprocess.run(
+                ["bash", "-c", script], capture_output=True, text=True, check=False,
+                env={**os.environ, "RUNNER_TEMP": directory, "GITHUB_PATH": str(path_file),
+                     "PATH": directory + os.pathsep + os.environ["PATH"]})
+            self.assertEqual(0, result.returncode, result.stderr)
+            wrapper = Path(path_file.read_text().strip())
+            for name in ("bazel", "bazelisk"):
+                result = subprocess.run([str(wrapper / name), "query", "target with spaces"],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(["--nohome_rc", "--nosystem_rc", "query", "target with spaces"],
+                                 result.stdout.splitlines())
+
+    def test_self_hosted_lint_preserves_generator_retry_on_documentation_prs(self):
+        job = self._job_body("lint-self-hosted", self.lint)
+        condition = next(line for line in job.splitlines() if line.startswith("    if:"))
+        self.assertNotIn("docs_only", condition)
+        self.assertNotIn("actions/cache", job)
+        self.assertIn("fetch-depth: 0", job)
+        self.assertIn("run: tools/ci/lint_lane.sh", job)
+        generator = job.split("      - id: cmake-generator-check\n", 1)[1]
+        hosted = self._job_body("cmake-validate", self.lint)
+        self.assertEqual(hosted.split("      - id: cmake-generator-check\n", 1)[1].strip(),
+                         generator.strip())
+
     @staticmethod
     def _variables(job):
         """The job's and its steps' literal `env:` values (`NAME: "value"` or `NAME: value`).
@@ -206,6 +241,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         self.assertLess(job.index("name: Test (Geode editor lane)"),
                         job.index("name: Diagnose Chromium context lifecycle"))
+
+    def test_all_arm64_linux_test_phases_retain_failure_artifacts(self):
+        job = self._job_body("linux-self-hosted")
+        upload = self._step_body(job, "Upload Bazel test failure artifacts")
+        condition = next(line.strip() for line in upload.splitlines() if line.strip().startswith("if:"))
+        self.assertTrue(condition.startswith("if: failure() && "))
+        for step_id in ("test", "wgpu_resvg_reference", "deterministic_soak_probe", "local_xvfb"):
+            with self.subTest(step=step_id):
+                self.assertIn("steps.%s.outcome == 'failure'" % step_id, condition)
+        self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", upload)
 
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
         for lane in ("macos", "macos-browser", "macos-self-hosted", "macos-metal"):
@@ -305,7 +350,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("path: ${{ runner.temp }}/browser-stall-system-log", upload)
         self.assertIn("retention-days: 14", upload)
         # A self-hosted runner's unified log describes a persistent host; it is never published.
-        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+        for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
             body = self._job_body(job)
             self.assertNotIn(name, body)
             self.assertNotIn("log show", body)
@@ -479,29 +524,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     shown = result.stdout.split("affected<", 1)[1].split(">", 1)[0]
                     self.assertEqual(shown.split(), expected_affected.split())
 
-    def test_hosted_browser_subset_keeps_the_hosted_failure_diagnostics(self):
-        # A browser failure in the trusted-PR subset needs the same evidence as one in the
-        # hosted macos job: the stall system-log slice and the serial and parallel GPU probes.
-        # The subset has no native Test step, so its conditions key on the browser step alone.
-        hosted = self._job_body("macos")
-        subset = self._job_body("macos-browser")
-        steps = ("Collect browser stall system log", "Upload browser stall system log",
-                 "Detect browser GPU acquisition failure", "Compare browser GPU tests (serial)",
-                 "Upload browser GPU comparison (serial)", "Compare browser GPU tests (parallel)",
-                 "Upload browser GPU comparison (parallel)",
-                 "Upload bounded browser GPU timing summaries")
-        positions = []
-        for step in steps:
-            expected = self._step_body(hosted, step).replace(
-                "steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure'",
-                "steps.browser_test.outcome == 'failure'")
-            body = self._step_body(subset, step)
-            # A job's last step body runs on into the next job's leading comments.
-            self.assertEqual(body.split("\n\n", 1)[0], expected.split("\n\n", 1)[0], step)
-            self.assertNotIn("steps.test.", body, step)
-            positions.append(subset.index("      - name: %s\n" % step))
-        self.assertEqual(positions, sorted(positions))
-        self.assertGreater(positions[0], subset.index("      - name: Test (browser targets)\n"))
+    def test_native_browser_retains_test_artifacts_without_host_diagnostics(self):
+        job = self._job_body("macos-browser")
+        archive = self._step_body(job, "Upload Bazel test failure artifacts")
+        for step in ("browser_preflight", "browser_test"):
+            self.assertIn("steps.%s.outcome == 'failure'" % step, archive)
+        for forbidden in ("Collect browser stall system log", "BROWSER_STALL_TEST_FLAGS",
+                          "Compare browser GPU tests", "Probe runner resources", "Setup Bazel",
+                          "Free hosted macOS disk", "Install clang-tidy"):
+            self.assertNotIn(forbidden, job)
+        self.assertIn("--nohome_rc --nosystem_rc", job)
 
     def test_browser_stall_recorder_is_enabled_only_in_the_hosted_job(self):
         # The recorder publishes host load, memory and call graphs, so only the ephemeral
@@ -514,20 +546,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for step in steps:
             self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",
                           self._step_body(hosted, step), step)
-        # The trusted-PR hosted browser subset runs the same browser step and GPU comparisons
-        # on the same image.
-        subset = self._job_body("macos-browser")
-        self.assertIn('      BROWSER_STALL_TEST_FLAGS: "%s"\n' % switch, subset)
-        subset_steps = steps[1:]
-        for step in subset_steps:
-            self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",
-                          self._step_body(subset, step), step)
         recorder = _repository_text("donner/editor/wasm/tests/browser-stall-diagnostics.mjs")
         self.assertIn('kEnableVariable = "DONNER_BROWSER_STALL_DIAGNOSTICS"', recorder)
-        self.assertEqual(self.main.count("DONNER_BROWSER_STALL_DIAGNOSTICS"), 2)
+        self.assertEqual(self.main.count("DONNER_BROWSER_STALL_DIAGNOSTICS"), 1)
         self.assertEqual(self.main.count("BROWSER_STALL_TEST_FLAGS"),
-                         2 + len(steps) + len(subset_steps))
-        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+                         1 + len(steps))
+        for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
             self.assertNotIn("BROWSER_STALL", self._job_body(job), job)
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
@@ -547,8 +571,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # Every other lane and local runs must keep running them.
         readers = {
             "macos": ("Test", "Test (browser targets)"),
-            # The trusted-PR hosted browser subset runs main's hosted browser step.
-            "macos-browser": ("Test (browser targets)",),
         }
         for job_name, steps in readers.items():
             job = self._job_body(job_name)
@@ -573,7 +595,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
                          "hosted-parity"):
                 self.assertNotIn(name, body, step)
-        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+        for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
             for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
                          "hosted-parity"):
                 self.assertNotIn(name, self._job_body(job), job)
@@ -624,7 +646,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                              path.name)
         self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", self.bazelrc)
 
-    def test_headed_browser_tests_keep_required_hosted_coverage(self):
+    def test_headed_browser_tests_have_a_single_native_owner(self):
         for job_name in ("macos", "macos-browser", "macos-self-hosted"):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)
@@ -632,7 +654,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 filters = self._tag_filters(body, job)
                 self.assertTrue(filters)
                 tags = filters.split(",")
-                self.assertIn("launches-browser", tags)
+                self.assertIn("requires_desktop_session" if job_name == "macos-browser"
+                              else "launches-browser", tags)
                 self.assertEqual("-requires_desktop_session" in tags,
                                  job_name == "macos-self-hosted")
                 self.assertNotIn("continue-on-error: true", body)
@@ -795,6 +818,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("github.event_name == 'push'", admission)
         self.assertIn("github.ref != 'refs/heads/main'", admission)
         consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
+        self.assertEqual(consumer.split("\n\n", 1)[0],
+                         self._step_body(self._job_body("linux-self-hosted"),
+                                         "Build and test CMake consumer").split("\n\n", 1)[0])
         self.assertIn("python3 tools/cmake/gen_cmakelists.py --check", consumer)
         self.assertIn("cmake -S examples/cmake_consumer -B build -G Ninja", consumer)
         self.assertIn("cmake --build build --target donner_cmake_consumer", consumer)
@@ -835,14 +861,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("\n  %s:\n" % redundant, self.main)
         self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
 
-    def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
+    def test_native_window_gate_runs_on_arm64_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
-        local = hosted
         remote = self._job_body("linux-self-hosted")
-        self.assertNotIn("use_self_hosted_linux", hosted.split("steps:", 1)[0])
-        self.assertIn("use_self_hosted_linux == 'true'", self._step_body(local, "Test local Xvfb targets"))
+        local = remote
+        self.assertIn("use_self_hosted_linux != 'true'", hosted.split("steps:", 1)[0])
+        self.assertIn("use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
+        self.assertNotIn("Test local Xvfb targets", hosted)
         self.assertIn("xvfb xauth", hosted)
-        self.assertIn("xvfb xauth", local)
         self.assertIn("-local-gpu-isolated", remote)
         target = self.editor_tests_build.split(
             'name = "editor_window_vulkan_surface_tests",', 1
@@ -857,6 +883,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
         self.assertEqual("requires_xvfb,-fuzz_soak", self._tag_filters(step, local))
         self.assertIn("--strategy=TestRunner=local", self._test_options(step, local))
+        self.assertIn("--test_env=PATH", step)
+        self.assertIn("for tool in xvfb-run Xvfb xauth cmake ninja",
+                      self._step_body(local, "Check native consumer tools"))
         script_template = textwrap.dedent(step.split("run: |\n", 1)[1])
         native_target = "//donner/editor/tests:editor_window_vulkan_surface_tests"
         for fallback, affected, expected_target, no_tests in (
@@ -890,6 +919,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     ambient_bash.chmod(0o755)
                     args_file = root / "args.txt"
                     env = {**os.environ, "BAZEL_ARGS": str(args_file),
+                           "BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS":
+                               self._variables(local)["BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS"],
                            "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
                     result = self._run_script(script, [], cwd=root, env=env)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -1516,9 +1547,29 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("install-recommends must be true or false", result.stderr)
             self.assertEqual(recorded, [])
 
+    def test_native_cmake_retains_consumer_and_generator_without_installing_tools(self):
+        native = self._job_body("macos-self-hosted", self.cmake)
+        self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
+        self.assertIn("run: tools/ci_select_macos_xcode.sh", native)
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --parallel 2", native)
+        self.assertIn("command -v cmake", native)
+        self.assertIn("command -v ninja", native)
+        self.assertNotIn("install-tools", native)
+        self.assertNotIn("actions/cache", native)
+        self.assertIn("needs: gatekeeper", native)
+        source = self._job_body("validate-generator", self.cmake)
+        first = "      - id: cmake-generator-check\n"
+        expected = source.split(first, 1)[1].strip()
+        actual = native.split(first, 1)[1].split("      # Hosted FetchContent", 1)[0].strip()
+        self.assertEqual(expected, actual)
+
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
-        for workflow_name, workflow in (("CMake", self.cmake), ("Lint", self.lint)):
+        for workflow_name, workflow in (
+                ("CMake hosted", self._job_body("validate-generator", self.cmake)),
+                ("CMake native", self._job_body("macos-self-hosted", self.cmake)),
+                ("Lint hosted", self._job_body("cmake-validate", self.lint)),
+                ("Lint ARM64", self._job_body("lint-self-hosted", self.lint))):
             with self.subTest(workflow=workflow_name):
                 self.assertEqual(
                     2,

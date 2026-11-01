@@ -882,14 +882,15 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
 
 std::shared_ptr<const CapturedPresentation> AcceptCapturedScene(
     RenderCoordinator& coordinator, EditorApp& app, std::span<const svg::SVGElement> hover = {},
-    const std::optional<LockedRejectionFlashInput>& flash = std::nullopt) {
+    const std::optional<LockedRejectionFlashInput>& flash = std::nullopt,
+    std::uint64_t captureId = 1) {
   std::vector<Entity> independent;
   for (const auto& element : app.selectedElements()) {
     independent.push_back(element.unsafeEntityHandle().entity());
   }
   const auto capture = CapturedPresentation::Capture(
       app.document().document(),
-      PresentationIdentity{.captureId = 1,
+      PresentationIdentity{.captureId = captureId,
                            .documentGeneration = app.document().documentGeneration(),
                            .version = app.document().currentFrameVersion(),
                            .geometryRevision = app.document().nonTransformRevision(),
@@ -919,6 +920,125 @@ std::shared_ptr<const FramePresentation> BuildFrame(
   return coordinator.buildFramePresentation(
       app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
       detail);
+}
+
+TEST(RenderCoordinatorTest, UnmeasuredTypingCaptureHoldsWholeFrameUntilChromeMatches) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  auto subject = QuerySelector(app, "#r1");
+  app.setSelection(subject);
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto baseline = AcceptCapturedScene(coordinator, app);
+  const std::array<Vector2d, 4> box{Vector2d(10, 10), Vector2d(30, 10), Vector2d(30, 30),
+                                    Vector2d(10, 30)};
+  CapturedPresentation::TextEditing measured{.identity = baseline->identity(),
+                                             .canvasSize = baseline->canvasSize(),
+                                             .subject = baseline->selection().front(),
+                                             .frame = box};
+  coordinator.setTextEditingChrome(measured);
+  const auto previous = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                   SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(previous, testing::Ne(nullptr));
+  ASSERT_THAT(previous->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
+
+  subject.setAttribute("x", "12");
+  const auto unmeasured = AcceptCapturedScene(coordinator, app, {}, std::nullopt, 2);
+  ASSERT_THAT(unmeasured->identity().documentRevision,
+              testing::Ne(measured.identity.documentRevision));
+  const auto held = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                               SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(held, testing::Ne(nullptr));
+  EXPECT_THAT(held, testing::Eq(previous));
+  EXPECT_THAT(held->chrome().textFrameCornersDoc, testing::Eq(std::optional(box)));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+
+  measured.identity = unmeasured->identity();
+  const std::array<Vector2d, 4> changedBox{Vector2d(12, 10), Vector2d(32, 10), Vector2d(32, 30),
+                                           Vector2d(12, 30)};
+  measured.frame = changedBox;
+  coordinator.setTextEditingChrome(measured);
+  const auto recovered = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                    SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(recovered, testing::Ne(nullptr));
+  EXPECT_THAT(recovered->identity(), testing::Eq(unmeasured->identity()));
+  EXPECT_THAT(recovered->chrome().textFrameCornersDoc, testing::Eq(std::optional(changedBox)));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+}
+
+TEST(RenderCoordinatorTest, MissingInitialTextMeasurementRecoversAndEndedSessionDoesNotFreeze) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  CapturedPresentation::TextEditing measured{.identity = capture->identity(),
+                                             .canvasSize = capture->canvasSize(),
+                                             .subject = capture->selection().front()};
+  coordinator.setTextEditingChrome(std::nullopt);
+  EXPECT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Eq(nullptr));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+  measured.identity = capture->identity();
+  coordinator.setTextEditingChrome(measured);
+  ASSERT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Ne(nullptr));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+  coordinator.setTextEditingChrome(std::nullopt);
+  QuerySelector(app, "#r1").setAttribute("x", "12");
+  const auto latest = AcceptCapturedScene(coordinator, app);
+  const auto ended =
+      BuildFrame(coordinator, app, tool, MakeViewport(app), textures, SelectionChromeDetail::Full);
+  ASSERT_THAT(ended, testing::Ne(nullptr));
+  EXPECT_THAT(ended->identity(), testing::Eq(latest->identity()));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
+}
+
+TEST(RenderCoordinatorTest, MissingTextMeasurementRetiresAnIncompatibleEditingFrame) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto baseline = AcceptCapturedScene(coordinator, app);
+  CapturedPresentation::TextEditing measured{
+      .identity = baseline->identity(),
+      .canvasSize = baseline->canvasSize(),
+      .subject = baseline->selection().front(),
+      .frame = std::array<Vector2d, 4>{Vector2d(10, 10), Vector2d(30, 10), Vector2d(30, 30),
+                                       Vector2d(10, 30)}};
+  coordinator.setTextEditingChrome(measured);
+  ASSERT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Ne(nullptr));
+  app.setSelection(QuerySelector(app, "#r2"));
+  const auto other = AcceptCapturedScene(coordinator, app, {}, std::nullopt, 2);
+  ASSERT_THAT(other->identity().captureId, testing::Ne(baseline->identity().captureId));
+  measured.subject = other->selection().front();
+  ++measured.identity.documentRevision;
+  coordinator.setTextEditingChrome(measured);
+  EXPECT_THAT(BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                         SelectionChromeDetail::EditingChromeOnly),
+              testing::Eq(nullptr));
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot(), testing::Eq(std::nullopt));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+  measured.identity = other->identity();
+  const std::array<Vector2d, 4> otherBox{Vector2d(50, 50), Vector2d(70, 50), Vector2d(70, 70),
+                                         Vector2d(50, 70)};
+  measured.frame = otherBox;
+  coordinator.setTextEditingChrome(measured);
+  const auto recovered = BuildFrame(coordinator, app, tool, MakeViewport(app), textures,
+                                    SelectionChromeDetail::EditingChromeOnly);
+  ASSERT_THAT(recovered, testing::Ne(nullptr));
+  EXPECT_THAT(recovered->identity(), testing::Eq(other->identity()));
+  EXPECT_THAT(recovered->chrome().textFrameCornersDoc, testing::Eq(std::optional(otherBox)));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
 }
 
 TEST(RenderCoordinatorTest, FrameRequiresAcceptedRasterResources) {

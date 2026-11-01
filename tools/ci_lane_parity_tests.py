@@ -67,6 +67,11 @@ TRIGGER_ALLOWLIST = {
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
+    ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
+    ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
+    ("cmake.yml", "validate-generator", "trusted-pr"): "macos-self-hosted",
+    ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
+    ("lint.yml", "cmake-validate", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
@@ -76,9 +81,7 @@ JOB_REPLACEMENTS = {
 # it is compared with the subset job instead of the replacement. The subset runs only when the
 # PR's affected set reaches the covered tests (or falls back to //...); a PR that cannot change
 # them leaves main's result for them unchanged, apart from flakes main's //... run can still hit.
-HOSTED_SUBSETS = {
-    ("main.yml", "macos", "trusted-pr"): ("macos-browser", ("Test (browser targets)",)),
-}
+HOSTED_SUBSETS = {}
 
 # Self-hosted jobs that rerun some of a replaced job's steps on a trusted PR under main's hosted
 # runner constraints, for the PRs whose affected set reaches those steps' runner-sensitive tests.
@@ -96,21 +99,8 @@ PARITY_SUBSETS = {
 # `hosted_parity` tests, because the PR skips main's step there. Keyed by (workflow, job,
 # scenario); the value is (PR step, main step). The hosted Linux job skips Build and Test on
 # trusted PRs (STEP_ALLOWLIST) and reruns its runner-sensitive tests on the hosted image.
-HOSTED_PARITY_STEPS = {
-    ("main.yml", "linux", "trusted-pr"): ("Test (hosted parity subset)", "Test"),
-}
-HOSTED_PARITY_STEP_ALLOWLIST = {
-    ("main.yml", "linux", "Test (hosted parity subset)", "tag-filter-pr-only", "hosted_parity"):
-        "The parity subset: only tests whose result can depend on the runner. Every other "
-        "selected test runs on the self-hosted ARM64 lane.",
-    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only", "--build_tests_only"):
-        "Build scope only: this step builds only what the selected tests need, because the "
-        "PR's Build step runs on the self-hosted lane.",
-    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only",
-     "--build_event_json_file=$RUNNER_TEMP/coverage-hosted_parity_test.bep.json"):
-        "Records how many parity tests ran, for the coverage contract's receipt; it changes "
-        "what Bazel reports, not what it tests.",
-}
+HOSTED_PARITY_STEPS = {}
+HOSTED_PARITY_STEP_ALLOWLIST = {}
 
 # Main's hosted lanes whose phases tools/ci/coverage_contract.json declares, and the phases there
 # that run no Bazel command.
@@ -176,8 +166,8 @@ PARITY_ALLOWLIST = {
 # or speed, display scale or host tools, each with the escape that put it here. In the BUILD
 # files listed here, the tagged rules and the listed tests must match, so a listed test cannot
 # silently leave the parity subset. Browser tests (the carousel handoff,
-# animation pulse and WebKit drag classes) are covered by the hosted macos-browser subset on the
-# hosted image itself, so they are not tagged.
+# animation pulse and WebKit drag classes) run in the native desktop browser partition,
+# while headless browser cases run in the VM, so they are not tagged.
 HOSTED_PARITY_TESTS = {
     ("donner/editor/tests/BUILD.bazel", "editor_shell_tests"):
         "Frame-loop, drag and readiness cases that failed only on hosted macOS (#1824, #1902) "
@@ -196,19 +186,13 @@ HOSTED_PARITY_TESTS = {
         "Runs the Xcode selection probe against host tools (#1895).",
     ("tools/BUILD.bazel", "native_delivery_elf_tests"):
         "Inspects real x86-64 ELF source lines with host binutils; the ARM64 lane skips this "
-        "architecture-specific regression, so trusted PRs retain the hosted x86 execution.",
+        "architecture-specific regression. The maintainer accepts its absence on ARM64 PRs.",
 }
 
 # Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
 # job, subset job, step, kind, value). Only build-scope differences belong here: the subset must
 # test exactly what main tests.
-SUBSET_ALLOWLIST = {
-    ("main.yml", "macos", "macos-browser", "Test (browser targets)", "flag-pr-only",
-     "--build_tests_only"):
-        "Build scope only: main's job builds the whole selection in its Build step first, and "
-        "the subset has no Build step, so it builds only what the selected tests need. The "
-        "tests themselves, their filters and environment are main's.",
-}
+SUBSET_ALLOWLIST = {}
 
 # Setup step inputs whose value in a hosted subset is fixed instead of copied from main's job. The
 # subset runs only for pull requests, which must not save the Actions cache, so it states that
@@ -230,9 +214,25 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
+    ("cmake.yml", "macos", "macos-self-hosted", "Build with CMake (tiny_skia)",
+     "step-changed", "dceee0c1aa1f6a9e"):
+        "The same consumer configure/build/CTest runs with two build tasks and no ccache launcher; "
+        "native tool provisioning is checked rather than installed during a PR.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Install build tools", "step-main-only", ""):
+        "The persistent runner must already provide CMake and Ninja; CI does not install host tools.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Restore CMake dependencies", "step-main-only", ""):
+        "Hosted FetchContent trees embed absolute paths, so native builds resolve fresh dependencies.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Restore compiler outputs", "step-main-only", ""):
+        "The bounded native consumer runs without the hosted ccache launcher or snapshot.",
+    ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
+        "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
+    ("lint.yml", "cmake-validate", "lint-self-hosted",
+     "actions/checkout@v7 [('persist-credentials', 'false')]", "step-main-only", ""):
+        "The shared lint checkout retains full history for changed-method complexity checks; "
+        "the generator consumes the same event source tree.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
-        "The required hosted macos-browser subset runs these tests with main's invocation; "
+        "The native macos-browser partition runs desktop-session tests separately; "
         "the service runner cannot launch browsers that require a desktop session.",
     # The hosted image has no offline Metal compiler, so its lane drops these targets. The
     # self-hosted runner has one and runs them, so the pull request runs more than main.
@@ -308,7 +308,7 @@ SHARED_JOB_ALLOWLIST = {
     ("main.yml", "linux", scenario, step, "flag-main-only", flag):
         "Cloud execution requires the trusted writer key, so other PRs run the same build and "
         "test commands, with the same declared LLVM toolchain, on the hosted runner itself. "
-        "Trusted PRs exercise the cloud compile probe before merge."
+        "Trusted PRs use ARM64 and accept the x86_64 gap; the cloud probe remains on main."
     for scenario in ("untrusted-pr", "renovate-pr") for step in ("Build", "Test")
     for flag in _config_flags("buildbuddy-re", step.lower())
 }
@@ -334,7 +334,7 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7740b18fcd2296e1"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "2b83ea0f49a01f29"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "60a1b7a4e8d1b120"),
 }
@@ -354,10 +354,6 @@ SHARED_STEP_ALLOWLIST.update({
 })
 
 # Steps of one job that run on a main push but not on one kind of pull request.
-_TRUSTED_LINUX_REASON = (
-    "operator decision 2026-10-13: trusted PRs run the Linux Build and Test steps only on the "
-    "self-hosted lane, for speed; hosted Linux covers main pushes and untrusted PRs")
-
 _CACHE_WRITER_REASON = (
     "Remote cache wiring only: main and trusted PRs read and write the BuildBuddy cache, Renovate "
     "PRs read it through the read-only step, and other PRs build without it. A cache changes how "
@@ -374,10 +370,6 @@ STEP_ALLOWLIST = {
        for scenario in ("untrusted-pr", "renovate-pr")},
     # Accepted risk: the self-hosted Linux lane builds and tests on another architecture, so a
     # test failure specific to the hosted runner's architecture or speed first shows on main.
-    # The hosted job's cloud build step builds main's hosted toolchain configuration before
-    # merge, and its parity subset reruns the runner-sensitive tests.
-    ("main.yml", "linux", "Build", "trusted-pr"): _TRUSTED_LINUX_REASON,
-    ("main.yml", "linux", "Test", "trusted-pr"): _TRUSTED_LINUX_REASON,
 }
 
 # Steps main runs that a kind of pull request skips, but that a different job runs on that pull
@@ -429,8 +421,42 @@ COUNTERPART_ALLOWLIST = {
     ], "The self-hosted lane swaps each locally isolated GPU suite for its remote wrapper "
        "(tools/ci_remote_gpu_targets.py), which runs the same implementation and shards, so it "
        "keeps the remote wrappers and drops the local-only targets; hosted Linux does the "
-       "reverse. The local-display targets this drops run in the hosted job's Xvfb step."),
+       "reverse. The local-display targets this drops run in the self-hosted job's Xvfb step."),
 }
+
+# The replacement still compares portable phases; x86_64 execution stays on main.
+INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
+    *[(step, "flag-main-only", flag) for step in ("Build", "Test")
+      for flag in _config_flags("buildbuddy-re", step.lower())],
+    *[("*", "flag-pr-only", flag) for flag in (
+        "--strategy=TestRunner=remote", "--remote_local_fallback=false",
+        "--incompatible_remote_local_fallback_for_remote_cache=false", "--remote_timeout=60s")],
+    *[(step, "flag-pr-only", "--remote_download_outputs=minimal")
+      for step in ("Build", "Test")],
+    *[(step, "flag-pr-only", "--%s=$DIAG_DIR/%s/%s" % (flag, step.lower(), filename))
+      for step in ("Build", "Test")
+      for flag, filename in (("build_event_json_file", "bep.json"),
+                             ("execution_log_compact_file", "exec.log.zst"),
+                             ("profile", "profile.gz"))],
+    ("Test", "flag-pr-only", r"--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"),
+    ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
+    ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
+    ("Test", "target-main-only", SELECTED_TARGETS),
+    ("Test", "target-pr-only", "$(python3 tools/ci_remote_gpu_targets.py %s)" % SELECTED_TARGETS),
+], "The ARM64 runner uses its own remote backend, strict fallback policy and diagnostics. "
+   "Remote GPU wrappers retain the same implementation; native display checks run separately. "
+   "The maintainer accepts the x86_64 toolchain/runtime gap before merge."))
+INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
+    (step, "step-main-only", "") for step in (
+        "Configure BuildBuddy remote cache", "Install system dependencies", "Setup Bazel",
+        "Restore Bazel action cache", "Save Bazel action cache")
+], "The persistent ARM64 runner pre-provisions its tools and uses its own remote cache; "
+   "hosted setup and public cache credentials do not run there."))
+INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
+    (step, "step-main-only", "") for step in (
+        "Verify BuildBuddy remote execution", "Linker canary (non-lld linker support)")
+], "Maintainer decision 2026-10-31 accepts losing hosted x86_64 PR coverage. "
+   "Cloud executor and gold-linker qualification remain on hosted main."))
 
 # Each scenario sets every job output a condition reads; an output not modelled here raises.
 # `trusted_pr` and `renovate_pr` are the .github/actions/pr-trust outputs, which both the
@@ -1731,7 +1757,7 @@ class CiLaneParityTest(unittest.TestCase):
             "macos": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "macos-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
             "macos-metal": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
-            "linux": {"main-push": True, "trusted-pr": True, "untrusted-pr": True},
+            "linux": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "linux-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
         }
         for job, scenarios in expected.items():
@@ -1798,7 +1824,9 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(counterpart=counterpart):
                 for step in steps:
                     # A counterpart stands in for a main step the pull request skips.
-                    self.assertIn((name, job_name, step, scenario), STEP_ALLOWLIST)
+                    self.assertTrue(
+                        (name, job_name, step, scenario) in STEP_ALLOWLIST or
+                        JOB_REPLACEMENTS.get((name, job_name, scenario)) == counterpart)
                 self.assertTrue(job_gates(self.workflows[name], counterpart, scenario))
             workflow = self.workflows[name]
             for step, kind, value in invocation_differences(workflow, job_name, counterpart,
@@ -2273,13 +2301,13 @@ class CiLaneParityTest(unittest.TestCase):
         self._assert_matches_allowlist(observed, SUBSET_ALLOWLIST,
                                        "a hosted subset runs a main step differently")
 
-    def test_desktop_browser_exclusion_keeps_required_hosted_coverage(self):
-        self.assertEqual(HOSTED_SUBSETS[("main.yml", "macos", "trusted-pr")],
-                         ("macos-browser", ("Test (browser targets)",)))
+    def test_browser_partitions_keep_complete_nonoverlapping_selection(self):
         workflow = self.workflows["main.yml"]
-        for job_name, scenario in (("macos", "main-push"),
-                                   ("macos-browser", "trusted-pr"),
-                                   ("macos-browser", "trusted-pr-fallback")):
+        for job_name, scenario, positive in (
+                ("macos", "main-push", "launches-browser"),
+                ("macos-self-hosted", "trusted-pr", "launches-browser"),
+                ("macos-browser", "trusted-pr", "requires_desktop_session"),
+                ("macos-browser", "trusted-pr-fallback", "requires_desktop_session")):
             with self.subTest(job=job_name, scenario=scenario):
                 self.assertTrue(job_gates(workflow, job_name, scenario))
                 job = _jobs(workflow)[job_name]
@@ -2288,8 +2316,12 @@ class CiLaneParityTest(unittest.TestCase):
                 invocations = profile["Test (browser targets)"]
                 self.assertTrue(invocations)
                 for invocation in invocations:
-                    self.assertIn("launches-browser", invocation["tag_filters"])
-                    self.assertNotIn("-requires_desktop_session", invocation["tag_filters"])
+                    tags = invocation["tag_filters"]
+                    self.assertEqual({positive}, {tag for tag in tags if not tag.startswith("-")})
+                    self.assertEqual(job_name == "macos-self-hosted",
+                                     "-requires_desktop_session" in tags)
+        for other in ("main-push", "untrusted-pr", "renovate-pr", "trusted-pr-native-only"):
+            self.assertFalse(job_gates(workflow, "macos-browser", other), other)
 
     def test_subset_order_problems_are_found(self):
         main = parse_workflow(

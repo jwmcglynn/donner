@@ -53,14 +53,15 @@ SCHEDULING_ONLY_FLAG = re.compile(r"^--(?:jobs|local_resources|build_tests_only)
 TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS")
 _RC_LINE = re.compile(r"^(?:build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 # Each lane names itself in its test environment, so test results never cross runners.
-LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
+LANE_TEST_ENV = {"macos-browser": "--test_env=DONNER_CI_MACOS_LANE=native-desktop-browser",
+                 "macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
                  "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm",
                  "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm",
                  "macos-metal": "--test_env=DONNER_CI_MACOS_LANE=native-metal",
                  "macos-vm-qualification": "--test_env=DONNER_CI_MACOS_LANE=vm-qualification"}
 # The main.yml lanes that must compute identical action keys. Every macOS job, in any workflow,
 # selects the pinned Xcode and fails without it.
-LANES = (HOSTED, SELF_HOSTED, PARITY, "macos-metal", "macos-vm-qualification")
+LANES = (HOSTED, SELF_HOSTED, PARITY, "macos-metal", "macos-vm-qualification", "macos-browser")
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -272,7 +273,7 @@ def _bazelrc_problems(bazelrc):
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
 XCODE_OVERRIDES = re.compile(
     r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|LSREGISTER|DEVELOPER_DIR|DONNER_CI_XCODE_IDENTITY|CCACHE_NAMESPACE)\b")
-MACOS_JOBS = LANES + ("macos-browser",)
+MACOS_JOBS = LANES
 
 
 def _xcode_override_problems(workflow):
@@ -453,6 +454,15 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             self.assertGreaterEqual(len(_bazel_commands(jobs[name])), 6)
         self.assertFalse(_runs_self_hosted(jobs[HOSTED]))
         self.assertTrue(_runs_self_hosted(jobs[SELF_HOSTED]))
+
+    def test_editor_wasm_cache_uses_the_selected_xcode_partition(self):
+        job = _jobs(_read(".github/workflows/editor_wasm.yml"))["build"]
+        steps = dict(_steps(job))
+        self.assertIn("id: xcode", steps["Select pinned Xcode"])
+        for name in ("Configure BuildBuddy remote cache", "Configure BuildBuddy read-only cache"):
+            with self.subTest(step=name):
+                self.assertIn("cache-partition: ${{ steps.xcode.outputs.cache_partition }}",
+                              steps[name])
 
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
@@ -635,7 +645,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual({owner for owner, *_ in _macos_jobs(files)}, {
             ".github/workflows/" + job for job in (
                 "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
-                "main.yml:" + PARITY, "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos", "editor_wasm.yml:build",
+                "main.yml:" + PARITY, "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos", "cmake.yml:macos-self-hosted", "editor_wasm.yml:build",
                 "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
                 "perf.yml:perf", "sign_macos_release.yml:sign", "sign_macos_release.yml:verify")})
         cmake, wasm = ".github/workflows/cmake.yml", ".github/workflows/editor_wasm.yml"
@@ -650,7 +660,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "runs-on: xcode-27", "runs-on: macos-26", 1), "not the xcode-27 image"),
             "a matrix entry on another image": (perf, files[perf].replace(
                 "- os: xcode-27", "- os: macos-latest", 1), "not the xcode-27 image"),
-            "no selection": (wasm, files[wasm].replace(select, "", 1), "does not select"),
+            "no selection": (wasm, files[wasm].replace(
+                select.replace("        shell:", "        id: xcode\n        shell:"), "", 1),
+                "does not select"),
             "selection after a build tool": (fuzz, fuzz_head + fuzz_macos.replace(
                 select, "", 1).replace("      - name: Soak", select + "\n      - name: Soak", 1),
                 "runs 'Setup Bazel' before selecting"),

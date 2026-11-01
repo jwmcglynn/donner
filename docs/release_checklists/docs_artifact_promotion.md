@@ -77,6 +77,11 @@ A site without `docs-site.json` has no modern composition identity. If its origi
 artifact has expired, the initializer uses a separately approved recovery destination. It does
 not claim a landing-page fingerprint is a backup of that historical site.
 
+Standalone composition is read-only and can be prepared even when the archive branch already
+exists. It does not read or replace that branch. A standalone artifact cannot be seeded over an
+existing archive branch or published without the matching live storage and recovery guards; an
+existing store needs a separately reviewed, explicitly approved append-only correction.
+
 First assemble a complete recovery composition with `snapshot_commit: "none"`, `bootstrap: null`,
 and the same signed stable-release source for both routes: select that release's docs build as
 `main_run` and its signed release-candidate record. The resulting selector explicitly labels
@@ -169,13 +174,29 @@ After maintainer publication approval, dispatch `selection: publish` with:
 ```
 
 The environment-protected job verifies both exact-workflow attestations and source bindings,
-restores and verifies the durable prior site, and confirms it is still live. It uploads that
-verified prior archive for bounded recovery, checks the returned artifact against this run and
-its exact bytes, persists the candidate and evidence to the protected branch, downloads that
-copy back, and only then requests Pages cutover. Normal publication does not build documentation.
+restores the durable prior site, and confirms it is still live. It uploads the already verified
+candidate and recovery archives in the publication attempt, then verifies both uploads' run,
+attempt, name, source commit, ZIP digest and inner archive hash. It persists the candidate and
+evidence to the protected branch, downloads and verifies that retained copy, and only then
+requests Pages cutover. The signed composition and source identities are unchanged; normal
+publication does not rebuild or repack documentation.
 
-The Pages build version is the verified source commit SHA, matching the official deployment
-action. Pages may reuse that SHA as a deployment ID across artifact uploads, so a terminal
+Candidate and recovery archives follow the reference upload layout: an explicit `./` root
+(directory `.` when read), relative `./` members with parent-directory entries, and GNU
+long-name records. This is our reference-aligned transport profile, not a claim about every
+format the Pages backend supports. Traversal, links, duplicate members, unreadable entries
+and size limits remain rejected. Historical archive restoration is separate and does not
+rewrite retained archives.
+The publisher checks both exact transport archives before retaining the candidate or requesting
+cutover. It also rejects unsafe/duplicate members, unreadable files and exceeded size limits.
+Historical archives remain readable for provenance and composition, but a bare-path archive
+cannot be selected directly for deployment or recovery. Repacking changes the archive digest:
+retain the original evidence and obtain a newly signed, explicitly selected composition rather
+than treating the replacement as the previously approved archive.
+
+The Pages build version is the publication execution commit (`GITHUB_SHA`), matching its upload
+and OIDC job. The signed assembly retains its separate verified workflow/source identities.
+Pages may reuse that SHA as a deployment ID across artifact uploads, so a terminal
 SHA-addressed status cannot prove that the latest artifact request has stopped. If publication
 fails with such an ID, the job records `recovery-required` and does not automatically request a
 rollback. Preserve the candidate, prior archive and receipts; confirm the current request is no
@@ -188,7 +209,8 @@ allow a two-minute propagation window with a shared monotonic deadline, bounded 
 remaining-budget socket timeouts. The 45-minute manual deployment job leaves preparation and
 recovery allowance around both ten-minute Pages waits; it does not guarantee arbitrary slow
 transfers finish. Socket timeouts are cooperative and do not bound platform DNS resolution. Successful activation records the new current/prior pair in
-`docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight and result receipts.
+`docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight, result and candidate
+deployment receipts, including the requested artifact ID and execution commit.
 
 A failure receipt distinguishes `published`, `unchanged`, `restored`, `recovered-to-bootstrap`
 and `recovery-required`.

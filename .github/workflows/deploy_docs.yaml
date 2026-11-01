@@ -151,9 +151,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
-      - name: Upload the verified durable rollback candidate
+      - name: Upload the verified publication candidate
         id: candidate
-        if: inputs.selection == 'rollback'
         uses: actions/upload-artifact@v7
         with:
           name: docs-candidate-${{ github.run_attempt }}
@@ -165,6 +164,7 @@ jobs:
         if: inputs.selection == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
           VERIFIED_PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact-id }}
         run: |
           python3 -B -m tools.docs_publish promote --work "$RUNNER_TEMP/docs-publish" \
@@ -186,6 +186,7 @@ jobs:
           path: |
             ${{ runner.temp }}/docs-publish/preflight.json
             ${{ runner.temp }}/docs-publish/result.json
+            ${{ runner.temp }}/docs-publish/candidate-deployment.json
             ${{ runner.temp }}/docs-publish/composition-attestation.json
             ${{ runner.temp }}/docs-publish/pages-attestation.json
           if-no-files-found: ignore
@@ -314,10 +315,21 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+      - name: Upload the verified publication candidate
+        id: candidate
+        if: steps.prepare.outputs.ready == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-candidate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-auto-publish/pages/artifact.tar
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
       - name: Publish only the verified development-docs update
         if: steps.prepare.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
           VERIFIED_PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact-id }}
         run: |
           python3 -B -m tools.docs_publish promote-auto --work "$RUNNER_TEMP/docs-auto-publish" \
@@ -330,6 +342,7 @@ jobs:
           path: |
             ${{ runner.temp }}/docs-auto-publish/preflight.json
             ${{ runner.temp }}/docs-auto-publish/result.json
+            ${{ runner.temp }}/docs-auto-publish/candidate-deployment.json
             ${{ runner.temp }}/docs-auto-publish/composition-attestation.json
             ${{ runner.temp }}/docs-auto-publish/pages-attestation.json
           if-no-files-found: ignore

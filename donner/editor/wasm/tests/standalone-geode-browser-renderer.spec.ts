@@ -4,37 +4,18 @@ import { join } from "node:path";
 import { PNG } from "pngjs";
 import { type BitmapComparatorResult, runBitmapComparator } from "./browser-bitmap-comparator";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
+import {
+  browserDiagnosticStage,
+  formatGpuCounters,
+  gpuCounterNames,
+  pageErrorCategory,
+  readGpuDiagnosticsBounded,
+} from "./browser-diagnostic-policy.js";
 
 installBrowserStallDiagnostics(test);
 
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const selectedBrowserBackend = "[Geode] GPU backend: browser, selected by the build setting";
-
-const gpuCounterNames = [
-  "deviceRequests",
-  "queueSubmits",
-  "queueSubmitFailures",
-  "queueWaits",
-  "queueDone",
-  "queueRejected",
-  "mapRequests",
-  "mapResolved",
-  "mapRejected",
-  "mapPending",
-  "observedAtMs",
-  "lastQueueSubmitAtMs",
-  "lastQueueDoneAtMs",
-  "lastMapRequestAtMs",
-  "lastMapResolvedAtMs",
-  "lastMapRejectedAtMs",
-  "gpuValidationErrors",
-  "gpuOutOfMemoryErrors",
-  "gpuInternalErrors",
-  "gpuOtherErrors",
-  "diagnosticObserverErrors",
-  "deviceLostDestroyed",
-  "deviceLostOther",
-] as const;
 
 type GpuCounters = Record<(typeof gpuCounterNames)[number], number>;
 type GpuDiagnostics = {
@@ -43,41 +24,6 @@ type GpuDiagnostics = {
   attachDeviceForTesting: (device: GPUDevice) => void;
 };
 
-function formatGpuCounters(value: unknown): string {
-  const counters = value !== null && typeof value === "object"
-    ? value as Record<string, unknown>
-    : {};
-  return gpuCounterNames.map((name) => {
-    const count = counters[name];
-    return `${name}=${
-      typeof count === "number" && Number.isSafeInteger(count) && count >= 0
-        ? count
-        : "unknown"
-    }`;
-  }).join(",");
-}
-
-async function readGpuDiagnosticsBounded(
-  page: Page,
-): Promise<Pick<GpuDiagnostics, "current" | "atDeadline"> | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      page.evaluate(() => {
-        const { current, atDeadline } =
-          (window as Window & { __donnerGpuDiagnostics: GpuDiagnostics }).__donnerGpuDiagnostics;
-        return { current, atDeadline };
-      }).catch(() => null),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), 500);
-      }),
-    ]);
-  } catch {
-    return null;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
 
 function installGpuDiagnostics(): void {
   const counters = {
@@ -228,23 +174,6 @@ function installGpuDiagnostics(): void {
   });
 }
 
-const browserDiagnosticStages = new Map([
-  ["[wasm] render_svg entry", "render_entry"],
-  ["[wasm] parsed OK", "svg_parsed"],
-  ["[wasm] RendererGeode constructed", "renderer_constructed"],
-  ["[wasm] draw() returned", "draw_returned"],
-  ["[wasm] takeSnapshot() returned", "snapshot_returned"],
-  ["[Geode] snapshot map reached the capture deadline", "snapshot_map_deadline"],
-]);
-
-function browserDiagnosticStage(line: string): string | null {
-  for (const [prefix, stage] of browserDiagnosticStages) {
-    if (line.startsWith(prefix)) {
-      return stage;
-    }
-  }
-  return null;
-}
 
 type RgbaCapture = { width: number; height: number; rgba: string };
 
@@ -282,56 +211,7 @@ function expectBitmapsMatch(
     .toBe(true);
 }
 
-function pageErrorCategory(error: Error): string {
-  const message = error.message;
-  if (/device.{0,24}lost|lost.{0,24}device/i.test(message)) {
-    return "WebGPU device lost";
-  }
-  if (error.name === "GPUValidationError" || /GPUValidationError|validation error/i.test(message)) {
-    return "WebGPU validation error";
-  }
-  if (error.name === "GPUOutOfMemoryError" || /GPUOutOfMemoryError|out of memory/i.test(message)) {
-    return "WebGPU out of memory";
-  }
-  if (/Asyncify/i.test(message)) {
-    return "Wasm Asyncify error";
-  }
-  if (error.name === "RuntimeError") {
-    return "Wasm runtime error";
-  }
-  if (error.name === "TypeError") {
-    return "JavaScript type error";
-  }
-  if (error.name === "RangeError") {
-    return "JavaScript range error";
-  }
-  if (error.name === "ReferenceError") {
-    return "JavaScript reference error";
-  }
-  return "Unclassified browser page error";
-}
 
-test("browser diagnostics cannot disclose console content", async () => {
-  const sensitive = "https://private.example.test/path /Users/operator/private/file";
-  expect(browserDiagnosticStage(sensitive)).toBeNull();
-  expect(browserDiagnosticStage(`[wasm] parsed OK ${sensitive}`)).toBe("svg_parsed");
-  expect(pageErrorCategory(new Error(`Asyncify failed at ${sensitive}`))).toBe(
-    "Wasm Asyncify error",
-  );
-  expect(pageErrorCategory(new Error(`device was lost at ${sensitive}`))).toBe(
-    "WebGPU device lost",
-  );
-  const validationError = new Error(sensitive);
-  validationError.name = "GPUValidationError";
-  expect(pageErrorCategory(validationError)).toBe("WebGPU validation error");
-  const memoryError = new Error(sensitive);
-  memoryError.name = "GPUOutOfMemoryError";
-  expect(pageErrorCategory(memoryError)).toBe("WebGPU out of memory");
-  expect(pageErrorCategory(new Error(sensitive))).toBe("Unclassified browser page error");
-  expect(formatGpuCounters({ mapRequests: sensitive, extra: sensitive })).not.toContain(sensitive);
-  const stalledPage = { evaluate: () => new Promise<never>(() => {}) } as unknown as Page;
-  expect(await readGpuDiagnosticsBounded(stalledPage)).toBeNull();
-});
 
 test("browser GPU diagnostics whitelist errors and snapshot the map deadline", async ({ page }) => {
   const fixtureUrl = `${baseUrl}/__gpu_diagnostic_blank`;

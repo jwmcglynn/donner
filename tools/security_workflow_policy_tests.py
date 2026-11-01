@@ -72,8 +72,6 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos-metal", "Configure BuildBuddy remote cache", None,
@@ -104,6 +102,9 @@ REVIEWED_WORKFLOW_CALLS = {
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
+    (".github/workflows/cmake.yml", "macos-self-hosted"): "use_self_hosted_macos",
+    (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
+    (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "macos-metal"): "use_self_hosted_macos",
@@ -119,6 +120,9 @@ SELF_HOSTED_STATUS_PREFIX = {
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
 SELF_HOSTED_NARROWING = {
+    (".github/workflows/main.yml", "macos-browser"):
+        " && (needs.determine-targets.outputs.fallback == 'true' || "
+        "needs.determine-targets.outputs.browser_affected == 'true')",
     (".github/workflows/main.yml", "macos-vm-qualification"):
         " && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
     (".github/workflows/main.yml", "macos-hosted-parity"):
@@ -134,6 +138,13 @@ SELF_HOSTED_GATE_PREFIX = (
     "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
     "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "
     "(github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && ")
+
+# Lint must keep validating documentation-only pull requests too.
+SELF_HOSTED_GATE_OVERRIDES = {
+    (".github/workflows/lint.yml", "lint-self-hosted"): (
+        "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
+        "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "),
+}
 
 # Reviewed `runs-on` expressions that are neither a literal label nor `${{ matrix.<key> }}`, with
 # every label each can produce.
@@ -292,7 +303,7 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/github_hosted_nightly.yml", "build"),
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
-    # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
+    # Native desktop browser partition for trusted maintainer PRs.
     (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/main.yml", "macos-self-hosted"),
     (".github/workflows/main.yml", "macos-metal"),
@@ -304,7 +315,8 @@ BUILDBUDDY_JOBS = {
 # The self-hosted lanes on BuildBuddy: the macOS fast lane and its hosted-parity subset. They run
 # only for trusted maintainer pull requests, so each holds the read-write key and no Renovate
 # reader, and its last step removes the key from the persistent runner whatever the job's outcome.
-SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-self-hosted"),
+SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-browser"),
+                               (".github/workflows/main.yml", "macos-self-hosted"),
                                (".github/workflows/main.yml", "macos-metal"),
                                (".github/workflows/main.yml", "macos-hosted-parity")}
 BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
@@ -1484,7 +1496,7 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
-    prefix = SELF_HOSTED_GATE_PREFIX.replace(
+    prefix = SELF_HOSTED_GATE_OVERRIDES.get((path, name), SELF_HOSTED_GATE_PREFIX).replace(
         "${{ ", "${{ " + SELF_HOSTED_STATUS_PREFIX.get((path, name), ""), 1)
     gate = prefix + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
         SELF_HOSTED_JOBS.get((path, name)), SELF_HOSTED_NARROWING.get((path, name), ""))
@@ -1983,7 +1995,7 @@ DOCS_BUILD_WORKFLOW = ".github/workflows/build_docs.yaml"
 DOCS_DEPLOY_STEPS = ("Verify the attested composition and durable prior site",
                      "Restore and verify the durable rollback selection",
                      "Retain the verified prior Pages archive for recovery",
-                     "Upload the verified durable rollback candidate",
+                     "Upload the verified publication candidate",
                      "Publish the verified complete site with approved recovery",
                      "Roll back the complete site with approved recovery",
                      "Retain publication and recovery evidence")
@@ -1997,6 +2009,25 @@ DOCS_AUTO_GUARD = ("github.event_name == 'workflow_run' && github.ref == 'refs/h
     "github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && "
     "github.event.workflow_run.conclusion == 'success' && "
     "github.event.workflow_run.head_repository.full_name == github.repository")
+
+
+def _docs_candidate_handoff_violations(job, work, publish_name, automatic):
+    upload = _named_step(job, "Upload the verified publication candidate")
+    publish = _named_step(job, publish_name)
+    conditional = ("if: steps.prepare.outputs.ready == 'true'" in upload if automatic
+                   else "        if:" not in upload)
+    return _failed([
+        ("id: candidate" in upload and "actions/upload-artifact@" in upload,
+         "docs publication must upload its verified candidate in this attempt"),
+        ("name: docs-candidate-${{ github.run_attempt }}" in upload and conditional,
+         "docs candidate upload must match the publication mode and attempt"),
+        ("path: ${{ runner.temp }}/" + work + "/pages/artifact.tar" in upload,
+         "docs candidate upload must use the already verified archive"),
+        ("VERIFIED_CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}" in publish,
+         "docs publication must bind its current candidate artifact"),
+        ("${{ runner.temp }}/" + work + "/candidate-deployment.json" in job,
+         "docs deployment identity must survive publication failure"),
+    ])
 
 
 def _docs_automatic_violations(workflow):
@@ -2024,7 +2055,10 @@ def _docs_automatic_violations(workflow):
              and "github.event.workflow_run.head_sha" not in body for body in (assemble, deploy)),
          "automatic code must come only from trusted main"),
     ])
-    return failures + _docs_automatic_gates(assemble, deploy) + _docs_automatic_commands(assemble, deploy)
+    return (failures + _docs_automatic_gates(assemble, deploy) +
+            _docs_automatic_commands(assemble, deploy) +
+            _docs_candidate_handoff_violations(deploy, "docs-auto-publish",
+                "Publish only the verified development-docs update", True))
 
 
 def _docs_automatic_gates(assemble, deploy):
@@ -2090,7 +2124,8 @@ def _docs_deploy_violations(workflow):
         (_docs_runs_quoted((deploy, assemble, seed)),
          "docs run blocks must use quoted environment values"),
     ])
-    return failures
+    return failures + _docs_candidate_handoff_violations(deploy, "docs-publish",
+        "Publish the verified complete site with approved recovery", False)
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
@@ -2280,7 +2315,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(save, _steps(job)[-1], where)
                 # tools/ci_runner_loss_rerun.py treats a step of this name as post-job cleanup.
                 self.assertEqual("Save Bazel action cache", _step_key(save, "name", 8), where)
-        self.assertEqual(4, restoring)
+        self.assertEqual(3, restoring)
 
     def test_only_main_pushes_save_actions_caches(self):
         self.assertEqual([], _cache_write_violations(self.supply_chain_files))
@@ -3380,7 +3415,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        step = _named_step(_jobs(workflow)["linux"], "Test deterministic fuzzer soak wrapper")
+        step = _named_step(_jobs(workflow)["linux-self-hosted"], "Test deterministic fuzzer soak wrapper")
         self.assertNotEqual("", step, "Linux PR gate must execute the deterministic soak probe")
         self.assertIsNone(_step_key(step, "if", 8))
         self.assertIsNone(_step_key(step, "continue-on-error", 8))
@@ -3390,6 +3425,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual([
             "set", "-euo", "pipefail", "bazelisk", "test", "--config=ci",
             "--config=latest_llvm", "--test_output=all",
+            "$BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS",
             "--test_tag_filters=", "--nocache_test_results",
             "--noskip_incompatible_explicit_targets",
             "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
@@ -3403,7 +3439,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_deterministic_soak_gate_rejects_exclusion_or_skip(self):
         path = ".github/workflows/main.yml"
         workflow = self.supply_chain_files[path]
-        step = _step_body(workflow, "Test deterministic fuzzer soak wrapper")
+        step = _named_step(_jobs(workflow)["linux-self-hosted"],
+                           "Test deterministic fuzzer soak wrapper")
         for old, new in [("--test_tag_filters= ", "--test_tag_filters=-fuzz_soak "),
                          ("--nocache_test_results", "--cache_test_results"),
                          ("--noskip_incompatible_explicit_targets",
@@ -3968,8 +4005,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual({(main, "linux", "Configure BuildBuddy remote cache", '"true"')},
                          opted_in)
         self.assertEqual({(main, "linux", step) for step in (
-            "Verify BuildBuddy remote execution", "Build", "Test",
-            "Test (hosted parity subset)")}, consumers)
+            "Verify BuildBuddy remote execution", "Build", "Test")}, consumers)
 
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci
@@ -4531,28 +4567,19 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIsNone(problem)
                 self.assertEqual(expected, sets)
 
-    def test_hosted_browser_subset_stays_hosted_and_never_writes_caches(self):
-        # The trusted-PR hosted macOS browser subset reads the self-hosted routing output only to
-        # run when the self-hosted macOS lane replaced the hosted one. It must stay on the hosted
-        # image, and as a pull-request-only job it restores main's Actions caches without saving
-        # any. Its BuildBuddy steps are the reviewed `macos` ones, checked by the BuildBuddy
-        # policy above; no other step reads a secret.
+    def test_native_browser_subset_is_trusted_and_removes_credentials(self):
         main = ".github/workflows/main.yml"
         workflow = _workflows(self.supply_chain_files)[main]
         job = _jobs(workflow)["macos-browser"]
-        self.assertEqual("xcode-27", _job_key(job, "runs-on"))
-        self.assertNotIn((main, "macos-browser"), SELF_HOSTED_JOBS)
-        condition = _job_key(job, "if")
-        self.assertIn("github.event_name == 'pull_request'", condition)
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
-        self.assertIn("cache-save: false", job)
-        self.assertNotRegex(job, r"uses: actions/cache(?:/save)?@")
+        self.assertEqual("[self-hosted, macOS, ARM64]", _job_key(job, "runs-on"))
+        self.assertEqual("use_self_hosted_macos", SELF_HOSTED_JOBS[(main, "macos-browser")])
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", _job_key(job, "if"))
+        for forbidden in ("actions/cache", "cache-save:", "BUILDBUDDY_API_KEY_READONLY"):
+            self.assertNotIn(forbidden, job)
         readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
                    if _secret_reads(step)}
-        self.assertEqual(readers, {
-            "Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"},
-            "Configure BuildBuddy read-only cache": {"BUILDBUDDY_API_KEY_READONLY"},
-        })
+        self.assertEqual(readers, {"Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"}})
+        self.assertTrue(job.rstrip("\n").endswith(BUILDBUDDY_CLEANUP.rstrip("\n")))
         self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())
 
     def test_self_hosted_policy_rejects_ungated_or_mutable_runner_selection(self):
@@ -4905,20 +4932,24 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertTrue(_artifact_upload_violations({**files, path: changed}))
 
     def test_gatekeeper_uses_immutable_admission_code(self):
-        workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        self.assertEqual([], _gatekeeper_source_violations(workflow))
-        for old, new in (
-            ("github.event.pull_request.base.sha || github.sha", "github.sha"),
-            ("path: pr-input", "path: ."),
-            ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only',
-             "python3 tools/ci/gatekeeper.py docs-only"),
-            ("uses: ./.github/actions/pr-trust", "uses: ./pr-input/.github/actions/pr-trust"),
-            ("persist-credentials: false", "persist-credentials: true"),
-        ):
-            with self.subTest(mutation=new):
-                changed = workflow.replace(old, new, 1)
-                self.assertNotEqual(workflow, changed)
-                self.assertTrue(_gatekeeper_source_violations(changed))
+        for path in (".github/workflows/main.yml", ".github/workflows/lint.yml",
+                     ".github/workflows/cmake.yml"):
+            workflow = self.supply_chain_files[path]
+            self.assertEqual([], _gatekeeper_source_violations(workflow))
+            self.assertEqual(_jobs(self.supply_chain_files[".github/workflows/main.yml"])["gatekeeper"],
+                             _jobs(workflow)["gatekeeper"])
+            for old, new in (
+                ("github.event.pull_request.base.sha || github.sha", "github.sha"),
+                ("path: pr-input", "path: ."),
+                ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only',
+                 "python3 tools/ci/gatekeeper.py docs-only"),
+                ("uses: ./.github/actions/pr-trust", "uses: ./pr-input/.github/actions/pr-trust"),
+                ("persist-credentials: false", "persist-credentials: true"),
+            ):
+                with self.subTest(mutation=new):
+                    changed = workflow.replace(old, new, 1)
+                    self.assertNotEqual(workflow, changed)
+                    self.assertTrue(_gatekeeper_source_violations(changed))
 
     def test_script_context_guard_reads_scalar_modifiers_and_stops_at_env(self):
         for scalar in ("|", "|-", "|+", "|2", "|2-", "|+2", ">", ">-", ">2+"):
@@ -4962,6 +4993,29 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "          BRANCH: ${{ github.head_ref }}\n", 1)
         self.assertNotEqual(safe, files[path])
         self.assertEqual([], _script_injection_violations({path: safe}))
+
+
+    def test_docs_candidate_handoff_and_failure_receipts_cannot_be_removed(self):
+        jobs = _jobs(self.supply_chain_files[DOCS_WORKFLOW])
+        modes = (("deploy", "docs-publish", "Publish the verified complete site with approved recovery", False),
+                 ("auto-deploy", "docs-auto-publish", "Publish only the verified development-docs update", True))
+        for name, work, publish_name, automatic in modes:
+            job = jobs[name]
+            self.assertEqual([], _docs_candidate_handoff_violations(job, work, publish_name, automatic))
+            for token in ("VERIFIED_CANDIDATE_ARTIFACT_ID:", "candidate-deployment.json",
+                          "name: docs-candidate-${{ github.run_attempt }}", "/pages/artifact.tar"):
+                with self.subTest(job=name, removed=token):
+                    changed = job.replace(token, "removed", 1)
+                    self.assertNotEqual(changed, job)
+                    self.assertTrue(_docs_candidate_handoff_violations(changed, work, publish_name, automatic))
+
+    def test_docs_candidate_upload_cannot_retain_a_rollback_only_guard(self):
+        job = _jobs(self.supply_chain_files[DOCS_WORKFLOW])["deploy"]
+        changed = job.replace("        id: candidate\n",
+                              "        id: candidate\n        if: inputs.selection == 'rollback'\n", 1)
+        self.assertNotEqual(changed, job)
+        self.assertTrue(_docs_candidate_handoff_violations(changed, "docs-publish",
+            "Publish the verified complete site with approved recovery", False))
 
 
 if __name__ == "__main__":

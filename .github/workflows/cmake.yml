@@ -28,12 +28,39 @@ jobs:
     outputs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
+      use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
+      use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
+      # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
+      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
     steps:
-      - uses: actions/checkout@v7
+      - id: admission_source
+        name: Checkout trusted admission code
+        uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          sparse-checkout: |
+            tools/ci/gatekeeper.py
+            tools/ci/github_rate_limit.py
+            .github/actions/pr-trust
+          sparse-checkout-cone-mode: false
+
+      - id: comparison_source
+        name: Checkout PR files for comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          path: pr-input
           fetch-depth: 0
           persist-credentials: false
+          submodules: false
+          lfs: false
 
+      # Admission and trust execute only base-pinned code; PR files are comparison data.
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
         env:
@@ -42,12 +69,56 @@ jobs:
 
       - id: docs_only
         name: Detect docs-only PR
-        run: python3 tools/ci/gatekeeper.py docs-only
+        working-directory: ${{ github.event_name == 'pull_request' && 'pr-input' || '.' }}
+        run: python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only
+
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
+      - id: runner_gate
+        name: Determine trusted self-hosted runner routing
+        env:
+          TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
+          SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
+          SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          hosted_macos_label="$(
+            python3 - <<'PY'
+          import json
+          import os
+
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          labels = (event.get("pull_request") or {}).get("labels") or []
+          print("true" if isinstance(labels, list) and any(
+              isinstance(label, dict) and label.get("name") == "ci:hosted-macos"
+              for label in labels
+          ) else "false")
+          PY
+          )"
+
+          use_linux=false
+          use_macos=false
+          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+            use_linux=true
+          fi
+          # An operator PR can select hosted macOS for this run without changing Linux routing.
+          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
+                "$hosted_macos_label" != "true" ]]; then
+            use_macos=true
+          fi
+
+          echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
+          echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
+          echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
   validate-generator:
     runs-on: ubuntu-24.04
     needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -98,7 +169,7 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 60
     needs: [gatekeeper, validate-generator]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M
@@ -160,3 +231,49 @@ jobs:
         with:
           path: .ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+  macos-self-hosted:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    needs: gatekeeper
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh
+
+      - name: Check preinstalled build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v cmake >/dev/null
+          command -v ninja >/dev/null
+
+      - name: Isolate nested Bazel invocations
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_binary="$(command -v bazelisk)"
+          wrapper_dir="${RUNNER_TEMP}/cmake-bazel"
+          mkdir -p "$wrapper_dir"
+          printf '#!/usr/bin/env bash\nexec %q --nohome_rc --nosystem_rc "$@"\n' "$bazel_binary" > "$wrapper_dir/bazel"
+          chmod +x "$wrapper_dir/bazel"
+          ln -s bazel "$wrapper_dir/bazelisk"
+          echo "$wrapper_dir" >> "$GITHUB_PATH"
+
+      - id: cmake-generator-check
+        name: Validate generated CMakeLists.txt
+        continue-on-error: true
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
+      - name: Retry generated CMakeLists.txt validation
+        if: steps.cmake-generator-check.outcome == 'failure'
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
+      # Hosted FetchContent trees contain absolute paths; start a fresh native consumer build.
+      - name: Build with CMake (tiny_skia)
+        run: tools/ci/cmake_consumer.sh build --parallel 2
