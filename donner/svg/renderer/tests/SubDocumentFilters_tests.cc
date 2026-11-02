@@ -498,6 +498,47 @@ TEST(SubDocumentFiltersTest, NestedExternalUsesUnderBoxEffects) {
   ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-nested");
 }
 
+/// Measuring an occurrence in the filter pre-pass, while the referenced document's render tree was
+/// last built for another occurrence of the same document, lays the measured one out first. The
+/// other occurrence draws before and after the filtered one, so every frame ends on it; each frame
+/// matches a fresh render, for different targets and for one symbol drawn into two viewports.
+TEST(SubDocumentFiltersTest, MeasuredOccurrenceAfterAnotherMatchesFreshRender) {
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  const Documents documents = {
+      {"sheet.svg", head + "<defs><rect id='small' width='4' height='4' fill='#2050d0'/>"
+                           "<rect id='big' width='24' height='12' fill='#20a020'/>"
+                           "<symbol id='symbol' viewBox='0 0 10 10'><rect width='10' height='10' "
+                           "fill='#d0a020'/></symbol></defs></svg>"},
+  };
+  struct Occurrences {
+    std::string measured;  ///< The occurrence the host filter measures.
+    std::string other;     ///< Another occurrence of the same document, drawn around it.
+  };
+  const Occurrences cases[] = {
+      {"<use href='sheet.svg#big' y='16'/>", "<use href='sheet.svg#small' x='26' y='2'/>"},
+      {"<use href='sheet.svg#symbol' y='16' width='24' height='12'/>",
+       "<use href='sheet.svg#symbol' x='24' width='6' height='6'/>"},
+  };
+  constexpr std::string_view kBoxFlood =
+      "<filter id='box'><feFlood flood-color='#d02020' flood-opacity='0.5'/>"
+      "<feMerge><feMergeNode/><feMergeNode in='SourceGraphic'/></feMerge></filter>";
+  for (const auto& [measured, other] : cases) {
+    SCOPED_TRACE(measured);
+    const std::string source = head + "<defs>" + std::string(kBoxFlood) +
+                               "</defs><rect width='32' height='32' fill='#ffffff'/>" + other +
+                               "<g filter='url(#box)'>" + measured + "</g>" + other + "</svg>";
+    SVGDocument document = Parse(source, documents);
+    Renderer renderer;
+    for (int frame = 0; frame < 4; ++frame) {
+      SCOPED_TRACE(frame);
+      SVGDocument fresh = Parse(source, documents);
+      Renderer freshRenderer;
+      ExpectSameBitmap(Draw(renderer, document), Draw(freshRenderer, fresh),
+                       "sub-document-measured-after-other");
+    }
+  }
+}
+
 /// An feImage that draws an external `<use>` keeps its offscreen copy of that use out of the box of
 /// an unrelated element earlier in the document, on every frame. The offscreen copy numbers its
 /// own draw order from zero, so its `<use>` could land inside the early group's draw-order range.

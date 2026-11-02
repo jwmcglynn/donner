@@ -140,6 +140,7 @@ void SVGRectElement::invalidate() const {
 
 void SVGRectElement::compute() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   auto& rect = handle_.get_or_emplace<components::RectComponent>(access);
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   components::ShapeSystem().createComputedPath(handle_, rect, FontMetrics(), disabledSink);

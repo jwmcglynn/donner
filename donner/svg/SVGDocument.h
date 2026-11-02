@@ -272,7 +272,8 @@ public:
 
   /**
    * Return true when the document carries render invalidation that the renderer has not yet
-   * consumed: per-entity dirty flags, or a queued full render-tree rebuild / style recompute.
+   * consumed: per-entity dirty flags, a queued full render-tree rebuild / style recompute, or a
+   * queued rebuild of the rendering instances alone.
    * Always false before the render tree has been built for the first time.
    *
    * UI surfaces that prepare the document for auxiliary rendering (for example the editor's

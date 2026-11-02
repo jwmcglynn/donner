@@ -56,13 +56,13 @@
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
-#include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/NonScalingStroke.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 #include "donner/svg/renderer/FilterRegionContext.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/renderer/PlacedTextGeometry.h"
@@ -4453,6 +4453,9 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   }
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+  if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
+    RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+  }
 }
 
 void RendererDriver::recordChildFontDependencies(SVGDocument& child, Entity target,
@@ -4526,25 +4529,6 @@ bool RendererDriver::beginSubDocumentFontTraversal(const SVGDocumentHandle& chil
 
 namespace {
 
-void InvalidateExternalUseDerivedState(Registry& registry) {
-  for (Entity entity : registry.view<donner::components::TreeComponent>()) {
-    components::StyleSystem().invalidateComputed(EntityHandle(registry, entity));
-    registry.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
-        components::DirtyFlagsComponent::All);
-    if (registry.all_of<components::TextRootComponent>(entity)) {
-      (void)components::InvalidateTextLayout(EntityHandle(registry, entity));
-    }
-  }
-  registry.clear<components::RenderingInstanceComponent>();
-  if (!registry.ctx().contains<components::RenderTreeState>()) {
-    registry.ctx().emplace<components::RenderTreeState>();
-  }
-  auto& state = registry.ctx().get<components::RenderTreeState>();
-  state.needsFullStyleRecompute = true;
-  state.needsFullRebuild = true;
-  components::InvalidateFontResourcePreparation(registry);
-}
-
 class ExternalUseStyleScope {
 public:
   ExternalUseStyleScope(Registry& child, Entity root, Registry& host,
@@ -4574,7 +4558,7 @@ public:
         root, properties, style.resourceOpacities, fill, stroke, family, bytes, std::move(work));
     retainPaintOwner(fill, resourceLeases_[0]);
     retainPaintOwner(stroke, resourceLeases_[1]);
-    InvalidateExternalUseDerivedState(child);
+    components::ExternalUseStyleRetention::PrepareOccurrence(child);
     installed_ = true;
   }
 
@@ -4586,7 +4570,7 @@ public:
     if (context.unsupportedResource && context.work->reportExternalResourceWarning()) {
       std::cerr << "External-use inherited cross-document URL resource is unsupported\n";
     }
-    InvalidateExternalUseDerivedState(registry_);
+    components::ExternalUseStyleRetention::FinishOccurrence(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
       budget->setAggregateWorkBudget(nullptr);
     }
@@ -4676,28 +4660,20 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   }
   textFrameCache_->roots.erase(&child);
   textFrameCache_->shadowStyles.erase(&child);
-  std::optional<components::RenderingContext::InitialPaintState> previousPaint;
-  if (const auto* context = child.ctx().find<components::RenderingContext>()) {
-    previousPaint = context->initialPaintState();
-  }
   setSubDocumentContextPaint(subDocument, instance.resolvedFill, instance.resolvedStroke);
   const Transform2d surfaceFromHost =
       instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
   if (!fragment.empty()) {
     const ExternalUseInstanceScope instanceScope(child, root,
                                                  EntityHandle(hostRegistry, hostEntity));
+    components::ExternalUseStyleRetention::PrepareInstance(child);
     drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity);
   } else {
+    components::ExternalUseStyleRetention::PrepareInstance(child);
     const Vector2i size = subDocument.canvasSize();
     drawAdmittedSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
                             PreserveAspectRatio::Default(), surfaceFromHost, hostRegistry,
                             hostEntity);
-  }
-  if (previousPaint) {
-    child.ctx().get<components::RenderingContext>().restoreInitialPaintState(
-        std::move(*previousPaint));
-  } else {
-    clearSubDocumentContextPaint(subDocument);
   }
   textFrameCache_->roots.erase(&child);
   textFrameCache_->shadowStyles.erase(&child);
@@ -4965,6 +4941,8 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
     return std::nullopt;
   }
   const ExternalUseInstanceScope instanceScope(child, root, EntityHandle(hostRegistry, hostEntity));
+  // The render tree may hold another occurrence's instance, as drawing finds it.
+  components::ExternalUseStyleRetention::PrepareInstance(child);
   prepareSubDocument(subDocument);
   // The instance is laid out relative to the <use> element, so its world space is the use's. Its
   // own external uses are measured in this layout too, then forgotten with it.
@@ -5018,13 +4996,6 @@ void RendererDriver::setSubDocumentContextPaint(
   }
   auto& renderCtx = subDocument.registry().ctx().get<components::RenderingContext>();
   renderCtx.setInitialContextPaint(contextFill, contextStroke);
-}
-
-void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
-  components::InvalidateFontResourcePreparation(subDocument.registry());
-  if (subDocument.registry().ctx().contains<components::RenderingContext>()) {
-    subDocument.registry().ctx().get<components::RenderingContext>().clearInitialContextPaint();
-  }
 }
 
 void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,

@@ -58,6 +58,7 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -66,6 +67,7 @@
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/parser/TransformParser.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 
 namespace donner::svg::components {
 
@@ -1559,19 +1561,6 @@ bool IsUnpresentedDefinition(const Registry& registry, Entity entity) {
   return false;
 }
 
-bool IsDormantDefinitionUse(Registry& registry, Entity entity,
-                            const ShadowTreeComponent& shadowTree) {
-  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
-  if (hostType == nullptr || hostType->type() != ElementType::Use) {
-    return false;
-  }
-  const std::optional<RcString> href = shadowTree.mainHref();
-  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
-    return false;
-  }
-  return IsUnpresentedDefinition(registry, entity);
-}
-
 void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
@@ -1618,35 +1607,64 @@ void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSin
 
 }  // namespace
 
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree) {
+  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
+  if (hostType == nullptr || hostType->type() != ElementType::Use) {
+    return false;
+  }
+  const std::optional<RcString> href = shadowTree.mainHref();
+  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
+    return false;
+  }
+  return IsUnpresentedDefinition(registry, entity);
+}
+
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
+
+namespace {
+
+bool IsProvablySameContextPaint(const std::optional<ResolvedPaintServer>& lhs,
+                                const std::optional<ResolvedPaintServer>& rhs) {
+  return lhs.has_value() == rhs.has_value() && (!lhs || IsProvablySamePaint(*lhs, *rhs));
+}
+
+}  // namespace
 
 void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
                                               const ResolvedPaintServer& stroke) {
-  initialContextFill_ = fill;
-  initialContextStroke_ = stroke;
-  getRenderTreeState(registry_).needsFullRebuild = true;
-}
-
-void RenderingContext::restoreInitialPaintState(InitialPaintState state) {
-  initialContextFill_ = std::move(state.first);
-  initialContextStroke_ = std::move(state.second);
-  getRenderTreeState(registry_).needsFullRebuild = true;
+  const std::optional<ResolvedPaintServer> newFill = fill;
+  const std::optional<ResolvedPaintServer> newStroke = stroke;
+  if (IsProvablySameContextPaint(initialContextFill_, newFill) &&
+      IsProvablySameContextPaint(initialContextStroke_, newStroke)) {
+    return;
+  }
+  initialContextFill_ = newFill;
+  initialContextStroke_ = newStroke;
+  getRenderTreeState(registry_).needsInstanceRebuild = true;
 }
 
 void RenderingContext::clearInitialContextPaint() {
+  if (!initialContextFill_ && !initialContextStroke_) {
+    return;
+  }
   initialContextFill_.reset();
   initialContextStroke_.reset();
-  getRenderTreeState(registry_).needsFullRebuild = true;
+  getRenderTreeState(registry_).needsInstanceRebuild = true;
 }
 
 void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& warningSink) {
+  if (!registry_.ctx().contains<ExternalUseStyleContext>()) {
+    ExternalUseStyleRetention::RestoreStandalone(registry_);
+  }
+
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 
-  // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
-  // is required, skip all recomputation.
+  // Fast path: if the render tree has been built, nothing is dirty, and no rebuild is required,
+  // skip all recomputation.
   if (renderState.hasBeenBuilt && !renderState.needsFullStyleRecompute &&
-      !renderState.needsFullRebuild && !hasDirtyEntities) {
+      !renderState.needsFullRebuild && !renderState.needsInstanceRebuild && !hasDirtyEntities) {
     return;
   }
 
@@ -1655,6 +1673,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& war
 
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
+  renderState.needsInstanceRebuild = false;
   renderState.hasBeenBuilt = true;
 }
 
