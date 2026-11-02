@@ -1086,23 +1086,26 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
   return result;
 }
 
-/// Snapshot the main-pass render instances in draw order, from `firstEntity` through `lastEntity`
-/// inclusive, or every instance when `firstEntity` is null. Offscreen feImage shadow instances are
-/// left out (see \ref collectOffscreenFeImageShadowEntities). Filter preparation can reorder
+/// Snapshot main-pass render instances in draw order, leaving out offscreen feImage shadow
+/// instances (see \ref collectOffscreenFeImageShadowEntities). Filter preparation can reorder
 /// rendering instance storage, so traversals iterate this snapshot rather than a live view.
-std::vector<Entity> CollectMainEntities(Registry& registry, Entity firstEntity = entt::null,
-                                        Entity lastEntity = entt::null) {
+///
+/// With @p range, the snapshot starts at `range->first` (empty when it is not found) and ends at
+/// `range->second` inclusive, or at the last instance when that is never reached. Without it, the
+/// snapshot holds every instance.
+std::vector<Entity> CollectMainEntities(
+    Registry& registry, std::optional<std::pair<Entity, Entity>> range = std::nullopt) {
   const std::unordered_set<Entity> feImageShadowEntities =
       collectOffscreenFeImageShadowEntities(registry);
   std::vector<Entity> entities;
   RenderingInstanceView view(registry);
-  while (firstEntity != entt::null && !view.done() && view.currentEntity() != firstEntity) {
+  while (range && !view.done() && view.currentEntity() != range->first) {
     view.advance();
   }
   bool reachedLast = false;
   while (!view.done() && !reachedLast) {
     const Entity entity = view.currentEntity();
-    reachedLast = firstEntity != entt::null && entity == lastEntity;
+    reachedLast = range && entity == range->second;
     if (feImageShadowEntities.count(entity) == 0) {
       entities.push_back(entity);
     }
@@ -2544,6 +2547,7 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
                                          const std::vector<DeferredPop>& markers) const {
   if (!earlyLeafViewportCulling_ || !IsPlainVisibleLeaf(instance) ||
       !HasNeutralLeafCompositing(style) ||
+      insideEnclosingFilterLayer_ ||
       std::any_of(markers.begin(), markers.end(),
                   [](const DeferredPop& marker) { return marker.filterLayerCount != 0; })) {
     return false;
@@ -2569,7 +2573,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   // left in the pool by a prior render's feImage pre-pass (see
   // `collectOffscreenFeImageShadowEntities` + `draw()`); they are offscreen-only and must not be
   // drawn as main content on a re-render (e.g. an editor partial re-draw).
-  const std::vector<Entity> rangeEntities = CollectMainEntities(registry, firstEntity, lastEntity);
+  const std::vector<Entity> rangeEntities =
+      CollectMainEntities(registry, std::pair(firstEntity, lastEntity));
 
   prepareFilterGraphs(registry, rangeEntities);
 
@@ -3015,6 +3020,7 @@ void RendererDriver::pushFilterStages(const std::vector<components::FilterGraph>
     for (auto it = stages->rbegin(); it != stages->rend(); ++it) {
       renderer_.pushFilterLayer(*it, it->filterRegion);
     }
+    pushedFilterLayers_ += stages->size();
   }
 }
 
@@ -3022,6 +3028,7 @@ void RendererDriver::popFilterStages(std::size_t count) {
   for (std::size_t i = 0; i < count; ++i) {
     renderer_.popFilterLayer();
   }
+  pushedFilterLayers_ -= count;
 }
 
 bool RendererDriver::reservePreparedFilterGraph(const components::FilterGraph& filterGraph) {
@@ -3384,7 +3391,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
-          hasFilterLayer ||
+          hasFilterLayer || insideEnclosingFilterLayer_ ||
           std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
                       [](const DeferredPop& m) { return m.filterLayerCount != 0; });
       if (!insideFilterLayer) {
@@ -3622,7 +3629,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
-          hasFilterLayer ||
+          hasFilterLayer || insideEnclosingFilterLayer_ ||
           std::any_of(localDeferred.begin(), localDeferred.end(),
                       [](const DeferredPop& m) { return m.filterLayerCount != 0; });
       if (!insideFilterLayer) {
@@ -4767,9 +4774,17 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
 void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
                                          Entity lastEntity) {
   // Snapshot before preparing filters: feImage preparation can reorder instance storage.
-  const std::vector<Entity> entities = CollectMainEntities(registry, firstEntity, lastEntity);
+  const std::vector<Entity> entities =
+      firstEntity == entt::null ? CollectMainEntities(registry)
+                                : CollectMainEntities(registry, std::pair(firstEntity, lastEntity));
   auto hostFilterGraphs = std::exchange(preparedFilterGraphs_, {});
   std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
+  // A filter layer the host has open can pull off-surface sub-document content into view, so the
+  // sub-document must not cull against the surface while one is open.
+  const bool hostInsideFilterLayer =
+      std::exchange(insideEnclosingFilterLayer_, pushedFilterLayers_ != 0);
+  // The feImage recursion guard holds entity ids of the registry being prepared.
+  std::unordered_set<entt::id_type>* hostFeImageGuard = std::exchange(feImageFragmentGuard_, nullptr);
   prepareFilterGraphs(registry, entities);
   RenderingInstanceView view(registry, entities);
   if (firstEntity == entt::null) {
@@ -4777,6 +4792,8 @@ void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
   } else {
     traverseRange(view, registry, firstEntity, lastEntity);
   }
+  feImageFragmentGuard_ = hostFeImageGuard;
+  insideEnclosingFilterLayer_ = hostInsideFilterLayer;
   subtreeMarkers_ = std::move(hostSubtreeMarkers);
   preparedFilterGraphs_ = std::move(hostFilterGraphs);
 }
