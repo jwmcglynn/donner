@@ -427,6 +427,52 @@ TEST_F(SubmitStalenessTests, IntactSceneSubmits) {
   EXPECT_THAT(device_.submit(std::move(commands)), HasResult());
 }
 
+TEST_F(SubmitStalenessTests, ValidSubmissionFormatsNoDiagnostics) {
+  CommandBuffer commands = recordScene();
+  const uint64_t before = Device::submissionDiagnosticsFormattedForTest();
+  EXPECT_THAT(device_.submit(std::move(commands)), HasResult());
+  EXPECT_THAT(Device::submissionDiagnosticsFormattedForTest(), Eq(before))
+      << "a submission that passes validation must not build error strings";
+}
+
+// A refused submission still names what reached the stale resource, word for word, whether that
+// was a bind group entry, a bind group's layout or a recorded command.
+TEST_F(SubmitStalenessTests, RefusedEntryBufferKeepsItsExactDiagnostic) {
+  CommandBuffer commands = recordScene();
+  const uint32_t slot = uniformBuffer_.slotIndex();
+  ASSERT_THAT(device_.destroyBuffer(std::move(uniformBuffer_)), IsOk());
+  const uint64_t before = Device::submissionDiagnosticsFormattedForTest();
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    Eq("submit: bind group \"solidUniforms\" entry binding 0 "
+                                       "references destroyed buffer (slot " +
+                                       std::to_string(slot) + ")")));
+  EXPECT_THAT(Device::submissionDiagnosticsFormattedForTest(), testing::Gt(before))
+      << "the refusal must format its diagnostic";
+}
+
+TEST_F(SubmitStalenessTests, RefusedBindGroupLayoutKeepsItsExactDiagnostic) {
+  CommandBuffer commands = recordScene();
+  const uint32_t slot = bindGroupLayout_.slotIndex();
+  ASSERT_THAT(device_.destroyBindGroupLayout(std::move(bindGroupLayout_)), IsOk());
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    Eq("submit: bind group \"solidUniforms\" references destroyed "
+                                       "bindGroupLayout (slot " +
+                                       std::to_string(slot) + ")")));
+}
+
+TEST_F(SubmitStalenessTests, RefusedPipelineKeepsItsExactDiagnostic) {
+  CommandBuffer commands = recordScene();
+  const uint32_t slot = pipeline_.slotIndex();
+  ASSERT_THAT(device_.destroyRenderPipeline(std::move(pipeline_)), IsOk());
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    Eq("submit: recorded setPipeline references destroyed "
+                                       "renderPipeline (slot " +
+                                       std::to_string(slot) + ")")));
+}
+
 TEST_F(SubmitStalenessTests, DestroyedVertexBufferRejectsSubmit) {
   CommandBuffer commands = recordScene();
   ASSERT_THAT(device_.destroyBuffer(std::move(vertexBuffer_)), IsOk());
@@ -678,11 +724,80 @@ TEST_F(SubmitStalenessTests, DestroyedSamplerEntryRejectsSubmit) {
   ASSERT_THAT(pass->end(), IsOk());
   CommandBuffer commands = GetResultOrFail(encoder->finish());
 
+  const uint32_t samplerSlot = sampler.slotIndex();
   ASSERT_THAT(device_.destroySampler(std::move(sampler)), IsOk());
   EXPECT_THAT(device_.submit(std::move(commands)),
-              IsGpuErrorWithMessage(
-                  GpuErrorType::InvalidHandle,
-                  AllOf(HasSubstr("bind group \"textureGroup\""), HasSubstr("destroyed sampler"))));
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    Eq("submit: bind group \"textureGroup\" entry binding 1 "
+                                       "references destroyed sampler (slot " +
+                                       std::to_string(samplerSlot) + ")")));
+}
+
+// The refusal names the binding of the entry that reached the stale resource, for texture view
+// and buffer entries that are not a group's first entry.
+TEST_F(SubmitStalenessTests, RefusedLaterEntriesNameTheirOwnBinding) {
+  for (const bool destroyView : {true, false}) {
+    SCOPED_TRACE(destroyView ? "texture view at binding 1" : "buffer at binding 2");
+    Texture sampled = GetResultOrFail(device_.createTexture(TextureDescriptor{
+        "sampled", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+    TextureView sampledView =
+        GetResultOrFail(device_.createTextureView(sampled, TextureViewDescriptor{"sampledView"}));
+    const Sampler sampler = GetResultOrFail(device_.createSampler(SamplerDescriptor{"linear"}));
+    Buffer uniforms = GetResultOrFail(device_.createBuffer(
+        BufferDescriptor{"mixedUniforms", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+    const BindGroupLayout layout =
+        GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+            "mixedBindings",
+            {BindGroupLayoutEntry{0, ShaderStage::Fragment, BindingType::FilteringSampler},
+             BindGroupLayoutEntry{1, ShaderStage::Fragment, BindingType::SampledTexture2dFloat},
+             BindGroupLayoutEntry{2, ShaderStage::Vertex | ShaderStage::Fragment,
+                                  BindingType::UniformBuffer}}}));
+    const PipelineLayout mixedPipelineLayout = GetResultOrFail(
+        device_.createPipelineLayout(PipelineLayoutDescriptor{"mixedLayout", {layout}}));
+    const BindGroup group = GetResultOrFail(device_.createBindGroup(
+        BindGroupDescriptor{"mixedGroup",
+                            layout,
+                            {BindGroupEntry{0, SamplerBinding{sampler}},
+                             BindGroupEntry{1, TextureViewBinding{sampledView}},
+                             BindGroupEntry{2, BufferBinding{uniforms, 0, 16}}}}));
+    const RenderPipeline mixedPipeline =
+        GetResultOrFail(device_.createRenderPipeline(RenderPipelineDescriptor{
+            "mixed", mixedPipelineLayout,
+            VertexState{
+                shader_,
+                "vsMain",
+                {VertexBufferLayout{
+                    8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
+            FragmentState{shader_, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
+
+    std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+    RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+        "mixedPass",
+        {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store, {0, 0, 0, 1}}}}));
+    ASSERT_THAT(pass->setPipeline(mixedPipeline), IsOk());
+    ASSERT_THAT(pass->setBindGroup(0, group), IsOk());
+    ASSERT_THAT(pass->setVertexBuffer(0, vertexBuffer_), IsOk());
+    ASSERT_THAT(pass->draw(3), IsOk());
+    ASSERT_THAT(pass->end(), IsOk());
+    CommandBuffer commands = GetResultOrFail(encoder->finish());
+
+    std::string expected;
+    if (destroyView) {
+      expected =
+          "submit: bind group \"mixedGroup\" entry binding 1 references destroyed "
+          "textureView (slot " +
+          std::to_string(sampledView.slotIndex()) + ")";
+      ASSERT_THAT(device_.destroyTextureView(std::move(sampledView)), IsOk());
+    } else {
+      expected =
+          "submit: bind group \"mixedGroup\" entry binding 2 references destroyed buffer "
+          "(slot " +
+          std::to_string(uniforms.slotIndex()) + ")";
+      ASSERT_THAT(device_.destroyBuffer(std::move(uniforms)), IsOk());
+    }
+    EXPECT_THAT(device_.submit(std::move(commands)),
+                IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, Eq(expected)));
+  }
 }
 
 // == Backing lifetime and bounded submission waits ============================================
