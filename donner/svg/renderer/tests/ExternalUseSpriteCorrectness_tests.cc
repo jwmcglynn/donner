@@ -638,5 +638,54 @@ TEST(ExternalUseRetentionTest, UseTargetRootSurvivesInstanceOnlyRebuilds) {
                "use-target-root");
 }
 
+/// Restyles of \p sheet over eight frames that only move one of two uses drawing different targets,
+/// after two warm-up frames.
+std::size_t CountRestylesWhileMovingOneOfTwoTargets(std::string sheet) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use id="u0" href="sprites.svg#s0" fill="red"/>
+        <use href="sprites.svg#s1" x="8" fill="blue"/>
+      </svg>)svg",
+      std::move(sheet));
+  if (!host) {
+    return 0;
+  }
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  RestyleCounter counter(SVGDocument::CreateFromHandle(*host->resource));
+  SVGGraphicsElement use = host->document.querySelector("#u0")->cast<SVGGraphicsElement>();
+  for (int frame = 1; frame <= 8; ++frame) {
+    use.setTransform(Transform2d::Translate(Vector2d(frame * 1.0, 0)));
+    renderer.draw(host->document);
+  }
+  return counter.restyles();
+}
+
+TEST(ExternalUseSpriteCorrectnessTest, AlternatingTargetsWithInnerUsesDoNotRestyle) {
+  EXPECT_EQ(CountRestylesWhileMovingOneOfTwoTargets(
+                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+    <g id="s0"><defs><circle id="c0" r="2"/></defs><use href="#c0" x="2" y="2"/></g>
+    <g id="s1"><defs><circle id="c1" r="2"/></defs><use href="#c1" x="4" y="4"/></g></svg>)svg"),
+            0u);
+}
+
+TEST(ExternalUseSpriteCorrectnessTest, AlternatingTargetsWithDormantDefinitionUseDoNotRestyle) {
+  EXPECT_EQ(CountRestylesWhileMovingOneOfTwoTargets(
+                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+    <g id="s0"><defs><circle id="c0" r="2"/><use id="d0" href="#c0"/></defs>
+      <use href="#c0" x="2" y="2"/></g>
+    <g id="s1"><defs><circle id="c1" r="2"/></defs><use href="#c1" x="4" y="4"/></g></svg>)svg"),
+            0u);
+}
+
+TEST(ExternalUseSpriteCorrectnessTest, AlternatingTargetsWithCyclicUsesDoNotRestyle) {
+  EXPECT_EQ(CountRestylesWhileMovingOneOfTwoTargets(
+                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+    <g id="s0"><use id="a0" href="#b0"/><use id="b0" href="#a0"/><circle r="2"/></g>
+    <g id="s1"><defs><circle id="c1" r="2"/></defs><use href="#c1" x="4" y="4"/></g></svg>)svg"),
+            0u);
+}
+
 }  // namespace
 }  // namespace donner::svg::tests
