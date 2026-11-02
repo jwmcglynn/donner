@@ -556,8 +556,10 @@ public:
    * nothing for two seconds also returns to the floor at its next frame or trim.
    *
    * `ToFloor` and `All` also drop this renderer's cached filter results (see
-   * `setFilterResultCacheEnabled`) before trimming, so their textures are freed with the rest;
-   * `IdleOnly` drops them only when this renderer began no frame for the same two seconds.
+   * `setFilterResultCacheEnabled`) before trimming. Between frames their textures are freed with
+   * the rest; during a frame they return to the pool once it submits, and the next trim or idle
+   * decay frees them. `IdleOnly` drops them only when this renderer began or finished no frame for
+   * the same two seconds.
    *
    * @param level How much to free.
    */

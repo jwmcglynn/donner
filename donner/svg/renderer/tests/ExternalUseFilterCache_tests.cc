@@ -46,6 +46,9 @@ enum class SpriteFilter {
   /// The roomy region's blur of content whose wide stroke reaches past its geometry far enough
   /// that the blur meets the region's edge; kept per quarter-pixel offset.
   StrokedBlur,
+  /// The roomy region's blur after a color matrix whose alpha offset turns transparent black
+  /// half opaque, flooding the region up to its clipped edge; kept per quarter-pixel offset.
+  AlphaOffsetBlur,
 };
 
 constexpr int kHostWidth = 256;
@@ -59,7 +62,7 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
     out << "<g id=\"sprite-" << sprite << "\">";
     out << "<filter id=\"filter-" << sprite << "\"";
     if (filter == SpriteFilter::Blur || filter == SpriteFilter::OffsetBlur ||
-        filter == SpriteFilter::StrokedBlur) {
+        filter == SpriteFilter::StrokedBlur || filter == SpriteFilter::AlphaOffsetBlur) {
       out << R"( x="-150%" y="-150%" width="400%" height="400%")";
     } else if (filter == SpriteFilter::Glow) {
       out << R"( x="-50%" y="-50%" width="200%" height="200%")";
@@ -67,6 +70,8 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
     out << ">";
     if (filter == SpriteFilter::OffsetBlur) {
       out << R"(<feOffset dx="12"/>)";
+    } else if (filter == SpriteFilter::AlphaOffsetBlur) {
+      out << R"(<feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0.5"/>)";
     }
     if (filter != SpriteFilter::Glow) {
       out << "<feGaussianBlur id=\"blur-" << sprite << "\" stdDeviation=\"5.3\"/>";
@@ -500,6 +505,13 @@ TEST(ExternalUseFilterCacheTest, ClippedBlurHitIsTheRecordedResultMovedByWholePi
 TEST(ExternalUseFilterCacheTest, OffsetThenBlurNearRegionEdgeIsKeptPerBucket) {
   REQUIRE_CACHING_BACKEND();
   ExpectBucketedHitIsTheRecordedResultMoved(SpriteFilter::OffsetBlur, "offset-blur");
+}
+
+// A color matrix with a positive alpha offset maps transparent black to half opaque, so the blur's
+// input fills the whole region and the region's clip leaves a hard edge. It is kept per bucket.
+TEST(ExternalUseFilterCacheTest, AlphaOffsetThenBlurIsKeptPerBucket) {
+  REQUIRE_CACHING_BACKEND();
+  ExpectBucketedHitIsTheRecordedResultMoved(SpriteFilter::AlphaOffsetBlur, "alpha-offset-blur");
 }
 
 // The blur's reach from the geometry fits the region, but a wide stroke paints past the geometry

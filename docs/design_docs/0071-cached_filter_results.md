@@ -152,8 +152,9 @@ pixel is how the content's edges were rasterized. Two placements are used:
   resampled bilinearly at the exact new offset when three conditions keep it free of hard edges:
   the blur has no primitive subregion of its own; it reads SourceGraphic or SourceAlpha directly
   or through per-pixel primitives only (color matrices and component transfers without
-  subregions), so its input stays inside the content's painted bounds; and its three-deviation
-  reach from those bounds, strokes included, stays inside the filter region. A blur that a region
+  subregions, that keep transparent pixels transparent), so its input stays inside the content's
+  painted bounds; and its three-deviation reach from those bounds, strokes included, plus one
+  device pixel, stays inside the filter region. A blur that a region
   or subregion clips, or whose input an offset, morphology or flood could carry to the edge, is
   treated like the next case. A qualifying blur's detail is already low-passed, so bilinear
   resampling moves each channel by a few levels at most, and the result lands exactly where the
@@ -208,9 +209,11 @@ the frame is submitted, or are retained when its submission is uncertain. A lost
 every result; disabling the cache drops them immediately.
 
 Held results follow the texture pool's memory controls. `trimTexturePool` with `ToFloor` or `All`
-drops every held result before trimming, so their textures are freed with the pool's. A renderer
-that begins no frame for the pool's two-second idle decay drops its held results at its next frame
-or trim. Results of a document that is gone are dropped at each frame and trim; the weak document
+drops every held result before trimming. Between frames their textures are freed with the pool's;
+during a frame they return to the pool once the frame submits, after an abandoned frame they are
+retained like other textures whose submission is uncertain, and the next trim or idle decay frees
+what returned. A renderer that begins or finishes no frame for the pool's two-second idle decay
+drops its held results at its next frame or trim. Results of a document that is gone are dropped at each frame and trim; the weak document
 identity in the key makes that a scan of at most 64 entries. A frame left unfinished returns the
 results it recorded to the pool unless it split its submission, when they are retained like other
 textures whose submission is uncertain.
@@ -264,7 +267,8 @@ and a process-unique epoch, so results never cross documents or outlive a docume
     the recorded translation moved by whole pixels exactly, and differs from the render at the
     actual translation only within 0.1 over at most 64 edge pixels;
   - a blur after an feOffset that moves the content to the region's edge, and a blur of a wide
-    stroke that reaches it, are kept per bucket rather than resampled.
+    stroke that reaches it, and a blur after a color matrix whose alpha offset floods the region,
+    are kept per bucket rather than resampled.
 - `//donner/svg/renderer/tests:renderer_geode_tests` cases: a result recorded in a frame that is
   abandoned before submission is not reused, and under a tight surface budget a caching frame
   draws every filter an uncached frame draws; a texture trim to the floor or to nothing drops held

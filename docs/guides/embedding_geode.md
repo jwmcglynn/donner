@@ -203,8 +203,8 @@ returns to the 64 MiB floor at its next frame or trim. Textures a frame is using
 
 Cached filter results (see `RendererInterface::setFilterResultCacheEnabled`) are held beside the
 pool, up to 64 MiB on native builds and 16 MiB in WebAssembly builds. `ToFloor` and `All` drop
-them before trimming, and a renderer that begins no frame for two seconds drops them at its next
-frame or trim.
+them before trimming (during a frame, their textures return to the pool once it submits), and a
+renderer that begins or finishes no frame for two seconds drops them at its next frame or trim.
 
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 

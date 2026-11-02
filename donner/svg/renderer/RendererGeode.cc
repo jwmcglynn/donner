@@ -2747,8 +2747,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// quarter of the frame surface budget's byte limit, and at most
   /// \ref kMaximumFilterResultCacheBytes, of results outside the per-frame charge, so held results
   /// never refuse a filter or other surface in a frame. It empties when the texture pool is
-  /// trimmed below its idle level and when this renderer begins no frame for the pool's idle
-  /// decay.
+  /// trimmed below its idle level and when this renderer begins or finishes no frame for the pool's
+  /// idle decay.
   FilterResultCacheIndex<FilterResultPayload> filterResultCache;
   /// Most bytes of held filter results. Native builds allow the index's 64 MiB. Browsers on phones
   /// reclaim a tab whose GPU process grows, and held results sit on top of the texture pool's
@@ -2819,12 +2819,23 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void dropFilterResults() {
     retireFilterResults(filterResultCache.clear());
     if (!frameRecordingOpen) {
-      drainRetiredFilterResults(/*submissionUncertain=*/false);
+      // After an abandoned frame, what it recorded may name these textures and its submission is
+      // uncertain.
+      drainRetiredFilterResults(/*submissionUncertain=*/frameRecordingAbandoned);
     }
   }
 
-  /// Drop every held result when this renderer began no frame for the pool's idle decay, like the
-  /// pool forgetting its working set, and the results of documents that are gone.
+  /// Record a frame beginning or ending now, on the pool's clock, for the cache's idle decay. A
+  /// frame's end counts as it does for the pool, so a renderer whose frames run longer than the
+  /// decay keeps its results.
+  void markFilterResultActivity() {
+    if (texturePool) {
+      lastFilterResultFrameTime = texturePool->now();
+    }
+  }
+
+  /// Drop every held result when this renderer began or finished no frame for the pool's idle
+  /// decay, like the pool forgetting its working set, and the results of documents that are gone.
   void dropIdleFilterResults() {
     retireFilterResults(filterResultCache.dropExpired());
     if (texturePool && lastFilterResultFrameTime.has_value() &&
@@ -2833,7 +2844,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       retireFilterResults(filterResultCache.clear());
     }
     if (!frameRecordingOpen) {
-      drainRetiredFilterResults(/*submissionUncertain=*/false);
+      drainRetiredFilterResults(/*submissionUncertain=*/frameRecordingAbandoned);
     }
   }
 
@@ -2846,9 +2857,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
     dropIdleFilterResults();
-    if (texturePool) {
-      lastFilterResultFrameTime = texturePool->now();
-    }
+    markFilterResultActivity();
     retireFilterResults(filterResultCache.setByteLimit(
         std::min(surfaceBudget->limitBytes() / 4, kMaximumFilterResultCacheBytes)));
   }
@@ -2863,19 +2872,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Whether a final blur's result fades out before the filter region's edge: it has no primitive
-  /// subregion of its own, and three deviations from the element's bounding box stay inside the
-  /// region. Otherwise the region or subregion clips the blur to a hard edge, which resampling at
-  /// a sub-pixel offset would soften.
+  /// subregion of its own, and three deviations from the content's painted bounds, plus one device
+  /// pixel, stay inside the region. Otherwise the region or subregion clips the blur to a hard
+  /// edge, which resampling at a sub-pixel offset would soften. The pixel of margin covers paint
+  /// the stroke bounds can miss, such as a non-scaling stroke drawn at a scale below one or the
+  /// rasterized coverage of a miter spike.
+  /// @param devicePixel Size of one device pixel in the filter's user space, per axis.
   static bool BlurStaysInsideFilterRegion(const components::FilterNode& node,
                                           const components::filter_primitive::GaussianBlur& blur,
                                           const std::optional<Box2d>& contentBounds,
-                                          const Box2d& region) {
+                                          const Box2d& region, const Vector2d& devicePixel) {
     if (node.hasExplicitRegion() || node.hasAnimatedRegion() || !contentBounds) {
       return false;
     }
     const Box2d& bounds = *contentBounds;
-    const double reachX = 3.0 * blur.stdDeviationX;
-    const double reachY = 3.0 * blur.stdDeviationY;
+    const double reachX = 3.0 * blur.stdDeviationX + devicePixel.x;
+    const double reachY = 3.0 * blur.stdDeviationY + devicePixel.y;
     return bounds.topLeft.x - reachX >= region.topLeft.x &&
            bounds.topLeft.y - reachY >= region.topLeft.y &&
            bounds.bottomRight.x + reachX <= region.bottomRight.x &&
@@ -2909,13 +2921,44 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return std::nullopt;
   }
 
-  /// Whether \p node maps each pixel to itself, without a subregion that could clip it.
+  /// Whether the transfer function \p func maps an alpha of zero to zero.
+  static bool TransferKeepsZero(const components::filter_primitive::ComponentTransfer::Func& func) {
+    using FuncType = components::filter_primitive::ComponentTransfer::FuncType;
+    switch (func.type) {
+      case FuncType::Identity: return true;
+      case FuncType::Table:
+      case FuncType::Discrete: return func.tableValues.empty() || func.tableValues.front() <= 0.0;
+      case FuncType::Linear: return func.intercept <= 0.0;
+      case FuncType::Gamma:
+        // amplitude * 0^exponent + offset; 0^0 is 1, and a negative exponent diverges.
+        return func.exponent > 0.0 ? func.offset <= 0.0
+                                   : func.exponent == 0.0 && func.amplitude + func.offset <= 0.0;
+    }
+    return false;
+  }
+
+  /// Whether \p primitive keeps transparent black transparent. A color matrix with a positive
+  /// alpha offset, or an alpha transfer that lifts zero, floods the whole region, whose clip then
+  /// makes a hard edge.
+  static bool KeepsTransparentBlackTransparent(const components::FilterPrimitive& primitive) {
+    using components::filter_primitive::ColorMatrix;
+    if (const auto* matrix = std::get_if<ColorMatrix>(&primitive)) {
+      // Only a full matrix has an offset column; the other types keep alpha or derive it from RGB.
+      return matrix->type != ColorMatrix::Type::Matrix ||
+             (matrix->values.size() == 20 && matrix->values[19] <= 0.0);
+    }
+    if (const auto* transfer =
+            std::get_if<components::filter_primitive::ComponentTransfer>(&primitive)) {
+      return TransferKeepsZero(transfer->funcA);
+    }
+    return false;
+  }
+
+  /// Whether \p node maps each pixel to itself and keeps transparent pixels transparent, without
+  /// a subregion that could clip it.
   static bool IsPerPixelFilterNode(const components::FilterNode& node) {
-    const bool perPixel =
-        std::holds_alternative<components::filter_primitive::ColorMatrix>(node.primitive) ||
-        std::holds_alternative<components::filter_primitive::ComponentTransfer>(node.primitive);
-    return perPixel && node.inputs.size() <= 1 && !node.hasExplicitRegion() &&
-           !node.hasAnimatedRegion();
+    return KeepsTransparentBlackTransparent(node.primitive) && node.inputs.size() <= 1 &&
+           !node.hasExplicitRegion() && !node.hasAnimatedRegion();
   }
 
   /// Whether the final blur of \p graph reads SourceGraphic or SourceAlpha through per-pixel
@@ -2965,7 +3008,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         blur != nullptr && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
         blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0 &&
         BlurReadsSourceThroughPerPixelPrimitives(graph) &&
-        BlurStaysInsideFilterRegion(graph.nodes.back(), *blur, content.contentBounds, filterRegion);
+        BlurStaysInsideFilterRegion(graph.nodes.back(), *blur, content.contentBounds, filterRegion,
+                                    Vector2d(1.0 / scaleX, 1.0 / scaleY));
     if (!smooth) {
       const auto bucket = [](double translation) {
         const double fraction = translation - std::floor(translation);
@@ -6417,7 +6461,9 @@ RendererGeodeTexturePoolStats RendererGeode::texturePoolStats() const {
 }
 
 void RendererGeode::trimTexturePool(RendererGeodeTexturePoolTrim level) {
-  // Held filter results go first, so the trim below also frees the textures they return.
+  // Held filter results go first. Outside a frame their textures return to the pool at once, so
+  // the trim below frees them too; inside an open frame they return once the frame submits, and
+  // the next trim or idle decay frees them.
   if (level == RendererGeodeTexturePoolTrim::IdleOnly) {
     impl_->dropIdleFilterResults();
   } else {
@@ -6717,6 +6763,7 @@ void RendererGeode::endFrame() {
   impl_->drainPendingReleases();
   impl_->drainRetiredFilterResults(impl_->frameRecordingAbandoned);
   impl_->settleFrameFilterResults(/*submitted=*/!impl_->frameRecordingAbandoned);
+  impl_->markFilterResultActivity();
 
   // The documents the frame drew are still held, so give back what it borrowed from them now.
   impl_->releaseFrameLoans();
