@@ -28,6 +28,11 @@ namespace {
 /// rebuilds the device's pipelines once, at creation.
 constexpr gpu::TextureFormat kDefaultFormat = gpu::TextureFormat::BGRA8Unorm;
 
+/// Name of a presentable format, for error messages.
+std::string_view FormatName(gpu::TextureFormat format) {
+  return format == gpu::TextureFormat::RGBA8Unorm ? "RGBA8" : "BGRA8";
+}
+
 /// Whether Geode can render to \p format as a presentation target.
 bool IsPresentableFormat(gpu::TextureFormat format) {
   return format == gpu::TextureFormat::BGRA8Unorm || format == gpu::TextureFormat::RGBA8Unorm;
@@ -174,7 +179,9 @@ struct GeodeSurfaceRenderer::Impl {
     if (failure.empty() && !Contains(caps.formats, format)) {
       failure = "the surface no longer offers its preferred format";
     }
-    return failure.empty() ? failure : "while reopening in RGBA8: " + failure;
+    return failure.empty()
+               ? failure
+               : "while reopening in " + std::string(FormatName(format)) + ": " + failure;
   }
 
   /// Chooses the surface format, Fifo pacing and opaque alpha when the surface offers them.
