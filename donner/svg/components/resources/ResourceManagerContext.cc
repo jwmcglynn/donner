@@ -456,6 +456,7 @@ void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInt
   }
   registry_.clear<DeferredDecodedImageComponent>();
   externalFetchCache_.clear();
+  admittedExternalSvgs_.clear();
   if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
     cache->clearFailures();
   }
@@ -557,6 +558,19 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   SubDocumentCache::ParseCallback guardedParseCallback =
       GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
   return cache.getOrParse(boundedUrl, data, guardedParseCallback, warningSink);
+}
+
+std::optional<SVGDocumentHandle> ResourceManagerContext::loadAdmittedExternalSVG(
+    std::string_view url, ParseWarningSink& warningSink) {
+  if (const auto found = admittedExternalSvgs_.find(RcString(url));
+      found != admittedExternalSvgs_.end()) {
+    return found->second;
+  }
+  std::optional<SVGDocumentHandle> document = loadExternalSVG(url, warningSink);
+  if (document) {
+    admittedExternalSvgs_.insert_or_assign(RcString(url), *document);
+  }
+  return document;
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {

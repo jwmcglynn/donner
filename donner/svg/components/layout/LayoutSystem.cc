@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <string_view>
+#include <tuple>
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/ParseWarningSink.h"
@@ -710,6 +711,17 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
       stack.push_back(ElementContext{child, currentViewBox});
     }
   }
+}
+
+void LayoutSystem::recomputeInvalidatedLayout(EntityHandle entity, ParseWarningSink& warningSink) {
+  const auto& style = entity.get<ComputedStyleComponent>();
+  if (entity.all_of<SizedElementComponent>()) {
+    createComputedSizedElementComponentWithStyle(entity, style, FontMetrics(), warningSink);
+  }
+  if (entity.all_of<TransformComponent>()) {
+    createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), warningSink);
+  }
+  std::ignore = getViewBox(entity);
 }
 
 SizedElementProperties LayoutSystem::resolveSizeProperties(

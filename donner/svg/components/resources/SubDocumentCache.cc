@@ -53,7 +53,11 @@ DocumentFootprint MeasureDocument(const SVGDocumentHandle& document) {
 }  // namespace
 
 bool SubDocumentCache::acceptsCachedDocument(const SVGDocumentHandle& document) const {
-  return !familyBound_ || (admission_ && admission_->admit(document));
+  if (!familyBound_) {
+    return true;
+  }
+  ++cachedDocumentAdmissions_;
+  return admission_ && admission_->admit(document);
 }
 
 bool SubDocumentCache::bindFamily(Registry& registry) {

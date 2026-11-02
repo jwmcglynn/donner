@@ -354,6 +354,7 @@ donner_perf_sensitive_cc_library(
         "AnimationReferences.cc",
         "ExternalUseStyleRetention.cc",
         "RenderingContext.cc",
+        "RetainedRenderTreeUpdate.cc",
     ],
     hdrs = [
         "AnimationAttributes.h",
@@ -361,6 +362,7 @@ donner_perf_sensitive_cc_library(
         "AnimationReferences.h",
         "ExternalUseStyleRetention.h",
         "RenderingContext.h",
+        "RetainedRenderTreeUpdate.h",
     ],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
