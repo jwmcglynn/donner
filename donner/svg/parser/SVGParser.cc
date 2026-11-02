@@ -525,8 +525,9 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
           hasEmptyNamespacePrefix = true;
           context.setNamespacePrefix("");
         }
-      } else if (value == "http://www.w3.org/1999/xlink") {
-        // Allow xlink.
+      } else if (value == "http://www.w3.org/1999/xlink" || attributeName != "xmlns") {
+        // A prefixed declaration of a foreign namespace only binds a prefix: the XML tree keeps
+        // its elements and attributes, so it changes no SVG semantics.
       } else {
         SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
         if (auto maybeRange = context.getAttributeLocation(node, attributeName)) {
@@ -540,28 +541,56 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
   }
 }
 
-/// Parse each of \p node's attributes onto \p element, skipping attributes in an unsupported
-/// namespace.
+/**
+ * Report a namespace-qualified attribute that stays in the XML tree without an SVG
+ * interpretation.
+ *
+ * @param context The parser context.
+ * @param element The element that carries the attribute.
+ * @param attributeName The attribute's qualified name.
+ * @param reason The diagnostic text.
+ */
+void WarnRetainedAttribute(SVGParserContext& context, const SVGElement& element,
+                           const XMLQualifiedNameRef& attributeName, std::string_view reason) {
+  SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
+  if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
+    range = *maybeRange;
+  }
+
+  context.addWarning(ParseDiagnostic::Warning(RcString(reason), range));
+}
+
+/// Parse each of \p node's attributes onto \p element. Attributes in a namespace other than SVG
+/// or XLink stay in the XML tree, readable through \ref SVGElement::getAttribute, without an SVG
+/// interpretation.
 std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, SVGElement element,
                                                   const XMLNode& node) {
   for (const XMLQualifiedNameRef& attributeName : node.attributes()) {
     const RcString value = node.getAttribute(attributeName).value();
 
     if (!attributeName.namespacePrefix.empty() && attributeName.namespacePrefix != "xmlns" &&
-        attributeName.namespacePrefix != "xlink" &&
-        node.getNamespaceUri(attributeName.namespacePrefix) != "http://www.w3.org/2000/svg") {
-      if (context.warningsEnabled()) {
-        ParseDiagnostic err;
-        std::ostringstream ss;
-        ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
-        err.reason = ss.str();
-        if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
-          err.range.start = maybeRange->start;
+        attributeName.namespacePrefix != "xlink") {
+      const std::optional<RcString> namespaceUri =
+          node.getNamespaceUri(attributeName.namespacePrefix);
+      if (namespaceUri != "http://www.w3.org/2000/svg") {
+        if (!context.warningsEnabled()) {
+          continue;
         }
 
-        context.addWarning(std::move(err));
+        std::ostringstream ss;
+        if (namespaceUri == "http://www.w3.org/1999/xlink") {
+          // XLink attributes are interpreted by their literal `xlink` prefix.
+          ss << "Retaining XLink attribute '" << attributeName
+             << "' without interpretation; only the 'xlink' prefix is interpreted";
+          WarnRetainedAttribute(context, element, attributeName, ss.str());
+        } else if (!namespaceUri.has_value() && attributeName.namespacePrefix != "xml") {
+          // The `xml` prefix is bound by the XML Namespaces specification without a declaration.
+          ss << "Retaining attribute '" << attributeName << "' with undeclared namespace prefix '"
+             << attributeName.namespacePrefix << "' without SVG interpretation";
+          WarnRetainedAttribute(context, element, attributeName, ss.str());
+        }
+        continue;
       }
-      continue;
     }
 
     if (auto error =
@@ -799,15 +828,11 @@ public:
       return isSvgNamespace;
     }
 
-    ParseDiagnostic err;
     std::ostringstream ss;
     ss << "Retaining element <" << name << "> with an unsupported namespace as unknown. "
        << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix << "'";
-    err.reason = ss.str();
-    if (auto sourceOffset = child.sourceStartOffset()) {
-      err.range.start = sourceOffset.value();
-    }
-    context_.addWarning(std::move(err));
+    context_.addWarning(ParseDiagnostic::Warning(
+        RcString(ss.str()), child.sourceStartOffset().value_or(FileOffset::Offset(0))));
     return false;
   }
 
