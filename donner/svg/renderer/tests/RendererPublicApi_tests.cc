@@ -8,6 +8,7 @@
 #include <functional>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <source_location>
@@ -1381,6 +1382,42 @@ INSTANTIATE_TEST_SUITE_P(
                               "x='4' y='4' opacity='0.5'",
                               {8, 8},
                               test::Rgba(0, 0, 255, test::Near(128, 1))},
+        ExternalUseTargetCase{
+            "SymbolSliceAlignedToMaxCorner",
+            "<symbol id='t' viewBox='0 0 4 2' preserveAspectRatio='xMaxYMax slice'>"
+            "<rect width='4' height='2' fill='blue'/>"
+            "<rect x='3' width='1' height='2' fill='lime'/></symbol>",
+            "x='2' y='2' width='8' height='8'",
+            {8, 5},
+            test::RgbaEq(0, 255, 0, 255)},
+        ExternalUseTargetCase{
+            "SymbolWithTransformPositionAndSize",
+            "<symbol id='t' viewBox='0 0 4 4'>"
+            "<rect width='4' height='4' fill='blue'/></symbol>",
+            "x='2' y='1' width='8' height='8' transform='translate(1 2) scale(0.5)'",
+            {4, 4},
+            OpaqueBlue()},
+        ExternalUseTargetCase{"NestedSvgAsTarget",
+                              "<defs><svg id='t' width='4' height='4' viewBox='0 0 2 2'>"
+                              "<rect width='4' height='4' fill='blue'/></svg></defs>",
+                              "x='4' y='4'",
+                              {5, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"HiddenAncestorOfVisibleDescendant",
+                              "<defs><g id='t'><g visibility='hidden'>"
+                              "<rect width='4' height='4' fill='red'/>"
+                              "<rect x='4' width='4' height='4' fill='blue' visibility='visible'/>"
+                              "</g></g></defs>",
+                              "x='4' y='4'",
+                              {9, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"DisplayNoneAncestorOfDescendant",
+                              "<defs><g id='t'><g display='none'>"
+                              "<rect width='4' height='4' fill='red'/></g>"
+                              "<rect x='4' width='4' height='4' fill='blue'/></g></defs>",
+                              "x='4' y='4'",
+                              {9, 5},
+                              OpaqueBlue()},
         ExternalUseTargetCase{"UseInsideDefs",
                               "<defs><use id='t' href='#r'/>"
                               "<rect id='r' width='8' height='8' fill='blue'/></defs>",
@@ -1469,6 +1506,77 @@ TEST(RendererPublicApiTest, ExternalUseInstanceLeavesReferencedDocumentClean) {
       "external-use-clean-child", editor::tests::PixelmatchIdentityParams());
 }
 
+// A nested `<svg>` inside the referenced element clips to its own viewport.
+TEST(RendererPublicApiTest, ExternalUseNestedSvgInsideTargetClips) {
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<use href='external.svg#t' x='4' y='4'/></svg>",
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs><g id='t'>"
+      "<svg width='4' height='4'><rect width='8' height='8' fill='blue'/></svg></g></defs></svg>");
+  const RendererBitmap expected = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<rect x='4' y='4' width='4' height='4' fill='blue'/></svg>");
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-use-nested-svg-clip",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Serves one SVG resource per URL; unknown URLs never reach a network or filesystem loader.
+class MultiResourceLoader final : public ResourceLoaderInterface {
+public:
+  explicit MultiResourceLoader(std::map<std::string, std::string> resources)
+      : resources_(std::move(resources)) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    const auto it = resources_.find(std::string(url));
+    if (it == resources_.end()) {
+      return ResourceLoaderError::NotFound;
+    }
+    return std::vector<uint8_t>(it->second.begin(), it->second.end());
+  }
+
+private:
+  std::map<std::string, std::string> resources_;
+};
+
+// An external instance may itself reference a third document.
+TEST(RendererPublicApiTest, ExternalUseOfTargetContainingExternalUse) {
+  constexpr std::string_view leaf =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='s' width='8' height='8' fill='blue'/></defs></svg>";
+  SVGDocument::Settings settings;
+  settings.resourceLoader =
+      std::make_unique<MultiResourceLoader>(std::map<std::string, std::string>{
+          {"b.svg",
+           "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs><g id='t'>"
+           "<use href='c.svg#s'/></g></defs></svg>"}});
+  settings.svgParseCallback = [leaf](
+                                  const std::vector<uint8_t>& bytes,
+                                  ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings nested;
+    nested.resourceLoader = std::make_unique<MultiResourceLoader>(
+        std::map<std::string, std::string>{{"c.svg", std::string(leaf)}});
+    auto parsed = parser::SVGParser::ParseSVG(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
+        parser::SVGParser::Options(), std::move(nested));
+    return parsed.hasError() ? std::nullopt : std::optional(parsed.result().handle());
+  };
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<use href='b.svg#t' x='4' y='4'/></svg>",
+      warnings, parser::SVGParser::Options(), std::move(settings));
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse()) << parsed.error();
+  const RendererBitmap actual = RenderPublicDocument(parsed.result());
+
+  const RendererBitmap expected = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='s' width='8' height='8' fill='blue'/></defs><use href='#s' x='4' y='4'/></svg>");
+  EXPECT_THAT(PixelAt(expected, 8, 8), OpaqueBlue());
+  editor::tests::CompareBitmapToBitmap(actual, expected, "external-use-nested-external",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // Drawing an instance must leave the referenced document's own layout readable through the public
 // API, with no standalone render in between. The `<use>` root is drawn last, so no later
 // occurrence's rebuild can restore state that the instance dropped.
@@ -1502,6 +1610,18 @@ TEST(RendererPublicApiTest, ExternalUseInstanceKeepsReferencedLayoutReadable) {
             element(fresh, "#g").cast<SVGGraphicsElement>().elementFromWorld());
   EXPECT_EQ(element(child, "#u").cast<SVGGraphicsElement>().elementFromWorld(),
             element(fresh, "#u").cast<SVGGraphicsElement>().elementFromWorld());
+}
+
+// A same-document <use> inside a nested <svg> renders its target.
+TEST(RendererPublicApiTest, UseInsideNestedSvgRenders) {
+  const RendererBitmap actual = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='r' width='4' height='4' fill='blue'/>"
+      "<symbol id='sym' viewBox='0 0 4 4'><rect width='4' height='4' fill='lime'/></symbol>"
+      "</defs><svg x='8' width='8' height='8'><use href='#r'/>"
+      "<use href='#sym' y='4' width='4' height='4'/></svg></svg>");
+  EXPECT_THAT(PixelAt(actual, 9, 1), OpaqueBlue());
+  EXPECT_THAT(PixelAt(actual, 9, 5), test::RgbaEq(0, 255, 0, 255));
 }
 
 // The host layer applies the `<use>` element's opacity, so the referenced content must not add a

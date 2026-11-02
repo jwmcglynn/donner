@@ -916,9 +916,11 @@ INSTANTIATE_TEST_SUITE_P(
                      .requireFeature(RendererBackendFeature::Text, "text rendering")},
                 // The image draws the nested SVG at 0.8x, so its 0.5035-unit black letter strokes
                 // are about 0.4 device pixels wide. Geode's analytic coverage of those strokes and
-                // of the small shape boundaries differs from the reference on 442 pixels, every one
-                // adjacent to a color boundary (median channel delta 7, max 102). The same SVG at
-                // 1x and larger (structure/image/external-svg) matches at default parameters.
+                // of the small shape boundaries differs from the reference only on pixels adjacent
+                // to a color boundary (on Metal: median channel delta 7, max 102). Measured counts:
+                // 442 on macOS Metal (Apple Silicon); 449 on Linux Vulkan lavapipe, both arm64 and
+                // x86_64, in the native Geode and wgpu-native reference lanes. The same SVG at 1x
+                // and larger (structure/image/external-svg) matches at default parameters.
                 {"with-an-image-child.svg", Params().withGeodeMaxPixelsDifferent(500)},
                 {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
