@@ -4429,15 +4429,26 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
     return;
   }
   // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
-  // the host sink once.
+  // the host sink once. A warning dropped by a resource limit, here or in the collecting sink, marks
+  // the host sink truncated so it does not look complete.
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
   auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
+  bool truncated = warnings.resourceLimitExceeded();
   for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (reported.keys.size() < ParseWarningSink::kMaximumWarnings &&
-        reported.keys.insert(SubDocumentWarningKey(warning)).second) {
-      warningSink_->add(ParseDiagnostic(warning));
+    std::string key = SubDocumentWarningKey(warning);
+    if (reported.keys.contains(key)) {
+      continue;
     }
+    if (reported.keys.size() >= ParseWarningSink::kMaximumWarnings) {
+      truncated = true;
+      continue;
+    }
+    reported.keys.insert(std::move(key));
+    warningSink_->add(ParseDiagnostic(warning));
+  }
+  if (truncated) {
+    warningSink_->markResourceLimitExceeded();
   }
 }
 

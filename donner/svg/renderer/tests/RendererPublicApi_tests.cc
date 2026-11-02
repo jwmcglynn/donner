@@ -1980,6 +1980,29 @@ TEST(RendererPublicApiTest, DisabledSinkLeavesSubDocumentPreparationWarningsForA
   EXPECT_THAT(WarningReasons(collecting), ElementsAre(kUnresolvedUseWarning));
 }
 
+TEST(RendererPublicApiTest, TruncatedSubDocumentPreparationWarningsMarkTheHostSinkIncomplete) {
+  // More distinct unresolved references than one sink retains, all found while the sub-document is
+  // prepared for rendering.
+  std::string child =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><g id="tile">)svg";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    child += "<use href=\"#missing" + std::to_string(i) + "\"/>";
+  }
+  child += "</g></svg>";
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(child);
+  ParseWarningSink parseWarnings;
+  auto parsed = parser::SVGParser::ParseSVG(kExternalUseHostSvg, parseWarnings,
+                                            parser::SVGParser::Options(), std::move(settings));
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  Renderer renderer;
+  ParseWarningSink warnings;
+  renderer.draw(document, warnings);
+  EXPECT_FALSE(warnings.warnings().empty());
+  EXPECT_TRUE(warnings.resourceLimitExceeded());
+}
+
 TEST(RendererPublicApiTest, DrawReportsSameDocumentWarningsToSink) {
   SVGDocument document = ParseDocument(kUnresolvedUseSvg);
   Renderer renderer;
