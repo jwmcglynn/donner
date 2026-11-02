@@ -687,6 +687,88 @@ TEST_F(TextBackendSimpleTest, SmallCapsSynthesisUppercasesAndScalesLowercase) {
                                                GlyphXKernIs(DoubleNear(-10.0, 1e-4)))));
 }
 
+#ifdef DONNER_TEXT_ENABLED
+std::vector<uint8_t> MakeBracketFontData() {
+  return MakeSfnt({
+      {"cmap", CmapTable({{'(', '(', 1},
+                          {')', ')', 2},
+                          {'A', 'A', 3},
+                          {0x3008, 0x3008, 1},
+                          {0x3009, 0x3009, 2}})},
+      {"glyf", QuadGlyphData()},
+      {"head", HeadTable(1000)},
+      {"hhea", HheaTable(800, -200, 100, 4)},
+      {"hmtx", HmtxTable({400, 500, 600, 700})},
+      {"loca", LocaTable()},
+      {"maxp", MaxpTable(4)},
+  });
+}
+
+TEST_F(TextBackendSimpleTest, SidewaysRtlBracketsKeepHorizontalMirroringAndSourceOrder) {
+  const FontHandle font = loadFont(MakeBracketFontData());
+  ASSERT_THAT(font, testing::Not(testing::Eq(FontHandle())));
+  constexpr std::string_view text = "(A)";
+  const auto covered = backend_.shapeRunNoKerning(font, 100, text, 0, text.size(), false,
+                                                  FontVariant::Normal, false);
+  ASSERT_THAT(covered.glyphs, ElementsAre(GlyphIndexIs(1), GlyphIndexIs(3), GlyphIndexIs(2)));
+  TextBackend::ShapingContext::WorkBudget work{4096, 64};
+  TextBackend::ShapingContext context;
+  context.byteLength = text.size();
+  context.work = &work;
+  context.rightToLeft = true;
+  const auto horizontal =
+      backend_.shapeRunInContext(font, 100, text, context, 0, text.size(), false,
+                                 TextOrientation::Mixed, FontVariant::Normal, false);
+  ASSERT_THAT(
+      horizontal.glyphs,
+      ElementsAre(AllOf(GlyphIndexIs(1), Field("cluster", &TextBackend::ShapedGlyph::cluster, 2)),
+                  AllOf(GlyphIndexIs(3), Field("cluster", &TextBackend::ShapedGlyph::cluster, 1)),
+                  AllOf(GlyphIndexIs(2), Field("cluster", &TextBackend::ShapedGlyph::cluster, 0))));
+  for (const auto orientation : {TextOrientation::Mixed, TextOrientation::Sideways}) {
+    SCOPED_TRACE(orientation);
+    const auto vertical = backend_.shapeRunInContext(font, 100, text, context, 0, text.size(), true,
+                                                     orientation, FontVariant::Normal, false);
+    ASSERT_THAT(work.rejected, testing::IsFalse());
+    ASSERT_THAT(vertical.glyphs, SizeIs(horizontal.glyphs.size()));
+    EXPECT_THAT(vertical.backward, testing::Optional(testing::IsTrue()));
+    for (size_t i = 0; i < vertical.glyphs.size(); ++i) {
+      EXPECT_THAT(vertical.glyphs[i].glyphIndex, testing::Eq(horizontal.glyphs[i].glyphIndex));
+      EXPECT_THAT(vertical.glyphs[i].cluster, testing::Eq(horizontal.glyphs[i].cluster));
+      EXPECT_THAT(vertical.glyphs[i].yAdvance, DoubleNear(horizontal.glyphs[i].xAdvance, 1e-4));
+    }
+  }
+}
+
+TEST_F(TextBackendSimpleTest, UprightAndMixedCjkContextRetainTheirVerticalShapingProfile) {
+  const FontHandle font = loadFont(MakeBracketFontData());
+  ASSERT_THAT(font, testing::Not(testing::Eq(FontHandle())));
+  for (const auto& [text, orientation, clusters] :
+       {std::tuple{std::string_view("(A)"), TextOrientation::Upright,
+                   std::vector<uint32_t>{0, 1, 2}},
+        std::tuple{std::string_view("〈A〉"), TextOrientation::Mixed,
+                   std::vector<uint32_t>{0, 3, 4}}}) {
+    SCOPED_TRACE(text);
+    const auto covered = backend_.shapeRunNoKerning(font, 100, text, 0, text.size(), true,
+                                                    orientation, FontVariant::Normal, false);
+    ASSERT_THAT(covered.glyphs, ElementsAre(GlyphIndexIs(1), GlyphIndexIs(3), GlyphIndexIs(2)));
+    TextBackend::ShapingContext::WorkBudget work{4096, 64};
+    TextBackend::ShapingContext context;
+    context.byteLength = text.size();
+    context.work = &work;
+    context.rightToLeft = true;
+    const auto contextual = backend_.shapeRunInContext(
+        font, 100, text, context, 0, text.size(), true, orientation, FontVariant::Normal, false);
+    ASSERT_THAT(work.rejected, testing::IsFalse());
+    ASSERT_THAT(contextual.glyphs, SizeIs(3));
+    EXPECT_THAT(contextual.backward, testing::Optional(testing::IsFalse()));
+    for (size_t i = 0; i < contextual.glyphs.size(); ++i) {
+      EXPECT_THAT(contextual.glyphs[i].glyphIndex, testing::Eq(covered.glyphs[i].glyphIndex));
+      EXPECT_THAT(contextual.glyphs[i].cluster, testing::Eq(clusters[i]));
+    }
+  }
+}
+#endif
+
 // -- Cross-span kerning -------------------------------------------------------
 
 TEST_F(TextBackendSimpleTest, CrossSpanKernAppliesPerWritingModeAndOrientation) {

@@ -7,6 +7,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/core/WritingMode.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
@@ -104,11 +105,15 @@ struct TextGlyph {
   bool emergencyLineStart = false;
   /// Preserved logical end space hanging before a backward line's visual content.
   bool hangingBefore = false;
-  bool rightToLeft = false;  ///< Resolved horizontal source-character direction.
+  bool rightToLeft = false;  ///< Resolved source-character direction in the inline context.
   /// Global visual adjacency for source-span decoration continuity; absent on legacy layouts.
   std::optional<uint32_t> visualOrder;
-  /// This visual chunk origin applies an authored horizontal absolute position.
+  /// This visual chunk origin applies an authored inline absolute position.
   bool absoluteInlinePosition = false;
+  /// Intrinsic vertical glyph-origin X offset from its pen, excluding baseline alignment.
+  double verticalCrossOffset = 0;
+  /// Full intrinsic vertical inline offset, including sideways shaping offsets when available.
+  std::optional<double> verticalInlineOffset;
 };
 
 /**
@@ -123,6 +128,7 @@ struct TextRun {
   bool textLengthAppliedOnPath =
       false;  ///< True when path placement consumed this run's textLength.
   std::shared_ptr<const StretchedTextPath> stretchedTextPath;  ///< Shared nonlinear path mapping.
+  WritingMode writingMode = WritingMode::HorizontalTb;  ///< Layout frame for ordinary decorations.
 };
 
 /**

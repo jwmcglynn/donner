@@ -1963,13 +1963,7 @@ INSTANTIATE_TEST_SUITE_P(
                               "`Hi!` and is shaped unjoined in logical order, and the vertical "
                               "underline is not drawn (3180 px)")
                      .onlyTextFull()},
-                {"mixed-languages-with-tb.svg",
-                 Params::Skip("Bug #1172: the Arabic word falls back to Amiri and the column is "
-                              "anchored like the reference, but upright CJK sits 0.026em lower "
-                              "than resvg (vhea ascender vertical origin vs resvg centering on "
-                              "hhea ascent/descent), 173 px")
-                     .setCanvasSize(300, 300)
-                     .onlyTextFull()},
+                {"mixed-languages-with-tb.svg", Params().setCanvasSize(300, 300).onlyTextFull()},
                 {"tb-and-punctuation.svg",
                  Params::Skip("#1172: punctuation forms and spacing match; upright glyphs sit "
                               "0.026em lower (vhea ascender origin vs resvg centering on "
