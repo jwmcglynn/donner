@@ -4800,8 +4800,9 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
   return bounds;
 }
 
-void RendererDriver::applyExternalUseClipBounds(ResolvedClip& clip, Registry& registry,
-                                                const components::RenderingInstanceComponent& instance) {
+void RendererDriver::applyExternalUseClipBounds(
+    ResolvedClip& clip, Registry& registry,
+    const components::RenderingInstanceComponent& instance) {
   const auto externalUses = registry.view<const components::ExternalUseComponent>();
   if (!instance.clipPath || instance.clipPath->units != ClipPathUnits::ObjectBoundingBox ||
       externalUses.begin() == externalUses.end()) {
