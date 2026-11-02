@@ -6438,11 +6438,10 @@ void RendererGeode::popIsolatedLayer() {
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshotHandle,
                                             static_cast<uint32_t>(frame.blendMode), frame.opacity);
-      // Defer release: `blitFullTargetBlended` recorded samples from
-      // both `frame.layerTexture` and `snapshot` into the shared
-      // one of the frame's command buffers; they must stay alive until it
-      // is submitted at `endFrame`.
-      impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      // The blend composite is the layer's last use, and whatever draws into it next records after
+      // this encoder ends its pass, so a later layer in this frame can take it. The snapshot is a
+      // copy destination, so it waits for the frame's submission.
+      impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
@@ -6461,8 +6460,11 @@ void RendererGeode::popIsolatedLayer() {
   impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
-  // Same deferred-release rationale as the blend-mode branch above.
-  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  // The composite above is the layer's last use, and whatever draws into the layer next records
+  // after this encoder ends its pass. Without reuse, every isolated layer of a frame held its own
+  // target-sized texture until the frame ended, so a frame of many sibling layers allocated that
+  // many full-size surfaces at once and, past the pool's budget, recreated most of them each frame.
+  impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
 }
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
