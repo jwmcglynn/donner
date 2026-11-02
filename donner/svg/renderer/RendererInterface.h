@@ -733,10 +733,13 @@ struct RendererResourceStats {
   std::uint64_t filterWorkUnits = 0;
   std::uint64_t filterRetainedBytes = 0;
   std::uint64_t filterCaptureBytesReserved = 0;
-  /// Filter graphs refused this frame. A refusal for one graph's work leaves later graphs that fit
-  /// admitted; see \ref components::FilterExecutionBudget.
+  /// Filter graphs refused this frame, up to and including the refusal that latched the frame;
+  /// a latched frame counts no later graphs. A refusal for one graph's work leaves later graphs
+  /// that fit admitted; see \ref components::FilterExecutionBudget. A graph dropped because a
+  /// requested memory chunk could not start is not counted here, though \ref filterBudgetRejected
+  /// reflects it.
   std::uint64_t filterGraphsRefused = 0;
-  /// Whether any filter graph was refused this frame, latched or not.
+  /// Whether any filter graph was refused or dropped this frame, latched or not.
   bool filterBudgetRejected = false;
   bool geometryBudgetSupported = false;
   std::size_t geometryDraws = 0;

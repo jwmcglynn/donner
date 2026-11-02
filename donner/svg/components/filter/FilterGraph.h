@@ -1384,7 +1384,9 @@ public:
 
   /// Filter graph executions admitted during the current frame.
   [[nodiscard]] std::uint64_t executions() const { return executions_; }
-  /// Filter graphs refused during the current frame, whether or not the refusal latched it closed.
+  /// Filter graphs refused during the current frame, up to and including the refusal that latched
+  /// it closed; a latched frame counts no later graphs. A graph dropped because a requested memory
+  /// chunk could not start is not counted; \ref rejected reports it.
   [[nodiscard]] std::uint64_t refusedGraphs() const { return refusedGraphs_; }
   /// Reason for the most recent refusal in the current frame, latched or not.
   [[nodiscard]] RejectionReason lastRefusalReason() const { return lastRefusalReason_; }
