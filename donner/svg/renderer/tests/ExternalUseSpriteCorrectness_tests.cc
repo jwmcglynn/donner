@@ -13,6 +13,8 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -401,6 +403,128 @@ TEST(ExternalUseRetentionTest, ReadsAfterHostDestructionSeeOnlyTheTargetDocument
         <rect width="8" height="8"/>
       </svg>)svg"),
       "external-use-after-host-destruction", editor::tests::PixelmatchIdentityParams());
+}
+
+/// Sprite b: a gradient whose stops take the host color, and a rect painted with it.
+constexpr std::string_view kGradB = R"svg(<g id="b">
+  <linearGradient id="g"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor"/></linearGradient>
+  <rect width="8" height="8" fill="url(#g)"/>
+</g>)svg";
+
+/// A sheet holding sprite b followed by \p rest.
+std::string Sheet(std::string_view rest) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg") +
+         std::string(kGradB) + std::string(rest) + "</svg>";
+}
+
+constexpr std::string_view kCrossSubtreeHost =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+  <use href="sprites.svg#b" color="red"/>
+  <use href="sprites.svg#a" x="8" color="blue"/>
+</svg>)svg";
+
+/// The expected host rendering: b in the host color, then \p aBody with \p defs in the sheet's
+/// own style.
+std::string Expected(std::string_view defs, std::string_view aBody) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+  <linearGradient id="r"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="red"/></linearGradient>
+  <linearGradient id="g"><stop offset="0" stop-color="black"/><stop offset="1" stop-color="black"/></linearGradient>
+  <rect width="8" height="8" fill="url(#r)"/>)svg") +
+         std::string(defs) + "<g transform=\"translate(8 0)\">" + std::string(aBody) + "</g></svg>";
+}
+
+TEST(ExternalUseRetentionTest, PatternContentReadsGradientInOtherSubtree) {
+  constexpr std::string_view kDefs =
+      R"svg(<pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="url(#g)"/></pattern>)svg";
+  constexpr std::string_view kA = R"svg(<rect id="a" width="8" height="8" fill="url(#p)"/>)svg";
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kCrossSubtreeHost, Sheet(std::string(kDefs) + std::string(kA)));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               Expected(kDefs, R"svg(<rect width="8" height="8" fill="url(#p)"/>)svg"),
+               "pattern-content");
+}
+
+TEST(ExternalUseRetentionTest, MarkerContentReadsGradientInOtherSubtree) {
+  constexpr std::string_view kDefs =
+      R"svg(<marker id="m" markerWidth="8" markerHeight="8" refX="0" refY="0" markerUnits="userSpaceOnUse" overflow="visible"><rect width="8" height="8" fill="url(#g)"/></marker>)svg";
+  constexpr std::string_view kA =
+      R"svg(<path id="a" d="M0,0 L1,0" stroke="none" marker-start="url(#m)"/>)svg";
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kCrossSubtreeHost, Sheet(std::string(kDefs) + std::string(kA)));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(
+      host->document, renderer, 3,
+      Expected(kDefs, R"svg(<path d="M0,0 L1,0" stroke="none" marker-start="url(#m)"/>)svg"),
+      "marker-content");
+}
+
+TEST(ExternalUseRetentionTest, MaskContentReadsGradientInOtherSubtree) {
+  constexpr std::string_view kDefs =
+      R"svg(<mask id="k" maskUnits="userSpaceOnUse" x="0" y="0" width="8" height="8"><rect width="8" height="8" fill="white"/><rect width="4" height="8" fill="url(#g)"/></mask>)svg";
+  constexpr std::string_view kA =
+      R"svg(<rect id="a" width="8" height="8" fill="green" mask="url(#k)"/>)svg";
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kCrossSubtreeHost, Sheet(std::string(kDefs) + std::string(kA)));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               Expected(kDefs, R"svg(<rect width="8" height="8" fill="green" mask="url(#k)"/>)svg"),
+               "mask-content");
+}
+
+TEST(ExternalUseRetentionTest, TextMetricsAfterDrawUseDocumentStyle) {
+  constexpr std::string_view kSheet =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
+    <g id="a"><text id="t" y="20">Hello world</text></g></svg>)svg";
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
+        <use href="sprites.svg#a" font-size="40"/></svg>)svg",
+      std::string(kSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  const double afterDraw =
+      resource.querySelector("#t")->cast<SVGTextElement>().getComputedTextLength();
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto standalone = parser::SVGParser::ParseSVG(kSheet, warnings);
+  ASSERT_FALSE(standalone.hasError());
+  const double own =
+      standalone.result().querySelector("#t")->cast<SVGTextElement>().getComputedTextLength();
+  EXPECT_GT(own, 0.0);
+  EXPECT_DOUBLE_EQ(afterDraw, own)
+      << "text metrics on the target document reflect the host font-size";
+}
+
+TEST(ExternalUseRetentionTest, LayoutAndGeometryReadsAfterDrawUseDocumentStyle) {
+  constexpr std::string_view kSheet =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
+    <g id="a"><rect id="r" style="width: 2em; height: 8px; transform: translateX(1em)"/></g></svg>)svg";
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
+        <use href="sprites.svg#a" font-size="40"/></svg>)svg",
+      std::string(kSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  const SVGRectElement afterDraw = resource.querySelector("#r")->cast<SVGRectElement>();
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto standalone = parser::SVGParser::ParseSVG(kSheet, warnings);
+  ASSERT_FALSE(standalone.hasError());
+  const SVGRectElement own = standalone.result().querySelector("#r")->cast<SVGRectElement>();
+
+  EXPECT_EQ(afterDraw.elementFromWorld(), own.elementFromWorld());
+  EXPECT_EQ(afterDraw.transform(), own.transform());
+  EXPECT_THAT(afterDraw.worldBounds(), testing::Eq(own.worldBounds()));
+  EXPECT_THAT(afterDraw.computedWidth(), testing::Eq(own.computedWidth()));
 }
 
 }  // namespace
