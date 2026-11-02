@@ -206,5 +206,202 @@ TEST(ExternalUseSpriteCorrectnessTest, EvictedTargetsInheritHostStyleWhenDrawnAg
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// Draws \p document \p frames times, comparing every frame with \p expected rendered standalone.
+void ExpectFrames(SVGDocument& document, Renderer& renderer, int frames, std::string_view expected,
+                  const std::string& label) {
+  const RendererBitmap want = RenderStandalone(expected);
+  for (int frame = 0; frame < frames; ++frame) {
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), want,
+                                         label + "-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(ExternalUseRetentionTest, CrossSubtreeGradientKeepsDocumentStyle) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#b" color="red"/>
+        <use href="sprites.svg#a" x="8" color="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="b">
+          <linearGradient id="g"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor"/></linearGradient>
+          <rect width="8" height="8" fill="url(#g)"/>
+        </g>
+        <rect id="a" width="8" height="8" fill="url(#g)"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <linearGradient id="r"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="red"/></linearGradient>
+        <linearGradient id="k"><stop offset="0" stop-color="black"/><stop offset="1" stop-color="black"/></linearGradient>
+        <rect width="8" height="8" fill="url(#r)"/>
+        <rect x="8" width="8" height="8" fill="url(#k)"/>
+      </svg>)svg",
+               "cross-subtree-gradient");
+}
+
+TEST(ExternalUseRetentionTest, OutOfDrawComputedStyleOnRetainedRoot) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="sprites.svg#a" fill="red"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="a" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  resource.querySelector("#a")->setAttribute(xml::XMLQualifiedNameRef("fill-opacity"), "1");
+  (void)resource.querySelector("#a")->getComputedStyle();
+  ExpectFrames(host->document, renderer, 2,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red"/>
+      </svg>)svg",
+               "out-of-draw-computed-style");
+}
+
+TEST(ExternalUseRetentionTest, OutOfDrawComputedStyleObservesHostStyle) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="sprites.svg#a" fill="red"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="a" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  const PropertyRegistry& style = resource.querySelector("#a")->getComputedStyle();
+  EXPECT_EQ(style.fill.get().value(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)))))
+      << "target document's own computed style leaks the host occurrence";
+}
+
+TEST(ExternalUseRetentionTest, SameTargetTwoStylesOneFrame) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#a" fill="red"/>
+        <use href="sprites.svg#a" x="8" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="a" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="red"/><rect x="8" width="8" height="8" fill="blue"/>
+      </svg>)svg",
+               "same-target-two-styles");
+}
+
+TEST(ExternalUseRetentionTest, OverlappingSubtrees) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#p" fill="red"/>
+        <use href="sprites.svg#c" x="8" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="p"><rect id="c" width="8" height="8"/></g>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="red"/><rect x="8" width="8" height="8" fill="blue"/>
+      </svg>)svg",
+               "overlapping");
+}
+
+TEST(ExternalUseRetentionTest, ImageInterleavedWithUse) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <use href="sprites.svg#a" fill="red"/>
+        <image href="sprites.svg" x="8" width="8" height="8"/>
+        <use href="sprites.svg#a" x="16" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="a" width="8" height="8" fill-opacity="0.5"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="8" height="8" fill="red" fill-opacity="0.5"/>
+        <rect x="8" width="8" height="8" fill="black" fill-opacity="0.5"/>
+        <rect x="16" width="8" height="8" fill="blue" fill-opacity="0.5"/>
+      </svg>)svg",
+               "image-interleaved");
+}
+
+TEST(ExternalUseRetentionTest, ContextFillFollowsHost) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use id="u" href="sprites.svg#a" fill="red"/>
+        <use href="sprites.svg#a" x="8" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="a"><rect width="8" height="8" fill="context-fill"/></g>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 2,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="red"/><rect x="8" width="8" height="8" fill="blue"/>
+      </svg>)svg",
+               "context-fill");
+  host->document.querySelector("#u")->setStyle("fill: lime");
+  ExpectFrames(host->document, renderer, 2,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="lime"/><rect x="8" width="8" height="8" fill="blue"/>
+      </svg>)svg",
+               "context-fill-changed");
+}
+
+TEST(ExternalUseRetentionTest, ReadsAfterHostDestructionSeeOnlyTheTargetDocument) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+        <use href="sprites.svg#a" fill="url(#g)"/>
+        <use href="sprites.svg#b" x="8" fill="url(#g)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="a" width="8" height="8"/>
+        <rect id="b" width="8" height="8" fill="context-fill"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  host->document = SVGDocument();
+
+  for (const char* id : {"#a", "#b"}) {
+    SCOPED_TRACE(id);
+    const SVGElement element = *resource.querySelector(id);
+    EXPECT_THAT(element.resolvedFillPaint(), testing::Eq(std::nullopt));
+  }
+  EXPECT_THAT(
+      resource.querySelector("#a")->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF))))));
+  editor::tests::CompareBitmapToBitmap(
+      [&] {
+        Renderer standalone;
+        standalone.draw(resource);
+        return standalone.takeSnapshot();
+      }(),
+      RenderStandalone(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8"/>
+      </svg>)svg"),
+      "external-use-after-host-destruction", editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg::tests
