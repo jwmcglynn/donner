@@ -19,7 +19,10 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
@@ -49,10 +52,29 @@ private:
   std::map<std::string, std::string, std::less<>> documents_;
 };
 
-SVGDocument Parse(std::string_view source,
-                  std::map<std::string, std::string, std::less<>> documents = {}) {
+using Documents = std::map<std::string, std::string, std::less<>>;
+
+/// Settings that load @p documents for this document and, recursively, for the documents it
+/// references, so a referenced document can reference another.
+SVGDocument::Settings SettingsFor(const Documents& documents,
+                                  std::shared_ptr<components::DocumentResourceFamilyBudget> family) {
   SVGDocument::Settings settings;
-  settings.resourceLoader = std::make_unique<InMemoryLoader>(std::move(documents));
+  settings.resourceLoader = std::make_unique<InMemoryLoader>(documents);
+  settings.resourceFamilyBudget = family;
+  settings.svgParseCallback = [documents, family](const std::vector<uint8_t>& bytes,
+                                                  ParseWarningSink& warnings)
+      -> std::optional<SVGDocumentHandle> {
+    auto child = parser::SVGParser::ParseSVG(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
+        parser::SVGParser::Options(), SettingsFor(documents, family));
+    return child.hasError() ? std::nullopt : std::optional(child.result().handle());
+  };
+  return settings;
+}
+
+SVGDocument Parse(std::string_view source, Documents documents = {}) {
+  SVGDocument::Settings settings =
+      SettingsFor(documents, std::make_shared<components::DocumentResourceFamilyBudget>());
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
                                             std::move(settings));
@@ -308,6 +330,172 @@ TEST(SubDocumentFiltersTest, HostMaskAndBoxClipAroundExternalUseMatchInDocument)
     ExpectSameBitmap(Draw(externalRenderer, external), expected,
                      "sub-document-host-effect-" + std::to_string(i));
   }
+}
+
+
+/// External-use work a frame admits for @p document, drawn through a driver that shares @p work.
+std::size_t ExternalInstanceWork(SVGDocument& document,
+                                 const std::shared_ptr<components::StyleResourceBudget>& work,
+                                 RendererBitmap* bitmap = nullptr) {
+  Renderer renderer;
+  RendererDriver driver(renderer, false, nullptr, work);
+  driver.draw(document);
+  if (bitmap != nullptr) {
+    *bitmap = renderer.takeSnapshot();
+  }
+  return work->externalInstanceWork();
+}
+
+/// Measuring external content for a host effect charges no external-use work: a frame with an
+/// effect around many occurrences admits exactly the work drawing them admits, and draws them all.
+TEST(SubDocumentFiltersTest, EffectsAroundManyExternalUsesChargeNoExtraWork) {
+  std::string uses;
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      uses += "<use href='sheet.svg#sprite-glow' transform='translate(" + std::to_string(x * 4) +
+              " " + std::to_string(y * 4) + ") scale(0.25)'/>";
+    }
+  }
+  const auto host = [&](std::string_view open, std::string_view close) {
+    return "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'><defs>"
+           "<filter id='user' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='16'>"
+           "<feColorMatrix type='matrix' values='0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0'/>"
+           "</filter><filter id='box'>"
+           "<feColorMatrix type='matrix' values='0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0'/>"
+           "</filter><clipPath id='half' clipPathUnits='objectBoundingBox'>"
+           "<rect width='1' height='1'/></clipPath><mask id='all'>"
+           "<rect width='32' height='16' fill='#ffffff'/></mask></defs>"
+           "<rect width='32' height='16' fill='#ffffff'/>" +
+           std::string(open) + uses + std::string(close) + "</svg>";
+  };
+  SVGDocument plain = Parse(host("<g>", "</g>"), {{"sheet.svg", Sheet()}});
+  const std::size_t drawingWork =
+      ExternalInstanceWork(plain, std::make_shared<components::StyleResourceBudget>());
+  ASSERT_THAT(drawingWork, Gt(0u));
+
+  constexpr std::string_view kEffects[] = {
+      "<g filter='url(#user)'>",
+      "<g filter='url(#box)'>",
+      "<g filter='url(#box)' mask='url(#all)' clip-path='url(#half)'>",
+  };
+  for (const std::string_view effect : kEffects) {
+    SCOPED_TRACE(effect);
+    SVGDocument document = Parse(host(effect, "</g>"), {{"sheet.svg", Sheet()}});
+    EXPECT_EQ(ExternalInstanceWork(document, std::make_shared<components::StyleResourceBudget>()),
+              drawingWork);
+
+    // Every occurrence draws, tinted red.
+    RendererBitmap bitmap;
+    ExternalInstanceWork(document, std::make_shared<components::StyleResourceBudget>(), &bitmap);
+    for (int y = 0; y < 4; ++y) {
+      for (int x = 0; x < 8; ++x) {
+        SCOPED_TRACE(testing::Message() << "occurrence " << x << "," << y);
+        EXPECT_THAT(PixelAt(bitmap, x * 4 + 1, y * 4 + 1), test::Rgba(Gt(180), Lt(80), Lt(80), 255));
+      }
+    }
+  }
+}
+
+/// Compares @p host drawn with `{ref}` naming fragments of an external sheet holding @p sheetDefs
+/// with the same host drawing the same definitions in-document.
+void ExpectExternalMatchesInDocument(const std::string& label, std::string_view sheetDefs,
+                                     std::string_view host, Documents extraDocuments = {}) {
+  const auto withReference = [&](std::string_view prefix) {
+    std::string result(host);
+    for (size_t at = result.find("{ref}"); at != std::string::npos; at = result.find("{ref}")) {
+      result.replace(at, 5, prefix);
+    }
+    return result;
+  };
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  Documents documents = std::move(extraDocuments);
+  documents["sheet.svg"] = head + "<defs>" + std::string(sheetDefs) + "</defs></svg>";
+  SVGDocument external = Parse(head + withReference("sheet.svg#") + "</svg>", documents);
+  SVGDocument local = Parse(head + "<defs>" + std::string(sheetDefs) + "</defs>" +
+                                withReference("#") + "</svg>",
+                            documents);
+  Renderer externalRenderer;
+  Renderer localRenderer;
+  ExpectSameBitmap(Draw(externalRenderer, external), Draw(localRenderer, local), label);
+}
+
+constexpr std::string_view kTint =
+    "<filter id='tint'><feColorMatrix type='matrix' "
+    "values='0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0'/></filter>"
+    "<clipPath id='left' clipPathUnits='objectBoundingBox'><rect width='0.5' height='1'/>"
+    "</clipPath><mask id='top'><rect width='32' height='12' fill='#ffffff'/></mask>";
+
+TEST(SubDocumentFiltersTest, BoxUnitsFilterInsideReferencedDocument) {
+  ExpectExternalMatchesInDocument(
+      "sub-document-box-units-inside",
+      "<filter id='shift' primitiveUnits='objectBoundingBox'><feOffset dx='0.25'/></filter>"
+      "<g id='sprite' filter='url(#shift)'><rect x='4' y='4' width='16' height='16' "
+      "fill='#2050d0'/></g>",
+      "<rect width='32' height='32' fill='#ffffff'/><use href='{ref}sprite'/>");
+}
+
+TEST(SubDocumentFiltersTest, FeImageInsideReferencedDocument) {
+  ExpectExternalMatchesInDocument(
+      "sub-document-feimage-inside",
+      "<rect id='picture' width='8' height='8' fill='#d02020'/>"
+      "<filter id='paste' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='32'>"
+      "<feImage href='#picture'/></filter>"
+      "<rect id='sprite' x='4' y='4' width='16' height='16' fill='#2050d0' filter='url(#paste)'/>",
+      "<rect width='32' height='32' fill='#ffffff'/><use href='{ref}sprite'/>");
+}
+
+TEST(SubDocumentFiltersTest, ScaledRotatedUseUnderBoxEffects) {
+  ExpectExternalMatchesInDocument(
+      "sub-document-scaled-rotated",
+      "<rect id='sprite' width='8' height='6' fill='#2050d0'/>",
+      "<defs>" + std::string(kTint) +
+          "</defs><rect width='32' height='32' fill='#ffffff'/>"
+          "<g filter='url(#tint)' clip-path='url(#left)' mask='url(#top)'>"
+          "<use href='{ref}sprite' transform='translate(16 4) rotate(30) scale(1.5)'/></g>");
+}
+
+TEST(SubDocumentFiltersTest, SymbolTargetViewportUnderBoxClip) {
+  ExpectExternalMatchesInDocument(
+      "sub-document-symbol-viewport",
+      "<symbol id='sprite' viewBox='0 0 10 10'><rect width='10' height='10' fill='#2050d0'/>"
+      "</symbol>",
+      "<defs>" + std::string(kTint) +
+          "</defs><rect width='32' height='32' fill='#ffffff'/>"
+          "<g clip-path='url(#left)'><use href='{ref}sprite' x='2' y='4' width='24' "
+          "height='12'/></g>");
+}
+
+/// A referenced document that itself references a third: its filters and its own external content
+/// draw, and a host box effect covers all of it, as the same three levels do in one document.
+TEST(SubDocumentFiltersTest, NestedExternalUsesUnderBoxEffects) {
+  const std::string leafDefs =
+      "<filter id='leaf-glow' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='32'>"
+      "<feGaussianBlur stdDeviation='1'/></filter>"
+      "<rect id='leaf' x='12' y='12' width='12' height='12' fill='#20a020' "
+      "filter='url(#leaf-glow)'/>";
+  const auto middle = [](std::string_view leafReference) {
+    return "<g id='middle'><rect x='2' y='2' width='8' height='8' fill='#2050d0'/><use href='" +
+           std::string(leafReference) + "'/></g>";
+  };
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  const auto host = [&](std::string_view defs, std::string_view middleReference) {
+    return head + "<defs>" + std::string(kTint) + std::string(defs) +
+           "</defs><rect width='32' height='32' fill='#ffffff'/>"
+           "<g clip-path='url(#left)' filter='url(#tint)'><use href='" +
+           std::string(middleReference) + "'/></g></svg>";
+  };
+  const Documents documents = {
+      {"sheet.svg", head + "<defs>" + middle("leaf.svg#leaf") + "</defs></svg>"},
+      {"leaf.svg", head + "<defs>" + leafDefs + "</defs></svg>"},
+  };
+  SVGDocument external = Parse(host("", "sheet.svg#middle"), documents);
+  SVGDocument local = Parse(host(leafDefs + middle("#leaf"), "#middle"));
+  Renderer externalRenderer;
+  Renderer localRenderer;
+  const RendererBitmap expected = Draw(localRenderer, local);
+  // The box spans both levels, so its left half keeps part of the leaf, tinted red.
+  EXPECT_THAT(PixelAt(expected, 12, 18), test::Rgba(Gt(120), Lt(80), Lt(80), 255));
+  ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-nested");
 }
 
 }  // namespace
