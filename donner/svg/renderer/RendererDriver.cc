@@ -1087,7 +1087,8 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
 }
 
 /// Draw order of the last rendered instance in @p instance's subtree, itself when it has none.
-int SubtreeLastDrawOrder(Registry& registry, const components::RenderingInstanceComponent& instance) {
+int SubtreeLastDrawOrder(Registry& registry,
+                         const components::RenderingInstanceComponent& instance) {
   const auto* last =
       registry.try_get<components::RenderingInstanceComponent>(instance.subtreeLastEntity);
   return last != nullptr ? std::max(last->drawOrder, instance.drawOrder) : instance.drawOrder;
@@ -1095,7 +1096,8 @@ int SubtreeLastDrawOrder(Registry& registry, const components::RenderingInstance
 
 /// Whether @p instance paints nothing itself and contributes nothing through its subtree: a zero
 /// `opacity` hides it and every descendant, and a hidden leaf has no descendants to show.
-bool IsInvisibleInstance(Registry& registry, const components::RenderingInstanceComponent& instance) {
+bool IsInvisibleInstance(Registry& registry,
+                         const components::RenderingInstanceComponent& instance) {
   const EntityHandle styleHandle = instance.styleHandle(registry);
   const auto& style = styleHandle.get<components::ComputedStyleComponent>();
   const bool zeroOpacity =
@@ -1106,10 +1108,10 @@ bool IsInvisibleInstance(Registry& registry, const components::RenderingInstance
 
 /// The filtered instances among @p entities, in draw order, whose output can reach the frame.
 ///
-/// Rendered but invisible content (anything inside a zero-opacity element, or a hidden leaf) is left
-/// out, so its filters neither run nor spend the frame's filter budget; an unprepared filter hides
-/// its element, which was invisible anyway. Content shown elsewhere, such as a `<use>` copy, a
-/// pattern tile or a mask, is a separate instance under its referencing element and stays in.
+/// Rendered but invisible content (anything inside a zero-opacity element, or a hidden leaf) is
+/// left out, so its filters neither run nor spend the frame's filter budget; an unprepared filter
+/// hides its element, which was invisible anyway. Content shown elsewhere, such as a `<use>` copy,
+/// a pattern tile or a mask, is a separate instance under its referencing element and stays in.
 std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const Entity> entities) {
   std::vector<Entity> result;
   std::optional<int> hiddenThroughDrawOrder;

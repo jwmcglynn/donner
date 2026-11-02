@@ -1356,8 +1356,8 @@ public:
   /// Forecast surface count retained by GPU executions until the next submitted chunk.
   std::size_t reservedGpuSurfaces() const { return reservedGpuSurfaces_; }
 
-  /// Refuse one graph whose raster cannot execute within the per-graph limits. Later graphs that fit
-  /// are still admitted.
+  /// Refuse one graph whose raster cannot execute within the per-graph limits. Later graphs that
+  /// fit are still admitted.
   void refuseOversizedGraph() { refuse(RejectionReason::WorkLimit); }
 
   /// Latch the frame closed after an allocation or other external preflight failure.

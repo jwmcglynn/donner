@@ -73,7 +73,8 @@ constexpr std::string_view kVisibleFilter =
 std::string HeavyShapes(int count) {
   std::string shapes;
   for (int i = 0; i < count; ++i) {
-    shapes += "<rect x='" + std::to_string(i) + "' width='8' height='8' fill='#d02020' "
+    shapes += "<rect x='" + std::to_string(i) +
+              "' width='8' height='8' fill='#d02020' "
               "filter='url(#heavy)'/>";
   }
   return shapes;
@@ -152,20 +153,21 @@ TEST(InvisibleFilterWorkTest, ReferencedContentStaysFiltered) {
   constexpr std::string_view kFlood =
       "<filter id='flood' filterUnits='userSpaceOnUse' x='0' y='0' width='128' height='128'>"
       "<feFlood flood-color='#d02020'/><feComposite in2='SourceAlpha' operator='in'/></filter>";
-  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'>"
-                           "<defs>" +
-                           std::string(kFlood) +
-                           "<pattern id='tile' patternUnits='userSpaceOnUse' width='16' "
-                           "height='16'><rect width='16' height='16' fill='#2050d0' "
-                           "filter='url(#flood)'/></pattern>"
-                           "<filter id='white' filterUnits='userSpaceOnUse' x='0' y='0' width='128' "
-                           "height='64'><feFlood flood-color='#ffffff'/></filter>"
-                           "<mask id='reveal'><rect width='8' height='8' fill='#000000' "
-                           "filter='url(#white)'/></mask>"
-                           "<marker id='dot' markerWidth='8' markerHeight='8' refX='4' refY='4' "
-                           "markerUnits='userSpaceOnUse'><rect width='8' height='8' "
-                           "fill='#2050d0' filter='url(#flood)'/></marker></defs>"
-                           "<rect width='128' height='128' fill='#ffffff'/>";
+  const std::string head =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'>"
+      "<defs>" +
+      std::string(kFlood) +
+      "<pattern id='tile' patternUnits='userSpaceOnUse' width='16' "
+      "height='16'><rect width='16' height='16' fill='#2050d0' "
+      "filter='url(#flood)'/></pattern>"
+      "<filter id='white' filterUnits='userSpaceOnUse' x='0' y='0' width='128' "
+      "height='64'><feFlood flood-color='#ffffff'/></filter>"
+      "<mask id='reveal'><rect width='8' height='8' fill='#000000' "
+      "filter='url(#white)'/></mask>"
+      "<marker id='dot' markerWidth='8' markerHeight='8' refX='4' refY='4' "
+      "markerUnits='userSpaceOnUse'><rect width='8' height='8' "
+      "fill='#2050d0' filter='url(#flood)'/></marker></defs>"
+      "<rect width='128' height='128' fill='#ffffff'/>";
   struct Case {
     std::string body;
     int x;
@@ -185,8 +187,9 @@ TEST(InvisibleFilterWorkTest, ReferencedContentStaysFiltered) {
   }
 
   // The mask's only content is black, so only its white flood reveals the masked shape.
-  const Frame masked = Draw(
-      head + "<rect x='80' y='0' width='40' height='120' fill='#20a020' mask='url(#reveal)'/></svg>");
+  const Frame masked =
+      Draw(head +
+           "<rect x='80' y='0' width='40' height='120' fill='#20a020' mask='url(#reveal)'/></svg>");
   EXPECT_THAT(PixelAt(masked.bitmap, 100, 30), test::Rgba(Lt(80), Gt(120), Lt(80), 255));
   EXPECT_THAT(PixelAt(masked.bitmap, 100, 100), test::Rgba(255, 255, 255, 255));
 }
