@@ -6,6 +6,7 @@ load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
     "donner_multi_transitioned_test",
+    "libc_compat_deps",
 )
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -94,7 +95,7 @@ cc_binary(
         ":bitmap_golden_compare",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
         "@com_google_gtest//:gtest_main",
-    ],
+    ] + libc_compat_deps(),
 )
 
 donner_cc_library(

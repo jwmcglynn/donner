@@ -1,4 +1,4 @@
-load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
 load("@npm//donner/editor/wasm/tests:esbuild/package_json.bzl", esbuild_bin = "bin")
@@ -280,6 +280,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "browser-application-heartbeat.mjs",
+        "browser-bitmap-comparator.ts",
         "browser-gpu-residency.ts",
         "browser-heartbeat.cjs",
         "browser-resource-quiescence.mjs",
@@ -299,6 +300,7 @@ playwright_bin.playwright_test(
         "first-click-breakdown.mjs",
         "flat-capture-retake.mjs",
         "gpu-image-transfer-canary.ts",
+        "gpu-image-transfer-comparison.ts",
         "gpu-session-console.ts",
         "latency-gates.mjs",
         "package.json",
@@ -1365,6 +1367,42 @@ playwright_bin.playwright_test(
 # Build-only tool: platform executables are pinned by the npm lockfiles.
 esbuild_bin.esbuild_binary(
     name = "esbuild",
+)
+
+js_run_binary(
+    name = "gpu_image_transfer_comparison_node",
+    testonly = True,
+    srcs = [
+        "browser-bitmap-comparator.ts",
+        "gpu-image-transfer-comparison.ts",
+    ],
+    outs = ["gpu-image-transfer-comparison.cjs"],
+    args = [
+        "gpu-image-transfer-comparison.ts",
+        "--bundle",
+        "--platform=node",
+        "--format=cjs",
+        "--outfile=gpu-image-transfer-comparison.cjs",
+    ],
+    chdir = package_name(),
+    tool = ":esbuild",
+)
+
+js_test(
+    name = "gpu_image_transfer_comparison_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        ":gpu_image_transfer_comparison_node",
+        ":node_modules/pngjs",
+        "//donner/editor/tests:standalone_geode_browser_png_compare",
+    ],
+    entry_point = "gpu-image-transfer-comparison_tests.mjs",
+    env = {
+        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
+        "DONNER_GPU_TRANSFER_COMPARISON": "$(rootpath :gpu_image_transfer_comparison_node)",
+    },
+    node_options = ["--test"],
 )
 
 js_test(
