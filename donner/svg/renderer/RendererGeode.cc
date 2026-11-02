@@ -2736,15 +2736,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     FilterResultPlacement placement;
   };
 
-  /// Filter results kept across frames, keyed by content and placement. Its textures are charged
-  /// to every frame's surface budget as one aggregate surface; see \ref chargeFilterResultCache.
+  /// Filter results kept across frames, keyed by content and placement. The cache holds at most a
+  /// quarter of the frame surface budget's byte limit (and at most 64 MiB) of results, outside the
+  /// per-frame charge, so held results never refuse a filter or other surface in a frame.
   FilterResultCacheIndex<FilterResultPayload> filterResultCache;
   bool filterResultCacheEnabled = true;
-  /// Whether this frame's surface budget holds the cache's aggregate surface.
-  bool filterResultCacheSurfaceCharged = false;
+  /// This renderer's frame number, for cache admission and eviction.
+  std::uint64_t filterResultFrame = 0;
   /// Evicted results whose textures the frame's recorded commands may still sample. Returned to
-  /// the pool once the frame is submitted, without a surface-budget release: the frame-start
-  /// charge, not a per-texture reservation, accounts for them.
+  /// the pool once the frame is submitted.
   std::vector<PendingRelease> retiredFilterResults;
   std::size_t filterResultCacheHits = 0;
   std::size_t filterResultCacheRecords = 0;
@@ -2761,36 +2761,45 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Return retired results to the pool, or retain them when the frame's submission is uncertain.
   void drainRetiredFilterResults(bool submissionUncertain) {
     for (PendingRelease& retired : retiredFilterResults) {
-      if (submissionUncertain) {
-        failedFilterTextures.push_back(std::move(retired));
-      } else {
-        recycleOrDestroyTexture(std::move(retired.texture), retired.desc);
-      }
+      retireFilterTexture(std::move(retired), submissionUncertain);
     }
     retiredFilterResults.clear();
   }
 
-  /// Charge the cache's textures to a frame's freshly reset surface budget, evicting least
-  /// recently used results until they fit. A lost device drops every result.
-  void chargeFilterResultCache() {
-    filterResultCacheSurfaceCharged = false;
+  /// Return a cache texture to the pool, or retain it when commands naming it may not have run.
+  void retireFilterTexture(PendingRelease texture, bool submissionUncertain) {
+    if (!submissionUncertain) {
+      recycleOrDestroyTexture(std::move(texture.texture), texture.desc);
+    } else if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+      retainRecoverableTexture(std::move(texture.texture), texture.desc);
+    } else {
+      failedFilterTextures.push_back(std::move(texture));
+    }
+  }
+
+  /// Settle the results this frame recorded: durable once the frame's work was submitted, dropped
+  /// when it was abandoned or its submission failed, since their copies may never have run.
+  void settleFrameFilterResults(bool submitted) {
+    if (submitted) {
+      filterResultCache.commitPending();
+      return;
+    }
+    for (FilterResultPayload& payload : filterResultCache.dropPending()) {
+      retireFilterTexture({std::move(payload.texture), payload.desc},
+                          /*submissionUncertain=*/true);
+    }
+  }
+
+  /// Prepare the cache for a frame: drop results of gone documents, everything on a lost device,
+  /// and whatever exceeds a quarter of the frame surface budget's byte limit.
+  void prepareFilterResultCache() {
+    ++filterResultFrame;
     if (!device || device->isDeviceLost()) {
       retireFilterResults(filterResultCache.clear());
       return;
     }
     retireFilterResults(filterResultCache.dropExpired());
-    if (filterResultCache.size() == 0) {
-      return;
-    }
-    while (filterResultCache.size() != 0 &&
-           !surfaceBudget->canReserveBytes(filterResultCache.bytes(), 1)) {
-      retireFilterResults(filterResultCache.setByteLimit(filterResultCache.bytes() - 1));
-    }
-    retireFilterResults(
-        filterResultCache.setByteLimit(FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes));
-    if (filterResultCache.size() != 0) {
-      filterResultCacheSurfaceCharged = surfaceBudget->reserveBytes(filterResultCache.bytes(), 1);
-    }
+    retireFilterResults(filterResultCache.setByteLimit(surfaceBudget->limitBytes() / 4));
   }
 
   /// Whether a filter layer pushed now may draw from or record into the cache: a top-level layer
@@ -2800,6 +2809,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
            encoder && frameRecordingOpen && !frameRecordingAbandoned && !frameArenaWriteFailed &&
            filterStack.empty() && rejectedFilterDepth == 0 && maskStack.empty() &&
            patternStack.empty() && readyForFilterCapture();
+  }
+
+  /// Whether a final blur's result fades out before the filter region's edge: it has no primitive
+  /// subregion of its own, and three deviations from the element's bounding box stay inside the
+  /// region. Otherwise the region or subregion clips the blur to a hard edge, which resampling at
+  /// a sub-pixel offset would soften.
+  static bool BlurStaysInsideFilterRegion(const components::FilterGraph& graph,
+                                          const components::FilterNode& node,
+                                          const components::filter_primitive::GaussianBlur& blur) {
+    if (node.hasExplicitRegion() || node.hasAnimatedRegion() || !graph.elementBoundingBox ||
+        !graph.filterRegion) {
+      return false;
+    }
+    const Box2d& bounds = *graph.elementBoundingBox;
+    const Box2d& region = *graph.filterRegion;
+    const double reachX = 3.0 * blur.stdDeviationX;
+    const double reachY = 3.0 * blur.stdDeviationY;
+    return bounds.topLeft.x - reachX >= region.topLeft.x &&
+           bounds.topLeft.y - reachY >= region.topLeft.y &&
+           bounds.bottomRight.x + reachX <= region.bottomRight.x &&
+           bounds.bottomRight.y + reachY <= region.bottomRight.y;
   }
 
   /// Fractional translation buckets per device pixel for results whose edges stay sharp.
@@ -2819,9 +2849,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                  &graph.nodes.back().primitive);
     const double scaleX = deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length();
     const double scaleY = deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length();
-    const bool smooth = blur != nullptr &&
-                        graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
-                        blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0;
+    const bool smooth =
+        blur != nullptr && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
+        blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0 &&
+        BlurStaysInsideFilterRegion(graph, graph.nodes.back(), *blur);
     if (!smooth) {
       const auto bucket = [](double translation) {
         const double fraction = translation - std::floor(translation);
@@ -2885,7 +2916,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   [[nodiscard]] bool canRecordFilterResult(const FilterStackFrame& frame,
                                            geode::FilterExecutionResult::Kind kind) const {
     return frame.resultRecording && kind == geode::FilterExecutionResult::Kind::Output &&
-           frameGpuEncoder != nullptr && !frameRecordingAbandoned;
+           frameGpuEncoder != nullptr && !frameRecordingAbandoned && !frameArenaWriteFailed;
   }
 
   void recordFilterResult(const FilterStackFrame& frame, geode::FilterExecutionResult::Kind kind,
@@ -2904,14 +2935,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const double bufferTop = top + frame.filterBufferOffsetY;
     const gpu::Extent2d extent{static_cast<uint32_t>(rect->width()),
                                static_cast<uint32_t>(rect->height())};
-    const std::uint64_t bytes = std::uint64_t{extent.width} * extent.height *
+    // Sized exactly: bilinear sampling at a sub-pixel offset reads one texel past the result,
+    // which in a larger texture would hold whatever an earlier user left there.
+    const gpu::Extent2d textureSize = extent;
+    const std::uint64_t bytes = std::uint64_t{textureSize.width} * textureSize.height *
                                 gpu::TextureFormatBytesPerTexel(filteredDesc.format);
-    if (!filterResultCache.canHold(bytes) ||
-        !surfaceBudget->reserveBytes(bytes, filterResultCacheSurfaceCharged ? 0 : 1)) {
+    // Recording never takes from this frame's surface budget; it only requires that the budget
+    // still has ample room, so a frame near its limit spends what is left on its own surfaces.
+    if (!filterResultCache.canInsert(bytes, filterResultFrame) ||
+        !surfaceBudget->canReserveBytes(bytes * 4, 1)) {
       return;
     }
-    filterResultCacheSurfaceCharged = true;
-    const gpu::TextureDescriptor desc{"RendererGeodeFilterResult", extent, filteredDesc.format,
+    const gpu::TextureDescriptor desc{"RendererGeodeFilterResult", textureSize, filteredDesc.format,
                                       gpu::TextureUsage::CopyDst | gpu::TextureUsage::Sampled};
     gpu::Texture texture = texturePool ? texturePool->acquire(desc) : gpu::Texture{};
     if (!texture.isValid()) {
@@ -2931,7 +2966,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         frame.resultRecording->placement.fractionBucketX == FilterResultPlacement::kAnyFraction};
     retireFilterResults(filterResultCache.insert(frame.resultRecording->content,
                                                  frame.resultRecording->placement,
-                                                 std::move(payload), bytes));
+                                                 std::move(payload), bytes, filterResultFrame));
   }
 
   /// State for an in-progress filter layer. Captures all draws
@@ -5829,6 +5864,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       drainPendingReleases();
     }
     drainRetiredFilterResults(frameRecordingAbandoned);
+    // Results recorded by a frame that never ended were never submitted.
+    settleFrameFilterResults(/*submitted=*/false);
     filterResultCacheHits = 0;
     filterResultCacheRecords = 0;
     filterResultCacheEvictions = 0;
@@ -5875,7 +5912,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     if (ownsSurfaceBudget) {
       surfaceBudget->reset();
-      chargeFilterResultCache();
+      prepareFilterResultCache();
     }
     if (ownsTextMaterializationBudget) {
       textMaterializationBudget->reset();
@@ -6515,6 +6552,7 @@ void RendererGeode::endFrame() {
   // new writes after the previous submit's GPU work completes.
   impl_->drainPendingReleases();
   impl_->drainRetiredFilterResults(impl_->frameRecordingAbandoned);
+  impl_->settleFrameFilterResults(/*submitted=*/!impl_->frameRecordingAbandoned);
 
   // The documents the frame drew are still held, so give back what it borrowed from them now.
   impl_->releaseFrameLoans();
@@ -6983,13 +7021,14 @@ CachedFilterLayerResult RendererGeode::pushCachedFilterLayer(
   }
   const FilterResultPlacement placement =
       Impl::filterResultPlacement(filterGraph, impl_->deviceFromLocalTransform);
-  if (const auto* entry = impl_->filterResultCache.find(content, placement)) {
+  if (const auto* entry =
+          impl_->filterResultCache.find(content, placement, impl_->filterResultFrame)) {
     impl_->drawFilterResult(entry->payload);
     ++impl_->filterResultCacheHits;
     return CachedFilterLayerResult::Drawn;
   }
   const bool record =
-      impl_->filterResultCache.admitMiss(content, placement.linear, impl_->currentFrameIndex);
+      impl_->filterResultCache.admitMiss(content, placement.linear, impl_->filterResultFrame);
   pushFilterLayer(filterGraph, filterRegion);
   if (record && !impl_->filterStack.empty()) {
     Impl::FilterStackFrame& frame = impl_->filterStack.back();

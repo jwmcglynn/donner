@@ -1,7 +1,8 @@
 # Design: Cached Filter Results for Instanced Sprites
 
 **Status:** Draft
-**Author:** Claude Opus 5.5
+**Author:** Jeff McGlynn
+**Model:** Withheld
 **Created:** 2026-11-02
 
 ## Summary
@@ -30,7 +31,8 @@ from, and Geode keeps the results. TinySkia keeps the uncached path.
   tolerance for fractional motion.
 - A continuously changing scale, such as a swap animation from 1.0x to 1.25x, falls back to the
   uncached path without recording a result per frame.
-- Cached results are bounded and charged to the frame surface budget, with LRU eviction.
+- Cached results are bounded by a share of the frame surface budget, with LRU eviction, and never
+  refuse a frame's own surfaces.
 
 ## Non-Goals
 
@@ -61,7 +63,8 @@ from, and Geode keeps the results. TinySkia keeps the uncached path.
 - [x] Milestone 2: Renderer interface
   - [x] `RendererInterface::pushCachedFilterLayer` and `setFilterResultCacheEnabled`, defaulting to
     the uncached path.
-  - [x] `FilterResultCacheIndex`: lookup, animation-aware admission, LRU bounds.
+  - [x] `FilterResultCacheIndex`: lookup, two-touch admission, pending results, LRU bounds with a
+    thrash guard.
 - [x] Milestone 3: Geode cache
   - [x] Record executed results into pixel-aligned textures; draw hits translated.
   - [x] Charge cached bytes to each frame's surface budget; drop on device loss or disable.
@@ -104,8 +107,11 @@ Content (`FilterResultContentKey`):
 - The sheet document (weak reference, so a destroyed document matches nothing), its mutation
   revision (every DOM mutation changes it, including a new `stdDeviation`), and its font resource
   revision.
-- The occurrence's retained style epoch. Epochs are process-wide and never reused, so a restored
-  and re-retained subtree, or a document at a reused address, cannot alias an old entry.
+- The occurrence's retained style epoch. A new snapshot of the occurrence's inputs (changed
+  inputs, eviction or a restore of the retained subtree) gets a new epoch; epochs are
+  process-wide and never reused, so a restored and re-retained subtree, or a document at a reused
+  address, cannot alias an old entry. A style-dirty element inside the current subtree is restyled
+  without ending its epoch, which is why the key also carries the mutation revision.
 - The instance root and the filtered element, and the viewport the `<use>` establishes for a
   referenced `<symbol>` or `<svg>`.
 - The filter region, primitive viewport and user-to-pixel scale of the prepared graph.
@@ -142,8 +148,10 @@ take the transformed local-raster path (skew, or rotation with an anisotropic bl
 A cached result is valid for any translation. What changes with the translation's fraction of a
 pixel is how the content's edges were rasterized. Two placements are used:
 
-- A result whose final primitive is a Gaussian blur of at least one device pixel in each axis is
-  resampled bilinearly at the exact new offset. Its detail is already low-passed, so bilinear
+- A result whose final primitive is a Gaussian blur of at least one device pixel in each axis,
+  with no primitive subregion of its own and whose three-deviation reach from the element's
+  bounding box stays inside the filter region, is resampled bilinearly at the exact new offset. A
+  blur the region or a subregion clips has a hard edge, so it is treated like the next case. Its detail is already low-passed, so bilinear
   resampling moves each channel by a few levels at most, and the result lands exactly where the
   uncached one would.
 - Any other result, such as a glow that keeps the sharp source over its halo, is kept per
@@ -158,8 +166,11 @@ sprites by up to half a pixel; bilinear resampling of sharp results would soften
 
 On a miss that admission accepts, the layer is pushed normally and marked for recording. At pop,
 after the graph executes and before the composite samples the output, Geode copies the
-pixel-aligned device rectangle around the filter region (rounded out, plus one pixel) from the
-output into a cache texture, on the frame encoder in recorded order. It records nothing when that
+pixel-aligned device rectangle around the filter region (rounded out) from the output into a cache
+texture, on the frame encoder in recorded order. The result is pending: later draws in the same
+frame reuse it, and it becomes durable only once the frame's work is submitted. If the frame is
+abandoned or its submission fails, its pending results are dropped, since their copies may never
+have run. It records nothing when that
 rectangle reaches past the captured raster, which would leave the copy missing content another
 placement would show, and nothing when the graph was declined, since a later frame with more
 budget would filter it. The miss frame's own composite is unchanged.
@@ -171,17 +182,21 @@ element's clip, mask, opacity and viewport layers and any subtree markers ending
 
 ### Admission and scale animation
 
-A content whose last miss, within two frames, was at a different linear transform is animating:
-its misses are not recorded until a linear transform repeats. A scale animation therefore records
-at most once when it starts, renders uncached while the scale changes, and records the final scale
-once it holds. Repeated misses at one linear transform (other sub-pixel buckets, other
-occurrences) are admitted.
+Admission is two-touch: a content records a result only on its second miss at the same linear
+transform within 120 frames of the renderer's own frame count, and each content remembers up to
+four recent linear transforms. A continuously changing scale never repeats and records nothing,
+the final scale records once it holds, and a few static scales of one content each record.
+Contents whose keys never repeat, such as an occurrence whose inputs change every draw, record
+nothing. An insertion that would evict a result used in this frame or the previous one is
+refused, so more contents than the cache holds keep what it holds and render the rest uncached
+instead of evicting each other every frame.
 
 ### Budget and eviction
 
-The index holds at most 64 results and 64 MiB. At each frame start the cache's bytes are charged
-to the frame surface budget as one aggregate surface; least recently used results are evicted
-until the charge fits. Recording a result charges its bytes the same way. Evicted textures may
+The index holds at most 64 results and at most a quarter of the frame surface budget's byte
+limit (64 MiB at the default limit). Held results are outside the per-frame charge, so they never
+refuse a filter or another surface in a frame; a result is recorded only while the frame's budget
+still has room for four times its bytes, and recording reserves nothing from it. Evicted textures may
 still be sampled by the frame's recorded commands, so they return to the texture pool only after
 the frame is submitted, or are retained when its submission is uncertain. A lost device drops
 every result; disabling the cache drops them immediately.
@@ -206,28 +221,35 @@ median frame time over 120 frames on an Apple GPU, cache disabled versus enabled
 ## Security / Privacy
 
 The cache holds pixels derived from documents the renderer already draws; it adds no input
-surface. Resource use is bounded by the entry and byte limits and charged to the existing frame
+surface. Resource use is bounded by the entry limit and by a share of the existing frame
 surface budget, so a document cannot grow it without bound. Keys compare a weak document identity
 and a process-unique epoch, so results never cross documents or outlive a document's identity.
 
 ## Testing and Validation
 
 - `//donner/svg/renderer/tests:filter_result_cache_index_tests`: lookup, LRU and byte-limit
-  eviction, expiry, and animation-aware admission.
+  eviction, expiry, pending results, the thrash guard, and two-touch admission with several
+  static scales.
 - `//donner/svg/renderer/tests:external_use_filter_cache_tests` (tiny and geode variants):
-  - the filter runs once across eight frames of five occurrences moving by integer and fractional
-    steps;
+  - the filter runs twice (the two-touch admission) across eight frames of five occurrences
+    moving by integer and fractional steps, and every other draw reuses the result;
   - a disabled cache runs it for every occurrence;
   - a sprite mutation, a `stdDeviation` change, a scale, rotation or device-scale change, a
-    `setHref` retarget, and a `currentColor` change on the host each run the filter again and
-    match a renderer with the cache disabled that drew the same frames, exactly except the scale
-    case (see Open Questions);
-  - more distinct sprites than the cache holds evict and run again;
-  - a scale animation records at most once and resumes hits once the scale holds;
-  - cached frames match uncached frames exactly for integer motion of a blur and a glow, and
-    within a pixelmatch threshold of 0.02 (blur) and 0.1 over at most 160 pixels (glow) for
-    fractional motion. A whole-pixel move draws the cached texels with nearest sampling, so it
-    copies them exactly.
+    `setHref` retarget, a `currentColor` change on the host, a `<use>` width and height change on
+    a symbol, a sheet `<style>` change, a gradient stop change, and a style retention eviction
+    each run the filter again and match a renderer with the cache disabled that drew the same
+    frames, exactly except the scale case (see Open Questions);
+  - more distinct sprites than the cache holds do not evict each other, stale sprites are evicted
+    for new ones, and an evicted sprite runs again;
+  - a continuously changing scale records nothing, and the held scale records once;
+  - cached frames match uncached frames exactly for integer motion, and within pixelmatch 0.02
+    for fractional motion of a blur that fades inside its region; a bucketed result (a glow, or a
+    blur clipped by the default region) moved within its bucket equals the uncached render at
+    the recorded translation moved by whole pixels exactly, and differs from the render at the
+    actual translation only within 0.1 over at most 64 edge pixels.
+- `//donner/svg/renderer/tests:renderer_geode_tests` cases: a result recorded in a frame that is
+  abandoned before submission is not reused, and under a tight surface budget a caching frame
+  draws every filter an uncached frame draws.
 - `//donner/svg/renderer/tests:external_use_sprite_tests_wallclock` (manual, perf): blurred
   background sprites and a grid of glowing pieces with swap scaling, cached versus uncached.
 - Correctness tests assert counts and pixels only, never timing.

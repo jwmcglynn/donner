@@ -6,7 +6,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -20,8 +19,8 @@ namespace donner::svg {
  * A filter result moves with a translation of its device transform but not with any other change,
  * so the non-translation part (\ref linear) must match exactly. Results whose edges stay sharp
  * also depend on the translation's fraction of a device pixel, which the rasterizer's coverage
- * follows: those carry the fraction's bucket, and results smooth enough to resample carry \ref
- * kAnyFraction.
+ * follows: those carry the fraction's bucket (a quarter of a pixel), and results smooth enough to
+ * resample carry \ref kAnyFraction.
  */
 struct FilterResultPlacement {
   /// Bucket value for a result that is resampled at any fractional offset.
@@ -42,10 +41,17 @@ struct FilterResultPlacement {
  * Lookup, admission and least-recently-used eviction for cached filter results, generic over the
  * backend's stored result type.
  *
- * Admission keeps a continuously changing scale from recording a result that is never reused: a
- * content whose last miss, within \ref kAnimationWindowFrames, was at a different linear transform
- * is animating, and records again only once a linear transform repeats. Entries are bounded by
- * count and bytes; a backend can lower the byte bound per frame to fit a shared budget.
+ * Admission is two-touch: a content records a result only on its second miss at the same linear
+ * transform within \ref kAdmissionWindowFrames, so contents whose keys never repeat (a scale that
+ * keeps changing, inputs that change every draw) record nothing. An insertion that would evict a
+ * result used in the current or previous frame is refused, so more contents than the cache holds
+ * do not evict each other every frame.
+ *
+ * A result inserted during a frame is pending: lookups find it, so later draws in the same frame
+ * reuse it, but it becomes durable only when the backend commits the frame's results after the
+ * frame's work is submitted, and is dropped if the frame is abandoned.
+ *
+ * Frame numbers are the caller's own, nondecreasing across calls.
  *
  * @tparam Payload Backend result storage. Move-only types are supported.
  */
@@ -56,10 +62,12 @@ public:
   static constexpr std::size_t kMaximumEntries = 64;
   /// Most result bytes kept at once.
   static constexpr std::uint64_t kMaximumBytes = 64ULL * 1024 * 1024;
-  /// Frames within which misses at two linear transforms mark a content as animating.
-  static constexpr std::uint64_t kAnimationWindowFrames = 2;
-  /// Most contents whose last miss is remembered for admission.
-  static constexpr std::size_t kMaximumAdmissionRecords = 64;
+  /// Frames within which a second miss at a linear transform admits the content.
+  static constexpr std::uint64_t kAdmissionWindowFrames = 120;
+  /// Most contents whose recent misses are remembered for admission.
+  static constexpr std::size_t kMaximumAdmissionRecords = 128;
+  /// Most linear transforms remembered per content.
+  static constexpr std::size_t kLinearsPerContent = 4;
 
   /// One cached result.
   struct Entry {
@@ -68,17 +76,21 @@ public:
     Payload payload;                  ///< Backend storage.
     std::uint64_t bytes = 0;          ///< Bytes \p payload holds.
     std::uint64_t lastUsed = 0;       ///< Use sequence of the last lookup or insertion.
+    std::uint64_t lastUsedFrame = 0;  ///< Frame of the last lookup or insertion.
+    bool pending = false;             ///< Inserted in a frame whose work is not yet submitted.
   };
 
   /**
-   * Find the result for \p content at \p placement and mark it used.
+   * Find the result for \p content at \p placement and mark it used in \p frame.
    *
    * @return The entry, or nullptr on a miss. Entries whose document is gone never match.
    */
-  Entry* find(const FilterResultContentKey& content, const FilterResultPlacement& placement) {
+  Entry* find(const FilterResultContentKey& content, const FilterResultPlacement& placement,
+              std::uint64_t frame) {
     for (Entry& entry : entries_) {
       if (entry.placement == placement && entry.content.sameContent(content)) {
         entry.lastUsed = ++uses_;
+        entry.lastUsedFrame = frame;
         return &entry;
       }
     }
@@ -86,11 +98,8 @@ public:
   }
 
   /**
-   * Decide whether a miss for \p content at \p linear in \p frame records its result.
-   *
-   * @param content Content that missed.
-   * @param linear Linear part of the device transform it missed at.
-   * @param frame Index of the frame drawing it, nondecreasing across calls.
+   * Decide whether a miss for \p content at \p linear in \p frame records its result: true when
+   * the same content already missed at the same linear transform within the admission window.
    */
   bool admitMiss(const FilterResultContentKey& content, const std::array<double, 4>& linear,
                  std::uint64_t frame) {
@@ -98,43 +107,102 @@ public:
                                [&](const Admission& a) { return a.content.sameContent(content); });
     if (record == admissions_.end()) {
       if (admissions_.size() >= kMaximumAdmissionRecords) {
-        admissions_.erase(std::min_element(
-            admissions_.begin(), admissions_.end(),
-            [](const Admission& lhs, const Admission& rhs) { return lhs.frame < rhs.frame; }));
+        admissions_.erase(std::min_element(admissions_.begin(), admissions_.end(),
+                                           [](const Admission& lhs, const Admission& rhs) {
+                                             return lhs.lastFrame() < rhs.lastFrame();
+                                           }));
       }
-      admissions_.push_back(Admission{content, linear, frame});
-      return true;
+      admissions_.push_back(Admission{content, {}});
+      record = admissions_.end() - 1;
     }
-    const bool animating =
-        record->linear != linear && frame - record->frame <= kAnimationWindowFrames;
-    record->linear = linear;
-    record->frame = frame;
-    return !animating;
+    auto seen = std::find_if(record->linears.begin(), record->linears.end(),
+                             [&](const SeenLinear& s) { return s.linear == linear; });
+    const bool admitted =
+        seen != record->linears.end() && frame - seen->frame <= kAdmissionWindowFrames;
+    if (seen == record->linears.end()) {
+      if (record->linears.size() >= kLinearsPerContent) {
+        record->linears.erase(std::min_element(
+            record->linears.begin(), record->linears.end(),
+            [](const SeenLinear& lhs, const SeenLinear& rhs) { return lhs.frame < rhs.frame; }));
+      }
+      record->linears.push_back(SeenLinear{linear, frame});
+    } else {
+      seen->frame = frame;
+    }
+    return admitted;
   }
 
   /**
-   * Whether \p bytes more fit the count and byte bounds once least recently used entries are
-   * evicted, without evicting.
+   * Whether a result of \p bytes can be inserted in \p frame: it fits the byte bound, and making
+   * room evicts nothing used in this frame or the previous one.
    */
-  [[nodiscard]] bool canHold(std::uint64_t bytes) const { return bytes <= byteLimit_; }
+  [[nodiscard]] bool canInsert(std::uint64_t bytes, std::uint64_t frame) const {
+    if (bytes > byteLimit_) {
+      return false;
+    }
+    std::vector<const Entry*> order;
+    order.reserve(entries_.size());
+    for (const Entry& entry : entries_) {
+      order.push_back(&entry);
+    }
+    std::sort(order.begin(), order.end(),
+              [](const Entry* lhs, const Entry* rhs) { return lhs->lastUsed < rhs->lastUsed; });
+    std::size_t count = entries_.size();
+    std::uint64_t held = bytes_;
+    for (const Entry* victim : order) {
+      if (count < kMaximumEntries && held + bytes <= byteLimit_) {
+        break;
+      }
+      if (victim->lastUsedFrame + 1 >= frame) {
+        return false;
+      }
+      --count;
+      held -= victim->bytes;
+    }
+    return count < kMaximumEntries && held + bytes <= byteLimit_;
+  }
 
   /**
-   * Insert a result, evicting least recently used entries until it fits. The caller has checked
-   * \ref canHold.
+   * Insert a pending result in \p frame, evicting least recently used entries until it fits. The
+   * caller has checked \ref canInsert.
    *
    * @return Payloads of the evicted entries, for the backend to retire.
    */
   std::vector<Payload> insert(FilterResultContentKey content, FilterResultPlacement placement,
-                              Payload payload, std::uint64_t bytes) {
+                              Payload payload, std::uint64_t bytes, std::uint64_t frame) {
     std::vector<Payload> evicted = evictUntil(kMaximumEntries - 1, byteLimit_ - bytes);
-    entries_.push_back(Entry{std::move(content), placement, std::move(payload), bytes, ++uses_});
+    entries_.push_back(Entry{std::move(content), placement, std::move(payload), bytes, ++uses_,
+                             frame, /*pending=*/true});
     bytes_ += bytes;
     return evicted;
   }
 
+  /// Make every pending result durable, once the frame that recorded it is submitted.
+  void commitPending() {
+    for (Entry& entry : entries_) {
+      entry.pending = false;
+    }
+  }
+
+  /// Drop every pending result, when the frame that recorded it is abandoned.
+  /// @return Their payloads.
+  std::vector<Payload> dropPending() {
+    std::vector<Payload> dropped;
+    for (auto it = entries_.begin(); it != entries_.end();) {
+      if (it->pending) {
+        bytes_ -= it->bytes;
+        dropped.push_back(std::move(it->payload));
+        it = entries_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return dropped;
+  }
+
   /**
-   * Lower the byte bound to \p limit (never above \ref kMaximumBytes), evicting least recently
-   * used entries until the held bytes fit.
+   * Set the byte bound to \p limit (never above \ref kMaximumBytes), evicting least recently used
+   * entries until the held bytes fit.
    *
    * @return Payloads of the evicted entries.
    */
@@ -172,7 +240,7 @@ public:
     return dropped;
   }
 
-  /// Number of results held.
+  /// Number of results held, pending ones included.
   [[nodiscard]] std::size_t size() const { return entries_.size(); }
   /// Bytes the held results occupy.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
@@ -180,10 +248,22 @@ public:
   [[nodiscard]] std::uint64_t byteLimit() const { return byteLimit_; }
 
 private:
-  struct Admission {
-    FilterResultContentKey content;
+  struct SeenLinear {
     std::array<double, 4> linear;
     std::uint64_t frame = 0;
+  };
+
+  struct Admission {
+    FilterResultContentKey content;
+    std::vector<SeenLinear> linears;
+
+    std::uint64_t lastFrame() const {
+      std::uint64_t last = 0;
+      for (const SeenLinear& seen : linears) {
+        last = std::max(last, seen.frame);
+      }
+      return last;
+    }
   };
 
   std::vector<Payload> evictUntil(std::size_t maximumEntries, std::uint64_t maximumBytes) {

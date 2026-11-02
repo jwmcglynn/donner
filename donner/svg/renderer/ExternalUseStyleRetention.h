@@ -107,12 +107,11 @@ public:
    * Identifies the style the installed occurrence's subtree currently has, while that subtree is
    * retained for the occurrence's inputs.
    *
-   * Every snapshot of occurrence inputs gets an epoch no other snapshot in the process has had, and
-   * a subtree keeps its epoch only while it stays styled for those inputs: any restyle that reaches
-   * it (changed inputs, a style-dirty element, eviction, or a restore) ends the epoch. Equal epochs
-   * on two draws therefore mean the subtree's computed styles were not recomputed in between.
-   * Changes that do not restyle, such as a new path `d`, are not covered; callers combine the epoch
-   * with the document's mutation revision.
+   * Every snapshot of occurrence inputs gets an epoch no other snapshot in the process has had. The
+   * epoch ends when the subtree is restyled for new inputs, evicted, restored, or reached by a
+   * restyle another occurrence causes. A style-dirty element inside the current occurrence's own
+   * subtree is restyled without ending it, and changes that do not restyle, such as a new path
+   * `d`, are not covered either; callers combine the epoch with the document's mutation revision.
    *
    * @param registry Referenced document's registry, with its occurrence context installed.
    * @return The epoch, or `std::nullopt` when the occurrence is not retained (its paint refers to

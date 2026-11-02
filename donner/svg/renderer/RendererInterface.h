@@ -257,6 +257,8 @@ public:
 
   /// Bytes currently reserved by active surfaces.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  /// Byte limit of the budget, including any tighter limit a test installed.
+  [[nodiscard]] std::uint64_t limitBytes() const { return limits_.bytes; }
   /// Most bytes reserved at once since the last \ref reset.
   [[nodiscard]] std::uint64_t peakBytes() const { return peakBytes_; }
   /// Number of active reserved surfaces.
@@ -1546,6 +1548,11 @@ public:
    * call \ref popFilterLayer. Otherwise it pushes the layer as \ref pushFilterLayer does,
    * possibly recording the result for later draws when the layer pops, and returns
    * \ref CachedFilterLayerResult::Pushed.
+   *
+   * Driver-facing: \ref RendererDriver calls this for filter layers whose content it can identify;
+   * applications drawing through \ref RendererInterface directly use \ref pushFilterLayer. A
+   * backend may reuse a result recorded at a translation in the same quarter-pixel bucket, drawn
+   * on the pixel grid, or resample a smooth result at any offset.
    *
    * Backends without a filter result cache push the layer. Appended after the legacy virtual
    * surface to preserve existing vtable slot order.
