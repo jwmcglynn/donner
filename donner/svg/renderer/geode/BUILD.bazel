@@ -307,6 +307,7 @@ donner_cc_library(
         # The final renderer names the Geode device implementation; this header needs only its API.
         ":geode_device_api",
         ":geode_handle_retirement",
+        ":geode_path_cache_component",
         ":geode_resource_budget",
     ],
 )

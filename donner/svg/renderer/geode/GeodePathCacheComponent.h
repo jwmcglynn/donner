@@ -15,7 +15,9 @@
 /// `emplaceComputedPathIfChanged`) ensures those signals only fire when
 /// the path actually changed, so idle re-renders leave the cache intact.
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
 
@@ -25,6 +27,11 @@
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 
 namespace donner::geode {
+
+/// Number of fill encodes an entity keeps, one per device-derived tolerance bucket. See
+/// `GeodePathCacheComponent::FillVariant`; `GeodeResidentPathSlots` keeps one resident fill slot
+/// per variant.
+inline constexpr std::size_t kGeodeFillVariantCount = 2;
 
 /// Per-entity cache of Geode's encoded-path output (and strokeToFill
 /// result). Installed lazily by `RendererGeode` at the encode call
@@ -36,14 +43,49 @@ namespace donner::geode {
 /// `RendererGeode.cc` references unqualified via `geode::` inside the
 /// `donner::svg` namespace.
 struct GeodePathCacheComponent {
-  /// Fill-slot encode. Populated on first encode; reused on hit.
-  /// Reset by the entt signal listener when geometry changes.
-  std::optional<EncodedPath> fillEncode;
-  /// Approximation tolerance of `fillEncode`; zero for paths without cubic segments.
-  /// A finer encode remains reusable at coarser device scales.
-  double fillTolerance = 0.0;
-  /// Live retained-byte charge for `fillEncode`.
-  GeodeGeometryCacheReservation fillReservation;
+  /// One fill encode, built for one device-derived cubic tolerance bucket.
+  struct FillVariant {
+    /// Cached encode. Reset by the entt signal listener when geometry changes.
+    std::optional<EncodedPath> encode;
+    /// Approximation tolerance of `encode`; zero for paths without cubic segments, whose
+    /// encode is the same at every scale.
+    double tolerance = 0.0;
+    /// Live retained-byte charge for `encode`.
+    GeodeGeometryCacheReservation reservation;
+    /// Value of `fillUseClock` when this variant last served a draw; picks the variant to replace.
+    std::uint64_t lastUse = 0;
+
+    /// True when this variant holds the encode a draw at \p drawTolerance would build.
+    ///
+    /// Only an exact bucket match serves the draw. Serving a finer encode at a coarser scale
+    /// would make the pixels of a draw depend on which scale encoded the entity first: an
+    /// element drawn at two scales would render differently in its first frame than in later
+    /// ones, a difference that a blur makes visible.
+    bool serves(double drawTolerance) const {
+      return encode.has_value() && (tolerance == 0.0 || tolerance == drawTolerance);
+    }
+  };
+
+  /// Number of tolerance buckets cached at once. Two covers an element drawn at its rest scale
+  /// and an animated scale in the same frame; a third bucket replaces the least recently used.
+  static constexpr std::size_t kFillVariantCount = kGeodeFillVariantCount;
+
+  /// Fill encodes, one per recently drawn tolerance bucket. Populated on first encode for a
+  /// bucket; reused while the bucket stays cached. Index `i` pairs with the resident slots of the
+  /// same index in `GeodeResidentPathSlots`.
+  std::array<FillVariant, kFillVariantCount> fillVariants;
+  /// Monotonic use counter for `FillVariant::lastUse`.
+  std::uint64_t fillUseClock = 0;
+
+  /// Index of the variant serving \p drawTolerance, or nullopt when no cached encode matches.
+  std::optional<std::size_t> fillVariantFor(double drawTolerance) const {
+    for (std::size_t i = 0; i < fillVariants.size(); ++i) {
+      if (fillVariants[i].serves(drawTolerance)) {
+        return i;
+      }
+    }
+    return std::nullopt;
+  }
 
   /// Stroke-slot cache. Holds both the `Path::strokeToFill` output
   /// path and its encoded form, keyed by the source `StrokeStyle` plus
