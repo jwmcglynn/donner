@@ -256,10 +256,12 @@ and a process-unique epoch, so results never cross documents or outlive a docume
 
 ## Open Questions
 
-- After a larger, scaled filter ran in earlier frames, re-running an unscaled sprite's blur
-  differs by one level in a few dozen pixels from a fresh render, with or without the cache. The
-  scale case is held to the default per-pixel threshold until that history dependence is
-  understood.
+- Re-running a blur in a later frame can differ from an earlier run of the same content by one
+  level in a few dozen pixels, with or without the cache, after other filters used the pooled
+  textures in between. A cached result shows its first run, so the scale and symbol cases are held
+  to the default per-pixel threshold. The suspected cause is a filter pass reading texels of a
+  reused texture that the pass did not write; that would make uncached output depend on texture
+  history and is worth fixing at the engine.
 - Whether same-document `<use>` instances should get an equivalent content signal.
 
 ## Future Work
