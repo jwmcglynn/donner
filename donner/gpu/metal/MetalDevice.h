@@ -133,6 +133,16 @@ public:
   /// native queue imposed before, now with a wait that is bounded instead of one that is not.
   static constexpr uint64_t kMaxCommandBuffersInFlight = 512;
 
+  /// Command buffers this device takes in one submission without splitting. The queue is sized
+  /// for \ref kMaxCommandBuffersInFlight plus a whole submission, and a submission waits for
+  /// room before acquiring any native buffer, so no span blocks inside Metal; this leaves several
+  /// such frames in flight below the backstop.
+  static constexpr size_t kPreferredCommandBuffersPerSubmission = 128;
+
+  size_t preferredCommandBuffersPerSubmission() const override {
+    return kPreferredCommandBuffersPerSubmission;
+  }
+
   /// Which memory model the backend builds its resources for.
   enum class MemoryModel : uint8_t {
     /// Take the model the Metal device reports. Production always uses this.

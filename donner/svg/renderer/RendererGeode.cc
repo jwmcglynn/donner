@@ -1704,17 +1704,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // a filter executes between the frame's own encoders.
   bool frameRecordingOpen = false;
 
-  // Most command buffers this renderer puts in one submission.
+  // Most command buffers this renderer puts in one submission: what the runtime device says its
+  // queue takes (see `gpu::Device::preferredCommandBuffersPerSubmission`), never more than the
+  // runtime accepts.
   //
-  // Well below what the runtime refuses, because the wgpu backend acquires a backend command
-  // buffer per element and commits none of them until the whole span has encoded, while the
-  // backend queue caps how many may be outstanding at once and blocks the encoding thread at
-  // that cap. Measured on the wgpu Metal path (2026-09-21): a span of 54 blocks indefinitely,
-  // and 32 blocks as well, while 16 leaves room for the readback contexts and sibling renderers
-  // sharing the same queue. Ordinary frames run to a handful of buffers, so only a pathological
-  // one - a filter graph of thousands of passes - is split across submissions at all, and the
-  // split keeps recording order because submissions execute in the order they are made.
-  static constexpr size_t kMaxFrameCommandBuffersPerSubmission = 16;
+  // A backend layered over another API keeps the portable bound of 16: the wgpu backend acquires
+  // a backend command buffer per element and commits none of them until the whole span has
+  // encoded, while its queue caps how many may be outstanding at once and blocks the encoding
+  // thread at that cap. Measured on the wgpu Metal path (2026-09-21): a span of 54 blocks
+  // indefinitely, and 32 blocks as well, while 16 leaves room for the readback contexts and
+  // sibling renderers sharing the same queue. A backend that bounds its own queue takes a whole
+  // frame of filter chunks in one submission. Splitting keeps recording order because
+  // submissions execute in the order they are made.
+  [[nodiscard]] size_t frameCommandBuffersPerSubmission() const {
+    return std::clamp<size_t>(device->runtimeDevice().preferredCommandBuffersPerSubmission(), 1,
+                              gpu::Device::kMaxCommandBuffersPerSubmission);
+  }
 
   // Runtime command encoder the frame is recording into right now.
   //
@@ -1856,12 +1861,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Add \p commandBuffer to the frame, splitting the submission first when the frame has
-  /// already reached \ref kMaxFrameCommandBuffersPerSubmission.
+  /// already reached \ref frameCommandBuffersPerSubmission.
   [[nodiscard]] bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
     if (frameArenaWriteFailed) {
       return false;
     }
-    if (frameCommandBuffers.size() >= kMaxFrameCommandBuffersPerSubmission &&
+    if (frameCommandBuffers.size() >= frameCommandBuffersPerSubmission() &&
         !splitFrameSubmission()) {
       return false;
     }

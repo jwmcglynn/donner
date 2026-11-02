@@ -2838,6 +2838,55 @@ TEST_F(RendererGeodeTest, AFramePacingWaitThatStallsDeclaresTheDeviceLost) {
   EXPECT_EQ(gpu.waitedFor.size(), 1u);
 }
 
+/// Draws \p count small blurred squares, each through a filter layer of its own.
+void DrawFilteredSquares(RendererGeode& renderer, int count) {
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = 1.5, .stdDeviationY = 1.5};
+  graph.nodes.push_back(blur);
+  for (int index = 0; index < count; ++index) {
+    const double x = 4.0 * (index % 14);
+    const double y = 8.0 * (index / 14);
+    const Box2d square({x, y}, {x + 4.0, y + 4.0});
+    renderer.pushFilterLayer(graph, square);
+    renderer.setPaint(solidFill(css::RGBA(255, static_cast<uint8_t>(6 * index), 0, 255)));
+    renderer.drawRect(square, StrokeParams{});
+    renderer.popFilterLayer();
+  }
+  renderer.endFrame();
+}
+
+/// A frame's filter layers each close the frame's encoder and add command buffers of their own.
+/// They reach the queue together, split only where the runtime device's queue needs it: one
+/// submission per `preferredCommandBuffersPerSubmission` buffers, not one per sixteen whatever the
+/// backend. On a backend that bounds its own queue, a frame of eighty filter layers is one
+/// submission.
+TEST_F(RendererGeodeTest, FilterLayersReachTheQueueInAsFewSubmissionsAsTheDeviceTakes) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  constexpr int kFilterLayers = 80;
+  RendererGeode renderer = createRenderer();
+  DrawFilteredSquares(renderer, kFilterLayers);
+  DrawFilteredSquares(renderer, kFilterLayers);
+  const geode::GeodeCounters& counters = renderer.lastFrameTimings().counters;
+  ASSERT_GT(counters.commandBuffers, gpu::Device::kPortableCommandBuffersPerSubmission)
+      << "the frame must hold more command buffers than the portable bound on one submission";
+  const uint64_t perSubmission =
+      sharedDevice()->runtimeDevice().preferredCommandBuffersPerSubmission();
+  EXPECT_EQ(counters.submits, (counters.commandBuffers + perSubmission - 1) / perSubmission)
+      << counters.commandBuffers << " command buffers, " << perSubmission << " per submission";
+#if defined(__APPLE__)
+  EXPECT_EQ(counters.submits, 1u) << "the Metal device takes the whole frame in one submission";
+#endif
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  EXPECT_THAT(PixelAt(bitmap, 2, 2)[3], testing::Gt(0)) << "the first filter layer must composite";
+}
+
 TEST_F(RendererGeodeTest, EncodersOfAFrameShareArenaBuffersAcrossManyLayers) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   // Each layer constructs an encoder for its content and another for its composite, so without

@@ -854,6 +854,22 @@ public:
   /// under it; this bound only keeps a span from being absurd.
   static constexpr size_t kMaxCommandBuffersPerSubmission = 256;
 
+  /// Command buffers per submission that every backend's native queue tolerates; see
+  /// \ref preferredCommandBuffersPerSubmission.
+  static constexpr size_t kPortableCommandBuffersPerSubmission = 16;
+
+  /**
+   * Most command buffers a caller splitting its work across submissions should put in one
+   * submission on this backend. A backend layered over another API can block at a native queue
+   * cap far below \ref kMaxCommandBuffersPerSubmission, so the default is the portable
+   * \ref kPortableCommandBuffersPerSubmission; a backend that bounds its own queue raises it, so a
+   * frame of many command buffers reaches the queue in one submission rather than several.
+   * Never above \ref kMaxCommandBuffersPerSubmission.
+   */
+  virtual size_t preferredCommandBuffersPerSubmission() const {
+    return kPortableCommandBuffersPerSubmission;
+  }
+
   /**
    * Submits a finished command buffer, consuming it, and returns the assigned submission serial.
    * Serials start at 1 and increase by 1 per submission; a submission rejected here or by the
