@@ -519,6 +519,24 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "sub_document_filters_tests",
+    srcs = ["SubDocumentFilters_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":rgba_test_matchers",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_public_api_tests",
     srcs = [
         "RendererPublicApi_tests.cc",
