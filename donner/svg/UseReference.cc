@@ -55,10 +55,14 @@ bool IsPresentedExternalOnlyUse(EntityHandle handle) {
 
 void InvalidateUseGeometry(EntityHandle handle) {
   // An external instance takes the viewport the use establishes when it is drawn, so only the
-  // use's own layout is stale. A same-document shadow tree copied that viewport when it was
-  // instantiated, so it is rebuilt.
+  // use's own layout is stale; the instance is re-attached, which also tells anything caching the
+  // use's pixels that its content changed and not only its position. A same-document shadow tree
+  // copied that viewport when it was instantiated, so it is rebuilt.
   if (IsPresentedExternalOnlyUse(handle)) {
     components::LayoutSystem().invalidate(handle);
+    handle.get_or_emplace<components::DirtyFlagsComponent>().mark(
+        components::DirtyFlagsComponent::ShadowTree |
+        components::DirtyFlagsComponent::RenderInstance);
     return;
   }
   InvalidateUseInstance(handle);
