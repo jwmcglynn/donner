@@ -110,8 +110,8 @@ struct GeodeSurfaceRenderer::Impl {
     configuration.format = kPresentationFormat;
     // Copying from the presentation target lets an isolated layer with a non-normal blend mode
     // capture its backdrop on the GPU; without it the renderer falls back to source-over.
-    configuration.usage = gpu::TextureUsage::RenderAttachment |
-                          (caps.usages & gpu::TextureUsage::CopySrc);
+    configuration.usage =
+        gpu::TextureUsage::RenderAttachment | (caps.usages & gpu::TextureUsage::CopySrc);
     configuration.presentMode = Contains(caps.presentModes, gpu::PresentMode::Fifo)
                                     ? gpu::PresentMode::Fifo
                                     : caps.presentModes.front();
