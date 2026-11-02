@@ -22,8 +22,6 @@
 #include <utility>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
-#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
-#include <unistd.h>
 #endif
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -93,14 +91,12 @@ std::string InstalledRoot() {
     return {};
   }
 #elif defined(__linux__) && !defined(__EMSCRIPTEN__)
-  std::array<char, 4096> buffer{};
-  const auto length = readlink("/proc/self/exe", buffer.data(), buffer.size());
-  if (length <= 0 || static_cast<size_t>(length) == buffer.size()) {
+  std::error_code ec;
+  const std::filesystem::path link = std::filesystem::read_symlink("/proc/self/exe", ec);
+  if (ec || link.empty()) {
     return {};
   }
-  std::error_code ec;
-  executable =
-      std::filesystem::canonical(std::string(buffer.data(), static_cast<size_t>(length)), ec);
+  executable = std::filesystem::canonical(link, ec);
   if (ec) {
     return {};
   }
