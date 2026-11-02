@@ -7954,6 +7954,36 @@ TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// Filtered elements of many different sizes, each holding a region-sized surface until the frame
+// ends, need more than the pool's starting budget. Once warm, the pool keeps that whole working set
+// from frame to frame instead of destroying and recreating most of it every frame.
+TEST_F(RendererGeodeTest, VariedFilterSizesCreateNoTexturesOnceWarm) {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(kPhoneWidth) + "\" height=\"" + std::to_string(kPhoneHeight) +
+                       "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < 120; ++i) {
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(100 + (i % 8) * 140) +
+              "\" cy=\"" + std::to_string(100 + (i / 8) * 165) + "\" r=\"" +
+              std::to_string(40 + (i % 40) * 2) + "\" fill=\"#e05090\"/></g>";
+  }
+  source += "</svg>";
+  SVGDocument document = ParseDocumentOrFail(source);
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  renderer.draw(document);
+  ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.resourceStats().filterExecutions, testing::Gt(0u));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+}
+
 // A texture parked for reuse within the frame is still live memory, so it stays charged to the
 // frame's surface budget until the frame ends: right after a filter pops, nothing it allocated has
 // been released from the budget.
