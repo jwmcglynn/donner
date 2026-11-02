@@ -1086,6 +1086,31 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
   return result;
 }
 
+/// Snapshot the main-pass render instances in draw order, from `firstEntity` through `lastEntity`
+/// inclusive, or every instance when `firstEntity` is null. Offscreen feImage shadow instances are
+/// left out (see \ref collectOffscreenFeImageShadowEntities). Filter preparation can reorder
+/// rendering instance storage, so traversals iterate this snapshot rather than a live view.
+std::vector<Entity> CollectMainEntities(Registry& registry, Entity firstEntity = entt::null,
+                                        Entity lastEntity = entt::null) {
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(registry);
+  std::vector<Entity> entities;
+  RenderingInstanceView view(registry);
+  while (firstEntity != entt::null && !view.done() && view.currentEntity() != firstEntity) {
+    view.advance();
+  }
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    const Entity entity = view.currentEntity();
+    reachedLast = firstEntity != entt::null && entity == lastEntity;
+    if (feImageShadowEntities.count(entity) == 0) {
+      entities.push_back(entity);
+    }
+    view.advance();
+  }
+  return entities;
+}
+
 void SamplePreparedImageDimension(components::FilterNode& node, std::size_t index,
                                   std::optional<Lengthd>& dimension,
                                   const components::AnimationValueContext& context,
@@ -2241,17 +2266,7 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
     return false;
   }
 
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(document.registry());
-  std::vector<Entity> mainEntities;
-  RenderingInstanceView instances(document.registry());
-  while (!instances.done()) {
-    const Entity entity = instances.currentEntity();
-    if (feImageShadowEntities.count(entity) == 0) {
-      mainEntities.push_back(entity);
-    }
-    instances.advance();
-  }
+  const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
   if (mainEntities.empty()) {
     renderer_.beginFrame(viewport);
@@ -2337,19 +2352,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   // nothing is dirty), so without this filter the 2nd+ render of a document containing an feImage
   // fragment reference would draw the referenced fragment as if it were main content. See
   // `collectOffscreenFeImageShadowEntities`.
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(document.registry());
-  std::vector<Entity> mainEntities;
-  {
-    RenderingInstanceView snapshot(document.registry());
-    while (!snapshot.done()) {
-      const Entity entity = snapshot.currentEntity();
-      if (feImageShadowEntities.count(entity) == 0) {
-        mainEntities.push_back(entity);
-      }
-      snapshot.advance();
-    }
-  }
+  const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
   // Pre-pass: resolve + pre-render feImage fragments, caching per-entity. Must run before the
   // main traverse so the main view doesn't observe the storage mutation that
@@ -2431,17 +2434,7 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(document.registry());
-  std::vector<Entity> mainEntities;
-  RenderingInstanceView instances(document.registry());
-  while (!instances.done()) {
-    const Entity entity = instances.currentEntity();
-    if (feImageShadowEntities.count(entity) == 0) {
-      mainEntities.push_back(entity);
-    }
-    instances.advance();
-  }
+  const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
   if (mainEntities.empty()) {
     return;
@@ -2576,23 +2569,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   // left in the pool by a prior render's feImage pre-pass (see
   // `collectOffscreenFeImageShadowEntities` + `draw()`); they are offscreen-only and must not be
   // drawn as main content on a re-render (e.g. an editor partial re-draw).
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(registry);
-  std::vector<Entity> rangeEntities;
-  {
-    RenderingInstanceView scanView(registry);
-    while (!scanView.done() && scanView.currentEntity() != firstEntity) {
-      scanView.advance();
-    }
-    bool reachedLast = false;
-    while (!scanView.done() && !reachedLast) {
-      reachedLast = (scanView.currentEntity() == lastEntity);
-      if (feImageShadowEntities.count(scanView.currentEntity()) == 0) {
-        rangeEntities.push_back(scanView.currentEntity());
-      }
-      scanView.advance();
-    }
-  }
+  const std::vector<Entity> rangeEntities = CollectMainEntities(registry, firstEntity, lastEntity);
 
   prepareFilterGraphs(registry, rangeEntities);
 
@@ -4699,8 +4676,7 @@ void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box
   surfaceFromCanvasTransform_ = baseTransform;
 
   // Traverse the sub-document's render tree, emitting draw calls to the same renderer.
-  RenderingInstanceView subView(subDocument.registry());
-  traverse(subView, subDocument.registry());
+  traverseSubDocument(subDocument.registry(), entt::null, entt::null);
   fontRenderScope.finish();
   recordChildFontDependencies(
       subDocument, subDocument.registry().ctx().get<components::SVGDocumentContext>().rootEntity,
@@ -4755,17 +4731,30 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   surfaceFromCanvasTransform_ = parentAbsoluteTransform;
 
   // The render tree holds only the instance, so a full traversal applies every layer and viewport
-  // clip a same-document instance gets. The target's viewport clip is in the <use> element's space,
-  // and the host's pending subtree pops must not match sub-document entities.
+  // clip a same-document instance gets. The target's viewport clip is in the <use> element's space.
   renderer_.setTransform(parentAbsoluteTransform);
-  std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
-  RenderingInstanceView subView(subDocument.registry());
-  traverse(subView, subDocument.registry());
-  subtreeMarkers_ = std::move(hostSubtreeMarkers);
+  traverseSubDocument(subDocument.registry(), entt::null, entt::null);
   fontRenderScope.finish();
   recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
+}
+
+void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
+                                         Entity lastEntity) {
+  // Snapshot before preparing filters: feImage preparation can reorder instance storage.
+  const std::vector<Entity> entities = CollectMainEntities(registry, firstEntity, lastEntity);
+  auto hostFilterGraphs = std::exchange(preparedFilterGraphs_, {});
+  std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
+  prepareFilterGraphs(registry, entities);
+  RenderingInstanceView view(registry, entities);
+  if (firstEntity == entt::null) {
+    traverse(view, registry);
+  } else {
+    traverseRange(view, registry, firstEntity, lastEntity);
+  }
+  subtreeMarkers_ = std::move(hostSubtreeMarkers);
+  preparedFilterGraphs_ = std::move(hostFilterGraphs);
 }
 
 void RendererDriver::setSubDocumentContextPaint(
