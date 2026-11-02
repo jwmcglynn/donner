@@ -135,13 +135,14 @@ std::optional<AnimatedScene> MakeGlowGridScene() {
     AppendVectorShapes(sheet, kind + 8, 6);
     sheet << "</g></g>";
   }
-  sheet << R"(<g id="bevel"><filter id="lit" x="-20%" y="-20%" width="140%" height="140%">)"
-        << R"(<feGaussianBlur in="SourceAlpha" stdDeviation="3" result="height"/>)"
-        << R"(<feDiffuseLighting in="height" surfaceScale="4" result="light">)"
-        << R"(<feDistantLight azimuth="225" elevation="45"/></feDiffuseLighting>)"
-        << R"(<feComposite in="light" in2="SourceAlpha" operator="in" result="shade"/>)"
-        << R"(<feBlend in="SourceGraphic" in2="shade" mode="multiply"/></filter>)"
-        << R"(<g filter="url(#lit)"><rect width="40" height="20" rx="4" fill="#c08040"/></g></g>)";
+  sheet
+      << R"(<g id="bevel"><filter id="lit" x="-20%" y="-20%" width="140%" height="140%">)"
+      << R"(<feGaussianBlur in="SourceAlpha" stdDeviation="3" result="height"/>)"
+      << R"(<feDiffuseLighting in="height" surfaceScale="4" result="light">)"
+      << R"(<feDistantLight azimuth="225" elevation="45"/></feDiffuseLighting>)"
+      << R"(<feComposite in="light" in2="SourceAlpha" operator="in" result="shade"/>)"
+      << R"(<feBlend in="SourceGraphic" in2="shade" mode="multiply"/></filter>)"
+      << R"svg(<g filter="url(#lit)"><rect width="40" height="20" rx="4" fill="#c08040"/></g></g>)svg";
   sheet << "</svg>";
 
   std::ostringstream host;
