@@ -75,10 +75,10 @@ Donner App depends on three changes that are open as pull requests:
 - [ ] Milestone 1: Prerequisites
   - [ ] `GeodeSurfaceRenderer` for Metal layers (#2221) and browser canvases (stacked pull request).
   - [ ] The browser GPU backend loads from a downstream module (#2222).
-  - [ ] Choose how `donner_app` reaches Emscripten. If Donner gains a non-development `emsdk`
-        dependency, prove with BCR preflight that the default (tiny-skia) consumer closure builds
-        and fetches no Emscripten toolchain, and that the root-only `emsdk` patches are either
-        unnecessary for consumers or upstreamed.
+  - [ ] Choose how `donner_app` reaches Emscripten. Prove with BCR preflight that the default
+        (tiny-skia) consumer closure builds and fetches no Emscripten toolchain, and, whichever
+        option is chosen, that the root-only `emsdk` patches are unnecessary for consumers or
+        upstreamed (the Closure Java-runtime patch matters for `--closure=1` size builds).
 - [ ] Milestone 2: Core library `//donner/app`
   - [ ] `Application`, `AppConfig`, `AppContext`, `Viewport`, `InputEvent`, `FrameClock`
         (fixed-step updates with a bounded catch-up, plus an interpolation factor per displayed
@@ -95,15 +95,25 @@ Donner App depends on three changes that are open as pull requests:
         existing packaged-resource lookup), and into `Contents/Resources/donner-assets` for an
         unsigned `.app` produced by a small Starlark bundling rule.
   - [ ] Smoke mode (`DONNER_APP_SMOKE_FRAMES=N`) that presents N frames, asserts zero frame-path
-        readbacks through Geode's counters, and exits with status.
+        readbacks and CPU bitmap uploads through Geode's counters (read through a test hook that
+        keeps GPU types out of public headers), and exits with status.
 - [ ] Milestone 4: Web runner
   - [ ] Single-threaded Emscripten entry point: ASYNCIFY only for device creation in `main()`,
         then a `requestAnimationFrame` loop whose callback never suspends. Canvas sizing from CSS
         size and `devicePixelRatio`, touch, mouse and keyboard input, `visibilitychange` pause and
         resume.
-  - [ ] Assets packaged as a content-addressed bundle fetched at startup through Donner's existing
-        browser packaged-resource transport, and served to the application by the in-memory asset
-        loader, so builds keep `-sFILESYSTEM=0`.
+  - [ ] Move the browser packaged-resource bridge (`donner/editor/wasm/PackagedResourceBridge.cc`)
+        and its loader (`packaged-resource-loader.js`) out of `donner/editor` into a shared library,
+        changing them in place rather than copying them, with the frame wake supplied by the runner
+        instead of the editor's worker.
+  - [ ] Assets packaged as a content-addressed bundle fetched at startup through that transport,
+        and served to the application by the in-memory asset loader, so builds keep
+        `-sFILESYSTEM=0`. The loader checks the page manifest against resources registered in the
+        module at compile time, so the macro generates that registration for the application's
+        assets and an asset change relinks the module.
+  - [ ] Enforce that frame callbacks never suspend: limit Asyncify instrumentation to the
+        device-creation path (`ASYNCIFY_ONLY`) or assert in debug builds that no unwind starts
+        inside the frame callback.
   - [ ] HTML template with a WebGPU capability message, served as `index.html`.
 - [ ] Milestone 5: `donner_app` macro and transitions
   - [ ] `name` (native), `name_web` (site directory) and `name_web_serve` (local development
@@ -289,7 +299,8 @@ The transitions follow the editor and Geode browser-test transitions. For `name_
 the Wasm platform (through `wasm_cc_binary`), `renderer_backend=geode`, `enable_geode=true`,
 `browser_backend=true`, `disable_perf_opt_transition=true`, `-fconstexpr-steps=10000000`,
 `-c opt`, `-Oz` and the size-related link options. For `name` they set Geode and the macOS
-minimum version Donner's Metal backend needs. Setting labels are written with `Label(...)` so they
+minimum version Donner's Metal backend needs; until a Linux runner exists, `name` is incompatible
+with Linux hosts and is skipped there. Setting labels are written with `Label(...)` so they
 resolve to `@donner` from a consumer module. The text tier comes from the consumer's
 `donner.configure` (`DONNER_CONFIG`) unless the macro's optional `text` attribute overrides it;
 the transitions never silently change the configured tier.
@@ -301,7 +312,9 @@ the transitions never silently change the configured tier.
     enters every consumer's module resolution, can raise shared dependency versions, and does not
     carry Donner's root-only `emsdk` patches.
   - A separate `donner_app` Bazel module in this repository that depends on Donner and `emsdk`.
-    This leaves the core Donner module and its BCR consumers unchanged.
+    This leaves the core Donner module and its BCR consumers unchanged. It has the same patch
+    problem, since it is not the root module either, and it needs the release and BCR workflows to
+    publish a second module root.
   - The consumer declares `emsdk` and passes the Wasm rule to the macro. This is flexible but
     leaks toolchain wiring into every application, contrary to the write-once goal.
 
@@ -340,5 +353,5 @@ the transitions never silently change the configured tier.
   presentation, a synthesized tap and zero frame-path readbacks.
 - Downstream: a consumer-module test that builds `donner_app` native and web targets from outside
   the repository, extending the existing consumer-load checks.
-- GPU residency: the readback counter assertions above are the CI targets that fail if a CPU
-  readback enters the frame path.
+- GPU residency: the readback and upload counter assertions above are the CI targets that fail if
+  a CPU readback or bitmap upload enters the frame path.
