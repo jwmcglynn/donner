@@ -47,11 +47,9 @@ from, and Geode keeps the results. TinySkia keeps the uncached path.
 
 ## Next Steps
 
-- Land the region-sized filter surfaces fix below this branch, so a miss captures only the
-  sprite's filter region.
-- Fix the external-use instance path that currently renders filtered sprites as empty on Geode
-  (see Open Questions); the cache cannot be validated end to end until it draws.
-- Run the counter, invalidation, and pixel tests on Geode and record perf numbers.
+- Land the region-sized filter surfaces and the sub-document filter preparation below this
+  branch; the cache records a result only when the capture holds the whole filter region.
+- Review and publish.
 
 ## Implementation Plan
 
@@ -67,9 +65,9 @@ from, and Geode keeps the results. TinySkia keeps the uncached path.
 - [x] Milestone 3: Geode cache
   - [x] Record executed results into pixel-aligned textures; draw hits translated.
   - [x] Charge cached bytes to each frame's surface budget; drop on device loss or disable.
-- [ ] Milestone 4: Validation
-  - [ ] Counter, invalidation and pixel tests green on Geode.
-  - [ ] Wall-clock comparison on the game-like scenes.
+- [x] Milestone 4: Validation
+  - [x] Counter, invalidation and pixel tests green on Geode.
+  - [x] Wall-clock comparison on the game-like scenes (see Performance).
 
 ## Background
 
@@ -195,6 +193,16 @@ paths, masks, and viewport clips are applied outside the filter layer, so a cach
 composited through them like an uncached one. A filter inside a mask, pattern tile or another
 filter's capture does not use the cache.
 
+## Performance
+
+`//donner/svg/renderer/tests:external_use_sprite_tests_wallclock` with `--config=geode -c opt`,
+median frame time over 120 frames on an Apple GPU, cache disabled versus enabled:
+
+| Scene | Uncached | Cached |
+| --- | --- | --- |
+| 100 inner-glow blurred background sprites of 5 kinds, drifting, plus 3 vector sprites, 800x1750 | 40.2 ms | 7.4 ms |
+| 80 glowing pieces of 3 kinds falling with swap scaling, plus 4 lit bevels, 1206x2622 | 25.0 ms | 5.9 ms |
+
 ## Security / Privacy
 
 The cache holds pixels derived from documents the renderer already draws; it adds no input
@@ -211,22 +219,25 @@ and a process-unique epoch, so results never cross documents or outlive a docume
     steps;
   - a disabled cache runs it for every occurrence;
   - a sprite mutation, a `stdDeviation` change, a scale, rotation or device-scale change, a
-    `setHref` retarget, and a host style change each run the filter again and match a fresh
-    uncached render exactly;
+    `setHref` retarget, and a `currentColor` change on the host each run the filter again and
+    match a renderer with the cache disabled that drew the same frames, exactly except the scale
+    case (see Open Questions);
   - more distinct sprites than the cache holds evict and run again;
   - a scale animation records at most once and resumes hits once the scale holds;
   - cached frames match uncached frames exactly for integer motion of a blur and a glow, and
     within a pixelmatch threshold of 0.02 (blur) and 0.1 over at most 160 pixels (glow) for
-    fractional motion.
+    fractional motion. A whole-pixel move draws the cached texels with nearest sampling, so it
+    copies them exactly.
 - `//donner/svg/renderer/tests:external_use_sprite_tests_wallclock` (manual, perf): blurred
   background sprites and a grid of glowing pieces with swap scaling, cached versus uncached.
 - Correctness tests assert counts and pixels only, never timing.
 
 ## Open Questions
 
-- On the current external-use stack, Geode draws a filtered group inside an external-use target
-  as empty, whether the filter is defined inside the sprite or in the sheet's `<defs>`; an
-  unfiltered sprite draws. The cache cannot be validated end to end until that renders.
+- After a larger, scaled filter ran in earlier frames, re-running an unscaled sprite's blur
+  differs by one level in a few dozen pixels from a fresh render, with or without the cache. The
+  scale case is held to the default per-pixel threshold until that history dependence is
+  understood.
 - Whether same-document `<use>` instances should get an equivalent content signal.
 
 ## Future Work
