@@ -602,6 +602,84 @@ writes on the whole-tree path.
 
 ### Phase 4: Selective Layout and Transform Recomputation
 
+#### Retained render-tree updates (implemented)
+
+A frame whose dirty set only moves content, changes its compositing, or points external `<use>`
+elements at another external instance now keeps every computed component and rebuilds only the
+render instances. `RenderingContext::ensureComputedComponents()` asks `PlanRetainedUpdate()`
+(`donner/svg/renderer/RetainedRenderTreeUpdate.h`) whether the dirty set qualifies before it
+starts the full rebuild. A qualifying frame:
+
+- restyles only the entities flagged `Style`, through the selective style pass;
+- recreates the computed size, local transform and viewBox that `LayoutSystem::invalidate()`
+  dropped from each moved element (`LayoutSystem::recomputeInvalidatedLayout()`); descendants keep
+  theirs, and their absolute transforms are recomputed on demand;
+- attaches the new external instance to each retargeted `<use>` and nothing else;
+- then rebuilds the render instances by traversing the retained tree, which recomputes world
+  transforms, clip-path geometry, context-paint remaps and subtree ranges exactly as the full
+  rebuild does.
+
+Shadow trees are not torn down, styles of unchanged elements are not recomputed, and external
+documents are not admitted again. The traversal still visits every rendered entity, so a retained
+frame costs `O(rendered entities)` with a small constant, not `O(changed entities)`; patching
+instances in place is a possible next step.
+
+The three qualifying changes and their marks:
+
+| Change | Mutation path | Dirty flags |
+|--------|---------------|-------------|
+| Transform write | `setTransform()`, the `transform` attribute | `Layout`, `Transform`, `WorldTransform`, `RenderInstance`; descendants `WorldTransform`, `RenderInstance` |
+| `opacity` attribute | `trySetPresentationAttribute()` | `Style`, `Compositing`, `RenderInstance` on the element and its descendants, whose computed styles are dropped (`opacity: inherit`) |
+| External `<use>` retarget | `setHref()`, `href` / `xlink:href` writes | `ShadowTree`, `RenderInstance`, plus the layout flags |
+
+`opacity` and `href` writes now request the whole-tree restyle only when a stylesheet selects on
+the attribute, as transform writes already did. An `href` write takes the retained path only when
+the use is presented, owns no shadow tree, and both the old and the new reference are external;
+anything else keeps the previous `InvalidateUseInstance()` behaviour.
+
+`PlanRetainedUpdate()` falls back to the full rebuild when any dirty entity carries another flag,
+or when one of these changes could reach a computed component:
+
+- the document has animation elements, whose presentation is rebuilt from the unanimated base on
+  every full pass;
+- the document has `feImage` fragment instances, which each draw recreates and only the full
+  rebuild retires;
+- a changed element is the source of a shadow-tree clone, which copied its transform and style
+  when it was created;
+- a moved element has no render instance of its own (clip-path content, `<defs>` content,
+  gradients and patterns), so something that references it reads its transform;
+- the document has a `<textPath>`, whose layout follows its path's transform;
+- a moved element establishes a viewport (`ViewBoxComponent`), whose change reaches descendants'
+  lengths.
+
+External documents are admitted to the resource family at most once per full rebuild,
+however many uses reference them (`ResourceManagerContext::loadAdmittedExternalSVG()`), and a
+use retargeted between rebuilds reuses the admission of the last rebuild, the same way the
+unchanged uses keep the documents they were given.
+
+`RenderTreeState::retainedUpdatesEnabled` forces the full rebuild for tests and diagnostics, and
+`RenderTreeState::counters` records full rebuilds, retained updates, shadow-tree teardowns and
+in-place retargets. `SubDocumentCache::cachedDocumentAdmissions()` counts re-admissions of cached
+documents. Pixel identity against the full rebuild is pinned per change kind in
+`donner/svg/renderer/tests/RetainedRenderTreeUpdate_tests.cc` (ancestor transforms, nested uses,
+symbols, clip paths and masks in both unit systems, objectBoundingBox filters, markers, patterns,
+text, opacity, external sprites, `ConcurrentDom`), and the per-frame work of a game-like sprite
+field in `SpriteFieldPrepareCorrectness_tests.cc`. `SpriteFieldPrepareWallclock_tests.cc` reports
+prepare time with and without retained updates.
+
+Measured with that test (`-c opt`, Apple Silicon, a shared and loaded machine, so the ratios are
+the signal): 150 external uses across 7 sheets, every use moving each frame plus a few fades and
+retargets, median host-document prepare 1.33 ms before this change, 0.22 ms on a full rebuild that
+admits each sheet once, and 0.17 ms with the retained update.
+
+`<use>` geometry written through the DOM: the parser applies `x`, `y`, `width` and `height` through
+the typed setters, at override precedence, so a later `setAttribute()` of the same attribute was
+ignored and a referenced `<symbol>` or nested `<svg>` kept its old viewport. These writes now take
+the same precedence, and `InvalidateUseGeometry()` drops only the layout of a presented external
+use (its instance takes the viewport when it is drawn) and rebuilds the shadow tree of any other.
+
+#### Remaining selective layout work
+
 Modify `LayoutSystem` to skip clean entities.
 
 - [ ] `LayoutSystem::instantiateAllComputedComponents()` skips entities without
