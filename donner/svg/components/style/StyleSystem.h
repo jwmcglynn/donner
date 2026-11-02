@@ -165,6 +165,9 @@ public:
     return true;
   }
 
+  /// External-use instance work admitted in the current frame.
+  [[nodiscard]] std::size_t externalInstanceWork() const { return externalInstanceWork_; }
+
   /// Return true once per frame when an unsupported inherited resource needs a diagnostic.
   bool reportExternalResourceWarning() { return !std::exchange(externalResourceWarning_, true); }
 
