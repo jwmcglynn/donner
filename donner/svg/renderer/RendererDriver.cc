@@ -2541,14 +2541,18 @@ void RendererDriver::popEndedSubtrees(std::vector<DeferredPop>& markers, Entity 
   }
 }
 
+bool RendererDriver::hasOpenFilterLayer(const std::vector<DeferredPop>& markers) const {
+  return insideEnclosingFilterLayer_ ||
+         std::any_of(markers.begin(), markers.end(),
+                     [](const DeferredPop& marker) { return marker.filterLayerCount != 0; });
+}
+
 bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
                                          const components::RenderingInstanceComponent& instance,
                                          const components::ComputedStyleComponent& style,
                                          const std::vector<DeferredPop>& markers) const {
   if (!earlyLeafViewportCulling_ || !IsPlainVisibleLeaf(instance) ||
-      !HasNeutralLeafCompositing(style) || insideEnclosingFilterLayer_ ||
-      std::any_of(markers.begin(), markers.end(),
-                  [](const DeferredPop& marker) { return marker.filterLayerCount != 0; })) {
+      !HasNeutralLeafCompositing(style) || hasOpenFilterLayer(markers)) {
     return false;
   }
   const auto bounds = DeviceDrawableBoundsWithStroke(
@@ -3389,10 +3393,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // clip/filter/isolation layers above.
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
-      const bool insideFilterLayer =
-          hasFilterLayer || insideEnclosingFilterLayer_ ||
-          std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
-                      [](const DeferredPop& m) { return m.filterLayerCount != 0; });
+      const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(subtreeMarkers_);
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
                 components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
@@ -3627,10 +3628,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     // clip/filter/isolation layers above.
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
-      const bool insideFilterLayer =
-          hasFilterLayer || insideEnclosingFilterLayer_ ||
-          std::any_of(localDeferred.begin(), localDeferred.end(),
-                      [](const DeferredPop& m) { return m.filterLayerCount != 0; });
+      const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(localDeferred);
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
                 components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
