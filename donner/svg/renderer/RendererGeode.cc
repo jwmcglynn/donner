@@ -47,6 +47,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeFramePacer.h"
 #include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -2299,6 +2300,65 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Arenas every encoder of an open frame allocates from, recycled once the frame is submitted.
   /// See `geode::GeoEncoderFrameArenas`.
   geode::GeoEncoderFrameArenas frameArenas;
+
+  /// Frames-in-flight limit; see `RendererGeode::setMaxFramesInFlight`.
+  geode::GeodeFramePacer framePacer;
+
+  /// Replaces the device as the pacer's completion source. Test seam.
+  RendererGeode::FramePacingHooksForTesting framePacingHooks;
+
+  /// How the pacer observes and waits for this renderer's frames. Empty without a device: such a
+  /// renderer submits nothing.
+  geode::GeodeFramePacer::Backend framePacingBackend() const {
+    geode::GeodeFramePacer::Backend backend;
+    if (framePacingHooks.completedSerial) {
+      backend.completedSerial = framePacingHooks.completedSerial;
+      backend.waitForSerial = framePacingHooks.waitForSerial;
+      return backend;
+    }
+    if (!device || !device->physicalDeviceOwner()->hasBackendDevice()) {
+      return backend;
+    }
+    gpu::Device* runtime = &device->runtimeDevice();
+    backend.completedSerial = [runtime] { return runtime->completedSerial(); };
+#ifndef __EMSCRIPTEN__
+    // A browser's thread may not block on GPU work: its completions arrive only once the thread
+    // returns to the event loop, so there the embedder paces frames instead.
+    backend.waitForSerial = [runtime](uint64_t serial) {
+      return runtime->waitForSerialUnlessStalled(serial, geode::kDefaultGpuWaitTimeout);
+    };
+#endif
+    return backend;
+  }
+
+  /// Waits, before a frame records anything, until it can be submitted within the
+  /// frames-in-flight limit. A wait that sees the GPU stop progressing declares the device lost,
+  /// so the frame is abandoned instead of recorded over work that will never complete.
+  void admitFrameForPacing() {
+    if (!device || device->isDeviceLost()) {
+      framePacer.clear();
+      return;
+    }
+    const geode::GeodeFramePacer::Admission admission = framePacer.admitFrame(framePacingBackend());
+    counters.framePacingWaits += admission.waits;
+    if ((admission.stalled || admission.failed) && !device->isDeviceLost()) {
+      device->markDeviceLostAfterWaitTimeout(
+          geode::GpuWaitSite::QueueIdle, admission.waited,
+          admission.stalled ? "an earlier frame's GPU work made no progress within the bounded "
+                              "frame-pacing wait"
+                            : "an earlier frame's GPU work failed before completing");
+    }
+  }
+
+  /// Records the frame just submitted with the pacer and reports the frames now in flight.
+  void recordSubmittedFrameForPacing() {
+    if (!device || !device->physicalDeviceOwner()->hasBackendDevice()) {
+      return;
+    }
+    const geode::GeodeFramePacer::Backend backend = framePacingBackend();
+    framePacer.frameSubmitted(device->runtimeDevice().lastSubmittedSerial());
+    counters.framesInFlight = framePacer.framesInFlight(backend);
+  }
 
   /// Apply the renderer-wide encoder configuration shared by every encoder
   /// this renderer constructs: arena buffer recycling and the antialias mode.
@@ -6206,6 +6266,22 @@ void RendererGeode::endFrameResourceScope() {
   --impl_->frameResourceScopeDepth;
 }
 
+void RendererGeode::setMaxFramesInFlight(uint32_t frames) {
+  impl_->framePacer.setMaxFramesInFlight(frames);
+}
+
+uint32_t RendererGeode::maxFramesInFlight() const {
+  return impl_->framePacer.maxFramesInFlight();
+}
+
+uint32_t RendererGeode::framesInFlight() {
+  return impl_->framePacer.framesInFlight(impl_->framePacingBackend());
+}
+
+void RendererGeode::setFramePacingHooksForTesting(FramePacingHooksForTesting hooks) {
+  impl_->framePacingHooks = std::move(hooks);
+}
+
 int RendererGeode::width() const {
   return impl_->pixelWidth;
 }
@@ -6215,6 +6291,7 @@ int RendererGeode::height() const {
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->resetForBeginFrame(viewport);
+  impl_->admitFrameForPacing();
   if (impl_->device) {
     impl_->device->drainFencedTextureBackings();
     if (impl_->device->pendingFencedTextureBackings() != 0) {
@@ -6269,6 +6346,9 @@ void RendererGeode::endFrame() {
       // when the refusal surfaces while recording.
       impl_->markDeviceLostUnlessArenaUploadFailed(
           "the frame's command buffers could not be submitted");
+    }
+    if (submitted) {
+      impl_->recordSubmittedFrameForPacing();
     }
     impl_->frameRecordingOpen = false;
     impl_->frameGpuEncoders.clear();

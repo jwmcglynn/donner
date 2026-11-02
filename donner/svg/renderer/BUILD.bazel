@@ -432,6 +432,7 @@ _RENDERER_GEODE_COMMON_DEPS = [
     "//donner/svg/components",
     "//donner/svg/renderer/geode:geo_encoder",
     "//donner/svg/renderer/geode:geode_counters",
+    "//donner/svg/renderer/geode:geode_frame_pacer",
     "//donner/svg/renderer/geode:geode_glyph_residency",
     "//donner/svg/renderer/geode:geode_handle_retirement",
     "//donner/svg/renderer/geode:geode_path_cache_component",

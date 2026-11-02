@@ -250,6 +250,24 @@ donner_cc_test(
     ],
 )
 
+# Header-only frames-in-flight limit for a renderer. Tracks submission serials only, with no
+# WebGPU dependency, so it builds (and is tested) regardless of the enable_geode flag.
+donner_cc_library(
+    name = "geode_frame_pacer",
+    hdrs = ["GeodeFramePacer.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = ["//donner/gpu:descriptors"],
+)
+
+donner_cc_test(
+    name = "geode_frame_pacer_tests",
+    srcs = ["tests/GeodeFramePacer_tests.cc"],
+    deps = [
+        ":geode_frame_pacer",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
 # Header-only device-aware curve-flattening tolerance for stroke outlines.
 # Pure transform math with no WebGPU dependency, so it builds (and is tested)
 # regardless of the enable_geode flag.

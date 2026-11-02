@@ -2718,6 +2718,126 @@ void DrawSiblingLayerColumns(RendererGeode& renderer, int count, double columnWi
   }
 }
 
+/// A completion source for frame pacing that never completes work on its own: a frame completes
+/// only when the renderer waits for it, as on a GPU that runs as far behind as the CPU lets it.
+struct HeldFrameCompletion {
+  uint64_t completed = 0;
+  std::vector<uint64_t> waitedFor;
+  gpu::SerialWaitEnd waitEnd = gpu::SerialWaitEnd::Completed;
+
+  RendererGeode::FramePacingHooksForTesting hooks() {
+    RendererGeode::FramePacingHooksForTesting result;
+    result.completedSerial = [this] { return completed; };
+    result.waitForSerial = [this](uint64_t serial) {
+      waitedFor.push_back(serial);
+      if (waitEnd == gpu::SerialWaitEnd::Completed) {
+        completed = std::max(completed, serial);
+      }
+      return gpu::SerialWaitResult{waitEnd, std::chrono::milliseconds{0}};
+    };
+    return result;
+  }
+};
+
+/// Draws one frame of a solid rect in \p color.
+void DrawSolidFrame(RendererGeode& renderer, const css::RGBA& color) {
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.setPaint(solidFill(color));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, FramesInFlightDefaultToTwo) {
+  RendererGeode renderer = createRenderer();
+  EXPECT_EQ(renderer.maxFramesInFlight(), 2u);
+}
+
+TEST_F(RendererGeodeTest, FramesInFlightNeverExceedTheLimitWhenTheGpuFallsBehind) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  for (const uint32_t limit : {1u, 2u, 3u}) {
+    SCOPED_TRACE(testing::Message() << "limit " << limit);
+    RendererGeode renderer = createRenderer();
+    renderer.setMaxFramesInFlight(limit);
+    HeldFrameCompletion gpu;
+    renderer.setFramePacingHooksForTesting(gpu.hooks());
+
+    constexpr int kFrames = 10;
+    uint64_t waits = 0;
+    for (int frame = 0; frame < kFrames; ++frame) {
+      DrawSolidFrame(renderer, css::RGBA(0, static_cast<uint8_t>(20 * frame), 255, 255));
+      const geode::GeodeCounters& counters = renderer.lastFrameTimings().counters;
+      EXPECT_LE(counters.framesInFlight, limit) << "frame " << frame;
+      waits += counters.framePacingWaits;
+    }
+    EXPECT_EQ(waits, static_cast<uint64_t>(kFrames - limit))
+        << "once the limit is reached, every frame waits for exactly one earlier frame";
+    EXPECT_EQ(gpu.waitedFor.size(), static_cast<size_t>(kFrames - limit));
+    EXPECT_LE(renderer.framesInFlight(), limit);
+
+    // Pacing only delays when a frame starts; what it draws is unchanged.
+    const RendererBitmap bitmap = renderer.takeSnapshot();
+    ASSERT_FALSE(bitmap.empty());
+    EXPECT_THAT(PixelAt(bitmap, 32, 32), RgbaEq(0, 20 * (kFrames - 1), 255, 255));
+  }
+}
+
+TEST_F(RendererGeodeTest, FramePacingWaitsForNothingWhileTheGpuKeepsUp) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  HeldFrameCompletion gpu;
+  renderer.setFramePacingHooksForTesting(gpu.hooks());
+  for (int frame = 0; frame < 6; ++frame) {
+    DrawSolidFrame(renderer, css::RGBA(255, 0, 0, 255));
+    EXPECT_EQ(renderer.lastFrameTimings().counters.framePacingWaits, 0u);
+    EXPECT_EQ(renderer.lastFrameTimings().counters.framesInFlight, 1u);
+    gpu.completed = sharedDevice()->runtimeDevice().lastSubmittedSerial();
+  }
+  EXPECT_TRUE(gpu.waitedFor.empty());
+}
+
+TEST_F(RendererGeodeTest, FramePacingCanBeDisabled) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  renderer.setMaxFramesInFlight(0);
+  HeldFrameCompletion gpu;
+  renderer.setFramePacingHooksForTesting(gpu.hooks());
+  for (int frame = 0; frame < 5; ++frame) {
+    DrawSolidFrame(renderer, css::RGBA(255, 0, 0, 255));
+  }
+  EXPECT_TRUE(gpu.waitedFor.empty());
+  EXPECT_EQ(renderer.framesInFlight(), 5u);
+}
+
+TEST_F(RendererGeodeTest, FramesInFlightStayWithinTheLimitOnTheDevice) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  for (int frame = 0; frame < 30; ++frame) {
+    DrawSolidFrame(renderer, css::RGBA(0, 0, 255, 255));
+    EXPECT_LE(renderer.lastFrameTimings().counters.framesInFlight, 2u) << "frame " << frame;
+  }
+}
+
+TEST_F(RendererGeodeTest, AFramePacingWaitThatStallsDeclaresTheDeviceLost) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+  RendererGeode renderer(device);
+  renderer.setMaxFramesInFlight(1);
+  HeldFrameCompletion gpu;
+  renderer.setFramePacingHooksForTesting(gpu.hooks());
+  DrawSolidFrame(renderer, css::RGBA(255, 0, 0, 255));
+  ASSERT_FALSE(renderer.deviceLost());
+
+  gpu.waitEnd = gpu::SerialWaitEnd::Stalled;
+  DrawSolidFrame(renderer, css::RGBA(255, 0, 0, 255));
+  EXPECT_TRUE(renderer.deviceLost()) << "a frame whose predecessor never completes must not wait "
+                                        "forever or record over it";
+  EXPECT_EQ(device->lostState()->timedOutSite.load(), geode::GpuWaitSite::QueueIdle);
+  EXPECT_EQ(gpu.waitedFor.size(), 1u);
+}
+
 TEST_F(RendererGeodeTest, EncodersOfAFrameShareArenaBuffersAcrossManyLayers) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   // Each layer constructs an encoder for its content and another for its composite, so without

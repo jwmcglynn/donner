@@ -361,6 +361,49 @@ public:
   /// @param antialias True to retain analytic edge coverage.
   void setAntialias(bool antialias);
 
+  /**
+   * Sets how many of this renderer's frames may be in flight: submitted, with their GPU work not
+   * yet complete. Applies to every target this renderer draws into, its own offscreen target, a
+   * host texture, or a presentation surface's frame.
+   *
+   * Each frame in flight retains what its work reads (staged uploads, command buffers, transient
+   * surfaces), so without a limit a renderer that records faster than the GPU executes grows its
+   * memory by a frame's worth every frame. With the limit, `beginFrame` first waits until fewer
+   * than \p frames earlier frames are executing; the CPU then runs at most that many frames ahead
+   * of the GPU, and waits at the frame boundary rather than in the middle of a frame. The wait is
+   * bounded by GPU progress like every other GPU wait: a GPU that stops making progress for the
+   * shared bound declares the device lost instead of blocking forever.
+   *
+   * In WebAssembly builds the renderer never blocks the browser's thread, where completions only
+   * arrive once it returns to the event loop: frames are admitted without waiting, and an embedder
+   * that drives frames from `requestAnimationFrame` reads \ref framesInFlight and skips a frame
+   * while the GPU is behind.
+   *
+   * @param frames Most frames in flight, 1 to 8; the default is 2 (one frame executing while the
+   *   next is recorded). Zero disables the limit for an embedder that paces frames itself; larger
+   *   values clamp to 8.
+   */
+  void setMaxFramesInFlight(uint32_t frames);
+
+  /// The frames-in-flight limit; see \ref setMaxFramesInFlight. Zero when disabled.
+  [[nodiscard]] uint32_t maxFramesInFlight() const;
+
+  /// This renderer's submitted frames whose GPU work has not completed yet, observed without
+  /// blocking.
+  [[nodiscard]] uint32_t framesInFlight();
+
+  /// Replacement completion source for frame pacing. Test seam.
+  struct FramePacingHooksForTesting {
+    /// Highest submission serial to treat as complete.
+    std::function<uint64_t()> completedSerial;
+    /// Wait for \p serial; empty to admit frames without waiting.
+    std::function<gpu::SerialWaitResult(uint64_t serial)> waitForSerial;
+  };
+
+  /// Observe and wait for frame completion through \p hooks instead of the device, so a test can
+  /// hold frames incomplete. Empty hooks restore the device. @param hooks Replacement source.
+  void setFramePacingHooksForTesting(FramePacingHooksForTesting hooks);
+
   // --- RendererInterface ---
 
   void draw(SVGDocument& document) override;

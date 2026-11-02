@@ -157,6 +157,15 @@ struct GeodeCounters {
   /// set does not fit and every frame repays the upload.
   uint64_t glyphResidencyEvictions = 0;
 
+  /// Earlier frames `beginFrame` waited for so this frame would not exceed the renderer's
+  /// frames-in-flight limit (see `RendererGeode::setMaxFramesInFlight`). Zero while the GPU keeps
+  /// up; at most one per frame once the CPU runs ahead.
+  uint64_t framePacingWaits = 0;
+
+  /// The renderer's frames in flight right after this frame was submitted, this frame included.
+  /// Never above the renderer's frames-in-flight limit when one is set.
+  uint64_t framesInFlight = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };
