@@ -766,6 +766,22 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return &transientResources.retain(std::move(created).result());
   }
 
+  /// The bind group for one draw. Inside a frame (shared arenas), the device's cache serves it:
+  /// a steady frame binds the same arena regions, targets and views as the last one, so it
+  /// creates none. Outside a frame the group is made for this encoder and released with it.
+  /// @param descriptor Layout and bound resources.
+  /// @return The bind group, or null when the runtime refuses it.
+  const gpu::BindGroup* makeDrawBindGroup(gpu::BindGroupDescriptor descriptor) {
+    if (arenas != &ownArenas) {
+      return device->bindGroupCache().bindGroup(*gpuContext->gpuDevice, std::move(descriptor));
+    }
+    gpu::Result<gpu::BindGroup> created = gpuContext->gpuDevice->createBindGroup(descriptor);
+    if (created.hasError()) {
+      return nullptr;
+    }
+    return &transientResources.retain(std::move(created).result());
+  }
+
   /// Pack one instance record per instanced draw into the per-frame record arena.
   ///
   /// Each instance's own affine replaces the shared record's transform, composed with the
@@ -989,44 +1005,41 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     const auto uniAlloc =
         allocInArena(arenas->uniformArena, &u, sizeof(GradientUniforms), kUniformOffsetAlignment);
 
-    gpu::Result<gpu::BindGroup> bindGroupResult =
-        gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
-            "GeodeGradientBindGroup",
-            gradientPipeline->bindGroupLayout(),
-            {gpu::BindGroupEntry{
-                 GradientBinding("uniforms"),
-                 gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("bands"),
-                 gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("curveData"),
-                 gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
-             gpu::BindGroupEntry{GradientBinding("clipMaskTexture"),
-                                 gpu::TextureViewBinding{currentClipMaskView()}},
-             gpu::BindGroupEntry{
-                 GradientBinding("vBands"),
-                 gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("vCurveData"),
-                 gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("hBandGrid"),
-                 gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("vBandGrid"),
-                 gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("hCurveIndices"),
-                 gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
-             gpu::BindGroupEntry{
-                 GradientBinding("vCurveIndices"),
-                 gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
-    if (bindGroupResult.hasError()) {
+    const gpu::BindGroup* drawBindGroup = makeDrawBindGroup(gpu::BindGroupDescriptor{
+        "GeodeGradientBindGroup",
+        gradientPipeline->bindGroupLayout(),
+        {gpu::BindGroupEntry{GradientBinding("uniforms"),
+                             gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("bands"),
+             gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("curveData"),
+             gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
+         gpu::BindGroupEntry{GradientBinding("clipMaskTexture"),
+                             gpu::TextureViewBinding{currentClipMaskView()}},
+         gpu::BindGroupEntry{
+             GradientBinding("vBands"),
+             gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("vCurveData"),
+             gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("hBandGrid"),
+             gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("vBandGrid"),
+             gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("hCurveIndices"),
+             gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
+         gpu::BindGroupEntry{
+             GradientBinding("vCurveIndices"),
+             gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
+    if (drawBindGroup == nullptr) {
       return;
     }
-    const gpu::BindGroup& bindGroup =
-        transientResources.retain(std::move(bindGroupResult).result());
+    const gpu::BindGroup& bindGroup = *drawBindGroup;
 
     recordGeometryDebugDraw(encoded);
     (void)pass->setBindGroup(0, bindGroup);
@@ -1767,42 +1780,33 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   const auto& [uniformsBinding, bandsBinding, curvesBinding, clipBinding, vBandsBinding,
                vCurvesBinding, hGridBinding, vGridBinding, hRefsBinding, vRefsBinding] = kBindings;
 
-  gpu::Result<gpu::BindGroup> bindGroupResult =
-      impl_->gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
-          "GeodeMaskBindGroup",
-          impl_->maskPipelineOwned->bindGroupLayout(),
-          {gpu::BindGroupEntry{uniformsBinding,
-                               gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
-           gpu::BindGroupEntry{
-               bandsBinding,
-               gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
-           gpu::BindGroupEntry{
-               curvesBinding,
-               gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
-           gpu::BindGroupEntry{clipBinding, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
-           gpu::BindGroupEntry{
-               vBandsBinding,
-               gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
-           gpu::BindGroupEntry{
-               vCurvesBinding,
-               gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
-           gpu::BindGroupEntry{
-               hGridBinding,
-               gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
-           gpu::BindGroupEntry{
-               vGridBinding,
-               gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
-           gpu::BindGroupEntry{
-               hRefsBinding,
-               gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
-           gpu::BindGroupEntry{
-               vRefsBinding,
-               gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
-  if (bindGroupResult.hasError()) {
+  const gpu::BindGroup* drawBindGroup = impl_->makeDrawBindGroup(gpu::BindGroupDescriptor{
+      "GeodeMaskBindGroup",
+      impl_->maskPipelineOwned->bindGroupLayout(),
+      {gpu::BindGroupEntry{uniformsBinding,
+                           gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+       gpu::BindGroupEntry{
+           bandsBinding, gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+       gpu::BindGroupEntry{curvesBinding, gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset,
+                                                             curvesAlloc.size}},
+       gpu::BindGroupEntry{clipBinding, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
+       gpu::BindGroupEntry{vBandsBinding, gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset,
+                                                             vBandsAlloc.size}},
+       gpu::BindGroupEntry{
+           vCurvesBinding,
+           gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
+       gpu::BindGroupEntry{
+           hGridBinding, gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
+       gpu::BindGroupEntry{
+           vGridBinding, gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
+       gpu::BindGroupEntry{
+           hRefsBinding, gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
+       gpu::BindGroupEntry{vRefsBinding, gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset,
+                                                            vRefsAlloc.size}}}});
+  if (drawBindGroup == nullptr) {
     return;
   }
-  const gpu::BindGroup& bindGroup =
-      impl_->transientResources.retain(std::move(bindGroupResult).result());
+  const gpu::BindGroup& bindGroup = *drawBindGroup;
 
   impl_->recordGeometryDebugDraw(encoded);
   (void)impl_->maskPass->setBindGroup(0, bindGroup);
@@ -2947,43 +2951,40 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   // pattern texture, pattern sampler, clip-mask texture, clip-mask sampler,
   // per-instance records SSBO, V bands SSBO, V curves SSBO, the combined
   // dense grid storage, and the gradient paint blocks.
-  gpu::Result<gpu::BindGroup> bindGroupResult =
-      impl_->gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
-          "GeodeBindGroup",
-          impl_->pipeline->bindGroupLayout(),
-          {gpu::BindGroupEntry{FillBinding("uniforms"),
-                               gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
-           gpu::BindGroupEntry{
-               FillBinding("bands"),
-               gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
-           gpu::BindGroupEntry{
-               FillBinding("curveData"),
-               gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
-           gpu::BindGroupEntry{FillBinding("patternTexture"),
-                               gpu::TextureViewBinding{args.patternView}},
-           gpu::BindGroupEntry{FillBinding("patternSampler"),
-                               gpu::SamplerBinding{args.patternSampler}},
-           gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
-                               gpu::TextureViewBinding{impl_->currentClipMaskView()}},
-           gpu::BindGroupEntry{FillBinding("instances"),
-                               gpu::BufferBinding{recordBuf, recordOffset, recordSize}},
-           gpu::BindGroupEntry{
-               FillBinding("vBands"),
-               gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
-           gpu::BindGroupEntry{
-               FillBinding("vCurveData"),
-               gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
-           gpu::BindGroupEntry{FillBinding("gridData"),
-                               gpu::BufferBinding{gridSpan.alloc.buffer, gridSpan.alloc.offset,
-                                                  gridSpan.alloc.size}},
-           gpu::BindGroupEntry{FillBinding("paintData"),
-                               gpu::BufferBinding{*impl_->gpuContext->dummyPaintDataBuffer, 0,
-                                                  kGradientPaintBlockRows * 4u * sizeof(float)}}}});
-  if (bindGroupResult.hasError()) {
+  const gpu::BindGroup* drawBindGroup = impl_->makeDrawBindGroup(gpu::BindGroupDescriptor{
+      "GeodeBindGroup",
+      impl_->pipeline->bindGroupLayout(),
+      {gpu::BindGroupEntry{FillBinding("uniforms"),
+                           gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+       gpu::BindGroupEntry{
+           FillBinding("bands"),
+           gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
+       gpu::BindGroupEntry{
+           FillBinding("curveData"),
+           gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
+       gpu::BindGroupEntry{FillBinding("patternTexture"),
+                           gpu::TextureViewBinding{args.patternView}},
+       gpu::BindGroupEntry{FillBinding("patternSampler"), gpu::SamplerBinding{args.patternSampler}},
+       gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
+                           gpu::TextureViewBinding{impl_->currentClipMaskView()}},
+       gpu::BindGroupEntry{FillBinding("instances"),
+                           gpu::BufferBinding{recordBuf, recordOffset, recordSize}},
+       gpu::BindGroupEntry{
+           FillBinding("vBands"),
+           gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
+       gpu::BindGroupEntry{
+           FillBinding("vCurveData"),
+           gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
+       gpu::BindGroupEntry{
+           FillBinding("gridData"),
+           gpu::BufferBinding{gridSpan.alloc.buffer, gridSpan.alloc.offset, gridSpan.alloc.size}},
+       gpu::BindGroupEntry{FillBinding("paintData"),
+                           gpu::BufferBinding{*impl_->gpuContext->dummyPaintDataBuffer, 0,
+                                              kGradientPaintBlockRows * 4u * sizeof(float)}}}});
+  if (drawBindGroup == nullptr) {
     return;
   }
-  const gpu::BindGroup& bindGroup =
-      impl_->transientResources.retain(std::move(bindGroupResult).result());
+  const gpu::BindGroup& bindGroup = *drawBindGroup;
 
   // 4. Record the draw call - one convex fan per path.
   impl_->recordGeometryDebugDraw(encoded, instanceTransforms);

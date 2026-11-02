@@ -440,11 +440,10 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"marker",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 414, 46},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 414, 0},
         /*reason=*/
-        "every drawn marker instance re-uploads its geometry through the per-frame arena and "
-        "builds its own bind group",
+        "every drawn marker instance re-uploads its geometry through the per-frame arena",
         /*tracking=*/"clears when marker instance geometry gains per-entity residency",
     },
     {

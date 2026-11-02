@@ -5546,6 +5546,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // A sibling renderer may still have unsubmitted reads of the shared filter scratch.
     if (device && device->oldestOpenFrameGeneration() == std::numeric_limits<uint64_t>::max()) {
       device->filterEngine().beginFrame();
+      // Nor may it age draw bind groups another renderer's open frame may still name.
+      device->bindGroupCache().beginFrame();
     }
     if (texturePool) {
       texturePool->beginFrame();

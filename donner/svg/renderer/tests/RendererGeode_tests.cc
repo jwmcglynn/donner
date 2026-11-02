@@ -2757,6 +2757,30 @@ TEST_F(RendererGeodeTest, EncodersOfAFrameShareArenaBuffersAcrossManyLayers) {
   }
 }
 
+TEST_F(RendererGeodeTest, ARepeatFrameOfArenaFillsCreatesNoBindGroups) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  constexpr int kRects = 12;
+  const auto drawFrame = [&](RendererGeode& renderer) {
+    beginFrame(renderer);
+    for (int index = 0; index < kRects; ++index) {
+      renderer.setPaint(solidFill(css::RGBA(static_cast<uint8_t>(20 * index), 128, 64, 255)));
+      renderer.drawRect(Box2d::FromXYWH(5.0 * index, 0.0, 5.0, kViewportSize), StrokeParams{});
+    }
+    renderer.endFrame();
+  };
+
+  RendererGeode renderer = createRenderer();
+  drawFrame(renderer);
+  ASSERT_GE(renderer.lastFrameTimings().counters.bindgroupCreates, 1u)
+      << "The first frame builds the draws' bind groups";
+  const RendererBitmap first = renderer.takeSnapshot();
+  drawFrame(renderer);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u)
+      << "The repeat frame binds the same arena regions, so every draw reuses last frame's group";
+  const RendererBitmap second = renderer.takeSnapshot();
+  EXPECT_EQ(first.pixels, second.pixels);
+}
+
 TEST_F(RendererGeodeTest, SiblingIsolatedLayersShareOneTextureWithinAFrame) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   // A size no other case uses, so nothing pooled by an earlier case can stand in for reuse.
@@ -7996,6 +8020,53 @@ SVGDocument ParseDocumentOrFail(const std::string& source) {
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_FALSE(parsed.hasError());
   return std::move(parsed.result());
+}
+
+/// A document whose one filtered group runs \p blurPasses chained blur primitives.
+std::string ChainedBlurDocument(int blurPasses) {
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><filter id="f" )"
+      R"(x="-50%" y="-50%" width="200%" height="200%">)";
+  for (int pass = 0; pass < blurPasses; ++pass) {
+    source += R"(<feGaussianBlur stdDeviation="1"/>)";
+  }
+  source += R"svg(</filter><g filter="url(#f)"><rect x="16" y="16" width="32" height="32" )svg"
+            R"svg(fill="#20a0e0"/></g></svg>)svg";
+  return source;
+}
+
+/// Counters of the third of three identical frames of \p document, and that frame's pixels.
+std::pair<geode::GeodeCounters, RendererBitmap> WarmFrame(RendererGeode& renderer,
+                                                          SVGDocument& document) {
+  renderer.draw(document);
+  renderer.draw(document);
+  const RendererBitmap second = renderer.takeSnapshot();
+  renderer.draw(document);
+  const RendererBitmap third = renderer.takeSnapshot();
+  EXPECT_EQ(second.pixels, third.pixels) << "Reused filter resources must render identically";
+  return {renderer.lastFrameTimings().counters, third};
+}
+
+TEST_F(RendererGeodeTest, WarmFilterPassesReuseBindGroupsAndBatchParameterUploads) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  SVGDocument onePass = ParseDocumentOrFail(ChainedBlurDocument(1));
+  SVGDocument fivePasses = ParseDocumentOrFail(ChainedBlurDocument(5));
+
+  RendererGeode oneRenderer = createRenderer();
+  const auto [oneCounters, oneBitmap] = WarmFrame(oneRenderer, onePass);
+  RendererGeode fiveRenderer = createRenderer();
+  const auto [fiveCounters, fiveBitmap] = WarmFrame(fiveRenderer, fivePasses);
+  ASSERT_FALSE(fiveBitmap.empty());
+
+  EXPECT_EQ(fiveCounters.bindgroupCreates, oneCounters.bindgroupCreates)
+      << "A warm frame binds last frame's filter pass bind groups, so four more passes add none";
+  EXPECT_EQ(fiveCounters.bufferWrites, oneCounters.bufferWrites)
+      << "Filter pass parameters upload together when the chunk closes, so four more passes add "
+         "no uploads";
+  RecordProperty("one_pass_bindgroups", std::to_string(oneCounters.bindgroupCreates));
+  RecordProperty("five_pass_bindgroups", std::to_string(fiveCounters.bindgroupCreates));
+  RecordProperty("one_pass_writes", std::to_string(oneCounters.bufferWrites));
+  RecordProperty("five_pass_writes", std::to_string(fiveCounters.bufferWrites));
 }
 
 constexpr int kPhoneWidth = 1206;

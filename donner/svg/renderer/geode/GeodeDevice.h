@@ -17,6 +17,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/Device.h"
+#include "donner/svg/renderer/geode/GeodeBindGroupCache.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -593,6 +594,13 @@ public:
                                                  gpu::BindGroup group);
 
   /**
+   * Bind groups of draws recorded inside renderer frames, kept across frames and keyed by exact
+   * resource identity (see GeodeBindGroupCache). Its entries may be named by any open frame on
+   * this device, so it ages them only from a frame start with no frame generation still open.
+   */
+  GeodeBindGroupCache& bindGroupCache() { return drawBindGroupCache_; }
+
+  /**
    * Process-unique identity for this device instance, assigned at
    * construction from a monotonic counter (never reused, starts at 1).
    *
@@ -1090,6 +1098,9 @@ private:
   static constexpr std::size_t kSceneBatchBindGroupCacheCap = 256;
   std::map<SceneBatchBindGroupKey, gpu::BindGroup> sceneBatchBindGroups_;
   std::deque<SceneBatchBindGroupKey> sceneBatchBindGroupOrder_;
+
+  // Last member: its bind groups are released before anything they name.
+  GeodeBindGroupCache drawBindGroupCache_;
 };
 
 }  // namespace donner::geode

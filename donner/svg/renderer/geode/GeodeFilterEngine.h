@@ -743,10 +743,8 @@ private:
 
   bool verbose_ = false;
 
-  /// Per-frame parameter scratch buffer and bump-allocated slot cursor (see
-  /// FilterResourceCache). Pass bind groups are still created per pass:
-  /// the pooled textures a pass binds rotate across frames, so their
-  /// identities are not stable cache keys.
+  /// Per-frame parameter scratch buffer and bump-allocated slot cursor, plus the views and pass
+  /// bind groups kept across frames, keyed by exact resource identity (see FilterResourceCache).
   std::unique_ptr<FilterResourceCache> resourceCache_;
   FilterExecutionMemory lastExecutionMemory_;
   uint32_t preferredTileExtent_ = 512;

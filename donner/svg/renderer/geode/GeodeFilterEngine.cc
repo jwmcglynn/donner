@@ -12,6 +12,7 @@
 #include <numbers>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -47,6 +48,7 @@
 #include "donner/svg/renderer/FilterRegionContext.h"
 #include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
+#include "donner/svg/renderer/geode/GeodeBindGroupCache.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
@@ -144,7 +146,14 @@ struct FilterResourceCache {
     return result;
   }
 
+  /// Views and pass bind groups kept across frames; see GeodeBindGroupCache.
+  GeodeBindGroupCache objects;
+
+  /// Start a frame: parameter slots restart from the first block, and views and bind groups no
+  /// pass named recently are dropped. Call only when no frame that could have recorded work
+  /// naming them is still unsubmitted.
   void beginFrame() {
+    objects.beginFrame();
     std::lock_guard<std::mutex> lock(mutex);
     runtimeIndex = 0;
     runtimeCursor = 0;
@@ -177,13 +186,8 @@ struct FilterResourceArena {
         frameSink_(frameSink) {}
   ~FilterResourceArena() {
     // A frame submits long after this execution ends, and its submission re-validates every
-    // resource the chunks name, so what they reference has to outlive the arena that made it.
-    if (frameSink_ != nullptr && framePendingChunks_ != 0) {
-      RetainedFilterResources retained;
-      retained.textureViews = std::move(textureViews_);
-      retained.bindGroups = std::move(bindGroups_);
-      frameSink_->retainUntilFrameSubmits(std::move(retained));
-    }
+    // resource the chunks name. The views and bind groups they reference live in the engine's
+    // resource cache, which drops them only at a frame start with no frame left unsubmitted.
     for (auto& owned : textures_) {
       // A detached output left its record behind with a null handle; the caller owns it now.
       if (owned.texture.isValid()) {
@@ -313,24 +317,9 @@ struct FilterResourceArena {
   /// runtime refuses it.
   /// @param texture Live runtime texture. @param label Debug label for the view.
   const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
-    // One view per named texture per frame, for the same reason the names themselves are reused.
-    // A hit keeps the label the view was opened with: the views are otherwise identical, and the
-    // label only names the pass in diagnostics.
-    for (const auto& [named, view] : viewByTexture_) {
-      if (named == &texture) {
-        return view;
-      }
-    }
-
-    gpu::Result<gpu::TextureView> view = device_.runtimeDevice().createTextureView(
-        texture, gpu::TextureViewDescriptor{std::move(label)});
-    if (!view.hasResult()) {
-      return nullptr;
-    }
-    textureViews_.push_back(std::move(view).result());
-    const gpu::TextureView* result = &textureViews_.back();
-    viewByTexture_.emplace_back(&texture, result);
-    return result;
+    // Views outlive the arena in the engine's cache, so every later frame that names the same
+    // texture binds the same view, and the bind groups over it can be reused too.
+    return resourceCache_.objects.textureView(device_.runtimeDevice(), texture, std::move(label));
   }
 
   /// A parameter slot holding \p data for uniform or read-only storage binding. Null buffer when
@@ -355,15 +344,12 @@ struct FilterResourceArena {
   const gpu::BindGroup* createRuntimeBindGroup(const gpu::BindGroupLayout& layout,
                                                std::vector<gpu::BindGroupEntry> entries,
                                                RcString label) {
-    gpu::Result<gpu::BindGroup> bindGroup = device_.runtimeDevice().createBindGroup(
+    // A steady frame runs the same passes over the same pooled textures and parameter slots, so
+    // the engine's cache returns last frame's bind group instead of building one per pass. The
+    // runtime counts the groups it does create.
+    return resourceCache_.objects.bindGroup(
+        device_.runtimeDevice(),
         gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
-    if (!bindGroup.hasResult()) {
-      return nullptr;
-    }
-    // No count here: the runtime counts the bind group it creates, and counting again would
-    // report every migrated pass as building two.
-    bindGroups_.push_back(std::move(bindGroup).result());
-    return &bindGroups_.back();
   }
 
   /// Records one compute dispatch into this execution's runtime-owned command encoder.
@@ -590,11 +576,6 @@ private:
   /// Deques rather than vectors: the accessors above hand out references into these, and a
   /// vector would move them on growth.
   std::deque<OwnedTexture> textures_;
-  std::deque<gpu::TextureView> textureViews_;
-  std::deque<gpu::BindGroup> bindGroups_;
-  /// Flat rather than hashed: a filter graph names a handful of textures, so a linear scan is
-  /// both smaller and faster than a hash table over that many entries.
-  std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
   uint64_t textureBytes = 0;
   /// Set once the output has been handed to the caller; see \ref detachTexture.
   bool detached_ = false;
