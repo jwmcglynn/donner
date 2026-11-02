@@ -941,6 +941,32 @@ TEST(FilterGraphExecutorTest, GraphAdmittedInANewMemoryChunkIsNotRefused) {
   EXPECT_EQ(budget.refusedGraphs(), 0u);
 }
 
+TEST(FilterGraphExecutorTest, RequestedMemoryChunkWithdrawsNoRefusal) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  components::FilterExecutionBudget budget;
+  EXPECT_FALSE(budget.consume(graph, components::kMaximumFilterSurfacePixels * 64,
+                              components::FilterMemoryModel::CpuFloatNamedResults));
+  ASSERT_EQ(budget.refusedGraphs(), 1u);
+  const auto refusal = budget.lastRefusalReason();
+  auto reservation = budget.reserve(graph, 1024, components::FilterMemoryModel::GpuAllNodes, 4096);
+  ASSERT_TRUE(reservation.has_value());
+  budget.release(*reservation);
+
+  // A chunk another GPU budget asks for refused nothing, so it leaves the earlier refusal counted.
+  budget.requireMemoryChunk();
+  ASSERT_TRUE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.refusedGraphs(), 1u);
+  EXPECT_EQ(budget.lastRefusalReason(), refusal);
+  EXPECT_FALSE(budget.rejected());
+}
+
 TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
   components::FilterGraph graph;
   components::FilterNode dropShadow;
@@ -953,11 +979,14 @@ TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
   constexpr std::uint64_t kPixels = 1024ULL * 1024;
   constexpr std::uint64_t kCaptureBytes = kPixels * 4;
 
+  // The CPU executions are small so the live captures, not the frame's work, run out first.
+  constexpr std::uint64_t kCpuExecutionPixels = 64ULL * 64;
   components::FilterExecutionBudget cpuBudget;
   std::vector<components::FilterExecutionBudget::Reservation> cpuReservations;
   while (true) {
-    auto reservation = cpuBudget.reserve(
-        graph, kPixels, components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes);
+    auto reservation =
+        cpuBudget.reserve(graph, kCpuExecutionPixels,
+                          components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes);
     if (!reservation.has_value()) {
       break;
     }
@@ -965,6 +994,8 @@ TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
   }
   EXPECT_FALSE(cpuReservations.empty());
   EXPECT_EQ(cpuBudget.refusedGraphs(), 1u);
+  EXPECT_EQ(cpuBudget.lastRefusalReason(),
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit);
   EXPECT_TRUE(cpuBudget.rejected());
   EXPECT_EQ(cpuBudget.captureBytesReserved(), cpuReservations.size() * kCaptureBytes);
   EXPECT_EQ(cpuBudget.retainedBytes(), cpuReservations.size() * kCaptureBytes);
@@ -981,6 +1012,8 @@ TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
     ++gpuReservations;
   }
   EXPECT_GT(gpuReservations, 0u);
+  EXPECT_EQ(gpuBudget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit);
   EXPECT_TRUE(gpuBudget.rejected());
   EXPECT_EQ(gpuBudget.captureBytesReserved(), gpuReservations * kCaptureBytes);
   EXPECT_LE(gpuBudget.retainedBytes(), components::kMaximumFilterFrameBytes);
