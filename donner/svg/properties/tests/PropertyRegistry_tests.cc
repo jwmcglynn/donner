@@ -291,6 +291,44 @@ TEST(PropertyRegistry, ComplexPropertyBytesIncludesUnparsedComponentTrees) {
   EXPECT_GT(registry.complexPropertyBytes(), 1024 * sizeof(ComponentValue));
 }
 
+TEST(PropertyRegistry, EqualityComparesValuesStatesSpecificityAndUnparsedDeclarations) {
+  constexpr std::string_view kStyle =
+      "fill: red; stroke-dasharray: 1 2; font-family: serif; transform-origin: 1px 2px; "
+      "transform: translate(1px)";
+  PropertyRegistry base;
+  base.parseStyle(kStyle);
+  ASSERT_THAT(base.unparsedProperties, testing::SizeIs(1));
+  EXPECT_THAT(PropertyRegistry(base), Eq(base));
+
+  std::vector<std::pair<std::string_view, PropertyRegistry>> variants;
+  variants.emplace_back("fill value", base);
+  variants.back().second.fill.set(PaintServer::Solid(Color(RGBA(0, 0, 0xFF, 0xFF))), Specificity());
+  variants.emplace_back("fill specificity", base);
+  variants.back().second.fill.set(PaintServer::Solid(Color(RGBA(0xFF, 0, 0, 0xFF))),
+                                  Specificity::FromABC(1, 0, 0));
+  variants.emplace_back("fill state", base);
+  variants.back().second.fill.set(PropertyState::Inherit, Specificity());
+  variants.emplace_back("stroke-dasharray", base);
+  variants.back().second.strokeDasharray.set(StrokeDasharray{Lengthd(3, Lengthd::Unit::None)},
+                                             Specificity());
+  variants.emplace_back("font-family", base);
+  variants.back().second.fontFamily.set(SmallVector<RcString, 1>{RcString("monospace")},
+                                        Specificity());
+  variants.emplace_back("transform-origin", base);
+  variants.back().second.transformOrigin.set(
+      TransformOrigin{Lengthd(1, Lengthd::Unit::Px), Lengthd(3, Lengthd::Unit::Px)}, Specificity());
+  PropertyRegistry unparsed;
+  unparsed.parseStyle(
+      "fill: red; stroke-dasharray: 1 2; font-family: serif; transform-origin: 1px 2px; "
+      "transform: translate(2px)");
+  variants.emplace_back("unparsed declaration", std::move(unparsed));
+
+  for (const auto& [label, variant] : variants) {
+    SCOPED_TRACE(label);
+    EXPECT_THAT(variant, Ne(base));
+  }
+}
+
 TEST(PropertyRegistry, ComplexPropertyBytesChargesRetainedVectorCapacity) {
   PropertyRegistry dashRegistry;
   StrokeDasharray dasharray;

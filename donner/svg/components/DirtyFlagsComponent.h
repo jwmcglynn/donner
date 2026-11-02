@@ -67,6 +67,10 @@ struct RenderTreeState {
 
   /// True if the render tree has been built at least once.
   bool hasBeenBuilt = false;
+
+  /// True if only the rendering instances must be rebuilt from the current computed components,
+  /// for example after the context paint an external `<use>` supplies changes.
+  bool needsInstanceRebuild = false;
 };
 
 }  // namespace donner::svg::components
