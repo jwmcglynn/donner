@@ -58,6 +58,7 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -98,6 +99,19 @@ struct ContextPaintServers {
   /// paint remaps must be resolved by the renderer driver at draw time.
   bool resolveAtDrawTime = false;
 };
+
+/// The element an external `<use>` is instantiating from this document, or `entt::null`.
+Entity ExternalUseInstanceRoot(const Registry& registry) {
+  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  return occurrence ? occurrence->root : entt::null;
+}
+
+/// Whether \p entity is a `<use>` instance's copy: a shadow entity of a same-document use, or the
+/// root an external use is instantiating.
+bool IsInstanceCopy(const Registry& registry, Entity entity) {
+  return registry.all_of<ShadowEntityComponent>(entity) ||
+         entity == ExternalUseInstanceRoot(registry);
+}
 
 /**
  * Creates a ShadowTreeSystem with a handler for shadow sized element components.
@@ -418,7 +432,7 @@ public:
       } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
         traverseChildren = false;
       } else if (behavior->behavior == RenderingBehavior::ShadowOnlyChildren) {
-        if (!shadowEntityComponent) {
+        if (!IsInstanceCopy(registry_, treeEntity)) {
           traverseChildren = false;
           isShadowOnlyInLightTree = true;
         }
@@ -1525,21 +1539,17 @@ HitTestConfig configFromPointerEvents(PointerEvents pe) {
   UTILS_UNREACHABLE();
 }
 
-bool IsDormantDefinitionUse(Registry& registry, Entity entity,
-                            const ShadowTreeComponent& shadowTree) {
-  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
-  if (hostType == nullptr || hostType->type() != ElementType::Use) {
-    return false;
-  }
-  const std::optional<RcString> href = shadowTree.mainHref();
-  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
-    return false;
-  }
-  for (Entity ancestor = registry.get<donner::components::TreeComponent>(entity).parent();
-       ancestor != entt::null;
-       ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent()) {
-    const auto* type = registry.try_get<ElementTypeComponent>(ancestor);
-    if (type == nullptr) {
+/**
+ * Whether \p entity sits in a `<defs>` reached only through `<g>` ancestors. Inside an external
+ * use's instance the definition is presented, so the walk stops at the instance root.
+ */
+bool IsUnpresentedDefinition(const Registry& registry, Entity entity) {
+  const Entity instanceRoot = ExternalUseInstanceRoot(registry);
+  for (Entity current = entity; current != instanceRoot;) {
+    current = registry.get<donner::components::TreeComponent>(current).parent();
+    const auto* type =
+        current != entt::null ? registry.try_get<ElementTypeComponent>(current) : nullptr;
+    if (type == nullptr || current == instanceRoot) {
       return false;
     }
     if (type->type() == ElementType::Defs) {
@@ -1550,6 +1560,19 @@ bool IsDormantDefinitionUse(Registry& registry, Entity entity,
     }
   }
   return false;
+}
+
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree) {
+  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
+  if (hostType == nullptr || hostType->type() != ElementType::Use) {
+    return false;
+  }
+  const std::optional<RcString> href = shadowTree.mainHref();
+  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
+    return false;
+  }
+  return IsUnpresentedDefinition(registry, entity);
 }
 
 void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
@@ -2129,7 +2152,11 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
   invalidateRenderTree();
 
-  const Entity rootEntity = registry_.ctx().get<SVGDocumentContext>().rootEntity;
+  // An external use draws only its instance, which renders whether or not this document does.
+  const Entity instanceRoot = ExternalUseInstanceRoot(registry_);
+  const Entity rootEntity = instanceRoot != entt::null
+                                ? instanceRoot
+                                : registry_.ctx().get<SVGDocumentContext>().rootEntity;
 
   // Build initial context paint servers if set.
   ContextPaintServers initialContext;

@@ -412,46 +412,49 @@ Transform2d LayoutSystem::getCanvasFromDocumentTransform(Registry& registry) {
 }
 
 Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
-  // If a shadow tree has been instantiated, there may be a ComputedShadowSizedElementComponent,
-  // used for <symbol> elements.
-  if (UTILS_PREDICT_FALSE(entity.all_of<ShadowTreeRootComponent>())) {
-    EntityHandle lightEntity(*entity.registry(), entity.get<ShadowEntityComponent>().lightEntity);
+  // A `<use>` instance root may carry a ComputedShadowSizedElementComponent, the viewport the use
+  // establishes for a referenced <symbol> or <svg>. Same-document instances are shadow tree roots;
+  // an external instance root is the referenced element itself.
+  if (const auto* computedShadowSizedElement =
+          entity.try_get<ComputedShadowSizedElementComponent>();
+      UTILS_PREDICT_FALSE(computedShadowSizedElement != nullptr)) {
+    const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
+    EntityHandle lightEntity(*entity.registry(),
+                             shadowEntity ? shadowEntity->lightEntity : entity.entity());
 
-    if (const auto* computedShadowSizedElement =
-            entity.try_get<ComputedShadowSizedElementComponent>()) {
-      // If there is no viewBox there is no scaling, but the instance viewport's origin (the
-      // `x`/`y` attributes on the referenced `<svg>`/`<symbol>`) still offsets the content.
-      if (!overridesViewBox(lightEntity)) {
-        return Transform2d::Translate(computedShadowSizedElement->bounds.topLeft);
-      }
-
-      const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(lightEntity);
-
-      const Box2d viewBox = getViewBox(lightEntity);
-      const Transform2d elementContentFromViewBox =
-          preserveAspectRatio.elementContentFromViewBoxTransform(computedShadowSizedElement->bounds,
-                                                                 viewBox);
-
-      if (const auto* symbolComponent = lightEntity.try_get<SymbolComponent>()) {
-        // refX/refY resolve against the symbol's viewBox; percentages (and the
-        // left/center/right / top/center/bottom keywords, which the parser maps to percentages)
-        // use the viewBox width/height as the basis.
-        // TODO: Plumb FontMetrics so font-relative refX/refY units resolve correctly.
-        const FontMetrics fontMetrics;
-        const double refXPixels =
-            symbolComponent->refX.toPixels(viewBox, fontMetrics, Lengthd::Extent::X);
-        const double refYPixels =
-            symbolComponent->refY.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y);
-        const Transform2d symbolContentFromElementContent =
-            Transform2d::Translate(-refXPixels, -refYPixels);
-
-        return symbolContentFromElementContent * elementContentFromViewBox;
-      } else {
-        return elementContentFromViewBox;
-      }
-    } else {
-      return getEntityContentFromEntityTransform(lightEntity);
+    // If there is no viewBox there is no scaling, but the instance viewport's origin (the
+    // `x`/`y` attributes on the referenced `<svg>`/`<symbol>`) still offsets the content.
+    if (!overridesViewBox(lightEntity)) {
+      return Transform2d::Translate(computedShadowSizedElement->bounds.topLeft);
     }
+
+    const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(lightEntity);
+
+    const Box2d viewBox = getViewBox(lightEntity);
+    const Transform2d elementContentFromViewBox =
+        preserveAspectRatio.elementContentFromViewBoxTransform(computedShadowSizedElement->bounds,
+                                                               viewBox);
+
+    if (const auto* symbolComponent = lightEntity.try_get<SymbolComponent>()) {
+      // refX/refY resolve against the symbol's viewBox; percentages (and the
+      // left/center/right / top/center/bottom keywords, which the parser maps to percentages)
+      // use the viewBox width/height as the basis.
+      // TODO: Plumb FontMetrics so font-relative refX/refY units resolve correctly.
+      const FontMetrics fontMetrics;
+      const double refXPixels =
+          symbolComponent->refX.toPixels(viewBox, fontMetrics, Lengthd::Extent::X);
+      const double refYPixels =
+          symbolComponent->refY.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y);
+      const Transform2d symbolContentFromElementContent =
+          Transform2d::Translate(-refXPixels, -refYPixels);
+
+      return symbolContentFromElementContent * elementContentFromViewBox;
+    } else {
+      return elementContentFromViewBox;
+    }
+  } else if (UTILS_PREDICT_FALSE(entity.all_of<ShadowTreeRootComponent>())) {
+    return getEntityContentFromEntityTransform(
+        EntityHandle(*entity.registry(), entity.get<ShadowEntityComponent>().lightEntity));
   } else if (entity.all_of<SizedElementComponent>() &&
              entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
     const SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
@@ -537,28 +540,31 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
     EntityHandle currentHandle(registry, parents[parents.size() - 1]);
     parents.pop_back();
 
-    // Elements whose rendering behavior disables self-transform (e.g. `<symbol>` under
-    // SVG 1.1, where a `transform` attribute is ignored) do not contribute their own
-    // `transform` to the cascade - only their viewport/content mapping. The light entity
-    // carries the RenderingBehaviorComponent for shadow instances.
-    Entity behaviorEntity = currentHandle.entity();
-    while (const auto* shadowEntity = registry.try_get<ShadowEntityComponent>(behaviorEntity)) {
-      behaviorEntity = shadowEntity->lightEntity;
-    }
-    const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(behaviorEntity);
-    const Transform2d entityFromParent =
-        (renderingBehavior && !renderingBehavior->appliesSelfTransform)
-            ? Transform2d()
-            : getEntityFromParentTransform(currentHandle);
-
     const Transform2d worldFromEntity =
-        getEntityContentFromEntityTransform(currentHandle) * entityFromParent * parentFromWorld;
+        getEntityContentFromParentTransform(currentHandle) * parentFromWorld;
     currentHandle.emplace<ComputedAbsoluteTransformComponent>(worldFromEntity, worldIsCanvas);
 
     parentFromWorld = worldFromEntity;
   }
 
   return entity.get<ComputedAbsoluteTransformComponent>();
+}
+
+Transform2d LayoutSystem::getEntityContentFromParentTransform(EntityHandle entity) {
+  // Elements whose rendering behavior disables self-transform (e.g. `<symbol>` under SVG 1.1, where
+  // a `transform` attribute is ignored) contribute only their viewport/content mapping. The light
+  // entity carries the RenderingBehaviorComponent for shadow instances.
+  Registry& registry = *entity.registry();
+  Entity behaviorEntity = entity.entity();
+  while (const auto* shadowEntity = registry.try_get<ShadowEntityComponent>(behaviorEntity)) {
+    behaviorEntity = shadowEntity->lightEntity;
+  }
+  const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(behaviorEntity);
+  const Transform2d entityFromParent =
+      (renderingBehavior && !renderingBehavior->appliesSelfTransform)
+          ? Transform2d()
+          : getEntityFromParentTransform(entity);
+  return getEntityContentFromEntityTransform(entity) * entityFromParent;
 }
 
 Transform2d LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {

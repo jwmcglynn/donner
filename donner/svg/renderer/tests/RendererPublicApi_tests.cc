@@ -1284,6 +1284,149 @@ TEST(RendererPublicApiTest, ExternalUseMissingFragmentDoesNotLeakScopedState) {
   EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
 }
 
+/// An external-use target placed so that its own document does or does not render it.
+struct ExternalUseTargetCase {
+  const char* name;
+  const char* content;        ///< Resource body; the referenced element has `id="t"`.
+  const char* useAttributes;  ///< Extra attributes on the referencing `<use>`.
+  Vector2i probe;             ///< Pixel checked in the expected bitmap before comparison.
+  testing::Matcher<std::array<uint8_t, 4>> probeColor;
+};
+
+void PrintTo(const ExternalUseTargetCase& value, std::ostream* output) {
+  *output << value.name << ": content=" << value.content << ", use=" << value.useAttributes;
+}
+
+class ExternalUseTargetTest : public testing::TestWithParam<ExternalUseTargetCase> {};
+
+// A `<use>` instantiates a copy of its target, so where that target sits in its own document is
+// irrelevant: an external reference renders exactly like the same content referenced in-document.
+TEST_P(ExternalUseTargetTest, MatchesSameDocumentUse) {
+  const ExternalUseTargetCase& params = GetParam();
+  const std::string svgOpen = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>";
+  const std::string use = std::string(" ") + params.useAttributes + "/></svg>";
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      svgOpen + "<use href='external.svg#t'" + use, svgOpen + params.content + "</svg>");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+
+  const RendererBitmap expected =
+      RenderInlineDocument(svgOpen + "<defs>" + params.content + "</defs><use href='#t'" + use);
+  EXPECT_THAT(PixelAt(expected, params.probe.x, params.probe.y), params.probeColor);
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, params.name,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+testing::Matcher<std::array<uint8_t, 4>> OpaqueBlue() {
+  return test::RgbaEq(0, 0, 255, 255);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ExternalUseTargets, ExternalUseTargetTest,
+    testing::Values(
+        ExternalUseTargetCase{"VisibleWithOwnTransform",
+                              "<rect id='t' width='4' height='4' transform='translate(6 6)' "
+                              "fill='blue'/>",
+                              "x='2'",
+                              {9, 7},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefs",
+                              "<defs><rect id='t' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefsWithOwnTransform",
+                              "<defs><rect id='t' width='4' height='4' transform='translate(6 6)' "
+                              "fill='blue'/></defs>",
+                              "x='2'",
+                              {9, 7},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefsUnderTransparentTranslatedGroup",
+                              "<defs><g opacity='0' transform='translate(100 100)'>"
+                              "<rect id='t' width='8' height='8' fill='blue'/></g></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"GroupInsideDefs",
+                              "<defs><g id='t' fill='blue'><rect width='4' height='4'/>"
+                              "<rect x='4' y='4' width='4' height='4' fill='lime'/></g></defs>",
+                              "x='4' y='4'",
+                              {10, 10},
+                              test::RgbaEq(0, 255, 0, 255)},
+        ExternalUseTargetCase{"ScaledUseOfTranslatedTarget",
+                              "<defs><rect id='t' width='2' height='2' transform='translate(1 1)' "
+                              "fill='blue'/></defs>",
+                              "x='1' transform='scale(2)'",
+                              {5, 3},
+                              OpaqueBlue()},
+        // The overflowing rect checks that the symbol clips to the viewport the use establishes.
+        ExternalUseTargetCase{"SymbolWithViewBox",
+                              "<symbol id='t' viewBox='0 0 4 4'>"
+                              "<rect width='6' height='6' fill='blue'/></symbol>",
+                              "x='4' y='4' width='8' height='8'",
+                              {10, 10},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"SymbolWithoutViewBox",
+                              "<symbol id='t'><rect width='6' height='6' fill='blue'/></symbol>",
+                              "x='2' y='2'",
+                              {5, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"OpacityOnUse",
+                              "<defs><rect id='t' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4' opacity='0.5'",
+                              {8, 8},
+                              test::Rgba(0, 0, 255, test::Near(128, 1))},
+        ExternalUseTargetCase{"UseInsideDefs",
+                              "<defs><use id='t' href='#r'/>"
+                              "<rect id='r' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"GroupWithUseInsideDefs",
+                              "<defs><g id='t'><use href='#r'/></g>"
+                              "<rect id='r' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"UnderHiddenParent",
+                              "<g display='none'><rect id='t' width='8' height='8' "
+                              "fill='blue'/></g>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        // The copy keeps the target's own `display: none`, so nothing renders in either case.
+        ExternalUseTargetCase{"HiddenItself",
+                              "<rect id='t' width='8' height='8' fill='blue' display='none'/>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              test::IsTransparent()}),
+    [](const testing::TestParamInfo<ExternalUseTargetCase>& info) { return info.param.name; });
+
+// The host layer applies the `<use>` element's opacity, so the referenced content must not add a
+// second one.
+TEST(RendererPublicApiTest, ExternalUseOpacityAppliesOnce) {
+  constexpr std::string_view resource =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<rect id='t' width='8' height='8' fill='blue'/></svg>";
+  for (const std::string_view href : {"external.svg#t", "external.svg"}) {
+    SCOPED_TRACE(href);
+    const ExternalUseRenderResult actual = RenderExternalUse(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><use href='" +
+            std::string(href) + "' opacity='0.5'/></svg>",
+        resource);
+    EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 0, 255, test::Near(128, 1)));
+  }
+}
+
+TEST(RendererPublicApiTest, SvgImageOpacityAppliesOnce) {
+  const RendererBitmap actual = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<image width='8' height='8' opacity='0.5' href='" +
+      SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                 "<rect width='8' height='8' fill='blue'/></svg>") +
+      "'/></svg>");
+  EXPECT_THAT(PixelAt(actual, 4, 4), test::Rgba(0, 0, 255, test::Near(128, 1)));
+}
+
 TEST(RendererPublicApiTest, ExternalUseFrameWorkAdmissionStopsAtLimit) {
   components::StyleResourceBudget work;
   EXPECT_THAT(

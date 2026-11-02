@@ -125,6 +125,15 @@ public:
   Transform2d getEntityContentFromEntityTransform(EntityHandle entity);
 
   /**
+   * Get the entityContent-from-parent transform: \ref getEntityContentFromEntityTransform composed
+   * with the entity's own transform, or with no transform for elements whose rendering behavior
+   * ignores it. Each ancestor contributes this factor to an absolute transform.
+   *
+   * @param entity Current entity.
+   */
+  Transform2d getEntityContentFromParentTransform(EntityHandle entity);
+
+  /**
    * Set the parentFromEntity transform for the current entity. This will be transformed with
    * modifiers such as transform-origin before being applied to the entity.
    *
