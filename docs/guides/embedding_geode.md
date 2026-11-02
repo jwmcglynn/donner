@@ -191,7 +191,8 @@ budget follows the largest working set of recent frames: it starts at 64 MiB and
 whose GPU memory grows. A scene with many filtered elements therefore keeps their surfaces
 resident while it renders.
 
-When rendering stops, give that memory back with `RendererGeode::trimTexturePool`:
+When rendering stops, give that memory back with `RendererGeode::trimTexturePool`, or
+`GeodeSurfaceRenderer::trimTexturePool` when presenting through a surface renderer:
 
 - `RendererGeodeTexturePoolTrim::ToFloor` when the app goes idle, keeping at most 64 MiB.
 - `RendererGeodeTexturePoolTrim::All` when the app is hidden or backgrounded, for example on a
