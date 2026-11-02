@@ -124,6 +124,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "filter_result_cache",
+    hdrs = [
+        "FilterResultCacheIndex.h",
+        "FilterResultCacheKey.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_interface",
     hdrs = [
         "RendererInterface.h",
@@ -131,6 +143,7 @@ donner_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":filter_result_cache",
         ":pixel_format_utils",
         ":stroke_params",
         "//donner/base",
@@ -424,6 +437,7 @@ donner_perf_sensitive_cc_library(
 
 _RENDERER_GEODE_COMMON_DEPS = [
     ":filter_region_context",
+    ":filter_result_cache",
     ":headless_device_pool",
     ":pattern_tile",
     ":renderer_driver",

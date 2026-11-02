@@ -34,6 +34,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/WritingMode.h"
+#include "donner/svg/renderer/FilterResultCacheKey.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -197,6 +198,19 @@ public:
     }
 
     bytes_ += byteCount;
+    surfaces_ += surfaceCount;
+    return true;
+  }
+
+  /// Reserves \p bytes held by \p surfaceCount surfaces whose shapes vary, such as a cache of
+  /// differently sized textures charged as one aggregate. Exhausted capacity latches rejection.
+  [[nodiscard]] bool reserveBytes(std::uint64_t bytes, std::size_t surfaceCount) {
+    if (rejected_ || surfaces_ > limits_.surfaces || surfaceCount > limits_.surfaces - surfaces_ ||
+        bytes_ > limits_.bytes || bytes > limits_.bytes - bytes_) {
+      rejected_ = true;
+      return false;
+    }
+    bytes_ += bytes;
     surfaces_ += surfaceCount;
     return true;
   }
@@ -760,6 +774,18 @@ struct RendererResourceStats {
   std::size_t textGlyphDecodeWork = 0;
   std::size_t textGlyphOccurrences = 0;
   bool textMaterializationBudgetRejected = false;
+  /// Whether the backend caches filter results (see \ref RendererInterface::pushCachedFilterLayer).
+  bool filterResultCacheSupported = false;
+  /// Cached filter results drawn this frame instead of running their filter.
+  std::size_t filterResultCacheHits = 0;
+  /// Filter results recorded into the cache this frame.
+  std::size_t filterResultCacheRecords = 0;
+  /// Cached filter results evicted this frame.
+  std::size_t filterResultCacheEvictions = 0;
+  /// Cached filter results held after the frame.
+  std::size_t filterResultCacheEntries = 0;
+  /// Bytes the held results occupy.
+  std::uint64_t filterResultCacheBytes = 0;
 };
 
 /// Backend type for \ref donner::svg::RendererTextureSnapshot "RendererTextureSnapshot" payloads.
@@ -1501,6 +1527,38 @@ public:
     (void)colorInterpolation;
     pushMask(maskBounds, maskType);
   }
+
+  /**
+   * Pushes a filter layer whose result may be reused from an earlier draw of the same content.
+   *
+   * \p content identifies what the layer's content and graph were derived from; the backend
+   * combines it with the current transform's non-translation part. When it holds a result for
+   * both, it draws that result translated to the current transform and returns
+   * \ref CachedFilterLayerResult::Drawn: the caller then skips the layer's content and does not
+   * call \ref popFilterLayer. Otherwise it pushes the layer as \ref pushFilterLayer does,
+   * possibly recording the result for later draws when the layer pops, and returns
+   * \ref CachedFilterLayerResult::Pushed.
+   *
+   * Backends without a filter result cache push the layer. Appended after the legacy virtual
+   * surface to preserve existing vtable slot order.
+   *
+   * @param content Identity of the layer's content and graph inputs.
+   * @param filterGraph The filter graph, as for \ref pushFilterLayer.
+   * @param filterRegion The filter region, as for \ref pushFilterLayer.
+   */
+  virtual CachedFilterLayerResult pushCachedFilterLayer(const FilterResultContentKey& content,
+                                                        const components::FilterGraph& filterGraph,
+                                                        const std::optional<Box2d>& filterRegion) {
+    (void)content;
+    pushFilterLayer(filterGraph, filterRegion);
+    return CachedFilterLayerResult::Pushed;
+  }
+
+  /**
+   * Enables or disables reuse of cached filter results; disabling drops every cached result.
+   * Enabled by default on backends that cache. Backends without a cache ignore the call.
+   */
+  virtual void setFilterResultCacheEnabled(bool enabled) { (void)enabled; }
 };
 
 }  // namespace donner::svg

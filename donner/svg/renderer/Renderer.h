@@ -218,6 +218,14 @@ public:
   /// Pops the most recent filter layer.
   void popFilterLayer() override;
 
+  /// Forwards \ref RendererInterface::pushCachedFilterLayer to the active backend.
+  CachedFilterLayerResult pushCachedFilterLayer(const FilterResultContentKey& content,
+                                                const components::FilterGraph& filterGraph,
+                                                const std::optional<Box2d>& filterRegion) override;
+
+  /// Forwards \ref RendererInterface::setFilterResultCacheEnabled to the active backend.
+  void setFilterResultCacheEnabled(bool enabled) override;
+
   /**
    * Begins mask rendering.
    *

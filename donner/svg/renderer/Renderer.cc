@@ -537,6 +537,16 @@ void Renderer::popFilterLayer() {
   impl_->popFilterLayer();
 }
 
+CachedFilterLayerResult Renderer::pushCachedFilterLayer(const FilterResultContentKey& content,
+                                                        const components::FilterGraph& filterGraph,
+                                                        const std::optional<Box2d>& filterRegion) {
+  return impl_->pushCachedFilterLayer(content, filterGraph, filterRegion);
+}
+
+void Renderer::setFilterResultCacheEnabled(bool enabled) {
+  impl_->setFilterResultCacheEnabled(enabled);
+}
+
 void Renderer::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->pushMask(maskBounds);
 }
