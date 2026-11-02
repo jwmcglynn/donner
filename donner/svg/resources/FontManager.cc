@@ -1124,7 +1124,6 @@ FontHandle FontManager::fallbackFont() {
   std::vector<uint8_t> data(fallback.bytes().begin(), fallback.bytes().end());
   if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
     registry_.destroy(entity);
-    std::cerr << "FontManager: Failed to load packaged fallback font (Public Sans)\n";
     return FontHandle();
   }
 

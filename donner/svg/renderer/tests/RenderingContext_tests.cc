@@ -6,13 +6,17 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <unistd.h>
 
+#include <cstdlib>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "donner/base/PackagedResource.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -27,6 +31,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/resources/FontManager.h"
@@ -85,6 +90,38 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeBasic) {
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, ShapeOnlyDocumentNeedsNoPackagedFallbackFont) {
+  // A re-executed child has no borrowed resource views, so it can install its own session. Any
+  // diagnostic printed between the two markers breaks the expected adjacent text.
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        if (!SetPackagedResourceSession(std::make_shared<PackagedResourceSession>(
+                [](const PackagedResource&) -> ResourceBytes { return {}; }))) {
+          std::_Exit(3);
+        }
+        auto document = ParseSVG(R"(
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect id="r" width="2ch" height="10" font-size="10"/>
+          </svg>
+        )");
+
+        const auto writeStderr = [](std::string_view text) {
+          (void)write(STDERR_FILENO, text.data(), text.size());
+        };
+        writeStderr("[prepare]");
+        RenderingContext ctx(document.registry());
+        ctx.instantiateRenderTree(false, warningSink_);
+        // Without a font to measure, `ch` is 0.5em per CSS Values.
+        const auto* path =
+            document.querySelector("#r").value().entityHandle().try_get<ComputedPathComponent>();
+        writeStderr("[/prepare] rect width: " +
+                    std::to_string(path ? path->spline.bounds().width() : -1.0));
+        std::_Exit(0);
+      },
+      testing::ExitedWithCode(0), "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0");
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeVerbose) {

@@ -250,6 +250,13 @@ Bazel 7 and 8, it builds `@donner//donner/base`, `@donner//donner/css`, `@donner
 checked-in consumer module against it. See \ref GettingStarted for the `MODULE.bazel`,
 `BUILD.bazel` and `.bazelrc` a consumer needs.
 
+Depending on `@donner` links code only; it does not install Donner's packaged resources. Documents
+without text render with none. Text needs the packaged Public Sans fallback font at run time, in a
+`<executable>.assets` or `donner-assets` directory beside the executable or through a
+`donner::PackagedResourceSession` provider, as \ref GettingStarted describes for the native
+examples. Call `donner::PreparePackagedResources()` at startup to report a missing installation;
+the renderer itself does not print one.
+
 A consumer module can build the same `Renderer` API on Geode by setting the two flags that
 `--config=geode` sets inside this repository:
 
