@@ -1258,6 +1258,44 @@ donner_cc_test(
     ],
 )
 
+donner_cc_library(
+    name = "sprite_scene_fixture",
+    testonly = 1,
+    srcs = ["SpriteSceneFixture.cc"],
+    hdrs = ["SpriteSceneFixture.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/resources:resource_loader_interface",
+    ],
+)
+
+# Pipelined and serialized frame time, GPU time, uploads and submissions of about 150 sprites drawn
+# through external `<use>` references on a phone-sized canvas. Manual perf lane: run with
+# `--config=geode`.
+donner_cc_test(
+    name = "geode_sprite_scene_wallclock",
+    srcs = ["GeodeSpriteSceneWallclock_tests.cc"],
+    tags = [
+        "manual",
+        "perf",
+    ],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":sprite_scene_fixture",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/geode:geode_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Captures of a renderer whose target is the frame a surface has out, over a real Core Animation
 # layer. Objective-C++ for the layer, so macOS only.
 objc_library(
