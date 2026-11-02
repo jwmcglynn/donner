@@ -84,7 +84,8 @@ struct RenderTreeState {
     uint64_t fullRebuilds = 0;         //!< Prepares that tore down and recomputed everything.
     uint64_t retainedUpdates = 0;      //!< Prepares that kept the computed components.
     uint64_t shadowTreeTeardowns = 0;  //!< Shadow-tree hosts torn down by full rebuilds.
-    uint64_t retargetedUses = 0;       //!< External `<use>` retargets applied in place.
+    /// External `<use>` instances re-attached in place, after a retarget or a geometry change.
+    uint64_t retargetedUses = 0;
   };
 
   /// Preparation counters for this document.
