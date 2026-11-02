@@ -1079,7 +1079,7 @@ bool SVGDocument::hasPendingRenderInvalidation() const {
   if (dirtyView.begin() != dirtyView.end()) {
     return true;
   }
-  return state->needsFullRebuild || state->needsFullStyleRecompute;
+  return state->needsFullRebuild || state->needsFullStyleRecompute || state->needsInstanceRebuild;
 }
 
 std::size_t SVGDocument::elementCount() const {
@@ -1371,7 +1371,7 @@ FontResourcePreflight SVGDocument::preflightFontResourcesForElement(const SVGEle
   }
   if (const auto* state = registry.ctx().find<components::RenderTreeState>();
       state && state->hasBeenBuilt &&
-      (state->needsFullRebuild || state->needsFullStyleRecompute ||
+      (state->needsFullRebuild || state->needsFullStyleRecompute || state->needsInstanceRebuild ||
        !registry.view<const components::DirtyFlagsComponent>().empty())) {
     return {.status = Status::NeedsRender};
   }

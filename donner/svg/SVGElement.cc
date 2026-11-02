@@ -38,6 +38,7 @@
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/AnimationPresentation.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 
 namespace donner::svg {
 
@@ -1030,7 +1031,8 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 }
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentWriteAccess access = handle_.writeAccess();
+  components::ExternalUseStyleRetention::RestoreStandalone(access.registry());
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStyleComponent& computedStyle =
       components::StyleSystem().computeStyle(handle_, disabledSink);
@@ -1045,6 +1047,10 @@ const PropertyRegistry* SVGElement::specifiedStyle() const {
 
 const PropertyRegistry* SVGElement::computedStyleIfPresent() const {
   DocumentReadAccess access = handle_.readAccess();
+  if (components::ExternalUseStyleRetention::IsOccurrenceStyled(access.registry(),
+                                                                handle_.entity())) {
+    return nullptr;
+  }
   const auto* computedStyle =
       access.registry().try_get<components::ComputedStyleComponent>(handle_.entity());
   return computedStyle != nullptr && computedStyle->properties.has_value()
@@ -1054,6 +1060,9 @@ const PropertyRegistry* SVGElement::computedStyleIfPresent() const {
 
 std::optional<PaintServer> SVGElement::resolvedFillPaint() const {
   DocumentReadAccess access = handle_.readAccess();
+  if (components::ExternalUseStyleRetention::HasOccurrenceState(access.registry())) {
+    return std::nullopt;
+  }
   const auto* instance =
       access.registry().try_get<components::RenderingInstanceComponent>(handle_.entity());
   if (instance == nullptr) {
