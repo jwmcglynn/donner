@@ -770,8 +770,9 @@ public:
 
 protected:
   /**
-   * Restore a document that external `<use>` elements drew to its own styles, so a read of computed
-   * or derived state does not observe a host occurrence. Call under write access.
+   * Restore a document that external `<use>` elements drew to its own styles and prepare it again,
+   * so a read of computed or derived state does not observe a host occurrence. Call under write
+   * access.
    */
   void restoreStandaloneState() const;
 

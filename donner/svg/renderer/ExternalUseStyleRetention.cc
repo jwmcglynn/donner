@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
@@ -17,9 +18,11 @@
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
@@ -103,10 +106,13 @@ struct RenderTreeOccurrence {
   Entity root;
   ResolvedPaintServer fill;
   ResolvedPaintServer stroke;
+  /// The viewport the `<use>` establishes for a referenced `<symbol>` or `<svg>`, if any.
+  std::optional<Box2d> viewport;
 
-  bool matches(const ExternalUseStyleContext& occurrence) const {
+  bool matches(const ExternalUseStyleContext& occurrence,
+               const std::optional<Box2d>& occurrenceViewport) const {
     return root == occurrence.root && IsProvablySamePaint(fill, occurrence.fill) &&
-           IsProvablySamePaint(stroke, occurrence.stroke);
+           IsProvablySamePaint(stroke, occurrence.stroke) && viewport == occurrenceViewport;
   }
 };
 
@@ -430,6 +436,29 @@ bool ReadsOutsideSubtree(Registry& registry, Entity root) {
   return false;
 }
 
+/// Whether \p root's subtree holds a `<use>` with a resolvable target but no instantiated shadow
+/// tree, as a use inside `<defs>` is left when the render tree was built for another root.
+bool HasUnexpandedUse(Registry& registry, Entity root) {
+  std::vector<Entity> pending{root};
+  while (!pending.empty()) {
+    const Entity entity = pending.back();
+    pending.pop_back();
+    const auto* shadowTree = registry.try_get<ShadowTreeComponent>(entity);
+    const auto* type = registry.try_get<ElementTypeComponent>(entity);
+    if (shadowTree && type && type->type() == ElementType::Use &&
+        !registry.all_of<ComputedShadowTreeComponent>(entity) &&
+        shadowTree->mainTargetEntity(registry)) {
+      return true;
+    }
+    for (Entity child = registry.get<donner::components::TreeComponent>(entity).firstChild();
+         child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      pending.push_back(child);
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 void ExternalUseStyleRetention::PrepareOccurrence(Registry& registry) {
@@ -447,14 +476,35 @@ void ExternalUseStyleRetention::PrepareOccurrence(Registry& registry) {
       matches ? *retained : RestyleForOccurrence(registry, state, occurrence, retain);
   entry.lastDrawn = ++state.draws;
   state.unretainedRoot = retain ? entt::null : occurrence.root;
+}
 
-  if (!retain || !state.renderTree || !state.renderTree->matches(occurrence)) {
-    renderState.needsInstanceRebuild = true;
-    state.renderTree.reset();
-    if (retain) {
-      state.renderTree = RenderTreeOccurrence{
-          .root = occurrence.root, .fill = occurrence.fill, .stroke = occurrence.stroke};
-    }
+void ExternalUseStyleRetention::PrepareInstance(Registry& registry) {
+  const auto& occurrence = registry.ctx().get<ExternalUseStyleContext>();
+  auto* state = registry.ctx().find<ExternalUseRetainedState>();
+  if (state == nullptr) {
+    return;
+  }
+  const auto* sized = registry.try_get<ComputedShadowSizedElementComponent>(occurrence.root);
+  const std::optional<Box2d> viewport = sized ? std::optional<Box2d>(sized->bounds) : std::nullopt;
+  const bool retain = state->unretainedRoot == entt::null;
+  if (retain && state->renderTree && state->renderTree->matches(occurrence, viewport)) {
+    return;
+  }
+  auto& renderState = GetOrEmplaceContext<RenderTreeState>(registry);
+  renderState.needsInstanceRebuild = true;
+  state->renderTree.reset();
+  if (retain) {
+    state->renderTree = RenderTreeOccurrence{.root = occurrence.root,
+                                             .fill = occurrence.fill,
+                                             .stroke = occurrence.stroke,
+                                             .viewport = viewport};
+  }
+  if (HasUnexpandedUse(registry, occurrence.root)) {
+    // A rebuild for another root re-expanded only the `<use>` elements that root presents, so
+    // this subtree's definition uses need the shadow trees a full rebuild instantiates.
+    renderState.needsFullRebuild = true;
+    ForgetInputsReachedByRestyle(registry, *state, renderState, occurrence.root,
+                                 /*restylingCurrent=*/true);
   }
 }
 
@@ -506,6 +556,18 @@ void ExternalUseStyleRetention::RestoreStandalone(Registry& registry) {
   }
   DropOccurrenceRenderState(registry, *state);
   registry.ctx().erase<ExternalUseRetainedState>();
+}
+
+void ExternalUseStyleRetention::RestoreStandaloneForRead(Registry& registry) {
+  if (!HasOccurrenceState(registry)) {
+    return;
+  }
+  auto* context = registry.ctx().find<RenderingContext>();
+  if (context == nullptr) {
+    context = &registry.ctx().emplace<RenderingContext>(registry);
+  }
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  context->instantiateRenderTree(/*verbose=*/false, disabledSink);
 }
 
 bool ExternalUseStyleRetention::IsOccurrenceStyled(const Registry& registry, Entity entity) {
