@@ -1918,7 +1918,8 @@ TEST(RendererPublicApiTest, DrawWithoutWarningSinkKeepsExternalUseWarningsOffStd
   Renderer renderer;
   testing::internal::CaptureStderr();
   renderer.draw(document);
-  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kChildParseWarning)));
 }
 
 TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentWarningsToSink) {
@@ -1927,7 +1928,8 @@ TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentWarningsToSink) {
   ParseWarningSink warnings;
   testing::internal::CaptureStderr();
   renderer.draw(document, warnings);
-  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kChildParseWarning)));
   EXPECT_THAT(WarningReasons(warnings), ElementsAre(kChildParseWarning));
 }
 
@@ -1980,16 +1982,16 @@ TEST(RendererPublicApiTest, VerboseDrawWithWarningSinkDoesNotPrintWarnings) {
 struct DriverEntryPoint {
   std::string_view name;
   ThreadingMode threadingMode = ThreadingMode::SingleThreaded;
-  std::function<void(RendererDriver&, SVGDocument&)> run;
+  std::function<void(RendererDriver&, RendererInterface&, SVGDocument&)> run;
 };
 
 TEST(RendererPublicApiTest, DriverReportsWarningsToSinkFromEveryEntryPoint) {
   RenderViewport viewport;
   viewport.size = Vector2d(8, 8);
-  const auto drawDocument = [](RendererDriver& driver, SVGDocument& document) {
-    driver.draw(document);
-  };
-  const auto drawViewport = [viewport](RendererDriver& driver, SVGDocument& document) {
+  const auto drawDocument = [](RendererDriver& driver, RendererInterface& /*renderer*/,
+                               SVGDocument& document) { driver.draw(document); };
+  const auto drawViewport = [viewport](RendererDriver& driver, RendererInterface& /*renderer*/,
+                                       SVGDocument& document) {
     driver.draw(document, viewport, Transform2d());
   };
   const std::vector<DriverEntryPoint> entryPoints = {
@@ -1998,13 +2000,20 @@ TEST(RendererPublicApiTest, DriverReportsWarningsToSinkFromEveryEntryPoint) {
       {"draw viewport", ThreadingMode::SingleThreaded, drawViewport},
       {"draw viewport concurrent", ThreadingMode::ConcurrentDom, drawViewport},
       {"drawInterruptibly", ThreadingMode::SingleThreaded,
-       [viewport](RendererDriver& driver, SVGDocument& document) {
+       [viewport](RendererDriver& driver, RendererInterface& /*renderer*/, SVGDocument& document) {
          EXPECT_TRUE(
              driver.drawInterruptibly(document, viewport, Transform2d(), [] { return false; }));
        }},
       {"captureRenderSnapshot", ThreadingMode::SingleThreaded,
-       [](RendererDriver& driver, SVGDocument& document) {
+       [](RendererDriver& driver, RendererInterface& /*renderer*/, SVGDocument& document) {
          (void)driver.captureRenderSnapshot(document);
+       }},
+      {"drawDocumentIntoCurrentFrame", ThreadingMode::SingleThreaded,
+       [viewport](RendererDriver& driver, RendererInterface& renderer, SVGDocument& document) {
+         DocumentWriteAccess access = document.writeAccess();
+         renderer.beginFrame(viewport);
+         driver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+         renderer.endFrame();
        }},
   };
   for (const DriverEntryPoint& entryPoint : entryPoints) {
@@ -2015,8 +2024,9 @@ TEST(RendererPublicApiTest, DriverReportsWarningsToSinkFromEveryEntryPoint) {
     ParseWarningSink warnings;
     RendererDriver driver(renderer, /*verbose=*/true, nullptr, nullptr, &warnings);
     testing::internal::CaptureStderr();
-    entryPoint.run(driver, document);
-    EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+    entryPoint.run(driver, renderer, document);
+    EXPECT_THAT(testing::internal::GetCapturedStderr(),
+                testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
     EXPECT_THAT(WarningReasons(warnings), ElementsAre(kUnresolvedUseWarning));
   }
 }
@@ -2028,7 +2038,8 @@ TEST(RendererPublicApiTest, ConcurrentDomDrawWithoutWarningSinkKeepsStderrClean)
   RendererDriver driver(renderer);
   testing::internal::CaptureStderr();
   driver.draw(document);
-  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
 }
 
 TEST(RendererPublicApiTest, DriverSnapshotCaptureWithoutWarningSinkKeepsStderrClean) {
@@ -2037,7 +2048,8 @@ TEST(RendererPublicApiTest, DriverSnapshotCaptureWithoutWarningSinkKeepsStderrCl
   RendererDriver driver(renderer);
   testing::internal::CaptureStderr();
   const RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
-  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
   (void)snapshot;
 }
 

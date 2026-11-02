@@ -2405,8 +2405,10 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  // Atlas tiles never print: without a host sink their warnings are discarded even when verbose.
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(
+      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink);
 
   const std::unordered_set<Entity> feImageShadowEntities =
       collectOffscreenFeImageShadowEntities(document.registry());

@@ -1516,9 +1516,9 @@ public:
    * cached results does not report its warnings again, so a document that has not changed since
    * the previous draw usually reports none.
    *
-   * Appended after the legacy virtual surface to preserve existing vtable slot order. The default
-   * compatibility implementation calls the one-argument \ref draw and reports nothing; the
-   * built-in backends override it.
+   * Declared after the existing virtual methods. The default compatibility implementation calls
+   * the one-argument \ref draw and reports nothing, so existing implementations keep compiling;
+   * the built-in backends override it.
    *
    * @param document The SVG document to render.
    * @param warningSink Receives preparation warnings. Pass \ref ParseWarningSink::Disabled to

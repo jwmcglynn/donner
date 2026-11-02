@@ -109,6 +109,7 @@ public:
       std::size_t maximumCapturedFontBytes = RenderSnapshot::kMaximumCapturedFontBytes,
       std::size_t maximumCapturedDecorationBytes = RenderSnapshot::kMaximumCapturedDecorationBytes);
 
+  using RendererInterface::draw;
   void draw(SVGDocument& document) override;
   [[nodiscard]] int width() const override;
   [[nodiscard]] int height() const override;

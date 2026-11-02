@@ -871,6 +871,45 @@ TEST_F(DonnerSvgToolFileTest, RenderWarningsRepeatedAcrossGifFramesArePrintedOnc
   EXPECT_THAT(warningOffsets, testing::SizeIs(1)) << output;
 }
 
+TEST_F(DonnerSvgToolFileTest, RenderWarningRepeatedPastTheSinkLimitIsNotReportedAsOmitted) {
+  const std::filesystem::path inputPath =
+      WriteSvg("long-missing.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+          <use href="#missing"/>
+          <rect width="1" height="1" fill="blue">
+            <animate attributeName="x" from="0" to="1" dur="20s" fill="freeze"/>
+          </rect>
+        </svg>)");
+  const std::filesystem::path gifPath = tmpDir_ / "long-missing.gif";
+
+  // More frames than ParseWarningSink::kMaximumWarnings, each re-reporting the same warning.
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "11", "--fps", "100", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 1100 rendered"));
+  EXPECT_THAT(out.str(),
+              testing::HasSubstr("Failed to resolve shadow tree target with href '#missing'"));
+  EXPECT_THAT(out.str(), testing::Not(testing::HasSubstr("further render warnings omitted")));
+}
+
+TEST_F(DonnerSvgToolFileTest, RenderWarningsArePrintedWhenCanvasSizingFails) {
+  const std::filesystem::path inputPath =
+      WriteSvg("missing.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                                   <use href="#missing"/>
+                                 </svg>)");
+
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(RunTool({"--scale", "100000", inputPath.string()}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("makes the canvas larger than"));
+  EXPECT_THAT(out.str(), testing::HasSubstr("Render warnings:"));
+  EXPECT_THAT(out.str(),
+              testing::HasSubstr("Failed to resolve shadow tree target with href '#missing'"));
+}
+
 TEST_F(DonnerSvgToolFileTest, ParseWarningsEscapeUnicodeTerminalControls) {
   std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect x=")";
   source.append("\xc2\x9b", 2);

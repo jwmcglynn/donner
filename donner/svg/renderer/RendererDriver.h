@@ -110,7 +110,7 @@ public:
    * must establish an OwnerScope on that context or be reconstructed for the next frame.
    * @param warningSink Optional destination for warnings found while preparing and drawing
    *   documents. When null, warnings are printed to stderr in verbose mode and discarded
-   *   otherwise. Must outlive the driver.
+   *   otherwise; \ref drawDocumentIntoCurrentFrame always discards them. Must outlive the driver.
    */
   explicit RendererDriver(
       RendererInterface& renderer, bool verbose = false, SecurityStats* securityStats = nullptr,

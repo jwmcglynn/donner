@@ -443,14 +443,9 @@ std::optional<std::string> ReadInputWithPackagedResources(const CliOptions& opti
   return fileData;
 }
 
-/// A warning sink that collects warnings, or discards them under `--quiet`.
-ParseWarningSink WarningSinkFor(const CliOptions& options) {
-  return options.quiet ? ParseWarningSink::Disabled() : ParseWarningSink();
-}
-
 std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::string& fileData,
                                          std::ostream& out, std::ostream& err) {
-  ParseWarningSink warningSink = WarningSinkFor(options);
+  ParseWarningSink warningSink = options.quiet ? ParseWarningSink::Disabled() : ParseWarningSink();
   parser::SVGParser::Options parserOptions;
   parserOptions.enableExperimental = options.experimental;
 
@@ -899,28 +894,67 @@ bool WriteGif(const std::string& gifFile, GifEncoder& encoder, std::ostream& out
 }
 
 /**
- * Print the warnings found while preparing the document for rendering, once per distinct message.
+ * The distinct warnings found while preparing the document for rendering, across every draw of
+ * one CLI run.
  *
- * Their source locations belong to whichever document produced them, which may be a referenced
- * sub-document rather than the input file, so they are printed without source context.
+ * Each draw collects into its own sink, so a warning repeated on every GIF frame cannot exhaust a
+ * shared sink's warning limit; only lines not seen before are kept. Source locations belong to
+ * whichever document produced a warning, which may be a referenced sub-document rather than the
+ * input file, so warnings are printed without source context.
  */
-void PrintRenderWarnings(const ParseWarningSink& renderWarnings, std::ostream& out) {
-  if (!renderWarnings.hasWarnings()) {
-    return;
-  }
-  out << "Render warnings:\n";
-  std::unordered_set<std::string> printed;
-  for (const ParseDiagnostic& warning : renderWarnings.warnings()) {
-    std::ostringstream line;
-    line << warning;
-    if (printed.insert(line.str()).second) {
-      out << "  " << EscapeTerminalText(line.str()) << "\n";
+class RenderWarningLog {
+public:
+  /// @param enabled False to discard every warning, for `--quiet`.
+  explicit RenderWarningLog(bool enabled) : enabled_(enabled) {}
+
+  /// Draw @p document with @p renderer and keep the warnings not reported by an earlier draw.
+  void draw(RendererTinySkia& renderer, SVGDocument& document) {
+    ParseWarningSink warnings = enabled_ ? ParseWarningSink() : ParseWarningSink::Disabled();
+    renderer.draw(document, warnings);
+    omitted_ |= warnings.resourceLimitExceeded();
+    for (const ParseDiagnostic& warning : warnings.warnings()) {
+      std::ostringstream formatted;
+      formatted << warning;
+      record(formatted.str());
     }
   }
-  if (renderWarnings.resourceLimitExceeded()) {
-    out << "  (further render warnings omitted)\n";
+
+  /// Print the kept warnings under a "Render warnings:" heading, if there are any.
+  void print(std::ostream& out) const {
+    if (lines_.empty() && !omitted_) {
+      return;
+    }
+    out << "Render warnings:\n";
+    for (const std::string& line : lines_) {
+      out << "  " << EscapeTerminalText(line) << "\n";
+    }
+    if (omitted_) {
+      out << "  (further render warnings omitted)\n";
+    }
   }
-}
+
+private:
+  void record(std::string line) {
+    if (seen_.contains(line)) {
+      return;
+    }
+    if (lines_.size() >= ParseWarningSink::kMaximumWarnings ||
+        line.size() > ParseWarningSink::kMaximumWarningBytes - lineBytes_) {
+      omitted_ = true;
+      return;
+    }
+    lineBytes_ += line.size();
+    seen_.insert(line);
+    lines_.push_back(std::move(line));
+  }
+
+  bool enabled_;
+  std::vector<std::string> lines_;
+  std::unordered_set<std::string> seen_;
+  std::size_t lineBytes_ = 0;
+  /// True when a distinct warning was dropped by a sink limit or by this log's own limits.
+  bool omitted_ = false;
+};
 
 /**
  * Render frames at evenly spaced document times over [start, end) and write a looping GIF.
@@ -932,7 +966,7 @@ void PrintRenderWarnings(const ParseWarningSink& renderWarnings, std::ostream& o
  * @return Process-style exit code.
  */
 int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, RendererTinySkia& renderer,
-                      ParseWarningSink& renderWarnings, std::ostream& out, std::ostream& err) {
+                      RenderWarningLog& renderWarnings, std::ostream& out, std::ostream& err) {
   const int frameCount = options.gifFrameCount;
   const std::vector<uint16_t> delays = GifEncoder::FrameDelaysCentiseconds(options.fps, frameCount);
   if (options.fps > 50.0) {
@@ -955,7 +989,7 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
       .width = gifSize.x, .height = gifSize.y, .background = options.background});
   for (int i = 0; i < frameCount; ++i) {
     document.setTime(GifFrameTime(options.startSeconds, options.fps, i));
-    renderer.draw(document, renderWarnings);
+    renderWarnings.draw(renderer, document);
     RendererBitmap frame = renderer.takeSnapshot();
     const Vector2i sampledSize = document.canvasSize();
     if (frame.empty() && sampledSize.x != 0 && sampledSize.y != 0) {
@@ -1016,7 +1050,7 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   // shader setup cost, so the CPU raster path is strictly faster for
   // single-frame output. The GPU backend serves interactive, multi-frame
   // rendering such as the editor.
-  ParseWarningSink renderWarnings = WarningSinkFor(options);
+  RenderWarningLog renderWarnings(!options.quiet);
   RendererTinySkia renderer(options.verbose);
   // Animated root width and height are applied when drawing, so size the canvas from the
   // document as drawn at the time being rendered: --start for a GIF, the initial time for PNG.
@@ -1024,21 +1058,22 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
     document.setTime(options.startSeconds);
   }
   if (!options.gifFile.empty() || options.scale || options.width > 0 || options.height > 0) {
-    renderer.draw(document, renderWarnings);
+    renderWarnings.draw(renderer, document);
   }
 
   if (!ApplyCanvasSize(options, &document, err)) {
+    renderWarnings.print(out);
     return 1;
   }
 
   if (!options.gifFile.empty()) {
     const int result = RenderAnimatedGif(options, document, renderer, renderWarnings, out, err);
-    PrintRenderWarnings(renderWarnings, out);
+    renderWarnings.print(out);
     return result;
   }
 
-  renderer.draw(document, renderWarnings);
-  PrintRenderWarnings(renderWarnings, out);
+  renderWarnings.draw(renderer, document);
+  renderWarnings.print(out);
 
   const bool shouldSavePng = options.outputFileSet || !options.preview;
   if (shouldSavePng) {
