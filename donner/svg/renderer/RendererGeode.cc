@@ -3949,6 +3949,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   struct AdmittedEncode {
     const geode::EncodedPath* encoded = nullptr;
     bool persistent = false;
+    /// Index of the `GeodePathCacheComponent::fillVariants` entry holding a persistent encode,
+    /// which also selects its resident slots.
+    std::size_t variant = 0;
   };
 
   /// Value returned by `getFillEncode` / `getStrokeDerived` describing
@@ -4058,39 +4061,61 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
         documentGeometryBudget(*source.registry());
     auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
+    // The encode a draw uses depends only on its own tolerance bucket, never on which scales
+    // drew the entity before, so an entity drawn at several scales renders the same every frame.
     const double tolerance = geode::FillCubicToleranceFor(deviceFromLocalTransform);
-    if (cache.fillEncode && cache.fillTolerance <= tolerance) {
-      return {&*cache.fillEncode, true};
+    if (const std::optional<std::size_t> hit = cache.fillVariantFor(tolerance)) {
+      auto& variant = cache.fillVariants[*hit];
+      variant.lastUse = ++cache.fillUseClock;
+      return {&*variant.encode, true, *hit};
     }
 
     std::optional<geode::EncodedPath> encoded = encodeGeometry(path, rule);
     if (!encoded.has_value()) {
       return {&rejectedGeometry, false};
     }
+    const std::size_t index = fillVariantToReplace(cache);
+    auto& variant = cache.fillVariants[index];
     const std::size_t retainedBytes = encoded->retainedBytes();
     if (retainedBytes != std::numeric_limits<std::size_t>::max() &&
-        cache.fillReservation.replace(documentBudget, retainedBytes)) {
-      if (cache.fillEncode && pendingBatchReferences(&*cache.fillEncode)) {
+        variant.reservation.replace(documentBudget, retainedBytes)) {
+      if (variant.encode && pendingBatchReferences(&*variant.encode)) {
         flushPendingBatch();
       }
       if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-        // Every device's residence was uploaded from the encode being replaced.
-        resident->devices.forEach([](geode::GeodeResidentPathSlots& slots) {
-          slots.fillSlot.reset();
-          slots.gradientFillSlot.reset();
+        // Every device's residence for this variant was uploaded from the encode being replaced.
+        resident->devices.forEach([index](geode::GeodeResidentPathSlots& slots) {
+          slots.fillSlots[index].reset();
+          slots.gradientFillSlots[index].reset();
         });
       }
-      cache.fillTolerance = std::any_of(path.commands().begin(), path.commands().end(),
-                                        [](const Path::Command& command) {
-                                          return command.verb == Path::Verb::CurveTo;
-                                        })
-                                ? tolerance
-                                : 0.0;
-      cache.fillEncode = std::move(*encoded);
-      return {&*cache.fillEncode, true};
+      variant.tolerance = std::any_of(path.commands().begin(), path.commands().end(),
+                                      [](const Path::Command& command) {
+                                        return command.verb == Path::Verb::CurveTo;
+                                      })
+                              ? tolerance
+                              : 0.0;
+      variant.encode = std::move(*encoded);
+      variant.lastUse = ++cache.fillUseClock;
+      return {&*variant.encode, true, index};
     }
     fillScratchEncode = std::move(*encoded);
     return {&*fillScratchEncode, false};
+  }
+
+  /// Index of the fill variant a new tolerance bucket replaces: an empty one when there is one,
+  /// otherwise the least recently used.
+  static std::size_t fillVariantToReplace(const geode::GeodePathCacheComponent& cache) {
+    std::size_t index = 0;
+    for (std::size_t i = 0; i < cache.fillVariants.size(); ++i) {
+      if (!cache.fillVariants[i].encode.has_value()) {
+        return i;
+      }
+      if (cache.fillVariants[i].lastUse < cache.fillVariants[index].lastUse) {
+        index = i;
+      }
+    }
+    return index;
   }
 
   AdmittedEncode getFillEncodeForPaint(EntityHandle source, const Path& path, FillRule rule) {
@@ -4601,16 +4626,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return slab;
   }
 
-  /// This device's GPU-residence slot for `source`'s fill encode. Returns null for a null
+  /// This device's GPU-residence slot for fill encode variant \p variant of `source` (see
+  /// `GeodePathCacheComponent::fillVariants`). Returns null for a null
   /// source (editor/overlay draws stay on the arena path). The slot lives on a
   /// `GeodeResidentPathComponent` beside the CPU encode cache and is invalidated by the same
   /// listener.
-  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source) {
+  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source, std::size_t variant) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentSlot& slot = residentPathSlots(source).fillSlot;
+    geode::GeodeResidentSlot& slot = residentPathSlots(source).fillSlots[variant];
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       // The slot's residence lives in another slab, so it must re-upload into this one. reset()
@@ -4657,12 +4683,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// See `residentFillSlot`; the slot lives on the
   /// same `GeodeResidentPathComponent` and is invalidated by the same
   /// listener.
-  geode::GeodeResidentGradientSlot* residentGradientFillSlot(EntityHandle source) {
+  geode::GeodeResidentGradientSlot* residentGradientFillSlot(EntityHandle source,
+                                                             std::size_t variant) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientFillSlot;
+    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientFillSlots[variant];
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -7317,7 +7344,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // ends up being drawn.
   geode::GeodeResidentSlot* residentFill =
       (fillAdmission.persistent && (solidFill || gradientFillBatchable))
-          ? impl_->residentFillSlot(path.sourceEntity)
+          ? impl_->residentFillSlot(path.sourceEntity, fillAdmission.variant)
           : nullptr;
 
   // Gradient residence: a persistent per-entity gradient slot for
@@ -7326,7 +7353,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // gradient methods only run for resolved gradients).
   geode::GeodeResidentGradientSlot* residentGradientFill =
       (fillAdmission.persistent && referenceFill)
-          ? impl_->residentGradientFillSlot(path.sourceEntity)
+          ? impl_->residentGradientFillSlot(path.sourceEntity, fillAdmission.variant)
           : nullptr;
 
   bool fillAbsorbed = false;

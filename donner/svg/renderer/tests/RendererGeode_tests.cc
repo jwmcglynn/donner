@@ -50,6 +50,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -3275,8 +3276,10 @@ TEST_F(RendererGeodeTest, ResourceStatsAggregateEveryDocumentTouchedInTheFrame) 
   const auto* secondCache = secondRegistry.try_get<geode::GeodePathCacheComponent>(secondEntity);
   ASSERT_NE(firstCache, nullptr);
   ASSERT_NE(secondCache, nullptr);
-  ASSERT_FALSE(firstCache->fillEncode.has_value()) << "Fixture must reject the first document.";
-  ASSERT_TRUE(secondCache->fillEncode.has_value()) << "Fixture must admit the second document.";
+  ASSERT_FALSE(firstCache->fillVariants[0].encode.has_value())
+      << "Fixture must reject the first document.";
+  ASSERT_TRUE(secondCache->fillVariants[0].encode.has_value())
+      << "Fixture must admit the second document.";
   EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected)
       << "Touching a clean second document must not erase the first document's rejection.";
   renderer.endFrame();
@@ -3342,7 +3345,7 @@ TEST_F(RendererGeodeTest, CacheBudgetRejectsBeforeInsertionAndUsesTransientFallb
 
   const auto* cache = document.registry().try_get<geode::GeodePathCacheComponent>(entity);
   ASSERT_NE(cache, nullptr);
-  EXPECT_FALSE(cache->fillEncode.has_value())
+  EXPECT_FALSE(cache->fillVariants[0].encode.has_value())
       << "Rejected retained geometry must not enter the document cache.";
   const RendererResourceStats stats = renderer.resourceStats();
   EXPECT_TRUE(stats.geometryBudgetRejected);
@@ -3495,20 +3498,29 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
     RendererDriver(renderer).drawEntityRange(document.registry(), source.entity(), source.entity(),
                                              viewport, Transform2d::Scale(scale));
   };
+  const auto encodeAtScale = [&](double scale) -> const geode::EncodedPath* {
+    const auto* cache = source.try_get<geode::GeodePathCacheComponent>();
+    if (cache == nullptr) {
+      return nullptr;
+    }
+    const std::optional<std::size_t> variant =
+        cache->fillVariantFor(geode::FillCubicToleranceFor(Transform2d::Scale(scale)));
+    return variant ? &*cache->fillVariants[*variant].encode : nullptr;
+  };
   renderAtScale(1.0);
-  const auto* cache = source.try_get<geode::GeodePathCacheComponent>();
-  ASSERT_THAT(cache, testing::NotNull());
-  ASSERT_THAT(cache->fillEncode, testing::Optional(testing::_));
-  const size_t initialCurveCount = cache->fillEncode->curves.size();
+  const geode::EncodedPath* initialEncode = encodeAtScale(1.0);
+  ASSERT_THAT(initialEncode, testing::NotNull());
+  const size_t initialCurveCount = initialEncode->curves.size();
 
   renderAtScale(32.0);
-  ASSERT_THAT(cache->fillEncode, testing::Optional(testing::_));
-  EXPECT_THAT(cache->fillEncode->curves.size(), testing::Gt(initialCurveCount));
+  const geode::EncodedPath* zoomedEncode = encodeAtScale(32.0);
+  ASSERT_THAT(zoomedEncode, testing::NotNull());
+  EXPECT_THAT(zoomedEncode->curves.size(), testing::Gt(initialCurveCount));
   EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(1u));
 
   // This cubic has x(t) = t and y(t) = t^3, so its shape has an exact reference.
   double maximumDeviceError = 0.0;
-  for (const auto& curve : cache->fillEncode->curves) {
+  for (const auto& curve : zoomedEncode->curves) {
     if (curve.p2x <= curve.p0x) {
       continue;
     }
@@ -3526,6 +3538,89 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
   renderAtScale(25.0);
   EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
       << "Zoom inside the same scale bucket must reuse the fill encode.";
+
+  renderAtScale(1.0);
+  EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+      << "Zooming back out must reuse the encode still cached for the original bucket.";
+  EXPECT_THAT(encodeAtScale(1.0)->curves.size(), testing::Eq(initialCurveCount))
+      << "The identity-scale draw must use the identity-bucket encode, not the finer one.";
+}
+
+// One element drawn at two device scales in a frame must not make either draw depend on which
+// scale encoded it first. The blur turns sub-level coverage differences between a coarse and a
+// fine cubic encode into visible ones, so any history dependence shows up as differing pixels.
+TEST_F(RendererGeodeTest, FillEncodeAtTwoScalesDoesNotDependOnHistory) {
+  constexpr std::string_view kSprite = R"svg(
+        <filter id="blur" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2"/>
+        </filter>
+        <g id="sprite" filter="url(#blur)"><circle cx="16" cy="16" r="8" fill="#c040a0"/></g>)svg";
+  const auto parse = [&](std::string_view uses) {
+    ParseWarningSink warnings;
+    const std::string source =
+        std::string(
+            R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"><defs>)svg") +
+        std::string(kSprite) + "</defs>" + std::string(uses) + "</svg>";
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    EXPECT_THAT(parsed.hasError(), testing::IsFalse());
+    return std::move(parsed).result();
+  };
+  // Both copies draw the same circle entity. The magnified copy lands in a finer tolerance
+  // bucket than the identity-scale copy, which draws first.
+  constexpr std::string_view kSingleUse = R"svg(<use href="#sprite"/>)svg";
+  const std::string twoScales =
+      std::string(kSingleUse) +
+      R"svg(<use href="#sprite" transform="translate(64 0) scale(1.5)"/>)svg";
+
+  SVGDocument single = parse(kSingleUse);
+  RendererGeode singleRenderer = createRenderer();
+  singleRenderer.draw(single);
+  const RendererBitmap singleFrame = singleRenderer.takeSnapshot();
+  ASSERT_FALSE(singleFrame.empty());
+
+  SVGDocument document = parse(twoScales);
+  RendererGeode renderer = createRenderer();
+  std::vector<RendererBitmap> frames;
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+    frames.push_back(renderer.takeSnapshot());
+    ASSERT_FALSE(frames.back().empty());
+    if (frame > 0) {
+      EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+          << "Both scales stay cached, so frame " << frame << " must not re-encode.";
+    }
+  }
+
+  // Counts pixels whose RGBA bytes differ, so an exact comparison reports how far it drifted.
+  const auto countDifferingPixels = [](const RendererBitmap& actual,
+                                       const RendererBitmap& expected) -> size_t {
+    if (actual.dimensions != expected.dimensions) {
+      return std::numeric_limits<size_t>::max();
+    }
+    size_t differing = 0;
+    for (int y = 0; y < actual.dimensions.y; ++y) {
+      for (int x = 0; x < actual.dimensions.x; ++x) {
+        const size_t actualOffset = static_cast<size_t>(y) * actual.rowBytes + x * 4u;
+        const size_t expectedOffset = static_cast<size_t>(y) * expected.rowBytes + x * 4u;
+        if (!std::equal(actual.pixels.begin() + actualOffset,
+                        actual.pixels.begin() + actualOffset + 4,
+                        expected.pixels.begin() + expectedOffset)) {
+          ++differing;
+        }
+      }
+    }
+    return differing;
+  };
+  // Only the identity-scale half is compared against the single-use render.
+  const auto leftHalf = [](const RendererBitmap& bitmap) {
+    return editor::tests::CropBitmap(bitmap, Vector2i(0, 0), Vector2i(64, 64));
+  };
+  EXPECT_THAT(countDifferingPixels(leftHalf(frames[0]), leftHalf(singleFrame)), testing::Eq(0u))
+      << "The first frame must match the single-occurrence render exactly.";
+  for (size_t frame = 1; frame < frames.size(); ++frame) {
+    EXPECT_THAT(countDifferingPixels(frames[frame], frames[0]), testing::Eq(0u))
+        << "Frame " << frame << " must match frame 0 exactly.";
+  }
 }
 
 TEST_F(RendererGeodeTest, MidFrameOffscreenGeometryMutationPreservesRecordedOuterDraw) {
