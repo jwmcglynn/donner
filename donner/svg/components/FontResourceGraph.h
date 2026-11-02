@@ -204,6 +204,10 @@ private:
                  const std::vector<FontFaceDependency>& currentFaces, bool scopeComplete) const;
   };
   bool reserve(std::size_t work);
+  /// The collection of a document with nothing font-dependent (see
+  /// \ref RendersNothingFontDependent), charging its scan; empty when the document has some.
+  std::optional<FontResourceGraph::Collection> collectFontIndependent(
+      const Registry& registry, Entity target, FontResourceGraph::Purpose purpose);
   bool prepareEntry(Entry& entry, const SVGDocumentHandle& document);
   Stats ownedStats_;
   Stats* stats_;

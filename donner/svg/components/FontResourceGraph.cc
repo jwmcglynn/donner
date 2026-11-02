@@ -834,6 +834,25 @@ bool RendersNothingFontDependent(const Registry& registry) {
   return true;
 }
 
+std::optional<FontResourceGraph::Collection> FontResourceGraphCache::collectFontIndependent(
+    const Registry& registry, Entity target, FontResourceGraph::Purpose purpose) {
+  if (HasFontDependentComponents(registry)) {
+    return std::nullopt;
+  }
+  if (!reserve(FontIndependenceScanWork(registry))) {
+    return FontResourceGraph::Collection{.resourceLimit = true};
+  }
+  if (!RendersNothingFontDependent(registry)) {
+    return std::nullopt;
+  }
+  ++stats_->fontIndependentCollections;
+  // No dependencies and nothing unprepared, but rendered-frame evidence still covers only what the
+  // completed scope drew, exactly as the full collection reports it.
+  return FontResourceGraph::Collection{.needsRender =
+                                           purpose == FontResourceGraph::Purpose::RenderedFrame &&
+                                           !HasRenderCoverage(registry, target)};
+}
+
 FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentHandle& document,
                                                               Entity target,
                                                               FontResourceGraph::Purpose purpose) {
@@ -844,17 +863,9 @@ FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentH
       !HasCompletedCurrentScope(document->registry())) {
     return {.needsRender = true};
   }
-  if (!HasFontDependentComponents(document->registry())) {
-    if (!reserve(FontIndependenceScanWork(document->registry()))) {
-      return {.resourceLimit = true};
-    }
-  }
-  if (RendersNothingFontDependent(document->registry())) {
-    ++stats_->fontIndependentCollections;
-    // No dependencies and nothing unprepared, but rendered-frame evidence still covers only what
-    // the completed scope drew, exactly as the full collection reports it.
-    return {.needsRender = purpose == FontResourceGraph::Purpose::RenderedFrame &&
-                           !HasRenderCoverage(document->registry(), target)};
+  if (std::optional<FontResourceGraph::Collection> independent =
+          collectFontIndependent(document->registry(), target, purpose)) {
+    return *std::move(independent);
   }
   auto& entry = entries_[document.get()];
   if (!prepareEntry(entry, document)) {
