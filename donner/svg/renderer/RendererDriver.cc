@@ -969,10 +969,13 @@ PaintParams toPaintParams(Registry& registry,
   return paint;
 }
 
+/// @param objectBounds Computes the element's object bounding box, for objectBoundingBox clip
+/// units.
 ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style, Registry& registry,
                             RendererTextMaterializationBudget& copyBudget,
-                            RendererDriver::SecurityStats* securityStats) {
+                            RendererDriver::SecurityStats* securityStats,
+                            const std::function<std::optional<Box2d>()>& objectBounds) {
   ResolvedClip clip;
   clip.clipRect = instance.clipRect;
   // Note: mask is handled separately by the caller, not through ResolvedClip.
@@ -981,7 +984,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
           instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>()) {
     // Compute objectBoundingBox transform if needed.
     if (instance.clipPath && instance.clipPath->units == ClipPathUnits::ObjectBoundingBox) {
-      if (auto maybeBounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry))) {
+      if (auto maybeBounds = objectBounds()) {
         const Box2d bounds = maybeBounds.value();
         clip.clipPathUnitsTransform =
             Transform2d::Scale(bounds.size()) * Transform2d::Translate(bounds.topLeft);
@@ -2507,7 +2510,7 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
   RenderingInstanceView view(registry, sliceEntities);
   view.advance();
   renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
-  const int maskDepth = renderMask(view, registry, instance, *instance.mask);
+  const int maskDepth = renderMask(view, registry, maskedEntity, instance, *instance.mask);
   bool drawn = false;
   if (maskDepth > 0) {
     renderer_.setTransform(Transform2d());
@@ -2656,11 +2659,12 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     int maskDepth = 0;
 
     if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      maskDepth = renderMask(view, registry, entity, instance, *instance.mask);
     }
 
     ResolvedClip entityClip =
-        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_,
+                       [&] { return objectBoundingBox(registry, entity); });
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
@@ -3286,7 +3290,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         style.properties->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
-    const std::optional<Box2d> elementBounds = filterObjectBoundingBox(registry, entity);
+    const std::optional<Box2d> elementBounds = objectBoundingBox(registry, entity);
     std::optional<std::vector<components::FilterGraph>> stages =
         resolveFilterStages(registry, instance->resolvedFilter.value(), *instance,
                             style.properties->color.get().value().rgba(), filterViewBox,
@@ -3352,7 +3356,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     int maskDepth = 0;
 
     if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      maskDepth = renderMask(view, registry, entity, instance, *instance.mask);
     }
 
     // Clip paths are in entity-local coordinates.
@@ -3360,7 +3364,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Push in reverse so pop order applies the effects in spec order: mask outermost,
     // then clip-path, then filter innermost.
     ResolvedClip entityClip =
-        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_,
+                       [&] { return objectBoundingBox(registry, entity); });
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -3590,12 +3595,13 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     int maskDepth = 0;
     if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      maskDepth = renderMask(view, registry, entity, instance, *instance.mask);
     }
 
     // Per SVG spec, apply paint → filter → clip-path → mask.
     ResolvedClip entityClip =
-        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_,
+                       [&] { return objectBoundingBox(registry, entity); });
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -3879,7 +3885,7 @@ void RendererDriver::renderMaskContents(RenderingInstanceView& view, Registry& r
   }
 }
 
-int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
+int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry, Entity entity,
                                const components::RenderingInstanceComponent& instance,
                                const components::ResolvedMask& mask) {
   if (!mask.subtreeInfo) {
@@ -3902,8 +3908,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
 
   // Text geometry is not a computed path, so ask for the element's object bounding box rather than
   // the shape bounds, which would be empty for a text element or a text span.
-  const Box2d shapeLocalBounds =
-      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
+  const Box2d shapeLocalBounds = objectBoundingBox(registry, entity).value_or(Box2d());
 
   for (const auto* m : chain) {
     if (!m->subtreeInfo || !m->reference.handle.valid()) {
@@ -4773,7 +4778,7 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 }
 
-std::optional<Box2d> RendererDriver::filterObjectBoundingBox(Registry& registry, Entity entity) {
+std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entity entity) {
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
   std::optional<Box2d> bounds =
       RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
