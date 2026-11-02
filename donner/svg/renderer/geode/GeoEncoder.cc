@@ -883,6 +883,19 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                               const FillDrawArgs& args);
 
+  /// Whether a frame that is still open on this device already drew a slot resident on it.
+  /// @param owningDeviceId Device the slot is resident on. @param residentFrame Frame of the
+  ///   slot's last solo resident draw. @param sceneFrame Frame of its last scene-batch draw.
+  [[nodiscard]] bool residentSlotTakenThisFrame(uint64_t owningDeviceId, uint64_t residentFrame,
+                                                uint64_t sceneFrame) const;
+
+  /// Draw a solid fill of `slot`: the slot's own uniform and cached bind group for the first
+  /// unclipped draw in the open frames, the slot's geometry with a per-draw uniform otherwise, and
+  /// the arena path inside a mask pass or when the geometry cannot be made resident.
+  void submitResidentSolidFill(GeoEncoder& owner, GeodeResidentSlot& slot,
+                               const EncodedPath& encoded, const FillDrawArgs& args,
+                               uint64_t frameId);
+
   /// Upload `encoded` into `slot` when its residence is missing, stale, or on another device.
   /// @return Whether the slot now holds `encoded` on this device.
   bool ensureResidentFillGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
@@ -2391,6 +2404,50 @@ bool GeoEncoder::Impl::submitResidentGeometryFillDraw(GeodeResidentSlot& slot,
   return true;
 }
 
+bool GeoEncoder::Impl::residentSlotTakenThisFrame(uint64_t owningDeviceId, uint64_t residentFrame,
+                                                  uint64_t sceneFrame) const {
+  return owningDeviceId == device->deviceId() &&
+         (device->frameStampClaimed(residentFrame) || device->frameStampClaimed(sceneFrame));
+}
+
+void GeoEncoder::Impl::submitResidentSolidFill(GeoEncoder& owner, GeodeResidentSlot& slot,
+                                               const EncodedPath& encoded, const FillDrawArgs& args,
+                                               uint64_t frameId) {
+  // A mask pass draws coverage rather than paint, so it keeps the per-frame arena path.
+  if (maskPassOpen) {
+    owner.submitFillDraw(args, {}, /*requireAdmission=*/false);
+    return;
+  }
+  // The slot's own uniform and cached bind group serve one unclipped draw while the frames that
+  // recorded it are open. Any other draw of the slot still reads the same geometry, so it binds
+  // the slot's resident ranges with a uniform of its own from the frame arena:
+  //   - A clipped draw: only its uniform and coverage binding differ from the cached bind group.
+  //   - A repeat while a frame that drew this slot is still open, resident or in a scene batch: a
+  //     repeat earlier in THIS frame (markers, repeated `<use>` occurrences, external `<use>`
+  //     occurrences sharing one sprite sheet), or an outer renderer's frame on this device that
+  //     recorded a draw against the slot while an offscreen pass renders the same document.
+  //     Writing the slot's uniform would clobber the parameters that recorded draw reads at
+  //     submit. Frame stamps are device-scoped generations, so the claim compares against the
+  //     device's oldest open generation, and it applies only to a slot resident on this device.
+  // A sprite drawn many times a frame therefore uploads its geometry once, not once per draw.
+  //
+  // A repeat whose slot was re-uploaded mid-frame (an in-place stroke rebuild clears the device
+  // id) is not a claimed repeat: the re-upload took a fresh slab range with its own uniform
+  // region, so the earlier recorded draw of this slot keeps its own parameters at submit time.
+  if (activeClipMaskView != nullptr || clipPolygonActive ||
+      residentSlotTakenThisFrame(slot.owningDeviceId, slot.lastResidentFrame,
+                                 slot.lastSceneFrame)) {
+    if (!submitResidentGeometryFillDraw(slot, encoded, args)) {
+      owner.submitFillDraw(args, {}, /*requireAdmission=*/false);
+    }
+    return;
+  }
+  slot.lastResidentFrame = frameId;
+  if (!submitResidentFillDraw(slot, encoded, args)) {
+    owner.submitFillDraw(args, {}, /*requireAdmission=*/false);
+  }
+}
+
 void GeoEncoder::Impl::publishSlotPaint(GeodeResidentSlot& slot, const FillDrawArgs& args) {
   if (args.linearGradient == nullptr && args.radialGradient == nullptr) {
     slot.paintMode = args.paintMode;
@@ -2623,58 +2680,7 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
-  // Residence is only safe (bind group stable, uniform clip flags zero)
-  // when no clip mask / clip polygon / mask pass is active. Otherwise fall
-  // back to the per-frame arena path so clipped / masked draws stay exact.
-  if (impl_->maskPassOpen) {
-    submitFillDraw(args, {}, /*requireAdmission=*/false);
-    return;
-  }
-  // A clipped draw still reads the slot's geometry, and only its uniform and coverage binding
-  // differ from the cached bind group, so it keeps the geometry resident and takes a per-draw
-  // uniform instead of re-uploading the whole encode.
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive) {
-    if (!impl_->submitResidentGeometryFillDraw(slot, encoded, args)) {
-      submitFillDraw(args, {}, /*requireAdmission=*/false);
-    }
-    return;
-  }
-  // A slot's single uniform buffer can only carry one draw's uniform per
-  // frame. If a frame that drew this slot resident is still open - a repeat
-  // earlier in THIS frame (markers, non-adjacent repeated `<use>` at
-  // distinct transforms), or an outer renderer's frame on this device that
-  // recorded a draw against the slot while an offscreen pass renders the
-  // same document - route this draw through the arena path so it gets its
-  // own uniform + bind group instead of clobbering the parameters that
-  // recorded draw reads at submit. Frame stamps are device-scoped
-  // generations, so the claim compares against the device's oldest open
-  // generation; the gate still applies only when the slot is resident ON
-  // THIS device. Every device keeps its own slots, so a slot resident on
-  // another device is not reachable here; the check is a defensive
-  // cross-check, and a mismatch re-uploads (submitResidentFillDraw
-  // re-uploads on the device-id mismatch) rather than falling back.
-  // A repeat whose slot was re-uploaded mid-frame (an in-place stroke
-  // rebuild clears the device id) is NOT gated here: the re-upload took a
-  // fresh slab range with its own uniform region, and a solo resident draw
-  // publishes its paint through that uniform rather than through a shared
-  // per-entity record, so the earlier recorded draw of this slot keeps its
-  // own parameters at submit time.
-  //
-  // The repeat still draws the same geometry, so it binds the slot's resident ranges with a
-  // uniform of its own from the frame arena: a sprite drawn many times a frame uploads its
-  // geometry once, not once per occurrence.
-  if (slot.owningDeviceId == impl_->device->deviceId() &&
-      (impl_->device->frameStampClaimed(slot.lastResidentFrame) ||
-       impl_->device->frameStampClaimed(slot.lastSceneFrame))) {
-    if (!impl_->submitResidentGeometryFillDraw(slot, encoded, args)) {
-      submitFillDraw(args, {}, /*requireAdmission=*/false);
-    }
-    return;
-  }
-  slot.lastResidentFrame = frameId;
-  if (!impl_->submitResidentFillDraw(slot, encoded, args)) {
-    submitFillDraw(args, {}, /*requireAdmission=*/false);
-  }
+  impl_->submitResidentSolidFill(*this, slot, encoded, args, frameId);
 }
 
 void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color,
