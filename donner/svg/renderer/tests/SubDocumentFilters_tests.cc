@@ -294,8 +294,7 @@ TEST(SubDocumentFiltersTest, HostMaskAndBoxClipAroundExternalUseMatchInDocument)
     SCOPED_TRACE(kReferences[i]);
     const auto host = [&](std::string_view href, bool inlineSprites) {
       return "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>" +
-             std::string(kEffects[i]) +
-             (inlineSprites ? std::string(kSprites) : std::string()) +
+             std::string(kEffects[i]) + (inlineSprites ? std::string(kSprites) : std::string()) +
              "<rect width='32' height='16' fill='#ffffff'/><g " + std::string(kReferences[i]) +
              "><use href='" + std::string(href) + "' x='8'/></g></svg>";
     };
