@@ -13,6 +13,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/FillRule.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
@@ -1130,6 +1131,9 @@ public:
   /**
    * Renders the given SVG document. Implementations prepare the document, traverse the render
    * tree, and emit drawing commands.
+   *
+   * Warnings found while preparing the document are discarded, or printed to stderr by a backend
+   * created in verbose mode. Use the overload taking a \ref ParseWarningSink to receive them.
    */
   virtual void draw(SVGDocument& document) = 0;
 
@@ -1500,6 +1504,29 @@ public:
                         ColorInterpolation colorInterpolation) {
     (void)colorInterpolation;
     pushMask(maskBounds, maskType);
+  }
+
+  /**
+   * Renders the given SVG document and reports the warnings found while preparing it.
+   *
+   * Preparation resolves references, loads external resources, and builds the render tree.
+   * Recoverable problems found on the way, such as an unresolved `href` or the parse warnings of
+   * an SVG document loaded for `<use href="other.svg#id">`, are appended to @p warningSink instead
+   * of being printed, so the host decides how to surface them. A preparation step that reuses
+   * cached results does not report its warnings again, so a document that has not changed since
+   * the previous draw usually reports none.
+   *
+   * Appended after the legacy virtual surface to preserve existing vtable slot order. The default
+   * compatibility implementation calls the one-argument \ref draw and reports nothing; the
+   * built-in backends override it.
+   *
+   * @param document The SVG document to render.
+   * @param warningSink Receives preparation warnings. Pass \ref ParseWarningSink::Disabled to
+   *   discard them.
+   */
+  virtual void draw(SVGDocument& document, ParseWarningSink& warningSink) {
+    (void)warningSink;
+    draw(document);
   }
 };
 

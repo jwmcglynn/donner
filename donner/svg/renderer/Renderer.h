@@ -119,6 +119,27 @@ public:
   void draw(SVGDocument& document) override;
 
   /**
+   * Draws the SVG document using the active backend and reports the warnings found while
+   * preparing it, such as unresolved references or the parse warnings of an SVG document loaded
+   * for `<use href="other.svg#id">`.
+   *
+   * Without a sink, \ref draw(SVGDocument&) discards these warnings, or prints them to stderr when
+   * the renderer was created in verbose mode.
+   *
+   * ```cpp
+   * ParseWarningSink warnings;
+   * renderer.draw(document, warnings);
+   * for (const ParseDiagnostic& warning : warnings.warnings()) {
+   *   std::cout << warning << "\n";
+   * }
+   * ```
+   *
+   * @param document The SVG document to render.
+   * @param warningSink Receives preparation warnings.
+   */
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override;
+
+  /**
    * Rasterize a single \ref SVGElement and its descendant subtree to an image
    * fitted into a target box.
    *

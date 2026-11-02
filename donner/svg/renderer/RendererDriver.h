@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/FontResourceGraph.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -101,15 +102,20 @@ public:
    * backend implementation.
    *
    * @param renderer Backend receiving prepared draw calls.
-   * @param verbose Whether to emit diagnostic warnings.
+   * @param verbose Whether to emit verbose diagnostics, including printing render warnings to
+   *   stderr when no @p warningSink is given.
    * @param securityStats Optional preparation diagnostics destination.
    * @param externalUseStyleWork Optional shared owner-frame work admission context. Current-frame
    * callers share one fresh context for every backend beginFrame/endFrame pair; persistent drivers
    * must establish an OwnerScope on that context or be reconstructed for the next frame.
+   * @param warningSink Optional destination for warnings found while preparing and drawing
+   *   documents. When null, warnings are printed to stderr in verbose mode and discarded
+   *   otherwise. Must outlive the driver.
    */
   explicit RendererDriver(
       RendererInterface& renderer, bool verbose = false, SecurityStats* securityStats = nullptr,
-      std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork = nullptr);
+      std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork = nullptr,
+      ParseWarningSink* warningSink = nullptr);
 
   ~RendererDriver();
 
@@ -492,6 +498,8 @@ private:
   void recordChildFontDependencies(SVGDocument& child, Entity target, Registry& hostRegistry,
                                    Entity host);
   void prepareSubDocument(SVGDocument& document);
+  /// Prepare @p document, routing its warnings as described for the constructor's warning sink.
+  void prepareDocument(SVGDocument& document);
   std::shared_ptr<components::FontResourceGraphCache> fontCollectionCache_;
   std::shared_ptr<std::unordered_set<const DocumentState*>> activeFontSubDocuments_;
   std::shared_ptr<std::unordered_set<const DocumentState*>> visitedFontSubDocuments_;
@@ -555,6 +563,8 @@ private:
   RendererTextMaterializationBudget ownedClipGeometryCopyBudget_{kClipGeometryCopyLimits};
   RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;
+  /// Host destination for render warnings, or null to print them only in verbose mode.
+  ParseWarningSink* warningSink_ = nullptr;
 
   void syncFilterPreparationStats();
 

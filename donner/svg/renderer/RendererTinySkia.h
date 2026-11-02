@@ -85,6 +85,14 @@ public:
    */
   void draw(SVGDocument& document) override;
 
+  /**
+   * Draws the SVG document and reports the warnings found while preparing it.
+   *
+   * @param document The SVG document to render.
+   * @param warningSink Receives preparation warnings instead of stderr.
+   */
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override;
+
   void beginFrameResourceScope() override;
   void endFrameResourceScope() override;
 
@@ -328,6 +336,9 @@ public:
 
 private:
   struct DashedPathWorkBudget;
+
+  /// Shared body of both \ref draw overloads; a null @p warningSink keeps the verbose-only default.
+  void drawDocument(SVGDocument& document, ParseWarningSink* warningSink);
 
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
