@@ -8,6 +8,7 @@
 #include <functional>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <source_location>
@@ -1283,6 +1284,465 @@ TEST(RendererPublicApiTest, ExternalUseMissingFragmentDoesNotLeakScopedState) {
   EXPECT_THAT(PixelAt(valid, 4, 4), test::Rgba(0, 0, 255, 255));
   EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
 }
+
+/// An external-use target placed so that its own document does or does not render it.
+struct ExternalUseTargetCase {
+  const char* name;
+  const char* content;        ///< Resource body; the referenced element has `id="t"`.
+  const char* useAttributes;  ///< Extra attributes on the referencing `<use>`.
+  Vector2i probe;             ///< Pixel checked in the expected bitmap before comparison.
+  testing::Matcher<std::array<uint8_t, 4>> probeColor;
+};
+
+void PrintTo(const ExternalUseTargetCase& value, std::ostream* output) {
+  *output << value.name << ": content=" << value.content << ", use=" << value.useAttributes;
+}
+
+class ExternalUseTargetTest : public testing::TestWithParam<ExternalUseTargetCase> {};
+
+// A `<use>` instantiates a copy of its target, so where that target sits in its own document is
+// irrelevant: an external reference renders exactly like the same content referenced in-document.
+TEST_P(ExternalUseTargetTest, MatchesSameDocumentUse) {
+  const ExternalUseTargetCase& params = GetParam();
+  const std::string svgOpen = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>";
+  const std::string use = std::string(" ") + params.useAttributes + "/></svg>";
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      svgOpen + "<use href='external.svg#t'" + use, svgOpen + params.content + "</svg>");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+
+  const RendererBitmap expected =
+      RenderInlineDocument(svgOpen + "<defs>" + params.content + "</defs><use href='#t'" + use);
+  EXPECT_THAT(PixelAt(expected, params.probe.x, params.probe.y), params.probeColor);
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, params.name,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+testing::Matcher<std::array<uint8_t, 4>> OpaqueBlue() {
+  return test::RgbaEq(0, 0, 255, 255);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ExternalUseTargets, ExternalUseTargetTest,
+    testing::Values(
+        ExternalUseTargetCase{"VisibleWithOwnTransform",
+                              "<rect id='t' width='4' height='4' transform='translate(6 6)' "
+                              "fill='blue'/>",
+                              "x='2'",
+                              {9, 7},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefs",
+                              "<defs><rect id='t' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefsWithOwnTransform",
+                              "<defs><rect id='t' width='4' height='4' transform='translate(6 6)' "
+                              "fill='blue'/></defs>",
+                              "x='2'",
+                              {9, 7},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefsUnderTransparentTranslatedGroup",
+                              "<defs><g opacity='0' transform='translate(100 100)'>"
+                              "<rect id='t' width='8' height='8' fill='blue'/></g></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefsUnderSingularGroup",
+                              "<defs><g transform='scale(0)'>"
+                              "<rect id='t' width='8' height='8' fill='blue'/></g></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"GroupInsideDefs",
+                              "<defs><g id='t' fill='blue'><rect width='4' height='4'/>"
+                              "<rect x='4' y='4' width='4' height='4' fill='lime'/></g></defs>",
+                              "x='4' y='4'",
+                              {10, 10},
+                              test::RgbaEq(0, 255, 0, 255)},
+        ExternalUseTargetCase{"ScaledUseOfTranslatedTarget",
+                              "<defs><rect id='t' width='2' height='2' transform='translate(1 1)' "
+                              "fill='blue'/></defs>",
+                              "x='1' transform='scale(2)'",
+                              {5, 3},
+                              OpaqueBlue()},
+        // The overflowing rect checks that the symbol clips to the viewport the use establishes.
+        ExternalUseTargetCase{"SymbolWithViewBox",
+                              "<symbol id='t' viewBox='0 0 4 4'>"
+                              "<rect width='6' height='6' fill='blue'/></symbol>",
+                              "x='4' y='4' width='8' height='8'",
+                              {10, 10},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"SymbolWithoutViewBox",
+                              "<symbol id='t'><rect width='6' height='6' fill='blue'/></symbol>",
+                              "x='2' y='2'",
+                              {5, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"OpacityOnUse",
+                              "<defs><rect id='t' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4' opacity='0.5'",
+                              {8, 8},
+                              test::Rgba(0, 0, 255, test::Near(128, 1))},
+        ExternalUseTargetCase{
+            "SymbolSliceAlignedToMaxCorner",
+            "<symbol id='t' viewBox='0 0 4 2' preserveAspectRatio='xMaxYMax slice'>"
+            "<rect width='4' height='2' fill='blue'/>"
+            "<rect x='3' width='1' height='2' fill='lime'/></symbol>",
+            "x='2' y='2' width='8' height='8'",
+            {8, 5},
+            test::RgbaEq(0, 255, 0, 255)},
+        ExternalUseTargetCase{
+            "SymbolWithTransformPositionAndSize",
+            "<symbol id='t' viewBox='0 0 4 4'>"
+            "<rect width='4' height='4' fill='blue'/></symbol>",
+            "x='2' y='1' width='8' height='8' transform='translate(1 2) scale(0.5)'",
+            {4, 4},
+            OpaqueBlue()},
+        ExternalUseTargetCase{"NestedSvgAsTarget",
+                              "<defs><svg id='t' width='4' height='4' viewBox='0 0 2 2'>"
+                              "<rect width='4' height='4' fill='blue'/></svg></defs>",
+                              "x='4' y='4'",
+                              {5, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"HiddenAncestorOfVisibleDescendant",
+                              "<defs><g id='t'><g visibility='hidden'>"
+                              "<rect width='4' height='4' fill='red'/>"
+                              "<rect x='4' width='4' height='4' fill='blue' visibility='visible'/>"
+                              "</g></g></defs>",
+                              "x='4' y='4'",
+                              {9, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"DisplayNoneAncestorOfDescendant",
+                              "<defs><g id='t'><g display='none'>"
+                              "<rect width='4' height='4' fill='red'/></g>"
+                              "<rect x='4' width='4' height='4' fill='blue'/></g></defs>",
+                              "x='4' y='4'",
+                              {9, 5},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"UseInsideDefs",
+                              "<defs><use id='t' href='#r'/>"
+                              "<rect id='r' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"GroupWithUseInsideDefs",
+                              "<defs><g id='t'><use href='#r'/></g>"
+                              "<rect id='r' width='8' height='8' fill='blue'/></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        ExternalUseTargetCase{"UnderHiddenParent",
+                              "<g display='none'><rect id='t' width='8' height='8' "
+                              "fill='blue'/></g>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
+        // The copy keeps the target's own `display: none`, so nothing renders in either case.
+        ExternalUseTargetCase{"HiddenItself",
+                              "<rect id='t' width='8' height='8' fill='blue' display='none'/>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              test::IsTransparent()}),
+    [](const testing::TestParamInfo<ExternalUseTargetCase>& info) { return info.param.name; });
+
+// Masks, patterns and markers render only where they are referenced as resources, never through a
+// `<use>`.
+TEST(RendererPublicApiTest, ExternalUseOfResourceContainerDrawsNothing) {
+  const RendererBitmap empty =
+      RenderInlineDocument("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'/>");
+  for (const std::string_view tag : {"mask", "pattern", "marker"}) {
+    SCOPED_TRACE(tag);
+    const ExternalUseRenderResult actual = RenderExternalUse(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+        "<use href='external.svg#t'/></svg>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><" + std::string(tag) +
+            " id='t'><rect width='8' height='8' fill='blue'/></" + std::string(tag) + "></svg>");
+    editor::tests::CompareBitmapToBitmap(actual.bitmap, empty,
+                                         "external-use-resource-" + std::string(tag),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+constexpr std::string_view kSymbolResource =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+    "<symbol id='sym' viewBox='0 0 4 4'><rect width='6' height='6' fill='blue'/></symbol>"
+    "<rect x='12' y='12' width='4' height='4' fill='lime'/>"
+    "<g transform='translate(8 0)'><g id='v' transform='translate(0 8)'>"
+    "<rect width='4' height='4' fill='red'/></g></g>"
+    "<use href='#sym' width='4' height='4'/></svg>";
+
+// Each occurrence sizes the shared symbol from its own <use>, and none of that state survives into
+// a later draw of the referenced document.
+TEST(RendererPublicApiTest, ExternalUseInstanceLeavesReferencedDocumentClean) {
+  auto fixture = MakeExternalUseFixture(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>"
+      "<use href='external.svg#sym' width='8' height='8'/>"
+      "<use href='external.svg#sym' x='8' y='8' width='4' height='4'/>"
+      "<use href='external.svg#v' x='12' y='-8'/><use href='external.svg' x='16'/></svg>",
+      kSymbolResource);
+  const RendererBitmap expected = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'><defs>"
+      "<symbol id='sym' viewBox='0 0 4 4'><rect width='6' height='6' fill='blue'/></symbol></defs>"
+      "<use href='#sym' width='8' height='8'/><use href='#sym' x='8' y='8' width='4' height='4'/>"
+      "<rect x='12' width='4' height='4' fill='red'/><image x='16' width='16' height='16' href='" +
+      SvgDataUrl(kSymbolResource) + "'/></svg>");
+  EXPECT_THAT(PixelAt(expected, 12, 12), test::IsTransparent());
+  EXPECT_THAT(PixelAt(expected, 11, 11), test::RgbaEq(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(expected, 17, 1), test::RgbaEq(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(expected, 13, 1), test::RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(expected, 25, 9), test::RgbaEq(255, 0, 0, 255));
+
+  Renderer renderer;
+  for (int frame = 0; frame < 2; ++frame) {
+    renderer.draw(fixture.document);
+    editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), expected,
+                                         "external-use-clean-frame-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  ASSERT_THAT(*fixture.child, testing::NotNull());
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  editor::tests::CompareBitmapToBitmap(
+      RenderPublicDocument(child), RenderInlineDocument(kSymbolResource),
+      "external-use-clean-child", editor::tests::PixelmatchIdentityParams());
+}
+
+// A nested `<svg>` inside the referenced element clips to its own viewport.
+TEST(RendererPublicApiTest, ExternalUseNestedSvgInsideTargetClips) {
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<use href='external.svg#t' x='4' y='4'/></svg>",
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs><g id='t'>"
+      "<svg width='4' height='4'><rect width='8' height='8' fill='blue'/></svg></g></defs></svg>");
+  const RendererBitmap expected = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<rect x='4' y='4' width='4' height='4' fill='blue'/></svg>");
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-use-nested-svg-clip",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Serves one SVG resource per URL; unknown URLs never reach a network or filesystem loader.
+class MultiResourceLoader final : public ResourceLoaderInterface {
+public:
+  explicit MultiResourceLoader(std::map<std::string, std::string> resources)
+      : resources_(std::move(resources)) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    const auto it = resources_.find(std::string(url));
+    if (it == resources_.end()) {
+      return ResourceLoaderError::NotFound;
+    }
+    return std::vector<uint8_t>(it->second.begin(), it->second.end());
+  }
+
+private:
+  std::map<std::string, std::string> resources_;
+};
+
+// An external instance may itself reference a third document.
+TEST(RendererPublicApiTest, ExternalUseOfTargetContainingExternalUse) {
+  constexpr std::string_view leaf =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='s' width='8' height='8' fill='blue'/></defs></svg>";
+  SVGDocument::Settings settings;
+  settings.resourceLoader =
+      std::make_unique<MultiResourceLoader>(std::map<std::string, std::string>{
+          {"b.svg",
+           "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs><g id='t'>"
+           "<use href='c.svg#s'/></g></defs></svg>"}});
+  settings.svgParseCallback = [leaf](
+                                  const std::vector<uint8_t>& bytes,
+                                  ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings nested;
+    nested.resourceLoader = std::make_unique<MultiResourceLoader>(
+        std::map<std::string, std::string>{{"c.svg", std::string(leaf)}});
+    auto parsed = parser::SVGParser::ParseSVG(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
+        parser::SVGParser::Options(), std::move(nested));
+    return parsed.hasError() ? std::nullopt : std::optional(parsed.result().handle());
+  };
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<use href='b.svg#t' x='4' y='4'/></svg>",
+      warnings, parser::SVGParser::Options(), std::move(settings));
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse()) << parsed.error();
+  const RendererBitmap actual = RenderPublicDocument(parsed.result());
+
+  const RendererBitmap expected = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='s' width='8' height='8' fill='blue'/></defs><use href='#s' x='4' y='4'/></svg>");
+  EXPECT_THAT(PixelAt(expected, 8, 8), OpaqueBlue());
+  editor::tests::CompareBitmapToBitmap(actual, expected, "external-use-nested-external",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Drawing an instance must leave the referenced document's own layout readable through the public
+// API, with no standalone render in between. The `<use>` root is drawn last, so no later
+// occurrence's rebuild can restore state that the instance dropped.
+TEST(RendererPublicApiTest, ExternalUseInstanceKeepsReferencedLayoutReadable) {
+  constexpr std::string_view resource =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='r' width='2' height='2' fill='blue'/><use id='u' href='#r' x='2' y='3'/></defs>"
+      "<g id='g' transform='translate(5 6)'><rect id='c' x='1' width='2' height='2' "
+      "fill='lime'/></g></svg>";
+  auto fixture = MakeExternalUseFixture(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<use href='external.svg#g' x='8'/><use href='external.svg#u'/></svg>",
+      resource);
+  Renderer renderer;
+  renderer.draw(fixture.document);
+
+  ASSERT_THAT(*fixture.child, testing::NotNull());
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  // Reads on a never-rendered `<use>` need its computed size, so the comparison document is
+  // rendered once; the child gets no render of its own.
+  SVGDocument fresh = ParseDocument(resource);
+  (void)RenderPublicDocument(fresh);
+  const auto element = [](SVGDocument& document, const char* selector) {
+    auto found = document.querySelector(selector);
+    EXPECT_THAT(found, testing::Optional(testing::_)) << selector;
+    return found.value_or(document.svgElement());
+  };
+  EXPECT_EQ(element(child, "#c").cast<SVGGeometryElement>().worldBounds(),
+            element(fresh, "#c").cast<SVGGeometryElement>().worldBounds());
+  EXPECT_EQ(element(child, "#g").cast<SVGGraphicsElement>().elementFromWorld(),
+            element(fresh, "#g").cast<SVGGraphicsElement>().elementFromWorld());
+  EXPECT_EQ(element(child, "#u").cast<SVGGraphicsElement>().elementFromWorld(),
+            element(fresh, "#u").cast<SVGGraphicsElement>().elementFromWorld());
+}
+
+// A same-document <use> inside a nested <svg> renders its target.
+TEST(RendererPublicApiTest, UseInsideNestedSvgRenders) {
+  const RendererBitmap actual = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='r' width='4' height='4' fill='blue'/>"
+      "<symbol id='sym' viewBox='0 0 4 4'><rect width='4' height='4' fill='lime'/></symbol>"
+      "</defs><svg x='8' width='8' height='8'><use href='#r'/>"
+      "<use href='#sym' y='4' width='4' height='4'/></svg></svg>");
+  EXPECT_THAT(PixelAt(actual, 9, 1), OpaqueBlue());
+  EXPECT_THAT(PixelAt(actual, 9, 5), test::RgbaEq(0, 255, 0, 255));
+}
+
+// The host layer applies the `<use>` element's opacity, so the referenced content must not add a
+// second one.
+TEST(RendererPublicApiTest, ExternalUseOpacityAppliesOnce) {
+  constexpr std::string_view resource =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<rect id='t' width='8' height='8' fill='blue'/></svg>";
+  for (const std::string_view href : {"external.svg#t", "external.svg"}) {
+    SCOPED_TRACE(href);
+    const ExternalUseRenderResult actual = RenderExternalUse(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><use href='" +
+            std::string(href) + "' opacity='0.5'/></svg>",
+        resource);
+    EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 0, 255, test::Near(128, 1)));
+  }
+}
+
+TEST(RendererPublicApiTest, SvgImageOpacityAppliesOnce) {
+  const RendererBitmap actual = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<image width='8' height='8' opacity='0.5' href='" +
+      SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                 "<rect width='8' height='8' fill='blue'/></svg>") +
+      "'/></svg>");
+  EXPECT_THAT(PixelAt(actual, 4, 4), test::Rgba(0, 0, 255, test::Near(128, 1)));
+}
+
+/// A generic attribute write that retargets a `<use>`.
+struct UseHrefMutationCase {
+  const char* name;
+  const char* prefix;  ///< Attribute namespace prefix: empty for `href`, `xlink` for `xlink:href`.
+  const char* base;    ///< Href before the fragment: `external.svg`, or empty for same-document.
+};
+
+void PrintTo(const UseHrefMutationCase& value, std::ostream* output) {
+  *output << value.name << ": prefix='" << value.prefix << "', base='" << value.base << "'";
+}
+
+class UseHrefMutationTest : public testing::TestWithParam<UseHrefMutationCase> {};
+
+TEST_P(UseHrefMutationTest, SetAttributeRetargetsAndRemoveAttributeClears) {
+  const UseHrefMutationCase& params = GetParam();
+  const xml::XMLQualifiedNameRef attribute(params.prefix, "href");
+  const std::string attributeSource =
+      std::string_view(params.prefix).empty() ? "href" : std::string(params.prefix) + ":href";
+  const std::string base(params.base);
+  const std::string targets =
+      "<defs><rect id='a' width='8' height='8' fill='red'/>"
+      "<rect id='b' width='8' height='8' fill='blue'/></defs>";
+  auto fixture = MakeExternalUseFixture(
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+      "width='8' height='8'>" +
+          targets + "<use id='host' " + attributeSource + "='" + base + "#a'/></svg>",
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>" + targets + "</svg>");
+  auto host = fixture.document.querySelector("#host");
+  ASSERT_THAT(host, testing::Optional(testing::_));
+
+  Renderer renderer;
+  renderer.draw(fixture.document);
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+              test::Rgba(255, 0, 0, 255));
+
+  host->setAttribute(attribute, base + "#b");
+  EXPECT_THAT(host->getAttribute(attribute), testing::Optional(RcString(base + "#b")));
+  EXPECT_EQ(host->cast<SVGUseElement>().href(), base + "#b");
+  renderer.draw(fixture.document);
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+              test::Rgba(0, 0, 255, 255));
+
+  host->removeAttribute(attribute);
+  EXPECT_EQ(host->cast<SVGUseElement>().href(), "");
+  renderer.draw(fixture.document);
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4), test::IsTransparent());
+}
+
+// `href` wins over `xlink:href` in either source order; removing it falls back to `xlink:href`.
+TEST(RendererPublicApiTest, UseHrefPrecedenceRenders) {
+  const std::string open =
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+      "width='8' height='8'><defs><rect id='a' width='8' height='8' fill='red'/>"
+      "<rect id='b' width='8' height='8' fill='blue'/></defs>";
+  for (const std::string_view attributes :
+       {"href='#a' xlink:href='#b'", "xlink:href='#b' href='#a'"}) {
+    SCOPED_TRACE(attributes);
+    SVGDocument document =
+        ParseDocument(open + "<use id='host' " + std::string(attributes) + "/></svg>");
+    Renderer renderer;
+    renderer.draw(document);
+    EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+                test::Rgba(255, 0, 0, 255));
+
+    auto host = document.querySelector("#host");
+    ASSERT_THAT(host, testing::Optional(testing::_));
+    host->removeAttribute(xml::XMLQualifiedNameRef("href"));
+    renderer.draw(document);
+    EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+                test::Rgba(0, 0, 255, 255));
+  }
+}
+
+// `setHref("")` stores an empty `href`, which wins over `xlink:href`: nothing renders.
+TEST(RendererPublicApiTest, UseSetEmptyHrefRendersNothing) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+      "width='8' height='8'><defs><rect id='a' width='8' height='8' fill='red'/>"
+      "<rect id='b' width='8' height='8' fill='blue'/></defs>"
+      "<use id='host' href='#a' xlink:href='#b'/></svg>");
+  auto host = document.querySelector("#host");
+  ASSERT_THAT(host, testing::Optional(testing::_));
+  host->cast<SVGUseElement>().setHref(RcString());
+  EXPECT_THAT(PixelAt(RenderPublicDocument(document), 4, 4), test::IsTransparent());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    UseHrefMutations, UseHrefMutationTest,
+    testing::Values(UseHrefMutationCase{"ExternalHref", "", "external.svg"},
+                    UseHrefMutationCase{"ExternalXlinkHref", "xlink", "external.svg"},
+                    UseHrefMutationCase{"SameDocumentHref", "", ""},
+                    UseHrefMutationCase{"SameDocumentXlinkHref", "xlink", ""}),
+    [](const testing::TestParamInfo<UseHrefMutationCase>& info) { return info.param.name; });
 
 TEST(RendererPublicApiTest, ExternalUseFrameWorkAdmissionStopsAtLimit) {
   components::StyleResourceBudget work;

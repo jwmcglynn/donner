@@ -235,7 +235,11 @@ public:
   /**
    * Set the URI to the element to reuse.
    *
-   * @param value URI to the element to reuse, such as `#elementId`
+   * Sets the `href` attribute, which takes precedence over a `xlink:href` attribute.
+   *
+   * @param value URI to the element to reuse, such as `#elementId`. An empty value is stored as an
+   *   empty `href`, which still takes precedence over `xlink:href`, so the element renders
+   *   nothing.
    */
   void setHref(const RcString& value);
 

@@ -435,20 +435,25 @@ private:
                        const components::RenderingInstanceComponent& instance,
                        const components::ComputedStyleComponent& style, Registry& hostRegistry,
                        Entity hostEntity);
+  /// Draw a whole sub-document into @p viewportBounds. The referencing element's own opacity is
+  /// applied by its caller's layer, not here.
   void drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
-                       const PreserveAspectRatio& aspectRatio, double opacity,
+                       const PreserveAspectRatio& aspectRatio,
                        const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
                        Entity hostEntity);
-  void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                              const Transform2d& parentAbsoluteTransform, double opacity,
-                              Registry& hostRegistry, Entity hostEntity);
   void drawAdmittedSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
-                               const PreserveAspectRatio& aspectRatio, double opacity,
+                               const PreserveAspectRatio& aspectRatio,
                                const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
                                Entity hostEntity);
-  void drawAdmittedSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                                      const Transform2d& parentAbsoluteTransform, double opacity,
-                                      Registry& hostRegistry, Entity hostEntity);
+  /**
+   * Draw the instance an external `<use>` references. Requires the occurrence's external-use style
+   * and instance contexts, under which the sub-document's render tree holds only that instance and
+   * its layout is relative to the `<use>`. The `<use>` element's own opacity is applied by its
+   * caller's layer, not here.
+   */
+  void drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
+                               const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
+                               Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,

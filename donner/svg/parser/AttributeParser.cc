@@ -1773,7 +1773,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGUseElement>(SVGParserContext& c
     // Warning already added if there was an error.
     return std::nullopt;
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    element.setHref(RcString(value));
+    // The shared attribute write resolves `href` over `xlink:href` regardless of attribute order,
+    // as DOM mutations and incremental reparses do.
+    return AttributeParser::ApplyParsedAttribute(element, name, value);
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }
