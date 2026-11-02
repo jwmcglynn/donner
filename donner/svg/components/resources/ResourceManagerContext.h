@@ -12,6 +12,7 @@
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -114,6 +115,24 @@ public:
                                                    ParseWarningSink& warningSink);
 
   /**
+   * Load an external SVG document like \ref loadExternalSVG, admitting each URL at most once per
+   * admission pass: later requests for a URL that was already admitted in the current pass reuse
+   * that admission. A full render-tree rebuild starts a new pass with \ref
+   * beginExternalSVGAdmissionPass, and an external `<use>` retargeted between rebuilds reuses
+   * the admission of the last one, the same way the unchanged `<use>` elements keep the document
+   * they were given. Failed loads are not remembered, so each one is retried and reported.
+   *
+   * @param url URL of the external SVG to load.
+   * @param warningSink Sink to collect warnings.
+   * @return Parsed document handle, or `std::nullopt` on failure.
+   */
+  std::optional<SVGDocumentHandle> loadAdmittedExternalSVG(std::string_view url,
+                                                           ParseWarningSink& warningSink);
+
+  /// Start a new admission pass for \ref loadAdmittedExternalSVG: every URL is admitted again.
+  void beginExternalSVGAdmissionPass() { admittedExternalSvgs_.clear(); }
+
+  /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.
    *
    * @param entity Entity to get the image size for.
@@ -213,6 +232,9 @@ private:
 
   /// Positive and negative external fetch cache, shared by images, fonts, and subdocuments.
   mutable std::unordered_map<std::string, CachedFetchResult> externalFetchCache_;
+
+  /// External SVG documents admitted in the current admission pass, keyed by URL.
+  std::unordered_map<RcString, SVGDocumentHandle> admittedExternalSvgs_;
 
   /// External fetch resource-limit accounting.
   mutable FetchSecurityStats fetchSecurityStats_;

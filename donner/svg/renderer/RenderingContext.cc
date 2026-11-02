@@ -68,6 +68,7 @@
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/renderer/ExternalUseStyleRetention.h"
+#include "donner/svg/renderer/RetainedRenderTreeUpdate.h"
 
 namespace donner::svg::components {
 
@@ -1562,6 +1563,8 @@ bool IsUnpresentedDefinition(const Registry& registry, Entity entity) {
 }
 
 void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  // Admit each external document once for this rebuild, however many uses reference it.
+  registry.ctx().get<ResourceManagerContext>().beginExternalSVGAdmissionPass();
   for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
     // A referencing host expands these local uses from their light tree when it is presented.
@@ -1585,16 +1588,9 @@ void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSin
       }
     } else if (shadowTreeComponent.mainHref()) {
       // Same-document resolution failed. Check if this is an external reference.
-      const Reference ref(shadowTreeComponent.mainHref().value());
-      if (ref.isExternal()) {
-        // Load the external SVG document via ResourceManagerContext.
-        auto& resourceManager = registry.ctx().get<ResourceManagerContext>();
-        const RcString docUrl(ref.documentUrl());
-        auto subDoc = resourceManager.loadExternalSVG(docUrl, warningSink);
-        if (subDoc) {
-          registry.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
-                                                            RcString(ref.fragment()));
-        }
+      const RcString href = shadowTreeComponent.mainHref().value();
+      if (Reference(href).isExternal()) {
+        AttachExternalUse(registry, entity, href, warningSink);
       } else {
         ParseDiagnostic err;
         err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
@@ -1685,9 +1681,12 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
     return;
   }
 
+  if (tryRetainedUpdate(warningSink)) {
+    return;
+  }
+
   // Full rebuild path: tear down shadow trees and recompute everything.
-  // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
-  // instead of the full tree.
+  ++renderState.counters.fullRebuilds;
   ShadowTreeSystem::beginRebuild(registry_);
   std::vector<Entity> shadowHosts;
   auto shadowView = registry_.view<ComputedShadowTreeComponent>();
@@ -1701,6 +1700,7 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
     }
     if (auto* shadow = registry_.try_get<ComputedShadowTreeComponent>(entity)) {
       createShadowTreeSystem().teardown(registry_, *shadow);
+      ++renderState.counters.shadowTreeTeardowns;
     }
   }
   registry_.clear<ComputedShadowTreeComponent>();
@@ -1725,6 +1725,26 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
+}
+
+bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink) {
+  auto& renderState = getRenderTreeState(registry_);
+  if (!renderState.retainedUpdatesEnabled || !renderState.hasBeenBuilt ||
+      renderState.needsFullRebuild || renderState.needsFullStyleRecompute) {
+    return false;
+  }
+  const std::optional<RetainedUpdatePlan> plan = PlanRetainedUpdate(registry_);
+  if (!plan) {
+    return false;
+  }
+
+  ++renderState.counters.retainedUpdates;
+  renderState.counters.retargetedUses += plan->retargetedUses.size();
+  ApplyRetainedUpdate(registry_, *plan, warningSink);
+  registry_.clear<DirtyFlagsComponent>();
+  // The instances still describe the previous frame; the next instantiation rebuilds them.
+  renderState.needsInstanceRebuild = true;
+  return true;
 }
 
 bool RenderingContext::HitGeometry::contains(const Vector2d& point, const Path* path) const {

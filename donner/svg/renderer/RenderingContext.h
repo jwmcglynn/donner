@@ -185,6 +185,16 @@ private:
                           HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
+   * Bring the computed components up to date without the full rebuild when the frame's dirty set
+   * only moves content, changes its compositing, or retargets external `<use>` elements; see
+   * \ref RetainedUpdatePlan.
+   *
+   * @param warningSink Sink to collect warnings.
+   * @return True if the update was applied, false if the frame needs the full rebuild.
+   */
+  bool tryRetainedUpdate(ParseWarningSink& warningSink);
+
+  /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
    *
    * @param warningSink Sink to collect warnings.

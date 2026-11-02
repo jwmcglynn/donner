@@ -104,6 +104,11 @@ bool IsUseHrefAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& nam
           name == xml::XMLQualifiedNameRef("xlink", "href"));
 }
 
+/// The `<use>` attributes that place its instance and size the viewport it establishes.
+bool IsUseGeometryAttribute(std::string_view name) {
+  return name == "x" || name == "y" || name == "width" || name == "height";
+}
+
 bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& name,
                          std::string_view value) {
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -113,7 +118,11 @@ bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& na
   } else if (name == xml::XMLQualifiedNameRef("style")) {
     element.setStyle(value);
   } else if (IsUseHrefAttribute(element.entityHandle(), name)) {
-    markNeedsFullStyleRecompute(element.entityHandle());
+    // The stored attribute feeds `[href]` selectors; retargeting itself needs no restyle.
+    if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(
+            *element.entityHandle().registry(), name.name)) {
+      markNeedsFullStyleRecompute(element.entityHandle());
+    }
     element.entityHandle().get_or_emplace<donner::components::AttributesComponent>().setAttribute(
         *element.entityHandle().registry(), name, RcString(value));
     RetargetUseFromAttributes(element.entityHandle());
@@ -243,6 +252,34 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
   }
 }
 
+/// Dirty flags for an element whose compositing properties changed, see \ref markCompositingDirty.
+constexpr uint16_t kCompositingDirtyFlags = components::DirtyFlagsComponent::Style |
+                                            components::DirtyFlagsComponent::Compositing |
+                                            components::DirtyFlagsComponent::RenderInstance;
+
+/**
+ * Mark a change to `opacity`, which only decides how the element's subtree is composited: the
+ * element and its descendants are restyled (a descendant may say `opacity: inherit`) and the
+ * render instances rebuilt, but no geometry, paint, filter or shadow-tree input changed.
+ */
+void markCompositingDirty(EntityHandle handle) {
+  invalidateComputedStyle(handle);
+  markDirty(handle, kCompositingDirtyFlags);
+  // Text layout memoizes span styles; dropping it sends the frame through the full rebuild.
+  (void)components::InvalidateTextLayout(handle);
+
+  auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (entt::entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    donner::components::ForAllChildrenRecursive(
+        EntityHandle(registry, child), [](EntityHandle desc) {
+          components::StyleSystem().invalidateComputed(desc);
+          markDirty(desc, kCompositingDirtyFlags);
+        });
+  }
+}
+
 /// Propagate world-transform-related dirty flags to all descendants of the given entity.
 void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
   auto& tree = handle.get<donner::components::TreeComponent>();
@@ -254,6 +291,69 @@ void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
           markDirty(desc, components::DirtyFlagsComponent::WorldTransform |
                               components::DirtyFlagsComponent::RenderInstance);
         });
+  }
+}
+
+/**
+ * Parse parameters for an element-specific presentation attribute. The parser applies a `<use>`
+ * element's geometry attributes through its typed setters, so an attribute written later takes
+ * the same precedence or it would never replace the parsed value.
+ */
+parser::PropertyParseFnParams ElementAttributeParams(ElementType elementType, std::string_view name,
+                                                     std::string_view value) {
+  parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
+  if (elementType == ElementType::Use && IsUseGeometryAttribute(name)) {
+    params.specificity = css::Specificity::Override();
+  }
+  return params;
+}
+
+/// Request the whole-tree restyle when a stylesheet selects on the attribute \p name.
+void markFullStyleRecomputeIfSelected(EntityHandle handle, std::string_view name) {
+  if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle.registry(), name)) {
+    markNeedsFullStyleRecompute(handle);
+  }
+}
+
+/**
+ * Mark the invalidation a successful presentation-attribute write needs.
+ *
+ * @param handle The written element.
+ * @param elementType The element's type.
+ * @param name The attribute name as written.
+ * @param actualName The presentation attribute it maps to (`gradientTransform` maps to
+ *   `transform`).
+ */
+void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType,
+                                    std::string_view name, std::string_view actualName) {
+  if (actualName == "transform") {
+    // The value is stored as an attribute, and attributes are a live selector input:
+    // `[transform]`, `[transform="..."]` and combinators keyed on them can start or stop
+    // matching, including on elements other than this one. Per-entity dirty flags cannot express
+    // that, so it needs the whole-tree restyle - but only when a stylesheet actually selects on
+    // this attribute, which keeps the common case on the selective style pass.
+    markFullStyleRecomputeIfSelected(handle, name);
+    components::LayoutSystem().invalidate(handle);
+    markDirty(handle, components::DirtyFlagsComponent::RenderInstance);
+    propagateWorldTransformDirtyToDescendants(handle);
+  } else if (actualName == "opacity" && elementType != ElementType::Stop) {
+    // Like `transform`, the stored attribute only needs the whole-tree restyle when a stylesheet
+    // selects on it.
+    markFullStyleRecomputeIfSelected(handle, name);
+    markCompositingDirty(handle);
+  } else {
+    // For CSS properties (fill, stroke, etc.) and element-specific attributes (cx, cy, r, d,
+    // etc.), mark style cascade + shape dirty.
+    markNeedsFullStyleRecompute(handle);
+    invalidateComputedStyle(handle);
+    markStyleCascadeDirty(handle, components::DirtyFlagsComponent::Shape);
+    if (ShouldInvalidateDescendantStyles(actualName)) {
+      invalidateComputedStyleForDescendants(handle);
+      propagateStyleDirtyToDescendants(handle);
+    }
+    if (elementType == ElementType::Use && IsUseGeometryAttribute(actualName)) {
+      InvalidateUseGeometry(handle);
+    }
   }
 }
 
@@ -657,8 +757,8 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   if (!trySetResult.result()) {
     // Try element-specific presentation attributes (cx, cy, r, rx, ry, d, etc.).
-    parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
-    trySetResult = parser::ParsePresentationAttribute(elementType, handle_, actualName, params);
+    trySetResult = parser::ParsePresentationAttribute(
+        elementType, handle_, actualName, ElementAttributeParams(elementType, actualName, value));
   }
 
   if (trySetResult.hasResult() && trySetResult.result()) {
@@ -666,32 +766,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
         *handle_.registry(), xml::XMLQualifiedName(RcString(name)), RcString(value));
 
-    // Mark dirty flags based on the attribute type.
-    if (actualName == "transform") {
-      // The value was just stored as an attribute above, and attributes are a live selector
-      // input: `[transform]`, `[transform="..."]` and combinators keyed on them can start or stop
-      // matching, including on elements other than this one. Per-entity dirty flags cannot
-      // express that, so it needs the whole-tree restyle - but only when a stylesheet actually
-      // selects on this attribute, which keeps the common case on the selective style pass.
-      if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle_.registry(),
-                                                                         name)) {
-        markNeedsFullStyleRecompute(handle_);
-      }
-
-      components::LayoutSystem().invalidate(handle_);
-      markDirty(handle_, components::DirtyFlagsComponent::RenderInstance);
-      propagateWorldTransformDirtyToDescendants(handle_);
-    } else {
-      // For CSS properties (fill, stroke, opacity, etc.) and element-specific attributes
-      // (cx, cy, r, d, etc.), mark style cascade + shape dirty.
-      markNeedsFullStyleRecompute(handle_);
-      invalidateComputedStyle(handle_);
-      markStyleCascadeDirty(handle_, components::DirtyFlagsComponent::Shape);
-      if (ShouldInvalidateDescendantStyles(actualName)) {
-        invalidateComputedStyleForDescendants(handle_);
-        propagateStyleDirtyToDescendants(handle_);
-      }
-    }
+    MarkPresentationAttributeDirty(handle_, elementType, name, actualName);
     return true;
   }
 

@@ -2005,6 +2005,66 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "sprite_field_scene",
+    testonly = 1,
+    srcs = ["SpriteFieldScene.cc"],
+    hdrs = ["SpriteFieldScene.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "//donner/svg/resources:resource_loader_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# Retained render-tree updates: every frame of a DOM edit sequence must match the full rebuild of
+# the same state, for each kind of change a retained update applies or must refuse.
+donner_cc_test(
+    name = "retained_render_tree_update_tests",
+    srcs = ["RetainedRenderTreeUpdate_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":external_use_sprite_scene",
+        ":sprite_field_scene",
+        "//donner/base",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Game-like sprite field: the correctness half pins the per-frame work counters on the PR gate;
+# the wall-clock half reports main-document prepare time with and without retained updates in the
+# manual perf lane.
+donner_perf_cc_test(
+    name = "sprite_field_prepare_tests",
+    correctness_srcs = ["SpriteFieldPrepareCorrectness_tests.cc"],
+    wallclock_srcs = ["SpriteFieldPrepareWallclock_tests.cc"],
+    deps = [
+        ":sprite_field_scene",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Animated external-use sprite: the correctness half counts sprite-sheet restyles on the PR gate;
 # the wall-clock half compares bitmap and vector sprite frame times in the manual perf lane (run
 # it with `--config=geode` for the GPU backend).
