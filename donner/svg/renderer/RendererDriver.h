@@ -479,6 +479,9 @@ private:
     int maskDepth = 0;
   };
   void popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity);
+  /// True when one of @p markers, or a host of the document being drawn, has a filter layer open.
+  /// Surface culling is unsafe then: a filter can move content from outside the surface into view.
+  bool hasOpenFilterLayer(const std::vector<DeferredPop>& markers) const;
   [[nodiscard]] bool shouldCullEarlyLeaf(Registry& registry,
                                          const components::RenderingInstanceComponent& instance,
                                          const components::ComputedStyleComponent& style,
