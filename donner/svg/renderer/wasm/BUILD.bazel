@@ -269,6 +269,41 @@ wasm_cc_binary(
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
+# Links GeodeSurfaceRenderer's browser canvas path, which native builds never compile. Reached by
+# the wildcard build of the WebAssembly Geode configuration, like the renderer module above.
+cc_binary(
+    name = "_geode_surface_renderer_link_probe",
+    srcs = ["geode_surface_renderer_link_probe.cc"],
+    additional_linker_inputs = ["//donner/gpu/browser:library_donner_gpu.js"],
+    linkopts = [
+        "-sENVIRONMENT=web",
+        "-sEXIT_RUNTIME=0",
+        # The browser device request is asynchronous; GeodeSurfaceRenderer waits for it through
+        # Asyncify.
+        "-sASYNCIFY=1",
+        "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:geode_surface_renderer",
+    ],
+)
+
+wasm_cc_binary(
+    name = "geode_surface_renderer_link_probe",
+    cc_target = ":_geode_surface_renderer_link_probe",
+    outputs = [
+        "_geode_surface_renderer_link_probe.js",
+        "_geode_surface_renderer_link_probe.wasm",
+    ],
+    tags = ["codeql_wasm_geode"],
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
+)
+
 # The standalone Geode module must select Donner's browser runtime in its normal Wasm config.
 no_rust_dependency_audit_test(
     name = "geode_browser_default_audit_test",

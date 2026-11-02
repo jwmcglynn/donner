@@ -9,26 +9,13 @@ The runtime boundary this guide walks through is an internal seam, used by the
 editor, this example and Donner's own tests. Bazel visibility keeps the GPU
 runtime and Geode device targets inside the repository. Applications outside
 Donner have two supported entry points instead: the public
-\ref donner::svg::Renderer API for offscreen rendering, and on macOS
+\ref donner::svg::Renderer API for offscreen rendering, and
 \ref donner::svg::GeodeSurfaceRenderer, which presents to a host-owned
-`CAMetalLayer` (see \ref EmbeddingGeodeSurfaceRenderer). Linux and browser
-window presentation have no public entry point yet. The
+`CAMetalLayer` on macOS (see \ref EmbeddingGeodeSurfaceRenderer) or a `<canvas>`
+in a WebAssembly build (see \ref EmbeddingGeodeWebAssembly). Linux window
+presentation has no public entry point yet. The
 [GPU runtime reference](../gpu_runtime.md) covers the ownership, backend and
 failure-mode contracts this guide relies on.
-
-## Presenting from an application on macOS {#EmbeddingGeodeSurfaceRenderer}
-
-Select Geode in the application's `MODULE.bazel` with
-`donner.configure(renderer = "geode")`, depend on
-`@donner//donner/svg/renderer:geode_surface_renderer`, and create one renderer
-per `CAMetalLayer`. The renderer opens the Metal root, Geode context and runtime
-surface, and retires them in the order this guide describes. Pass drawable sizes
-in pixels (the layer's `bounds.size` times its `contentsScale`), keep
-`contentsScale` equal to the display's backing scale, and call `resize()` when
-`draw()` returns `ResizeNeeded`. Round each axis of the pixel size to the
-nearest whole pixel. The renderer configures the layer's device, pixel format,
-drawable size and opacity; the host must not change them. It always selects the
-Metal backend and ignores `DONNER_GPU_BACKEND`.
 
 The code below is quoted from `examples/geode_embed.cc`, so it is the code that
 builds; `//examples:geode_embed_builds_test` compiles the example in ordinary
@@ -54,6 +41,48 @@ interactive mode has no attempt limit.
 ```sh
 bazel run --config=geode //examples:geode_embed -- --one-frame path/to/drawing.svg
 ```
+
+## Presenting from an application on macOS {#EmbeddingGeodeSurfaceRenderer}
+
+Select Geode in the application's `MODULE.bazel` with
+`donner.configure(renderer = "geode")`, depend on
+`@donner//donner/svg/renderer:geode_surface_renderer`, and create one renderer
+per `CAMetalLayer`. The renderer opens the Metal root, Geode context and runtime
+surface, and retires them in the order this guide describes. Pass drawable sizes
+in pixels (the layer's `bounds.size` times its `contentsScale`), keep
+`contentsScale` equal to the display's backing scale, and call `resize()` when
+`draw()` returns `ResizeNeeded`. Round each axis of the pixel size to the
+nearest whole pixel. The renderer configures the layer's device, pixel format,
+drawable size and opacity; the host must not change them. It always selects the
+Metal backend and ignores `DONNER_GPU_BACKEND`.
+
+## Presenting from a WebAssembly application {#EmbeddingGeodeWebAssembly}
+
+`GeodeSurfaceRenderer::CreateForCanvas` presents to a `<canvas>` through WebGPU
+in builds that use Geode's browser backend. A downstream module needs:
+
+- An Emscripten toolchain of its own (for example `bazel_dep(name = "emsdk")`),
+  with the module built by `wasm_cc_binary`.
+- Geode, through `donner.configure(renderer = "geode")` or both
+  `--@donner//donner/svg/renderer:renderer_backend=geode` and
+  `--@donner//donner/svg/renderer/geode:enable_geode=true`, plus
+  `--@donner//donner/svg/renderer/geode:browser_backend=true` for the Wasm
+  build, which `donner.configure` does not set.
+- The compile and transition settings Donner's own Wasm configuration uses:
+  `--cxxopt=-fconstexpr-steps=10000000` and
+  `--@donner//build_defs:disable_perf_opt_transition=true`.
+- Link options `-sASYNCIFY` and
+  `--js-library=$(execpath @donner//donner/gpu/browser:library_donner_gpu.js)`,
+  with that file in `additional_linker_inputs`.
+
+Create the renderer from `main()`, where Asyncify can wait for the browser's
+asynchronous device request, and draw from the per-frame loop. Size the canvas
+with CSS and pass its drawing-buffer size (CSS size times `devicePixelRatio`);
+the renderer writes the canvas `width` and `height` attributes. A canvas never
+reports `ResizeNeeded`, so track size and pixel-ratio changes and call
+`resize()`. The canvas is configured with the browser's preferred format (BGRA8
+or RGBA8) and opaque alpha. Serve the page from a secure context (HTTPS, or
+localhost during development), which WebGPU requires.
 
 ## Native backend configuration {#EmbeddingGeodeBackendSelection}
 

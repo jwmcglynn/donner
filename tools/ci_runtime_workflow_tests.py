@@ -1738,7 +1738,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         module = 'name = "geode_wasm_browser_module"'
         self.assertIn(module, self.ci_target_definitions)
         definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
-        self.assertIn('srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"]', definition)
+        self.assertIn('"//donner/svg/renderer/wasm:donner_wasm_geode"', definition)
+        self.assertIn('"//donner/svg/renderer/wasm:geode_surface_renderer_link_probe"', definition)
 
     def test_browser_bridge_step_stays_strict_with_later_evidence_recovery(self):
         workflow = self.editor_wasm

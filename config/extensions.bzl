@@ -17,9 +17,10 @@ hardcoded defaults.
 Renderers:
   - renderer="tiny_skia": Software rasterizer (default).
   - renderer="geode":     GPU renderer (native Metal on macOS, Vulkan on Linux). Also enables
-                          the Geode build targets, including the macOS-only
+                          the Geode build targets, including
                           //donner/svg/renderer:geode_surface_renderer for presenting to an
-                          application's Metal layer.
+                          application's Metal layer on macOS, or to a canvas in WebAssembly
+                          builds with the browser backend.
   - renderer="skia":      Legacy value kept for compatibility; selects tiny_skia.
 
 Text rendering tiers:

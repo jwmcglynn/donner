@@ -451,12 +451,22 @@ _RENDERER_GEODE_COMMON_DEPS = [
 })
 
 # Public application-embedding entry point: presents documents with Geode to a host-owned
-# Core Animation Metal layer while keeping the GPU runtime types out of the public header.
+# Core Animation Metal layer or browser canvas while keeping the GPU runtime types out of the
+# public header.
 donner_cc_library(
     name = "geode_surface_renderer",
     srcs = ["GeodeSurfaceRenderer.cc"],
     hdrs = ["GeodeSurfaceRenderer.h"],
-    target_compatible_with = ["@platforms//os:macos"] + select({
+    local_defines = select({
+        "//donner/svg/renderer/geode:browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
+        "//conditions:default": [],
+    }),
+    # Metal-layer presentation on macOS; canvas presentation in browser-backend Wasm builds.
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//donner/svg/renderer/geode:browser_backend_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),

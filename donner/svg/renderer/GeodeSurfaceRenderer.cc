@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "donner/gpu/Descriptors.h"
@@ -11,13 +13,30 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#if defined(DONNER_GEODE_BROWSER_BACKEND)
+#include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
+#else
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
+#endif
 
 namespace donner::svg {
 namespace {
 
-/// Core Animation presents BGRA8, so the device and surface are created for that format.
-constexpr gpu::TextureFormat kPresentationFormat = gpu::TextureFormat::BGRA8Unorm;
+/// The device is first created for BGRA8, which Core Animation presents and most browsers prefer.
+/// A browser surface reports only its preferred format, and presenting in that format avoids a
+/// compositor copy, so a canvas that prefers RGBA8 reopens the device in RGBA8. The reopen
+/// rebuilds the device's pipelines once, at creation.
+constexpr gpu::TextureFormat kDefaultFormat = gpu::TextureFormat::BGRA8Unorm;
+
+/// Name of a presentable format, for error messages.
+std::string_view FormatName(gpu::TextureFormat format) {
+  return format == gpu::TextureFormat::RGBA8Unorm ? "RGBA8" : "BGRA8";
+}
+
+/// Whether Geode can render to \p format as a presentation target.
+bool IsPresentableFormat(gpu::TextureFormat format) {
+  return format == gpu::TextureFormat::BGRA8Unorm || format == gpu::TextureFormat::RGBA8Unorm;
+}
 
 void SetError(std::string* error, std::string message) {
   if (error != nullptr) {
@@ -49,14 +68,20 @@ bool Contains(const Container& container, const Value& value) {
   return std::find(container.begin(), container.end(), value) != container.end();
 }
 
-/// Whether \p caps can present BGRA8 render targets with some pacing and alpha mode.
-bool SupportsPresentation(const gpu::SurfaceCapabilities& caps) {
-  return Contains(caps.formats, kPresentationFormat) &&
+/// Whether \p caps can present render targets with some pacing and alpha mode.
+bool CanPresent(const gpu::SurfaceCapabilities& caps) {
+  return !caps.formats.empty() &&
          (caps.usages & gpu::TextureUsage::RenderAttachment) != gpu::TextureUsage::None &&
          !caps.presentModes.empty() && !caps.alphaModes.empty();
 }
 
 }  // namespace
+
+/// What one factory asks \ref GeodeSurfaceRenderer::Impl::open for.
+struct GeodeSurfaceRenderer::SurfaceRequest {
+  geode::GpuBackendKind backend;    //!< Backend the platform object belongs to.
+  gpu::NativeSurfaceHandle native;  //!< The host's platform object.
+};
 
 struct GeodeSurfaceRenderer::Impl {
   std::shared_ptr<geode::GeodeGpuRoot> root;
@@ -65,49 +90,112 @@ struct GeodeSurfaceRenderer::Impl {
   gpu::SurfaceConfiguration configuration;
   std::unique_ptr<RendererGeode> renderer;
   Vector2i size;
+  gpu::TextureFormat format = kDefaultFormat;
 
   gpu::Device& runtime() { return device->runtimeDevice(); }
 
-  /// Opens a Metal root, the device, and a runtime surface over \p metalLayer.
+  /// Opens the requested backend's root, a device for \ref format, and a runtime surface.
   /// @return An error description, or empty on success.
-  std::string open(void* metalLayer) {
+  std::string open(const SurfaceRequest& request) {
     geode::GpuRootSelection selection;
     selection.label = "GeodeSurfaceRenderer";
     // Naming the backend keeps DONNER_GPU_BACKEND from redirecting or aborting selection.
-    selection.backend = geode::GpuBackendKind::NativeMetal;
+    selection.backend = request.backend;
     root = geode::SelectGpuRoot(selection);
     if (root == nullptr) {
-      return "Metal is not available on this host";
+      return "the " + std::string(geode::GpuBackendKindName(request.backend)) +
+             " GPU backend is not available on this host";
     }
+    return openDeviceAndSurface(request.native);
+  }
+
+  /// Opens a device for \ref format over \ref root and a runtime surface for \p native.
+  /// @return An error description, or empty on success.
+  std::string openDeviceAndSurface(const gpu::NativeSurfaceHandle& native) {
     device = std::shared_ptr<geode::GeodeDevice>(
-        geode::GeodeDevice::CreateOverSelectedRoot(root, kPresentationFormat));
+        geode::GeodeDevice::CreateOverSelectedRoot(root, format));
     if (device == nullptr) {
-      return "could not create a Geode device over the Metal root";
+      return "could not create a Geode device over the GPU root";
     }
     gpu::SurfaceDescriptor descriptor;
     descriptor.label = "GeodeSurfaceRenderer";
-    descriptor.native.kind = gpu::NativeSurfaceKind::MetalLayer;
-    descriptor.native.display = metalLayer;
+    descriptor.native = native;
     gpu::Result<gpu::Surface> created = runtime().createSurface(descriptor);
     if (created.hasError()) {
-      return "could not create a surface for the layer: " + created.error().toString();
+      return "could not create a surface: " + created.error().toString();
     }
     surface = std::move(created).result();
     return {};
   }
 
-  /// Chooses BGRA8 with Fifo pacing and opaque alpha when the surface offers them.
+  /// Releases the surface and device, keeping the root, so a device can reopen in another format.
+  void closeDeviceAndSurface() {
+    retireSurface();
+    device.reset();
+  }
+
+  /// Destroys the runtime surface, logging a failure to retire it.
+  void retireSurface() {
+    if (!surface.isValid() || device == nullptr) {
+      return;
+    }
+    if (gpu::Status released = runtime().destroySurface(std::move(surface)); released.hasError()) {
+      std::fprintf(stderr, "GeodeSurfaceRenderer: could not retire surface: %s\n",
+                   released.error().toString().c_str());
+    }
+  }
+
+  /// Queries what the surface supports.
   /// @return An error description, or empty on success.
-  std::string chooseConfiguration() {
-    gpu::Result<gpu::SurfaceCapabilities> capabilities = runtime().surfaceCapabilities(surface);
-    if (capabilities.hasError()) {
-      return "could not query surface capabilities: " + capabilities.error().toString();
+  std::string capabilities(gpu::SurfaceCapabilities& caps) {
+    gpu::Result<gpu::SurfaceCapabilities> queried = runtime().surfaceCapabilities(surface);
+    if (queried.hasError()) {
+      return "could not query surface capabilities: " + queried.error().toString();
     }
-    const gpu::SurfaceCapabilities& caps = capabilities.result();
-    if (!SupportsPresentation(caps)) {
-      return "the surface cannot present BGRA8 render targets";
+    caps = queried.result();
+    return CanPresent(caps) ? std::string() : "the surface cannot present render targets";
+  }
+
+  /// Ensures the device format is one the surface accepts, reopening the device and surface for
+  /// the surface's own format when it does not offer BGRA8 (a browser canvas whose preferred
+  /// format is RGBA8).
+  /// @return An error description, or empty on success.
+  std::string matchSurfaceFormat(const gpu::NativeSurfaceHandle& native,
+                                 gpu::SurfaceCapabilities& caps) {
+    if (Contains(caps.formats, format)) {
+      return {};
     }
-    configuration.format = kPresentationFormat;
+    const auto preferred =
+        std::find_if(caps.formats.begin(), caps.formats.end(), IsPresentableFormat);
+    if (preferred == caps.formats.end()) {
+      return "the surface offers no BGRA8 or RGBA8 format";
+    }
+    format = *preferred;
+    closeDeviceAndSurface();
+    std::string failure = openDeviceAndSurface(native);
+    if (failure.empty()) {
+      failure = capabilities(caps);
+    }
+    if (failure.empty() && !Contains(caps.formats, format)) {
+      failure = "the surface no longer offers its preferred format";
+    }
+    return failure.empty()
+               ? failure
+               : "while reopening in " + std::string(FormatName(format)) + ": " + failure;
+  }
+
+  /// Chooses the surface format, Fifo pacing and opaque alpha when the surface offers them.
+  /// @return An error description, or empty on success.
+  std::string chooseConfiguration(const gpu::NativeSurfaceHandle& native) {
+    gpu::SurfaceCapabilities caps;
+    std::string failure = capabilities(caps);
+    if (failure.empty()) {
+      failure = matchSurfaceFormat(native, caps);
+    }
+    if (!failure.empty()) {
+      return failure;
+    }
+    configuration.format = format;
     // Copying from the presentation target lets an isolated layer with a non-normal blend mode
     // capture its backdrop on the GPU; without it the renderer falls back to source-over.
     configuration.usage =
@@ -144,7 +232,7 @@ struct GeodeSurfaceRenderer::Impl {
   }
 
   /// Draws into the acquired \p frame, then presents it. A frame whose draw lost the device is
-  /// abandoned rather than presented, so the layer never shows an undrawn drawable.
+  /// abandoned rather than presented, so the surface never shows an undrawn frame.
   FrameStatus drawAndPresent(SVGDocument& document, const gpu::Texture& frame) {
     renderer->setTargetTexture(frame);
     renderer->draw(document);
@@ -164,13 +252,7 @@ struct GeodeSurfaceRenderer::Impl {
   ~Impl() {
     // Retirement order: renderer, then surface, then the device and root.
     renderer.reset();
-    if (surface.isValid() && device != nullptr) {
-      if (gpu::Status released = runtime().destroySurface(std::move(surface));
-          released.hasError()) {
-        std::fprintf(stderr, "GeodeSurfaceRenderer: could not retire surface: %s\n",
-                     released.error().toString().c_str());
-      }
-    }
+    retireSurface();
     device.reset();
     root.reset();
   }
@@ -180,21 +262,18 @@ GeodeSurfaceRenderer::GeodeSurfaceRenderer(std::unique_ptr<Impl> impl) : impl_(s
 
 GeodeSurfaceRenderer::~GeodeSurfaceRenderer() = default;
 
-std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::CreateForMetalLayer(
-    void* metalLayer, Vector2i sizePx, std::string* error) {
-  if (metalLayer == nullptr) {
-    SetError(error, "metalLayer is null");
-    return nullptr;
-  }
+std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::Create(const SurfaceRequest& request,
+                                                                   Vector2i sizePx,
+                                                                   std::string* error) {
   if (std::string invalid = CheckFrameSize(sizePx); !invalid.empty()) {
     SetError(error, std::move(invalid));
     return nullptr;
   }
 
   auto impl = std::make_unique<Impl>();
-  std::string failure = impl->open(metalLayer);
+  std::string failure = impl->open(request);
   if (failure.empty()) {
-    failure = impl->chooseConfiguration();
+    failure = impl->chooseConfiguration(request.native);
   }
   if (failure.empty()) {
     failure = impl->configure(sizePx);
@@ -206,6 +285,44 @@ std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::CreateForMetalLayer(
 
   impl->renderer = std::make_unique<RendererGeode>(impl->device);
   return std::unique_ptr<GeodeSurfaceRenderer>(new GeodeSurfaceRenderer(std::move(impl)));
+}
+
+std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::CreateForMetalLayer(
+    void* metalLayer, Vector2i sizePx, std::string* error) {
+#if defined(DONNER_GEODE_BROWSER_BACKEND)
+  (void)metalLayer;
+  (void)sizePx;
+  SetError(error, "Metal layers are not available in browser builds");
+  return nullptr;
+#else
+  if (metalLayer == nullptr) {
+    SetError(error, "metalLayer is null");
+    return nullptr;
+  }
+  SurfaceRequest request{geode::GpuBackendKind::NativeMetal, {}};
+  request.native.kind = gpu::NativeSurfaceKind::MetalLayer;
+  request.native.display = metalLayer;
+  return Create(request, sizePx, error);
+#endif
+}
+
+std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::CreateForCanvas(
+    std::string_view canvasSelector, Vector2i sizePx, std::string* error) {
+#if defined(DONNER_GEODE_BROWSER_BACKEND)
+  if (canvasSelector.empty()) {
+    SetError(error, "canvasSelector is empty");
+    return nullptr;
+  }
+  SurfaceRequest request{geode::GpuBackendKind::Browser, {}};
+  request.native.kind = gpu::NativeSurfaceKind::CanvasSelector;
+  request.native.selector = RcString(canvasSelector);
+  return Create(request, sizePx, error);
+#else
+  (void)canvasSelector;
+  (void)sizePx;
+  SetError(error, "canvas presentation requires a WebAssembly build with the browser backend");
+  return nullptr;
+#endif
 }
 
 bool GeodeSurfaceRenderer::resize(Vector2i sizePx, std::string* error) {
