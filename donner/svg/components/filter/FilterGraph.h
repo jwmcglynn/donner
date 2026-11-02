@@ -13,6 +13,7 @@
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1240,6 +1241,10 @@ public:
   /// Reset all per-frame accounting.
   void reset() {
     executions_ = 0;
+    refusedGraphs_ = 0;
+    lastRefusalReason_ = RejectionReason::None;
+    priorRefusalReason_ = RejectionReason::None;
+    memoryRefusalLatched_ = false;
     workUnits_ = 0;
     intermediateBytes_ = 0;
     reservedGpuSurfaces_ = 0;
@@ -1251,7 +1256,14 @@ public:
     rejected_ = false;
   }
 
-  /** Release GPU-retained accounting after submitting one ordered command-buffer chunk. */
+  /**
+   * Release GPU-retained accounting after submitting one ordered command-buffer chunk.
+   *
+   * A memory refusal that started the chunk is withdrawn, so a graph the renderer retries and
+   * admits in the new chunk counts as neither refused nor against \ref kMaximumExecutions twice.
+   * A chunk requested through \ref requireMemoryChunk refused nothing, so there is none to
+   * withdraw.
+   */
   bool beginChunkAfterSubmit() {
     if (rejectionReason_ != RejectionReason::MemoryLimit || activeGpuReservations_ != 0 ||
         intermediateBytes_ == 0) {
@@ -1262,6 +1274,12 @@ public:
     liveCpuCaptureBytes_ = 0;
     rejectionReason_ = RejectionReason::None;
     rejected_ = false;
+    // A memory refusal latches the frame, and a latched frame counts no further refusals, so the
+    // refusal it withdraws is the latest one.
+    if (std::exchange(memoryRefusalLatched_, false)) {
+      --refusedGraphs_;
+      lastRefusalReason_ = priorRefusalReason_;
+    }
     ++chunks_;
     return true;
   }
@@ -1269,9 +1287,12 @@ public:
   /**
    * Reserve graph execution and capture memory before allocating the capture surface.
    *
-   * Rejection latches the frame closed, preventing a document from repeatedly attempting large
-   * allocations that were never charged. CPU capture bytes are released at pop; GPU capture and
-   * intermediate textures remain charged until frame reset because command buffers retain them.
+   * A graph that exceeds the frame's remaining work, or whose cost cannot be estimated, is refused
+   * on its own: later graphs that still fit are admitted, and \ref refusedGraphs records every
+   * refusal. Exhausting the execution count or memory, or an external failure, latches the frame
+   * closed, as does reaching \ref kMaximumExecutions admitted and refused attempts together. CPU
+   * capture bytes are released at pop; GPU capture and intermediate textures remain charged until
+   * frame reset because command buffers retain them.
    */
   std::optional<Reservation> reserve(const FilterGraph& graph, std::uint64_t pixelCount,
                                      FilterMemoryModel memoryModel, std::uint64_t captureBytes,
@@ -1285,8 +1306,7 @@ public:
         evaluate(graph, pixelCount, memoryModel, captureBytes, retainedGpuBufferBytes, memoryPixels,
                  executions, gpuSurfaces);
     if (admission.failure != RejectionReason::None) {
-      rejectionReason_ = admission.failure;
-      rejected_ = true;
+      refuse(admission.failure);
       return std::nullopt;
     }
 
@@ -1352,6 +1372,10 @@ public:
   /// Forecast surface count retained by GPU executions until the next submitted chunk.
   std::size_t reservedGpuSurfaces() const { return reservedGpuSurfaces_; }
 
+  /// Refuse one graph whose raster cannot execute within the per-graph limits. Later graphs that
+  /// fit are still admitted.
+  void refuseOversizedGraph() { refuse(RejectionReason::WorkLimit); }
+
   /// Latch the frame closed after an allocation or other external preflight failure.
   void reject() {
     rejectionReason_ = RejectionReason::External;
@@ -1360,6 +1384,12 @@ public:
 
   /// Filter graph executions admitted during the current frame.
   [[nodiscard]] std::uint64_t executions() const { return executions_; }
+  /// Filter graphs refused during the current frame, up to and including the refusal that latched
+  /// it closed; a latched frame counts no later graphs. A graph dropped because a requested memory
+  /// chunk could not start is not counted; \ref rejected reports it.
+  [[nodiscard]] std::uint64_t refusedGraphs() const { return refusedGraphs_; }
+  /// Reason for the most recent refusal in the current frame, latched or not.
+  [[nodiscard]] RejectionReason lastRefusalReason() const { return lastRefusalReason_; }
   /// Estimated pixel-work units admitted during the current frame.
   [[nodiscard]] std::uint64_t workUnits() const { return workUnits_; }
   /// Total intermediate, persistent GPU, and live CPU capture bytes accounted for this frame.
@@ -1382,6 +1412,26 @@ public:
   [[nodiscard]] RejectionReason rejectionReason() const { return rejectionReason_; }
 
 private:
+  /// Whether a refusal for @p reason closes the frame to all later graphs. Work and estimation
+  /// refusals belong to one graph; a smaller graph can still fit after them.
+  static bool LatchesFrame(RejectionReason reason) {
+    return reason != RejectionReason::WorkLimit && reason != RejectionReason::InvalidGraph;
+  }
+
+  /// Record a refused graph, latching the frame for frame-wide reasons or once attempts run out.
+  void refuse(RejectionReason reason) {
+    if (rejected_) {
+      return;  // A latched frame refuses everything; only the refusal that latched it counts.
+    }
+    ++refusedGraphs_;
+    priorRefusalReason_ = std::exchange(lastRefusalReason_, reason);
+    if (LatchesFrame(reason) || executions_ + refusedGraphs_ >= kMaximumExecutions) {
+      rejectionReason_ = reason;
+      rejected_ = true;
+      memoryRefusalLatched_ = reason == RejectionReason::MemoryLimit;
+    }
+  }
+
   /// Outcome of checking one reservation against the frame's remaining capacity.
   struct Admission {
     RejectionReason failure = RejectionReason::None;  ///< First limit the reservation exceeds.
@@ -1442,6 +1492,12 @@ private:
   }
 
   std::uint64_t executions_ = 0;
+  std::uint64_t refusedGraphs_ = 0;
+  RejectionReason lastRefusalReason_ = RejectionReason::None;
+  /// Refusal reason before the latest one, restored when a chunk withdraws a memory refusal.
+  RejectionReason priorRefusalReason_ = RejectionReason::None;
+  /// Whether the refusal that latched the frame was a memory refusal a chunk can withdraw.
+  bool memoryRefusalLatched_ = false;
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;
   std::uint64_t persistentGpuBytes_ = 0;

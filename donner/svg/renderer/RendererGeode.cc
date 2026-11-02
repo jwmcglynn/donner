@@ -1341,7 +1341,7 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
   const std::optional<GeodeFilterBuffer> buffer =
       MakeGeodeFilterBuffer(filterRegion, expanded, viewportWidth, viewportHeight);
   if (!buffer.has_value()) {
-    budget.reject();
+    budget.refuseOversizedGraph();
     return std::nullopt;
   }
   GeodeFilterPlan plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, *buffer,
@@ -2995,6 +2995,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     geode::FilterExecutionResult filtered;
     filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
     if (frame.localRasterRequiredForBudget) {
+      // The graph was admitted for a local raster that could not be allocated or run. That is a
+      // renderer failure, not a graph too large for the frame's remaining work, so it latches the
+      // frame like other external failures rather than counting as a per-graph refusal.
       filterExecutionBudget->reject();
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
       return filtered;
@@ -5970,7 +5973,9 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .filterWorkUnits = impl_->filterExecutionBudget->workUnits(),
       .filterRetainedBytes = impl_->filterExecutionBudget->retainedBytes(),
       .filterCaptureBytesReserved = impl_->filterExecutionBudget->captureBytesReserved(),
-      .filterBudgetRejected = impl_->filterExecutionBudget->rejected(),
+      .filterGraphsRefused = impl_->filterExecutionBudget->refusedGraphs(),
+      .filterBudgetRejected = impl_->filterExecutionBudget->rejected() ||
+                              impl_->filterExecutionBudget->refusedGraphs() != 0,
       .geometryBudgetSupported = true,
       .geometryDraws = impl_->geometryBudget->draws(),
       .geometryItems = impl_->geometryBudget->items(),
