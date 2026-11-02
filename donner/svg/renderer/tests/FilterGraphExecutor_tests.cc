@@ -919,9 +919,8 @@ TEST(FilterGraphExecutorTest, GraphAdmittedInANewMemoryChunkIsNotRefused) {
   constexpr std::uint64_t kCaptureBytes = kPixels * 4;
   components::FilterExecutionBudget budget;
   std::uint64_t admitted = 0;
-  while (auto reservation = budget.reserve(graph, kPixels,
-                                           components::FilterMemoryModel::GpuAllNodes,
-                                           kCaptureBytes)) {
+  while (auto reservation = budget.reserve(
+             graph, kPixels, components::FilterMemoryModel::GpuAllNodes, kCaptureBytes)) {
     budget.release(*reservation);
     ++admitted;
   }

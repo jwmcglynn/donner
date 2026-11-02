@@ -1104,8 +1104,8 @@ int ContentLastDrawOrder(Registry& registry,
     if (!content.has_value()) {
       return;
     }
-    if (const auto* contentLast = registry.try_get<components::RenderingInstanceComponent>(
-            content->lastRenderedEntity)) {
+    if (const auto* contentLast =
+            registry.try_get<components::RenderingInstanceComponent>(content->lastRenderedEntity)) {
       last = std::max(last, contentLast->drawOrder);
     }
   };

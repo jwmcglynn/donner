@@ -123,7 +123,8 @@ TEST(InvisibleFilterWorkTest, HiddenFilteredContentRunsNoFilters) {
       "<defs><mask id='hiddenMask'>" + shapes +
           "</mask></defs><rect width='64' height='64' opacity='0' mask='url(#hiddenMask)'/>",
       "<defs><pattern id='hiddenTile' patternUnits='userSpaceOnUse' width='16' height='16'>" +
-          shapes + "</pattern></defs><rect width='64' height='64' opacity='0' fill='url(#hiddenTile)'/>",
+          shapes +
+          "</pattern></defs><rect width='64' height='64' opacity='0' fill='url(#hiddenTile)'/>",
       "<defs><marker id='hiddenDot' markerWidth='8' markerHeight='8' "
       "markerUnits='userSpaceOnUse'>" +
           shapes +

@@ -1271,7 +1271,8 @@ public:
     liveCpuCaptureBytes_ = 0;
     rejectionReason_ = RejectionReason::None;
     rejected_ = false;
-    // A memory refusal latches the frame, so it is the latest refusal and nothing was refused since.
+    // A memory refusal latches the frame, so it is the latest refusal and nothing was refused
+    // since.
     --refusedGraphs_;
     lastRefusalReason_ = priorRefusalReason_;
     ++chunks_;
