@@ -1031,7 +1031,7 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 }
 
 void SVGElement::restoreStandaloneState() const {
-  components::ExternalUseStyleRetention::RestoreStandalone(*handle_.registry());
+  components::ExternalUseStyleRetention::RestoreStandaloneForRead(*handle_.registry());
 }
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {

@@ -15,7 +15,7 @@ namespace {
 
 TextEngine& getPreparedTextEngine(EntityHandle handle) {
   Registry& registry = *handle.registry();
-  components::ExternalUseStyleRetention::RestoreStandalone(registry);
+  components::ExternalUseStyleRetention::RestoreStandaloneForRead(registry);
   auto* textEngine = registry.ctx().find<TextEngine>();
   if (!textEngine) {
     auto& fontManager = registry.ctx().contains<FontManager>()
