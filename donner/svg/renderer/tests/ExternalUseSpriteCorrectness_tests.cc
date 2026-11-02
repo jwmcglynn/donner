@@ -209,6 +209,43 @@ TEST(ExternalUseSpriteCorrectnessTest, EvictedTargetsInheritHostStyleWhenDrawnAg
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(ExternalUseSpriteCorrectnessTest, EvictingAnAncestorRestylesItsRetainedDescendant) {
+  // After the group and its child, these fill the remaining retention slots plus one, so the last
+  // filler evicts the group while the child stays retained.
+  constexpr int kFillers = 31;
+  std::string resource = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+    <g id="group"><rect id="child" width="8" height="8"/></g>)svg";
+  for (int filler = 0; filler < kFillers; ++filler) {
+    resource += "<rect id=\"t" + std::to_string(filler) + "\" width=\"8\" height=\"8\"/>";
+  }
+  resource += "</svg>";
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use id="tile-use" href="sprites.svg#group" fill="red"/>
+      </svg>)svg",
+      std::move(resource));
+  ASSERT_TRUE(host.has_value());
+  SVGUseElement use = host->document.querySelector("#tile-use")->cast<SVGUseElement>();
+  Renderer renderer;
+  renderer.draw(host->document);
+  use.setHref(RcString("sprites.svg#child"));
+  renderer.draw(host->document);
+  for (int filler = 0; filler < kFillers; ++filler) {
+    use.setHref(RcString("sprites.svg#t" + std::to_string(filler)));
+    renderer.draw(host->document);
+  }
+  use.setHref(RcString("sprites.svg#child"));
+  renderer.draw(host->document);
+
+  const RendererBitmap expected = RenderStandalone(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red"/>
+      </svg>)svg");
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "external-use-evicted-ancestor",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Draws \p document \p frames times, comparing every frame with \p expected rendered standalone.
 void ExpectFrames(SVGDocument& document, Renderer& renderer, int frames, std::string_view expected,
                   const std::string& label) {

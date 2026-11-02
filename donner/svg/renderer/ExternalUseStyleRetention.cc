@@ -215,7 +215,12 @@ std::optional<OccurrenceInputs> SnapshotInputs(Registry& registry,
                           .charge = RetainedStyleCharge(std::move(family), bytes)};
 }
 
-/// Restyle and forget the least recently drawn subtree other than \p keep.
+/**
+ * Restyle and forget the least recently drawn subtree other than \p keep, forgetting the inputs of
+ * every retained subtree that overlaps it. The eviction marks those subtrees dirty after this
+ * occurrence's `ForgetInputsReachedByRestyle` pass, so the coming preparation restyles them under
+ * the current occurrence without anything else resetting their saved inputs.
+ */
 void EvictLeastRecentlyDrawn(Registry& registry, ExternalUseRetainedState& state, Entity keep) {
   auto victim = state.subtrees.end();
   for (auto it = state.subtrees.begin(); it != state.subtrees.end(); ++it) {
@@ -223,9 +228,16 @@ void EvictLeastRecentlyDrawn(Registry& registry, ExternalUseRetainedState& state
       victim = it;
     }
   }
-  if (victim != state.subtrees.end()) {
-    InvalidateSubtree(registry, victim->root);
-    state.subtrees.erase(victim);
+  if (victim == state.subtrees.end()) {
+    return;
+  }
+  const Entity evicted = victim->root;
+  InvalidateSubtree(registry, evicted);
+  state.subtrees.erase(victim);
+  for (RetainedSubtree& other : state.subtrees) {
+    if (Overlaps(registry, other.root, evicted)) {
+      other.inputs.reset();
+    }
   }
 }
 
