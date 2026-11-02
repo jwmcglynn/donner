@@ -936,7 +936,7 @@ public:
     if (recentFrameReleases_.size() > kBudgetWindowFrames) {
       recentFrameReleases_.pop_front();
     }
-    lastFrameTime_ = clock_();
+    lastActivityTime_ = clock_();
     const uint64_t workingSet =
         *std::max_element(recentFrameReleases_.begin(), recentFrameReleases_.end());
     budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
@@ -967,7 +967,7 @@ public:
   void setClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock) {
     std::lock_guard lock(mutex_);
     clock_ = std::move(clock);
-    lastFrameTime_ = clock_();
+    lastActivityTime_ = clock_();
   }
 
   [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
@@ -1024,6 +1024,7 @@ public:
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
     releasedSinceFrameStart_ += textureBytes;
+    lastActivityTime_ = clock_();
     if (existingBucket != buckets_.end() &&
         existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
         textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
@@ -1064,20 +1065,17 @@ private:
   // reclaim a tab whose GPU process grows, so the Wasm ceiling stays close to the floor.
 #ifdef __EMSCRIPTEN__
   static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 96u * 1024u * 1024u;
-  static_assert(kMaximumTexturePoolBudgetBytes <= 96u * 1024u * 1024u,
-                "The Wasm texture pool ceiling must stay phone safe");
 #else
   static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 256u * 1024u * 1024u;
 #endif
-  // Frames of release history the budget follows. Frames count beginFrame calls of every
-  // renderer sharing the device, so with several renderers the window spans fewer app frames.
-  static constexpr std::size_t kBudgetWindowFrames = 120;
-  // A device idle this long forgets its working set: the next frame or trim drops the budget to
-  // the floor and evicts free textures beyond it.
+  // A device with no frame beginning and no texture returned for this long forgets its working
+  // set: the next frame or trim drops the budget to the floor and evicts free textures beyond it.
+  // Returns at the end of a frame count as activity, so a renderer whose frames take longer, or
+  // one that renders on demand, keeps its pool across pauses shorter than this.
   static constexpr std::chrono::seconds kIdleWorkingSetDecay{2};
 
   void forgetWorkingSetAfterIdle() {
-    if (clock_() - lastFrameTime_ < kIdleWorkingSetDecay) {
+    if (clock_() - lastActivityTime_ < kIdleWorkingSetDecay) {
       return;
     }
     recentFrameReleases_.clear();
@@ -1085,6 +1083,12 @@ private:
     budgetBytes_ = kTexturePoolBudgetBytes;
   }
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
+  // Frames of release history the budget follows. Frames count beginFrame calls of every
+  // renderer sharing the device, so with several renderers the window spans fewer app frames. It
+  // matches the stale-bucket age: a bucket unused for longer than the window was not part of any
+  // frame the budget still counts.
+  static constexpr std::size_t kBudgetWindowFrames =
+      static_cast<std::size_t>(kBucketEvictAfterFrames);
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
     return static_cast<uint64_t>(key.width) * key.height * key.sampleCount *
@@ -1172,8 +1176,8 @@ private:
   std::function<std::chrono::steady_clock::time_point()> clock_ = [] {
     return std::chrono::steady_clock::now();
   };
-  /// When the last frame began.
-  std::chrono::steady_clock::time_point lastFrameTime_ = std::chrono::steady_clock::now();
+  /// When a frame last began or a texture was last returned.
+  std::chrono::steady_clock::time_point lastActivityTime_ = std::chrono::steady_clock::now();
 };
 
 /// The one pool serving \p device, created on first use. Renderers sharing a device share its

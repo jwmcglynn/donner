@@ -8023,10 +8023,11 @@ TEST_F(RendererGeodeTest, IdleTexturePoolReturnsToItsFloor) {
   SVGDocument light = ParseDocumentOrFail(GlowingPiecesSource(64, 64, 0));
   for (const bool viaFrame : {false, true}) {
     SCOPED_TRACE(viaFrame ? "next frame" : "idle trim");
+    // Declared first so it outlives the pool whose clock reads it.
+    auto now = std::chrono::steady_clock::time_point();
     std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
     ASSERT_THAT(device, testing::NotNull());
     RendererGeode renderer(device);
-    auto now = std::chrono::steady_clock::time_point();
     renderer.setTexturePoolClockForTesting([&now] { return now; });
     for (int frame = 0; frame < 3; ++frame) {
       now += std::chrono::milliseconds(16);
@@ -8068,6 +8069,40 @@ TEST_F(RendererGeodeTest, ParkedFilterTexturesStayChargedUntilTheFrameEnds) {
   const RendererResourceStats stats = renderer.resourceStats();
   EXPECT_THAT(stats.surfaceBytes, testing::Eq(stats.surfacePeakBytes));
   renderer.endFrame();
+}
+
+// A frame that takes longer than the idle decay is activity, not idleness: the textures it returns
+// when it ends keep the device's working set for the frame after it.
+TEST_F(RendererGeodeTest, SlowFrameKeepsTheTexturePoolWorkingSet) {
+  using namespace components;
+  SVGDocument heavy = ParseDocumentOrFail(VariedGlowSource());
+  // Declared first so it outlives the pool whose clock reads it.
+  auto now = std::chrono::steady_clock::time_point();
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  renderer.setTexturePoolClockForTesting([&now] { return now; });
+  for (int frame = 0; frame < 3; ++frame) {
+    now += std::chrono::milliseconds(16);
+    renderer.draw(heavy);
+  }
+  ASSERT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  beginFrame(renderer);
+  now += std::chrono::seconds(3);  // The frame itself takes three seconds.
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  now += std::chrono::milliseconds(100);
+  renderer.draw(heavy);
+  EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
 }
 
 // Textures one renderer releases within an open frame stay with it: another renderer on the same

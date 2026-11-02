@@ -197,8 +197,8 @@ When rendering stops, give that memory back with `RendererGeode::trimTexturePool
 - `RendererGeodeTexturePoolTrim::All` when the app is hidden or backgrounded, for example on a
   browser `visibilitychange` to `hidden`, or on a platform memory warning.
 
-A device that begins no frame for two seconds also returns to the 64 MiB floor at its next frame
-or trim. Textures a frame is using are never freed by a trim.
+A device that renders nothing for two seconds (no frame begins and no frame finishes) also
+returns to the 64 MiB floor at its next frame or trim. Textures a frame is using are never freed by a trim.
 
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 
