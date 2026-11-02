@@ -2659,7 +2659,7 @@ TEST(FilterInputMarginTest, RegionBufferCoversOnlyTheVisibleRegionAndItsReach) {
   using testing::FieldsAre;
   const FilterGraph blur = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
   // A 40-pixel region in a 1206x2622 viewport: the region plus nothing, since the capture holds
-  // nothing outside the region, rounded up to the 32-pixel granularity. Texel (0, 0) is at
+  // nothing outside the region, rounded up to the 64-pixel granularity. Texel (0, 0) is at
   // viewport pixel (100, 200).
   EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100, 200, 40, 40), Transform2d(),
                                              1206, 2622),

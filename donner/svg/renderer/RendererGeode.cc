@@ -930,15 +930,52 @@ public:
   void beginFrame() {
     std::lock_guard lock(mutex_);
     ++currentFrameIndex_;
+    forgetWorkingSetAfterIdle();
+    recentFrameReleases_.push_back(std::exchange(releasedSinceFrameStart_, 0));
+    if (recentFrameReleases_.size() > kBudgetWindowFrames) {
+      recentFrameReleases_.pop_front();
+    }
+    lastActivityTime_ = clock_();
+    const uint64_t workingSet =
+        *std::max_element(recentFrameReleases_.begin(), recentFrameReleases_.end());
+    budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
     evictStalePoolBuckets();
+    (void)evictPoolEntriesToFit(0);
+  }
+
+  /**
+   * Drop free textures to relieve memory pressure. \ref RendererGeodeTexturePoolTrim::ToFloor
+   * forgets the recent working set and keeps at most the starting budget;
+   * \ref RendererGeodeTexturePoolTrim::All drops every free texture. A trim also applies the idle
+   * decay. Textures in use are never affected.
+   */
+  void trim(RendererGeodeTexturePoolTrim level) {
+    std::lock_guard lock(mutex_);
+    forgetWorkingSetAfterIdle();
+    if (level == RendererGeodeTexturePoolTrim::IdleOnly) {
+      (void)evictPoolEntriesToFit(0);
+      return;
+    }
+    recentFrameReleases_.clear();
+    budgetBytes_ = level == RendererGeodeTexturePoolTrim::All ? 0 : kTexturePoolBudgetBytes;
+    (void)evictPoolEntriesToFit(0);
+    budgetBytes_ = kTexturePoolBudgetBytes;
+  }
+
+  /// Replace the clock idle decay reads, for a test.
+  void setClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock) {
+    std::lock_guard lock(mutex_);
+    clock_ = std::move(clock);
+    lastActivityTime_ = clock_();
   }
 
   [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
     std::lock_guard lock(mutex_);
     RendererGeodeTexturePoolStats result;
+    result.maximumBudgetBytes = kMaximumTexturePoolBudgetBytes;
     result.textureCount = pooledTextureCount_;
     result.bytes = pooledTextureBytes_;
-    result.budgetBytes = kTexturePoolBudgetBytes;
+    result.budgetBytes = budgetBytes_;
     for (const auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
       if (!bucket.free.empty()) {
@@ -985,9 +1022,11 @@ public:
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
+    releasedSinceFrameStart_ += textureBytes;
+    lastActivityTime_ = clock_();
     if (existingBucket != buckets_.end() &&
         existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
-        textureBytes * (existingBucket->second.free.size() + 1) > kMaxPoolBytesPerKey) {
+        textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
       destroyPooledTexture(std::move(texture));
       return;
     }
@@ -1014,12 +1053,41 @@ private:
   // concurrent intermediates (blur ping-pong reuse) is the follow-up that
   // would let the cap come back down.
   static constexpr std::size_t kMaxPoolEntriesPerKey = 16;
-  // Small surfaces of one size, such as the region-sized captures of many filtered instances in
-  // one frame, may exceed the entry cap up to this many bytes, so a frame of them reuses its
-  // previous frame's surfaces instead of recreating all but the first few.
-  static constexpr uint64_t kMaxPoolBytesPerKey = 16u * 1024u * 1024u;
+  // Surfaces of one size, such as the region-sized captures of many filtered instances in one
+  // frame, may exceed the entry cap up to a quarter of the current budget, so a frame of them
+  // reuses its previous frame's surfaces instead of recreating all but the first few.
+  /// Retention budget a pool starts with and never goes below.
   static constexpr uint64_t kTexturePoolBudgetBytes = 64u * 1024u * 1024u;
+  // The budget follows the most bytes released in one recent frame, up to this ceiling, so a
+  // frame's whole working set, such as one transient surface per filtered element, stays pooled
+  // for the next frame instead of being destroyed and recreated each frame. Browsers on phones
+  // reclaim a tab whose GPU process grows, so the Wasm ceiling stays close to the floor.
+#ifdef __EMSCRIPTEN__
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 96u * 1024u * 1024u;
+#else
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 256u * 1024u * 1024u;
+#endif
+  // A device with no frame beginning and no texture returned for this long forgets its working
+  // set: the next frame or trim drops the budget to the floor and evicts free textures beyond it.
+  // Returns at the end of a frame count as activity, so a renderer whose frames take longer, or
+  // one that renders on demand, keeps its pool across pauses shorter than this.
+  static constexpr std::chrono::seconds kIdleWorkingSetDecay{2};
+
+  void forgetWorkingSetAfterIdle() {
+    if (clock_() - lastActivityTime_ < kIdleWorkingSetDecay) {
+      return;
+    }
+    recentFrameReleases_.clear();
+    releasedSinceFrameStart_ = 0;
+    budgetBytes_ = kTexturePoolBudgetBytes;
+  }
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
+  // Frames of release history the budget follows. Frames count beginFrame calls of every
+  // renderer sharing the device, so with several renderers the window spans fewer app frames. It
+  // matches the stale-bucket age: a bucket unused for longer than the window was not part of any
+  // frame the budget still counts.
+  static constexpr std::size_t kBudgetWindowFrames =
+      static_cast<std::size_t>(kBucketEvictAfterFrames);
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
     return static_cast<uint64_t>(key.width) * key.height * key.sampleCount *
@@ -1051,11 +1119,11 @@ private:
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
-    if (incomingBytes > kTexturePoolBudgetBytes) {
+    if (incomingBytes > budgetBytes_) {
       return false;
     }
 
-    while (pooledTextureBytes_ > kTexturePoolBudgetBytes - incomingBytes) {
+    while (pooledTextureBytes_ > budgetBytes_ - incomingBytes) {
       auto victim = buckets_.end();
       for (auto it = buckets_.begin(); it != buckets_.end(); ++it) {
         if (it->second.free.empty()) {
@@ -1097,6 +1165,18 @@ private:
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;
   uint64_t currentFrameIndex_ = 0;
+  /// Bytes returned to the pool since the last \ref beginFrame.
+  uint64_t releasedSinceFrameStart_ = 0;
+  /// Bytes returned in each recent frame, newest last.
+  std::deque<uint64_t> recentFrameReleases_;
+  /// Current retention budget; see \ref kMaximumTexturePoolBudgetBytes.
+  uint64_t budgetBytes_ = kTexturePoolBudgetBytes;
+  /// Clock idle decay reads.
+  std::function<std::chrono::steady_clock::time_point()> clock_ = [] {
+    return std::chrono::steady_clock::now();
+  };
+  /// When a frame last began or a texture was last returned.
+  std::chrono::steady_clock::time_point lastActivityTime_ = std::chrono::steady_clock::now();
 };
 
 /// The one pool serving \p device, created on first use. Renderers sharing a device share its
@@ -5929,6 +6009,19 @@ FrameTimings RendererGeode::lastFrameTimings() const {
 
 RendererGeodeTexturePoolStats RendererGeode::texturePoolStats() const {
   return impl_->texturePoolStats();
+}
+
+void RendererGeode::trimTexturePool(RendererGeodeTexturePoolTrim level) {
+  if (impl_->texturePool) {
+    impl_->texturePool->trim(level);
+  }
+}
+
+void RendererGeode::setTexturePoolClockForTesting(
+    std::function<std::chrono::steady_clock::time_point()> clock) {
+  if (impl_->texturePool) {
+    impl_->texturePool->setClockForTesting(std::move(clock));
+  }
 }
 
 void RendererGeode::setTargetTexture(const gpu::Texture& texture) {
