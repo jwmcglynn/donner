@@ -261,13 +261,26 @@ lists. Call `donner::PreparePackagedResources()` at startup to report a missing 
 Rendering a document that contains text without the fallback font adds one warning per document
 to the rendering warnings; the font manager itself does not print.
 
-A consumer module can build the same `Renderer` API on Geode by setting the two flags that
-`--config=geode` sets inside this repository:
+A consumer module can build the same `Renderer` API on Geode by selecting it in its
+`MODULE.bazel`, which sets both the backend and the Geode build flag:
+
+```py
+donner = use_extension("@donner//config:extensions.bzl", "donner")
+donner.configure(renderer = "geode")
+use_repo(donner, "donner_config")
+```
+
+Setting the two flags that `--config=geode` sets inside this repository is equivalent:
 
 ```sh
 bazel build --@donner//donner/svg/renderer:renderer_backend=geode \
   --@donner//donner/svg/renderer/geode:enable_geode=true //:my_app
 ```
+
+On macOS, to present frames to an application window rather than read pixels back, depend on
+`@donner//donner/svg/renderer:geode_surface_renderer` and use `donner::svg::GeodeSurfaceRenderer`,
+which draws each frame into a host-owned `CAMetalLayer` and presents it without leaving the GPU.
+Linux and browser window presentation have no public entry point yet; see \ref EmbeddingGeode.
 
 Donner's build checks that the packages Geode adds load without Donner's development-only
 dependencies, but CI does not build Geode from an external module; BCR preflight covers only the

@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -47,11 +48,20 @@ static_assert(kFillingSubmissions * kFullSize == kBackstop);
 /// A stall bound short enough to reach well before the system's own timeout ends a command buffer
 /// that makes no progress, which would otherwise declare the loss first.
 constexpr std::chrono::milliseconds kShortStallBound{200};
-/// Longest any case keeps work paused, measured from just before its first paused commit. Well
-/// inside the system's own timeout for command buffers that make no progress, about five seconds,
-/// so a case whose submission is stuck releases the paused work itself, and fails, before the
-/// system ends that work and disturbs other GPU work on the machine.
+/// Longest any case lets its paused work go without letting some of it run, measured from just
+/// before its first paused commit and then from each release. A stall guard rather than a budget
+/// for the whole case: up to \ref kPausedWorkCeiling, a case that keeps releasing its paused work
+/// is not cut off because a loaded machine runs its fill and its paced releases slowly. A case
+/// that stops releasing, because its submission is stuck, releases all paused work itself and
+/// fails.
 constexpr std::chrono::milliseconds kReleaseDeadline{3000};
+/// Longest any case keeps work paused in all, measured from just before its first paused commit,
+/// however steadily it releases. Paused command buffers the case never releases stay blocked from
+/// the fill on, so this keeps every one of them inside the system's own timeout for command
+/// buffers that make no progress, about five seconds, before the system ends that work and
+/// disturbs other GPU work on the machine. A case that releases on pace finishes far inside it.
+constexpr std::chrono::milliseconds kPausedWorkCeiling{4500};
+static_assert(kReleaseDeadline < kPausedWorkCeiling);
 /// Releases every paused command buffer.
 constexpr uint64_t kReleaseAll = std::numeric_limits<uint64_t>::max();
 
@@ -100,14 +110,61 @@ struct WorkerSubmission {
   std::chrono::steady_clock::time_point endedAt;    //!< When it returned.
 };
 
-/// Runs \p submit on a worker thread while the calling thread waits for it until \p releaseAt. A
+/// When a case first paused work, and when it last moved it: paused it, or let some of it run.
+/// Readable from any thread, so a case's releasing thread can record its releases while the case's
+/// own thread waits on them. Starts at its construction, so a case that never pauses work is
+/// treated as having paused it then.
+class PausedWorkClock {
+public:
+  using Clock = std::chrono::steady_clock;
+
+  PausedWorkClock() : pausedAt_(Clock::now()), movedAt_(pausedAt_.time_since_epoch().count()) {}
+
+  /// Records that the case paused work, now. Only the first pause starts \ref firstPaused.
+  void paused() {
+    if (!pausedOnce_) {
+      pausedOnce_ = true;
+      pausedAt_ = Clock::now();
+    }
+    moved();
+  }
+
+  /// Records that the case let some paused work run, now. Callable from any thread.
+  void moved() {
+    movedAt_.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
+  }
+
+  /// When the case first paused work. Read only by the case's own thread, which pauses.
+  Clock::time_point firstPaused() const { return pausedAt_; }
+
+  /// When \ref moved last ran.
+  Clock::time_point lastMoved() const {
+    return Clock::time_point(Clock::duration(movedAt_.load(std::memory_order_acquire)));
+  }
+
+  /// When a submission held behind this paused work is let go: \ref kReleaseDeadline after the
+  /// last move, and no later than \ref kPausedWorkCeiling after the first pause.
+  Clock::time_point releaseAt() const {
+    return std::min(lastMoved() + kReleaseDeadline, firstPaused() + kPausedWorkCeiling);
+  }
+
+private:
+  bool pausedOnce_ = false;
+  Clock::time_point pausedAt_;
+  std::atomic<Clock::rep> movedAt_;
+};
+
+/// Runs \p submit on a worker thread while the calling thread waits for it, until \p pausedWork
+/// has not moved for \ref kReleaseDeadline or has been paused for \ref kPausedWorkCeiling. A
 /// submission still running then is let go by \p unblock, which releases the GPU work it is held
-/// behind, so a case reports it instead of hanging.
+/// behind, so a case reports it instead of hanging. Each release the case makes meanwhile extends
+/// the wait, up to the ceiling.
 /// @param submit Submission to run. @param unblock Releases every paused command buffer the
-///   submission could be held behind. @param releaseAt When \p unblock runs at the latest.
+///   submission could be held behind. @param pausedWork When the case last moved the paused work
+///   the submission could be held behind.
 WorkerSubmission SubmitOnWorker(const std::function<Result<uint64_t>()>& submit,
                                 const std::function<void()>& unblock,
-                                std::chrono::steady_clock::time_point releaseAt) {
+                                const PausedWorkClock& pausedWork) {
   std::mutex mutex;
   std::condition_variable finishedChanged;
   bool finished = false;
@@ -126,8 +183,18 @@ WorkerSubmission SubmitOnWorker(const std::function<Result<uint64_t>()>& submit,
   });
   {
     std::unique_lock<std::mutex> lock(mutex);
-    outcome.finishedInWindow =
-        finishedChanged.wait_until(lock, releaseAt, [&] { return finished; });
+    auto releaseAt = pausedWork.releaseAt();
+    for (;;) {
+      outcome.finishedInWindow =
+          finishedChanged.wait_until(lock, releaseAt, [&] { return finished; });
+      // A release made during the wait moves the deadline out, up to the ceiling; only a stall or
+      // the ceiling ends the wait.
+      const auto movedReleaseAt = pausedWork.releaseAt();
+      if (outcome.finishedInWindow || movedReleaseAt <= releaseAt) {
+        break;
+      }
+      releaseAt = movedReleaseAt;
+    }
   }
   if (!outcome.finishedInWindow) {
     unblock();
@@ -165,23 +232,33 @@ protected:
 
   /// Pauses the GPU and commits command buffers up to the backstop, none of which can complete
   /// until they are released. Records in \ref fillStarted_ a time no later than the device's last
-  /// progress before the fill.
+  /// progress before the fill, and starts \ref pausedWork_ there.
   void fillBackstopWhilePaused() {
     ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
     fillStarted_ = std::chrono::steady_clock::now();
+    pausedWork_.paused();
     for (uint64_t submission = 0; submission < kFillingSubmissions; ++submission) {
       ASSERT_THAT(SubmitEmptyWork(*device_, kFullSize), HasResult());
     }
     EXPECT_THAT(device_->commandBuffersInFlightForTest(), Eq(kBackstop));
   }
 
-  /// Submits \p buffers empty command buffers on a worker thread, releasing all paused work by
-  /// \ref kReleaseDeadline after the fill began; see \ref SubmitOnWorker.
+  /// Submits \p buffers empty command buffers on a worker thread, releasing all paused work once
+  /// the case has let none of it run for \ref kReleaseDeadline; see \ref SubmitOnWorker.
   /// @param buffers Command buffers the submission carries.
   WorkerSubmission submitPastTheBackstop(uint64_t buffers = 1) {
     return SubmitOnWorker([&] { return SubmitEmptyWork(*device_, buffers); },
                           [&] { device_->releasePausedCommandBuffersForTest(kReleaseAll); },
-                          fillStarted_ + kReleaseDeadline);
+                          pausedWork_);
+  }
+
+  /// Lets the first \p count command buffers \p device paused run, and records the release in
+  /// \ref pausedWork_. Callable from a case's releasing thread.
+  /// @param device Device whose paused work to release. @param count See
+  ///   \ref MetalDevice::releasePausedCommandBuffersForTest.
+  void releasePaused(MetalDevice& device, uint64_t count) {
+    device.releasePausedCommandBuffersForTest(count);
+    pausedWork_.moved();
   }
 
   std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
@@ -189,6 +266,9 @@ protected:
   /// When the fill began. The stall bound runs from the device's last progress, which can be no
   /// earlier, since the device was idle until the fill.
   std::chrono::steady_clock::time_point fillStarted_;
+  /// When the case last paused work or let some of it run, which bounds how long a submission
+  /// held behind that work is waited for.
+  PausedWorkClock pausedWork_;
 };
 
 /// Work that stays below the backstop never waits for room, so ordinary frames cost nothing extra,
@@ -212,19 +292,20 @@ TEST_F(MetalSubmissionBackstopTest, ASubmissionPastTheBackstopWaitsForRoom) {
   ASSERT_NO_FATAL_FAILURE(fillBackstopWhilePaused());
 
   std::chrono::steady_clock::time_point releasedAt;
+  std::atomic<bool> submissionReturned{false};
   std::thread releaser([&] {
-    // Released only once the submission is waiting for room, however late its worker starts, and
-    // in any case well before the paused work's release deadline.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    // Released only once the submission is waiting for room, however late its worker starts. A
+    // submission that returns without waiting is released after, which the case reports.
     while (device_->commandBufferRoomWaitsForTest() == 0 &&
-           std::chrono::steady_clock::now() < deadline) {
+           !submissionReturned.load(std::memory_order_acquire)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     releasedAt = std::chrono::steady_clock::now();
-    device_->releasePausedCommandBuffersForTest(1);
+    releasePaused(*device_, 1);
   });
   const WorkerSubmission past = submitPastTheBackstop();
+  submissionReturned.store(true, std::memory_order_release);
   releaser.join();
 
   EXPECT_TRUE(past.finishedInWindow) << "the submission past the backstop never went through";
@@ -266,18 +347,20 @@ TEST_F(MetalSubmissionBackstopTest, AStalledGpuDeclaresTheRootLostInsteadOfBlock
 TEST_F(MetalSubmissionBackstopTest, ALossDeclaredWhileWaitingForRoomEndsTheWait) {
   ASSERT_NO_FATAL_FAILURE(fillBackstopWhilePaused());
 
+  std::atomic<bool> submissionReturned{false};
   std::thread declarer([&] {
-    // Declared only once the submission is waiting for room, so the declaration has a wait to end,
-    // and in any case well before the paused work is released.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    // Declared only once the submission is waiting for room, however late its worker starts, so
+    // the declaration has a wait to end. A submission that returns without waiting is declared
+    // over after, which the case reports.
     while (device_->commandBufferRoomWaitsForTest() == 0 &&
-           std::chrono::steady_clock::now() < deadline) {
+           !submissionReturned.load(std::memory_order_acquire)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     (void)DeclareDeviceLost(*rootLoss_);
   });
   const WorkerSubmission past = submitPastTheBackstop();
+  submissionReturned.store(true, std::memory_order_release);
   declarer.join();
 
   EXPECT_TRUE(past.finishedInWindow) << "the wait for room outlived a loss declared during it";
@@ -305,13 +388,15 @@ TEST_F(MetalSubmissionBackstopTest, CommandBuffersCompletingKeepALongWaitAlive) 
     for (uint64_t released = kReleasedPerInterval; released <= kFullSize;
          released += kReleasedPerInterval) {
       std::this_thread::sleep_for(kReleaseInterval);
-      device_->releasePausedCommandBuffersForTest(released);
+      releasePaused(*device_, released);
     }
   });
   const WorkerSubmission past = submitPastTheBackstop(kFullSize);
   releaser.join();
 
-  EXPECT_TRUE(past.finishedInWindow);
+  EXPECT_TRUE(past.finishedInWindow)
+      << "the submission was still waiting " << kReleaseDeadline.count()
+      << " ms after the last release, though command buffers kept completing until then";
   ASSERT_TRUE(past.result.has_value());
   EXPECT_THAT(*past.result, HasResult()) << "a wait that saw command buffers complete gave up";
   EXPECT_THAT(past.waitedMs, Ge(kStallBound.count()))
@@ -338,7 +423,7 @@ TEST_F(MetalSubmissionBackstopTest, TheWaitCapEndsAWaitThatKeepsProgressing) {
          released <= kFullSize && !rootLoss_->lost.load(std::memory_order_acquire);
          released += kReleasedPerInterval) {
       std::this_thread::sleep_for(kReleaseInterval);
-      device_->releasePausedCommandBuffersForTest(released);
+      releasePaused(*device_, released);
     }
   });
   const WorkerSubmission past = submitPastTheBackstop(kFullSize);
@@ -380,6 +465,7 @@ protected:
         TextureUsage::RenderAttachment | TextureUsage::Sampled | TextureUsage::CopySrc}));
     EXPECT_THAT(producer_->pauseSubmissionsForTest(), IsOk());
     producerPausedAt_ = std::chrono::steady_clock::now();
+    pausedWork_.paused();
     for (uint64_t submission = 0; submission < earlier; ++submission) {
       EXPECT_THAT(SubmitEmptyWork(*producer_), HasResult());
     }
@@ -404,7 +490,7 @@ protected:
   /// @param releases How many to let run. @param interval Time between releases.
   PacedSteps releaseProducer(int releases, std::chrono::milliseconds interval) {
     return PacedSteps(releases, interval, [this](int released) {
-      producer_->releasePausedCommandBuffersForTest(static_cast<uint64_t>(released));
+      releasePaused(*producer_, static_cast<uint64_t>(released));
     });
   }
 
@@ -429,12 +515,13 @@ protected:
     EXPECT_THAT(device_->commandBuffersInFlightForTest(), Eq(kBackstop));
   }
 
-  /// Submits one empty consumer command buffer on a worker thread; a submission still held
-  /// \ref kReleaseDeadline after the producer paused is let go by releasing the producer.
+  /// Submits one empty consumer command buffer on a worker thread; a submission still held once
+  /// the case has let none of the producer's paused work run for \ref kReleaseDeadline is let go
+  /// by releasing the producer.
   WorkerSubmission submitConsumerPastTheBackstop() {
     return SubmitOnWorker([&] { return SubmitEmptyWork(*device_); },
                           [&] { producer_->releasePausedCommandBuffersForTest(kReleaseAll); },
-                          producerPausedAt_ + kReleaseDeadline);
+                          pausedWork_);
   }
 
   std::unique_ptr<MetalDevice> producer_;
@@ -447,8 +534,7 @@ protected:
 /// stall bound: the work it waits on is progressing, so its GPU is not hung.
 TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsAConsumerWaitAlive) {
   // Several release intervals fit inside the stall bound, so a slow or shared GPU still shows the
-  // producer's progress in time, and ten of them pass before the consumer can complete anything,
-  // well before the paused work's release deadline.
+  // producer's progress in time, and ten of them pass before the consumer can complete anything.
   constexpr std::chrono::milliseconds kStallBound{700};
   constexpr std::chrono::milliseconds kReleaseInterval{80};
   constexpr uint64_t kEarlier = 10;
@@ -462,7 +548,7 @@ TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsACo
     // The producer's command buffers run one per interval, the first at once and the texture's
     // last, so the consumer sees no completion of its own for longer than its stall bound.
     for (uint64_t released = 1; released <= kEarlier + 1; ++released) {
-      producer_->releasePausedCommandBuffersForTest(released);
+      releasePaused(*producer_, released);
       if (released <= kEarlier) {
         std::this_thread::sleep_for(kReleaseInterval);
       }
@@ -472,7 +558,8 @@ TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsACo
   releaser.join();
 
   EXPECT_TRUE(past.finishedInWindow)
-      << "the consumer was still waiting when the paused work was released; it submitted "
+      << "the consumer was still waiting " << kReleaseDeadline.count()
+      << " ms after the producer's last release; it submitted "
       << MillisecondsBetween(producerPausedAt_, past.startedAt) << " ms after the producer paused";
   ASSERT_TRUE(past.result.has_value());
   EXPECT_THAT(*past.result, HasResult()) << "a wait behind a progressing producer gave up";
@@ -569,6 +656,7 @@ TEST_F(MetalSubmissionBackstopProducerTest,
   // The consumer's own work stays paused, so only the producer can show progress.
   ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
   fillStarted_ = std::chrono::steady_clock::now();
+  pausedWork_.paused();
   ASSERT_NO_FATAL_FAILURE(fillConsumerBehind(source));
 
   std::promise<void> unrelatedWorkCompleted;
@@ -595,10 +683,14 @@ TEST_F(MetalSubmissionBackstopProducerTest,
     }
   });
   // The wait starts only once the awaited serial is met and unrelated producer work has completed.
-  if (unrelatedWorkCompletedFuture.wait_for(std::chrono::seconds(1)) != std::future_status::ready) {
+  // Waited for as long as still leaves the consumer's wait two stall bounds before the paused work
+  // is released, so a slow machine is not mistaken for a producer that completes nothing.
+  const auto unrelatedWorkBy = fillStarted_ + kReleaseDeadline - 2 * kStallBound;
+  if (unrelatedWorkCompletedFuture.wait_until(unrelatedWorkBy) != std::future_status::ready) {
     stopBusyProducer.store(true, std::memory_order_release);
     busyProducer.join();
-    FAIL() << "the producer completed no unrelated work within 1 s";
+    FAIL() << "the producer completed no unrelated work within "
+           << MillisecondsBetween(fillStarted_, unrelatedWorkBy) << " ms of the fill";
   }
   const uint64_t completedAtWaitStart = producer_->completedSerial();
   const WorkerSubmission past = submitPastTheBackstop();

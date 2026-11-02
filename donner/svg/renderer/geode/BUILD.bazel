@@ -13,6 +13,7 @@ To enable:
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@donner_config//:config.bzl", "DONNER_CONFIG")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load(
@@ -53,10 +54,12 @@ exports_files(
     visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
 )
 
-# Build flag controlling whether Geode's GPU targets are compiled.
+# Build flag controlling whether Geode's GPU targets are compiled. It defaults on when a downstream
+# module selects donner.configure(renderer = "geode"), so that one setting enables both the
+# backend selection and the Geode targets.
 bool_flag(
     name = "enable_geode",
-    build_setting_default = False,
+    build_setting_default = DONNER_CONFIG.get("renderer", "tiny_skia") == "geode",
     visibility = ["//visibility:public"],
 )
 

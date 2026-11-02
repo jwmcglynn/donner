@@ -202,6 +202,12 @@ readback delta with that explicit lane and requires zero document-stage readback
 
 ### Surfaces {#GpuRuntimeSurfaces}
 
+Applications outside Donner present on macOS through `donner::svg::GeodeSurfaceRenderer`
+(`//donner/svg/renderer:geode_surface_renderer`), which owns the root, context, runtime surface and
+renderer for one host-owned `CAMetalLayer` and follows the retirement order below. The runtime
+surface API described here is internal to Donner's own hosts; Linux and browser presentation have
+no public entry point yet.
+
 - `Device::createSurface()` makes a runtime surface on one runtime device from a
   `gpu::NativeSurfaceHandle`. The platform object stays the host's: a `CAMetalLayer`
   (`NativeSurfaceKind::MetalLayer`), a `VkSurfaceKHR` the host created against the root's instance
