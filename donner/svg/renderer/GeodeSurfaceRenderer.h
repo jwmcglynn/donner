@@ -62,14 +62,18 @@ class SVGDocument;
  * ```
  *
  * Canvas contract:
- * - Create the renderer from a context that can wait for the browser's asynchronous WebGPU device
- *   request, for example `main()` in a module linked with `-sASYNCIFY`, then draw from the
- *   per-frame loop.
- * - Pass the canvas drawing-buffer size in pixels (its CSS size times `devicePixelRatio`) and call
- *   \ref resize when it changes. The browser presents each drawn frame at the end of the current
- *   task.
- * - The canvas is configured with the browser's preferred format (BGRA8 or RGBA8) and opaque
- *   alpha.
+ * - Link the module with `-sASYNCIFY` and with the browser bridge's JavaScript library: list
+ *   `@donner//donner/gpu/browser:library_donner_gpu.js` in `additional_linker_inputs` and pass
+ *   `--js-library=$(execpath @donner//donner/gpu/browser:library_donner_gpu.js)`.
+ * - Create the renderer where the browser's asynchronous WebGPU device request can be awaited
+ *   through Asyncify, such as `main()`, then draw from the per-frame loop.
+ * - Size the canvas with CSS only. Pass its drawing-buffer size in pixels (CSS size times
+ *   `devicePixelRatio`); the renderer writes the canvas `width` and `height` attributes itself.
+ * - Track size and `devicePixelRatio` changes yourself and call \ref resize: a canvas never reports
+ *   \ref FrameStatus::ResizeNeeded. The browser presents each drawn frame at the end of the
+ *   current task.
+ * - The canvas is configured with the browser's preferred format (BGRA8 or RGBA8) and opaque alpha,
+ *   so transparent regions composite as black.
  *
  * Linux (Vulkan) window presentation has no public entry point yet.
  */
@@ -77,9 +81,9 @@ class GeodeSurfaceRenderer {
 public:
   /// Outcome of one \ref draw call.
   enum class FrameStatus {
-    /// The frame was drawn and handed to the layer for presentation.
+    /// The frame was drawn and handed to the surface for presentation.
     Presented,
-    /// No drawable was available in time. Nothing was drawn; draw again next frame.
+    /// No surface frame was available in time. Nothing was drawn; draw again next frame.
     Skipped,
     /// The surface's pixel extent differs from the configured size. Nothing was drawn; call
     /// \ref resize with the current size (for a Metal layer, `bounds.size * contentsScale`), then
@@ -97,8 +101,8 @@ public:
    *   positive.
    * @param error When non-null, receives a description of why creation failed.
    * @return The renderer, or nullptr when the layer is null or not a `CAMetalLayer`, the size is
-   *   empty or exceeds the surface budget, Metal is unavailable, or the surface cannot present
-   *   BGRA8 render targets.
+   *   empty or exceeds the surface budget, Metal is unavailable, the surface cannot present, or
+   *   the build is a browser-backend WebAssembly build (which has no Metal).
    */
   static std::unique_ptr<GeodeSurfaceRenderer> CreateForMetalLayer(void* metalLayer,
                                                                    Vector2i sizePx,
@@ -108,17 +112,20 @@ public:
    * Creates a renderer that presents to a browser `<canvas>` element through WebGPU.
    *
    * @param canvasSelector CSS selector naming the canvas, such as `"#canvas"`. In a worker, which
-   *   has no document, only a plain id selector resolves.
+   *   has no document, the selector instead names an OffscreenCanvas registered through
+   *   Emscripten's offscreen-canvas support; a leading `#` is stripped, so `"#id"` works there.
    * @param sizePx Drawing-buffer size in pixels. Both dimensions must be positive.
    * @param error When non-null, receives a description of why creation failed.
-   * @return The renderer, or nullptr when the selector is empty, the size is empty, the build has
-   *   no browser backend, the browser offers no WebGPU device, or the canvas cannot present.
+   * @return The renderer, or nullptr when the selector is empty, the size is empty or exceeds the
+   *   surface budget, the build has no browser backend, the browser offers no WebGPU device, or the
+   *   canvas cannot present.
    */
   static std::unique_ptr<GeodeSurfaceRenderer> CreateForCanvas(std::string_view canvasSelector,
                                                                Vector2i sizePx,
                                                                std::string* error = nullptr);
 
-  /// Releases the surface, then the device. Waits, bounded, for submitted frames to finish.
+  /// Releases the surface, then the device. Native builds wait, bounded, for submitted frames to
+  /// finish; WebAssembly builds do not wait.
   ~GeodeSurfaceRenderer();
 
   GeodeSurfaceRenderer(const GeodeSurfaceRenderer&) = delete;

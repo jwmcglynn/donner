@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "donner/gpu/Descriptors.h"
@@ -20,9 +22,16 @@
 namespace donner::svg {
 namespace {
 
-/// Core Animation presents BGRA8, and every browser canvas can be configured with it, so the device
-/// is first created for BGRA8. A canvas whose preferred format differs reopens with that format.
+/// The device is first created for BGRA8, which Core Animation presents and most browsers prefer.
+/// A browser surface reports only its preferred format, and presenting in that format avoids a
+/// compositor copy, so a canvas that prefers RGBA8 reopens the device in RGBA8. The reopen
+/// rebuilds the device's pipelines once, at creation.
 constexpr gpu::TextureFormat kDefaultFormat = gpu::TextureFormat::BGRA8Unorm;
+
+/// Whether Geode can render to \p format as a presentation target.
+bool IsPresentableFormat(gpu::TextureFormat format) {
+  return format == gpu::TextureFormat::BGRA8Unorm || format == gpu::TextureFormat::RGBA8Unorm;
+}
 
 void SetError(std::string* error, std::string message) {
   if (error != nullptr) {
@@ -89,7 +98,8 @@ struct GeodeSurfaceRenderer::Impl {
     selection.backend = request.backend;
     root = geode::SelectGpuRoot(selection);
     if (root == nullptr) {
-      return "no GPU is available for this surface";
+      return "the " + std::string(geode::GpuBackendKindName(request.backend)) +
+             " GPU backend is not available on this host";
     }
     return openDeviceAndSurface(request.native);
   }
@@ -115,10 +125,19 @@ struct GeodeSurfaceRenderer::Impl {
 
   /// Releases the surface and device, keeping the root, so a device can reopen in another format.
   void closeDeviceAndSurface() {
-    if (surface.isValid()) {
-      (void)runtime().destroySurface(std::move(surface));
-    }
+    retireSurface();
     device.reset();
+  }
+
+  /// Destroys the runtime surface, logging a failure to retire it.
+  void retireSurface() {
+    if (!surface.isValid() || device == nullptr) {
+      return;
+    }
+    if (gpu::Status released = runtime().destroySurface(std::move(surface)); released.hasError()) {
+      std::fprintf(stderr, "GeodeSurfaceRenderer: could not retire surface: %s\n",
+                   released.error().toString().c_str());
+    }
   }
 
   /// Queries what the surface supports.
@@ -141,16 +160,21 @@ struct GeodeSurfaceRenderer::Impl {
     if (Contains(caps.formats, format)) {
       return {};
     }
-    format = caps.formats.front();
+    const auto preferred =
+        std::find_if(caps.formats.begin(), caps.formats.end(), IsPresentableFormat);
+    if (preferred == caps.formats.end()) {
+      return "the surface offers no BGRA8 or RGBA8 format";
+    }
+    format = *preferred;
     closeDeviceAndSurface();
     std::string failure = openDeviceAndSurface(native);
     if (failure.empty()) {
       failure = capabilities(caps);
     }
     if (failure.empty() && !Contains(caps.formats, format)) {
-      failure = "the surface offers no format the device can render";
+      failure = "the surface no longer offers its preferred format";
     }
-    return failure;
+    return failure.empty() ? failure : "while reopening in RGBA8: " + failure;
   }
 
   /// Chooses the surface format, Fifo pacing and opaque alpha when the surface offers them.
@@ -198,7 +222,7 @@ struct GeodeSurfaceRenderer::Impl {
   }
 
   /// Draws into the acquired \p frame, then presents it. A frame whose draw lost the device is
-  /// abandoned rather than presented, so the layer never shows an undrawn drawable.
+  /// abandoned rather than presented, so the surface never shows an undrawn frame.
   FrameStatus drawAndPresent(SVGDocument& document, const gpu::Texture& frame) {
     renderer->setTargetTexture(frame);
     renderer->draw(document);
@@ -218,13 +242,7 @@ struct GeodeSurfaceRenderer::Impl {
   ~Impl() {
     // Retirement order: renderer, then surface, then the device and root.
     renderer.reset();
-    if (surface.isValid() && device != nullptr) {
-      if (gpu::Status released = runtime().destroySurface(std::move(surface));
-          released.hasError()) {
-        std::fprintf(stderr, "GeodeSurfaceRenderer: could not retire surface: %s\n",
-                     released.error().toString().c_str());
-      }
-    }
+    retireSurface();
     device.reset();
     root.reset();
   }

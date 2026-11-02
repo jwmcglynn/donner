@@ -164,6 +164,14 @@ TEST_F(GeodeSurfaceRendererTest, RejectsAnEmptySize) {
   EXPECT_THAT(GeodeSurfaceRenderer::CreateForMetalLayer(layer(), Vector2i(-1, 64)), IsNull());
 }
 
+/// Canvas presentation exists only in browser-backend WebAssembly builds; a native build refuses
+/// it with a reason instead of opening a device.
+TEST_F(GeodeSurfaceRendererTest, CanvasPresentationIsUnavailableInNativeBuilds) {
+  std::string error;
+  EXPECT_THAT(GeodeSurfaceRenderer::CreateForCanvas("#canvas", Vector2i(64, 64), &error), IsNull());
+  EXPECT_THAT(error, HasSubstr("requires a WebAssembly build"));
+}
+
 /// A frame target larger than the renderer's surface budget would never be drawn, so it is
 /// refused up front rather than presented undrawn.
 TEST_F(GeodeSurfaceRendererTest, RejectsASizeBeyondTheSurfaceBudget) {
