@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/ExternalUseStyleRetention.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -15,8 +16,10 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
@@ -132,17 +135,21 @@ T& GetOrEmplaceContext(Registry& registry) {
   return registry.ctx().emplace<T>();
 }
 
-/// Drop \p root's computed styles and text layout so the next render-tree preparation restyles the
-/// subtree under whichever occurrence context, if any, is installed then.
+/// Drop \p root's style-derived state (computed styles and stops, layout, text layout) so the next
+/// render-tree preparation restyles the subtree under whichever occurrence context, if any, is
+/// installed then. Path, paint server and filter data are rebuilt from computed styles on every
+/// preparation.
 void InvalidateSubtree(Registry& registry, Entity root) {
   if (!registry.valid(root) || !registry.all_of<donner::components::TreeComponent>(root)) {
     return;
   }
+  LayoutSystem().invalidate(EntityHandle(registry, root));
   std::vector<Entity> pending{root};
   while (!pending.empty()) {
     const Entity entity = pending.back();
     pending.pop_back();
     StyleSystem().invalidateComputed(EntityHandle(registry, entity));
+    registry.remove<ComputedStopComponent>(entity);
     registry.get_or_emplace<DirtyFlagsComponent>(entity).mark(DirtyFlagsComponent::All);
     if (registry.all_of<TextRootComponent>(entity)) {
       (void)InvalidateTextLayout(EntityHandle(registry, entity));
@@ -451,6 +458,9 @@ void ExternalUseStyleRetention::PrepareOccurrence(Registry& registry) {
   }
 }
 
+// Only self-contained subtrees keep their retained styles next to others: a sheet whose sprites
+// share top-level gradients, patterns or filters restores the other subtrees, and so restyles them,
+// for every occurrence that reads outside its own subtree.
 bool ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(Registry& registry) {
   const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
   auto* state = registry.ctx().find<ExternalUseRetainedState>();
@@ -485,8 +495,10 @@ void ExternalUseStyleRetention::FinishOccurrence(Registry& registry) {
 }
 
 void ExternalUseStyleRetention::RestoreStandalone(Registry& registry) {
+  const bool drawingOccurrence = registry.ctx().contains<ExternalUseStyleContext>();
+  assert(!drawingOccurrence && "RestoreStandalone called while an external use is drawing");
   auto* state = registry.ctx().find<ExternalUseRetainedState>();
-  if (state == nullptr) {
+  if (drawingOccurrence || state == nullptr) {
     return;
   }
   for (const RetainedSubtree& subtree : state->subtrees) {
