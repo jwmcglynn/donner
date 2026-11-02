@@ -266,9 +266,10 @@ bazel build --@donner//donner/svg/renderer:renderer_backend=geode \
   --@donner//donner/svg/renderer/geode:enable_geode=true //:my_app
 ```
 
-To present frames to an application window rather than read pixels back, depend on
+On macOS, to present frames to an application window rather than read pixels back, depend on
 `@donner//donner/svg/renderer:geode_surface_renderer` and use `donner::svg::GeodeSurfaceRenderer`,
 which draws each frame into a host-owned `CAMetalLayer` and presents it without leaving the GPU.
+Linux and browser window presentation have no public entry point yet; see \ref EmbeddingGeode.
 
 Donner's build checks that the packages Geode adds load without Donner's development-only
 dependencies, but CI does not build Geode from an external module; BCR preflight covers only the

@@ -1,13 +1,18 @@
 /// @file
-/// GeodeSurfaceRenderer over a real Core Animation layer: creation, presentation, resize and
-/// argument validation of the public application-embedding entry point.
+/// GeodeSurfaceRenderer over real Core Animation layers: creation, the layer configuration it
+/// promises, presentation, resize and resize-needed handling, and argument validation.
+///
+/// These cases cannot prove that pixels reached the layer (a capture of a borrowed drawable is
+/// refused by design), device-loss recovery, the destructor's bounded wait, or threading.
 
+#import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -23,31 +28,23 @@ using testing::Eq;
 using testing::HasSubstr;
 using testing::IsNull;
 using testing::NotNull;
+using FrameStatus = GeodeSurfaceRenderer::FrameStatus;
 
-/// A surface frame can be briefly unavailable; this bounds the retries before a frame must present.
+/// A drawable can be briefly unavailable; this bounds the retries before a frame must present.
 constexpr int kMaxPresentAttempts = 32;
 
-SVGDocument ParseDocument() {
-  ParseWarningSink warnings;
-  ParseResult<SVGDocument> parsed = parser::SVGParser::ParseSVG(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-           <rect width="64" height="64" fill="#d33"/>
-           <circle cx="32" cy="32" r="16" fill="#3d3"/>
-         </svg>)",
-      warnings);
-  EXPECT_FALSE(parsed.hasError()) << parsed.error();
-  return std::move(parsed.result());
-}
+constexpr std::string_view kDocument =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+         <rect width="64" height="64" fill="#d33"/>
+         <circle cx="32" cy="32" r="16" fill="#3d3"/>
+       </svg>)";
 
-/// Draws until a frame presents or the attempt budget runs out, returning the last status.
-GeodeSurfaceRenderer::FrameStatus DrawUntilPresented(GeodeSurfaceRenderer& renderer,
-                                                     SVGDocument& document) {
-  GeodeSurfaceRenderer::FrameStatus status = GeodeSurfaceRenderer::FrameStatus::Skipped;
-  for (int attempt = 0; attempt < kMaxPresentAttempts; ++attempt) {
+/// Draws until a frame is not skipped or the attempt budget runs out, returning the last status.
+FrameStatus DrawUntilNotSkipped(GeodeSurfaceRenderer& renderer, SVGDocument& document) {
+  FrameStatus status = FrameStatus::Skipped;
+  for (int attempt = 0; attempt < kMaxPresentAttempts && status == FrameStatus::Skipped;
+       ++attempt) {
     status = renderer.draw(document);
-    if (status != GeodeSurfaceRenderer::FrameStatus::Skipped) {
-      break;
-    }
   }
   return status;
 }
@@ -57,46 +54,97 @@ protected:
   void SetUp() override {
     layer_ = [CAMetalLayer layer];
     layer_.contentsScale = 1.0;
+
+    ParseWarningSink warnings;
+    ParseResult<SVGDocument> parsed = parser::SVGParser::ParseSVG(kDocument, warnings);
+    ASSERT_FALSE(parsed.hasError()) << parsed.error();
+    document_ = std::move(parsed.result());
   }
 
   void* layer() { return (__bridge void*)layer_; }
 
+  /// Creates a renderer over the test layer, failing the test when creation fails.
+  std::unique_ptr<GeodeSurfaceRenderer> create(Vector2i sizePx) {
+    std::string error;
+    std::unique_ptr<GeodeSurfaceRenderer> renderer =
+        GeodeSurfaceRenderer::CreateForMetalLayer(layer(), sizePx, &error);
+    EXPECT_THAT(renderer, NotNull()) << error;
+    return renderer;
+  }
+
   CAMetalLayer* layer_ = nil;
+  std::optional<SVGDocument> document_;
 };
 
-TEST_F(GeodeSurfaceRendererTest, PresentsADocumentToAMetalLayer) {
-  std::string error;
-  std::unique_ptr<GeodeSurfaceRenderer> renderer =
-      GeodeSurfaceRenderer::CreateForMetalLayer(layer(), Vector2i(64, 64), &error);
-  ASSERT_THAT(renderer, NotNull()) << error;
-  EXPECT_THAT(renderer->size(), Eq(Vector2i(64, 64)));
+TEST_F(GeodeSurfaceRendererTest, ConfiguresTheLayerItPresentsTo) {
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
 
-  SVGDocument document = ParseDocument();
-  document.setCanvasSize(64, 64);
-  EXPECT_THAT(DrawUntilPresented(*renderer, document),
-              Eq(GeodeSurfaceRenderer::FrameStatus::Presented));
+  EXPECT_THAT(renderer->size(), Eq(Vector2i(64, 64)));
+  EXPECT_THAT(layer_.device, NotNull());
+  EXPECT_THAT(layer_.pixelFormat, Eq(MTLPixelFormatBGRA8Unorm));
+  EXPECT_THAT(layer_.drawableSize.width, Eq(64.0));
+  EXPECT_THAT(layer_.drawableSize.height, Eq(64.0));
+  EXPECT_TRUE(layer_.opaque) << "the documented opaque configuration";
+}
+
+TEST_F(GeodeSurfaceRendererTest, PresentsADocument) {
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
+
+  document_->setCanvasSize(64, 64);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
   // Presenting again reuses the surface and device.
-  EXPECT_THAT(DrawUntilPresented(*renderer, document),
-              Eq(GeodeSurfaceRenderer::FrameStatus::Presented));
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
   EXPECT_FALSE(renderer->isDeviceLost());
 }
 
-TEST_F(GeodeSurfaceRendererTest, ResizeReconfiguresTheSurface) {
+TEST_F(GeodeSurfaceRendererTest, ResizeReconfiguresTheLayer) {
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
+
   std::string error;
-  std::unique_ptr<GeodeSurfaceRenderer> renderer =
-      GeodeSurfaceRenderer::CreateForMetalLayer(layer(), Vector2i(64, 64), &error);
-  ASSERT_THAT(renderer, NotNull()) << error;
-
-  ASSERT_TRUE(renderer->resize(Vector2i(96, 48)));
+  ASSERT_TRUE(renderer->resize(Vector2i(96, 48), &error)) << error;
   EXPECT_THAT(renderer->size(), Eq(Vector2i(96, 48)));
+  EXPECT_THAT(layer_.drawableSize.width, Eq(96.0));
+  EXPECT_THAT(layer_.drawableSize.height, Eq(48.0));
+  EXPECT_TRUE(renderer->resize(Vector2i(96, 48))) << "resizing to the current size is a no-op";
 
-  SVGDocument document = ParseDocument();
-  document.setCanvasSize(96, 48);
-  EXPECT_THAT(DrawUntilPresented(*renderer, document),
-              Eq(GeodeSurfaceRenderer::FrameStatus::Presented));
+  document_->setCanvasSize(96, 48);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
 
-  EXPECT_FALSE(renderer->resize(Vector2i(0, 48))) << "an empty size is rejected";
+  EXPECT_FALSE(renderer->resize(Vector2i(0, 48), &error));
+  EXPECT_THAT(error, HasSubstr("positive"));
   EXPECT_THAT(renderer->size(), Eq(Vector2i(96, 48))) << "the previous size stays in effect";
+}
+
+/// When the laid-out layer's pixel extent drifts from the configured size, draw reports it
+/// instead of presenting a stretched frame, and a resize to the new extent recovers.
+TEST_F(GeodeSurfaceRendererTest, ReportsAResizeWhenTheLayerExtentChanges) {
+  layer_.bounds = CGRectMake(0, 0, 32, 32);
+  layer_.contentsScale = 2.0;
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
+  document_->setCanvasSize(64, 64);
+  ASSERT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+
+  layer_.bounds = CGRectMake(0, 0, 50, 40);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::ResizeNeeded));
+  EXPECT_THAT(renderer->draw(*document_), Eq(FrameStatus::ResizeNeeded))
+      << "the status persists until the host resizes";
+
+  ASSERT_TRUE(renderer->resize(Vector2i(100, 80)));
+  document_->setCanvasSize(100, 80);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+}
+
+TEST_F(GeodeSurfaceRendererTest, RejectsALayerThatIsNotAMetalLayer) {
+  CALayer* plainLayer = [CALayer layer];
+  std::string error;
+  EXPECT_THAT(GeodeSurfaceRenderer::CreateForMetalLayer((__bridge void*)plainLayer,
+                                                        Vector2i(64, 64), &error),
+              IsNull());
+  EXPECT_THAT(error, HasSubstr("could not create a surface"));
 }
 
 TEST_F(GeodeSurfaceRendererTest, RejectsANullLayer) {

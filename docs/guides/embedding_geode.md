@@ -5,13 +5,28 @@ window. The in-tree \ref geode_embed.cc "GLFW example" shows the
 current native runtime boundary. The host owns the window and its platform
 surface; Geode owns a rendering context over the selected Metal or Vulkan root.
 
-This is an internal seam, not a supported external API. For v0.8 the maintainer
-decided that Donner exposes no native embedding surface beyond internal callers:
-the editor, this example and Donner's own tests. Bazel visibility keeps the GPU
-runtime and Geode device targets inside the repository, and applications render
-through the public \ref donner::svg::Renderer API. The
+The runtime boundary this guide walks through is an internal seam, used by the
+editor, this example and Donner's own tests. Bazel visibility keeps the GPU
+runtime and Geode device targets inside the repository. Applications outside
+Donner have two supported entry points instead: the public
+\ref donner::svg::Renderer API for offscreen rendering, and on macOS
+\ref donner::svg::GeodeSurfaceRenderer, which presents to a host-owned
+`CAMetalLayer` (see \ref EmbeddingGeodeSurfaceRenderer). Linux and browser
+window presentation have no public entry point yet. The
 [GPU runtime reference](../gpu_runtime.md) covers the ownership, backend and
 failure-mode contracts this guide relies on.
+
+## Presenting from an application on macOS {#EmbeddingGeodeSurfaceRenderer}
+
+Select Geode in the application's `MODULE.bazel` with
+`donner.configure(renderer = "geode")`, depend on
+`@donner//donner/svg/renderer:geode_surface_renderer`, and create one renderer
+per `CAMetalLayer`. The renderer opens the Metal root, Geode context and runtime
+surface, and retires them in the order this guide describes. Pass drawable sizes
+in pixels (the layer's `bounds.size` times its `contentsScale`), keep
+`contentsScale` equal to the display's backing scale, and call `resize()` when
+`draw()` returns `ResizeNeeded`. The renderer configures the layer's device,
+pixel format, drawable size and opacity; the host must not change them.
 
 The code below is quoted from `examples/geode_embed.cc`, so it is the code that
 builds; `//examples:geode_embed_builds_test` compiles the example in ordinary

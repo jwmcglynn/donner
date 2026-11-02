@@ -17,9 +17,10 @@ hardcoded defaults.
 Renderers:
   - renderer="tiny_skia": Software rasterizer (default).
   - renderer="geode":     GPU renderer (native Metal on macOS, Vulkan on Linux). Also enables
-                          the Geode build targets, including
+                          the Geode build targets, including the macOS-only
                           //donner/svg/renderer:geode_surface_renderer for presenting to an
-                          application window.
+                          application's Metal layer.
+  - renderer="skia":      Legacy value kept for compatibility; selects tiny_skia.
 
 Text rendering tiers:
   - text=False:              No text rendering.
@@ -35,7 +36,10 @@ _DEFAULTS = dict(
 )
 
 _configure = tag_class(attrs = {
-    "renderer": attr.string(default = _DEFAULTS["renderer"], values = ["geode", "skia", "tiny_skia"]),
+    "renderer": attr.string(
+        default = _DEFAULTS["renderer"],
+        values = ["geode", "skia", "tiny_skia"],
+    ),
     "filters": attr.bool(default = _DEFAULTS["filters"]),
     "text": attr.bool(default = _DEFAULTS["text"]),
     "text_full": attr.bool(default = _DEFAULTS["text_full"]),
