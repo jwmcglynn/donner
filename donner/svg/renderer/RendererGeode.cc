@@ -2270,19 +2270,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
-    if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
+    if (!texturePool) {
       return gpu::Texture{};
     }
+    // A parked texture keeps its surface charge, which passes to the reuser.
+    if (gpu::Texture parked = takeFrameReusableTexture(desc); parked.isValid()) {
+      return parked;
+    }
+    if (!reserveTextureSurface(desc.size, desc.format)) {
+      return gpu::Texture{};
+    }
+    return texturePool->acquire(desc);
+  }
+
+  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any.
+  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc) {
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto reusable = std::find_if(
         frameReusableTextures.begin(), frameReusableTextures.end(),
         [&](const PendingRelease& r) { return RendererGeodeTextureKey::From(r.desc) == key; });
-    if (reusable != frameReusableTextures.end()) {
-      gpu::Texture texture = std::move(reusable->texture);
-      frameReusableTextures.erase(reusable);
-      return texture;
+    if (reusable == frameReusableTextures.end()) {
+      return gpu::Texture{};
     }
-    return texturePool->acquire(desc);
+    gpu::Texture texture = std::move(reusable->texture);
+    frameReusableTextures.erase(reusable);
+    return texture;
   }
 
   gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& desc) override {
@@ -2383,8 +2395,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * command naming it is already recorded in this renderer's submission order: a later pass that
    * reuses it runs after them. The texture stays out of the device-shared pool, which another
    * renderer could take from and submit ahead of this frame, and which can destroy what it
-   * cannot hold; it reaches the pool only once this frame is submitted. Its surface charge is
-   * released now and charged again when it is reused.
+   * cannot hold; it reaches the pool only once this frame is submitted. It stays charged to the
+   * frame's surface budget while parked, since it is still live memory, and the charge passes to
+   * its reuser.
    *
    * A texture a queue upload can write is deferred to the frame end instead, since an upload runs
    * ahead of recorded work that is not submitted yet; so is everything once the frame's recording
@@ -2399,30 +2412,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       releaseTextureAtFrameEnd(std::move(texture), desc);
       return;
     }
-    const bool releasedSurface =
-        desc.size.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
-        desc.size.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
-        surfaceBudget->release(static_cast<int>(desc.size.width),
-                               static_cast<int>(desc.size.height), 1,
-                               gpu::TextureFormatBytesPerTexel(desc.format));
-    UTILS_RELEASE_ASSERT(releasedSurface);
     frameReusableTextures.push_back({std::move(texture), desc});
   }
 
   /// Textures this renderer released within its open frame, reusable only by its own later
-  /// acquisitions until the frame is submitted. Their surface charge is already released.
+  /// acquisitions until the frame is submitted. Each is still charged to the surface budget.
   std::vector<PendingRelease> frameReusableTextures;
   /// Whether \ref releaseTextureWithinFrame makes textures reusable within the frame.
   bool withinFrameReuseEnabled = true;
 
-  /// Hand the frame's unreused within-frame textures to the pool once the frame is submitted, or
-  /// retain them when its submission is uncertain. Their surface charge was released already.
+  /// Hand the frame's unreused within-frame textures to the pool, releasing their surface charge,
+  /// once the frame is submitted; or retain them when its submission is uncertain, as the frame's
+  /// other pending releases are.
   void drainFrameReusableTextures(bool submissionUncertain) {
     for (PendingRelease& reusable : frameReusableTextures) {
-      if (submissionUncertain) {
-        failedFilterTextures.push_back(std::move(reusable));
+      if (!submissionUncertain) {
+        releaseTexture(std::move(reusable.texture), reusable.desc);
+      } else if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+        retainRecoverableTexture(std::move(reusable.texture), reusable.desc);
       } else {
-        recycleOrDestroyTexture(std::move(reusable.texture), reusable.desc);
+        failedFilterTextures.push_back(std::move(reusable));
       }
     }
     frameReusableTextures.clear();
@@ -5759,7 +5768,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGeneration();
 
     waitForQueueIdleAtTeardown();
-    drainFrameReusableTextures(/*submissionUncertain=*/false);
+    drainFrameReusableTextures(frameRecordingAbandoned || !device || device->isDeviceLost());
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
     releaseFrameTargetsAtTeardown();
@@ -6486,7 +6495,11 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
   if (!impl_->readyForFilterCapture()) {
-    impl_->filterStack.push_back({});
+    // A placeholder frame; its pop restores the clip stack it saves.
+    Impl::FilterStackFrame placeholder;
+    placeholder.savedClipStack = std::move(impl_->clipStack);
+    impl_->clipStack.clear();
+    impl_->filterStack.push_back(std::move(placeholder));
     return;
   }
   // The capture covers the target the result composites back onto, which is larger than the

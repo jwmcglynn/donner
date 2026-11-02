@@ -8119,8 +8119,10 @@ TEST_F(RendererGeodeTest, WithinFrameTextureReuseMatchesSingleUseTextures) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-// A filter whose intermediates exceed what the shared pool can hold still renders: a texture the
-// frame released is kept until the frame submits, never destroyed while its commands are pending.
+// A full-canvas blur on a canvas larger than 2048x2048 renders, and reusing its textures within
+// the frame matches single-use textures. On this backend the blur executes in tiles below the
+// shared pool's budget, so this guards the large-raster path rather than reproducing a texture
+// destroyed while pending; ManyDifferentlySizedFiltersInOneFrameSubmit covers that.
 TEST_F(RendererGeodeTest, FullCanvasBlurBeyondThePoolBudgetRenders) {
   const std::string source =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="2100">
@@ -8180,6 +8182,26 @@ TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
   editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(),
                                        "differently_sized_filters_submit",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// A texture parked for reuse within the frame is still live memory, so it stays charged to the
+// frame's surface budget until the frame ends: right after a filter pops, nothing it allocated has
+// been released from the budget.
+TEST_F(RendererGeodeTest, ParkedFilterTexturesStayChargedUntilTheFrameEnds) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.popFilterLayer();
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.surfaceBytes, testing::Eq(stats.surfacePeakBytes));
+  renderer.endFrame();
 }
 
 // Textures one renderer releases within an open frame stay with it: another renderer on the same
