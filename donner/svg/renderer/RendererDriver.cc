@@ -4397,8 +4397,11 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
   }
+  // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
+  // the host sink. Without one they are discarded even when verbose, as before the sink existed.
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+  RendererUtils::prepareDocumentForRendering(
+      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink);
 }
 
 void RendererDriver::prepareDocument(SVGDocument& document) {

@@ -1933,6 +1933,31 @@ TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentWarningsToSink) {
   EXPECT_THAT(WarningReasons(warnings), ElementsAre(kChildParseWarning));
 }
 
+TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentPreparationWarningsToSink) {
+  // The referenced subtree itself holds an unresolved `<use>`, which is only found when the
+  // sub-document is prepared for rendering, not when it is loaded.
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="tile"><use href="#missing"/></g>
+      </svg>)svg");
+  ParseWarningSink parseWarnings;
+  auto parsed = parser::SVGParser::ParseSVG(kExternalUseHostSvg, parseWarnings,
+                                            parser::SVGParser::Options(), std::move(settings));
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  Renderer renderer;
+  ParseWarningSink firstDraw;
+  testing::internal::CaptureStderr();
+  renderer.draw(document, firstDraw);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
+  EXPECT_THAT(WarningReasons(firstDraw), ElementsAre(kUnresolvedUseWarning));
+  ParseWarningSink secondDraw;
+  renderer.draw(document, secondDraw);
+  EXPECT_THAT(WarningReasons(secondDraw), testing::IsEmpty());
+}
+
 TEST(RendererPublicApiTest, DrawReportsSameDocumentWarningsToSink) {
   SVGDocument document = ParseDocument(kUnresolvedUseSvg);
   Renderer renderer;
