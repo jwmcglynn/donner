@@ -40,16 +40,18 @@ public:
   static void PrepareOccurrence(Registry& registry);
 
   /**
-   * After the render tree is instantiated for the installed occurrence, restore to the document's
-   * own styles every other retained subtree that drawing the occurrence reads: a paint server,
-   * clip path, mask, marker, filter or instantiated element outside the occurrence's subtree, and
-   * the elements they inherit from.
+   * After the render tree is instantiated for the installed occurrence, restore every other
+   * retained subtree to the document's own styles if drawing the occurrence may read any element
+   * outside its own subtree: a paint server, clip path, mask, marker, filter, instantiated element,
+   * inherited paint server, or a feImage, textPath or mpath target. What such an element pulls in
+   * can reach any other subtree, so a self-contained subtree is the only one drawn next to
+   * retained subtrees.
    *
    * @param registry Referenced document's registry, with its occurrence context installed.
    * @return True if a subtree was restored, in which case the caller instantiates the render tree
    *   again before drawing.
    */
-  static bool RestoreSubtreesReadByOccurrence(Registry& registry);
+  static bool RestoreOtherSubtreesIfReadingOutside(Registry& registry);
 
   /**
    * End the installed occurrence's draw, before its context is removed. Restores the occurrence's
@@ -63,6 +65,11 @@ public:
   /**
    * Restyle every subtree an occurrence styled and drop the occurrence's rendering instances and
    * context paint, so the document renders and reads with its own styles.
+   *
+   * Every public read of computed or derived state (styles, text metrics, layout transforms, shape
+   * geometry and bounds, rendering instances) calls this first under write access, or goes through
+   * render-tree instantiation, which does. A read-only accessor that cannot restore reports no
+   * value for occurrence-derived state instead.
    *
    * @param registry Document registry.
    */

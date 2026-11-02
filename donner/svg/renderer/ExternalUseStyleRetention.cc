@@ -14,9 +14,11 @@
 #include "donner/svg/components/FontResourceGraph.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextInvalidation.h"
@@ -290,53 +292,6 @@ void RestoreSubtree(Registry& registry, ExternalUseRetainedState& state, Entity 
   std::erase_if(state.subtrees, [&](const RetainedSubtree& s) { return s.root == root; });
 }
 
-/// Entities outside an occurrence's subtree that drawing it reads.
-struct ReadTargets {
-  std::vector<Entity> entities;
-  /// Set when the subtree has a reference these targets cannot describe.
-  bool unbounded = false;
-};
-
-void AddTarget(const Registry& registry, Entity root, const EntityHandle& handle,
-               ReadTargets& targets) {
-  if (!handle || handle.registry() != &registry ||
-      IsAncestorOrSelf(registry, root, handle.entity()) ||
-      std::find(targets.entities.begin(), targets.entities.end(), handle.entity()) !=
-          targets.entities.end()) {
-    return;
-  }
-  targets.entities.push_back(handle.entity());
-}
-
-void AddPaintTarget(const Registry& registry, Entity root, const ResolvedPaintServer& paint,
-                    ReadTargets& targets) {
-  if (const auto* reference = std::get_if<PaintResolvedReference>(&paint)) {
-    AddTarget(registry, root, reference->reference.handle, targets);
-  }
-}
-
-void AddInstanceTargets(const Registry& registry, Entity root,
-                        const RenderingInstanceComponent& instance, ReadTargets& targets) {
-  AddPaintTarget(registry, root, instance.resolvedFill, targets);
-  AddPaintTarget(registry, root, instance.resolvedStroke, targets);
-  if (instance.clipPath) {
-    AddTarget(registry, root, instance.clipPath->reference.handle, targets);
-  }
-  if (instance.mask) {
-    AddTarget(registry, root, instance.mask->reference.handle, targets);
-  }
-  for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
-    if (*marker) {
-      AddTarget(registry, root, (*marker)->reference.handle, targets);
-    }
-  }
-  if (instance.resolvedFilter) {
-    if (const auto* reference = std::get_if<ResolvedReference>(&*instance.resolvedFilter)) {
-      AddTarget(registry, root, reference->handle, targets);
-    }
-  }
-}
-
 /// The element a gradient, pattern or `<use>` inherits from or instantiates, if any.
 std::optional<ResolvedReference> ReferencedElement(Registry& registry, Entity entity) {
   if (const auto* gradient = registry.try_get<GradientComponent>(entity);
@@ -352,43 +307,120 @@ std::optional<ResolvedReference> ReferencedElement(Registry& registry, Entity en
   return std::nullopt;
 }
 
-void AddElementTargets(Registry& registry, Entity root, Entity entity, ReadTargets& targets) {
-  if (const auto* type = registry.try_get<ElementTypeComponent>(entity);
-      type && (type->type() == ElementType::FeImage || type->type() == ElementType::TextPath ||
-               type->type() == ElementType::MPath)) {
-    targets.unbounded = true;
-    return;
-  }
-  if (const auto* instance = registry.try_get<RenderingInstanceComponent>(entity)) {
-    AddInstanceTargets(registry, root, *instance, targets);
-  }
-  if (const std::optional<ResolvedReference> referenced = ReferencedElement(registry, entity)) {
-    AddTarget(registry, root, referenced->handle, targets);
-  }
+/// Whether \p handle names an element of \p registry outside \p root's subtree.
+bool IsOutside(const Registry& registry, Entity root, const EntityHandle& handle) {
+  return handle && handle.registry() == &registry &&
+         !IsAncestorOrSelf(registry, root, handle.entity());
 }
 
-/// Collect what drawing \p root's subtree reads outside it, following the inheritance chains of
-/// the referenced paint servers.
-ReadTargets CollectReadTargets(Registry& registry, Entity root) {
-  ReadTargets targets;
+bool IsOutside(Registry& registry, Entity root, const std::optional<Reference>& reference) {
+  if (!reference) {
+    return false;
+  }
+  const std::optional<ResolvedReference> resolved = reference->resolve(registry);
+  return resolved && IsOutside(registry, root, resolved->handle);
+}
+
+bool PaintIsOutside(const Registry& registry, Entity root, const ResolvedPaintServer& paint) {
+  const auto* reference = std::get_if<PaintResolvedReference>(&paint);
+  return reference != nullptr && IsOutside(registry, root, reference->reference.handle);
+}
+
+/// Whether a resolved clip path, mask or marker names an element outside \p root's subtree.
+template <typename Resolved>
+bool ResolvedIsOutside(const Registry& registry, Entity root,
+                       const std::optional<Resolved>& value) {
+  return value && IsOutside(registry, root, value->reference.handle);
+}
+
+/// Whether \p instance resolved a paint server, clip path, mask, marker or filter outside
+/// \p root's subtree.
+bool InstanceReadsOutside(const Registry& registry, Entity root,
+                          const RenderingInstanceComponent& instance) {
+  const auto* filter =
+      instance.resolvedFilter ? std::get_if<ResolvedReference>(&*instance.resolvedFilter) : nullptr;
+  return PaintIsOutside(registry, root, instance.resolvedFill) ||
+         PaintIsOutside(registry, root, instance.resolvedStroke) ||
+         ResolvedIsOutside(registry, root, instance.clipPath) ||
+         ResolvedIsOutside(registry, root, instance.mask) ||
+         ResolvedIsOutside(registry, root, instance.markerStart) ||
+         ResolvedIsOutside(registry, root, instance.markerMid) ||
+         ResolvedIsOutside(registry, root, instance.markerEnd) ||
+         (filter != nullptr && IsOutside(registry, root, filter->handle));
+}
+
+std::optional<Reference> PaintReference(const std::optional<PaintServer>& paint) {
+  const auto* reference =
+      paint ? std::get_if<PaintServer::ElementReference>(&paint->value) : nullptr;
+  return reference ? std::optional<Reference>(reference->reference) : std::nullopt;
+}
+
+/// Whether \p style references a paint server, clip path, mask, marker or filter outside
+/// \p root's subtree. Covers elements without rendering instances, such as paint server content.
+std::optional<Reference> ClipReference(const std::optional<ClipPath>& clip) {
+  const auto* reference = clip ? std::get_if<Reference>(&clip->value) : nullptr;
+  return reference ? std::optional<Reference>(*reference) : std::nullopt;
+}
+
+bool FilterIsOutside(Registry& registry, Entity root,
+                     const std::optional<std::vector<FilterEffect>>& filters) {
+  return filters && std::any_of(filters->begin(), filters->end(), [&](const FilterEffect& effect) {
+           const auto* reference = std::get_if<FilterEffect::ElementReference>(&effect.value);
+           return reference && IsOutside(registry, root, reference->reference);
+         });
+}
+
+bool StyleReadsOutside(Registry& registry, Entity root, const PropertyRegistry& style) {
+  return IsOutside(registry, root, PaintReference(style.fill.get())) ||
+         IsOutside(registry, root, PaintReference(style.stroke.get())) ||
+         IsOutside(registry, root, ClipReference(style.clipPath.get())) ||
+         IsOutside(registry, root, style.mask.get()) ||
+         IsOutside(registry, root, style.markerStart.get()) ||
+         IsOutside(registry, root, style.markerMid.get()) ||
+         IsOutside(registry, root, style.markerEnd.get()) ||
+         FilterIsOutside(registry, root, style.filter.get());
+}
+
+/// Whether \p entity is an element whose reference this check does not model.
+bool IsUnmodeledReference(const Registry& registry, Entity entity) {
+  const auto* type = registry.try_get<ElementTypeComponent>(entity);
+  return type && (type->type() == ElementType::FeImage || type->type() == ElementType::TextPath ||
+                  type->type() == ElementType::MPath);
+}
+
+/// Whether \p entity, inside \p root's subtree, reads any element outside that subtree.
+bool ElementReadsOutside(Registry& registry, Entity root, Entity entity) {
+  if (IsUnmodeledReference(registry, entity)) {
+    return true;
+  }
+  const auto* instance = registry.try_get<RenderingInstanceComponent>(entity);
+  const auto* style = registry.try_get<ComputedStyleComponent>(entity);
+  const std::optional<ResolvedReference> referenced = ReferencedElement(registry, entity);
+  return (instance && InstanceReadsOutside(registry, root, *instance)) ||
+         (style && style->properties && StyleReadsOutside(registry, root, *style->properties)) ||
+         (referenced && IsOutside(registry, root, referenced->handle));
+}
+
+/**
+ * Whether drawing \p root's subtree may read any element outside it. Content that an outside
+ * element pulls in, such as a pattern's children or the gradients those use, is not followed: any
+ * outside reference counts.
+ */
+bool ReadsOutsideSubtree(Registry& registry, Entity root) {
   std::vector<Entity> pending{root};
-  while (!pending.empty() && !targets.unbounded) {
+  while (!pending.empty()) {
     const Entity entity = pending.back();
     pending.pop_back();
-    AddElementTargets(registry, root, entity, targets);
+    if (ElementReadsOutside(registry, root, entity)) {
+      return true;
+    }
     for (Entity child = registry.get<donner::components::TreeComponent>(entity).firstChild();
          child != entt::null;
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
       pending.push_back(child);
     }
   }
-  for (std::size_t i = 0; i < targets.entities.size() && !targets.unbounded; ++i) {
-    if (const std::optional<ResolvedReference> referenced =
-            ReferencedElement(registry, targets.entities[i])) {
-      AddTarget(registry, root, referenced->handle, targets);
-    }
-  }
-  return targets;
+  return false;
 }
 
 }  // namespace
@@ -419,28 +451,21 @@ void ExternalUseStyleRetention::PrepareOccurrence(Registry& registry) {
   }
 }
 
-bool ExternalUseStyleRetention::RestoreSubtreesReadByOccurrence(Registry& registry) {
+bool ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(Registry& registry) {
   const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
   auto* state = registry.ctx().find<ExternalUseRetainedState>();
-  if (occurrence == nullptr || state == nullptr || state->subtrees.size() < 2) {
+  if (occurrence == nullptr || state == nullptr || state->subtrees.size() < 2 ||
+      !ReadsOutsideSubtree(registry, occurrence->root)) {
     return false;
   }
   const Entity root = occurrence->root;
-  const ReadTargets targets = CollectReadTargets(registry, root);
-  std::vector<Entity> restore;
   for (const RetainedSubtree& subtree : state->subtrees) {
-    const bool read =
-        targets.unbounded ||
-        std::any_of(targets.entities.begin(), targets.entities.end(),
-                    [&](Entity target) { return Overlaps(registry, subtree.root, target); });
-    if (subtree.root != root && read) {
-      restore.push_back(subtree.root);
+    if (subtree.root != root) {
+      InvalidateSubtree(registry, subtree.root);
     }
   }
-  for (Entity subtreeRoot : restore) {
-    RestoreSubtree(registry, *state, subtreeRoot);
-  }
-  return !restore.empty();
+  std::erase_if(state->subtrees, [&](const RetainedSubtree& s) { return s.root != root; });
+  return true;
 }
 
 void ExternalUseStyleRetention::FinishOccurrence(Registry& registry) {

@@ -9,7 +9,6 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
-#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 
 namespace donner::svg {
 
@@ -116,6 +115,7 @@ SVGGraphicsElement::SVGGraphicsElement(EntityHandle handle) : SVGElement(handle)
 
 Transform2d SVGGraphicsElement::transform() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
@@ -126,6 +126,7 @@ void SVGGraphicsElement::setTransform(const Transform2d& transform) {
 
 Transform2d SVGGraphicsElement::elementFromWorld() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   return components::LayoutSystem().getEntityFromWorldTransform(handle_);
 }
 
@@ -137,8 +138,8 @@ std::optional<Path> SVGGraphicsElement::resolvedSimpleClipPathOutline(std::size_
     *hasClipPath = false;
   }
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   Registry& registry = *handle_.registry();
-  components::ExternalUseStyleRetention::RestoreStandalone(registry);
   const auto* instance = registry.try_get<components::RenderingInstanceComponent>(handle_.entity());
   if (instance == nullptr || !instance->visible) {
     return std::nullopt;

@@ -770,6 +770,12 @@ public:
 
 protected:
   /**
+   * Restore a document that external `<use>` elements drew to its own styles, so a read of computed
+   * or derived state does not observe a host occurrence. Call under write access.
+   */
+  void restoreStandaloneState() const;
+
+  /**
    * Scoped mutation helper that runs cleanup before committing the mutation revision.
    *
    * This is intended for element setters that need to invalidate cached computed state after the
