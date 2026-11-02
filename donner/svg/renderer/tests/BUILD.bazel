@@ -1234,6 +1234,30 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# Frame time, texture creations and peak surface bytes of about 180 small filtered elements on a
+# phone-sized canvas. Manual perf lane: run with `--config=geode`.
+donner_cc_test(
+    name = "geode_filter_surfaces_wallclock",
+    srcs = ["GeodeFilterSurfacesWallclock_tests.cc"],
+    tags = [
+        "manual",
+        "perf",
+    ],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/geode:geode_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Captures of a renderer whose target is the frame a surface has out, over a real Core Animation
 # layer. Objective-C++ for the layer, so macOS only.
 objc_library(
@@ -1302,6 +1326,7 @@ objc_library(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:geode_surface_renderer",
+        "//donner/svg/renderer:renderer_geode",
         "@com_google_gtest//:gtest",
     ],
     alwayslink = True,

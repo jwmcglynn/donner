@@ -2654,5 +2654,67 @@ TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
   EXPECT_THAT(buffer, testing::FieldsAre(186, 186, 91, 91));
 }
 
+TEST(FilterInputMarginTest, RegionBufferCoversOnlyTheVisibleRegionAndItsReach) {
+  using namespace components;
+  using testing::FieldsAre;
+  const FilterGraph blur = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
+  // A 40-pixel region in a 1206x2622 viewport: the region plus nothing, since the capture holds
+  // nothing outside the region, rounded up to the 64-pixel granularity. Texel (0, 0) is at
+  // viewport pixel (100, 200).
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100, 200, 40, 40), Transform2d(),
+                                             1206, 2622),
+              FieldsAre(64, 64, -100, -200));
+  // A fractional region rounds outward before the granularity.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100.5, 200.25, 40, 40),
+                                             Transform2d(), 1206, 2622),
+              FieldsAre(64, 64, -100, -200));
+  // Scaling the filter scales the region in device pixels.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(10, 20, 40, 40),
+                                             Transform2d::Scale(3.0), 1206, 2622),
+              FieldsAre(128, 128, -30, -60));
+}
+
+TEST(FilterInputMarginTest, RegionBufferReachesPastTheViewportOnlyByTheGraphReach) {
+  using namespace components;
+  using testing::FieldsAre;
+  const FilterGraph blur = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
+  // The region starts 50 pixels left of and above the viewport; output there is invisible, but
+  // the visible output reads 7 pixels past the edge (three deviations and a rounding pixel).
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(-50, -50, 90, 90), Transform2d(),
+                                             64, 64),
+              FieldsAre(64, 64, 7, 7));
+  // Past the far edge too: the visible part is 24..64, read 7 pixels further, so 24..71.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(24, 24, 100, 100), Transform2d(),
+                                             64, 64),
+              FieldsAre(64, 64, -24, -24));
+  // A region wholly outside the viewport shows nothing and gets a single pixel.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100, 100, 20, 20), Transform2d(),
+                                             64, 64),
+              FieldsAre(1, 1, 0, 0));
+}
+
+TEST(FilterInputMarginTest, RegionBufferKeepsViewportLayoutsWhereRequired) {
+  using namespace components;
+  using testing::FieldsAre;
+  const std::optional<Box2d> region = Box2d::FromXYWH(10, 10, 20, 20);
+  // Turbulence keeps a viewport-aligned capture.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(SinglePrimitiveGraph(filter_primitive::Turbulence{}),
+                                             region, Transform2d(), 64, 64),
+              FieldsAre(64, 64, 0, 0));
+  // Without a region the filter covers the viewport.
+  EXPECT_THAT(
+      ComputeRegionFilterInputBuffer(SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0}),
+                                     std::nullopt, Transform2d(), 64, 64),
+      FieldsAre(64, 64, 0, 0));
+  // A graph that reads anywhere in its input covers its whole region, even past the viewport, and
+  // one that wraps or duplicates the raster edge keeps the region's exact extent.
+  filter_primitive::GaussianBlur wrap{2.0, 2.0};
+  wrap.edgeMode = filter_primitive::GaussianBlur::EdgeMode::Wrap;
+  EXPECT_THAT(
+      ComputeRegionFilterInputBuffer(SinglePrimitiveGraph(wrap), Box2d::FromXYWH(-50, 10, 100, 20),
+                                     Transform2d(), 64, 64),
+      FieldsAre(100, 20, 50, -10));
+}
+
 }  // namespace
 }  // namespace donner::svg

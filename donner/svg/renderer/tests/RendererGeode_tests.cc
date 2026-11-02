@@ -7812,5 +7812,447 @@ TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
   }
 }
 
+/// A document of \p count glowing pieces in a \p width by \p height canvas: each a small group
+/// whose filter merges a blur under its source.
+std::string GlowingPiecesSource(int width, int height, int count) {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(width) + "\" height=\"" + std::to_string(height) + "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < count; ++i) {
+    const int x = 40 + (i % 9) * 128;
+    const int y = 60 + (i / 9) * 280;
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(x) + "\" cy=\"" +
+              std::to_string(y) + "\" r=\"30\" fill=\"#e05090\"/><rect x=\"" +
+              std::to_string(x - 10) + "\" y=\"" + std::to_string(y - 40) +
+              "\" width=\"20\" height=\"16\" fill=\"#40c0f0\"/></g>";
+  }
+  return source + "</svg>";
+}
+
+SVGDocument ParseDocumentOrFail(const std::string& source) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+constexpr int kPhoneWidth = 1206;
+constexpr int kPhoneHeight = 2622;
+constexpr std::uint64_t kPhoneTargetBytes = std::uint64_t{kPhoneWidth} * kPhoneHeight * 4;
+
+// A small filtered element's capture and intermediates cover its filter region, not the whole
+// viewport it sits in.
+TEST_F(RendererGeodeTest, SmallFilterInLargeViewportCapturesOnlyItsRegion) {
+  SVGDocument document = ParseDocumentOrFail(GlowingPiecesSource(kPhoneWidth, kPhoneHeight, 1));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.filterExecutions, testing::Eq(1u));
+  // The 60x70 piece's filter region is 108x126 pixels, so its capture is at most 128x160.
+  EXPECT_THAT(stats.filterCaptureBytesReserved, testing::Le(std::uint64_t{128} * 160 * 4));
+  EXPECT_THAT(stats.surfacePeakBytes, testing::Lt(kPhoneTargetBytes + (std::uint64_t{2} << 20)))
+      << "filter surfaces beyond the frame target";
+}
+
+// Many small filters reuse a few pooled surfaces: once warm, a frame creates no textures and holds
+// far less than one viewport-sized surface per filter.
+TEST_F(RendererGeodeTest, ManySmallFiltersReusePooledSurfacesOnceWarm) {
+  constexpr int kPieces = 80;
+  SVGDocument document =
+      ParseDocumentOrFail(GlowingPiecesSource(kPhoneWidth, kPhoneHeight, kPieces));
+  RendererGeode renderer = createRenderer();
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  renderer.draw(document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.filterExecutions, testing::Eq(static_cast<std::uint64_t>(kPieces)));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.surfacePeakBytes, testing::Lt(kPhoneTargetBytes + (std::uint64_t{32} << 20)));
+}
+
+// Reusing filter textures within a frame changes which texture each filter writes, never what it
+// writes.
+TEST_F(RendererGeodeTest, WithinFrameTextureReuseMatchesSingleUseTextures) {
+  SVGDocument document = ParseDocumentOrFail(GlowingPiecesSource(kPhoneWidth, kPhoneHeight, 80));
+  RendererGeode reusing = createRenderer();
+  reusing.draw(document);
+  reusing.draw(document);
+  RendererGeode singleUse = createRenderer();
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  editor::tests::CompareBitmapToBitmap(reusing.takeSnapshot(), singleUse.takeSnapshot(),
+                                       "within_frame_texture_reuse",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A full-canvas blur on a canvas larger than 2048x2048 renders, and reusing its textures within
+// the frame matches single-use textures. On this backend the blur executes in tiles below the
+// shared pool's budget, so this guards the large-raster path rather than reproducing a texture
+// destroyed while pending; ManyDifferentlySizedFiltersInOneFrameSubmit covers that.
+TEST_F(RendererGeodeTest, FullCanvasBlurBeyondThePoolBudgetRenders) {
+  const std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="2100">
+      <filter id="soft" x="0" y="0" width="1" height="1"><feGaussianBlur stdDeviation="6"/></filter>
+      <g filter="url(#soft)"><rect width="2100" height="2100" fill="#3070c0"/>
+        <rect x="1000" y="1000" width="100" height="100" fill="#ffffff"/></g>
+    </svg>)svg";
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode reusing = createRenderer();
+  reusing.draw(document);
+  ASSERT_THAT(reusing.deviceLost(), testing::IsFalse());
+  const RendererBitmap actual = reusing.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAt(actual, 400, 400), RgbaEq(48, 112, 192, 255));
+  RendererGeode singleUse = createRenderer();
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(), "full_canvas_blur_reuse",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Filters of many different sizes in one frame release far more intermediates than the shared
+// pool can hold. A frame that handed them to the pool as they were released let it evict, and so
+// destroy, textures the frame's pending commands still named, and the frame's submission failed
+// and lost the device. They now wait for the frame to submit.
+TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(kPhoneWidth) + "\" height=\"" + std::to_string(kPhoneHeight) +
+                       "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < 40; ++i) {
+    const int radius = 12 + i * 9;
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(150 + (i % 4) * 300) +
+              "\" cy=\"" + std::to_string(200 + (i / 4) * 240) + "\" r=\"" +
+              std::to_string(radius) + "\" fill=\"#e05090\"/></g>";
+  }
+  source += "</svg>";
+  SVGDocument document = ParseDocumentOrFail(source);
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+  const std::uint64_t executions = renderer.resourceStats().filterExecutions;
+  EXPECT_THAT(executions, testing::Gt(0u));
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  RendererGeode singleUse(device);
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  ASSERT_THAT(singleUse.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(singleUse.resourceStats().filterExecutions, testing::Eq(executions))
+      << "reuse must not change which filters the frame budget admits";
+  editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(),
+                                       "differently_sized_filters_submit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A document of 120 glowing circles of 40 sizes on the phone-sized canvas, whose filters hold more
+/// region-sized surfaces until the frame ends than the pool's starting budget, but less than its
+/// native ceiling.
+std::string VariedGlowSource() {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(kPhoneWidth) + "\" height=\"" + std::to_string(kPhoneHeight) +
+                       "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < 120; ++i) {
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(100 + (i % 8) * 140) +
+              "\" cy=\"" + std::to_string(100 + (i / 8) * 165) + "\" r=\"" +
+              std::to_string(40 + (i % 40) * 2) + "\" fill=\"#e05090\"/></g>";
+  }
+  return source + "</svg>";
+}
+
+constexpr std::uint64_t kPoolFloorBytes = std::uint64_t{64} << 20;
+
+// Filtered elements of many different sizes need more than the pool's starting budget. Once warm,
+// the pool keeps that whole working set from frame to frame instead of destroying and recreating
+// most of it every frame. This holds while the working set stays under the pool's ceiling.
+TEST_F(RendererGeodeTest, VariedFilterSizesCreateNoTexturesOnceWarm) {
+  SVGDocument document = ParseDocumentOrFail(VariedGlowSource());
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  renderer.draw(document);
+  ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.resourceStats().filterExecutions, testing::Gt(0u));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+  const RendererGeodeTexturePoolStats pool = renderer.texturePoolStats();
+  EXPECT_THAT(pool.budgetBytes, testing::Gt(kPoolFloorBytes));
+  EXPECT_THAT(pool.budgetBytes, testing::Le(pool.maximumBudgetBytes));
+}
+
+// An embedder can give the pool's free textures back: to the floor when rendering goes idle, and
+// all of them when the app is hidden.
+TEST_F(RendererGeodeTest, TrimTexturePoolFreesFreeTextures) {
+  SVGDocument document = ParseDocumentOrFail(VariedGlowSource());
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  ASSERT_THAT(renderer.texturePoolStats().bytes, testing::Gt(kPoolFloorBytes));
+
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::ToFloor);
+  EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Le(kPoolFloorBytes));
+  EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Eq(kPoolFloorBytes));
+
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Eq(0u));
+  EXPECT_THAT(renderer.texturePoolStats().textureCount, testing::Eq(0u));
+}
+
+// A device that stops rendering forgets its working set after two seconds, whether the next
+// event is a frame or an idle trim, so a scene rendered once does not keep its peak forever.
+TEST_F(RendererGeodeTest, IdleTexturePoolReturnsToItsFloor) {
+  SVGDocument heavy = ParseDocumentOrFail(VariedGlowSource());
+  SVGDocument light = ParseDocumentOrFail(GlowingPiecesSource(64, 64, 0));
+  for (const bool viaFrame : {false, true}) {
+    SCOPED_TRACE(viaFrame ? "next frame" : "idle trim");
+    // Declared first so it outlives the pool whose clock reads it.
+    auto now = std::chrono::steady_clock::time_point();
+    std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    RendererGeode renderer(device);
+    renderer.setTexturePoolClockForTesting([&now] { return now; });
+    for (int frame = 0; frame < 3; ++frame) {
+      now += std::chrono::milliseconds(16);
+      renderer.draw(heavy);
+    }
+    ASSERT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+
+    now += std::chrono::seconds(1);
+    renderer.trimTexturePool(RendererGeodeTexturePoolTrim::IdleOnly);
+    EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes))
+        << "a second of idle keeps the working set";
+
+    now += std::chrono::seconds(2);
+    if (viaFrame) {
+      renderer.draw(light);
+    } else {
+      renderer.trimTexturePool(RendererGeodeTexturePoolTrim::IdleOnly);
+    }
+    EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Eq(kPoolFloorBytes));
+    EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Le(kPoolFloorBytes));
+  }
+}
+
+// A texture parked for reuse within the frame is still live memory, so it stays charged to the
+// frame's surface budget until the frame ends: right after a filter pops, nothing it allocated has
+// been released from the budget.
+TEST_F(RendererGeodeTest, ParkedFilterTexturesStayChargedUntilTheFrameEnds) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.popFilterLayer();
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.surfaceBytes, testing::Eq(stats.surfacePeakBytes));
+  renderer.endFrame();
+}
+
+// A frame that takes longer than the idle decay is activity, not idleness: the textures it returns
+// when it ends keep the device's working set for the frame after it.
+TEST_F(RendererGeodeTest, SlowFrameKeepsTheTexturePoolWorkingSet) {
+  using namespace components;
+  SVGDocument heavy = ParseDocumentOrFail(VariedGlowSource());
+  // Declared first so it outlives the pool whose clock reads it.
+  auto now = std::chrono::steady_clock::time_point();
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  renderer.setTexturePoolClockForTesting([&now] { return now; });
+  for (int frame = 0; frame < 3; ++frame) {
+    now += std::chrono::milliseconds(16);
+    renderer.draw(heavy);
+  }
+  ASSERT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  beginFrame(renderer);
+  now += std::chrono::seconds(3);  // The frame itself takes three seconds.
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  now += std::chrono::milliseconds(100);
+  renderer.draw(heavy);
+  EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+}
+
+// Textures one renderer releases within an open frame stay with it: another renderer on the same
+// device could otherwise take one, write it, and submit ahead of the first renderer's frame.
+TEST_F(RendererGeodeTest, WithinFrameReleasesStayWithTheirRenderer) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  const auto drawFilter = [&](RendererGeode& renderer, const css::RGBA& color) {
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+    renderer.setPaint(solidFill(color));
+    renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+    renderer.popFilterLayer();
+  };
+
+  // A device of their own, so the shared pool starts empty and only these renderers feed it.
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode first(device);
+  RendererGeode second(device);
+  beginFrame(first);
+  const std::size_t pooledBefore = first.texturePoolStats().textureCount;
+  drawFilter(first, css::RGBA(200, 40, 40, 255));
+  EXPECT_THAT(first.texturePoolStats().textureCount, testing::Le(pooledBefore))
+      << "an open frame's released filter textures reached the shared pool";
+
+  beginFrame(second);
+  drawFilter(second, css::RGBA(40, 200, 40, 255));
+  second.endFrame();
+
+  drawFilter(first, css::RGBA(200, 40, 40, 255));
+  first.endFrame();
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  drawFilter(reference, css::RGBA(200, 40, 40, 255));
+  drawFilter(reference, css::RGBA(200, 40, 40, 255));
+  reference.endFrame();
+  editor::tests::CompareBitmapToBitmap(first.takeSnapshot(), reference.takeSnapshot(),
+                                       "within_frame_release_isolation",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Renders \p content in a \p size canvas, and again in a canvas with \p room more pixels on
+/// every side and the content moved by \p room, then requires the window of the second that
+/// shows the first canvas to match it: a filter near or past the canvas edge must read and show
+/// the same pixels as one with room around it.
+void ExpectFilterEdgeParity(RendererGeode& renderer, const std::string& content, int size, int room,
+                            std::string_view label,
+                            const editor::tests::BitmapGoldenCompareParams& params =
+                                editor::tests::PixelmatchIdentityParams()) {
+  const std::string filters = R"svg(
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="wide" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="stretch" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1 7"/>
+    </filter>
+    <filter id="shift" x="-60%" y="-60%" width="220%" height="220%">
+      <feOffset dx="-14" dy="-11"/>
+    </filter>
+    <filter id="sharpen">
+      <feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 5 -1 0 -1 0"/>
+    </filter>
+    <filter id="tiles" filterUnits="userSpaceOnUse" x="-40" y="-40" width="200" height="200">
+      <feOffset x="-10" y="-10" width="16" height="16" result="cell"/>
+      <feTile in="cell"/>
+    </filter>
+    <filter id="spot" x="-30%" y="-30%" width="160%" height="160%">
+      <feDiffuseLighting in="SourceAlpha" surfaceScale="3" lighting-color="#ffe0a0">
+        <fePointLight x="2" y="4" z="20"/>
+      </feDiffuseLighting>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+    <clipPath id="clip"><rect x="-6" y="-6" width="40" height="34"/></clipPath>
+    <mask id="fade"><rect x="-40" y="-40" width="200" height="200" fill="#808080"/></mask>)svg";
+  const auto canvas = [&](int extent, int shift) {
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + std::to_string(extent) +
+           "\" height=\"" + std::to_string(extent) + "\">" + filters + "<g transform=\"translate(" +
+           std::to_string(shift) + " " + std::to_string(shift) + ")\">" + content + "</g></svg>";
+  };
+  SVGDocument atEdge = ParseDocumentOrFail(canvas(size, 0));
+  renderer.draw(atEdge);
+  const RendererBitmap edgeBitmap = renderer.takeSnapshot();
+  SVGDocument withRoom = ParseDocumentOrFail(canvas(size + 2 * room, room));
+  renderer.draw(withRoom);
+  const RendererBitmap roomBitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(edgeBitmap.empty());
+  ASSERT_FALSE(roomBitmap.empty());
+  editor::tests::CompareBitmapToBitmap(
+      edgeBitmap, editor::tests::CropBitmap(roomBitmap, Vector2i(room, room), Vector2i(size, size)),
+      label, params);
+}
+
+TEST_F(RendererGeodeTest, FilterRegionsNearCanvasEdgesMatchFiltersWithRoom) {
+  RendererGeode renderer = createRenderer();
+  const std::array<std::pair<std::string_view, std::string_view>, 13> cases{{
+      {"straddles_top_left",
+       R"svg(<g filter="url(#glow)"><circle cx="6" cy="10" r="18" fill="#e05090"/></g>)svg"},
+      {"straddles_bottom_right",
+       R"svg(<g filter="url(#glow)"><rect x="80" y="84" width="30" height="24" fill="#40c0f0"/></g>)svg"},
+      {"halo_only_past_edge",
+       R"svg(<g filter="url(#wide)"><rect x="-30" y="30" width="24" height="24" fill="#208040"/></g>)svg"},
+      {"rotated",
+       R"svg(<g transform="translate(90 20) rotate(30)" filter="url(#glow)"><rect x="-20" y="-10" width="40" height="20" fill="#e0a020"/></g>)svg"},
+      {"scaled",
+       R"svg(<g transform="translate(-10 50) scale(2.5)" filter="url(#glow)"><circle cx="10" cy="6" r="8" fill="#6040e0"/></g>)svg"},
+      {"negative_offset_top_left",
+       R"svg(<g filter="url(#shift)"><rect x="4" y="2" width="30" height="26" fill="#30a050"/></g>)svg"},
+      {"convolve_duplicate_edges",
+       R"svg(<g filter="url(#sharpen)"><rect x="-8" y="70" width="40" height="40" fill="#5070c0"/></g>)svg"},
+      {"tile_user_space_source",
+       R"svg(<g filter="url(#tiles)"><circle cx="-4" cy="-4" r="7" fill="#c03080"/></g>)svg"},
+      {"point_light_near_edge",
+       R"svg(<g filter="url(#spot)"><rect x="-4" y="-2" width="36" height="30" fill="#a07030"/></g>)svg"},
+      {"nested_filters",
+       R"svg(<g filter="url(#glow)"><g filter="url(#shift)"><rect x="6" y="8" width="24" height="20" fill="#2080c0"/></g></g>)svg"},
+      {"under_ancestor_clip",
+       R"svg(<g clip-path="url(#clip)"><g filter="url(#wide)"><rect x="-6" y="0" width="30" height="20" fill="#d04040"/></g></g>)svg"},
+      {"under_opacity",
+       R"svg(<g opacity="0.6"><g filter="url(#glow)"><circle cx="90" cy="88" r="14" fill="#40a040"/></g></g>)svg"},
+      {"inside_mask",
+       R"svg(<g mask="url(#fade)"><g filter="url(#glow)"><rect x="70" y="-6" width="30" height="24" fill="#8040c0"/></g></g>)svg"},
+  }};
+  for (const auto& [label, content] : cases) {
+    SCOPED_TRACE(label);
+    ExpectFilterEdgeParity(renderer, std::string(content), 96, 64,
+                           "filter_edge_parity_" + std::string(label));
+  }
+}
+
+// A rotated anisotropic blur runs on the transformed path, which resamples the capture into a
+// local raster aligned with the filter's axes. That resampling is not exactly invariant to where
+// the canvas edge falls: some edge pixels of the halo differ slightly, which they also did when
+// filter surfaces spanned the viewport, so they are held to the suite's default per-pixel
+// threshold rather than to identity.
+TEST_F(RendererGeodeTest, RotatedAnisotropicFilterNearCanvasEdgeMatchesFilterWithRoom) {
+  RendererGeode renderer = createRenderer();
+  ExpectFilterEdgeParity(
+      renderer,
+      R"svg(<g transform="translate(8 60) rotate(40)" filter="url(#stretch)"><rect x="-14" y="-14" width="28" height="28" fill="#c02040"/></g>)svg",
+      96, 64, "filter_edge_parity_rotated_anisotropic",
+      editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true));
+}
+
 }  // namespace
 }  // namespace donner::svg

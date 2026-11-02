@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -346,12 +347,13 @@ inline FilterInputMargin ComputeFilterInputMargin(const components::FilterGraph&
   return ComputeFilterSamplingReach(graph, deviceFromFilter);
 }
 
-/// Filter input raster layout around a viewport: the viewport plus input margins on each side.
+/// Filter input raster layout relative to a viewport. Raster texel (0, 0) lies at viewport pixel
+/// (-\ref offsetX, -\ref offsetY).
 struct FilterInputBuffer {
   int width = 0;    ///< Raster width in pixels.
   int height = 0;   ///< Raster height in pixels.
-  int offsetX = 0;  ///< Raster pixels left of the viewport.
-  int offsetY = 0;  ///< Raster pixels above the viewport.
+  int offsetX = 0;  ///< Raster pixels left of the viewport; negative when it starts inside it.
+  int offsetY = 0;  ///< Raster pixels above the viewport; negative when it starts inside it.
 
   /// Whether the raster extends past the viewport on any side.
   [[nodiscard]] bool exceedsViewport(int viewportWidth, int viewportHeight) const {
@@ -434,6 +436,144 @@ inline FilterInputBuffer ComputeFilterInputBuffer(const components::FilterGraph&
   const std::uint64_t pixels = static_cast<std::uint64_t>(std::max(result.width, 0)) *
                                static_cast<std::uint64_t>(std::max(result.height, 0));
   return pixels > components::kMaximumFilterSurfacePixels ? viewport : result;
+}
+
+/// Raster dimensions of a region-bounded layout round up to this many pixels, so a region that
+/// moves by a fraction of a pixel, or regions of nearby sizes, keep one texture size.
+inline constexpr int kFilterInputBufferGranularity = 64;
+
+/// Whether a primitive of \p graph extends its input at the raster edge, duplicating or wrapping
+/// edge pixels, so the raster must end exactly where its content does.
+inline bool FilterGraphReadsRasterEdges(const components::FilterGraph& graph) {
+  using namespace components::filter_primitive;
+  return std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const components::FilterNode& n) {
+    if (const auto* blur = std::get_if<GaussianBlur>(&n.primitive)) {
+      return blur->edgeMode != GaussianBlur::EdgeMode::None;
+    }
+    if (const auto* convolve = std::get_if<ConvolveMatrix>(&n.primitive)) {
+      return convolve->edgeMode != ConvolveMatrix::EdgeMode::None;
+    }
+    return false;
+  });
+}
+
+/// Whether every coordinate of \p box is finite.
+inline bool IsFiniteBox(const Box2d& box) {
+  return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
+         std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y);
+}
+
+/// The overlap of \p a and \p b, or `std::nullopt` when they share no area.
+inline std::optional<Box2d> IntersectFilterBoxes(const Box2d& a, const Box2d& b) {
+  const Vector2d topLeft(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y));
+  const Vector2d bottomRight(std::min(a.bottomRight.x, b.bottomRight.x),
+                             std::min(a.bottomRight.y, b.bottomRight.y));
+  if (!(topLeft.x < bottomRight.x) || !(topLeft.y < bottomRight.y)) {
+    return std::nullopt;
+  }
+  return Box2d(topLeft, bottomRight);
+}
+
+/// Device pixels a filter layer's input must cover for the \p visible part of its device
+/// \p region: the visible part expanded by the graph's reach, or the whole region for a graph that
+/// can read anywhere, plus any tile source, clipped back to the region.
+inline std::optional<Box2d> FilterInputRasterBox(const FilterInputMargin& margin,
+                                                 const Box2d& region, const Box2d& visible,
+                                                 const Transform2d& deviceFromFilter) {
+  Box2d needed = margin.wholeRegion
+                     ? region
+                     : Box2d(visible.topLeft - margin.pixels, visible.bottomRight + margin.pixels);
+  if (margin.userCapture) {
+    const Box2d source = deviceFromFilter.transformBox(*margin.userCapture);
+    needed = Box2d::Union(needed, Box2d(source.topLeft - margin.captureReach,
+                                        source.bottomRight + margin.captureReach));
+  }
+  return IntersectFilterBoxes(needed, region);
+}
+
+/// The pixel-aligned raster over \p box, its size rounded up to the layout granularity unless
+/// \p exactEdges, or `std::nullopt` past the surface limits.
+inline std::optional<FilterInputBuffer> PixelAlignedFilterRaster(const Box2d& box,
+                                                                 bool exactEdges) {
+  const auto extent = [&](double from, double to) {
+    const double pixels = std::ceil(to) - std::floor(from);
+    return exactEdges
+               ? pixels
+               : std::ceil(pixels / kFilterInputBufferGranularity) * kFilterInputBufferGranularity;
+  };
+  const double left = std::floor(box.topLeft.x);
+  const double top = std::floor(box.topLeft.y);
+  const double width = extent(box.topLeft.x, box.bottomRight.x);
+  const double height = extent(box.topLeft.y, box.bottomRight.y);
+  const double limit = static_cast<double>(components::kMaximumFilterSurfaceDimension);
+  const double coordinateLimit = static_cast<double>(std::numeric_limits<int>::max() / 2);
+  if (width > limit || height > limit || std::abs(left) > coordinateLimit ||
+      std::abs(top) > coordinateLimit ||
+      width * height > static_cast<double>(components::kMaximumFilterSurfacePixels)) {
+    return std::nullopt;
+  }
+  return FilterInputBuffer{static_cast<int>(width), static_cast<int>(height),
+                           static_cast<int>(-left), static_cast<int>(-top)};
+}
+
+/**
+ * Lay out the input raster for a filter layer over only the part of its filter region that can
+ * affect what a \p viewportWidth by \p viewportHeight surface shows.
+ *
+ * Output is visible only where the filter region meets the viewport, and each output pixel reads
+ * input up to the graph's reach away, so the raster covers that visible part of the region
+ * expanded by the reach, clipped back to the region since the capture holds nothing outside it. A
+ * graph that can read anywhere in its input covers its whole region, and a tile source rectangle
+ * is always covered. Dimensions round up to \ref kFilterInputBufferGranularity unless a primitive
+ * reads the raster edge (\ref FilterGraphReadsRasterEdges). A region that shows nothing gets a
+ * single-pixel raster.
+ *
+ * Graphs whose capture must stay aligned with the viewport (feTurbulence evaluates noise from
+ * raster coordinates), a missing region, and a layout past the surface limits use
+ * \ref ComputeFilterInputBuffer instead.
+ */
+inline FilterInputBuffer ComputeRegionFilterInputBuffer(const components::FilterGraph& graph,
+                                                        const std::optional<Box2d>& filterRegion,
+                                                        const Transform2d& deviceFromFilter,
+                                                        int viewportWidth, int viewportHeight) {
+  const auto viewportLayout = [&] {
+    return ComputeFilterInputBuffer(graph, filterRegion, deviceFromFilter, viewportWidth,
+                                    viewportHeight);
+  };
+  if (!filterRegion.has_value() || graph.keepsViewportAlignedCapture ||
+      components::FilterGraphHasTurbulence(graph) || viewportWidth <= 0 || viewportHeight <= 0) {
+    return viewportLayout();
+  }
+  const Box2d region = deviceFromFilter.transformBox(*filterRegion);
+  if (!IsFiniteBox(region)) {
+    return viewportLayout();
+  }
+  const std::optional<Box2d> visible = IntersectFilterBoxes(
+      region, Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight)));
+  const std::optional<Box2d> raster =
+      visible ? FilterInputRasterBox(ComputeFilterInputMargin(graph, deviceFromFilter), region,
+                                     *visible, deviceFromFilter)
+              : std::nullopt;
+  if (!raster.has_value()) {
+    return FilterInputBuffer{1, 1, 0, 0};
+  }
+  const std::optional<FilterInputBuffer> layout =
+      PixelAlignedFilterRaster(*raster, FilterGraphReadsRasterEdges(graph));
+  return layout ? *layout : viewportLayout();
+}
+
+/// Whether a filter region shows nothing on a \p viewportWidth by \p viewportHeight surface: it
+/// lies wholly outside it, so the layer's result is invisible and need not be captured or run.
+/// @param filterRegion Filter region in filter user space.
+/// @param deviceFromFilter Filter user space to surface pixels.
+/// @param viewportWidth Surface width. @param viewportHeight Surface height.
+inline bool FilterRegionShowsNothing(const Box2d& filterRegion, const Transform2d& deviceFromFilter,
+                                     int viewportWidth, int viewportHeight) {
+  const Box2d region = deviceFromFilter.transformBox(filterRegion);
+  return IsFiniteBox(region) &&
+         !IntersectFilterBoxes(region,
+                               Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight)))
+              .has_value();
 }
 
 /// Invert only finite, nonsingular transforms whose inverse remains finite.
