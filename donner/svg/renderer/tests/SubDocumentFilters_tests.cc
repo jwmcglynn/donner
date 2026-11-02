@@ -280,5 +280,36 @@ TEST(SubDocumentFiltersTest, HostGroupFilterAroundExternalUseMatchesInDocument) 
   ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-filters-host-tint");
 }
 
+/// Masks and objectBoundingBox clip paths on a host group around an external `<use>` resolve
+/// against the content the occurrence draws, as they do for the same content in-document.
+TEST(SubDocumentFiltersTest, HostMaskAndBoxClipAroundExternalUseMatchInDocument) {
+  constexpr std::string_view kEffects[] = {
+      "<defs><mask id='effect'><rect x='0' y='0' width='16' height='8' fill='#ffffff'/></mask>"
+      "</defs>",
+      "<defs><clipPath id='effect' clipPathUnits='objectBoundingBox'>"
+      "<rect width='0.5' height='1'/></clipPath></defs>",
+  };
+  constexpr std::string_view kReferences[] = {"mask='url(#effect)'", "clip-path='url(#effect)'"};
+  for (size_t i = 0; i < std::size(kEffects); ++i) {
+    SCOPED_TRACE(kReferences[i]);
+    const auto host = [&](std::string_view href, bool inlineSprites) {
+      return "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>" +
+             std::string(kEffects[i]) +
+             (inlineSprites ? std::string(kSprites) : std::string()) +
+             "<rect width='32' height='16' fill='#ffffff'/><g " + std::string(kReferences[i]) +
+             "><use href='" + std::string(href) + "' x='8'/></g></svg>";
+    };
+    SVGDocument external = Parse(host("sheet.svg#sprite-glow", false), {{"sheet.svg", Sheet()}});
+    SVGDocument local = Parse(host("#sprite-glow", true));
+    Renderer externalRenderer;
+    Renderer localRenderer;
+    const RendererBitmap expected = Draw(localRenderer, local);
+    // The effect keeps the occurrence's top-left quarter.
+    EXPECT_THAT(PixelAt(expected, 9, 7), test::Rgba(Lt(60), Lt(120), Gt(180), 255));
+    ExpectSameBitmap(Draw(externalRenderer, external), expected,
+                     "sub-document-host-effect-" + std::to_string(i));
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
