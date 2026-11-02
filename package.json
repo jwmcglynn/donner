@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "jest": "^30.0.0",
-    "n": "^10.0.0"
+    "n": "^11.0.0"
   },
   "scripts": {
     "test": "jest"
