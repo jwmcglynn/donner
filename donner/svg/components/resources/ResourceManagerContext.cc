@@ -562,13 +562,19 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
 
 std::optional<SVGDocumentHandle> ResourceManagerContext::loadAdmittedExternalSVG(
     std::string_view url, ParseWarningSink& warningSink) {
+  const auto currentRevision = [this]() -> uint64_t {
+    const auto* cache = registry_.ctx().find<SubDocumentCache>();
+    return cache != nullptr ? cache->admissionRevision() : 0;
+  };
   if (const auto found = admittedExternalSvgs_.find(RcString(url));
-      found != admittedExternalSvgs_.end()) {
-    return found->second;
+      found != admittedExternalSvgs_.end() &&
+      found->second.admissionRevision == currentRevision()) {
+    return found->second.document;
   }
   std::optional<SVGDocumentHandle> document = loadExternalSVG(url, warningSink);
   if (document) {
-    admittedExternalSvgs_.insert_or_assign(RcString(url), *document);
+    admittedExternalSvgs_.insert_or_assign(RcString(url),
+                                           AdmittedExternalSvg{*document, currentRevision()});
   }
   return document;
 }

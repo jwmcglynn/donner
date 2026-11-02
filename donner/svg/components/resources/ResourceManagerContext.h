@@ -116,12 +116,13 @@ public:
 
   /**
    * Load an external SVG document like \ref loadExternalSVG, admitting each URL at most once per
-   * admission pass: later requests in the same pass for a URL that was already admitted reuse that
-   * admission, since nothing a pass does between them changes what admission checks. A full
-   * render-tree rebuild starts a new pass with \ref beginExternalSVGAdmissionPass; requests made
-   * outside a rebuild use \ref loadExternalSVG, which admits again. Only successful loads are
-   * reused; a failed one goes through \ref loadExternalSVG again, which applies its own negative
-   * cache.
+   * admission pass. A later request for an admitted URL reuses that admission while this
+   * document's resource families are unchanged (\ref SubDocumentCache::admissionRevision): it has
+   * not joined or left a family and none has tightened its limits, the only changes that can
+   * refuse an unchanged document. Otherwise the document is admitted again. A full render-tree
+   * rebuild starts a new pass with \ref beginExternalSVGAdmissionPass, which also re-checks
+   * documents that grew. Only successful loads are reused; a failed one goes through \ref
+   * loadExternalSVG again, which applies its own negative cache.
    *
    * @param url URL of the external SVG to load.
    * @param warningSink Sink to collect warnings.
@@ -235,8 +236,14 @@ private:
   /// Positive and negative external fetch cache, shared by images, fonts, and subdocuments.
   mutable std::unordered_map<std::string, CachedFetchResult> externalFetchCache_;
 
+  /// An external SVG document admitted in the current admission pass.
+  struct AdmittedExternalSvg {
+    SVGDocumentHandle document;      ///< The admitted document.
+    uint64_t admissionRevision = 0;  ///< \ref SubDocumentCache::admissionRevision then.
+  };
+
   /// External SVG documents admitted in the current admission pass, keyed by URL.
-  std::unordered_map<RcString, SVGDocumentHandle> admittedExternalSvgs_;
+  std::unordered_map<RcString, AdmittedExternalSvg> admittedExternalSvgs_;
 
   /// External fetch resource-limit accounting.
   mutable FetchSecurityStats fetchSecurityStats_;

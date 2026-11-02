@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -52,6 +53,14 @@ public:
   /// Admit a returned or cached document's bounded, acyclic retained graph.
   /// @param document Candidate. @param reservation Optional slots reserved before parsing.
   bool admit(const SVGDocumentHandle& document, Reservation* reservation = nullptr) const;
+
+  /**
+   * A value that changes whenever the owning document joins or leaves a family, or one of its
+   * families tightens its limits. Those are the only changes after which an unchanged document
+   * this cache already admitted can be refused, so an admission may be reused while this value and
+   * the document are unchanged.
+   */
+  uint64_t revision() const;
 
   /// Inspect the ledger attached to an existing family without creating one.
   /// @param family Family whose admission counters are requested.
