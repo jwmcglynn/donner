@@ -142,7 +142,8 @@ public:
   /**
    * Set initial context-fill and context-stroke values for sub-document rendering.
    * When a `<use>` element references an external SVG, the `<use>` element's resolved fill
-   * and stroke become the initial context-fill/context-stroke in the sub-document.
+   * and stroke become the initial context-fill/context-stroke in the sub-document. Rebuilds the
+   * rendering instances on the next instantiation unless both paints are provably unchanged.
    *
    * @param fill Initial context-fill value.
    * @param stroke Initial context-stroke value.
@@ -150,21 +151,10 @@ public:
   void setInitialContextPaint(const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke);
 
   /**
-   * Clear previously set context-fill and context-stroke values.
-   * Call after rendering a sub-document to prevent stale context paint from leaking to subsequent
-   * renders of the same cached sub-document handle.
+   * Clear previously set context-fill and context-stroke values, so a sub-document drawn without
+   * an external `<use>` does not inherit stale context paint.
    */
   void clearInitialContextPaint();
-
-  /// Owned paint state saved and restored under a sub-document's write guard.
-  using InitialPaintState =
-      std::pair<std::optional<ResolvedPaintServer>, std::optional<ResolvedPaintServer>>;
-  /// Return the owned context paints for restoration after a scoped external-use render.
-  InitialPaintState initialPaintState() const {
-    return {initialContextFill_, initialContextStroke_};
-  }
-  /// Restore the state that preceded a scoped external-use occurrence.
-  void restoreInitialPaintState(InitialPaintState state);
 
 private:
   /**

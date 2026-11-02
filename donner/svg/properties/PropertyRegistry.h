@@ -543,6 +543,15 @@ public:
   PropertyRegistry& operator=(PropertyRegistry&&) noexcept;
 
   /**
+   * Returns true if both registries hold identical properties: the same value, state and
+   * specificity for every property, the same unparsed declarations, and the same inline
+   * resource-color origins.
+   *
+   * @param other Registry to compare against.
+   */
+  bool operator==(const PropertyRegistry& other) const;
+
+  /**
    * Return a tuple of all properties within the PropertyRegistry.
    *
    * To get the size of the tuple, use \ref numProperties().

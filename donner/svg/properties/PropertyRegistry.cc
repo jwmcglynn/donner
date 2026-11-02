@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <concepts>
 #include <cstdio>
 #include <limits>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -3232,6 +3235,58 @@ PropertyRegistry::PropertyRegistry(const PropertyRegistry&) = default;
 PropertyRegistry::PropertyRegistry(PropertyRegistry&&) noexcept = default;
 PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default;
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
+
+namespace {
+
+template <typename T>
+bool SamePropertyValue(const T& lhs, const T& rhs) {
+  if constexpr (std::is_same_v<T, TransformOrigin>) {
+    return lhs.x == rhs.x && lhs.y == rhs.y;
+  } else if constexpr (std::equality_comparable<T>) {
+    return lhs == rhs;
+  } else {
+    return std::ranges::equal(lhs, rhs);
+  }
+}
+
+template <typename T, PropertyCascade kCascade>
+bool SameProperty(const Property<T, kCascade>& lhs, const Property<T, kCascade>& rhs) {
+  if (lhs.state != rhs.state || lhs.specificity != rhs.specificity ||
+      lhs.value.has_value() != rhs.value.has_value()) {
+    return false;
+  }
+  return !lhs.value.has_value() || SamePropertyValue(*lhs.value, *rhs.value);
+}
+
+}  // namespace
+
+bool PropertyRegistry::operator==(const PropertyRegistry& other) const {
+  const auto lhsProperties = allProperties();
+  const auto rhsProperties = other.allProperties();
+  bool same = true;
+  forEachProperty<0, numProperties()>([&](auto i) {
+    same = same && SameProperty(std::get<i.value>(lhsProperties), std::get<i.value>(rhsProperties));
+  });
+  if (!same || unparsedProperties.size() != other.unparsedProperties.size()) {
+    return false;
+  }
+  for (auto lhs = unparsedProperties.begin(), rhs = other.unparsedProperties.begin();
+       lhs != unparsedProperties.end(); ++lhs, ++rhs) {
+    if (lhs->first != rhs->first || lhs->second.specificity != rhs->second.specificity ||
+        !(lhs->second.declaration == rhs->second.declaration)) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < kResourceColorCount; ++i) {
+    const auto& lhs = inlineResourceColors_[i];
+    const auto& rhs = other.inlineResourceColors_[i];
+    if (lhs.has_value() != rhs.has_value() ||
+        (lhs && (!SameProperty(lhs->base, rhs->base) || !SameProperty(lhs->value, rhs->value)))) {
+      return false;
+    }
+  }
+  return true;
+}
 
 std::span<const std::string_view> PropertyRegistry::propertyNames() {
   static const std::array<std::string_view, kProperties.kSize + 3> names = [] {
