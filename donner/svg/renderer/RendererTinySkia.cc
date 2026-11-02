@@ -2137,6 +2137,9 @@ void RendererTinySkia::popFilterLayer() {
     return;
   }
   if (frame.localRasterRequiredForBudget) {
+    // The graph was admitted for a local raster that could not be allocated or run. That is a
+    // renderer failure, not a graph too large for the frame's remaining work, so it latches the
+    // frame like other external failures rather than counting as a per-graph refusal.
     filterExecutionBudget_->reject();
     filterExecutionBudget_->release(frame.filterReservation);
     return;

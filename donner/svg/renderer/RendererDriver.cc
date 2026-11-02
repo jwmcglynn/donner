@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "donner/base/Length.h"
@@ -1094,36 +1095,85 @@ int SubtreeLastDrawOrder(Registry& registry,
   return last != nullptr ? std::max(last->drawOrder, instance.drawOrder) : instance.drawOrder;
 }
 
-/// Whether @p instance paints nothing itself and contributes nothing through its subtree: a zero
-/// `opacity` hides it and every descendant, and a hidden leaf has no descendants to show.
+/// Draw order through which @p instance's output depends on rendered instances: its subtree and
+/// the mask, marker and pattern content drawn for it. That content can come after the subtree.
+int ContentLastDrawOrder(Registry& registry,
+                         const components::RenderingInstanceComponent& instance) {
+  int last = SubtreeLastDrawOrder(registry, instance);
+  const auto extend = [&](const std::optional<components::SubtreeInfo>& content) {
+    if (!content.has_value()) {
+      return;
+    }
+    if (const auto* contentLast = registry.try_get<components::RenderingInstanceComponent>(
+            content->lastRenderedEntity)) {
+      last = std::max(last, contentLast->drawOrder);
+    }
+  };
+  extend(instance.subtreeInfo);
+  if (instance.mask.has_value()) {
+    extend(instance.mask->subtreeInfo);
+  }
+  for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
+    if (marker->has_value()) {
+      extend((*marker)->subtreeInfo);
+    }
+  }
+  for (const auto* paint : {&instance.resolvedFill, &instance.resolvedStroke}) {
+    if (const auto* reference = std::get_if<components::PaintResolvedReference>(paint)) {
+      extend(reference->subtreeInfo);
+    }
+  }
+  return last;
+}
+
+/// Whether @p instance paints nothing itself and contributes nothing through its subtree or its
+/// content: a zero `opacity` hides it and everything drawn for it, and a hidden leaf draws neither
+/// its geometry nor the markers, mask or pattern content drawn for it.
+///
+/// A hidden leaf's filter therefore never runs, even a filter that would paint with no source
+/// (`feFlood`), as browsers do. A visible descendant of a hidden group is not a leaf of that group
+/// and keeps its filter.
 bool IsInvisibleInstance(Registry& registry,
                          const components::RenderingInstanceComponent& instance) {
+  if (!instance.visible && SubtreeLastDrawOrder(registry, instance) == instance.drawOrder) {
+    return true;
+  }
   const EntityHandle styleHandle = instance.styleHandle(registry);
   const auto& style = styleHandle.get<components::ComputedStyleComponent>();
-  const bool zeroOpacity =
-      style.properties.has_value() && style.properties->opacity.get().value() <= 0.0;
-  const bool leaf = SubtreeLastDrawOrder(registry, instance) == instance.drawOrder;
-  return zeroOpacity || (!instance.visible && leaf);
+  return style.properties.has_value() && style.properties->opacity.get().value() <= 0.0;
 }
 
 /// The filtered instances among @p entities, in draw order, whose output can reach the frame.
 ///
-/// Rendered but invisible content (anything inside a zero-opacity element, or a hidden leaf) is
-/// left out, so its filters neither run nor spend the frame's filter budget; an unprepared filter
-/// hides its element, which was invisible anyway. Content shown elsewhere, such as a `<use>` copy,
-/// a pattern tile or a mask, is a separate instance under its referencing element and stays in.
+/// Rendered but invisible content (anything drawn for a zero-opacity element, or for a hidden
+/// leaf) is left out, so its filters neither run nor spend the frame's filter budget; an
+/// unprepared filter hides its element, which was invisible anyway. Content shown elsewhere, such
+/// as a `<use>` copy, or a pattern tile, mask or marker of a visible element, is a separate
+/// instance under its referencing element and stays in.
 std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const Entity> entities) {
   std::vector<Entity> result;
+  const bool anyFilter = std::any_of(entities.begin(), entities.end(), [&](Entity entity) {
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    return instance != nullptr && instance->resolvedFilter.has_value();
+  });
+  if (!anyFilter) {
+    return result;
+  }
   std::optional<int> hiddenThroughDrawOrder;
   for (const Entity entity : entities) {
     const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
-    if (instance == nullptr ||
-        (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder)) {
+    if (instance == nullptr) {
+      continue;
+    }
+    if (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder) {
+      // Content drawn for hidden content is hidden too, and can end after the hidden subtree.
+      hiddenThroughDrawOrder =
+          std::max(*hiddenThroughDrawOrder, ContentLastDrawOrder(registry, *instance));
       continue;
     }
     hiddenThroughDrawOrder.reset();
     if (IsInvisibleInstance(registry, *instance)) {
-      hiddenThroughDrawOrder = SubtreeLastDrawOrder(registry, *instance);
+      hiddenThroughDrawOrder = ContentLastDrawOrder(registry, *instance);
       continue;
     }
     if (instance->resolvedFilter.has_value()) {

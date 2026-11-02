@@ -2995,6 +2995,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     geode::FilterExecutionResult filtered;
     filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
     if (frame.localRasterRequiredForBudget) {
+      // The graph was admitted for a local raster that could not be allocated or run. That is a
+      // renderer failure, not a graph too large for the frame's remaining work, so it latches the
+      // frame like other external failures rather than counting as a per-graph refusal.
       filterExecutionBudget->reject();
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
       return filtered;
