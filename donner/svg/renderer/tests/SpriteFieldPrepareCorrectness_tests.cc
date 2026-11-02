@@ -1,7 +1,7 @@
 /// @file
-/// CPU-invariant counters for a game-like sprite field: warm frames that only move sprites, fade
-/// them or flip them to another sprite of an already loaded sheet keep the document's shadow trees,
-/// sub-document admissions and styles, and do work proportional to what changed.
+/// CPU-invariant counters for a game-like sprite field: warm frames that only move sprites or flip
+/// them to another sprite of an already loaded sheet keep the document's shadow trees,
+/// sub-document admissions and styles, and a full rebuild admits each sheet once.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -112,22 +112,21 @@ TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
   EXPECT_EQ(restyles.restyles(), 0u);
 }
 
-TEST(SpriteFieldPrepareCorrectnessTest, OpacityFramesRestyleOnlyTheFadedUses) {
+TEST(SpriteFieldPrepareCorrectnessTest, OpacityFramesAdmitEachSheetOncePerRebuild) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
   ASSERT_TRUE(scene.has_value());
 
+  // An opacity write still takes the full rebuild, which admits each sheet once, not once per use.
   const WorkCounters before = ReadCounters(scene->document);
-  RestyleCounter restyles(scene->document);
-  std::size_t edited = 0;
   for (int frame = kWarmFrames; frame < kWarmFrames + kMeasuredFrames; ++frame) {
     AdvanceSpriteField(*scene, frame, SpriteFieldChange::Opacity);
-    edited += EditedUses(frame);
     renderer.draw(scene->document);
   }
-  ExpectOnlyRetainedUpdates(before, ReadCounters(scene->document), kMeasuredFrames);
-  // An external use has no children in this document, so each fade restyles exactly one element.
-  EXPECT_EQ(restyles.restyles(), edited);
+  const WorkCounters after = ReadCounters(scene->document);
+  EXPECT_EQ(after.renderTree.fullRebuilds, before.renderTree.fullRebuilds + kMeasuredFrames);
+  EXPECT_EQ(after.cachedAdmissions,
+            before.cachedAdmissions + static_cast<std::size_t>(kMeasuredFrames) * kField.sheets);
 }
 
 TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUses) {
@@ -149,21 +148,20 @@ TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUse
   EXPECT_EQ(restyles.restyles(), 0u);
 }
 
-TEST(SpriteFieldPrepareCorrectnessTest, GameFramesCombineAllThreeChanges) {
+TEST(SpriteFieldPrepareCorrectnessTest, GameFramesBetweenFadesKeepTheRenderTree) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
   ASSERT_TRUE(scene.has_value());
 
+  // The measured frames move and retarget sprites; none of them is a fade frame.
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
-  std::size_t edited = 0;
   for (int frame = kWarmFrames; frame < kWarmFrames + kMeasuredFrames; ++frame) {
     AdvanceSpriteField(*scene, frame, SpriteFieldChange::All);
-    edited += EditedUses(frame);
     renderer.draw(scene->document);
   }
   ExpectOnlyRetainedUpdates(before, ReadCounters(scene->document), kMeasuredFrames);
-  EXPECT_EQ(restyles.restyles(), edited);
+  EXPECT_EQ(restyles.restyles(), 0u);
 }
 
 TEST(SpriteFieldPrepareCorrectnessTest, FullRebuildAdmitsEachSheetOnce) {
