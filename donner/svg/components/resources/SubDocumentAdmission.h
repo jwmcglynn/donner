@@ -59,7 +59,7 @@ public:
    * documents: \p document's entity and payload size, the families of the owning document and of
    * \p document (each by identity and limit revision), and both documents' membership revisions.
    * While the fingerprint is unchanged, re-admitting \p document reaches the same verdict unless
-   * one of its nested documents grew.
+   * one of its nested documents grew or changed families.
    *
    * @param document A document this cache admitted.
    */

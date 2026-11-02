@@ -119,7 +119,7 @@ public:
    * admission pass. A later request for an admitted URL reuses that admission while the loader
    * and \ref SubDocumentCache::admissionFingerprint are unchanged: the document's size, the
    * families of this document and of the admitted one, and their limits. A nested document of the
-   * admitted one that grew is only re-checked when the next pass starts. A full render-tree
+   * admitted one that grew or changed families is only re-checked when the next pass starts. A full render-tree
    * rebuild starts a new pass with \ref beginExternalSVGAdmissionPass. Only successful loads are
    * reused; a failed one goes through \ref loadExternalSVG again, which applies its own negative
    * cache. Admitted documents stay referenced here until the next pass starts.
