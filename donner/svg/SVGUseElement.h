@@ -235,7 +235,8 @@ public:
   /**
    * Set the URI to the element to reuse.
    *
-   * @param value URI to the element to reuse, such as `#elementId`
+   * @param value URI to the element to reuse, such as `#elementId`. An empty value removes the
+   *   reference, so the element renders nothing.
    */
   void setHref(const RcString& value);
 

@@ -1427,6 +1427,62 @@ TEST(RendererPublicApiTest, SvgImageOpacityAppliesOnce) {
   EXPECT_THAT(PixelAt(actual, 4, 4), test::Rgba(0, 0, 255, test::Near(128, 1)));
 }
 
+/// A generic attribute write that retargets a `<use>`.
+struct UseHrefMutationCase {
+  const char* name;
+  const char* prefix;  ///< Attribute namespace prefix: empty for `href`, `xlink` for `xlink:href`.
+  const char* base;    ///< Href before the fragment: `external.svg`, or empty for same-document.
+};
+
+void PrintTo(const UseHrefMutationCase& value, std::ostream* output) {
+  *output << value.name << ": prefix='" << value.prefix << "', base='" << value.base << "'";
+}
+
+class UseHrefMutationTest : public testing::TestWithParam<UseHrefMutationCase> {};
+
+TEST_P(UseHrefMutationTest, SetAttributeRetargetsAndRemoveAttributeClears) {
+  const UseHrefMutationCase& params = GetParam();
+  const xml::XMLQualifiedNameRef attribute(params.prefix, "href");
+  const std::string attributeSource =
+      std::string_view(params.prefix).empty() ? "href" : std::string(params.prefix) + ":href";
+  const std::string base(params.base);
+  const std::string targets =
+      "<defs><rect id='a' width='8' height='8' fill='red'/>"
+      "<rect id='b' width='8' height='8' fill='blue'/></defs>";
+  auto fixture = MakeExternalUseFixture(
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+      "width='8' height='8'>" +
+          targets + "<use id='host' " + attributeSource + "='" + base + "#a'/></svg>",
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>" + targets + "</svg>");
+  auto host = fixture.document.querySelector("#host");
+  ASSERT_THAT(host.has_value(), testing::IsTrue());
+
+  Renderer renderer;
+  renderer.draw(fixture.document);
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+              test::Rgba(255, 0, 0, 255));
+
+  host->setAttribute(attribute, base + "#b");
+  EXPECT_THAT(host->getAttribute(attribute), testing::Optional(RcString(base + "#b")));
+  EXPECT_EQ(host->cast<SVGUseElement>().href(), base + "#b");
+  renderer.draw(fixture.document);
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+              test::Rgba(0, 0, 255, 255));
+
+  host->removeAttribute(attribute);
+  EXPECT_EQ(host->cast<SVGUseElement>().href(), "");
+  renderer.draw(fixture.document);
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4), test::IsTransparent());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    UseHrefMutations, UseHrefMutationTest,
+    testing::Values(UseHrefMutationCase{"ExternalHref", "", "external.svg"},
+                    UseHrefMutationCase{"ExternalXlinkHref", "xlink", "external.svg"},
+                    UseHrefMutationCase{"SameDocumentHref", "", ""},
+                    UseHrefMutationCase{"SameDocumentXlinkHref", "xlink", ""}),
+    [](const testing::TestParamInfo<UseHrefMutationCase>& info) { return info.param.name; });
+
 TEST(RendererPublicApiTest, ExternalUseFrameWorkAdmissionStopsAtLimit) {
   components::StyleResourceBudget work;
   EXPECT_THAT(

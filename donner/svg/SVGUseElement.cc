@@ -30,9 +30,13 @@ SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
 void SVGUseElement::setHref(const RcString& value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
-  auto& shadowTree = handle_.emplace_or_replace<components::ShadowTreeComponent>(access);
-  shadowTree.setMainHref(value);
-  shadowTree.setsContextColors = true;
+  if (value.empty()) {
+    handle_.remove<components::ShadowTreeComponent>(access);
+  } else {
+    auto& shadowTree = handle_.emplace_or_replace<components::ShadowTreeComponent>(access);
+    shadowTree.setMainHref(value);
+    shadowTree.setsContextColors = true;
+  }
 
   InvalidateUse(handle_);
 }
