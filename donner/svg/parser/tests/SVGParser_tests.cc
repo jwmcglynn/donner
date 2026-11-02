@@ -330,8 +330,32 @@ TEST(SVGParser, UnsupportedNamespacesWarnAndContinueInsideSvg) {
 
   EXPECT_THAT(documentResult, NoParseError());
   EXPECT_THAT(warnings.warnings(),
-              testing::Contains(testing::Field(&ParseDiagnostic::reason,
-                                               testing::HasSubstr("unsupported namespace"))));
+              ElementsAre(AllOf(
+                  testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
+                  ParseErrorIs("Retaining element <other:rect> with an unsupported namespace as "
+                               "unknown. Expected '', found 'other'"))));
+}
+
+TEST(SVGParser, XLinkAttributeUnderAnotherPrefixWarnsThatItIsNotInterpreted) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:xl="http://www.w3.org/1999/xlink">
+           <rect id="a" width="4" height="4"/>
+           <use xl:href="#a"/>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto documentResult = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(documentResult, NoParseError());
+
+  EXPECT_THAT(warnings.warnings(),
+              ElementsAre(AllOf(
+                  ParseErrorPos(3, 16),
+                  testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
+                  ParseErrorIs("Retaining XLink attribute 'xl:href' without interpretation; only "
+                               "the 'xlink' prefix is interpreted"))));
+  const SVGElement use = documentResult.result().querySelector("use").value();
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("xl", "href")),
+              testing::Optional(RcString("#a")));
 }
 
 TEST(SVGParser, DeclaredForeignNamespaceAttributesAreRetainedWithoutDiagnostics) {
@@ -595,6 +619,7 @@ TEST(SVGParser, MismatchedNamespace) {
     EXPECT_THAT(
         warnings.warnings(),
         ElementsAre(AllOf(ParseErrorPos(2, 13),
+                          testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
                           ParseErrorIs("Retaining element <path> with an unsupported namespace as "
                                        "unknown. Expected 'svg', found ''"))));
   }

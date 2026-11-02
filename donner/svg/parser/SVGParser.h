@@ -71,7 +71,8 @@ public:
      * Set this to true only to optimize for performance when custom attributes are known
      * to be irrelevant; whole-tree attribute checks then cannot see them.
      *
-     * This option omits only unprefixed attributes. Attributes in another XML namespace, such
+     * This option omits only unprefixed, non-presentation (user) attributes. Attributes in another
+     * XML namespace, such
      * as `app:origin` under a declared `xmlns:app`, always stay on the tree without an SVG
      * interpretation.
      */

@@ -542,28 +542,22 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
 }
 
 /**
- * Report an attribute whose namespace prefix has no declaration in scope. Like any other
- * foreign-namespace attribute it stays in the XML tree without an SVG interpretation.
+ * Report a namespace-qualified attribute that stays in the XML tree without an SVG
+ * interpretation.
  *
  * @param context The parser context.
  * @param element The element that carries the attribute.
  * @param attributeName The attribute's qualified name.
+ * @param reason The diagnostic text.
  */
-void WarnUndeclaredAttributePrefix(SVGParserContext& context, const SVGElement& element,
-                                   const XMLQualifiedNameRef& attributeName) {
-  if (!context.warningsEnabled()) {
-    return;
-  }
-
-  std::ostringstream ss;
-  ss << "Retaining attribute '" << attributeName << "' with undeclared namespace prefix '"
-     << attributeName.namespacePrefix << "' without SVG interpretation";
+void WarnRetainedAttribute(SVGParserContext& context, const SVGElement& element,
+                           const XMLQualifiedNameRef& attributeName, std::string_view reason) {
   SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
   if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
     range = *maybeRange;
   }
 
-  context.addWarning(ParseDiagnostic::Warning(RcString(ss.str()), range));
+  context.addWarning(ParseDiagnostic::Warning(RcString(reason), range));
 }
 
 /// Parse each of \p node's attributes onto \p element. Attributes in a namespace other than SVG
@@ -579,9 +573,21 @@ std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, SVG
       const std::optional<RcString> namespaceUri =
           node.getNamespaceUri(attributeName.namespacePrefix);
       if (namespaceUri != "http://www.w3.org/2000/svg") {
-        // The `xml` prefix is bound by the XML Namespaces specification without a declaration.
-        if (!namespaceUri.has_value() && attributeName.namespacePrefix != "xml") {
-          WarnUndeclaredAttributePrefix(context, element, attributeName);
+        if (!context.warningsEnabled()) {
+          continue;
+        }
+
+        std::ostringstream ss;
+        if (namespaceUri == "http://www.w3.org/1999/xlink") {
+          // XLink attributes are interpreted by their literal `xlink` prefix.
+          ss << "Retaining XLink attribute '" << attributeName
+             << "' without interpretation; only the 'xlink' prefix is interpreted";
+          WarnRetainedAttribute(context, element, attributeName, ss.str());
+        } else if (!namespaceUri.has_value() && attributeName.namespacePrefix != "xml") {
+          // The `xml` prefix is bound by the XML Namespaces specification without a declaration.
+          ss << "Retaining attribute '" << attributeName << "' with undeclared namespace prefix '"
+             << attributeName.namespacePrefix << "' without SVG interpretation";
+          WarnRetainedAttribute(context, element, attributeName, ss.str());
         }
         continue;
       }
@@ -822,15 +828,14 @@ public:
       return isSvgNamespace;
     }
 
-    ParseDiagnostic err;
     std::ostringstream ss;
     ss << "Retaining element <" << name << "> with an unsupported namespace as unknown. "
        << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix << "'";
-    err.reason = ss.str();
+    ParseDiagnostic warning = ParseDiagnostic::Warning(RcString(ss.str()), FileOffset::Offset(0));
     if (auto sourceOffset = child.sourceStartOffset()) {
-      err.range.start = sourceOffset.value();
+      warning.range.start = sourceOffset.value();
     }
-    context_.addWarning(std::move(err));
+    context_.addWarning(std::move(warning));
     return false;
   }
 
