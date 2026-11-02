@@ -7812,5 +7812,139 @@ TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
   }
 }
 
+/// A document of \p count glowing pieces in a \p width by \p height canvas: each a small group
+/// whose filter merges a blur under its source.
+std::string GlowingPiecesSource(int width, int height, int count) {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(width) + "\" height=\"" + std::to_string(height) + "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < count; ++i) {
+    const int x = 40 + (i % 9) * 128;
+    const int y = 60 + (i / 9) * 280;
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(x) + "\" cy=\"" +
+              std::to_string(y) + "\" r=\"30\" fill=\"#e05090\"/><rect x=\"" +
+              std::to_string(x - 10) + "\" y=\"" + std::to_string(y - 40) +
+              "\" width=\"20\" height=\"16\" fill=\"#40c0f0\"/></g>";
+  }
+  return source + "</svg>";
+}
+
+SVGDocument ParseDocumentOrFail(const std::string& source) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+constexpr int kPhoneWidth = 1206;
+constexpr int kPhoneHeight = 2622;
+constexpr std::uint64_t kPhoneTargetBytes = std::uint64_t{kPhoneWidth} * kPhoneHeight * 4;
+
+// A small filtered element's capture and intermediates cover its filter region, not the whole
+// viewport it sits in.
+TEST_F(RendererGeodeTest, SmallFilterInLargeViewportCapturesOnlyItsRegion) {
+  SVGDocument document = ParseDocumentOrFail(GlowingPiecesSource(kPhoneWidth, kPhoneHeight, 1));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.filterExecutions, testing::Eq(1u));
+  // The 60x70 piece's filter region is 108x126 pixels, so its capture is at most 128x160.
+  EXPECT_THAT(stats.filterCaptureBytesReserved, testing::Le(std::uint64_t{128} * 160 * 4));
+  EXPECT_THAT(stats.surfacePeakBytes, testing::Lt(kPhoneTargetBytes + (std::uint64_t{2} << 20)))
+      << "filter surfaces beyond the frame target";
+}
+
+// Many small filters reuse a few pooled surfaces: once warm, a frame creates no textures and holds
+// far less than one viewport-sized surface per filter.
+TEST_F(RendererGeodeTest, ManySmallFiltersReusePooledSurfacesOnceWarm) {
+  constexpr int kPieces = 80;
+  SVGDocument document =
+      ParseDocumentOrFail(GlowingPiecesSource(kPhoneWidth, kPhoneHeight, kPieces));
+  RendererGeode renderer = createRenderer();
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  renderer.draw(document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.filterExecutions, testing::Eq(static_cast<std::uint64_t>(kPieces)));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(stats.surfacePeakBytes, testing::Lt(kPhoneTargetBytes + (std::uint64_t{32} << 20)));
+}
+
+/// Renders \p content in a \p size canvas, and again in a canvas with \p room more pixels on
+/// every side and the content moved by \p room, then requires the window of the second that
+/// shows the first canvas to match it: a filter near or past the canvas edge must read and show
+/// the same pixels as one with room around it.
+void ExpectFilterEdgeParity(RendererGeode& renderer, const std::string& content, int size, int room,
+                            std::string_view label,
+                            const editor::tests::BitmapGoldenCompareParams& params =
+                                editor::tests::PixelmatchIdentityParams()) {
+  const std::string filters = R"svg(
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="wide" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="stretch" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1 7"/>
+    </filter>)svg";
+  const auto canvas = [&](int extent, int shift) {
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + std::to_string(extent) +
+           "\" height=\"" + std::to_string(extent) + "\">" + filters + "<g transform=\"translate(" +
+           std::to_string(shift) + " " + std::to_string(shift) + ")\">" + content + "</g></svg>";
+  };
+  SVGDocument atEdge = ParseDocumentOrFail(canvas(size, 0));
+  renderer.draw(atEdge);
+  const RendererBitmap edgeBitmap = renderer.takeSnapshot();
+  SVGDocument withRoom = ParseDocumentOrFail(canvas(size + 2 * room, room));
+  renderer.draw(withRoom);
+  const RendererBitmap roomBitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(edgeBitmap.empty());
+  ASSERT_FALSE(roomBitmap.empty());
+  editor::tests::CompareBitmapToBitmap(
+      edgeBitmap, editor::tests::CropBitmap(roomBitmap, Vector2i(room, room), Vector2i(size, size)),
+      label, params);
+}
+
+TEST_F(RendererGeodeTest, FilterRegionsNearCanvasEdgesMatchFiltersWithRoom) {
+  RendererGeode renderer = createRenderer();
+  const std::array<std::pair<std::string_view, std::string_view>, 5> cases{{
+      {"straddles_top_left",
+       R"svg(<g filter="url(#glow)"><circle cx="6" cy="10" r="18" fill="#e05090"/></g>)svg"},
+      {"straddles_bottom_right",
+       R"svg(<g filter="url(#glow)"><rect x="80" y="84" width="30" height="24" fill="#40c0f0"/></g>)svg"},
+      {"halo_only_past_edge",
+       R"svg(<g filter="url(#wide)"><rect x="-30" y="30" width="24" height="24" fill="#208040"/></g>)svg"},
+      {"rotated",
+       R"svg(<g transform="translate(90 20) rotate(30)" filter="url(#glow)"><rect x="-20" y="-10" width="40" height="20" fill="#e0a020"/></g>)svg"},
+      {"scaled",
+       R"svg(<g transform="translate(-10 50) scale(2.5)" filter="url(#glow)"><circle cx="10" cy="6" r="8" fill="#6040e0"/></g>)svg"},
+  }};
+  for (const auto& [label, content] : cases) {
+    SCOPED_TRACE(label);
+    ExpectFilterEdgeParity(renderer, std::string(content), 96, 64,
+                           "filter_edge_parity_" + std::string(label));
+  }
+}
+
+// A rotated anisotropic blur runs on the transformed path, which resamples the capture into a
+// local raster aligned with the filter's axes. That resampling is not exactly invariant to where
+// the canvas edge falls: some edge pixels of the halo differ slightly, which they also did when
+// filter surfaces spanned the viewport, so they are held to the suite's default per-pixel
+// threshold rather than to identity.
+TEST_F(RendererGeodeTest, RotatedAnisotropicFilterNearCanvasEdgeMatchesFilterWithRoom) {
+  RendererGeode renderer = createRenderer();
+  ExpectFilterEdgeParity(
+      renderer,
+      R"svg(<g transform="translate(8 60) rotate(40)" filter="url(#stretch)"><rect x="-14" y="-14" width="28" height="28" fill="#c02040"/></g>)svg",
+      96, 64, "filter_edge_parity_rotated_anisotropic",
+      editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
+}
+
 }  // namespace
 }  // namespace donner::svg
