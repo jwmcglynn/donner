@@ -661,8 +661,8 @@ however many uses reference them (`ResourceManagerContext::loadAdmittedExternalS
 retargeted between rebuilds reuses that admission only while the loader generation and
 `SubDocumentCache::admissionFingerprint()` are unchanged: the admitted document's entity and
 payload size, and the identity, limit revision and membership revision of the families of both
-the host and the admitted document. A nested document of the admitted one that grew is re-checked
-when the next full rebuild starts a new admission pass; until then, the memo also keeps the
+the host and the admitted document. A nested document of the admitted one that grew or changed
+families is re-checked only when the next full rebuild starts a new admission pass; until then, the memo also keeps the
 admitted documents referenced. Unchanged uses keep the documents they were given, as they did on
 frames with nothing dirty.
 
