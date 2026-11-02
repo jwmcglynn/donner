@@ -1,6 +1,7 @@
 #include "donner/svg/components/resources/SubDocumentAdmission.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <mutex>
 #include <unordered_map>
@@ -27,12 +28,19 @@ bool Fits(size_t retained, size_t additional, size_t maximum) {
   return retained <= maximum && additional <= maximum - retained;
 }
 
+uint64_t NextStateId() {
+  static std::atomic<uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 }  // namespace
 
 struct SubDocumentAdmissionState {
   SubDocumentCache::Limits limits;
   SubDocumentAdmission::Stats stats;
   bool originalRootAssigned = false;
+  /// Distinguishes this family from any other, including one later allocated at its address.
+  uint64_t id = NextStateId();
   /// Bumped whenever a requesting cache tightens \ref limits.
   uint64_t limitsRevision = 0;
   std::unordered_map<const Registry*, std::weak_ptr<SubDocumentAdmissionLease>> members;
@@ -553,26 +561,39 @@ bool SubDocumentAdmission::admit(const SVGDocumentHandle& document,
   return Apply(snapshot, states, reservation);
 }
 
-uint64_t SubDocumentAdmission::revision() const {
-  // Every counter only grows, so their sum changes whenever any of them does.
-  uint64_t result = 0;
+std::vector<uint64_t> SubDocumentAdmission::fingerprint(const SVGDocumentHandle& document) const {
+  std::vector<uint64_t> result;
+  if (!document) {
+    return result;
+  }
+  // The admitted document's own size, as its admission charged it.
+  Registry& registry = document->registry();
+  const auto* payload = registry.ctx().find<ParsedPayloadResourceBudget>();
+  result.push_back(registry.storage<Entity>().size());
+  result.push_back(payload ? payload->securityStats().retainedBytes : 0);
+
   auto owner = owner_.lock();
   std::lock_guard lock(AdmissionMutex());
-  for (const auto& weakState : states_) {
-    if (const auto state = weakState.lock()) {
-      result += state->limitsRevision;
-    }
-  }
-  if (owner) {
-    if (const auto* memberships = owner->registry->ctx().find<SubDocumentAdmissionMemberships>()) {
-      result += memberships->revision;
+  const auto appendState = [&result](const std::shared_ptr<SubDocumentAdmissionState>& state) {
+    result.push_back(state ? state->id : 0);
+    result.push_back(state ? state->limitsRevision : 0);
+  };
+  const auto appendMemberships = [&](const Registry& member) {
+    const auto* memberships = member.ctx().find<SubDocumentAdmissionMemberships>();
+    result.push_back(memberships ? memberships->revision : 0);
+    if (memberships != nullptr) {
       for (const auto& lease : memberships->leases) {
-        if (const auto state = lease->state.lock()) {
-          result += state->limitsRevision;
-        }
+        appendState(lease->state.lock());
       }
     }
+  };
+  for (const auto& state : states_) {
+    appendState(state.lock());
   }
+  if (owner) {
+    appendMemberships(*owner->registry);
+  }
+  appendMemberships(registry);
   return result;
 }
 

@@ -116,13 +116,13 @@ public:
 
   /**
    * Load an external SVG document like \ref loadExternalSVG, admitting each URL at most once per
-   * admission pass. A later request for an admitted URL reuses that admission while this
-   * document's resource families are unchanged (\ref SubDocumentCache::admissionRevision): it has
-   * not joined or left a family and none has tightened its limits, the only changes that can
-   * refuse an unchanged document. Otherwise the document is admitted again. A full render-tree
-   * rebuild starts a new pass with \ref beginExternalSVGAdmissionPass, which also re-checks
-   * documents that grew. Only successful loads are reused; a failed one goes through \ref
-   * loadExternalSVG again, which applies its own negative cache.
+   * admission pass. A later request for an admitted URL reuses that admission while the loader
+   * and \ref SubDocumentCache::admissionFingerprint are unchanged: the document's size, the
+   * families of this document and of the admitted one, and their limits. A nested document of the
+   * admitted one that grew is only re-checked when the next pass starts. A full render-tree
+   * rebuild starts a new pass with \ref beginExternalSVGAdmissionPass. Only successful loads are
+   * reused; a failed one goes through \ref loadExternalSVG again, which applies its own negative
+   * cache. Admitted documents stay referenced here until the next pass starts.
    *
    * @param url URL of the external SVG to load.
    * @param warningSink Sink to collect warnings.
@@ -238,8 +238,10 @@ private:
 
   /// An external SVG document admitted in the current admission pass.
   struct AdmittedExternalSvg {
-    SVGDocumentHandle document;      ///< The admitted document.
-    uint64_t admissionRevision = 0;  ///< \ref SubDocumentCache::admissionRevision then.
+    SVGDocumentHandle document;    ///< The admitted document.
+    uint64_t cacheGeneration = 0;  ///< \ref cacheGeneration when it was admitted.
+    /// \ref SubDocumentCache::admissionFingerprint when it was admitted.
+    std::vector<uint64_t> fingerprint;
   };
 
   /// External SVG documents admitted in the current admission pass, keyed by URL.
