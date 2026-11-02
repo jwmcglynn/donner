@@ -1977,7 +1977,10 @@ donner_cc_test(
 donner_perf_cc_test(
     name = "external_use_sprite_tests",
     correctness_srcs = ["ExternalUseSpriteCorrectness_tests.cc"],
-    wallclock_srcs = ["ExternalUseSpriteWallclock_tests.cc"],
+    wallclock_srcs = [
+        "ExternalUseFilterCacheWallclock_tests.cc",
+        "ExternalUseSpriteWallclock_tests.cc",
+    ],
     deps = [
         ":external_use_sprite_scene",
         "//donner/base",
