@@ -4820,9 +4820,11 @@ std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegi
   if (!scope.installed()) {
     return std::nullopt;
   }
+  const ExternalUseInstanceScope instanceScope(child, root, EntityHandle(hostRegistry, hostEntity));
   prepareSubDocument(subDocument);
-  // Drawing maps the fragment's own user space onto the <use> element's.
-  return components::ShapeSystem().getShapeBounds(EntityHandle(child, root));
+  // The instance is laid out relative to the <use> element, so its world space is the use's.
+  return components::ShapeSystem().getTransformedShapeBounds(EntityHandle(child, root),
+                                                             Transform2d());
 }
 
 void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
