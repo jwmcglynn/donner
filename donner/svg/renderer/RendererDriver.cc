@@ -2546,8 +2546,7 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
                                          const components::ComputedStyleComponent& style,
                                          const std::vector<DeferredPop>& markers) const {
   if (!earlyLeafViewportCulling_ || !IsPlainVisibleLeaf(instance) ||
-      !HasNeutralLeafCompositing(style) ||
-      insideEnclosingFilterLayer_ ||
+      !HasNeutralLeafCompositing(style) || insideEnclosingFilterLayer_ ||
       std::any_of(markers.begin(), markers.end(),
                   [](const DeferredPop& marker) { return marker.filterLayerCount != 0; })) {
     return false;
@@ -4784,7 +4783,8 @@ void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
   const bool hostInsideFilterLayer =
       std::exchange(insideEnclosingFilterLayer_, pushedFilterLayers_ != 0);
   // The feImage recursion guard holds entity ids of the registry being prepared.
-  std::unordered_set<entt::id_type>* hostFeImageGuard = std::exchange(feImageFragmentGuard_, nullptr);
+  std::unordered_set<entt::id_type>* hostFeImageGuard =
+      std::exchange(feImageFragmentGuard_, nullptr);
   prepareFilterGraphs(registry, entities);
   RenderingInstanceView view(registry, entities);
   if (firstEntity == entt::null) {
