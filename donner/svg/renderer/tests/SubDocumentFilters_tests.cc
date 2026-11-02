@@ -256,5 +256,29 @@ TEST(SubDocumentFiltersTest, ReferencedContentUnderHostFilterIsNotCulled) {
   }
 }
 
+/// A filter on a host group whose only content is external `<use>` occurrences resolves its default
+/// object-bounding-box region from the content those occurrences draw.
+TEST(SubDocumentFiltersTest, HostGroupFilterAroundExternalUseMatchesInDocument) {
+  const auto host = [](std::string_view href, bool inlineSprites) {
+    return std::string(
+               "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>"
+               "<defs><filter id='tint' color-interpolation-filters='sRGB'>"
+               "<feColorMatrix type='matrix' values='0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0'/>"
+               "</filter></defs>") +
+           (inlineSprites ? std::string(kSprites) : std::string()) +
+           "<rect width='32' height='16' fill='#ffffff'/>"
+           "<g filter='url(#tint)'><use href='" +
+           std::string(href) + "' x='8'/></g></svg>";
+  };
+  SVGDocument external = Parse(host("sheet.svg#sprite-glow", false), {{"sheet.svg", Sheet()}});
+  SVGDocument local = Parse(host("#sprite-glow", true));
+  Renderer externalRenderer;
+  Renderer localRenderer;
+  const RendererBitmap expected = Draw(localRenderer, local);
+  // The tint paints the occurrence red.
+  EXPECT_THAT(PixelAt(expected, 16, 12), test::Rgba(Gt(200), Lt(30), Lt(30), 255));
+  ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-filters-host-tint");
+}
+
 }  // namespace
 }  // namespace donner::svg
