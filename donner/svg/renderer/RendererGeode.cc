@@ -4360,6 +4360,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (const std::optional<std::size_t> hit = cache.fillVariantFor(tolerance)) {
       auto& variant = cache.fillVariants[*hit];
       variant.lastUse = ++cache.fillUseClock;
+      variant.lastUseFrame = currentFrameIndex;
       return {&*variant.encode, true, *hit};
     }
 
@@ -4367,7 +4368,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!encoded.has_value()) {
       return {&rejectedGeometry, false};
     }
-    const std::size_t index = fillVariantToReplace(cache);
+    const std::optional<std::size_t> replaceable = fillVariantToReplace(cache, currentFrameIndex);
+    if (!replaceable) {
+      // Every variant already served a draw this frame. Replacing one would make this frame's
+      // buckets evict each other on every draw, re-encoding and re-uploading each time, so this
+      // draw uses a scratch encode and the cached variants and their residence stay put.
+      fillScratchEncode = std::move(*encoded);
+      return {&*fillScratchEncode, false};
+    }
+    const std::size_t index = *replaceable;
     auto& variant = cache.fillVariants[index];
     const std::size_t retainedBytes = encoded->retainedBytes();
     if (retainedBytes != std::numeric_limits<std::size_t>::max() &&
@@ -4390,6 +4399,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                               : 0.0;
       variant.encode = std::move(*encoded);
       variant.lastUse = ++cache.fillUseClock;
+      variant.lastUseFrame = currentFrameIndex;
       return {&*variant.encode, true, index};
     }
     fillScratchEncode = std::move(*encoded);
@@ -4397,14 +4407,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Index of the fill variant a new tolerance bucket replaces: an empty one when there is one,
-  /// otherwise the least recently used.
-  static std::size_t fillVariantToReplace(const geode::GeodePathCacheComponent& cache) {
-    std::size_t index = 0;
+  /// otherwise the least recently used one that served no draw in frame \p frame. Nullopt when
+  /// every variant served a draw in \p frame.
+  static std::optional<std::size_t> fillVariantToReplace(
+      const geode::GeodePathCacheComponent& cache, std::uint64_t frame) {
+    std::optional<std::size_t> index;
     for (std::size_t i = 0; i < cache.fillVariants.size(); ++i) {
-      if (!cache.fillVariants[i].encode.has_value()) {
+      const auto& variant = cache.fillVariants[i];
+      if (!variant.encode.has_value()) {
         return i;
       }
-      if (cache.fillVariants[i].lastUse < cache.fillVariants[index].lastUse) {
+      if (variant.lastUseFrame != frame &&
+          (!index || variant.lastUse < cache.fillVariants[*index].lastUse)) {
         index = i;
       }
     }

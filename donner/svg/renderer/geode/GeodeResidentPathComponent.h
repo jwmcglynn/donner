@@ -40,8 +40,8 @@
 #include "donner/gpu/Handles.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillVariants.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
-#include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePerDevice.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 
