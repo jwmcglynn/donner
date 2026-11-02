@@ -618,8 +618,8 @@ starts the full rebuild. A qualifying frame:
   transforms, clip-path geometry, context-paint remaps and subtree ranges exactly as the full
   rebuild does.
 
-Shadow trees are not torn down, no style is recomputed, and external
-documents are not admitted again. The traversal still visits every rendered entity, so a retained
+Shadow trees are not torn down, no style is recomputed, and only a retargeted use admits its
+external document again. The traversal still visits every rendered entity, so a retained
 frame costs `O(rendered entities)` with a small constant, not `O(changed entities)`; patching
 instances in place is a possible next step.
 
@@ -632,7 +632,8 @@ The two qualifying changes and their marks:
 
 `href` writes on a `<use>` now request the whole-tree restyle only when a stylesheet selects on
 the attribute, as transform writes already did. An `href` write takes the retained path only when
-the use is presented, owns no shadow tree, and both the old and the new reference are external;
+the use is presented, owns no shadow tree, and the new reference is external while the old one
+was external or absent;
 anything else keeps the previous `InvalidateUseInstance()` behaviour.
 
 `PlanRetainedUpdate()` falls back to the full rebuild when any dirty entity carries another flag,
@@ -651,9 +652,10 @@ or when one of these changes could reach a computed component:
   lengths.
 
 External documents are admitted to the resource family at most once per full rebuild,
-however many uses reference them (`ResourceManagerContext::loadAdmittedExternalSVG()`), and a
-use retargeted between rebuilds reuses the admission of the last rebuild, the same way the
-unchanged uses keep the documents they were given.
+however many uses reference them (`ResourceManagerContext::loadAdmittedExternalSVG()`). A use
+retargeted between rebuilds is admitted again (`loadExternalSVG()`), since the family may have
+changed since the last rebuild; unchanged uses keep the documents they were given, as they did
+on frames with nothing dirty.
 
 `RenderTreeState::retainedUpdatesEnabled` forces the full rebuild for tests and diagnostics, and
 `RenderTreeState::counters` records full rebuilds, retained updates, shadow-tree teardowns and

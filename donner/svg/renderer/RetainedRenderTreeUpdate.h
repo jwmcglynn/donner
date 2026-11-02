@@ -52,17 +52,24 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry);
 void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
                          ParseWarningSink& warningSink);
 
+/// How \ref AttachExternalUse admits the referenced document to the resource family.
+enum class ExternalUseAdmission {
+  /// Once per full rebuild, see \ref ResourceManagerContext::loadAdmittedExternalSVG.
+  OncePerRebuild,
+  /// Admit again now, as a use retargeted between rebuilds must.
+  Now,
+};
+
 /**
  * Give an external `<use>` the document its reference names, as an \ref ExternalUseComponent.
- * Each document is admitted to the resource family at most once per admission pass, see
- * \ref ResourceManagerContext::loadAdmittedExternalSVG.
  *
  * @param registry Document registry.
  * @param entity The `<use>` element.
  * @param href The use's external reference.
+ * @param admission How the document is admitted to the resource family.
  * @param warningSink Sink to collect warnings.
  */
 void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
-                       ParseWarningSink& warningSink);
+                       ExternalUseAdmission admission, ParseWarningSink& warningSink);
 
 }  // namespace donner::svg::components

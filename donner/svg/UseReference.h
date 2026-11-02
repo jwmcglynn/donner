@@ -27,11 +27,11 @@ void InvalidateUseGeometry(EntityHandle handle);
 /**
  * Point a `<use>` at the reference its stored attributes resolve to, `href` taking precedence over
  * `xlink:href` (an empty `href` still wins and means no reference), then invalidate its instance.
- * A presented use that moves from one external document instance to another, and owns no shadow
- * tree, is only marked for a retarget: the next render attaches the new instance without
- * rebuilding the rest of the render tree.
- * This is the only DOM writer of a use element's reference, so the attributes and the rendered
- * target never disagree; SMIL animation of `href` overrides the reference temporarily on its own.
+ * A presented use that owns no shadow tree and moves to an external document instance from
+ * another one (or from no reference) is only marked for a retarget: the next render attaches the
+ * new instance without rebuilding the rest of the render tree. This is the only DOM writer of a use
+ * element's reference, so the attributes and the rendered target never disagree; SMIL animation of
+ * `href` overrides the reference temporarily on its own.
  *
  * @param handle The `<use>` element.
  */

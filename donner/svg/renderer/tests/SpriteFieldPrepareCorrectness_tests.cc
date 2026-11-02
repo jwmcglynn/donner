@@ -67,7 +67,7 @@ WorkCounters ReadCounters(SVGDocument& document) {
   return counters;
 }
 
-/// Uses whose attributes \ref AdvanceSpriteField writes on \p frame.
+/// Uses \ref AdvanceSpriteField retargets (or fades) on \p frame.
 std::size_t EditedUses(int frame) {
   std::size_t edited = 0;
   for (int i = frame % 7; i < kField.sprites; i += 13) {
@@ -89,12 +89,14 @@ std::optional<SpriteFieldScene> WarmField(Renderer& renderer) {
   return scene;
 }
 
-/// Asserts that \p after differs from \p before only by \p frames retained updates.
-void ExpectOnlyRetainedUpdates(const WorkCounters& before, const WorkCounters& after, int frames) {
+/// Asserts that \p after differs from \p before only by \p frames retained updates and
+/// \p admissions re-admissions of cached documents, one per retargeted use.
+void ExpectOnlyRetainedUpdates(const WorkCounters& before, const WorkCounters& after, int frames,
+                               std::size_t admissions = 0) {
   EXPECT_EQ(after.renderTree.fullRebuilds, before.renderTree.fullRebuilds);
   EXPECT_EQ(after.renderTree.retainedUpdates, before.renderTree.retainedUpdates + frames);
   EXPECT_EQ(after.renderTree.shadowTreeTeardowns, before.renderTree.shadowTreeTeardowns);
-  EXPECT_EQ(after.cachedAdmissions, before.cachedAdmissions);
+  EXPECT_EQ(after.cachedAdmissions, before.cachedAdmissions + admissions);
 }
 
 TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
@@ -143,7 +145,8 @@ TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUse
     renderer.draw(scene->document);
   }
   const WorkCounters after = ReadCounters(scene->document);
-  ExpectOnlyRetainedUpdates(before, after, kMeasuredFrames);
+  // Each retargeted use admits its document again; no other document is re-admitted.
+  ExpectOnlyRetainedUpdates(before, after, kMeasuredFrames, edited);
   EXPECT_EQ(after.renderTree.retargetedUses, before.renderTree.retargetedUses + edited);
   EXPECT_EQ(restyles.restyles(), 0u);
 }
@@ -156,11 +159,13 @@ TEST(SpriteFieldPrepareCorrectnessTest, GameFramesBetweenFadesKeepTheRenderTree)
   // The measured frames move and retarget sprites; none of them is a fade frame.
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
+  std::size_t retargeted = 0;
   for (int frame = kWarmFrames; frame < kWarmFrames + kMeasuredFrames; ++frame) {
     AdvanceSpriteField(*scene, frame, SpriteFieldChange::All);
+    retargeted += EditedUses(frame);
     renderer.draw(scene->document);
   }
-  ExpectOnlyRetainedUpdates(before, ReadCounters(scene->document), kMeasuredFrames);
+  ExpectOnlyRetainedUpdates(before, ReadCounters(scene->document), kMeasuredFrames, retargeted);
   EXPECT_EQ(restyles.restyles(), 0u);
 }
 

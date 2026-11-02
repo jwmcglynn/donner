@@ -116,11 +116,12 @@ public:
 
   /**
    * Load an external SVG document like \ref loadExternalSVG, admitting each URL at most once per
-   * admission pass: later requests for a URL that was already admitted in the current pass reuse
-   * that admission. A full render-tree rebuild starts a new pass with \ref
-   * beginExternalSVGAdmissionPass, and an external `<use>` retargeted between rebuilds reuses
-   * the admission of the last one, the same way the unchanged `<use>` elements keep the document
-   * they were given. Failed loads are not remembered, so each one is retried and reported.
+   * admission pass: later requests in the same pass for a URL that was already admitted reuse that
+   * admission, since nothing a pass does between them changes what admission checks. A full
+   * render-tree rebuild starts a new pass with \ref beginExternalSVGAdmissionPass; requests made
+   * outside a rebuild use \ref loadExternalSVG, which admits again. Only successful loads are
+   * reused; a failed one goes through \ref loadExternalSVG again, which applies its own negative
+   * cache.
    *
    * @param url URL of the external SVG to load.
    * @param warningSink Sink to collect warnings.
@@ -130,6 +131,7 @@ public:
                                                            ParseWarningSink& warningSink);
 
   /// Start a new admission pass for \ref loadAdmittedExternalSVG: every URL is admitted again.
+  /// Call this at the start of each full render-tree rebuild.
   void beginExternalSVGAdmissionPass() { admittedExternalSvgs_.clear(); }
 
   /**
