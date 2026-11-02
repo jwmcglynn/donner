@@ -146,6 +146,35 @@ TEST(ExternalUseSpriteCorrectnessTest, HostStyleChangeRestylesTheRetainedTarget)
   }
 }
 
+TEST(ExternalUseSpriteCorrectnessTest, TargetMutationRestylesEveryRetainedTarget) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#a" fill="red"/>
+        <use href="sprites.svg#b" x="8" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="a" width="8" height="8"/>
+        <rect id="b" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  resource.querySelector("#b")->setAttribute(xml::XMLQualifiedNameRef("fill-opacity"), "0.5");
+  renderer.draw(host->document);
+
+  const RendererBitmap expected = RenderStandalone(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="red"/>
+        <rect x="8" width="8" height="8" fill="blue" fill-opacity="0.5"/>
+      </svg>)svg");
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "external-use-target-mutation",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(ExternalUseSpriteCorrectnessTest, EvictedTargetsInheritHostStyleWhenDrawnAgain) {
   constexpr int kTargets = 40;
   std::string resource = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg";
