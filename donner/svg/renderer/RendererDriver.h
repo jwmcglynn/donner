@@ -396,7 +396,7 @@ private:
   void renderMaskContents(RenderingInstanceView& view, Registry& registry,
                           const components::RenderingInstanceComponent& instance,
                           const components::ResolvedMask& mask, const Box2d& shapeLocalBounds);
-  int renderMask(RenderingInstanceView& view, Registry& registry, Entity entity,
+  int renderMask(RenderingInstanceView& view, Registry& registry,
                  const components::RenderingInstanceComponent& instance,
                  const components::ResolvedMask& mask);
   void renderPattern(RenderingInstanceView& view, Registry& registry,
@@ -470,6 +470,10 @@ private:
    * from that document's geometry, laid out with the occurrence's styles.
    */
   std::optional<Box2d> objectBoundingBox(Registry& registry, Entity entity);
+  /// Resolve objectBoundingBox clip units of @p instance over the content external `<use>`
+  /// elements in its subtree draw, which @p clip's own resolution cannot see.
+  void applyExternalUseClipBounds(ResolvedClip& clip, Registry& registry,
+                                  const components::RenderingInstanceComponent& instance);
   /// Bounds of the fragment an external `<use>` draws, in the `<use>` element's user space, or
   /// nothing when @p hostEntity is not an external fragment reference.
   std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity);
