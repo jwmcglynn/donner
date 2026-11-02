@@ -208,16 +208,51 @@ TEST(SubDocumentFiltersTest, WholeDocumentUseKeepsHostGroupLayerAndFilters) {
            "<rect x='20' y='4' width='8' height='8' fill='#000000'/>"
            "</g></svg>";
   };
-  SVGDocument external = Parse(host("<use href='scene.svg'/>"), {{"scene.svg", scene}});
   SVGDocument local = Parse(host("<svg width='16' height='16'>" + sceneContent + "</svg>"));
-  Renderer externalRenderer;
   Renderer localRenderer;
-  const RendererBitmap actual = Draw(externalRenderer, external);
   const RendererBitmap expected = Draw(localRenderer, local);
   // The host's last child stays inside the group's half-opacity layer.
   EXPECT_THAT(PixelAt(expected, 24, 8), test::Rgba(Gt(100), Gt(100), Gt(100), 255));
-  EXPECT_THAT(PixelAt(actual, 24, 8), test::Rgba(Gt(100), Gt(100), Gt(100), 255));
-  ExpectSameBitmap(actual, expected, "sub-document-filters-whole-document");
+  for (const std::string_view reference :
+       {"<use href='scene.svg'/>", "<image href='scene.svg' width='16' height='16'/>"}) {
+    SCOPED_TRACE(reference);
+    SVGDocument external = Parse(host(reference), {{"scene.svg", scene}});
+    Renderer externalRenderer;
+    const RendererBitmap actual = Draw(externalRenderer, external);
+    EXPECT_THAT(PixelAt(actual, 24, 8), test::Rgba(Gt(100), Gt(100), Gt(100), 255));
+    ExpectSameBitmap(actual, expected, "sub-document-filters-whole-document");
+  }
+}
+
+/// A host filter can pull a referenced document's off-surface content into view, so that content
+/// must still be drawn into the filter's input.
+TEST(SubDocumentFiltersTest, ReferencedContentUnderHostFilterIsNotCulled) {
+  const std::string scene =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<rect width='16' height='16' fill='#2050d0'/></svg>";
+  const auto host = [](std::string_view content) {
+    return "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>"
+           "<defs><filter id='shift' filterUnits='userSpaceOnUse' x='-16' y='0' width='48' "
+           "height='16'><feOffset dx='16'/></filter></defs>"
+           "<rect width='32' height='16' fill='#ffffff'/>"
+           "<g filter='url(#shift)'>" +
+           std::string(content) + "</g></svg>";
+  };
+  SVGDocument local = Parse(host("<svg x='-16' width='16' height='16'>"
+                                 "<rect width='16' height='16' fill='#2050d0'/></svg>"));
+  Renderer localRenderer;
+  const RendererBitmap expected = Draw(localRenderer, local);
+  EXPECT_THAT(PixelAt(expected, 8, 8), test::Rgba(Lt(60), Lt(100), Gt(180), 255));
+  for (const std::string_view reference :
+       {"<use href='scene.svg' x='-16'/>",
+        "<image href='scene.svg' x='-16' width='16' height='16'/>"}) {
+    SCOPED_TRACE(reference);
+    SVGDocument external = Parse(host(reference), {{"scene.svg", scene}});
+    Renderer externalRenderer;
+    const RendererBitmap actual = Draw(externalRenderer, external);
+    EXPECT_THAT(PixelAt(actual, 8, 8), test::Rgba(Lt(60), Lt(100), Gt(180), 255));
+    ExpectSameBitmap(actual, expected, "sub-document-filters-host-filter");
+  }
 }
 
 }  // namespace
