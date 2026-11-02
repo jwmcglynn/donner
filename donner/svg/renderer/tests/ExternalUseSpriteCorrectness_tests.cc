@@ -14,6 +14,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGStopElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -525,6 +526,57 @@ TEST(ExternalUseRetentionTest, LayoutAndGeometryReadsAfterDrawUseDocumentStyle) 
   EXPECT_EQ(afterDraw.transform(), own.transform());
   EXPECT_THAT(afterDraw.worldBounds(), testing::Eq(own.worldBounds()));
   EXPECT_THAT(afterDraw.computedWidth(), testing::Eq(own.computedWidth()));
+}
+
+TEST(ExternalUseRetentionTest, StylesheetRuleReadsGradientInOtherSubtree) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#b" color="red"/>
+        <use href="sprites.svg#a" x="8" color="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <style>#a { fill: url(#g) }</style>
+        <g id="b">
+          <linearGradient id="g"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor"/></linearGradient>
+          <rect width="8" height="8" fill="url(#g)"/>
+        </g>
+        <rect id="a" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  const RendererBitmap want = RenderStandalone(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <linearGradient id="r"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="red"/></linearGradient>
+        <linearGradient id="k"><stop offset="0" stop-color="black"/><stop offset="1" stop-color="black"/></linearGradient>
+        <rect width="8" height="8" fill="url(#r)"/>
+        <rect x="8" width="8" height="8" fill="url(#k)"/>
+      </svg>)svg");
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(host->document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), want,
+                                         "stylesheet-rule-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(ExternalUseRetentionTest, StopColorAfterDrawUsesDocumentStyle) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="sprites.svg#a" color="red"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="a">
+          <linearGradient id="g"><stop id="s" offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor"/></linearGradient>
+          <rect width="8" height="8" fill="url(#g)"/>
+        </g>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
+  const css::Color color = resource.querySelector("#s")->cast<SVGStopElement>().computedStopColor();
+  EXPECT_EQ(color, css::Color(css::RGBA(0, 0, 0, 0xFF))) << "stop color reflects the host color";
 }
 
 }  // namespace
