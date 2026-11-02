@@ -19,6 +19,7 @@
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/renderer/RenderSnapshot.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/SpriteOccurrenceTable.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 namespace donner::svg {
@@ -452,9 +453,65 @@ private:
    * its layout is relative to the `<use>`. The `<use>` element's own opacity is applied by its
    * caller's layer, not here.
    */
+  /// What \ref probeCachedSprite found for an external `<use>` occurrence.
+  struct SpriteProbe {
+    /// The occurrence's entry in its sheet's \ref SpriteOccurrenceTable, or null when the
+    /// occurrence may not be cached.
+    SpriteOccurrenceTable::Entry* entry = nullptr;
+    std::uint64_t revision = 0;      ///< Sheet mutation revision at the probe.
+    std::uint64_t fontRevision = 0;  ///< Sheet font resource revision at the probe.
+    bool drawn = false;              ///< The renderer drew the cached sprite.
+    bool record = false;             ///< The renderer admitted the sprite for recording.
+    FilterResultContentKey content;  ///< The sprite's key, when \ref drawn or \ref record.
+    Box2d bounds;  ///< The sprite's padded bounds, when \ref drawn or \ref record.
+    /// Resampling hint pointing into \ref entry, when its painting is one filtered element.
+    std::optional<SpriteResampling> resampling;
+  };
+
+  /**
+   * Before any preparation of the sheet, look up the external `<use>` occurrence of \p fragment in
+   * the renderer's sprite cache, and draw it from there when the renderer holds it.
+   */
+  SpriteProbe probeCachedSprite(SVGDocument& subDocument, std::string_view fragment,
+                                const components::RenderingInstanceComponent& instance,
+                                const components::ComputedStyleComponent& style,
+                                Registry& hostRegistry, Entity hostEntity);
+
+  /**
+   * Measure whether the occurrence of \p root, prepared and installed in \p subDocument, may be
+   * cached as a sprite, and the bounds of what it paints, into \p entry.
+   */
+  void measureSprite(SpriteOccurrenceTable::Entry& entry, SVGDocument& subDocument, Entity root,
+                     std::uint64_t revision, std::uint64_t fontRevision) const;
+
+  /// Look up the probed occurrence of \p root in the renderer's sprite cache at \p surfaceFromHost,
+  /// drawing it when the renderer holds it, and fill \p probe's key and outcome.
+  void drawProbedSprite(SpriteProbe& probe, SVGDocument& subDocument, Entity root,
+                        const Transform2d& surfaceFromHost);
+
+  /// The one filtered element everything in \p root's subtree paints through, with one stage and
+  /// no clip or mask, everything outside it being a plain container; `entt::null` otherwise.
+  Entity singleFilteredSpriteElement(Registry& registry, Entity root) const;
+
+  /// Whether a descendant of \p element has a filter of its own.
+  bool hasFilteredDescendant(Registry& registry, Entity element) const;
+
+  /// Fill \p entry's resampling hint: when everything the occurrence of \p root paints is one
+  /// filtered element with one stage, that stage and the element's placement and painted bounds.
+  void measureSpriteResampling(SpriteOccurrenceTable::Entry& entry, Registry& registry,
+                               Entity root) const;
+
+  /// Whether \p element may lie in a cached sprite: what a cached filter layer may hold, plus a
+  /// `<symbol>` or `<svg>`, with no blend mode that reads the backdrop.
+  bool isSpriteCacheableElement(Registry& registry, Entity element) const;
+
+  /// Union of the filter regions in the subtree of \p root, in the `<use>` element's user space:
+  /// an empty box when nothing is filtered, or nullopt when the subtree may not be cached.
+  std::optional<Box2d> spriteFilterBounds(Registry& registry, Entity root) const;
+
   void drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
                                const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
-                               Entity hostEntity);
+                               Entity hostEntity, const SpriteProbe& sprite);
   /**
    * Draw a sub-document's whole render tree into the current frame.
    *
@@ -685,6 +742,17 @@ private:
 
   /// Set while an external-use instance whose filter results may be cached is traversed.
   std::optional<FilterResultScope> filterResultScope_;
+
+  /// A sprite occurrence to measure once its instance's filter graphs are prepared; see
+  /// \ref measureSprite.
+  struct PendingSpriteMeasure {
+    SpriteOccurrenceTable::Entry* entry = nullptr;  ///< Entry to measure into.
+    SVGDocument* subDocument = nullptr;             ///< The occurrence's sheet.
+    Entity root = entt::null;                       ///< The referenced root.
+    std::uint64_t revision = 0;                     ///< Sheet revision at the probe.
+    std::uint64_t fontRevision = 0;                 ///< Sheet font revision at the probe.
+  };
+  std::optional<PendingSpriteMeasure> pendingSpriteMeasure_;
 };
 
 }  // namespace donner::svg

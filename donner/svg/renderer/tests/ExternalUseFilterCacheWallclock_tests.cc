@@ -1,7 +1,8 @@
 /// @file
-/// Wall-clock cost of filtered sprites drawn through external `<use>`, with and without cached
-/// filter results: blurred background sprites moving every frame behind a few vector sprites, and
-/// a grid of glowing pieces of a few kinds that move and briefly scale during swaps.
+/// Wall-clock cost of filtered sprites drawn through external `<use>`, uncached, with cached filter
+/// results, and with whole sprites cached: blurred background sprites moving every frame behind a
+/// few vector sprites, a grid of glowing pieces of a few kinds that move and briefly scale during
+/// swaps, and a scene of 150 sprites combining both.
 
 #include <gtest/gtest.h>
 
@@ -175,15 +176,23 @@ void AdvanceGlowGrid(AnimatedScene& scene, int frame) {
   }
 }
 
+/// What a measured renderer caches.
+enum class CacheMode {
+  Uncached,       ///< Nothing.
+  FilterResults,  ///< Filter results only.
+  Sprites,        ///< Filter results and whole sprite occurrences.
+};
+
 FrameStats MeasureFrames(const std::function<std::optional<AnimatedScene>()>& makeScene,
-                         const std::function<void(AnimatedScene&, int)>& advance, bool cached,
+                         const std::function<void(AnimatedScene&, int)>& advance, CacheMode mode,
                          bool* cacheSupported) {
   std::optional<AnimatedScene> scene = makeScene();
   if (!scene) {
     return {};
   }
   Renderer renderer;
-  renderer.setFilterResultCacheEnabled(cached);
+  renderer.setFilterResultCacheEnabled(mode != CacheMode::Uncached);
+  renderer.setSpriteCacheEnabled(mode == CacheMode::Sprites);
   for (int frame = 0; frame < kWarmupFrames; ++frame) {
     advance(*scene, frame);
     renderer.draw(scene->host.document);
@@ -216,19 +225,24 @@ void CompareCachedToUncached(const char* label,
                              const std::function<std::optional<AnimatedScene>()>& makeScene,
                              const std::function<void(AnimatedScene&, int)>& advance) {
   bool supported = false;
-  const FrameStats uncached = MeasureFrames(makeScene, advance, /*cached=*/false, &supported);
-  const FrameStats cached = MeasureFrames(makeScene, advance, /*cached=*/true, &supported);
+  const FrameStats uncached = MeasureFrames(makeScene, advance, CacheMode::Uncached, &supported);
+  const FrameStats cached = MeasureFrames(makeScene, advance, CacheMode::FilterResults, &supported);
+  const FrameStats sprites = MeasureFrames(makeScene, advance, CacheMode::Sprites, &supported);
   std::fprintf(stderr,
                "[%s] uncached median=%.3fms mean=%.3fms max=%.3fms | "
-               "cached median=%.3fms mean=%.3fms max=%.3fms\n",
+               "filter-cached median=%.3fms mean=%.3fms max=%.3fms | "
+               "sprite-cached median=%.3fms mean=%.3fms max=%.3fms\n",
                label, uncached.medianMs, uncached.meanMs, uncached.maxMs, cached.medianMs,
-               cached.meanMs, cached.maxMs);
+               cached.meanMs, cached.maxMs, sprites.medianMs, sprites.meanMs, sprites.maxMs);
   ::testing::Test::RecordProperty(std::string(label) + "UncachedMedianMs",
                                   std::to_string(uncached.medianMs));
   ::testing::Test::RecordProperty(std::string(label) + "CachedMedianMs",
                                   std::to_string(cached.medianMs));
+  ::testing::Test::RecordProperty(std::string(label) + "SpriteCachedMedianMs",
+                                  std::to_string(sprites.medianMs));
   if (supported) {
     EXPECT_LT(cached.medianMs, uncached.medianMs * kMaximumCachedToUncachedRatio);
+    EXPECT_LT(sprites.medianMs, uncached.medianMs * kMaximumCachedToUncachedRatio);
   }
 }
 
@@ -238,6 +252,74 @@ TEST(ExternalUseFilterCacheWallclockTest, BlurredBackgroundSprites) {
 
 TEST(ExternalUseFilterCacheWallclockTest, GlowingGridWithSwaps) {
   CompareCachedToUncached("GlowingGrid", MakeGlowGridScene, AdvanceGlowGrid);
+}
+
+/// 150 sprites on a 2x device-scale portrait canvas: 100 blurred background sprites of five kinds
+/// drifting at fractional speeds, 47 glowing pieces of three kinds falling by whole pixels, and
+/// three vector sprites.
+std::optional<AnimatedScene> MakeMixedSpriteScene() {
+  std::ostringstream sheet;
+  sheet << R"(<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">)";
+  for (int sprite = 0; sprite < 5; ++sprite) {
+    sheet << "<g id=\"bg-" << sprite << "\"><filter id=\"bf-" << sprite
+          << R"(" x="-50%" y="-50%" width="200%" height="200%">)"
+          << R"(<feGaussianBlur stdDeviation="5.3"/></filter>)"
+          << "<g filter=\"url(#bf-" << sprite << ")\">";
+    AppendVectorShapes(sheet, sprite, 8);
+    sheet << "</g></g>";
+  }
+  for (int kind = 0; kind < 3; ++kind) {
+    sheet << "<g id=\"piece-" << kind << "\"><filter id=\"glow-" << kind
+          << R"(" x="-40%" y="-40%" width="180%" height="180%">)"
+          << R"(<feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="halo"/>)"
+          << R"(<feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>)"
+          << "</filter><g filter=\"url(#glow-" << kind << ")\">";
+    AppendVectorShapes(sheet, kind + 8, 6);
+    sheet << "</g></g>";
+  }
+  for (int sprite = 0; sprite < 3; ++sprite) {
+    sheet << "<g id=\"fg-" << sprite << "\">";
+    AppendVectorShapes(sheet, sprite + 4, 30);
+    sheet << "</g>";
+  }
+  sheet << "</svg>";
+
+  std::ostringstream host;
+  host
+      << R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1750" viewBox="0 0 400 875">)"
+      << R"(<rect width="400" height="875" fill="#4a7bd0"/>)";
+  for (int i = 0; i < 100; ++i) {
+    host << "<use id=\"u" << i << "\" href=\"sprites.svg#bg-" << i % 5 << "\"/>";
+  }
+  for (int i = 100; i < 147; ++i) {
+    host << "<use id=\"u" << i << "\" href=\"sprites.svg#piece-" << i % 3 << "\"/>";
+  }
+  for (int i = 147; i < 150; ++i) {
+    host << "<use id=\"u" << i << "\" href=\"sprites.svg#fg-" << i - 147 << "\"/>";
+  }
+  host << "</svg>";
+  return MakeAnimatedScene(host.str(), sheet.str(), 150);
+}
+
+void AdvanceMixedSprites(AnimatedScene& scene, int frame) {
+  for (int i = 0; i < 100; ++i) {
+    const double drift = (frame * (0.7 + 0.005 * i));
+    scene.uses[i].setTransform(Transform2d::Translate(
+        Vector2d(std::fmod(i * 37.0 + drift, 380.0), 20.0 + (i * 41) % 820)));
+  }
+  for (int i = 100; i < 147; ++i) {
+    const int piece = i - 100;
+    scene.uses[i].setTransform(Transform2d::Translate(
+        Vector2d(20.0 + (piece % 9) * 42.0, 120.0 + (piece / 9) * 70.0 + (frame + piece) % 40)));
+  }
+  for (int i = 147; i < 150; ++i) {
+    scene.uses[i].setTransform(
+        Transform2d::Translate(Vector2d(60.0 + (frame % 60) * 2.0 + (i - 147) * 90.0, 600.0)));
+  }
+}
+
+TEST(ExternalUseFilterCacheWallclockTest, HundredFiftyMixedSprites) {
+  CompareCachedToUncached("MixedSprites150", MakeMixedSpriteScene, AdvanceMixedSprites);
 }
 
 }  // namespace

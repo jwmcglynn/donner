@@ -2764,6 +2764,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Whether the open frame split its submission, so work it recorded may have reached the queue.
   bool frameMadeChunkSubmission = false;
   bool filterResultCacheEnabled = true;
+  /// Whether whole sprite occurrences are cached beside filter results.
+  bool spriteCacheEnabled = true;
   /// This renderer's frame number, for cache admission and eviction.
   std::uint64_t filterResultFrame = 0;
   /// Evicted results whose textures the frame's recorded commands may still sample. Returned to
@@ -2771,6 +2773,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<PendingRelease> retiredFilterResults;
   std::size_t filterResultCacheHits = 0;
   std::size_t filterResultCacheRecords = 0;
+  std::size_t spriteCacheHits = 0;
+  std::size_t spriteCacheRecords = 0;
   std::size_t filterResultCacheEvictions = 0;
 
   /// Queue evicted payloads for retirement after the frame.
@@ -3022,6 +3026,43 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return placement;
   }
 
+  /// A filter graph that passes its source through unchanged, in sRGB so no color conversion
+  /// rounds it, over \p bounds. A sprite is recorded through it so its capture, recording and
+  /// compositing follow the filter result cache's own paths.
+  static components::FilterGraph spriteCaptureGraph(const Box2d& bounds) {
+    components::FilterGraph graph;
+    components::FilterNode node;
+    node.primitive = components::filter_primitive::Offset{};
+    graph.nodes.push_back(std::move(node));
+    graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+    graph.filterRegion = bounds;
+    return graph;
+  }
+
+  /// Where a sprite's rasterization is valid: its linear part, and per quarter-pixel bucket unless
+  /// \p resampling shows its one filtered element's result may be resampled at any offset.
+  static FilterResultPlacement spritePlacement(const FilterResultContentKey& content,
+                                               const Box2d& bounds,
+                                               const SpriteResampling* resampling,
+                                               const Transform2d& deviceFromSprite) {
+    FilterResultPlacement placement =
+        filterResultPlacement(spriteCaptureGraph(bounds), content, bounds, deviceFromSprite);
+    if (resampling == nullptr || resampling->graph == nullptr ||
+        !resampling->graph->filterRegion.has_value()) {
+      return placement;
+    }
+    FilterResultContentKey filtered;
+    filtered.contentBounds = resampling->contentBounds;
+    const FilterResultPlacement inner =
+        filterResultPlacement(*resampling->graph, filtered, *resampling->graph->filterRegion,
+                              resampling->spriteFromFilter * deviceFromSprite);
+    if (inner.fractionBucketX == FilterResultPlacement::kAnyFraction) {
+      placement.fractionBucketX = FilterResultPlacement::kAnyFraction;
+      placement.fractionBucketY = FilterResultPlacement::kAnyFraction;
+    }
+    return placement;
+  }
+
   /// Draw \p payload at the current device transform's translation.
   void drawFilterResult(const FilterResultPayload& payload) {
     Vector2d delta = Vector2d(deviceFromLocalTransform.data[4], deviceFromLocalTransform.data[5]) -
@@ -3116,7 +3157,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       recycleOrDestroyTexture(std::move(texture), desc);
       return;
     }
-    ++filterResultCacheRecords;
+    ++(frame.resultRecording->content.sprite ? spriteCacheRecords : filterResultCacheRecords);
     FilterResultPayload payload{
         std::move(texture), desc, *rect,
         Vector2d(frame.deviceFromFilter.data[4], frame.deviceFromFilter.data[5]),
@@ -6071,6 +6112,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     filterResultCacheHits = 0;
     filterResultCacheRecords = 0;
     filterResultCacheEvictions = 0;
+    spriteCacheHits = 0;
+    spriteCacheRecords = 0;
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -6641,6 +6684,8 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .filterResultCacheEvictions = impl_->filterResultCacheEvictions,
       .filterResultCacheEntries = impl_->filterResultCache.size(),
       .filterResultCacheBytes = impl_->filterResultCache.bytes(),
+      .spriteCacheHits = impl_->spriteCacheHits,
+      .spriteCacheRecords = impl_->spriteCacheRecords,
   };
 }
 
@@ -7248,6 +7293,56 @@ CachedFilterLayerResult RendererGeode::pushCachedFilterLayer(
     }
   }
   return CachedFilterLayerResult::Pushed;
+}
+
+CachedSpriteResult RendererGeode::drawCachedSprite(const FilterResultContentKey& content,
+                                                   const Box2d& bounds,
+                                                   const SpriteResampling* resampling) {
+  impl_->flushPendingBatch();
+  if (!content.sprite || !impl_->spriteCacheEnabled || !impl_->filterResultCacheUsable()) {
+    return CachedSpriteResult::Uncached;
+  }
+  const components::FilterGraph graph = Impl::spriteCaptureGraph(bounds);
+  if (ShouldPlanGeodeLocalRaster(graph, bounds, impl_->deviceFromLocalTransform,
+                                 /*fullExecutionFits=*/true)) {
+    return CachedSpriteResult::Uncached;
+  }
+  const FilterResultPlacement placement =
+      Impl::spritePlacement(content, bounds, resampling, impl_->deviceFromLocalTransform);
+  if (const auto* entry =
+          impl_->filterResultCache.find(content, placement, impl_->filterResultFrame)) {
+    impl_->drawFilterResult(entry->payload);
+    ++impl_->spriteCacheHits;
+    return CachedSpriteResult::Drawn;
+  }
+  return impl_->filterResultCache.admitMiss(content, placement.linear, impl_->filterResultFrame)
+             ? CachedSpriteResult::Record
+             : CachedSpriteResult::Uncached;
+}
+
+void RendererGeode::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+                                        const SpriteResampling* resampling) {
+  const components::FilterGraph graph = Impl::spriteCaptureGraph(bounds);
+  const FilterResultPlacement placement =
+      Impl::spritePlacement(content, bounds, resampling, impl_->deviceFromLocalTransform);
+  pushFilterLayer(graph, bounds);
+  if (!impl_->filterStack.empty()) {
+    Impl::FilterStackFrame& frame = impl_->filterStack.back();
+    if (!frame.allocationRejected && frame.layerTexture.isValid()) {
+      frame.resultRecording = Impl::FilterResultRecording{content, placement};
+    }
+  }
+}
+
+void RendererGeode::popSpriteRecording() {
+  popFilterLayer();
+}
+
+void RendererGeode::setSpriteCacheEnabled(bool enabled) {
+  impl_->spriteCacheEnabled = enabled;
+  if (!enabled) {
+    impl_->dropFilterResults();
+  }
 }
 
 void RendererGeode::setFilterResultCacheEnabled(bool enabled) {

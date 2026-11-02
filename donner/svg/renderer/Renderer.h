@@ -226,6 +226,20 @@ public:
   /// Forwards \ref RendererInterface::setFilterResultCacheEnabled to the active backend.
   void setFilterResultCacheEnabled(bool enabled) override;
 
+  /// Forwards \ref RendererInterface::drawCachedSprite to the active backend.
+  CachedSpriteResult drawCachedSprite(const FilterResultContentKey& content, const Box2d& bounds,
+                                      const SpriteResampling* resampling = nullptr) override;
+
+  /// Forwards \ref RendererInterface::pushSpriteRecording to the active backend.
+  void pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+                           const SpriteResampling* resampling = nullptr) override;
+
+  /// Forwards \ref RendererInterface::popSpriteRecording to the active backend.
+  void popSpriteRecording() override;
+
+  /// Forwards \ref RendererInterface::setSpriteCacheEnabled to the active backend.
+  void setSpriteCacheEnabled(bool enabled) override;
+
   /**
    * Begins mask rendering.
    *

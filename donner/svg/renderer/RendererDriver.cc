@@ -3467,6 +3467,297 @@ std::optional<RendererDriver::FilterResultScope> RendererDriver::ExternalUseFilt
   return scope;
 }
 
+namespace {
+
+/// Whether \p paint is none or a solid color, so it refers to nothing in the host document.
+bool IsPlainSpritePaint(const components::ResolvedPaintServer& paint) {
+  return !std::holds_alternative<components::PaintResolvedReference>(paint);
+}
+
+/// Whether \p registry's document animates, so its rendering changes without a revision.
+bool HasSheetAnimation(Registry& registry) {
+  return !registry.view<components::AnimationTimingComponent>().empty() ||
+         !registry.view<components::AnimatedValuesComponent>().empty();
+}
+
+/// The `x`, `y`, `width` and `height` an external `<use>` places and sizes its instance with, or
+/// nullopt when one is a percentage, which resolves against the host's viewport.
+std::optional<std::array<std::optional<Lengthd>, 4>> SpriteUseGeometry(Registry& hostRegistry,
+                                                                       Entity hostEntity) {
+  std::array<std::optional<Lengthd>, 4> geometry;
+  if (const auto* sized = hostRegistry.try_get<components::SizedElementComponent>(hostEntity)) {
+    geometry = {sized->properties.x.get(), sized->properties.y.get(), sized->properties.width.get(),
+                sized->properties.height.get()};
+  }
+  const bool percent = std::any_of(geometry.begin(), geometry.end(), [](const auto& length) {
+    return length.has_value() && length->unit == Lengthd::Unit::Percent;
+  });
+  return percent ? std::nullopt : std::optional(geometry);
+}
+
+/// \p bounds grown by one device pixel under \p deviceFromUser, which covers the anti-aliased
+/// coverage just past a shape's geometry at any scale.
+Box2d PadSpriteBounds(const Box2d& bounds, const Transform2d& deviceFromUser) {
+  const double scale = std::min(deviceFromUser.transformVector(Vector2d(1.0, 0.0)).length(),
+                                deviceFromUser.transformVector(Vector2d(0.0, 1.0)).length());
+  if (!(scale > 0.0) || !std::isfinite(scale)) {
+    return bounds;
+  }
+  const Vector2d pad(1.0 / scale, 1.0 / scale);
+  return Box2d(bounds.topLeft - pad, bounds.bottomRight + pad);
+}
+
+/// Append \p element's children to \p pending.
+void PushSpriteChildren(Registry& registry, Entity element, std::vector<Entity>& pending) {
+  for (Entity child = registry.get<donner::components::TreeComponent>(element).firstChild();
+       child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    pending.push_back(child);
+  }
+}
+
+/// Element types a cached sprite may contain: those a cached filter layer may, plus the
+/// `<symbol>` or `<svg>` an occurrence may reference.
+bool IsSpriteContentType(ElementType type) {
+  return type == ElementType::Symbol || type == ElementType::SVG ||
+         IsCacheableFilteredContentType(type);
+}
+
+}  // namespace
+
+namespace {
+
+/// The inputs an external `<use>` occurrence of \p root contributes, or nullopt when the
+/// occurrence may not be cached: it paints with a host paint server, or sizes with a percentage.
+std::optional<SpriteOccurrenceInputs> SpriteInputs(
+    Entity root, const components::RenderingInstanceComponent& instance,
+    const components::ComputedStyleComponent& style, Registry& hostRegistry, Entity hostEntity) {
+  std::optional<std::array<std::optional<Lengthd>, 4>> geometry =
+      SpriteUseGeometry(hostRegistry, hostEntity);
+  if (root == entt::null || !style.properties || !geometry ||
+      !IsPlainSpritePaint(instance.resolvedFill) || !IsPlainSpritePaint(instance.resolvedStroke)) {
+    return std::nullopt;
+  }
+  SpriteOccurrenceInputs inputs;
+  inputs.root = root;
+  inputs.inherited = PropertyRegistry().inheritFrom(*style.properties);
+  inputs.resourceOpacities = style.resourceOpacities;
+  inputs.fill = instance.resolvedFill;
+  inputs.stroke = instance.resolvedStroke;
+  inputs.geometry = *geometry;
+  return inputs;
+}
+
+/// The sheet's occurrence table, created on first use.
+SpriteOccurrenceTable& SpriteTable(Registry& sheet) {
+  auto* table = sheet.ctx().find<SpriteOccurrenceTable>();
+  return table != nullptr ? *table : sheet.ctx().emplace<SpriteOccurrenceTable>();
+}
+
+}  // namespace
+
+RendererDriver::SpriteProbe RendererDriver::probeCachedSprite(
+    SVGDocument& subDocument, std::string_view fragment,
+    const components::RenderingInstanceComponent& instance,
+    const components::ComputedStyleComponent& style, Registry& hostRegistry, Entity hostEntity) {
+  SpriteProbe probe;
+  Registry& sheet = subDocument.registry();
+  if (fragment.empty() || HasSheetAnimation(sheet)) {
+    return probe;
+  }
+  const Entity root = components::FindAttachedEntityById(sheet, RcString(fragment));
+  std::optional<SpriteOccurrenceInputs> inputs =
+      SpriteInputs(root, instance, style, hostRegistry, hostEntity);
+  if (!inputs) {
+    return probe;
+  }
+  probe.entry = &SpriteTable(sheet).findOrInsert(std::move(*inputs));
+  probe.revision = subDocument.handle()->revision();
+  probe.fontRevision = subDocument.fontResourceRevision();
+  if (probe.entry->measuredAt(probe.revision, probe.fontRevision) && probe.entry->bounds) {
+    drawProbedSprite(probe, subDocument, root,
+                     instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
+  }
+  return probe;
+}
+
+void RendererDriver::drawProbedSprite(SpriteProbe& probe, SVGDocument& subDocument, Entity root,
+                                      const Transform2d& surfaceFromHost) {
+  const SpriteOccurrenceTable::Entry& entry = *probe.entry;
+  probe.content.document = subDocument.handle();
+  probe.content.documentRevision = probe.revision;
+  probe.content.fontResourceRevision = probe.fontRevision;
+  probe.content.styleEpoch = entry.id;
+  probe.content.instanceRoot = entt::to_integral(root);
+  probe.content.filteredElement = entt::to_integral(root);
+  probe.content.sprite = true;
+  probe.bounds = PadSpriteBounds(*entry.bounds, surfaceFromHost);
+  probe.content.filterRegion = probe.bounds;
+  if (entry.resamplingGraph) {
+    probe.resampling = SpriteResampling{&*entry.resamplingGraph, entry.spriteFromFilter,
+                                        entry.filteredContentBounds};
+  }
+  renderer_.setTransform(surfaceFromHost);
+  const CachedSpriteResult result = renderer_.drawCachedSprite(
+      probe.content, probe.bounds, probe.resampling ? &*probe.resampling : nullptr);
+  probe.drawn = result == CachedSpriteResult::Drawn;
+  probe.record = result == CachedSpriteResult::Record;
+}
+
+bool RendererDriver::isSpriteCacheableElement(Registry& registry, Entity element) const {
+  const auto* type = registry.try_get<components::ElementTypeComponent>(element);
+  if (type == nullptr || !IsSpriteContentType(type->type())) {
+    return false;
+  }
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(element);
+  if (instance == nullptr) {
+    return true;
+  }
+  const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
+  // A blend mode reads the backdrop, which a sprite recorded on its own does not have.
+  if (style.properties &&
+      style.properties->mixBlendMode.get().value_or(MixBlendMode::Normal) != MixBlendMode::Normal) {
+    return false;
+  }
+  const auto* stages = preparedFilterStagesFor(element);
+  return InstanceDrawsOnlyItsOwnContent(*instance) &&
+         (stages == nullptr ||
+          std::all_of(stages->begin(), stages->end(), IsTranslationInvariantFilterGraph));
+}
+
+std::optional<Box2d> RendererDriver::spriteFilterBounds(Registry& registry, Entity root) const {
+  std::optional<Box2d> bounds;
+  std::vector<Entity> pending{root};
+  while (!pending.empty()) {
+    const Entity element = pending.back();
+    pending.pop_back();
+    if (!isSpriteCacheableElement(registry, element)) {
+      return std::nullopt;
+    }
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(element);
+    const auto* stages = preparedFilterStagesFor(element);
+    for (const components::FilterGraph& stage :
+         stages ? std::span(*stages) : std::span<const components::FilterGraph>()) {
+      if (instance == nullptr || !stage.filterRegion) {
+        return std::nullopt;
+      }
+      const Box2d box = instance->worldFromEntityTransform.transformBox(*stage.filterRegion);
+      bounds = bounds ? Box2d::Union(*bounds, box) : box;
+    }
+    PushSpriteChildren(registry, element, pending);
+  }
+  // An empty union stands for "eligible, nothing filtered"; the caller adds the geometry.
+  return bounds.value_or(Box2d());
+}
+
+void RendererDriver::measureSprite(SpriteOccurrenceTable::Entry& entry, SVGDocument& subDocument,
+                                   Entity root, std::uint64_t revision,
+                                   std::uint64_t fontRevision) const {
+  entry.measured = true;
+  entry.measuredRevision = revision;
+  entry.measuredFontRevision = fontRevision;
+  entry.bounds.reset();
+  Registry& registry = subDocument.registry();
+  // The occurrence's styles must be retained for its inputs, which the filter result scope
+  // establishes for the same instance.
+  const auto* rootInstance = registry.try_get<components::RenderingInstanceComponent>(root);
+  if (!filterResultScope_ || filterResultScope_->registry != &registry || rootInstance == nullptr) {
+    return;
+  }
+  const std::optional<Box2d> filtered = spriteFilterBounds(registry, root);
+  const std::optional<Box2d> painted =
+      components::ShapeSystem().getStrokeBounds(EntityHandle(registry, root));
+  if (!filtered) {
+    return;
+  }
+  std::optional<Box2d> bounds = filtered->isEmpty() ? std::nullopt : filtered;
+  if (painted && !painted->isEmpty()) {
+    const Box2d box = rootInstance->worldFromEntityTransform.transformBox(*painted);
+    bounds = bounds ? Box2d::Union(*bounds, box) : box;
+  }
+  entry.bounds = bounds;
+  measureSpriteResampling(entry, registry, root);
+}
+
+namespace {
+
+/// Whether \p type only groups content and paints nothing of its own.
+bool IsSpriteContainerType(ElementType type) {
+  return type == ElementType::G || type == ElementType::Symbol || type == ElementType::SVG ||
+         type == ElementType::A;
+}
+
+/// Whether \p instance clips or masks its content, which leaves a hard edge.
+bool ClipsOrMasks(const components::RenderingInstanceComponent& instance) {
+  return instance.clipRect.has_value() || instance.hasClipPath() || instance.mask.has_value();
+}
+
+/// Whether \p element only groups what it holds: a container with no layer, clip or mask.
+bool IsPlainSpriteContainer(Registry& registry, Entity element,
+                            const components::RenderingInstanceComponent& instance) {
+  const auto* type = registry.try_get<components::ElementTypeComponent>(element);
+  return type != nullptr && IsSpriteContainerType(type->type()) && !instance.isolatedLayer &&
+         !ClipsOrMasks(instance);
+}
+
+}  // namespace
+
+Entity RendererDriver::singleFilteredSpriteElement(Registry& registry, Entity root) const {
+  Entity filtered = entt::null;
+  std::vector<Entity> pending{root};
+  while (!pending.empty()) {
+    const Entity element = pending.back();
+    pending.pop_back();
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(element);
+    const auto* stages = instance != nullptr ? preparedFilterStagesFor(element) : nullptr;
+    if (stages != nullptr) {
+      if (filtered != entt::null || stages->size() != 1 || ClipsOrMasks(*instance)) {
+        return entt::null;
+      }
+      filtered = element;
+      continue;  // The filtered element's subtree is inside its result.
+    }
+    if (instance != nullptr && !IsPlainSpriteContainer(registry, element, *instance)) {
+      return entt::null;
+    }
+    PushSpriteChildren(registry, element, pending);
+  }
+  return filtered;
+}
+
+bool RendererDriver::hasFilteredDescendant(Registry& registry, Entity element) const {
+  std::vector<Entity> pending;
+  PushSpriteChildren(registry, element, pending);
+  while (!pending.empty()) {
+    const Entity descendant = pending.back();
+    pending.pop_back();
+    if (preparedFilterStagesFor(descendant) != nullptr) {
+      return true;
+    }
+    PushSpriteChildren(registry, descendant, pending);
+  }
+  return false;
+}
+
+void RendererDriver::measureSpriteResampling(SpriteOccurrenceTable::Entry& entry,
+                                             Registry& registry, Entity root) const {
+  entry.resamplingGraph.reset();
+  entry.filteredContentBounds.reset();
+  const Entity filtered = singleFilteredSpriteElement(registry, root);
+  if (filtered == entt::null) {
+    return;
+  }
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(filtered);
+  entry.resamplingGraph = preparedFilterStagesFor(filtered)->front();
+  entry.spriteFromFilter = instance.worldFromEntityTransform;
+  // A filtered descendant paints past its own geometry, so the painted bounds are known only when
+  // the filtered element's subtree holds no other filter.
+  if (!hasFilteredDescendant(registry, filtered)) {
+    entry.filteredContentBounds =
+        components::ShapeSystem().getStrokeBounds(instance.styleHandle(registry));
+  }
+}
+
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
@@ -4851,6 +5142,15 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   const auto access = subDocument.writeAccess();
   Registry& child = subDocument.registry();
   const auto childHandle = subDocument.handle();
+  const SpriteProbe sprite =
+      probeCachedSprite(subDocument, fragment, instance, style, hostRegistry, hostEntity);
+  if (sprite.drawn) {
+    // The cached sprite stands in for the whole occurrence: nothing of the sheet is prepared,
+    // styled or traversed. Cached content holds no text, so it has no font dependencies to record.
+    hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =
+        true;
+    return;
+  }
   if (!beginSubDocumentFontTraversal(childHandle, hostRegistry, hostEntity)) {
     return;
   }
@@ -4877,7 +5177,8 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
     const ExternalUseInstanceScope instanceScope(child, root,
                                                  EntityHandle(hostRegistry, hostEntity));
     components::ExternalUseStyleRetention::PrepareInstance(child);
-    drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity);
+    drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity,
+                            sprite);
   } else {
     components::ExternalUseStyleRetention::PrepareInstance(child);
     const Vector2i size = subDocument.canvasSize();
@@ -4958,7 +5259,8 @@ void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box
 
 void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
                                              const Transform2d& parentAbsoluteTransform,
-                                             Registry& hostRegistry, Entity hostEntity) {
+                                             Registry& hostRegistry, Entity hostEntity,
+                                             const SpriteProbe& sprite) {
   hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =
       true;
   // Prepare the sub-document's render tree.
@@ -5004,7 +5306,20 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   renderer_.setTransform(parentAbsoluteTransform);
   std::optional<FilterResultScope> hostFilterResultScope =
       std::exchange(filterResultScope_, ExternalUseFilterResultScope(subDocument, targetEntity));
+  if (sprite.entry != nullptr && !sprite.entry->measuredAt(sprite.revision, sprite.fontRevision)) {
+    // Measured once the traversal has prepared the instance's filter graphs.
+    pendingSpriteMeasure_ = PendingSpriteMeasure{sprite.entry, &subDocument, targetEntity,
+                                                 sprite.revision, sprite.fontRevision};
+  }
+  if (sprite.record) {
+    renderer_.pushSpriteRecording(sprite.content, sprite.bounds,
+                                  sprite.resampling ? &*sprite.resampling : nullptr);
+  }
   traverseSubDocument(subDocument.registry());
+  pendingSpriteMeasure_.reset();
+  if (sprite.record) {
+    renderer_.popSpriteRecording();
+  }
   filterResultScope_ = std::move(hostFilterResultScope);
   fontRenderScope.finish();
   recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
@@ -5186,6 +5501,11 @@ void RendererDriver::traverseSubDocument(Registry& registry) {
   std::unordered_set<entt::id_type>* hostFeImageGuard =
       std::exchange(feImageFragmentGuard_, nullptr);
   prepareFilterGraphs(registry, entities);
+  if (pendingSpriteMeasure_ && &pendingSpriteMeasure_->subDocument->registry() == &registry) {
+    const PendingSpriteMeasure pending = *std::exchange(pendingSpriteMeasure_, std::nullopt);
+    measureSprite(*pending.entry, *pending.subDocument, pending.root, pending.revision,
+                  pending.fontRevision);
+  }
   RenderingInstanceView view(registry, entities);
   traverse(view, registry);
   // A subtree whose last entity was never visited would leave its layers open; close them here so

@@ -183,7 +183,10 @@ donner_perf_sensitive_cc_library(
 donner_perf_sensitive_cc_library(
     name = "renderer_driver",
     srcs = ["RendererDriver.cc"],
-    hdrs = ["RendererDriver.h"],
+    hdrs = [
+        "RendererDriver.h",
+        "SpriteOccurrenceTable.h",
+    ],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],

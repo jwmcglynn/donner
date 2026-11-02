@@ -171,8 +171,12 @@ std::size_t FilterResultCacheEntries() {
   return 64;
 }
 
+/// A renderer that caches filter results but not whole sprites, so these tests see each filter
+/// layer's own cache behavior.
 std::unique_ptr<RendererInterface> MakeCachingRenderer() {
-  return CreateRendererInstance(RendererBackend::Geode);
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(RendererBackend::Geode);
+  renderer->setSpriteCacheEnabled(false);
+  return renderer;
 }
 
 /// The backend this binary renders with by default, for comparisons that hold on every backend.
@@ -422,6 +426,7 @@ void ExpectCachedMatchesUncached(SpriteFilter filter, double step, std::string_v
   ASSERT_TRUE(scene.has_value());
   const RendererBackend backend = DefaultBackend();
   std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(backend);
+  renderer->setSpriteCacheEnabled(false);
   for (int frame = 0; frame < 4; ++frame) {
     PlaceAll(*scene, frame, step);
     renderer->draw(scene->host.document);

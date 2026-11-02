@@ -796,6 +796,11 @@ struct RendererResourceStats {
   std::size_t filterResultCacheEntries = 0;
   /// Bytes the held results occupy.
   std::uint64_t filterResultCacheBytes = 0;
+  /// Sprite occurrences drawn this frame from a cached rasterization (see
+  /// \ref RendererInterface::drawCachedSprite). Counted apart from filter result hits.
+  std::size_t spriteCacheHits = 0;
+  /// Sprite rasterizations recorded into the cache this frame. Counted apart from filter records.
+  std::size_t spriteCacheRecords = 0;
 };
 
 /// Backend type for \ref donner::svg::RendererTextureSnapshot "RendererTextureSnapshot" payloads.
@@ -1574,6 +1579,64 @@ public:
    * Enabled by default on backends that cache. Backends without a cache ignore the call.
    */
   virtual void setFilterResultCacheEnabled(bool enabled) { (void)enabled; }
+
+  /**
+   * Draw a whole cached sprite occurrence, if this renderer holds one.
+   *
+   * \p content names the sprite's content (see \ref FilterResultContentKey::sprite) and \p bounds
+   * encloses everything it paints, in the current transform's user space. When the renderer holds
+   * a rasterization of that content for the current transform's non-translation part, it draws it
+   * translated to the current transform and returns \ref CachedSpriteResult::Drawn. Otherwise it
+   * returns \ref CachedSpriteResult::Record when it admits the sprite for recording, and
+   * \ref CachedSpriteResult::Uncached when it does not.
+   *
+   * Driver-facing: \ref RendererDriver calls this for external `<use>` occurrences whose content it
+   * can identify. A whole-pixel move draws the recorded pixels exactly; a fractional move reuses a
+   * rasterization recorded in the same quarter-pixel bucket, drawn on the pixel grid. Results share
+   * the filter result cache's memory bound and trim rules. Backends without a cache return
+   * \ref CachedSpriteResult::Uncached.
+   *
+   * @param content Identity of the sprite's content.
+   * @param bounds Bounds of everything the sprite paints, in the current user space.
+   * @param resampling When the sprite paints one filtered element, what decides whether its
+   *   rasterization may be resampled at any sub-pixel offset; null keeps it per bucket.
+   */
+  virtual CachedSpriteResult drawCachedSprite(const FilterResultContentKey& content,
+                                              const Box2d& bounds,
+                                              const SpriteResampling* resampling = nullptr) {
+    (void)content;
+    (void)bounds;
+    (void)resampling;
+    return CachedSpriteResult::Uncached;
+  }
+
+  /**
+   * Begin capturing a sprite occurrence that \ref drawCachedSprite admitted for recording. The
+   * content drawn until \ref popSpriteRecording is composited as usual and recorded under
+   * \p content for later draws. Only valid after \ref drawCachedSprite returned
+   * \ref CachedSpriteResult::Record for the same arguments and transform.
+   *
+   * @param content Identity of the sprite's content, as for \ref drawCachedSprite.
+   * @param bounds Bounds of the sprite, as for \ref drawCachedSprite.
+   * @param resampling As for \ref drawCachedSprite.
+   */
+  virtual void pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+                                   const SpriteResampling* resampling = nullptr) {
+    (void)content;
+    (void)bounds;
+    (void)resampling;
+  }
+
+  /// End the capture \ref pushSpriteRecording began.
+  virtual void popSpriteRecording() {}
+
+  /**
+   * Enables or disables caching whole sprite occurrences (see \ref drawCachedSprite) while filter
+   * results stay cached. Enabled by default on backends that cache; disabling the filter result
+   * cache disables sprites too. Disabling drops every cached result. Backends without a cache
+   * ignore the call.
+   */
+  virtual void setSpriteCacheEnabled(bool enabled) { (void)enabled; }
 };
 
 }  // namespace donner::svg

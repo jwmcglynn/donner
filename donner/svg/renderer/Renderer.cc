@@ -547,6 +547,25 @@ void Renderer::setFilterResultCacheEnabled(bool enabled) {
   impl_->setFilterResultCacheEnabled(enabled);
 }
 
+CachedSpriteResult Renderer::drawCachedSprite(const FilterResultContentKey& content,
+                                              const Box2d& bounds,
+                                              const SpriteResampling* resampling) {
+  return impl_->drawCachedSprite(content, bounds, resampling);
+}
+
+void Renderer::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+                                   const SpriteResampling* resampling) {
+  impl_->pushSpriteRecording(content, bounds, resampling);
+}
+
+void Renderer::popSpriteRecording() {
+  impl_->popSpriteRecording();
+}
+
+void Renderer::setSpriteCacheEnabled(bool enabled) {
+  impl_->setSpriteCacheEnabled(enabled);
+}
+
 void Renderer::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->pushMask(maskBounds);
 }

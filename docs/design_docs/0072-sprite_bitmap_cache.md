@@ -1,0 +1,201 @@
+# Design: Sprite Bitmap Cache for External-Use Occurrences
+
+**Status:** Draft
+**Author:** Jeff McGlynn
+**Model:** Withheld
+**Created:** 2026-11-02
+
+## Summary
+
+A game that draws sprites from an external sprite sheet through `<use href="sheet.svg#sprite-N">`
+draws about 150 occurrences per frame. Each one prepares the sheet for the occurrence, restyles or
+reuses the referenced subtree, rebuilds the sheet's render tree when the previous occurrence
+referenced another sprite, traverses the subtree, and draws every path, filter layer and group
+in it. Measured on a game scene natively, the traversal of 141 such draws costs about 10 ms of
+CPU per frame (7.4 ms of it in the sheet traversals and 1.4 ms in sheet preparation), and the GPU
+fills every path of every occurrence.
+
+[Cached filter results](0071-cached_filter_results.md) already render each filtered layer once
+and draw the result at every occurrence. This design generalizes that to whole occurrences, the
+technique Flash called `cacheAsBitmapMatrix`: rasterize everything an occurrence paints (paths,
+gradients, clip paths, opacity groups and filters) once into a texture, and draw every later
+occurrence with the same content and the same non-translation transform as one textured quad.
+A cached occurrence does no sheet preparation, styling, render-tree work, traversal, font work,
+path draw or filter execution.
+
+## Goals
+
+- An occurrence is rasterized once across N frames and M occurrences when only translations, or
+  the `<use>` element's own opacity, change.
+- It is rasterized again after any change to what it paints: a DOM mutation or font load in the
+  sheet, a change to the style the referenced root inherits from the `<use>`, the `<use>`
+  element's fill or stroke (context paint), its `x`, `y`, `width` or `height`, a `setHref`
+  retarget, or a change to the non-translation part of the device transform.
+- Cached frames match uncached frames exactly for whole-pixel motion; sub-pixel motion has the
+  documented bounded error of cached filter results.
+- Several static scales of one sprite each keep a rasterization; a continuously animated scale
+  falls back to the uncached path without recording a rasterization per frame.
+- Rasterizations share the cached filter results' memory bound, trim and idle rules.
+- Content whose pixels depend on anything the key cannot name is never cached.
+
+## Non-Goals
+
+- Same-document `<use>` and plain groups: they have no content identity that survives a frame.
+  Retained group layers are a separate compositor-level design.
+- Atlas packing and instanced quads. Each cached occurrence is still one textured draw; batching
+  them is the next step and reuses the same cache entries.
+- Mipmapped entries for animated scale. An animated scale draws uncached, as before.
+
+## Design
+
+### Where the cache sits
+
+`RendererDriver::drawExternalUse` probes the sprite cache before it touches the sheet. The probe
+needs only data that is cheap to read from the host: the sheet's identity and revisions, the
+referenced root, the `<use>` element's computed style, its fill and stroke, and its sizing
+attributes. On a hit the renderer draws the cached texture at the occurrence's transform and the
+driver returns. On a miss the occurrence draws as before; when the renderer admits it for
+recording, the driver brackets the sheet traversal with `pushSpriteRecording` and
+`popSpriteRecording`.
+
+```
+drawExternalUse
+  probeCachedSprite ---- hit ----> renderer.drawCachedSprite: one textured quad; return
+        | miss (Record or Uncached)
+  style scope, instance layout, prepareSubDocument
+  traverseSubDocument
+    prepareFilterGraphs -> measureSprite (eligibility, bounds, resampling hint)
+    [pushSpriteRecording]  traverse  [popSpriteRecording]
+```
+
+### Key
+
+The key reuses `FilterResultContentKey` with a `sprite` flag, so sprites and filter layers share
+one index, one memory bound and one eviction policy:
+
+- `document`, `documentRevision`, `fontResourceRevision`: the sheet's identity and revisions. Any
+  DOM mutation or font load in the sheet changes them.
+- `styleEpoch`: the id of the occurrence's inputs (below).
+- `instanceRoot`: the referenced element.
+- `filterRegion`: the sprite's bounds in the `<use>` element's user space, grown by one device
+  pixel at the occurrence's scale.
+- The placement: the exact linear part of the device transform, plus the quarter-pixel bucket of
+  the translation (or any fraction, below).
+
+**Occurrence inputs.** The style an occurrence contributes is what the referenced root inherits
+from the `<use>`: the `<use>` element's computed style reduced to inherited properties, its
+resource opacities, its fill and stroke (none or a solid color; a paint server reference is not
+cached, since it names host content), and its `x`, `y`, `width` and `height` (a percentage
+resolves against the host viewport and is not cached). Each sheet keeps a table of recently seen
+inputs, at most 64, in its registry context; each distinct set gets a process-unique id. Because
+the inputs hold only inherited properties, the `<use>` element's own opacity, transform or blend
+mode never change the id. They apply outside the cached content, exactly as they do uncached.
+
+### Eligibility and bounds
+
+The driver measures each set of inputs once per sheet revision, during the first draw after the
+sheet changed, once the instance's filter graphs are prepared. An occurrence is cacheable when:
+
+- its styles are retained for the occurrence (the cached filter result rule: no paint server
+  reference from the host, no style resource limit hit) and the sheet has no animation;
+- every element in the referenced subtree is one a cached filter layer may hold (shapes, groups,
+  gradients, clip paths, filter primitives), or the referenced `<symbol>` or `<svg>`;
+- no element draws content from elsewhere: no mask, marker, pattern paint, text, image or nested
+  `<use>`;
+- every filter in the subtree is translation invariant (no lighting, turbulence or `feImage`);
+- no element has a `mix-blend-mode` other than `normal`, which would read a backdrop the cached
+  rasterization does not have.
+
+The bounds are the union of the root's stroke-inclusive painted bounds and every filter region in
+the subtree, in the `<use>` element's user space. One device pixel of margin covers anti-aliased
+coverage. A clip path or a `<symbol>` viewport only shrinks what is painted.
+
+### Recording and drawing
+
+Recording reuses the cached filter result machinery. `pushSpriteRecording` pushes a filter layer
+over the sprite's bounds whose graph is a zero offset in sRGB, which passes the captured content
+through without color conversion. Its pop records the result into the shared index under the
+sprite key and composites it, as a filter result is. A hit draws the texture with
+`drawFilterResult`: on the pixel grid at the whole-pixel delta from where it was recorded, or
+resampled bilinearly at an exact fractional offset when the placement allows it. The capture,
+the pending-until-submit commit, the thrash guard, the budget check, trimming and idle decay are
+all those of cached filter results.
+
+Admission is two-touch as for filter results: a miss at a linear transform records only after a
+second miss at the same linear transform within the admission window, so a continuously
+changing scale never records. An occurrence whose bounds reach past the visible capture is drawn
+but not recorded; a later occurrence fully inside the canvas records it, and every occurrence
+then draws it.
+
+### Sub-pixel placement
+
+A sprite is kept per quarter-pixel bucket of its translation and drawn on the pixel grid, so
+sharp edges are never smeared; positions differ from an uncached render by less than a quarter
+pixel. When everything the sprite paints is one filtered element (outside it only plain
+containers, and no clip or mask on it) whose filter result may be resampled under the cached
+filter result rules (a final blur of at least one device pixel, fed from the source through
+per-pixel primitives only, fading inside its region), the sprite is resampled at any offset
+instead: one rasterization serves every position, and each premultiplied channel differs from an
+uncached render by a few levels at most (4 measured).
+
+### Memory
+
+Sprites and filter results share the index: at most 64 entries and the smaller of a quarter of
+the frame surface byte limit and 64 MiB native or 16 MiB WebAssembly. `trimTexturePool` with
+`ToFloor` or `All` and the two-second idle decay drop sprites with the filter results.
+`setSpriteCacheEnabled(false)` stops caching sprites while filter results stay cached; disabling
+the filter result cache disables both.
+
+## Testing and Validation
+
+`//donner/svg/renderer/tests:external_use_sprite_cache_tests` (Geode cases skip on other
+backends):
+
+- counters: one rasterization across six frames of six moving occurrences, and every occurrence
+  of a warm frame drawn from the cache with no path draw and no filter execution;
+- translation and the `<use>` element's opacity keep every occurrence cached, and match an
+  uncached render exactly;
+- invalidation: a sheet geometry change, a filter primitive change, a gradient stop change, an
+  inherited host style change, a `setHref` retarget, a scale change and a device scale change
+  each rasterize again and match an uncached render exactly; `<symbol>` uses of two sizes keep
+  one rasterization each;
+- three static scales record once each while an animated scale records nothing;
+- sub-pixel motion: a hit in the recorded bucket is exactly the uncached render at the recorded
+  translation moved by whole pixels, and within 0.1 over at most 160 edge pixels of the render at
+  the actual translation; a single blurred element is resampled at any offset with one
+  rasterization, within the bilinear bound;
+- fallbacks: a `mix-blend-mode`, text, or a host gradient paint is never cached and matches an
+  uncached render exactly;
+- disabling the filter result cache drops held sprites.
+
+The existing cached filter result tests run with sprites disabled so they keep measuring filter
+layers. The manual wall-clock test `external_use_sprite_tests_wallclock` measures each scene
+uncached, with filter results cached, and with sprites cached, including a 150-sprite scene.
+
+## Security and Privacy
+
+The cache holds rasterizations of documents the renderer already draws, keyed by a weak document
+identity, and is bounded in entries and bytes. Keys hold no host document references: an
+occurrence painted with a host paint server is not cached.
+
+## Alternatives Considered
+
+- **Key on the sheet's retained style epoch**, as filter results do. The epoch is known only after
+  the occurrence's styles are installed, which is the work a hit must skip. Comparing the
+  occurrence inputs directly is cheap and is what the retention compares anyway.
+- **A dedicated capture layer** instead of a pass-through filter layer. The filter layer already
+  sizes its surface to the region, records exact device rectangles and composites the same way;
+  the extra pass runs only on a recording frame.
+- **Rasterize at a fixed scale and transform the bitmap** for every scale. Scaling a raster
+  softens edges and loses the vector fidelity of uncached draws; recording per linear transform
+  keeps output identical.
+
+## Open Questions
+
+- An `inherit` keyword in the sheet for a property that does not inherit (for example
+  `opacity: inherit` on the referenced root) reads a value the inherited-only inputs omit. Such
+  sheets are rare; covering them means including the full computed style when the subtree uses
+  `inherit` on a non-inherited property.
+- Whether a fully cached sheet should also skip its per-frame font bookkeeping on the host side
+  beyond marking the host's font dependencies prepared.
+- Atlas packing and instancing of cached sprites (the next milestone).

@@ -397,6 +397,17 @@ public:
                                                 const std::optional<Box2d>& filterRegion) override;
   /// Enables or disables the filter result cache; disabling drops every cached result.
   void setFilterResultCacheEnabled(bool enabled) override;
+  /// Draws a cached sprite occurrence, or reports whether to record it; see
+  /// \ref RendererInterface::drawCachedSprite. Sprites share the filter result cache.
+  CachedSpriteResult drawCachedSprite(const FilterResultContentKey& content, const Box2d& bounds,
+                                      const SpriteResampling* resampling = nullptr) override;
+  /// Begins recording a sprite admitted by \ref drawCachedSprite.
+  void pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+                           const SpriteResampling* resampling = nullptr) override;
+  /// Ends the recording \ref pushSpriteRecording began.
+  void popSpriteRecording() override;
+  /// Enables or disables caching sprite occurrences; disabling drops every cached result.
+  void setSpriteCacheEnabled(bool enabled) override;
   void popFilterLayer() override;
 
   void pushMask(const std::optional<Box2d>& maskBounds) override {

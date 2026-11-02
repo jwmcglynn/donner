@@ -337,6 +337,9 @@ std::size_t ExternalInstanceWork(SVGDocument& document,
                                  const std::shared_ptr<components::StyleResourceBudget>& work,
                                  RendererBitmap* bitmap = nullptr) {
   Renderer renderer;
+  // Cached sprites skip an occurrence's styling work, and only outside a filter layer; this
+  // measures the work drawing each occurrence admits.
+  renderer.setSpriteCacheEnabled(false);
   RendererDriver driver(renderer, false, nullptr, work);
   driver.draw(document);
   if (bitmap != nullptr) {

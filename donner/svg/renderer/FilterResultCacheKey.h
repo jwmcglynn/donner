@@ -7,9 +7,14 @@
 #include <optional>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 
 namespace donner::svg {
+
+namespace components {
+struct FilterGraph;
+}  // namespace components
 
 /**
  * What a filter layer's input and graph were derived from, independent of where the result lands
@@ -50,6 +55,10 @@ struct FilterResultContentKey {
   /// backend how far the graph's reach stays inside the filter region. Unset when they are not
   /// known, such as under a filtered descendant. Determined by the content, so not compared.
   std::optional<Box2d> contentBounds;
+  /// Whether the key names a whole sprite occurrence (see \ref RendererInterface::drawCachedSprite)
+  /// rather than one filter layer. For a sprite, \ref styleEpoch identifies the occurrence's
+  /// inputs and \ref filterRegion holds the sprite's bounds in the `<use>` element's user space.
+  bool sprite = false;
 
   /// Whether \p other names the same content. False when either document is gone.
   [[nodiscard]] bool sameContent(const FilterResultContentKey& other) const {
@@ -62,8 +71,35 @@ struct FilterResultContentKey {
            instanceRoot == other.instanceRoot && filteredElement == other.filteredElement &&
            instanceViewport == other.instanceViewport && filterRegion == other.filterRegion &&
            primitiveViewport == other.primitiveViewport &&
-           userToPixelScale == other.userToPixelScale;
+           userToPixelScale == other.userToPixelScale && sprite == other.sprite;
   }
+};
+
+/**
+ * A sprite whose painting is one filtered element, whose filter result may be resampled at any
+ * sub-pixel offset under the rules for cached filter results (see
+ * \ref RendererInterface::pushCachedFilterLayer): then the whole sprite may be too, instead of
+ * being kept per quarter-pixel bucket.
+ */
+struct SpriteResampling {
+  /// The filtered element's single filter stage. Must outlive the call it is passed to.
+  const components::FilterGraph* graph = nullptr;
+  /// Maps the filtered element's user space into the sprite's (the `<use>` element's) user space.
+  Transform2d spriteFromFilter;
+  /// Painted bounds of the filtered element in its user space, strokes included.
+  std::optional<Box2d> contentBounds;
+};
+
+/// Outcome of \ref RendererInterface::drawCachedSprite.
+enum class CachedSpriteResult : std::uint8_t {
+  /// The cached sprite was drawn. The caller draws none of the occurrence's content.
+  Drawn,
+  /// Nothing is cached for the sprite, but the backend admits it. The caller draws the content
+  /// between \ref RendererInterface::pushSpriteRecording and
+  /// \ref RendererInterface::popSpriteRecording.
+  Record,
+  /// Nothing is cached and the sprite is not recorded. The caller draws the content as usual.
+  Uncached,
 };
 
 /// Outcome of \ref RendererInterface::pushCachedFilterLayer.
