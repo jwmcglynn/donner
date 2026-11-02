@@ -7912,6 +7912,46 @@ TEST_F(RendererGeodeTest, FullCanvasBlurBeyondThePoolBudgetRenders) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// Filters of many different sizes in one frame release far more intermediates than the shared
+// pool can hold. A frame that handed them to the pool as they were released let it evict, and so
+// destroy, textures the frame's pending commands still named, and the frame's submission failed
+// and lost the device. They now wait for the frame to submit.
+TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(kPhoneWidth) + "\" height=\"" + std::to_string(kPhoneHeight) +
+                       "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < 40; ++i) {
+    const int radius = 12 + i * 9;
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(150 + (i % 4) * 300) +
+              "\" cy=\"" + std::to_string(200 + (i / 4) * 240) + "\" r=\"" +
+              std::to_string(radius) + "\" fill=\"#e05090\"/></g>";
+  }
+  source += "</svg>";
+  SVGDocument document = ParseDocumentOrFail(source);
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+  const std::uint64_t executions = renderer.resourceStats().filterExecutions;
+  EXPECT_THAT(executions, testing::Gt(0u));
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  RendererGeode singleUse(device);
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  ASSERT_THAT(singleUse.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(singleUse.resourceStats().filterExecutions, testing::Eq(executions))
+      << "reuse must not change which filters the frame budget admits";
+  editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(),
+                                       "differently_sized_filters_submit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // Textures one renderer releases within an open frame stay with it: another renderer on the same
 // device could otherwise take one, write it, and submit ahead of the first renderer's frame.
 TEST_F(RendererGeodeTest, WithinFrameReleasesStayWithTheirRenderer) {
