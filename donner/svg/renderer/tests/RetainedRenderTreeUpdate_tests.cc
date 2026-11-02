@@ -788,5 +788,69 @@ TEST(RetainedRenderTreeUpdateTest, PromotingAJustRetargetedExternalUseMatchesUnc
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// A drawn document with a `<use>` of a symbol, edited by \p edit without another draw.
+SVGDocument UseQueriedBeforeTheNextRender(const std::function<void(SVGUseElement&)>& edit) {
+  SVGDocument document = Parse(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+      <defs>
+        <symbol id="symbol" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol>
+        <rect id="other" width="5" height="5"/>
+      </defs>
+      <use id="use" href="#symbol" x="4" y="6" width="20" height="20"/>
+    </svg>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  SVGUseElement use = document.querySelector("#use")->cast<SVGUseElement>();
+  edit(use);
+  return document;
+}
+
+/// The use's element-from-world transform in a freshly parsed document with \p useAttributes.
+Transform2d FreshElementFromWorld(std::string_view useAttributes) {
+  SVGDocument document =
+      Parse(R"(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><defs>)"
+            R"(<symbol id="symbol" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol>)"
+            R"(<rect id="other" width="5" height="5"/></defs><use id="use" )" +
+            std::string(useAttributes) + "/></svg>");
+  return document.querySelector("#use")->cast<SVGUseElement>().elementFromWorld();
+}
+
+void ExpectElementFromWorld(const std::function<void(SVGUseElement&)>& edit,
+                            std::string_view freshAttributes) {
+  SVGDocument document = UseQueriedBeforeTheNextRender(edit);
+  // Queried before any render prepares the edited use again.
+  EXPECT_EQ(document.querySelector("#use")->cast<SVGUseElement>().elementFromWorld(),
+            FreshElementFromWorld(freshAttributes))
+      << freshAttributes;
+}
+
+TEST(RetainedRenderTreeUpdateTest, UseElementFromWorldAfterWidthAttributeBeforeRender) {
+  ExpectElementFromWorld(
+      [](SVGUseElement& use) { use.setAttribute(xml::XMLQualifiedNameRef("width"), "40"); },
+      R"svg(href="#symbol" x="4" y="6" width="40" height="20")svg");
+}
+
+TEST(RetainedRenderTreeUpdateTest, UseElementFromWorldAfterXAttributeBeforeRender) {
+  ExpectElementFromWorld(
+      [](SVGUseElement& use) { use.setAttribute(xml::XMLQualifiedNameRef("x"), "9"); },
+      R"svg(href="#symbol" x="9" y="6" width="20" height="20")svg");
+}
+
+TEST(RetainedRenderTreeUpdateTest, UseElementFromWorldAfterSetXBeforeRender) {
+  ExpectElementFromWorld([](SVGUseElement& use) { use.setX(Lengthd(12)); },
+                         R"svg(href="#symbol" x="12" y="6" width="20" height="20")svg");
+}
+
+TEST(RetainedRenderTreeUpdateTest, UseElementFromWorldAfterSetTransformBeforeRender) {
+  ExpectElementFromWorld(
+      [](SVGUseElement& use) { use.setTransform(Transform2d::Translate(Vector2d(5, 7))); },
+      R"svg(href="#symbol" x="4" y="6" width="20" height="20" transform="translate(5 7)")svg");
+}
+
+TEST(RetainedRenderTreeUpdateTest, UseElementFromWorldAfterSetHrefBeforeRender) {
+  ExpectElementFromWorld([](SVGUseElement& use) { use.setHref(RcString("#other")); },
+                         R"svg(href="#other" x="4" y="6" width="20" height="20")svg");
+}
+
 }  // namespace
 }  // namespace donner::svg::tests

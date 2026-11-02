@@ -459,11 +459,20 @@ Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entit
   } else if (entity.all_of<SizedElementComponent>() &&
              entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
     const SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     if (sizedElement.applyTranslationForUseElement) {
-      return Transform2d::Translate(entity.get<ComputedSizedElementComponent>().bounds.topLeft);
+      // A layout invalidation drops the computed size of a <use>; a query before the next render
+      // recomputes it, as the branch below does for other sized elements.
+      if (const auto* computed = entity.try_get<ComputedSizedElementComponent>()) {
+        return Transform2d::Translate(computed->bounds.topLeft);
+      }
+      const ComputedStyleComponent& computedStyle =
+          StyleSystem().computeStyle(entity, disabledSink);
+      return Transform2d::Translate(createComputedSizedElementComponentWithStyle(
+                                        entity, computedStyle, FontMetrics(), disabledSink)
+                                        .bounds.topLeft);
     }
 
-    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, disabledSink);
 
     const ComputedSizedElementComponent& computedSizedElement =
