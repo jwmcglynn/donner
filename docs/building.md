@@ -250,13 +250,25 @@ Bazel 7 and 8, it builds `@donner//donner/base`, `@donner//donner/css`, `@donner
 checked-in consumer module against it. See \ref GettingStarted for the `MODULE.bazel`,
 `BUILD.bazel` and `.bazelrc` a consumer needs.
 
-A consumer module can build the same `Renderer` API on Geode by setting the two flags that
-`--config=geode` sets inside this repository:
+A consumer module can build the same `Renderer` API on Geode by selecting it in its
+`MODULE.bazel`, which sets both the backend and the Geode build flag:
+
+```py
+donner = use_extension("@donner//config:extensions.bzl", "donner")
+donner.configure(renderer = "geode")
+use_repo(donner, "donner_config")
+```
+
+Setting the two flags that `--config=geode` sets inside this repository is equivalent:
 
 ```sh
 bazel build --@donner//donner/svg/renderer:renderer_backend=geode \
   --@donner//donner/svg/renderer/geode:enable_geode=true //:my_app
 ```
+
+To present frames to an application window rather than read pixels back, depend on
+`@donner//donner/svg/renderer:geode_surface_renderer` and use `donner::svg::GeodeSurfaceRenderer`,
+which draws each frame into a host-owned `CAMetalLayer` and presents it without leaving the GPU.
 
 Donner's build checks that the packages Geode adds load without Donner's development-only
 dependencies, but CI does not build Geode from an external module; BCR preflight covers only the

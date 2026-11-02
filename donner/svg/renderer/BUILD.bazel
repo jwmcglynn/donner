@@ -449,6 +449,26 @@ _RENDERER_GEODE_COMMON_DEPS = [
     "//conditions:default": [],
 })
 
+# Public application-embedding entry point: presents documents with Geode to a host-owned
+# window surface while keeping the GPU runtime types out of the public header.
+donner_cc_library(
+    name = "geode_surface_renderer",
+    srcs = ["GeodeSurfaceRenderer.cc"],
+    hdrs = ["GeodeSurfaceRenderer.h"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_geode",
+        "//donner/base",
+        "//donner/gpu",
+        "//donner/svg",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+)
+
 donner_cc_library(
     name = "renderer_geode",
     srcs = ["RendererGeode.cc"],

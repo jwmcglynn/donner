@@ -14,6 +14,13 @@ All options have built-in defaults, so calling donner.configure() with no
 arguments (or not calling it at all) produces the same result as the
 hardcoded defaults.
 
+Renderers:
+  - renderer="tiny_skia": Software rasterizer (default).
+  - renderer="geode":     GPU renderer (native Metal on macOS, Vulkan on Linux). Also enables
+                          the Geode build targets, including
+                          //donner/svg/renderer:geode_surface_renderer for presenting to an
+                          application window.
+
 Text rendering tiers:
   - text=False:              No text rendering.
   - text=True:               Simple text (stb_truetype only — TTF/OTF, kern-table kerning).
@@ -28,7 +35,7 @@ _DEFAULTS = dict(
 )
 
 _configure = tag_class(attrs = {
-    "renderer": attr.string(default = _DEFAULTS["renderer"], values = ["skia", "tiny_skia"]),
+    "renderer": attr.string(default = _DEFAULTS["renderer"], values = ["geode", "skia", "tiny_skia"]),
     "filters": attr.bool(default = _DEFAULTS["filters"]),
     "text": attr.bool(default = _DEFAULTS["text"]),
     "text_full": attr.bool(default = _DEFAULTS["text_full"]),

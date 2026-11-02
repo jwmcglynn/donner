@@ -1282,6 +1282,48 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+objc_library(
+    name = "geode_surface_renderer_tests_lib",
+    testonly = True,
+    srcs = ["GeodeSurfaceRenderer_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "QuartzCore",
+    ],
+    target_compatible_with = ["@platforms//os:macos"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:geode_surface_renderer",
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+donner_cc_test(
+    name = "geode_surface_renderer_tests_impl",
+    target_compatible_with = ["@platforms//os:macos"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":geode_surface_renderer_tests_lib",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_surface_renderer_tests",
+    testonly = 1,
+    dep = ":geode_surface_renderer_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_cc_test(
     name = "renderer_driver_tests",
     srcs = [
