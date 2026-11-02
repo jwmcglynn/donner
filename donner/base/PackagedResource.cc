@@ -446,10 +446,6 @@ ResourceBytes PackagedResourceSession::load(const PackagedResource& resource) {
       }
       return found->second;
     }
-    // A recorded failure stays final until install() or retry(), so a miss does not re-query.
-    if (impl_->failures.contains(resource.sha256)) {
-      return {};
-    }
   }
   const auto bytes = impl_->provider(resource);
   if (!bytes) {

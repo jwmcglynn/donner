@@ -399,8 +399,12 @@ TEST(FontManagerTest, MissingPackagedFallbackFontIsSilentAndRetried) {
   EXPECT_EXIT(
       {
         const ResourceBytes packagedBytes = embedded::kPublicSansMediumOtf.load();
+        int providerQueries = 0;
         auto session = std::make_shared<PackagedResourceSession>(
-            [](const PackagedResource&) -> ResourceBytes { return {}; });
+            [&providerQueries](const PackagedResource&) -> ResourceBytes {
+              ++providerQueries;
+              return {};
+            });
         if (!packagedBytes || !SetPackagedResourceSession(session)) {
           WriteStderr("setup failed: packaged font unreadable or session not replaceable\n");
           std::_Exit(3);
@@ -411,7 +415,8 @@ TEST(FontManagerTest, MissingPackagedFallbackFontIsSilentAndRetried) {
         WriteStderr("[missing]");
         const bool loadedWhileMissing =
             static_cast<bool>(mgr.fallbackFont()) || static_cast<bool>(mgr.fallbackFont());
-        WriteStderr("[/missing] loaded while missing: " + std::to_string(loadedWhileMissing));
+        WriteStderr("[/missing] loaded while missing: " + std::to_string(loadedWhileMissing) +
+                    ", provider queries: " + std::to_string(providerQueries));
         if (!session->install(embedded::kPublicSansMediumOtf, *packagedBytes)) {
           WriteStderr("setup failed: packaged font install rejected\n");
           std::_Exit(4);
@@ -421,7 +426,8 @@ TEST(FontManagerTest, MissingPackagedFallbackFontIsSilentAndRetried) {
         std::_Exit(0);
       },
       testing::ExitedWithCode(0),
-      "\\[missing\\]\\[/missing\\] loaded while missing: 0, loaded after install: 1$");
+      "\\[missing\\]\\[/missing\\] loaded while missing: 0, provider queries: 1, loaded after "
+      "install: 1$");
 }
 
 TEST(FontManagerTest, LoadRawOtfData) {

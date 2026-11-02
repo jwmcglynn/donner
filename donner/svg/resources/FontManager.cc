@@ -1117,6 +1117,12 @@ FontHandle FontManager::fallbackFont() {
     return fallbackHandle_;
   }
 
+  // Shapes measure `ch` on every preparation; a native miss stays recorded until the font is
+  // installed or retried, so do not query the resource provider again for it.
+  if (embedded::kPublicSansMediumOtf.failed()) {
+    return FontHandle();
+  }
+
   // Keep a verified owning lease until the manager has copied its private face data.
   const ResourceLease fallback(embedded::kPublicSansMediumOtf);
   if (fallback.empty()) {
