@@ -451,9 +451,9 @@ private:
    * its layout is relative to the `<use>`. The `<use>` element's own opacity is applied by its
    * caller's layer, not here.
    */
-  void drawAdmittedSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                                      const Transform2d& parentAbsoluteTransform,
-                                      Registry& hostRegistry, Entity hostEntity);
+  void drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
+                               const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
+                               Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,

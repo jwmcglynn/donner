@@ -577,6 +577,21 @@ Transform2d LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
   return getAbsoluteTransformComponent(entity).worldFromEntity;
 }
 
+void LayoutSystem::invalidateAbsoluteTransforms(EntityHandle entity) {
+  Registry& registry = *entity.registry();
+  std::vector<Entity> stack{entity.entity()};
+  while (!stack.empty()) {
+    const Entity current = stack.back();
+    stack.pop_back();
+    registry.remove<ComputedAbsoluteTransformComponent>(current);
+    for (Entity child = registry.get<donner::components::TreeComponent>(current).firstChild();
+         child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      stack.push_back(child);
+    }
+  }
+}
+
 void LayoutSystem::invalidate(EntityHandle entity, bool viewportChanged) {
   entity.remove<components::ComputedLocalTransformComponent>();
   entity.remove<components::ComputedAbsoluteTransformComponent>();

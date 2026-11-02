@@ -1429,6 +1429,8 @@ constexpr std::string_view kSymbolResource =
     "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
     "<symbol id='sym' viewBox='0 0 4 4'><rect width='6' height='6' fill='blue'/></symbol>"
     "<rect x='12' y='12' width='4' height='4' fill='lime'/>"
+    "<g transform='translate(8 0)'><g id='v' transform='translate(0 8)'>"
+    "<rect width='4' height='4' fill='red'/></g></g>"
     "<use href='#sym' width='4' height='4'/></svg>";
 
 // Each occurrence sizes the shared symbol from its own <use>, and none of that state survives into
@@ -1438,17 +1440,19 @@ TEST(RendererPublicApiTest, ExternalUseInstanceLeavesReferencedDocumentClean) {
       "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>"
       "<use href='external.svg#sym' width='8' height='8'/>"
       "<use href='external.svg#sym' x='8' y='8' width='4' height='4'/>"
-      "<use href='external.svg' x='16'/></svg>",
+      "<use href='external.svg#v' x='12' y='-8'/><use href='external.svg' x='16'/></svg>",
       kSymbolResource);
   const RendererBitmap expected = RenderInlineDocument(
       "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'><defs>"
       "<symbol id='sym' viewBox='0 0 4 4'><rect width='6' height='6' fill='blue'/></symbol></defs>"
       "<use href='#sym' width='8' height='8'/><use href='#sym' x='8' y='8' width='4' height='4'/>"
-      "<image x='16' width='16' height='16' href='" +
+      "<rect x='12' width='4' height='4' fill='red'/><image x='16' width='16' height='16' href='" +
       SvgDataUrl(kSymbolResource) + "'/></svg>");
   EXPECT_THAT(PixelAt(expected, 12, 12), test::IsTransparent());
   EXPECT_THAT(PixelAt(expected, 11, 11), test::RgbaEq(0, 0, 255, 255));
   EXPECT_THAT(PixelAt(expected, 17, 1), test::RgbaEq(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(expected, 13, 1), test::RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(expected, 25, 9), test::RgbaEq(255, 0, 0, 255));
 
   Renderer renderer;
   for (int frame = 0; frame < 2; ++frame) {
@@ -1463,6 +1467,41 @@ TEST(RendererPublicApiTest, ExternalUseInstanceLeavesReferencedDocumentClean) {
   editor::tests::CompareBitmapToBitmap(
       RenderPublicDocument(child), RenderInlineDocument(kSymbolResource),
       "external-use-clean-child", editor::tests::PixelmatchIdentityParams());
+}
+
+// Drawing an instance must leave the referenced document's own layout readable through the public
+// API, with no standalone render in between. The `<use>` root is drawn last, so no later
+// occurrence's rebuild can restore state that the instance dropped.
+TEST(RendererPublicApiTest, ExternalUseInstanceKeepsReferencedLayoutReadable) {
+  constexpr std::string_view resource =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><defs>"
+      "<rect id='r' width='2' height='2' fill='blue'/><use id='u' href='#r' x='2' y='3'/></defs>"
+      "<g id='g' transform='translate(5 6)'><rect id='c' x='1' width='2' height='2' "
+      "fill='lime'/></g></svg>";
+  auto fixture = MakeExternalUseFixture(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<use href='external.svg#g' x='8'/><use href='external.svg#u'/></svg>",
+      resource);
+  Renderer renderer;
+  renderer.draw(fixture.document);
+
+  ASSERT_THAT(*fixture.child, testing::NotNull());
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  // Reads on a never-rendered `<use>` need its computed size, so the comparison document is
+  // rendered once; the child gets no render of its own.
+  SVGDocument fresh = ParseDocument(resource);
+  (void)RenderPublicDocument(fresh);
+  const auto element = [](SVGDocument& document, const char* selector) {
+    auto found = document.querySelector(selector);
+    EXPECT_THAT(found, testing::Optional(testing::_)) << selector;
+    return found.value_or(document.svgElement());
+  };
+  EXPECT_EQ(element(child, "#c").cast<SVGGeometryElement>().worldBounds(),
+            element(fresh, "#c").cast<SVGGeometryElement>().worldBounds());
+  EXPECT_EQ(element(child, "#g").cast<SVGGraphicsElement>().elementFromWorld(),
+            element(fresh, "#g").cast<SVGGraphicsElement>().elementFromWorld());
+  EXPECT_EQ(element(child, "#u").cast<SVGGraphicsElement>().elementFromWorld(),
+            element(fresh, "#u").cast<SVGGraphicsElement>().elementFromWorld());
 }
 
 // The host layer applies the `<use>` element's opacity, so the referenced content must not add a

@@ -183,6 +183,15 @@ public:
    */
   void invalidate(EntityHandle entity, bool viewportChanged = false);
 
+  /**
+   * Drop the cached absolute transforms of \p entity and its descendants, which depend on where
+   * the entity is placed, while keeping its computed size, viewBox and local transform. Marks
+   * nothing dirty.
+   *
+   * @param entity Root of the subtree.
+   */
+  void invalidateAbsoluteTransforms(EntityHandle entity);
+
   /// @}
 
   /// @name Computed properties

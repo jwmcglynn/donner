@@ -4584,11 +4584,11 @@ private:
 class ExternalUseInstanceScope {
 public:
   ExternalUseInstanceScope(Registry& child, Entity root, EntityHandle use) : root_(child, root) {
-    // Cached absolute transforms in the root's subtree differ between an instance (placed by the
-    // <use>, with the viewport it establishes) and the document's own layout, so both entering and
-    // leaving an instance drop them. Skipping this requires a cache key covering the instance root
-    // and the use-established viewport, plus a reset whenever the document is drawn on its own.
-    components::LayoutSystem().invalidate(root_);
+    // Cached absolute transforms in the root's subtree differ between an instance, placed by the
+    // <use> with the viewport it establishes, and the document's own layout, so entering and
+    // leaving an instance drops them. Only those caches and the use-established viewport are
+    // occurrence state; skipping the drop requires a key covering the root and that viewport.
+    resetInstanceLayout();
     child.ctx().emplace<components::ExternalUseInstanceContext>(root);
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     (void)components::LayoutSystem().createShadowSizedElementComponent(
@@ -4597,13 +4597,18 @@ public:
 
   ~ExternalUseInstanceScope() {
     root_.registry()->ctx().erase<components::ExternalUseInstanceContext>();
-    components::LayoutSystem().invalidate(root_);
+    resetInstanceLayout();
   }
 
   ExternalUseInstanceScope(const ExternalUseInstanceScope&) = delete;
   ExternalUseInstanceScope& operator=(const ExternalUseInstanceScope&) = delete;
 
 private:
+  void resetInstanceLayout() {
+    root_.remove<components::ComputedShadowSizedElementComponent>();
+    components::LayoutSystem().invalidateAbsoluteTransforms(root_);
+  }
+
   EntityHandle root_;
 };
 
@@ -4645,8 +4650,7 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   if (!fragment.empty()) {
     const ExternalUseInstanceScope instanceScope(child, root,
                                                  EntityHandle(hostRegistry, hostEntity));
-    drawAdmittedSubDocumentElement(subDocument, fragment, surfaceFromHost, hostRegistry,
-                                   hostEntity);
+    drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity);
   } else {
     const Vector2i size = subDocument.canvasSize();
     drawAdmittedSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
@@ -4731,10 +4735,9 @@ void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box
   renderer_.popClip();
 }
 
-void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
-                                                    std::string_view fragmentId,
-                                                    const Transform2d& parentAbsoluteTransform,
-                                                    Registry& hostRegistry, Entity hostEntity) {
+void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
+                                             const Transform2d& parentAbsoluteTransform,
+                                             Registry& hostRegistry, Entity hostEntity) {
   hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =
       true;
   // Prepare the sub-document's render tree.
