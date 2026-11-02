@@ -178,6 +178,14 @@ donner_cc_library(
     deps = ["//donner/svg/components"],
 )
 
+# Header-only count of per-entity fill encode variants, shared by the encode cache and the GPU
+# residence.
+donner_cc_library(
+    name = "geode_fill_variants",
+    hdrs = ["GeodeFillVariants.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 # Header-only ECS component caching the encoded form of each path, so an unchanged path is not
 # re-encoded on the CPU every frame.
 donner_cc_library(
@@ -185,6 +193,7 @@ donner_cc_library(
     hdrs = ["GeodePathCacheComponent.h"],
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":geode_fill_variants",
         ":geode_path_encoder",
         ":geode_resource_budget",
         "//donner/base",
@@ -306,6 +315,7 @@ donner_cc_library(
         "//donner/gpu/shader:slug_fill_api",
         # The final renderer names the Geode device implementation; this header needs only its API.
         ":geode_device_api",
+        ":geode_fill_variants",
         ":geode_handle_retirement",
         ":geode_resource_budget",
     ],

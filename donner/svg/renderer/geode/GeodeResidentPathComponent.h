@@ -22,7 +22,9 @@
 /// Lives in `donner::geode` (not `donner::svg::geode`) to match the other
 /// Geode types referenced unqualified via `geode::` inside `donner::svg`.
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -38,6 +40,7 @@
 #include "donner/gpu/Handles.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillVariants.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodePerDevice.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
@@ -1224,9 +1227,11 @@ struct GeodeResidentGradientSlot {
 /// at the solid-fill draw sites; removed by the same entt listener that
 /// clears `GeodePathCacheComponent` when geometry changes.
 struct GeodeResidentPathSlots {
-  GeodeResidentSlot fillSlot;                    ///< Solid fill's resident geometry and record.
-  GeodeResidentSlot strokeSlot;                  ///< Solid stroke's resident geometry and record.
-  GeodeResidentGradientSlot gradientFillSlot;    ///< Gradient-painted fill residence.
+  /// Solid fill's resident geometry and record, one per cached fill encode variant.
+  std::array<GeodeResidentSlot, kGeodeFillVariantCount> fillSlots;
+  GeodeResidentSlot strokeSlot;  ///< Solid stroke's resident geometry and record.
+  /// Gradient-painted fill residence, one per cached fill encode variant.
+  std::array<GeodeResidentGradientSlot, kGeodeFillVariantCount> gradientFillSlots;
   GeodeResidentGradientSlot gradientStrokeSlot;  ///< Cached gradient-stroked outline and paint.
 };
 

@@ -1205,6 +1205,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_fill_tolerance",
         "//donner/svg/renderer/geode:geode_path_cache_component",
         "//donner/svg/renderer/geode:geode_test_contexts",
         "//donner/svg/renderer/tests:rgba_test_matchers",
