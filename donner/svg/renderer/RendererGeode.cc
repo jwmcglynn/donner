@@ -2210,10 +2210,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// `texturePool` on the buffer side.
   geode::GeodeBufferPool arenaBufferPool;
 
+  /// Arenas every encoder of an open frame allocates from, recycled once the frame is submitted.
+  /// See `geode::GeoEncoderFrameArenas`.
+  geode::GeoEncoderFrameArenas frameArenas;
+
   /// Apply the renderer-wide encoder configuration shared by every encoder
   /// this renderer constructs: arena buffer recycling and the antialias mode.
   void configureEncoder(geode::GeoEncoder& encoderToConfigure) {
     encoderToConfigure.setBufferPool(&arenaBufferPool);
+    // Inside a frame every encoder shares one set of arenas until the frame is submitted.
+    encoderToConfigure.setFrameArenas(frameRecordingOpen ? &frameArenas : nullptr);
     encoderToConfigure.setArenaWriteFailureFlag(&frameArenaWriteFailed);
     encoderToConfigure.setGeometryAdmission(this);
     encoderToConfigure.setAntialias(antialias);
@@ -5510,6 +5516,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
+    // Nothing still allocates from the frame arenas; an unfinished frame's work never reaches the
+    // queue, so its buffers can serve the next frame unless its uploads failed.
+    frameArenas.recycle(/*discardBuffers=*/frameArenaWriteFailed);
     // An unfinished frame can leave pattern tiles, clips, open scopes, and pending releases
     // behind. Retire them before resetting their budget. Unsubmitted work returns to the pool;
     // resources whose submission is uncertain stay retained until device teardown.
@@ -6152,6 +6161,9 @@ void RendererGeode::endFrame() {
     impl_->frameGpuEncoders.clear();
     impl_->frameFinishedEncoders.clear();
     impl_->frameCommandBuffers.clear();
+    // No encoder allocates from the frame's arenas any more and their work is submitted; a frame
+    // whose submission or uploads failed starts the next one from fresh buffers.
+    impl_->frameArenas.recycle(/*discardBuffers=*/!submitted || impl_->frameArenaWriteFailed);
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
     impl_->frameRetainedFilterResources.clear();

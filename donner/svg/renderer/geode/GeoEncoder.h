@@ -84,6 +84,44 @@ public:
 
 class GeodeBufferPool;
 class GeodeDevice;
+
+/**
+ * Arena buffers every encoder of one frame allocates from.
+ *
+ * Without sharing, each encoder grows its own arenas from 64 KiB on first use, and a frame with
+ * many isolated layers constructs several encoders per layer, so it holds many mostly-empty arena
+ * buffers until it is submitted and recreates most of them every frame. Shared arenas hold one
+ * bump allocation for the whole frame: regions are never reused within a frame, so a queue upload
+ * for a later encoder cannot overwrite bytes an earlier, not yet submitted draw reads.
+ *
+ * The frame owner calls \ref recycle once every command naming the arenas has been submitted;
+ * the next frame then reuses the grown buffers from offset zero.
+ */
+class GeoEncoderFrameArenas {
+public:
+  GeoEncoderFrameArenas();
+  ~GeoEncoderFrameArenas();
+
+  GeoEncoderFrameArenas(const GeoEncoderFrameArenas&) = delete;
+  GeoEncoderFrameArenas& operator=(const GeoEncoderFrameArenas&) = delete;
+
+  /**
+   * Start the next frame at offset zero in the current buffers. Call only after every command
+   * that reads the arenas has been submitted (or dropped) and no encoder still allocates from
+   * them.
+   *
+   * @param discardBuffers Drop every buffer instead, after a frame whose uploads were refused.
+   */
+  void recycle(bool discardBuffers);
+
+  /// Bytes of the buffers the arenas currently draw into, excluding outgrown ones.
+  [[nodiscard]] uint64_t capacityBytes() const;
+
+private:
+  friend class GeoEncoder;
+  struct Storage;
+  std::unique_ptr<Storage> storage_;
+};
 class GeodeImagePipeline;
 class GeodePipeline;
 class GeodeGradientPipeline;
@@ -231,6 +269,13 @@ public:
    * to disable (default).
    */
   void setBufferPool(GeodeBufferPool* pool);
+
+  /**
+   * Allocate per-draw data from \p frameArenas, shared with the frame's other encoders, instead
+   * of this encoder's own arenas. Call before the first draw; \p frameArenas must outlive this
+   * encoder. Pass `nullptr` to use this encoder's own arenas (default).
+   */
+  void setFrameArenas(GeoEncoderFrameArenas* frameArenas);
 
   /**
    * Share arena-write failure with the frame owner so it can discard the incomplete frame.

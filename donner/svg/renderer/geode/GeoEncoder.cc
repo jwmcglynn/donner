@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -330,6 +331,117 @@ constexpr uint32_t kGradientKindRadial = 1u;
 
 }  // namespace
 
+/// Per-encoder growable GPU buffer used as a bump-allocation arena
+/// for per-draw data (vertex / band / curve). Replaces the per-fill
+/// `dev.createBuffer` pattern with a single long-lived buffer that each
+/// draw writes into at the current `offset`, then advances.
+///
+/// Alignment: callers pass the required alignment for the binding.
+/// Vertex buffers need 4-byte offset alignment (WebGPU spec §23.8);
+/// storage buffers need `minStorageBufferOffsetAlignment` which
+/// defaults to 256 in the WebGPU limits every Geode backend follows.
+///
+/// Lifetime: when the arena grows, the previous buffer is moved into
+/// `retired` and kept alive for the encoder's lifetime. Commands
+/// already recorded into the command encoder that reference the
+/// old buffer remain valid because the owning handle keeps the buffer
+/// alive until the `Arena` itself is destroyed (at encoder destruction,
+/// after `finish()` has submitted all work).
+struct GeoEncoderArena {
+  gpu::Buffer buffer;
+  uint64_t capacity = 0;
+  uint64_t offset = 0;  // Next unused byte within `buffer`.
+  /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`),
+  /// re-stamped on every growth. Arena buffers are recycled through the
+  /// device's buffer pool, so two arenas at different times can hold the
+  /// same handle address with completely different contents; anything
+  /// that caches across frames must compare this id instead.
+  uint64_t bufferId = 0;
+  std::vector<gpu::Buffer> retired;
+  /// Owned geometry bytes awaiting one bounded upload before submission or buffer growth.
+  std::vector<uint8_t> pendingBytes;
+  uint64_t pendingOffset = 0;
+  gpu::BufferUsage usage = gpu::BufferUsage::CopyDst;
+  const char* label = "GeodeArena";
+};
+
+/// The arenas one encoder draws through: its own, or a set every encoder of a frame shares (see
+/// \ref GeoEncoderFrameArenas).
+struct GeoEncoderArenaSet {
+  GeoEncoderArena bandArena;
+  GeoEncoderArena curveArena;
+  GeoEncoderArena uniformArena;
+  /// Analytic dual-ray fill: vertical band/curve SSBOs, dense H/V band-grid lookup
+  /// tables, and compact curve references. Bound at bindings 8-13 of the fill pipeline.
+  GeoEncoderArena vBandArena;
+  GeoEncoderArena vCurveArena;
+  GeoEncoderArena gridArena;
+
+  /// Per-instance affine transforms for `fillPathInstanced`.
+  /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
+  /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
+  /// since the binding is storage read-only.
+  GeoEncoderArena instanceRecordArena;
+
+  /// Every arena of the set, for passes over all of them.
+  [[nodiscard]] std::array<GeoEncoderArena*, 7> all() {
+    return {&bandArena,   &curveArena, &uniformArena,       &vBandArena,
+            &vCurveArena, &gridArena,  &instanceRecordArena};
+  }
+
+  /// Give each arena its buffer usage and debug label. Buffers grow lazily on first use.
+  GeoEncoderArenaSet() {
+    bandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
+    bandArena.label = "GeodeBandArena";
+    curveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
+    curveArena.label = "GeodeCurveArena";
+    uniformArena.usage = gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst;
+    uniformArena.label = "GeodeUniformArena";
+    instanceRecordArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
+    instanceRecordArena.label = "GeodeInstanceRecordArena";
+    vBandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
+    vBandArena.label = "GeodeVBandArena";
+    vCurveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
+    vCurveArena.label = "GeodeVCurveArena";
+    gridArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
+    gridArena.label = "GeodeGridArena";
+  }
+};
+
+struct GeoEncoderFrameArenas::Storage {
+  GeoEncoderArenaSet arenas;
+};
+
+GeoEncoderFrameArenas::GeoEncoderFrameArenas() : storage_(std::make_unique<Storage>()) {}
+GeoEncoderFrameArenas::~GeoEncoderFrameArenas() = default;
+
+void GeoEncoderFrameArenas::recycle(bool discardBuffers) {
+  for (GeoEncoderArena* arena : storage_->arenas.all()) {
+    arena->pendingBytes.clear();
+    // Buffers an arena outgrew this frame are named only by work that has now been submitted, and
+    // the arena keeps the larger one it grew into.
+    arena->retired.clear();
+    if (discardBuffers) {
+      // The frame refused an upload, so these bytes are uncertain; start over from nothing.
+      arena->buffer = gpu::Buffer();
+      arena->capacity = 0;
+    }
+    arena->offset = 0;
+    if (arena->buffer.isValid()) {
+      // Same buffer, new contents: anything keyed on the identity must not match last frame's.
+      arena->bufferId = GeodeDevice::AllocateBufferId();
+    }
+  }
+}
+
+uint64_t GeoEncoderFrameArenas::capacityBytes() const {
+  uint64_t bytes = 0;
+  for (GeoEncoderArena* arena : storage_->arenas.all()) {
+    bytes += arena->buffer.isValid() ? arena->capacity : 0;
+  }
+  return bytes;
+}
+
 struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   GeodeDevice* device;
   /// The GPU runtime context this encoder records against; the device's, wired in `initImpl`.
@@ -344,57 +456,15 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// buffer; a buffer is only created when the arena grows.
   GeodeTextureEncoder::UniformAllocation allocate(const void* data, uint64_t size,
                                                   uint64_t alignment) override {
-    const Allocation alloc = allocInArena(uniformArena, data, size, alignment);
+    const Allocation alloc = allocInArena(arenas->uniformArena, data, size, alignment);
     return {alloc.buffer, alloc.offset, alloc.size};
   }
 
-  /// Per-encoder growable GPU buffer used as a bump-allocation arena
-  /// for per-draw data (vertex / band / curve). Replaces the per-fill
-  /// `dev.createBuffer` pattern with a single long-lived buffer that each
-  /// draw writes into at the current `offset`, then advances.
-  ///
-  /// Alignment: callers pass the required alignment for the binding.
-  /// Vertex buffers need 4-byte offset alignment (WebGPU spec §23.8);
-  /// storage buffers need `minStorageBufferOffsetAlignment` which
-  /// defaults to 256 in the WebGPU limits every Geode backend follows.
-  ///
-  /// Lifetime: when the arena grows, the previous buffer is moved into
-  /// `retired` and kept alive for the encoder's lifetime. Commands
-  /// already recorded into the command encoder that reference the
-  /// old buffer remain valid because the owning handle keeps the buffer
-  /// alive until the `Arena` itself is destroyed (at encoder destruction,
-  /// after `finish()` has submitted all work).
-  struct Arena {
-    gpu::Buffer buffer;
-    uint64_t capacity = 0;
-    uint64_t offset = 0;  // Next unused byte within `buffer`.
-    /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`),
-    /// re-stamped on every growth. Arena buffers are recycled through the
-    /// device's buffer pool, so two arenas at different times can hold the
-    /// same handle address with completely different contents; anything
-    /// that caches across frames must compare this id instead.
-    uint64_t bufferId = 0;
-    std::vector<gpu::Buffer> retired;
-    /// Owned geometry bytes awaiting one bounded upload before submission or buffer growth.
-    std::vector<uint8_t> pendingBytes;
-    uint64_t pendingOffset = 0;
-    gpu::BufferUsage usage = gpu::BufferUsage::CopyDst;
-    const char* label = "GeodeArena";
-  };
-  Arena bandArena;
-  Arena curveArena;
-  Arena uniformArena;
-  /// Analytic dual-ray fill: vertical band/curve SSBOs, dense H/V band-grid lookup
-  /// tables, and compact curve references. Bound at bindings 8-13 of the fill pipeline.
-  Arena vBandArena;
-  Arena vCurveArena;
-  Arena gridArena;
-
-  /// Per-instance affine transforms for `fillPathInstanced`.
-  /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
-  /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
-  /// since the binding is storage read-only.
-  Arena instanceRecordArena;
+  using Arena = GeoEncoderArena;
+  /// This encoder's own arenas, used unless a frame shares one set among its encoders.
+  GeoEncoderArenaSet ownArenas;
+  /// The arenas draws allocate from: \ref ownArenas, or the frame's shared set.
+  GeoEncoderArenaSet* arenas = &ownArenas;
 
   /// Optional cross-frame buffer pool (owned by `RendererGeode::Impl`).
   /// When set, arena growth prefers recycled buffers and arena teardown
@@ -423,14 +493,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     pass = nullptr;
     maskPass = nullptr;
 
-    releaseArenaResources(bandArena);
-    releaseArenaResources(curveArena);
-    releaseArenaResources(uniformArena);
-    releaseArenaResources(vBandArena);
-    releaseArenaResources(vCurveArena);
-    releaseArenaResources(gridArena);
-
-    releaseArenaResources(instanceRecordArena);
+    // A frame's shared arenas belong to the frame; it recycles them once its work is submitted.
+    for (Arena* arena : ownArenas.all()) {
+      releaseArenaResources(*arena);
+    }
     transientResources.clear();
   }
 
@@ -472,7 +538,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       return sceneBatchUniformAlloc;
     }
     sceneBatchUniformAlloc =
-        allocInArena(uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
+        allocInArena(arenas->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
     sceneBatchUniformBytes.assign(bytes, bytes + sizeof(Uniforms));
     return sceneBatchUniformAlloc;
   }
@@ -524,10 +590,13 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   }
 
   void flushArenas() {
-    for (Arena* arena : {&bandArena, &curveArena, &uniformArena, &vBandArena, &vCurveArena,
-                         &gridArena, &instanceRecordArena}) {
+    const bool ownedArenas = arenas == &ownArenas;
+    for (Arena* arena : arenas->all()) {
       flushArena(*arena);
-      std::vector<uint8_t>().swap(arena->pendingBytes);
+      if (ownedArenas) {
+        // A frame's shared staging is reused by its next encoder; an encoder's own is not.
+        std::vector<uint8_t>().swap(arena->pendingBytes);
+      }
     }
   }
 
@@ -624,7 +693,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     span.vGridBase = append(encoded.vBandGrid);
     span.hRefsBase = append(encoded.curveIndices);
     span.vRefsBase = append(encoded.vCurveIndices);
-    span.alloc = allocInArena(gridArena, gridSpanScratch.data(),
+    span.alloc = allocInArena(arenas->gridArena, gridSpanScratch.data(),
                               gridSpanScratch.size() * sizeof(uint32_t), kStorageOffsetAlignment);
     return span;
   }
@@ -722,7 +791,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       rec.transformRow1[3] = 0.0f;
     }
     const uint64_t recordBytes = static_cast<size_t>(instanceCount) * sizeof(InstanceRecord);
-    return allocInArena(instanceRecordArena, records.data(), recordBytes, kStorageOffsetAlignment);
+    return allocInArena(arenas->instanceRecordArena, records.data(), recordBytes,
+                        kStorageOffsetAlignment);
   }
 
   /// Allocate a read-only storage binding for `byteCount` bytes of `data`,
@@ -884,25 +954,25 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     u.gridVBandCount = encoded.vBandCount;
     writeBoundingPolygonUniforms(u, encoded);
 
-    const auto bandsAlloc = allocStorageOrDummy(bandArena, encoded.bands.data(),
+    const auto bandsAlloc = allocStorageOrDummy(arenas->bandArena, encoded.bands.data(),
                                                 encoded.bands.size() * sizeof(EncodedPath::Band));
-    const auto curvesAlloc = allocStorageOrDummy(curveArena, encoded.curves.data(),
+    const auto curvesAlloc = allocStorageOrDummy(arenas->curveArena, encoded.curves.data(),
                                                  encoded.curves.size() * 6u * sizeof(float));
-    const auto vBandsAlloc = allocStorageOrDummy(vBandArena, encoded.vBands.data(),
+    const auto vBandsAlloc = allocStorageOrDummy(arenas->vBandArena, encoded.vBands.data(),
                                                  encoded.vBands.size() * sizeof(EncodedPath::Band));
-    const auto vCurvesAlloc = allocStorageOrDummy(vCurveArena, encoded.vCurves.data(),
+    const auto vCurvesAlloc = allocStorageOrDummy(arenas->vCurveArena, encoded.vCurves.data(),
                                                   encoded.vCurves.size() * 6u * sizeof(float));
-    const auto hGridAlloc = allocStorageOrDummy(gridArena, encoded.hBandGrid.data(),
+    const auto hGridAlloc = allocStorageOrDummy(arenas->gridArena, encoded.hBandGrid.data(),
                                                 encoded.hBandGrid.size() * sizeof(uint32_t));
-    const auto vGridAlloc = allocStorageOrDummy(gridArena, encoded.vBandGrid.data(),
+    const auto vGridAlloc = allocStorageOrDummy(arenas->gridArena, encoded.vBandGrid.data(),
                                                 encoded.vBandGrid.size() * sizeof(uint32_t));
-    const auto hRefsAlloc = allocStorageOrDummy(gridArena, encoded.curveIndices.data(),
+    const auto hRefsAlloc = allocStorageOrDummy(arenas->gridArena, encoded.curveIndices.data(),
                                                 encoded.curveIndices.size() * sizeof(uint32_t));
-    const auto vRefsAlloc = allocStorageOrDummy(gridArena, encoded.vCurveIndices.data(),
+    const auto vRefsAlloc = allocStorageOrDummy(arenas->gridArena, encoded.vCurveIndices.data(),
                                                 encoded.vCurveIndices.size() * sizeof(uint32_t));
 
     const auto uniAlloc =
-        allocInArena(uniformArena, &u, sizeof(GradientUniforms), kUniformOffsetAlignment);
+        allocInArena(arenas->uniformArena, &u, sizeof(GradientUniforms), kUniformOffsetAlignment);
 
     gpu::Result<gpu::BindGroup> bindGroupResult =
         gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
@@ -1385,23 +1455,10 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   // `GeodeDevice` and shared across encoders - no per-encoder create
   // needed.
 
-  // Configure per-draw arenas (bump-allocated GPU buffers). They stay
-  // empty here; the first draw
-  // triggers lazy growth to 64 KiB and doubles from there.
-  impl.bandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
-  impl.bandArena.label = "GeodeBandArena";
-  impl.curveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
-  impl.curveArena.label = "GeodeCurveArena";
-  impl.uniformArena.usage = gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst;
-  impl.uniformArena.label = "GeodeUniformArena";
-  impl.instanceRecordArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
-  impl.instanceRecordArena.label = "GeodeInstanceRecordArena";
-  impl.vBandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
-  impl.vBandArena.label = "GeodeVBandArena";
-  impl.vCurveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
-  impl.vCurveArena.label = "GeodeVCurveArena";
-  impl.gridArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
-  impl.gridArena.label = "GeodeGridArena";
+  // Per-draw arenas (bump-allocated GPU buffers) take their usages and labels from
+  // `GeoEncoderArenaSet`. They stay empty here; the first draw triggers lazy growth to 64 KiB
+  // and doubles from there.
+  (void)impl;
 }
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -1634,23 +1691,28 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
 
   // Analytic dual-ray buffers: H/V bands, curves, references, and grids. The
   // bounding fan is generated from vertex_index and uniform data.
-  const auto bandsAlloc = impl_->allocStorageOrDummy(
-      impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
-  const auto curvesAlloc = impl_->allocStorageOrDummy(impl_->curveArena, encoded.curves.data(),
-                                                      encoded.curves.size() * 6u * sizeof(float));
-  const auto vBandsAlloc = impl_->allocStorageOrDummy(
-      impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
-  const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
-                                                       encoded.vCurves.size() * 6u * sizeof(float));
-  const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.hBandGrid.data(),
-                                                     encoded.hBandGrid.size() * sizeof(uint32_t));
-  const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.vBandGrid.data(),
-                                                     encoded.vBandGrid.size() * sizeof(uint32_t));
+  const auto bandsAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->bandArena, encoded.bands.data(),
+                                 encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto curvesAlloc = impl_->allocStorageOrDummy(
+      impl_->arenas->curveArena, encoded.curves.data(), encoded.curves.size() * 6u * sizeof(float));
+  const auto vBandsAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->vBandArena, encoded.vBands.data(),
+                                 encoded.vBands.size() * sizeof(EncodedPath::Band));
+  const auto vCurvesAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->vCurveArena, encoded.vCurves.data(),
+                                 encoded.vCurves.size() * 6u * sizeof(float));
+  const auto hGridAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->gridArena, encoded.hBandGrid.data(),
+                                 encoded.hBandGrid.size() * sizeof(uint32_t));
+  const auto vGridAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->gridArena, encoded.vBandGrid.data(),
+                                 encoded.vBandGrid.size() * sizeof(uint32_t));
   const auto hRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->gridArena, encoded.curveIndices.data(),
+      impl_->allocStorageOrDummy(impl_->arenas->gridArena, encoded.curveIndices.data(),
                                  encoded.curveIndices.size() * sizeof(uint32_t));
   const auto vRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->gridArena, encoded.vCurveIndices.data(),
+      impl_->allocStorageOrDummy(impl_->arenas->gridArena, encoded.vCurveIndices.data(),
                                  encoded.vCurveIndices.size() * sizeof(uint32_t));
 
   static_assert(sizeof(EncodedPath::Band) == sizeof(gpu::shader::programs::SlugMaskBand));
@@ -1675,7 +1737,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   writeBoundingPolygonUniforms(u, encoded);
 
   const auto uniAlloc =
-      impl_->allocInArena(impl_->uniformArena, &u, sizeof(u), kUniformOffsetAlignment);
+      impl_->allocInArena(impl_->arenas->uniformArena, &u, sizeof(u), kUniformOffsetAlignment);
 
   static const auto kBindings = [] {
     const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugMask);
@@ -1774,6 +1836,10 @@ void GeoEncoder::clearClipMask() {
 
 void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
   impl_->bufferPool = pool;
+}
+
+void GeoEncoder::setFrameArenas(GeoEncoderFrameArenas* frameArenas) {
+  impl_->arenas = frameArenas != nullptr ? &frameArenas->storage_->arenas : &impl_->ownArenas;
 }
 
 void GeoEncoder::setArenaWriteFailureFlag(bool* failed) {
@@ -2799,14 +2865,17 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   // 2. Allocate and upload GPU buffers via the per-encoder arenas. The analytic dual-ray fill
   // generates one convex bounding fan from vertex_index and binds two band/curve
   // SSBO sets (horizontal + vertical) plus the dense H/V band grids.
-  const auto bandsAlloc = impl_->allocStorageOrDummy(
-      impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
-  const auto curvesAlloc = impl_->allocStorageOrDummy(impl_->curveArena, encoded.curves.data(),
-                                                      encoded.curves.size() * 6u * sizeof(float));
-  const auto vBandsAlloc = impl_->allocStorageOrDummy(
-      impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
-  const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
-                                                       encoded.vCurves.size() * 6u * sizeof(float));
+  const auto bandsAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->bandArena, encoded.bands.data(),
+                                 encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto curvesAlloc = impl_->allocStorageOrDummy(
+      impl_->arenas->curveArena, encoded.curves.data(), encoded.curves.size() * 6u * sizeof(float));
+  const auto vBandsAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->vBandArena, encoded.vBands.data(),
+                                 encoded.vBands.size() * sizeof(EncodedPath::Band));
+  const auto vCurvesAlloc =
+      impl_->allocStorageOrDummy(impl_->arenas->vCurveArena, encoded.vCurves.data(),
+                                 encoded.vCurves.size() * 6u * sizeof(float));
   const auto gridSpan = impl_->allocGridSpan(encoded);
 
   // Batch-level uniform + per-instance record. The uniform is shared with
@@ -2833,8 +2902,8 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   // record at all.
   copyRecordParamsToUniform(u, record);
 
-  const auto uniAlloc =
-      impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
+  const auto uniAlloc = impl_->allocInArena(impl_->arenas->uniformArena, &u, sizeof(Uniforms),
+                                            kUniformOffsetAlignment);
 
   // The instanced path copies the base record and overwrites each copy's
   // transform so every instance still shares the geometry bases computed

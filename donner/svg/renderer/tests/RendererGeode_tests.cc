@@ -2703,6 +2703,56 @@ TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcros
       << "Unique texture sizes must not bypass the global pool budget";
 }
 
+/// Draws \p count sibling isolated layers, each filling its own column of the target with its own
+/// color, so a composite that ran after a later layer had reused its texture would show up as a
+/// wrong or missing column.
+void DrawSiblingLayerColumns(RendererGeode& renderer, int count, double columnWidth,
+                             double height) {
+  for (int index = 0; index < count; ++index) {
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.setPaint(solidFill(css::RGBA(static_cast<uint8_t>(40 * index), 255,
+                                          static_cast<uint8_t>(255 - 40 * index), 255)));
+    renderer.drawRect(Box2d::FromXYWH(columnWidth * index, 0.0, columnWidth, height),
+                      StrokeParams{});
+    renderer.popIsolatedLayer();
+  }
+}
+
+TEST_F(RendererGeodeTest, EncodersOfAFrameShareArenaBuffersAcrossManyLayers) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  // Each layer constructs an encoder for its content and another for its composite, so without
+  // shared arenas a frame of this many layers holds several arena buffers per layer, more than the
+  // cross-frame pool keeps.
+  constexpr int kLayers = 40;
+  constexpr double kColumnWidth = 2.0;
+  constexpr double kHeight = 9.0;
+  RenderViewport viewport;
+  viewport.size = Vector2d(kColumnWidth * kLayers, kHeight);
+  viewport.devicePixelRatio = 1.0;
+
+  RendererGeode renderer = createRenderer();
+  renderer.beginFrame(viewport);
+  DrawSiblingLayerColumns(renderer, kLayers, kColumnWidth, kHeight);
+  renderer.endFrame();
+  const uint64_t coldBufferCreates = renderer.lastFrameTimings().counters.bufferCreates;
+  EXPECT_LE(coldBufferCreates, 16u)
+      << "One growing buffer per arena kind for the whole frame, not one per encoder";
+
+  renderer.beginFrame(viewport);
+  DrawSiblingLayerColumns(renderer, kLayers, kColumnWidth, kHeight);
+  renderer.endFrame();
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bufferCreates, 0u)
+      << "A repeat frame reuses the arena buffers the previous frame grew";
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  for (int index = 0; index < kLayers; index += 7) {
+    EXPECT_THAT(
+        PixelAt(bitmap, static_cast<int>(kColumnWidth * index + 1), static_cast<int>(kHeight / 2)),
+        RgbaEq((40 * index) & 0xFF, 255, (255 - 40 * index) & 0xFF, 255))
+        << "Layer " << index << " must draw from its own arena region";
+  }
+}
+
 TEST_F(RendererGeodeTest, SurfaceBudgetCountsPoolReuseAndNestedOffscreensBeforeAllocation) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 
