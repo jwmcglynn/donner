@@ -44,8 +44,7 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
   out << R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)";
   for (int sprite = 0; sprite < spriteCount; ++sprite) {
     out << "<g id=\"sprite-" << sprite << "\">";
-    out << "<filter id=\"filter-" << sprite
-        << R"(" x="-50%" y="-50%" width="200%" height="200%">)";
+    out << "<filter id=\"filter-" << sprite << R"(" x="-50%" y="-50%" width="200%" height="200%">)";
     if (filter == SpriteFilter::Blur) {
       out << "<feGaussianBlur id=\"blur-" << sprite << "\" stdDeviation=\"5.3\"/>";
     } else {
@@ -94,8 +93,8 @@ std::optional<FilteredSpriteScene> MakeScene(int occurrences, int spriteCount = 
   }
   FilteredSpriteScene scene{std::move(*host), {}};
   for (int i = 0; i < occurrences; ++i) {
-    scene.uses.push_back(scene.host.document.querySelector("#use-" + std::to_string(i))
-                             ->cast<SVGUseElement>());
+    scene.uses.push_back(
+        scene.host.document.querySelector("#use-" + std::to_string(i))->cast<SVGUseElement>());
   }
   return scene;
 }
@@ -128,13 +127,13 @@ FrameWork Draw(RendererInterface& renderer, FilteredSpriteScene& scene) {
 }
 
 /// Skips unless this binary links a backend that caches filter results and runs filters.
-#define REQUIRE_CACHING_BACKEND()                                                            \
-  do {                                                                                       \
-    if (!IsRendererBackendAvailable(RendererBackend::Geode) ||                               \
-        !RendererBackendSupportsFeature(RendererBackend::Geode,                              \
-                                        RendererBackendFeature::FilterEffects)) {            \
+#define REQUIRE_CACHING_BACKEND()                                                               \
+  do {                                                                                          \
+    if (!IsRendererBackendAvailable(RendererBackend::Geode) ||                                  \
+        !RendererBackendSupportsFeature(RendererBackend::Geode,                                 \
+                                        RendererBackendFeature::FilterEffects)) {               \
       GTEST_SKIP() << "Filter result caching is implemented by the Geode backend with filters"; \
-    }                                                                                        \
+    }                                                                                           \
   } while (false)
 
 std::unique_ptr<RendererInterface> MakeCachingRenderer() {
@@ -199,17 +198,24 @@ TEST(ExternalUseFilterCacheTest, DisabledCacheRunsTheFilterForEveryOccurrence) {
   }
 }
 
-/// A mutation of the scene after warm frames runs the filter again and renders like a fresh,
-/// uncached render of the same state.
+/// A mutation of the scene after warm frames runs the filter again and renders like a renderer
+/// with the cache disabled that drew the same frames. The uncached oracle repeats the history
+/// rather than rendering fresh, so only the cache differs between the two.
 void ExpectMutationRefilters(FilteredSpriteScene& scene, std::string_view label,
                              const std::function<void(FilteredSpriteScene&)>& mutate) {
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
-  Warm(*renderer, scene, 0);
+  std::unique_ptr<RendererInterface> uncached = MakeCachingRenderer();
+  uncached->setFilterResultCacheEnabled(false);
+  PlaceAll(scene, 0, 1.0);
+  for (int frame = 0; frame < 2; ++frame) {
+    (void)Draw(*renderer, scene);
+    (void)Draw(*uncached, scene);
+  }
   mutate(scene);
   const FrameWork work = Draw(*renderer, scene);
+  (void)Draw(*uncached, scene);
   EXPECT_GE(work.executions, 1u) << label;
-  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(),
-                                       RenderUncached(scene, RendererBackend::Geode), label,
+  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(), label,
                                        editor::tests::PixelmatchIdentityParams());
 }
 
@@ -286,8 +292,7 @@ TEST(ExternalUseFilterCacheTest, EvictedResultsRefilter) {
   for (int i = 0; i < kSprites; ++i) {
     scene->uses[i].setHref(
         RcString(std::string(kExternalResourceUrl) + "#sprite-" + std::to_string(i)));
-    scene->uses[i].setTransform(
-        Transform2d::Translate(Vector2d((i % 12) * 20.0, (i / 12) * 30.0)));
+    scene->uses[i].setTransform(Transform2d::Translate(Vector2d((i % 12) * 20.0, (i / 12) * 30.0)));
   }
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
   const FrameWork first = Draw(*renderer, *scene);

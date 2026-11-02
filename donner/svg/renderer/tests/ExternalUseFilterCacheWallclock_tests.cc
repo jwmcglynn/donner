@@ -23,6 +23,11 @@ namespace donner::svg::tests {
 namespace {
 
 constexpr int kWarmupFrames = 24;
+/// Background sprites in the blurred-background scene.
+constexpr int kBackgroundSprites = 100;
+/// Glowing pieces and lit bevels in the grid scene.
+constexpr int kGlowingPieces = 80;
+constexpr int kBevels = 4;
 constexpr int kMeasuredFrames = 120;
 
 /// Cached frames stay below this fraction of uncached frames on a backend that caches.
@@ -48,8 +53,8 @@ std::optional<AnimatedScene> MakeAnimatedScene(const std::string& hostSource,
   }
   AnimatedScene scene{std::move(*host), {}};
   for (int i = 0; i < useCount; ++i) {
-    scene.uses.push_back(scene.host.document.querySelector("#u" + std::to_string(i))
-                             ->cast<SVGUseElement>());
+    scene.uses.push_back(
+        scene.host.document.querySelector("#u" + std::to_string(i))->cast<SVGUseElement>());
   }
   return scene;
 }
@@ -64,15 +69,20 @@ void AppendVectorShapes(std::ostringstream& out, int sprite, int count) {
   }
 }
 
-/// Twenty blurred background sprites drifting every frame behind three vector sprites, on a
-/// 2x device-scale portrait canvas.
+/// A hundred background sprites of five kinds, each an inner glow then a 5.3 px blur, drifting
+/// every frame behind three vector sprites, on a 2x device-scale portrait canvas.
 std::optional<AnimatedScene> MakeBackgroundBlurScene() {
   std::ostringstream sheet;
   sheet << R"(<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">)";
-  for (int sprite = 0; sprite < 4; ++sprite) {
+  for (int sprite = 0; sprite < 5; ++sprite) {
     sheet << "<g id=\"bg-" << sprite << "\"><filter id=\"bf-" << sprite
           << R"(" x="-50%" y="-50%" width="200%" height="200%">)"
-          << R"(<feGaussianBlur stdDeviation="5.3"/></filter>)"
+          << R"(<feGaussianBlur in="SourceAlpha" stdDeviation="4" result="inset"/>)"
+          << R"(<feComposite in="SourceAlpha" in2="inset" operator="out" result="edge"/>)"
+          << R"(<feFlood flood-color="#ffffff" flood-opacity="0.6"/>)"
+          << R"(<feComposite in2="edge" operator="in" result="rim"/>)"
+          << R"(<feMerge result="lit"><feMergeNode in="SourceGraphic"/><feMergeNode in="rim"/>)"
+          << R"(</feMerge><feGaussianBlur in="lit" stdDeviation="5.3"/></filter>)"
           << "<g filter=\"url(#bf-" << sprite << ")\">";
     AppendVectorShapes(sheet, sprite, 8);
     sheet << "</g></g>";
@@ -85,33 +95,34 @@ std::optional<AnimatedScene> MakeBackgroundBlurScene() {
   sheet << "</svg>";
 
   std::ostringstream host;
-  host << R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1750" viewBox="0 0 400 875">)"
-       << R"(<rect width="400" height="875" fill="#4a7bd0"/>)";
-  for (int i = 0; i < 20; ++i) {
-    host << "<use id=\"u" << i << "\" href=\"sprites.svg#bg-" << i % 4 << "\"/>";
+  host
+      << R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1750" viewBox="0 0 400 875">)"
+      << R"(<rect width="400" height="875" fill="#4a7bd0"/>)";
+  for (int i = 0; i < kBackgroundSprites; ++i) {
+    host << "<use id=\"u" << i << "\" href=\"sprites.svg#bg-" << i % 5 << "\"/>";
   }
-  for (int i = 20; i < 23; ++i) {
-    host << "<use id=\"u" << i << "\" href=\"sprites.svg#fg-" << i - 20 << "\"/>";
+  for (int i = kBackgroundSprites; i < kBackgroundSprites + 3; ++i) {
+    host << "<use id=\"u" << i << "\" href=\"sprites.svg#fg-" << i - kBackgroundSprites << "\"/>";
   }
   host << "</svg>";
-  return MakeAnimatedScene(host.str(), sheet.str(), 23);
+  return MakeAnimatedScene(host.str(), sheet.str(), kBackgroundSprites + 3);
 }
 
 void AdvanceBackgroundBlur(AnimatedScene& scene, int frame) {
-  for (int i = 0; i < 20; ++i) {
-    const double drift = (frame * (0.7 + 0.05 * i));
+  for (int i = 0; i < kBackgroundSprites; ++i) {
+    const double drift = (frame * (0.7 + 0.005 * i));
     scene.uses[i].setTransform(Transform2d::Translate(
         Vector2d(std::fmod(i * 37.0 + drift, 380.0), 20.0 + (i * 41) % 820)));
   }
-  for (int i = 20; i < 23; ++i) {
-    scene.uses[i].setTransform(
-        Transform2d::Translate(Vector2d(60.0 + (frame % 60) * 2.0 + (i - 20) * 90.0, 600.0)));
+  for (int i = kBackgroundSprites; i < kBackgroundSprites + 3; ++i) {
+    scene.uses[i].setTransform(Transform2d::Translate(
+        Vector2d(60.0 + (frame % 60) * 2.0 + (i - kBackgroundSprites) * 90.0, 600.0)));
   }
 }
 
-/// A 9x9 grid of glowing pieces of three kinds on a 3x device-scale portrait canvas. Pieces fall
-/// by translation; every twelfth frame two neighbours swap, growing to 1.25x and back over six
-/// frames.
+/// Eighty glowing pieces of three kinds in a grid on a 3x device-scale portrait canvas, plus four
+/// bevels lit by a lighting filter, which the cache does not take. Pieces fall by translation;
+/// every twelfth frame two neighbours swap, growing to 1.25x and back over six frames.
 std::optional<AnimatedScene> MakeGlowGridScene() {
   std::ostringstream sheet;
   sheet << R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">)";
@@ -124,23 +135,34 @@ std::optional<AnimatedScene> MakeGlowGridScene() {
     AppendVectorShapes(sheet, kind + 8, 6);
     sheet << "</g></g>";
   }
+  sheet << R"(<g id="bevel"><filter id="lit" x="-20%" y="-20%" width="140%" height="140%">)"
+        << R"(<feGaussianBlur in="SourceAlpha" stdDeviation="3" result="height"/>)"
+        << R"(<feDiffuseLighting in="height" surfaceScale="4" result="light">)"
+        << R"(<feDistantLight azimuth="225" elevation="45"/></feDiffuseLighting>)"
+        << R"(<feComposite in="light" in2="SourceAlpha" operator="in" result="shade"/>)"
+        << R"(<feBlend in="SourceGraphic" in2="shade" mode="multiply"/></filter>)"
+        << R"(<g filter="url(#lit)"><rect width="40" height="20" rx="4" fill="#c08040"/></g></g>)";
   sheet << "</svg>";
 
   std::ostringstream host;
-  host << R"(<svg xmlns="http://www.w3.org/2000/svg" width="1206" height="2622" viewBox="0 0 402 874">)"
-       << R"(<rect width="402" height="874" fill="#202040"/>)";
-  for (int i = 0; i < 81; ++i) {
+  host
+      << R"(<svg xmlns="http://www.w3.org/2000/svg" width="1206" height="2622" viewBox="0 0 402 874">)"
+      << R"(<rect width="402" height="874" fill="#202040"/>)";
+  for (int i = 0; i < kGlowingPieces; ++i) {
     host << "<use id=\"u" << i << "\" href=\"sprites.svg#piece-" << i % 3 << "\"/>";
   }
+  for (int i = 0; i < kBevels; ++i) {
+    host << "<use href=\"sprites.svg#bevel\" transform=\"translate(" << 60 + i * 80 << " 800)\"/>";
+  }
   host << "</svg>";
-  return MakeAnimatedScene(host.str(), sheet.str(), 81);
+  return MakeAnimatedScene(host.str(), sheet.str(), kGlowingPieces);
 }
 
 void AdvanceGlowGrid(AnimatedScene& scene, int frame) {
   const int swapStart = frame - frame % 12;
   const int swapFrame = frame % 12;
-  const int swapping = (swapStart / 12 * 7) % 80;
-  for (int i = 0; i < 81; ++i) {
+  const int swapping = (swapStart / 12 * 7) % (kGlowingPieces - 1);
+  for (int i = 0; i < kGlowingPieces; ++i) {
     const double fall = std::fmod(frame * 1.5 + (i % 9) * 3.0, 40.0);
     Transform2d transform =
         Transform2d::Translate(Vector2d(20.0 + (i % 9) * 42.0, 120.0 + (i / 9) * 70.0 + fall));
