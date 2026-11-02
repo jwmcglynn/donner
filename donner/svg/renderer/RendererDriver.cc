@@ -4806,8 +4806,12 @@ std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegi
   components::ExternalUseStyleRetention::PrepareInstance(child);
   prepareSubDocument(subDocument);
   // The instance is laid out relative to the <use> element, so its world space is the use's.
-  return components::ShapeSystem().getTransformedShapeBounds(EntityHandle(child, root),
-                                                             Transform2d());
+  const EntityHandle target(child, root);
+  const std::optional<Box2d> local = components::ShapeSystem().getShapeBounds(target);
+  if (!local) {
+    return std::nullopt;
+  }
+  return components::LayoutSystem().getEntityFromWorldTransform(target).transformBox(*local);
 }
 
 void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
