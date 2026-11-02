@@ -3,6 +3,8 @@
 /// Reuse of an external `<use>` target document's derived state across repeated draws.
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 
 #include "donner/base/EcsRegistry.h"
 
@@ -100,6 +102,23 @@ public:
    * @param entity Element to test.
    */
   static bool IsOccurrenceStyled(const Registry& registry, Entity entity);
+
+  /**
+   * Identifies the style the installed occurrence's subtree currently has, while that subtree is
+   * retained for the occurrence's inputs.
+   *
+   * Every snapshot of occurrence inputs gets an epoch no other snapshot in the process has had, and
+   * a subtree keeps its epoch only while it stays styled for those inputs: any restyle that reaches
+   * it (changed inputs, a style-dirty element, eviction, or a restore) ends the epoch. Equal epochs
+   * on two draws therefore mean the subtree's computed styles were not recomputed in between.
+   * Changes that do not restyle, such as a new path `d`, are not covered; callers combine the epoch
+   * with the document's mutation revision.
+   *
+   * @param registry Referenced document's registry, with its occurrence context installed.
+   * @return The epoch, or `std::nullopt` when the occurrence is not retained (its paint refers to
+   *   the host, or its inputs were not snapshotted).
+   */
+  static std::optional<std::uint64_t> RetainedStyleEpoch(const Registry& registry);
 
   /**
    * Whether any occurrence state is retained, so the document's rendering instances may reflect an

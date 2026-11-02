@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/ExternalUseStyleRetention.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -82,6 +83,9 @@ struct OccurrenceInputs {
   ResolvedPaintServer fill;
   ResolvedPaintServer stroke;
   RetainedStyleCharge charge;
+  /// Identifies these inputs among every snapshot taken in the process; see
+  /// \ref ExternalUseStyleRetention::RetainedStyleEpoch.
+  std::uint64_t epoch = 0;
 
   bool matches(const ExternalUseStyleContext& occurrence) const {
     return occurrence.parent.properties && parent == *occurrence.parent.properties &&
@@ -132,6 +136,10 @@ struct ExternalUseRetainedState {
   Entity unretainedRoot = entt::null;
   std::uint64_t draws = 0;
 };
+
+/// Next value of \ref OccurrenceInputs::epoch. Process-wide, so an epoch is never reused, even by a
+/// document that reuses another's address or by state recreated after a restore.
+std::atomic<std::uint64_t> gNextInputsEpoch{1};
 
 template <typename T>
 T& GetOrEmplaceContext(Registry& registry) {
@@ -212,7 +220,8 @@ std::optional<OccurrenceInputs> SnapshotInputs(Registry& registry,
                           .resourceOpacities = occurrence.parent.resourceOpacities,
                           .fill = occurrence.fill,
                           .stroke = occurrence.stroke,
-                          .charge = RetainedStyleCharge(std::move(family), bytes)};
+                          .charge = RetainedStyleCharge(std::move(family), bytes),
+                          .epoch = gNextInputsEpoch.fetch_add(1, std::memory_order_relaxed)};
 }
 
 /**
@@ -595,6 +604,23 @@ bool ExternalUseStyleRetention::IsOccurrenceStyled(const Registry& registry, Ent
          std::any_of(state->subtrees.begin(), state->subtrees.end(), [&](const RetainedSubtree& s) {
            return IsAncestorOrSelf(registry, s.root, entity);
          });
+}
+
+std::optional<std::uint64_t> ExternalUseStyleRetention::RetainedStyleEpoch(
+    const Registry& registry) {
+  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  const auto* state = registry.ctx().find<ExternalUseRetainedState>();
+  if (occurrence == nullptr || state == nullptr || state->unretainedRoot != entt::null) {
+    return std::nullopt;
+  }
+  const auto retained =
+      std::find_if(state->subtrees.begin(), state->subtrees.end(),
+                   [&](const RetainedSubtree& s) { return s.root == occurrence->root; });
+  if (retained == state->subtrees.end() || !retained->inputs ||
+      !retained->inputs->matches(*occurrence)) {
+    return std::nullopt;
+  }
+  return retained->inputs->epoch;
 }
 
 bool ExternalUseStyleRetention::HasOccurrenceState(const Registry& registry) {
