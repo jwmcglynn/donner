@@ -200,8 +200,8 @@ median frame time over 120 frames on an Apple GPU, cache disabled versus enabled
 
 | Scene | Uncached | Cached |
 | --- | --- | --- |
-| 100 inner-glow blurred background sprites of 5 kinds, drifting, plus 3 vector sprites, 800x1750 | 40.2 ms | 7.4 ms |
-| 80 glowing pieces of 3 kinds falling with swap scaling, plus 4 lit bevels, 1206x2622 | 25.0 ms | 5.9 ms |
+| 100 inner-glow blurred background sprites of 5 kinds, drifting, plus 3 vector sprites, 800x1750 | 37.7 ms | 3.6 ms |
+| 80 glowing pieces of 3 kinds falling with swap scaling, plus 4 lit bevels, 1206x2622 | 22.6 ms | 5.3 ms |
 
 ## Security / Privacy
 
