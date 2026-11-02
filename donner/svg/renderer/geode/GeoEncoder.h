@@ -633,10 +633,14 @@ public:
    * it actually changed (camera/color move), so a static document's
    * steady-state frame writes ~zero bytes and creates zero bind groups.
    *
-   * Residency is taken ONLY for the fast, cacheable case: no active clip
-   * mask, no clip polygon, no open mask pass. When any of those hold the
-   * call transparently falls back to the per-frame arena path (a fresh
-   * per-draw bind group) so clipped / masked draws stay bit-exact.
+   * The slot's own uniform and cached bind group serve only the fast case:
+   * the first unclipped draw of the slot while the frames that recorded it
+   * are open. A clipped draw, or a repeat of the slot in an open frame,
+   * still reads the resident geometry but takes a per-draw uniform and bind
+   * group from the frame arena, so it uploads only its uniform. Only a draw
+   * inside an open mask pass, or one whose geometry cannot be made resident,
+   * falls back to the per-frame arena path for its geometry too. Every form
+   * produces the same pixels.
    *
    * @param slot Persistent residence for this entity's fill or stroke
    *   encode. Must outlive the frame's submit (it does: the ECS component
@@ -646,10 +650,10 @@ public:
    * @param color Solid fill color (NOT premultiplied - premultiplied here,
    *   identically to `fillPath`).
    * @param rule Fill rule.
-   * @param frameId Monotonic frame index. A slot serves at most one
-   *   resident draw per frame (its single uniform buffer cannot hold
-   *   distinct per-instance uniforms); repeat draws in the same frame fall
-   *   back to the arena path.
+   * @param frameId Monotonic frame index. The slot's own uniform serves at
+   *   most one draw per frame (it cannot hold distinct per-draw uniforms);
+   *   repeat draws in the same frame take an arena uniform over the same
+   *   resident geometry.
    */
   void fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded, const css::RGBA& color,
                         FillRule rule, uint64_t frameId);
@@ -871,10 +875,12 @@ public:
    *
    * The slot's combined buffer holds the encoded band/curve/grid data and
    * the 704-byte gradient uniform block; on an unchanged frame the draw
-   * rewrites nothing and reuses the cached 11-binding bind group. Falls
-   * back to the per-frame arena path internally when a clip mask, clip
-   * polygon, or mask pass is active (the cached bind group binds dummy
-   * clip-mask resources, which is only stable when no clip is active).
+   * rewrites nothing and reuses the cached 11-binding bind group. Under a
+   * clip mask or clip polygon, or for a repeat in an open frame, the draw
+   * keeps the resident geometry and takes a per-draw uniform and bind group
+   * from the frame arena (the cached bind group binds dummy clip-mask
+   * resources and the slot's single uniform). Inside an open mask pass it
+   * falls back to the per-frame arena path.
    *
    * @param slot Resident gradient slot for this entity's fill.
    * @param encoded Precomputed encode from the cached-path encode cache.

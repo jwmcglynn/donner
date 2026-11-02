@@ -517,11 +517,6 @@ TEST_F(GeoEncoderTest, IllConditionedShearStillRasterizesHalfPixelHalo) {
   EXPECT_THAT(pixelAt(pixels, 32, 35), RgbaEq(0, 0, 0, 0));
 }
 
-/// Record-slab slots use GLOBAL indices across chunks while byte offsets are
-/// per-buffer. After the slab grows, a freed slot from a later chunk must
-/// resolve back to its exact original buffer and buffer-relative offset;
-/// resolving the global index as a raw byte offset would alias another live
-/// slot's storage and two entities would share one record.
 /// How a repeated draw of one encoded path reaches the GPU, for the pixel comparisons below.
 enum class RepeatForm {
   Arena,     //!< Every draw re-uploads its geometry to the per-frame arenas.
@@ -640,6 +635,11 @@ TEST_F(GeoEncoderTest, ResidentRepeatAndClippedDrawsMatchTheArenaPath) {
   }
 }
 
+/// Record-slab slots use GLOBAL indices across chunks while byte offsets are
+/// per-buffer. After the slab grows, a freed slot from a later chunk must
+/// resolve back to its exact original buffer and buffer-relative offset;
+/// resolving the global index as a raw byte offset would alias another live
+/// slot's storage and two entities would share one record.
 /// entt removes a component mid-pool by move-assigning the LAST component
 /// over the removed slot (swap-and-pop). The move must transfer the record
 /// slot and its owning slab: if the moved-from component kept them, its

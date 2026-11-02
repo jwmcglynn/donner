@@ -2274,8 +2274,9 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   // slots through one binding and build their own whole-chunk bind group with chunk-relative bases
   // in each instance record.
   //
-  // Residence is only taken with no active clip, so the clip-mask slot is always the identity
-  // coverage dummy - bound directly so the cached bind group is deterministic. A solo resident
+  // The cached bind group serves only unclipped draws (a clipped draw binds its own coverage in a
+  // per-draw group over the same ranges), so the clip-mask slot is always the identity coverage
+  // dummy - bound directly so the cached bind group is deterministic. A solo resident
   // draw reads its paint from the slot's uniform, so the record binding only has to supply the
   // vertex stage's identity transform; binding the shared identity record keeps this slot out of
   // the record slab entirely. The paint block binds on the same tight-range terms, so the
@@ -3296,7 +3297,8 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
 void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
   const gpu::BufferRef buf = slot.buffer;
 
-  // Residence is admitted only without clipping, so the cached group uses the dummy mask.
+  // The cached group serves only unclipped draws, so it binds the dummy mask; a clipped draw binds
+  // its coverage in a per-draw group over the same ranges.
   const auto region = [&buf](uint32_t binding, const GeodeResidentGradientSlot::Region& r) {
     return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
   };
