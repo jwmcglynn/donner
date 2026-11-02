@@ -275,15 +275,9 @@ TEST(ExternalUseFilterCacheTest, ScalingAnOccurrenceRefilters) {
   REQUIRE_CACHING_BACKEND();
   std::optional<FilteredSpriteScene> scene = MakeScene(2);
   ASSERT_TRUE(scene.has_value());
-  // Re-running the unscaled sprite's blur after another occurrence's larger, scaled filter ran in
-  // the same frames moves a few dozen pixels by one level, cache or not, so the cached and
-  // uncached frames are held to the suite's default per-pixel threshold here.
-  ExpectMutationRefilters(
-      *scene, "scaled-occurrence",
-      [](FilteredSpriteScene& s) {
-        s.uses[1].setTransform(Transform2d::Scale(1.5) * Transform2d::Translate(Vector2d(90, 60)));
-      },
-      editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
+  ExpectMutationRefilters(*scene, "scaled-occurrence", [](FilteredSpriteScene& s) {
+    s.uses[1].setTransform(Transform2d::Scale(1.5) * Transform2d::Translate(Vector2d(90, 60)));
+  });
 }
 
 TEST(ExternalUseFilterCacheTest, RotatingAnOccurrenceRefilters) {
@@ -541,12 +535,9 @@ TEST(ExternalUseFilterCacheTest, SymbolUsesOfDifferentSizesKeepSeparateResults) 
     (void)Draw(*uncached, *scene);
   }
   EXPECT_GT(hits, 0u);
-  // The uncached renderer runs the blur again each frame, and a rerun can differ from the first
-  // run by one level in a few dozen pixels (see the design's open questions), so the comparison
-  // uses the suite's default per-pixel threshold.
   editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(),
                                        "symbol-viewports",
-                                       editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(ExternalUseFilterCacheTest, ChangingTheSheetStylesheetRefilters) {

@@ -240,7 +240,7 @@ and a process-unique epoch, so results never cross documents or outlive a docume
     `setHref` retarget, a `currentColor` change on the host, a `<use>` width and height change on
     a symbol, a sheet `<style>` change, a gradient stop change, and a style retention eviction
     each run the filter again and match a renderer with the cache disabled that drew the same
-    frames, exactly except the scale case (see Open Questions);
+    frames, exactly;
   - more distinct sprites than the cache holds do not evict each other, stale sprites are evicted
     for new ones, and an evicted sprite runs again;
   - a continuously changing scale records nothing, and the held scale records once;
@@ -258,12 +258,6 @@ and a process-unique epoch, so results never cross documents or outlive a docume
 
 ## Open Questions
 
-- Re-running a blur in a later frame can differ from an earlier run of the same content by one
-  level in a few dozen pixels, with or without the cache, after other filters used the pooled
-  textures in between. A cached result shows its first run, so the scale and symbol cases are held
-  to the default per-pixel threshold. The suspected cause is a filter pass reading texels of a
-  reused texture that the pass did not write; that would make uncached output depend on texture
-  history and is worth fixing at the engine.
 - Whether same-document `<use>` instances should get an equivalent content signal.
 
 ## Future Work
