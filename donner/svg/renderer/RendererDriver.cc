@@ -1677,9 +1677,9 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
   // Determine the bounds reference for resolving percentages.
   const Box2d shapeBounds =
-      objectBounds ? *objectBounds
-                   : RenderingObjectBoundingBox(registry, instance.styleHandle(registry))
-                         .value_or(Box2d());
+      objectBounds
+          ? *objectBounds
+          : RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -3287,10 +3287,10 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
     const std::optional<Box2d> elementBounds = filterObjectBoundingBox(registry, entity);
-    std::optional<std::vector<components::FilterGraph>> stages = resolveFilterStages(
-        registry, instance->resolvedFilter.value(), *instance,
-        style.properties->color.get().value().rgba(), filterViewBox, filterFontMetrics,
-        elementBounds);
+    std::optional<std::vector<components::FilterGraph>> stages =
+        resolveFilterStages(registry, instance->resolvedFilter.value(), *instance,
+                            style.properties->color.get().value().rgba(), filterViewBox,
+                            filterFontMetrics, elementBounds);
     if (!stages) {
       continue;
     }
@@ -4775,7 +4775,8 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
 
 std::optional<Box2d> RendererDriver::filterObjectBoundingBox(Registry& registry, Entity entity) {
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-  std::optional<Box2d> bounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+  std::optional<Box2d> bounds =
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
   const auto externalUses = registry.view<const components::ExternalUseComponent>();
   if (externalUses.begin() == externalUses.end()) {
     return bounds;
@@ -4783,8 +4784,7 @@ std::optional<Box2d> RendererDriver::filterObjectBoundingBox(Registry& registry,
   const Entity lastEntity =
       instance.subtreeInfo ? instance.subtreeInfo->lastRenderedEntity : entity;
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
-  for (const Entity descendant :
-       CollectMainEntities(registry, std::pair(entity, lastEntity))) {
+  for (const Entity descendant : CollectMainEntities(registry, std::pair(entity, lastEntity))) {
     const std::optional<Box2d> content = externalUseContentBounds(registry, descendant);
     if (!content) {
       continue;
@@ -4805,8 +4805,7 @@ std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegi
   if (externalUse == nullptr || !externalUse->subDocument || externalUse->fragment.empty()) {
     return std::nullopt;
   }
-  const auto& style =
-      instance.styleHandle(hostRegistry).get<components::ComputedStyleComponent>();
+  const auto& style = instance.styleHandle(hostRegistry).get<components::ComputedStyleComponent>();
   SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
   const auto access = subDocument.writeAccess();
   Registry& child = subDocument.registry();
