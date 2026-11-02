@@ -427,6 +427,25 @@ TEST_F(SubmitStalenessTests, IntactSceneSubmits) {
   EXPECT_THAT(device_.submit(std::move(commands)), HasResult());
 }
 
+TEST_F(SubmitStalenessTests, ValidSubmissionFormatsNoDiagnostics) {
+  CommandBuffer commands = recordScene();
+  const uint64_t before = Device::submissionDiagnosticsFormattedForTest();
+  EXPECT_THAT(device_.submit(std::move(commands)), HasResult());
+  EXPECT_THAT(Device::submissionDiagnosticsFormattedForTest(), Eq(before))
+      << "a submission that passes validation must not build error strings";
+}
+
+TEST_F(SubmitStalenessTests, RefusedSubmissionFormatsItsDiagnostic) {
+  CommandBuffer commands = recordScene();
+  ASSERT_THAT(device_.destroyBuffer(std::move(uniformBuffer_)), IsOk());
+  const uint64_t before = Device::submissionDiagnosticsFormattedForTest();
+  EXPECT_THAT(device_.submit(std::move(commands)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidHandle,
+                                    AllOf(HasSubstr("bind group \"solidUniforms\" entry binding 0"),
+                                          HasSubstr("destroyed buffer"))));
+  EXPECT_THAT(Device::submissionDiagnosticsFormattedForTest(), testing::Gt(before));
+}
+
 TEST_F(SubmitStalenessTests, DestroyedVertexBufferRejectsSubmit) {
   CommandBuffer commands = recordScene();
   ASSERT_THAT(device_.destroyBuffer(std::move(vertexBuffer_)), IsOk());

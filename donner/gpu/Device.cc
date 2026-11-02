@@ -2292,17 +2292,44 @@ Result<uint64_t> Device::submit(std::span<CommandBuffer> commandBuffers) {
   return serial;
 }
 
+namespace {
+
+/// Submission-validation diagnostics formatted so far; see
+/// \ref Device::submissionDiagnosticsFormattedForTest.
+std::atomic<uint64_t> gSubmissionDiagnosticsFormatted{0};
+
+void CountSubmissionDiagnostic() {
+  gSubmissionDiagnosticsFormatted.fetch_add(1, std::memory_order_relaxed);
+}
+
+}  // namespace
+
+std::string Device::SubmissionContext::describe() const {
+  CountSubmissionDiagnostic();
+  if (!bindGroupLabel.has_value()) {
+    return std::string(operation);
+  }
+  if (!binding.has_value()) {
+    return std::format("bind group \"{}\"", *bindGroupLabel);
+  }
+  return std::format("bind group \"{}\" entry binding {}", *bindGroupLabel, *binding);
+}
+
+uint64_t Device::submissionDiagnosticsFormattedForTest() {
+  return gSubmissionDiagnosticsFormatted.load(std::memory_order_relaxed);
+}
+
 template <typename Record>
 Result<const Record*> Device::checkSubmissionResource(const details::SlotTable<Record>& table,
                                                       const ResourceIdentity& identity,
                                                       ResourceKind kind,
                                                       std::string_view resourceName,
-                                                      std::string_view context,
+                                                      const SubmissionContext& context,
                                                       std::vector<SubmissionUse>& uses) const {
   const Record* record = table.find(identity.slotIndex, identity.generation);
   if (record == nullptr) {
     return GpuError{GpuErrorType::InvalidHandle,
-                    std::format("submit: {} references destroyed {} (slot {})", context,
+                    std::format("submit: {} references destroyed {} (slot {})", context.describe(),
                                 resourceName, identity.slotIndex)};
   }
   uses.push_back(SubmissionUse{kind, identity.slotIndex});
@@ -2310,7 +2337,7 @@ Result<const Record*> Device::checkSubmissionResource(const details::SlotTable<R
 }
 
 Status Device::checkSubmissionTextureView(const ResourceIdentity& viewIdentity,
-                                          std::string_view context,
+                                          const SubmissionContext& context,
                                           std::vector<SubmissionUse>& uses) const {
   auto viewRecord = checkSubmissionResource(textureViews_, viewIdentity, ResourceKind::TextureView,
                                             TextureViewTag::kName, context, uses);
@@ -2346,17 +2373,16 @@ Status Device::checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
   if (groupRecord.hasError()) {
     return std::move(groupRecord).error();
   }
+  const RcString& label = groupRecord.result()->descriptor.label;
+  const std::string_view groupLabel(label.data(), label.size());
   auto layoutRecord = checkSubmissionResource(
       bindGroupLayouts_, groupRecord.result()->layoutIdentity, ResourceKind::BindGroupLayout,
-      BindGroupLayoutTag::kName,
-      std::format("bind group \"{}\"", groupRecord.result()->descriptor.label.str()), uses);
+      BindGroupLayoutTag::kName, SubmissionContext(groupLabel, std::nullopt), uses);
   if (layoutRecord.hasError()) {
     return std::move(layoutRecord).error();
   }
   for (const BindGroupEntry& entry : groupRecord.result()->descriptor.entries) {
-    const std::string context =
-        std::format("bind group \"{}\" entry binding {}",
-                    groupRecord.result()->descriptor.label.str(), entry.binding);
+    const SubmissionContext context(groupLabel, entry.binding);
     if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
       const ResourceIdentity bufferIdentity{bufferBinding->buffer.slotIndex(),
                                             bufferBinding->buffer.generation()};

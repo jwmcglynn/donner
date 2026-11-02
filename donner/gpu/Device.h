@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -920,6 +921,10 @@ public:
   /// Serial assigned to the most recent submission (0 if none yet).
   uint64_t lastSubmittedSerial() const { return lastSubmittedSerial_; }
 
+  /// Number of submission-validation diagnostics this process has formatted, on any device. A
+  /// valid submission formats none, so this only grows when a submission is refused. Test seam.
+  [[nodiscard]] static uint64_t submissionDiagnosticsFormattedForTest();
+
   /// Serial of the most recent submission the backend has finished executing (0 if none). The
   /// recording backend completes instantly, so this equals \ref lastSubmittedSerial there.
   virtual uint64_t completedSerial() const = 0;
@@ -1672,6 +1677,36 @@ private:
    */
   Status checkSubmissionMappings(std::span<const SubmissionUse> uses) const;
 
+  /**
+   * What a recorded command reached a resource through, for a submission error message. Holds
+   * only views and numbers, and is formatted only when validation refuses the submission, so a
+   * valid submission builds no strings.
+   */
+  struct SubmissionContext {
+    /// Recorded operation, e.g. `recorded setPipeline`, or empty for a bind group's own parts.
+    std::string_view operation;
+    /// Label of the bind group the resource was reached through, when it was.
+    std::optional<std::string_view> bindGroupLabel;
+    /// Entry binding within that bind group, when the resource is an entry's.
+    std::optional<uint32_t> binding;
+
+    /// A context naming only \p operation. @param operation Recorded operation.
+    constexpr SubmissionContext(std::string_view operation)  // NOLINT(google-explicit-constructor)
+        : operation(operation) {}
+
+    /// A context naming only \p operation, a string literal. @param operation Recorded operation.
+    constexpr SubmissionContext(const char* operation)  // NOLINT(google-explicit-constructor)
+        : operation(operation) {}
+
+    /// A bind group's layout or one of its entries.
+    /// @param label Bind group label. @param entryBinding Entry binding, if any.
+    SubmissionContext(std::string_view label, std::optional<uint32_t> entryBinding)
+        : bindGroupLabel(label), binding(entryBinding) {}
+
+    /// The description used in the error message.
+    std::string describe() const;
+  };
+
   /// Resolves one recorded identity against \p table and records it in \p uses, failing closed
   /// with \ref GpuErrorType::InvalidHandle when the slot has been destroyed or reused.
   /// @param table Table owning the resource kind.
@@ -1684,7 +1719,7 @@ private:
   Result<const Record*> checkSubmissionResource(const details::SlotTable<Record>& table,
                                                 const ResourceIdentity& identity, ResourceKind kind,
                                                 std::string_view resourceName,
-                                                std::string_view context,
+                                                const SubmissionContext& context,
                                                 std::vector<SubmissionUse>& uses) const;
 
   /// Resolves a recorded texture view plus the texture behind it: a view of a destroyed texture
@@ -1692,7 +1727,8 @@ private:
   /// @param viewIdentity Recorded view slot and generation.
   /// @param context Description of what referenced the view, for the error message.
   /// @param uses Accumulator of resources referenced by the submission.
-  Status checkSubmissionTextureView(const ResourceIdentity& viewIdentity, std::string_view context,
+  Status checkSubmissionTextureView(const ResourceIdentity& viewIdentity,
+                                    const SubmissionContext& context,
                                     std::vector<SubmissionUse>& uses) const;
 
   /// Resolves every attachment view of a recorded render pass.
