@@ -1014,9 +1014,13 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
   return details::QuerySelectorSearch(selector, handle_.resolve());
 }
 
+void SVGElement::restoreStandaloneState() const {
+  components::ExternalUseStyleRetention::RestoreStandalone(*handle_.registry());
+}
+
 const PropertyRegistry& SVGElement::getComputedStyle() const {
-  DocumentWriteAccess access = handle_.writeAccess();
-  components::ExternalUseStyleRetention::RestoreStandalone(access.registry());
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStyleComponent& computedStyle =
       components::StyleSystem().computeStyle(handle_, disabledSink);

@@ -10,6 +10,7 @@ namespace donner::svg {
 
 double SVGGeometryElement::computedPathLength() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (const components::ComputedPathComponent* path =
           components::ShapeSystem().createComputedPathIfShape(handle_, FontMetrics(),
@@ -40,6 +41,7 @@ void SVGGeometryElement::setPathLength(std::optional<double> value) {
 
 std::optional<Path> SVGGeometryElement::computedSpline() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (const components::ComputedPathComponent* computedPath =
           components::ShapeSystem().createComputedPathIfShape(handle_, FontMetrics(),
@@ -52,6 +54,7 @@ std::optional<Path> SVGGeometryElement::computedSpline() const {
 
 std::optional<Box2d> SVGGeometryElement::worldBounds() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   return components::ShapeSystem().getShapeWorldBounds(handle_);
 }
 
