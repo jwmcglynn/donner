@@ -498,7 +498,6 @@ TEST(SubDocumentFiltersTest, NestedExternalUsesUnderBoxEffects) {
   ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-nested");
 }
 
-
 /// An feImage that draws an external `<use>` keeps its offscreen copy of that use out of the box of
 /// an unrelated element earlier in the document, on every frame. The offscreen copy numbers its
 /// own draw order from zero, so its `<use>` could land inside the early group's draw-order range.
@@ -511,7 +510,8 @@ TEST(SubDocumentFiltersTest, FeImageExternalContentStaysOutOfOtherBoxes) {
            "<filter id='paste' filterUnits='userSpaceOnUse' x='16' y='0' width='16' height='16'>"
            "<feImage href='#frag'/></filter><g id='frag'><rect width='1' height='1' "
            "fill='none'/><rect width='1' height='1' fill='none'/><use href='" +
-           std::string(farReference) + "' transform='translate(-4 -20)'/></g></defs>"
+           std::string(farReference) +
+           "' transform='translate(-4 -20)'/></g></defs>"
            "<rect width='32' height='32' fill='#ffffff'/>"
            "<g filter='url(#mark)'><rect x='2' y='2' width='6' height='6' fill='#2050d0'/></g>"
 
