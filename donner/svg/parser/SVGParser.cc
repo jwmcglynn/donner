@@ -831,11 +831,8 @@ public:
     std::ostringstream ss;
     ss << "Retaining element <" << name << "> with an unsupported namespace as unknown. "
        << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix << "'";
-    ParseDiagnostic warning = ParseDiagnostic::Warning(RcString(ss.str()), FileOffset::Offset(0));
-    if (auto sourceOffset = child.sourceStartOffset()) {
-      warning.range.start = sourceOffset.value();
-    }
-    context_.addWarning(std::move(warning));
+    context_.addWarning(ParseDiagnostic::Warning(
+        RcString(ss.str()), child.sourceStartOffset().value_or(FileOffset::Offset(0))));
     return false;
   }
 

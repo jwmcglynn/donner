@@ -618,10 +618,12 @@ TEST(SVGParser, MismatchedNamespace) {
 
     EXPECT_THAT(
         warnings.warnings(),
-        ElementsAre(AllOf(ParseErrorPos(2, 13),
-                          testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
-                          ParseErrorIs("Retaining element <path> with an unsupported namespace as "
-                                       "unknown. Expected 'svg', found ''"))));
+        ElementsAre(AllOf(
+            ParseErrorPos(2, 13),
+            ParseErrorRange(mismatchedXmlnsXml.find("<path"), mismatchedXmlnsXml.find("<path")),
+            testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
+            ParseErrorIs("Retaining element <path> with an unsupported namespace as "
+                         "unknown. Expected 'svg', found ''"))));
   }
 
   {

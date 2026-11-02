@@ -72,9 +72,8 @@ public:
      * to be irrelevant; whole-tree attribute checks then cannot see them.
      *
      * This option omits only unprefixed, non-presentation (user) attributes. Attributes in another
-     * XML namespace, such
-     * as `app:origin` under a declared `xmlns:app`, always stay on the tree without an SVG
-     * interpretation.
+     * XML namespace, such as `app:origin` under a declared `xmlns:app`, always stay on the tree
+     * without an SVG interpretation.
      */
     bool disableUserAttributes = false;
 
