@@ -4784,10 +4784,13 @@ void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
   std::unordered_set<entt::id_type>* hostFeImageGuard =
       std::exchange(feImageFragmentGuard_, nullptr);
   prepareFilterGraphs(registry, entities);
-  RenderingInstanceView view(registry, entities);
   if (firstEntity == entt::null) {
+    RenderingInstanceView view(registry, entities);
     traverse(view, registry);
   } else {
+    // A range draw reads paint-server content that sorts after the range from the view, so it walks
+    // the live render tree, created after preparation may have reordered it.
+    RenderingInstanceView view(registry);
     traverseRange(view, registry, firstEntity, lastEntity);
   }
   feImageFragmentGuard_ = hostFeImageGuard;
