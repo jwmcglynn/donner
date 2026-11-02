@@ -1561,19 +1561,6 @@ bool IsUnpresentedDefinition(const Registry& registry, Entity entity) {
   return false;
 }
 
-bool IsDormantDefinitionUse(Registry& registry, Entity entity,
-                            const ShadowTreeComponent& shadowTree) {
-  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
-  if (hostType == nullptr || hostType->type() != ElementType::Use) {
-    return false;
-  }
-  const std::optional<RcString> href = shadowTree.mainHref();
-  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
-    return false;
-  }
-  return IsUnpresentedDefinition(registry, entity);
-}
-
 void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
@@ -1619,6 +1606,19 @@ void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSin
 }
 
 }  // namespace
+
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree) {
+  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
+  if (hostType == nullptr || hostType->type() != ElementType::Use) {
+    return false;
+  }
+  const std::optional<RcString> href = shadowTree.mainHref();
+  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
+    return false;
+  }
+  return IsUnpresentedDefinition(registry, entity);
+}
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
