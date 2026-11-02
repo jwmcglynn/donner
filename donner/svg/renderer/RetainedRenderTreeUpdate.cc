@@ -61,10 +61,13 @@ bool DocumentAllowsRetainedUpdate(const Registry& registry) {
          !HasFeImageShadowTrees(registry);
 }
 
-DocumentFacts CollectDocumentFacts(const Registry& registry) {
+/// Collect \ref DocumentFacts; the shadow-tree sources only when \p withShadowSources is set.
+DocumentFacts CollectDocumentFacts(const Registry& registry, bool withShadowSources) {
   DocumentFacts facts;
-  for (const auto& [entity, shadowEntity] : registry.view<const ShadowEntityComponent>().each()) {
-    facts.shadowSources.insert(shadowEntity.lightEntity);
+  if (withShadowSources) {
+    for (const auto& [entity, shadowEntity] : registry.view<const ShadowEntityComponent>().each()) {
+      facts.shadowSources.insert(shadowEntity.lightEntity);
+    }
   }
   facts.hasTextPaths = !registry.view<const TextPathComponent>().empty();
   return facts;
@@ -125,7 +128,16 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
   if (!DocumentAllowsRetainedUpdate(registry)) {
     return std::nullopt;
   }
-  const DocumentFacts facts = CollectDocumentFacts(registry);
+  // Refuse any other change before scanning the document's shadow trees, which only an element's
+  // own change needs.
+  bool ownChanges = false;
+  for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
+    if ((dirty.flags & ~kRetainedFlags) != 0) {
+      return std::nullopt;
+    }
+    ownChanges |= Has(dirty.flags, kOwnChangeFlags);
+  }
+  const DocumentFacts facts = CollectDocumentFacts(registry, ownChanges);
   RetainedUpdatePlan plan;
   for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
     if (!PlanDirtyEntity(registry, entity, dirty.flags, facts, plan)) {

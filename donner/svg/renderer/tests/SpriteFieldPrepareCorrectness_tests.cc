@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
@@ -76,11 +77,22 @@ std::size_t EditedUses(int frame) {
   return edited;
 }
 
-/// Renders the warm-up frames of a field and returns it, or records a failure.
+/**
+ * Renders the warm-up frames of a field and returns it, or records a failure. Every sprite of
+ * every sheet is drawn once first: a sheet grows the first time one of its sprites is drawn, and a
+ * grown sheet is rightly admitted again on its next retarget.
+ */
 std::optional<SpriteFieldScene> WarmField(Renderer& renderer) {
   std::optional<SpriteFieldScene> scene = MakeSpriteFieldScene(kField);
   if (!scene) {
     return std::nullopt;
+  }
+  for (int sprite = 0; sprite < kField.spritesPerSheet; ++sprite) {
+    for (int i = 0; i < kField.sprites; ++i) {
+      scene->uses[i].setHref(RcString("sheet-" + std::to_string(i % kField.sheets) +
+                                      ".svg#sprite-" + std::to_string(sprite)));
+    }
+    renderer.draw(scene->document);
   }
   for (int frame = 0; frame < kWarmFrames; ++frame) {
     AdvanceSpriteField(*scene, frame);
