@@ -8403,6 +8403,149 @@ TEST_F(RendererGeodeTest, CachedResultOfAbandonedFrameIsNotReused) {
   EXPECT_GT(PixelAt(bitmap, 32, 32)[3], 128);
 }
 
+/// One renderer drawing a cacheable blurred sprite through the cache entry point.
+class CachedSpriteFixture {
+public:
+  explicit CachedSpriteFixture(std::shared_ptr<geode::GeodeDevice> device)
+      : renderer(std::move(device)) {
+    key.document = owner;
+    key.filterRegion = region;
+  }
+
+  /// Draws the sprite once in the open frame.
+  CachedFilterLayerResult draw() {
+    renderer.setTransform(Transform2d::Translate(Vector2d(8, 8)));
+    const CachedFilterLayerResult result = renderer.pushCachedFilterLayer(key, graph, region);
+    if (result == CachedFilterLayerResult::Pushed) {
+      renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+      renderer.drawRect(Box2d({12, 12}, {36, 36}), StrokeParams{});
+      renderer.popFilterLayer();
+    }
+    renderer.setTransform(Transform2d());
+    return result;
+  }
+
+  void beginFrame() {
+    RenderViewport viewport;
+    viewport.size = Vector2d(64, 64);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+  }
+
+  /// Records the sprite: the second miss of a frame admits it, and the frame's end commits it.
+  void warm() {
+    beginFrame();
+    (void)draw();
+    (void)draw();
+    renderer.endFrame();
+  }
+
+  const Box2d region = Box2d({4, 4}, {44, 44});
+  RendererGeode renderer;
+  const components::FilterGraph graph = CacheBlurGraph(2.0);
+  std::shared_ptr<int> owner = std::make_shared<int>(0);
+  FilterResultContentKey key;
+};
+
+// Trimming the texture pool below its idle level also frees held filter results, so an app that
+// trims when it is hidden gives back their memory too. An idle-only trim keeps them.
+TEST_F(RendererGeodeTest, TextureTrimDropsCachedFilterResults) {
+  for (const RendererGeodeTexturePoolTrim level :
+       {RendererGeodeTexturePoolTrim::ToFloor, RendererGeodeTexturePoolTrim::All}) {
+    SCOPED_TRACE(static_cast<int>(level));
+    std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+    ASSERT_TRUE(device);
+    CachedSpriteFixture sprite(device);
+    sprite.warm();
+    ASSERT_EQ(sprite.renderer.resourceStats().filterResultCacheEntries, 1u);
+
+    sprite.renderer.trimTexturePool(RendererGeodeTexturePoolTrim::IdleOnly);
+    EXPECT_EQ(sprite.renderer.resourceStats().filterResultCacheEntries, 1u)
+        << "An idle-only trim of an active renderer must keep its results.";
+
+    sprite.renderer.trimTexturePool(level);
+    EXPECT_EQ(sprite.renderer.resourceStats().filterResultCacheEntries, 0u);
+    EXPECT_EQ(sprite.renderer.resourceStats().filterResultCacheBytes, 0u);
+    EXPECT_EQ(sprite.renderer.failedFilterTextureCountForTesting(), 0u)
+        << "Results dropped between frames go back to the pool, not to the failure retention.";
+    if (level == RendererGeodeTexturePoolTrim::All) {
+      EXPECT_EQ(sprite.renderer.texturePoolStats().textureCount, 0u)
+          << "A full trim frees the dropped results' textures with the pool's.";
+    }
+
+    sprite.beginFrame();
+    EXPECT_EQ(sprite.draw(), CachedFilterLayerResult::Pushed)
+        << "A trimmed result must be filtered again.";
+    sprite.renderer.endFrame();
+    const RendererBitmap bitmap = sprite.renderer.takeSnapshot();
+    ASSERT_FALSE(bitmap.empty());
+    EXPECT_GT(PixelAt(bitmap, 32, 32)[3], 128);
+  }
+}
+
+// A renderer that begins no frame for the pool's idle decay drops its held results, on the pool's
+// clock, at its next frame or idle-only trim.
+TEST_F(RendererGeodeTest, IdleRendererDropsCachedFilterResults) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_TRUE(device);
+  auto now = std::make_shared<std::chrono::steady_clock::time_point>(
+      std::chrono::steady_clock::time_point{});
+  const auto advance = [&](std::chrono::milliseconds by) { *now += by; };
+
+  {
+    CachedSpriteFixture sprite(device);
+    sprite.renderer.setTexturePoolClockForTesting([now] { return *now; });
+    sprite.warm();
+    advance(std::chrono::milliseconds(1900));
+    sprite.beginFrame();
+    EXPECT_EQ(sprite.draw(), CachedFilterLayerResult::Drawn)
+        << "A pause shorter than the idle decay keeps the result.";
+    sprite.renderer.endFrame();
+
+    advance(std::chrono::milliseconds(2100));
+    sprite.beginFrame();
+    EXPECT_EQ(sprite.draw(), CachedFilterLayerResult::Pushed)
+        << "A pause longer than the idle decay drops the result before the next frame.";
+    sprite.renderer.endFrame();
+  }
+  {
+    CachedSpriteFixture sprite(device);
+    sprite.renderer.setTexturePoolClockForTesting([now] { return *now; });
+    sprite.warm();
+    advance(std::chrono::milliseconds(2100));
+    sprite.renderer.trimTexturePool(RendererGeodeTexturePoolTrim::IdleOnly);
+    EXPECT_EQ(sprite.renderer.resourceStats().filterResultCacheEntries, 0u)
+        << "An idle-only trim after the idle decay drops held results.";
+  }
+}
+
+// Results a frame recorded but never submitted are dropped at the next frame. When nothing the
+// frame recorded reached the queue, their textures go back to the pool rather than being retained
+// for the renderer's life; after a mid-frame split they may have, so they are retained.
+TEST_F(RendererGeodeTest, UnfinishedFrameRecyclesUnsubmittedResults) {
+  for (const bool split : {false, true}) {
+    SCOPED_TRACE(split ? "split" : "unsplit");
+    std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+    ASSERT_TRUE(device);
+    CachedSpriteFixture sprite(device);
+    sprite.beginFrame();
+    (void)sprite.draw();
+    (void)sprite.draw();
+    ASSERT_EQ(sprite.renderer.resourceStats().filterResultCacheRecords, 1u);
+    if (split) {
+      // The return value reports whether the budget can begin a chunk, which says nothing here.
+      (void)sprite.renderer.submitFilterBudgetChunkForTesting();
+      ASSERT_FALSE(sprite.renderer.deviceLost());
+    }
+    // The next frame begins without an endFrame for this one.
+    sprite.beginFrame();
+    EXPECT_EQ(sprite.renderer.resourceStats().filterResultCacheEntries, 0u);
+    EXPECT_EQ(sprite.renderer.failedFilterTextureCountForTesting(), split ? 1u : 0u);
+    EXPECT_EQ(sprite.draw(), CachedFilterLayerResult::Pushed);
+    sprite.renderer.endFrame();
+  }
+}
+
 // Recording a result never takes from the frame's surface budget: under a tight budget, a frame
 // that caches draws every filter an uncached frame draws.
 TEST_F(RendererGeodeTest, CacheRecordsDoNotStarveLaterFilters) {

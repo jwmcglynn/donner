@@ -148,10 +148,14 @@ take the transformed local-raster path (skew, or rotation with an anisotropic bl
 A cached result is valid for any translation. What changes with the translation's fraction of a
 pixel is how the content's edges were rasterized. Two placements are used:
 
-- A result whose final primitive is a Gaussian blur of at least one device pixel in each axis,
-  with no primitive subregion of its own and whose three-deviation reach from the element's
-  bounding box stays inside the filter region, is resampled bilinearly at the exact new offset. A
-  blur the region or a subregion clips has a hard edge, so it is treated like the next case. Its detail is already low-passed, so bilinear
+- A result whose final primitive is a Gaussian blur of at least one device pixel in each axis is
+  resampled bilinearly at the exact new offset when three conditions keep it free of hard edges:
+  the blur has no primitive subregion of its own; it reads SourceGraphic or SourceAlpha directly
+  or through per-pixel primitives only (color matrices and component transfers without
+  subregions), so its input stays inside the content's painted bounds; and its three-deviation
+  reach from those bounds, strokes included, stays inside the filter region. A blur that a region
+  or subregion clips, or whose input an offset, morphology or flood could carry to the edge, is
+  treated like the next case. A qualifying blur's detail is already low-passed, so bilinear
   resampling moves each channel by a few levels at most, and the result lands exactly where the
   uncached one would.
 - Any other result, such as a glow that keeps the sharp source over its halo, is kept per
@@ -194,12 +198,22 @@ instead of evicting each other every frame.
 ### Budget and eviction
 
 The index holds at most 64 results and at most a quarter of the frame surface budget's byte
-limit (64 MiB at the default limit). Held results are outside the per-frame charge, so they never
+limit, capped at 64 MiB on native builds and 16 MiB in WebAssembly builds. Held results sit on top
+of the texture pool, whose WebAssembly ceiling is 96 MiB, and a phone browser may reclaim a tab
+whose GPU memory grows; 16 MiB still holds about 100 results of 200x200 pixels. Held results are outside the per-frame charge, so they never
 refuse a filter or another surface in a frame; a result is recorded only while the frame's budget
 still has room for four times its bytes, and recording reserves nothing from it. Evicted textures may
 still be sampled by the frame's recorded commands, so they return to the texture pool only after
 the frame is submitted, or are retained when its submission is uncertain. A lost device drops
 every result; disabling the cache drops them immediately.
+
+Held results follow the texture pool's memory controls. `trimTexturePool` with `ToFloor` or `All`
+drops every held result before trimming, so their textures are freed with the pool's. A renderer
+that begins no frame for the pool's two-second idle decay drops its held results at its next frame
+or trim. Results of a document that is gone are dropped at each frame and trim; the weak document
+identity in the key makes that a scan of at most 64 entries. A frame left unfinished returns the
+results it recorded to the pool unless it split its submission, when they are retained like other
+textures whose submission is uncertain.
 
 ### Composition with occurrence state
 
@@ -248,10 +262,15 @@ and a process-unique epoch, so results never cross documents or outlive a docume
     for fractional motion of a blur that fades inside its region; a bucketed result (a glow, or a
     blur clipped by the default region) moved within its bucket equals the uncached render at
     the recorded translation moved by whole pixels exactly, and differs from the render at the
-    actual translation only within 0.1 over at most 64 edge pixels.
+    actual translation only within 0.1 over at most 64 edge pixels;
+  - a blur after an feOffset that moves the content to the region's edge, and a blur of a wide
+    stroke that reaches it, are kept per bucket rather than resampled.
 - `//donner/svg/renderer/tests:renderer_geode_tests` cases: a result recorded in a frame that is
   abandoned before submission is not reused, and under a tight surface budget a caching frame
-  draws every filter an uncached frame draws.
+  draws every filter an uncached frame draws; a texture trim to the floor or to nothing drops held
+  results and an idle-only trim keeps them; an idle renderer drops them on the pool's clock; and a
+  frame left unfinished returns its unsubmitted results to the pool unless it split its
+  submission.
 - `//donner/svg/renderer/tests:external_use_sprite_tests_wallclock` (manual, perf): blurred
   background sprites and a grid of glowing pieces with swap scaling, cached versus uncached.
 - Correctness tests assert counts and pixels only, never timing.

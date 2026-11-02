@@ -3414,12 +3414,16 @@ std::optional<FilterResultContentKey> RendererDriver::cacheableFilterContent(
     return std::nullopt;
   }
   std::vector<Entity> pending{entity};
+  // A filtered descendant can paint past its own geometry, so its stroke bounds would understate
+  // the content's reach.
+  bool filteredDescendant = false;
   while (!pending.empty()) {
     const Entity element = pending.back();
     pending.pop_back();
     if (!isCacheableFilteredElement(registry, element, element == entity)) {
       return std::nullopt;
     }
+    filteredDescendant |= element != entity && preparedFilterStagesFor(element) != nullptr;
     for (Entity child = registry.get<donner::components::TreeComponent>(element).firstChild();
          child != entt::null;
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
@@ -3431,7 +3435,12 @@ std::optional<FilterResultContentKey> RendererDriver::cacheableFilterContent(
   key.filterRegion = graph.filterRegion;
   key.primitiveViewport = graph.primitiveViewport;
   key.userToPixelScale = graph.userToPixelScale;
-  key.contentBounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+  // Painted bounds, strokes included: a stroke reaches past the geometry by half its width, and a
+  // blur whose reach is measured from the geometry alone could meet the region's edge unseen.
+  // Cacheable content draws no text, markers or masks, so the stroke bounds cover what it paints.
+  if (!filteredDescendant) {
+    key.contentBounds = components::ShapeSystem().getStrokeBounds(instance.styleHandle(registry));
+  }
   return key;
 }
 

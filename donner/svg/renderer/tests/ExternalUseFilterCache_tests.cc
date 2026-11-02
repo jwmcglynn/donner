@@ -40,6 +40,12 @@ enum class SpriteFilter {
   BlurDefaultRegion,
   /// A blur merged under the sharp source graphic, kept per quarter-pixel offset.
   Glow,
+  /// The roomy region's blur after an feOffset that moves the content toward the region's edge, so
+  /// the blur reaches it and is clipped; kept per quarter-pixel offset.
+  OffsetBlur,
+  /// The roomy region's blur of content whose wide stroke reaches past its geometry far enough
+  /// that the blur meets the region's edge; kept per quarter-pixel offset.
+  StrokedBlur,
 };
 
 constexpr int kHostWidth = 256;
@@ -52,12 +58,16 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
   for (int sprite = 0; sprite < spriteCount; ++sprite) {
     out << "<g id=\"sprite-" << sprite << "\">";
     out << "<filter id=\"filter-" << sprite << "\"";
-    if (filter == SpriteFilter::Blur) {
+    if (filter == SpriteFilter::Blur || filter == SpriteFilter::OffsetBlur ||
+        filter == SpriteFilter::StrokedBlur) {
       out << R"( x="-150%" y="-150%" width="400%" height="400%")";
     } else if (filter == SpriteFilter::Glow) {
       out << R"( x="-50%" y="-50%" width="200%" height="200%")";
     }
     out << ">";
+    if (filter == SpriteFilter::OffsetBlur) {
+      out << R"(<feOffset dx="12"/>)";
+    }
     if (filter != SpriteFilter::Glow) {
       out << "<feGaussianBlur id=\"blur-" << sprite << "\" stdDeviation=\"5.3\"/>";
     } else {
@@ -69,7 +79,9 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
     out << "<g filter=\"url(#filter-" << sprite << ")\">";
     out << "<circle id=\"dot-" << sprite << "\" cx=\"16\" cy=\"16\" r=\"" << 6 + sprite % 5
         << R"(" fill="#c040a0"/>)";
-    out << R"(<rect x="8" y="20" width="16" height="6" fill="currentColor"/>)";
+    out << R"(<rect x="8" y="20" width="16" height="6" fill="currentColor")"
+        << (filter == SpriteFilter::StrokedBlur ? R"( stroke="#208040" stroke-width="20")" : "")
+        << "/>";
     out << "</g></g>";
   }
   out << "</svg>";
@@ -479,6 +491,22 @@ TEST(ExternalUseFilterCacheTest, GlowHitIsTheRecordedResultMovedByWholePixels) {
 TEST(ExternalUseFilterCacheTest, ClippedBlurHitIsTheRecordedResultMovedByWholePixels) {
   REQUIRE_CACHING_BACKEND();
   ExpectBucketedHitIsTheRecordedResultMoved(SpriteFilter::BlurDefaultRegion, "clipped-blur");
+}
+
+// The blur's reach from the content's bounds fits the region, but an feOffset ahead of it moves
+// the content so the blur meets the region's edge. Only primitives that keep each pixel in place
+// may precede a resampled blur, so this result is kept per bucket and fractional motion inside a
+// bucket does not soften the clipped edge.
+TEST(ExternalUseFilterCacheTest, OffsetThenBlurNearRegionEdgeIsKeptPerBucket) {
+  REQUIRE_CACHING_BACKEND();
+  ExpectBucketedHitIsTheRecordedResultMoved(SpriteFilter::OffsetBlur, "offset-blur");
+}
+
+// The blur's reach from the geometry fits the region, but a wide stroke paints past the geometry
+// and the blur of it meets the region's edge. The reach is measured from the painted bounds.
+TEST(ExternalUseFilterCacheTest, StrokedBlurNearRegionEdgeIsKeptPerBucket) {
+  REQUIRE_CACHING_BACKEND();
+  ExpectBucketedHitIsTheRecordedResultMoved(SpriteFilter::StrokedBlur, "stroked-blur");
 }
 
 /// A scene from custom sources, with the uses `use-0` through `use-<occurrences - 1>`.

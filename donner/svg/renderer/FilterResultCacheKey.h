@@ -46,8 +46,9 @@ struct FilterResultContentKey {
   std::optional<Box2d> primitiveViewport;
   /// User-space to pixel-space scale the filter graph was configured with.
   Vector2d userToPixelScale = Vector2d(1.0, 1.0);
-  /// Bounding box of the filtered element in its user space, which tells a backend how far the
-  /// graph's reach stays inside the filter region. Determined by the content, so not compared.
+  /// Painted bounds of the filtered element in its user space, strokes included, which tell a
+  /// backend how far the graph's reach stays inside the filter region. Unset when they are not
+  /// known, such as under a filtered descendant. Determined by the content, so not compared.
   std::optional<Box2d> contentBounds;
 
   /// Whether \p other names the same content. False when either document is gone.

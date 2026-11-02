@@ -201,6 +201,11 @@ When rendering stops, give that memory back with `RendererGeode::trimTexturePool
 A device that renders nothing for two seconds (no frame begins and no frame finishes) also
 returns to the 64 MiB floor at its next frame or trim. Textures a frame is using are never freed by a trim.
 
+Cached filter results (see `RendererInterface::setFilterResultCacheEnabled`) are held beside the
+pool, up to 64 MiB on native builds and 16 MiB in WebAssembly builds. `ToFloor` and `All` drop
+them before trimming, and a renderer that begins no frame for two seconds drops them at its next
+frame or trim.
+
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 
 Logical contexts over one root share its `DeviceLostState`. Runtime backends

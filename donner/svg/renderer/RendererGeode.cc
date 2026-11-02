@@ -970,6 +970,18 @@ public:
     lastActivityTime_ = clock_();
   }
 
+  /// The time on the clock idle decay reads, so caches beside the pool decay on the same clock.
+  [[nodiscard]] std::chrono::steady_clock::time_point now() const {
+    std::lock_guard lock(mutex_);
+    return clock_();
+  }
+
+  /// A device with no frame beginning and no texture returned for this long forgets its working
+  /// set: the next frame or trim drops the budget to the floor and evicts free textures beyond it.
+  /// Returns at the end of a frame count as activity, so a renderer whose frames take longer, or
+  /// one that renders on demand, keeps its pool across pauses shorter than this.
+  static constexpr std::chrono::seconds kIdleWorkingSetDecay{2};
+
   [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
     std::lock_guard lock(mutex_);
     RendererGeodeTexturePoolStats result;
@@ -1068,12 +1080,6 @@ private:
 #else
   static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 256u * 1024u * 1024u;
 #endif
-  // A device with no frame beginning and no texture returned for this long forgets its working
-  // set: the next frame or trim drops the budget to the floor and evicts free textures beyond it.
-  // Returns at the end of a frame count as activity, so a renderer whose frames take longer, or
-  // one that renders on demand, keeps its pool across pauses shorter than this.
-  static constexpr std::chrono::seconds kIdleWorkingSetDecay{2};
-
   void forgetWorkingSetAfterIdle() {
     if (clock_() - lastActivityTime_ < kIdleWorkingSetDecay) {
       return;
@@ -1849,6 +1855,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameCommandBuffers.empty()) {
       return true;  // Nothing was split, so there is no edge to wait across.
     }
+    frameMadeChunkSubmission = true;
     if (!submitFrameCommandBuffers()) {
       return false;
     }
@@ -2737,9 +2744,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   };
 
   /// Filter results kept across frames, keyed by content and placement. The cache holds at most a
-  /// quarter of the frame surface budget's byte limit (and at most 64 MiB) of results, outside the
-  /// per-frame charge, so held results never refuse a filter or other surface in a frame.
+  /// quarter of the frame surface budget's byte limit, and at most
+  /// \ref kMaximumFilterResultCacheBytes, of results outside the per-frame charge, so held results
+  /// never refuse a filter or other surface in a frame. It empties when the texture pool is
+  /// trimmed below its idle level and when this renderer begins no frame for the pool's idle
+  /// decay.
   FilterResultCacheIndex<FilterResultPayload> filterResultCache;
+  /// Most bytes of held filter results. Native builds allow the index's 64 MiB. Browsers on phones
+  /// reclaim a tab whose GPU process grows, and held results sit on top of the texture pool's
+  /// 96 MiB Wasm ceiling, so Wasm keeps 16 MiB: about 100 sprite results of 200x200 pixels.
+#ifdef __EMSCRIPTEN__
+  static constexpr std::uint64_t kMaximumFilterResultCacheBytes = 16ULL * 1024 * 1024;
+#else
+  static constexpr std::uint64_t kMaximumFilterResultCacheBytes =
+      FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes;
+#endif
+  /// Pool clock time of this renderer's last frame that prepared the cache.
+  std::optional<std::chrono::steady_clock::time_point> lastFilterResultFrameTime;
+  /// Whether the open frame split its submission, so work it recorded may have reached the queue.
+  bool frameMadeChunkSubmission = false;
   bool filterResultCacheEnabled = true;
   /// This renderer's frame number, for cache admission and eviction.
   std::uint64_t filterResultFrame = 0;
@@ -2779,14 +2802,38 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Settle the results this frame recorded: durable once the frame's work was submitted, dropped
   /// when it was abandoned or its submission failed, since their copies may never have run.
-  void settleFrameFilterResults(bool submitted) {
+  /// Dropped textures go back to the pool unless \p submissionUncertain, when commands naming
+  /// them may have reached the queue.
+  void settleFrameFilterResults(bool submitted, bool submissionUncertain = true) {
     if (submitted) {
       filterResultCache.commitPending();
       return;
     }
     for (FilterResultPayload& payload : filterResultCache.dropPending()) {
-      retireFilterTexture({std::move(payload.texture), payload.desc},
-                          /*submissionUncertain=*/true);
+      retireFilterTexture({std::move(payload.texture), payload.desc}, submissionUncertain);
+    }
+  }
+
+  /// Drop every held result. Outside a frame nothing can still sample them, so their textures go
+  /// back to the pool at once; inside one they go back after the frame submits.
+  void dropFilterResults() {
+    retireFilterResults(filterResultCache.clear());
+    if (!frameRecordingOpen) {
+      drainRetiredFilterResults(/*submissionUncertain=*/false);
+    }
+  }
+
+  /// Drop every held result when this renderer began no frame for the pool's idle decay, like the
+  /// pool forgetting its working set, and the results of documents that are gone.
+  void dropIdleFilterResults() {
+    retireFilterResults(filterResultCache.dropExpired());
+    if (texturePool && lastFilterResultFrameTime.has_value() &&
+        texturePool->now() - *lastFilterResultFrameTime >=
+            RendererGeodeTexturePool::kIdleWorkingSetDecay) {
+      retireFilterResults(filterResultCache.clear());
+    }
+    if (!frameRecordingOpen) {
+      drainRetiredFilterResults(/*submissionUncertain=*/false);
     }
   }
 
@@ -2798,8 +2845,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       retireFilterResults(filterResultCache.clear());
       return;
     }
-    retireFilterResults(filterResultCache.dropExpired());
-    retireFilterResults(filterResultCache.setByteLimit(surfaceBudget->limitBytes() / 4));
+    dropIdleFilterResults();
+    if (texturePool) {
+      lastFilterResultFrameTime = texturePool->now();
+    }
+    retireFilterResults(filterResultCache.setByteLimit(
+        std::min(surfaceBudget->limitBytes() / 4, kMaximumFilterResultCacheBytes)));
   }
 
   /// Whether a filter layer pushed now may draw from or record into the cache: a top-level layer
@@ -2831,6 +2882,66 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
            bounds.bottomRight.y + reachY <= region.bottomRight.y;
   }
 
+  /// Index of the node whose result node \p index of \p graph reads, or nullopt when it reads a
+  /// standard input or a name no earlier node produces. Sets \p readsSource when the input is
+  /// SourceGraphic or SourceAlpha, explicitly or as the first primitive's implicit input.
+  static std::optional<std::size_t> FilterInputProducer(const components::FilterGraph& graph,
+                                                        std::size_t index, bool& readsSource) {
+    readsSource = false;
+    const components::FilterNode& node = graph.nodes[index];
+    if (node.inputs.empty() ||
+        std::holds_alternative<components::FilterInput::Previous>(node.inputs.front().value)) {
+      readsSource = index == 0;
+      return index == 0 ? std::nullopt : std::optional<std::size_t>(index - 1);
+    }
+    const components::FilterInput::Type& input = node.inputs.front().value;
+    if (const auto* standard = std::get_if<components::FilterStandardInput>(&input)) {
+      readsSource = *standard == components::FilterStandardInput::SourceGraphic ||
+                    *standard == components::FilterStandardInput::SourceAlpha;
+      return std::nullopt;
+    }
+    const auto& named = std::get<components::FilterInput::Named>(input);
+    for (std::size_t candidate = index; candidate-- > 0;) {
+      if (graph.nodes[candidate].result == named.name) {
+        return candidate;
+      }
+    }
+    return std::nullopt;
+  }
+
+  /// Whether \p node maps each pixel to itself, without a subregion that could clip it.
+  static bool IsPerPixelFilterNode(const components::FilterNode& node) {
+    const bool perPixel =
+        std::holds_alternative<components::filter_primitive::ColorMatrix>(node.primitive) ||
+        std::holds_alternative<components::filter_primitive::ComponentTransfer>(node.primitive);
+    return perPixel && node.inputs.size() <= 1 && !node.hasExplicitRegion() &&
+           !node.hasAnimatedRegion();
+  }
+
+  /// Whether the final blur of \p graph reads SourceGraphic or SourceAlpha through per-pixel
+  /// primitives only (color matrices and component transfers, with no subregions). Those keep the
+  /// blur's input inside the content's painted bounds, which is what lets
+  /// \ref BlurStaysInsideFilterRegion measure the blur's reach from those bounds. A primitive that
+  /// moves, grows or floods its input, or a fill or stroke paint input, can reach the region's
+  /// edge however the content sits.
+  static bool BlurReadsSourceThroughPerPixelPrimitives(const components::FilterGraph& graph) {
+    std::size_t index = graph.nodes.size() - 1;
+    if (graph.nodes[index].inputs.size() > 1) {
+      return false;
+    }
+    while (true) {
+      bool readsSource = false;
+      const std::optional<std::size_t> producer = FilterInputProducer(graph, index, readsSource);
+      if (!producer) {
+        return readsSource;
+      }
+      if (!IsPerPixelFilterNode(graph.nodes[*producer])) {
+        return false;
+      }
+      index = *producer;
+    }
+  }
+
   /// Fractional translation buckets per device pixel for results whose edges stay sharp.
   static constexpr int kFilterResultFractionBuckets = 4;
 
@@ -2853,6 +2964,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const bool smooth =
         blur != nullptr && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
         blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0 &&
+        BlurReadsSourceThroughPerPixelPrimitives(graph) &&
         BlurStaysInsideFilterRegion(graph.nodes.back(), *blur, content.contentBounds, filterRegion);
     if (!smooth) {
       const auto bucket = [](double translation) {
@@ -5892,8 +6004,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       drainPendingReleases();
     }
     drainRetiredFilterResults(frameRecordingAbandoned);
-    // Results recorded by a frame that never ended were never submitted.
-    settleFrameFilterResults(/*submitted=*/false);
+    // Results recorded by a frame that never ended were never submitted. Unless the frame split its
+    // submission, nothing it recorded reached the queue, so their textures are free to reuse.
+    settleFrameFilterResults(
+        /*submitted=*/false,
+        /*submissionUncertain=*/frameRecordingAbandoned || frameMadeChunkSubmission);
+    frameMadeChunkSubmission = false;
     filterResultCacheHits = 0;
     filterResultCacheRecords = 0;
     filterResultCacheEvictions = 0;
@@ -6287,6 +6403,12 @@ RendererGeodeTexturePoolStats RendererGeode::texturePoolStats() const {
 }
 
 void RendererGeode::trimTexturePool(RendererGeodeTexturePoolTrim level) {
+  // Held filter results go first, so the trim below also frees the textures they return.
+  if (level == RendererGeodeTexturePoolTrim::IdleOnly) {
+    impl_->dropIdleFilterResults();
+  } else {
+    impl_->dropFilterResults();
+  }
   if (impl_->texturePool) {
     impl_->texturePool->trim(level);
   }

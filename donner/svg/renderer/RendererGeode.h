@@ -555,11 +555,16 @@ public:
    * `visibilitychange` to hidden) or the platform reports memory pressure. A device that renders
    * nothing for two seconds also returns to the floor at its next frame or trim.
    *
+   * `ToFloor` and `All` also drop this renderer's cached filter results (see
+   * `setFilterResultCacheEnabled`) before trimming, so their textures are freed with the rest;
+   * `IdleOnly` drops them only when this renderer began no frame for the same two seconds.
+   *
    * @param level How much to free.
    */
   void trimTexturePool(RendererGeodeTexturePoolTrim level);
 
-  /// Replace the clock the texture pool's idle decay reads, for a test.
+  /// Replace the clock the texture pool's idle decay reads, for a test. The filter result cache's
+  /// idle decay reads the same clock.
   void setTexturePoolClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock);
 
   /**
