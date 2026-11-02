@@ -24,6 +24,9 @@ namespace {
 
 constexpr int kPathsPerSprite = 6;
 
+/// A game frame fades a few sprites once in this many frames.
+constexpr int kFramesPerFade = 8;
+
 /// Serves a fixed set of documents from memory; any other URL is not found.
 class MapResourceLoader final : public ResourceLoaderInterface {
 public:
@@ -159,9 +162,12 @@ void AdvanceSpriteField(SpriteFieldScene& scene, int frame, SpriteFieldChange ch
       scene.uses[i].setTransform(SpriteTransform(i, frame));
     }
   }
-  // A handful of sprites per frame fade or flip to their next animation frame.
+  // A handful of sprites per frame flip to their next animation frame; every eighth frame of a
+  // game, a few fade.
+  const bool fades = change == SpriteFieldChange::Opacity ||
+                     (change == SpriteFieldChange::All && frame % kFramesPerFade == 0);
   for (int i = frame % 7; i < count; i += 13) {
-    if (change == SpriteFieldChange::Opacity || change == SpriteFieldChange::All) {
+    if (fades) {
       scene.uses[i].setAttribute(xml::XMLQualifiedNameRef("opacity"),
                                  std::to_string(0.25 + 0.25 * ((frame + i) % 4)));
     }

@@ -16,17 +16,15 @@ namespace donner::svg::components {
  * The work a retained update performs, collected while checking that a frame's dirty set
  * qualifies for one.
  *
- * A dirty set qualifies when every change only moves content (a transform write), changes how it
- * is composited (an `opacity` write) or points an external `<use>` at another external instance.
- * None of these changes any input of the computed styles of other elements, the shadow trees, the
- * computed paths, text layout, paint servers or filter graphs, so those are kept, and the render
- * instances are rebuilt from them. Anything else, or any case where one of these changes could
- * reach a computed component (for example a moved element that a shadow tree clones, or that a
+ * A dirty set qualifies when every change only moves content (a transform write) or points an
+ * external `<use>` at another external instance. Neither changes any input of the computed
+ * styles, the shadow trees, the computed paths, text layout, paint servers or filter graphs, so
+ * those are kept, and the render instances are rebuilt from them. Anything else, or any case where
+ * one of these changes could reach a computed component (for example a moved element that a shadow
+ * tree clones, or that a
  * `<textPath>` follows), takes the full rebuild.
  */
 struct RetainedUpdatePlan {
-  /// Whether any entity needs its style recomputed through the selective style pass.
-  bool restyle = false;
   /// Entities whose computed layout was dropped by a transform write.
   std::vector<Entity> layoutEntities;
   /// External `<use>` elements that were retargeted to another external instance.

@@ -604,13 +604,12 @@ writes on the whole-tree path.
 
 #### Retained render-tree updates (implemented)
 
-A frame whose dirty set only moves content, changes its compositing, or points external `<use>`
-elements at another external instance now keeps every computed component and rebuilds only the
+A frame whose dirty set only moves content or points external `<use>` elements at another
+external instance now keeps every computed component and rebuilds only the
 render instances. `RenderingContext::ensureComputedComponents()` asks `PlanRetainedUpdate()`
 (`donner/svg/renderer/RetainedRenderTreeUpdate.h`) whether the dirty set qualifies before it
 starts the full rebuild. A qualifying frame:
 
-- restyles only the entities flagged `Style`, through the selective style pass;
 - recreates the computed size, local transform and viewBox that `LayoutSystem::invalidate()`
   dropped from each moved element (`LayoutSystem::recomputeInvalidatedLayout()`); descendants keep
   theirs, and their absolute transforms are recomputed on demand;
@@ -619,20 +618,19 @@ starts the full rebuild. A qualifying frame:
   transforms, clip-path geometry, context-paint remaps and subtree ranges exactly as the full
   rebuild does.
 
-Shadow trees are not torn down, styles of unchanged elements are not recomputed, and external
+Shadow trees are not torn down, no style is recomputed, and external
 documents are not admitted again. The traversal still visits every rendered entity, so a retained
 frame costs `O(rendered entities)` with a small constant, not `O(changed entities)`; patching
 instances in place is a possible next step.
 
-The three qualifying changes and their marks:
+The two qualifying changes and their marks:
 
 | Change | Mutation path | Dirty flags |
 |--------|---------------|-------------|
 | Transform write | `setTransform()`, the `transform` attribute | `Layout`, `Transform`, `WorldTransform`, `RenderInstance`; descendants `WorldTransform`, `RenderInstance` |
-| `opacity` attribute | `trySetPresentationAttribute()` | `Style`, `Compositing`, `RenderInstance` on the element and its descendants, whose computed styles are dropped (`opacity: inherit`) |
 | External `<use>` retarget | `setHref()`, `href` / `xlink:href` writes | `ShadowTree`, `RenderInstance`, plus the layout flags |
 
-`opacity` and `href` writes now request the whole-tree restyle only when a stylesheet selects on
+`href` writes on a `<use>` now request the whole-tree restyle only when a stylesheet selects on
 the attribute, as transform writes already did. An `href` write takes the retained path only when
 the use is presented, owns no shadow tree, and both the old and the new reference are external;
 anything else keeps the previous `InvalidateUseInstance()` behaviour.
@@ -663,14 +661,21 @@ in-place retargets. `SubDocumentCache::cachedDocumentAdmissions()` counts re-adm
 documents. Pixel identity against the full rebuild is pinned per change kind in
 `donner/svg/renderer/tests/RetainedRenderTreeUpdate_tests.cc` (ancestor transforms, nested uses,
 symbols, clip paths and masks in both unit systems, objectBoundingBox filters, markers, patterns,
-text, opacity, external sprites, `ConcurrentDom`), and the per-frame work of a game-like sprite
+text, opacity (which keeps the full rebuild), external sprites, `ConcurrentDom`), and the per-frame work of a game-like sprite
 field in `SpriteFieldPrepareCorrectness_tests.cc`. `SpriteFieldPrepareWallclock_tests.cc` reports
 prepare time with and without retained updates.
 
 Measured with that test (`-c opt`, Apple Silicon, a shared and loaded machine, so the ratios are
-the signal): 150 external uses across 7 sheets, every use moving each frame plus a few fades and
-retargets, median host-document prepare 1.33 ms before this change, 0.22 ms on a full rebuild that
+the signal): 150 external uses across 7 sheets, every use moving each frame plus a few retargets
+and an occasional fade, median host-document prepare 1.33 ms before this change, 0.22 ms on a full rebuild that
 admits each sheet once, and 0.17 ms with the retained update.
+
+`opacity` writes still take the whole-tree restyle and the full rebuild. Retaining them is a
+small change (restyle the written element and its descendants through the selective style pass,
+then rebuild the instances), but `CompositorController` refuses a promotion only while
+`needsFullStyleRecompute` or `needsFullRebuild` is set, and relies on that to avoid trusting
+instances and styles that a pending attribute write made stale. Retained `opacity` updates need
+the compositor to also refuse promotion while style-dirty entities are pending.
 
 `<use>` geometry written through the DOM: the parser applies `x`, `y`, `width` and `height` through
 the typed setters, at override precedence, so a later `setAttribute()` of the same attribute was

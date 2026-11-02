@@ -299,16 +299,16 @@ constexpr std::string_view kOpacityScene = R"svg(
     <use id="faded-use" href="#tile" x="50" y="50"/>
   </svg>)svg";
 
-TEST(RetainedRenderTreeUpdateTest, OpacityMatchesFullRebuild) {
+TEST(RetainedRenderTreeUpdateTest, OpacityTakesTheFullRebuild) {
   ExpectSourceFramesMatchFullRebuild(kOpacityScene,
                                      Both(SetOpacity("#faded"), SetOpacity("#faded-use")),
-                                     ExpectedPath::Retained, "opacity");
+                                     ExpectedPath::FullRebuild, "opacity");
 }
 
-TEST(RetainedRenderTreeUpdateTest, OpacityAndMovesMatchFullRebuild) {
+TEST(RetainedRenderTreeUpdateTest, OpacityWithMovesTakesTheFullRebuild) {
   ExpectSourceFramesMatchFullRebuild(kOpacityScene,
                                      Both(SetOpacity("#faded"), MoveElement("#faded")),
-                                     ExpectedPath::Retained, "opacity-move");
+                                     ExpectedPath::FullRebuild, "opacity-move");
 }
 
 TEST(RetainedRenderTreeUpdateTest, OpacitySelectorsTakeTheFullRebuild) {
@@ -334,7 +334,8 @@ TEST(RetainedRenderTreeUpdateTest, AnimatedDocumentsTakeTheFullRebuild) {
 }
 
 /// Sprite-field scene: \p change is applied to two copies of a small field.
-void ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange change, std::string_view label) {
+void ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange change, std::string_view label,
+                                             ExpectedPath expected = ExpectedPath::Retained) {
   constexpr SpriteFieldOptions kField{.sprites = 16, .sheets = 3, .spritesPerSheet = 5};
   std::optional<SpriteFieldScene> retained = MakeSpriteFieldScene(kField);
   std::optional<SpriteFieldScene> reference = MakeSpriteFieldScene(kField);
@@ -344,16 +345,16 @@ void ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange change, std::stri
     SpriteFieldScene& scene = document == retained->document ? *retained : *reference;
     AdvanceSpriteField(scene, frame, change);
   };
-  ExpectFramesMatchFullRebuild(retained->document, reference->document, advance,
-                               ExpectedPath::Retained, label);
+  ExpectFramesMatchFullRebuild(retained->document, reference->document, advance, expected, label);
 }
 
 TEST(RetainedRenderTreeUpdateTest, MovingExternalUsesMatchFullRebuild) {
   ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange::Move, "sprite-move");
 }
 
-TEST(RetainedRenderTreeUpdateTest, FadingExternalUsesMatchFullRebuild) {
-  ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange::Opacity, "sprite-opacity");
+TEST(RetainedRenderTreeUpdateTest, FadingExternalUsesTakeTheFullRebuild) {
+  ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange::Opacity, "sprite-opacity",
+                                          ExpectedPath::FullRebuild);
 }
 
 TEST(RetainedRenderTreeUpdateTest, RetargetedExternalUsesMatchFullRebuild) {
@@ -372,7 +373,7 @@ TEST(RetainedRenderTreeUpdateTest, ConcurrentDomFramesMatchFullRebuild) {
   retained.setThreadingMode(ThreadingMode::ConcurrentDom);
   reference.setThreadingMode(ThreadingMode::ConcurrentDom);
   ExpectFramesMatchFullRebuild<DriverRenderer>(
-      retained, reference, Both(SetOpacity("#faded"), MoveElement("#faded-use")),
+      retained, reference, Both(MoveElement("#faded"), MoveElement("#faded-use")),
       ExpectedPath::Retained, "concurrent-dom");
 }
 
