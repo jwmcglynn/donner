@@ -781,13 +781,28 @@ bool HasAnyComponent(const Registry& registry) {
   }());
 }
 
+/// Whether \p registry holds a component that makes its rendering depend on a font: constant
+/// time, the first half of \ref RendersNothingFontDependent.
+bool HasFontDependentComponents(const Registry& registry) {
+  return HasAnyComponent<TextComponent, TextRootComponent, ComputedTextComponent,
+                         ComputedTextGeometryComponent, FontMetricDependenciesComponent,
+                         FontPaintDependenciesComponent, LoadedSVGImageComponent,
+                         ExternalUseComponent>(registry);
+}
+
+/// Work units of the filter and render-tree scan in \ref RendersNothingFontDependent, charged
+/// like any other collection work so repeated shortcut answers stay within the ceiling.
+std::size_t FontIndependenceScanWork(const Registry& registry) {
+  const auto* filters = registry.storage<ComputedFilterComponent>();
+  const auto* instances = registry.storage<RenderingInstanceComponent>();
+  return (filters != nullptr ? filters->size() : 0u) +
+         (instances != nullptr ? instances->size() : 0u) + 1u;
+}
+
 }  // namespace
 
 bool RendersNothingFontDependent(const Registry& registry) {
-  if (HasAnyComponent<TextComponent, TextRootComponent, ComputedTextComponent,
-                      ComputedTextGeometryComponent, FontMetricDependenciesComponent,
-                      FontPaintDependenciesComponent, LoadedSVGImageComponent,
-                      ExternalUseComponent>(registry)) {
+  if (HasFontDependentComponents(registry)) {
     return false;
   }
   if (const auto* filters = registry.storage<ComputedFilterComponent>()) {
@@ -828,6 +843,11 @@ FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentH
   if (purpose == FontResourceGraph::Purpose::RenderedFrame &&
       !HasCompletedCurrentScope(document->registry())) {
     return {.needsRender = true};
+  }
+  if (!HasFontDependentComponents(document->registry())) {
+    if (!reserve(FontIndependenceScanWork(document->registry()))) {
+      return {.resourceLimit = true};
+    }
   }
   if (RendersNothingFontDependent(document->registry())) {
     ++stats_->fontIndependentCollections;

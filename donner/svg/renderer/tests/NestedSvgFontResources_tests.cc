@@ -401,7 +401,10 @@ TEST(NestedSvgFontResourcesTest, RepeatedChildTargetsReuseCollectionWithinOnePre
 
 TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregateCeiling) {
   constexpr int kTargets = 512;
-  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  // The text keeps every collection on the dependency graph: a document with nothing
+  // font-dependent is answered without one (see the test below).
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text>t</text>)";
   for (int i = 0; i < kTargets; ++i) {
     source += "<rect id='r" + std::to_string(i) + "' width='1' height='1'/>";
   }
@@ -426,6 +429,33 @@ TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregate
   EXPECT_GT(work.targetCollections, 1u);
   EXPECT_LT(work.targetCollections, kTargets);
   EXPECT_LE(work.work, components::FontResourceGraphCache::kMaximumWork);
+}
+
+TEST(NestedSvgFontResourcesTest, FontIndependentTargetsAreAnsweredWithinTheCeilingWithoutAGraph) {
+  constexpr int kTargets = 512;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (int i = 0; i < kTargets; ++i) {
+    source += "<rect id='r" + std::to_string(i) + "' width='1' height='1'/>";
+  }
+  source += "</svg>";
+  auto parsed = ParseDocument(source);
+  ASSERT_TRUE(parsed.has_value());
+  testing::NiceMock<tests::MockRendererInterface> backend;
+  RendererDriver driver(backend);
+  driver.draw(*parsed);
+  components::FontResourceGraphCache::Stats work;
+  components::FontResourceGraphCache cache(&work);
+  for (int i = 0; i < kTargets; ++i) {
+    const auto target = parsed->querySelector("#r" + std::to_string(i));
+    ASSERT_TRUE(target.has_value());
+    const auto collection = cache.collect(parsed->handle(), target->unsafeEntityHandle().entity());
+    EXPECT_TRUE(collection.dependencies.empty());
+    EXPECT_FALSE(collection.resourceLimit);
+  }
+  EXPECT_EQ(work.graphBuilds, 0u);
+  EXPECT_EQ(work.fontIndependentCollections, static_cast<std::size_t>(kTargets));
+  EXPECT_GT(work.work, 0u) << "the shortcut's scan is charged against the ceiling";
+  EXPECT_FALSE(work.resourceLimit);
 }
 
 TEST(NestedSvgFontResourcesTest, TwoStandaloneRangesCannotQualifyAWholeDocument) {

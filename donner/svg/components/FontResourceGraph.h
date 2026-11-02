@@ -141,7 +141,8 @@ private:
  * function list naming an element (a fragment the collection reports as unprepared). Such a
  * document's font dependency collection has no dependencies and nothing unprepared for every
  * target, whatever its revision, so it is answered without building the dependency graph.
- * Constant time apart from a scan of the document's filters and rendering instances.
+ * Constant time apart from a scan of the document's filters and rendering instances, which a
+ * \ref FontResourceGraphCache charges against its work ceiling.
  *
  * @param registry Prepared document registry.
  */
