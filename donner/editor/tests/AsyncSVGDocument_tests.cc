@@ -273,8 +273,8 @@ TEST(AsyncSVGDocumentTest, CapturedMouseBudgetRejectsTheWholeSnapshot) {
 
 TEST(AsyncSVGDocumentTest, SuccessfulParsePublishesWarnings) {
   constexpr std::string_view kSvgWithWarning = R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" xmlns:unused="urn:unexpected">
-      <rect width="10" height="10"/>
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect undeclared:attr="1" width="10" height="10"/>
     </svg>)svg";
   AsyncSVGDocument doc;
 

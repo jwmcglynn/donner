@@ -80,10 +80,9 @@ text stay in sync without a full document reparse.
 ## Implementation Plan
 
 - [ ] Milestone 1: Namespace recognition and preservation
-  - [ ] Recognize the diagram namespace URI in `SVGParser.cc` so its `xmlns` declaration,
-        attributes and elements no longer emit the three unsupported-namespace warnings ("Unexpected
-        namespace", "Ignored attribute", "Retaining element"), while staying out of the SVG
-        semantic projection.
+  - [ ] Recognize the diagram namespace URI in `SVGParser.cc` so its elements no longer emit the
+        "Retaining element" unsupported-namespace warning, while staying out of the SVG semantic
+        projection.
   - [ ] Make `SVGElement::setAttributeFromXMLMutation` skip diagram-namespace attributes the same
         way the parser does (no generic attribute storage, no full style recompute).
   - [ ] Make an `xmlns` declaration of a non-SVG namespace whose prefix is unused in the subtree
@@ -170,11 +169,12 @@ Verified against the current parser and DOM:
 - The XML tree keeps every element and attribute regardless of namespace. Source-backed documents
   keep the original bytes in `XMLSourceStore`, so untouched regions serialize byte-for-byte.
 - `ParseXmlNsAttribute` (`donner/svg/parser/SVGParser.cc`) accepts the SVG and XLink namespace
-  URIs and emits an "Unexpected namespace" warning for any other `xmlns` declaration, but keeps the
-  declaration.
-- `ParseAttributeList` skips attributes whose prefix resolves to a non-SVG namespace (with an
-  "Ignored attribute ... with an unsupported namespace" warning when warnings are enabled). The
-  attribute stays on the `XMLNode`; it is simply not projected into SVG semantics.
+  URIs and any prefixed declaration. It emits an "Unexpected namespace" warning only for a default
+  `xmlns` declaration of another URI, and keeps every declaration.
+- `ParseAttributeList` skips attributes whose prefix resolves to a non-SVG namespace without a
+  diagnostic; only an undeclared prefix (other than the implicitly bound `xml`) is reported. The
+  attribute stays on the `XMLNode`, readable through `SVGElement::getAttribute` even when
+  `disableUserAttributes` is set; it is simply not projected into SVG semantics.
 - Foreign-namespace elements are retained as unknown, non-rendering elements rather than detached
   (`createElement` and `resolveSvgNamespace` in `SVGParser.cc`), so the shared XML tree stays
   complete.

@@ -334,6 +334,54 @@ TEST(SVGParser, UnsupportedNamespacesWarnAndContinueInsideSvg) {
                                                testing::HasSubstr("unsupported namespace"))));
 }
 
+TEST(SVGParser, DeclaredForeignNamespaceAttributesAreRetainedWithoutDiagnostics) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:app="https://example.invalid/ns/app/0">
+           <rect app:origin="1 2" width="4" height="4"/>
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto documentResult = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(documentResult, NoParseError());
+
+  EXPECT_THAT(warnings.warnings(), ElementsAre());
+  const SVGElement rect = documentResult.result().querySelector("rect").value();
+  EXPECT_THAT(rect.getAttribute(xml::XMLQualifiedNameRef("app", "origin")),
+              testing::Optional(RcString("1 2")));
+}
+
+TEST(SVGParser, DeclaredForeignNamespaceAttributesSurviveDisabledUserAttributes) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:app="https://example.invalid/ns/app/0">
+           <rect app:origin="1 2" width="4" height="4"/>
+         </svg>)");
+  SVGParser::Options options;
+  options.disableUserAttributes = true;
+
+  ParseWarningSink warnings;
+  auto documentResult = SVGParser::ParseSVG(source, warnings, options);
+  ASSERT_THAT(documentResult, NoParseError());
+
+  EXPECT_THAT(warnings.warnings(), ElementsAre());
+  const SVGElement rect = documentResult.result().querySelector("rect").value();
+  EXPECT_THAT(rect.getAttribute(xml::XMLQualifiedNameRef("app", "origin")),
+              testing::Optional(RcString("1 2")));
+}
+
+TEST(SVGParser, XmlPrefixedAttributesAreRetainedWithoutDiagnostics) {
+  const std::string_view source(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text xml:space="preserve">a  b</text></svg>)");
+
+  ParseWarningSink warnings;
+  auto documentResult = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(documentResult, NoParseError());
+
+  EXPECT_THAT(warnings.warnings(), ElementsAre());
+  const SVGElement text = documentResult.result().querySelector("text").value();
+  EXPECT_THAT(text.getAttribute(xml::XMLQualifiedNameRef("xml", "space")),
+              testing::Optional(RcString("preserve")));
+}
+
 TEST(SVGParser, Attributes) {
   const std::string_view attributeXml =
       std::string_view(R"(<svg id="svg1" xmlns="http://www.w3.org/2000/svg">
@@ -558,12 +606,19 @@ TEST(SVGParser, MismatchedNamespace) {
            </svg:svg>)");
 
     ParseWarningSink warnings;
-    EXPECT_THAT(SVGParser::ParseSVG(invalidAttributeNsXml, warnings), NoParseError());
+    auto documentResult = SVGParser::ParseSVG(invalidAttributeNsXml, warnings);
+    ASSERT_THAT(documentResult, NoParseError());
 
     EXPECT_THAT(warnings.warnings(),
                 ElementsAre(AllOf(
                     ParseErrorPos(2, 23),
-                    ParseErrorIs("Ignored attribute 'invalid:d' with an unsupported namespace"))));
+                    testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
+                    ParseErrorIs("Retaining attribute 'invalid:d' with undeclared namespace prefix "
+                                 "'invalid' without SVG interpretation"))));
+    const std::optional<SVGElement> path = documentResult.result().svgElement().firstChild();
+    ASSERT_THAT(path, testing::Ne(std::nullopt));
+    EXPECT_THAT(path->getAttribute(xml::XMLQualifiedNameRef("invalid", "d")),
+                testing::Optional(RcString("M 100 100 h 2")));
   }
 }
 
@@ -1261,6 +1316,22 @@ TEST_P(NestedSvgOptionsTest, FeatureAndAttributeOptionsReachGrandchild) {
   EXPECT_EQ(nested.querySelector("#a")->type(), ElementType::Animate);
   ASSERT_TRUE(nested.querySelector("#r"));
   EXPECT_EQ(nested.querySelector("#r")->getAttribute("user-attribute"), std::nullopt);
+}
+
+TEST_P(NestedSvgOptionsTest, DataChildForeignNamespaceAttributesAreRetainedWithoutDiagnostics) {
+  const std::string child =
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:app='https://example.invalid/ns/app/0'>"
+      "<rect id='r' app:origin='1 2' width='4' height='4'/></svg>";
+  auto parent = parseParent(SvgDataUrl(child));
+  ASSERT_THAT(parent, NoParseError());
+  auto childHandle = loadChild(parent.result());
+  ASSERT_TRUE(childHandle);
+
+  EXPECT_THAT(warnings_.warnings(), ElementsAre());
+  auto nested = SVGDocument::CreateFromHandle(childHandle);
+  EXPECT_THAT(
+      nested.querySelector("#r").value().getAttribute(xml::XMLQualifiedNameRef("app", "origin")),
+      testing::Optional(RcString("1 2")));
 }
 
 TEST_P(NestedSvgOptionsTest, InlineParentDoesNotMakeDataChildInline) {

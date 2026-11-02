@@ -525,8 +525,9 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
           hasEmptyNamespacePrefix = true;
           context.setNamespacePrefix("");
         }
-      } else if (value == "http://www.w3.org/1999/xlink") {
-        // Allow xlink.
+      } else if (value == "http://www.w3.org/1999/xlink" || attributeName != "xmlns") {
+        // A prefixed declaration of a foreign namespace only binds a prefix: the XML tree keeps
+        // its elements and attributes, so it changes no SVG semantics.
       } else {
         SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
         if (auto maybeRange = context.getAttributeLocation(node, attributeName)) {
@@ -540,28 +541,50 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
   }
 }
 
-/// Parse each of \p node's attributes onto \p element, skipping attributes in an unsupported
-/// namespace.
+/**
+ * Report an attribute whose namespace prefix has no declaration in scope. Like any other
+ * foreign-namespace attribute it stays in the XML tree without an SVG interpretation.
+ *
+ * @param context The parser context.
+ * @param element The element that carries the attribute.
+ * @param attributeName The attribute's qualified name.
+ */
+void WarnUndeclaredAttributePrefix(SVGParserContext& context, const SVGElement& element,
+                                   const XMLQualifiedNameRef& attributeName) {
+  if (!context.warningsEnabled()) {
+    return;
+  }
+
+  std::ostringstream ss;
+  ss << "Retaining attribute '" << attributeName << "' with undeclared namespace prefix '"
+     << attributeName.namespacePrefix << "' without SVG interpretation";
+  SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
+  if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
+    range = *maybeRange;
+  }
+
+  context.addWarning(ParseDiagnostic::Warning(RcString(ss.str()), range));
+}
+
+/// Parse each of \p node's attributes onto \p element. Attributes in a namespace other than SVG
+/// or XLink stay in the XML tree, readable through \ref SVGElement::getAttribute, without an SVG
+/// interpretation.
 std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, SVGElement element,
                                                   const XMLNode& node) {
   for (const XMLQualifiedNameRef& attributeName : node.attributes()) {
     const RcString value = node.getAttribute(attributeName).value();
 
     if (!attributeName.namespacePrefix.empty() && attributeName.namespacePrefix != "xmlns" &&
-        attributeName.namespacePrefix != "xlink" &&
-        node.getNamespaceUri(attributeName.namespacePrefix) != "http://www.w3.org/2000/svg") {
-      if (context.warningsEnabled()) {
-        ParseDiagnostic err;
-        std::ostringstream ss;
-        ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
-        err.reason = ss.str();
-        if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
-          err.range.start = maybeRange->start;
+        attributeName.namespacePrefix != "xlink") {
+      const std::optional<RcString> namespaceUri =
+          node.getNamespaceUri(attributeName.namespacePrefix);
+      if (namespaceUri != "http://www.w3.org/2000/svg") {
+        // The `xml` prefix is bound by the XML Namespaces specification without a declaration.
+        if (!namespaceUri.has_value() && attributeName.namespacePrefix != "xml") {
+          WarnUndeclaredAttributePrefix(context, element, attributeName);
         }
-
-        context.addWarning(std::move(err));
+        continue;
       }
-      continue;
     }
 
     if (auto error =
