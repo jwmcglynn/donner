@@ -213,6 +213,7 @@ public:
       return false;
     }
     bytes_ += bytes;
+    peakBytes_ = std::max(peakBytes_, bytes_);
     surfaces_ += surfaceCount;
     return true;
   }

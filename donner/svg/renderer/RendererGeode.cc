@@ -2724,11 +2724,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!frame.resultRecording || frameGpuEncoder == nullptr || frameRecordingAbandoned) {
       return;
     }
+    // The engine clips the result to the filter region, so the pixels covering the region hold
+    // all of it.
     const Box2d region = frame.deviceFromFilter.transformBox(frame.filterRegion);
-    const double left = std::floor(region.topLeft.x) - 1.0;
-    const double top = std::floor(region.topLeft.y) - 1.0;
-    const double right = std::ceil(region.bottomRight.x) + 1.0;
-    const double bottom = std::ceil(region.bottomRight.y) + 1.0;
+    const double left = std::floor(region.topLeft.x);
+    const double top = std::floor(region.topLeft.y);
+    const double right = std::ceil(region.bottomRight.x);
+    const double bottom = std::ceil(region.bottomRight.y);
     const double bufferLeft = left + frame.filterBufferOffsetX;
     const double bufferTop = top + frame.filterBufferOffsetY;
     if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
