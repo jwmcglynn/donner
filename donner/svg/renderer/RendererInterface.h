@@ -166,6 +166,7 @@ public:
   /// Clears usage counters and the sticky rejection state for a new frame.
   void reset() {
     bytes_ = 0;
+    peakBytes_ = 0;
     surfaces_ = 0;
     rejected_ = false;
   }
@@ -197,6 +198,7 @@ public:
     }
 
     bytes_ += byteCount;
+    peakBytes_ = std::max(peakBytes_, bytes_);
     surfaces_ += surfaceCount;
     return true;
   }
@@ -240,6 +242,8 @@ public:
 
   /// Bytes currently reserved by active surfaces.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  /// Most bytes reserved at once since the last \ref reset.
+  [[nodiscard]] std::uint64_t peakBytes() const { return peakBytes_; }
   /// Number of active reserved surfaces.
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
   /// Whether a reservation or release has failed in this frame.
@@ -254,6 +258,7 @@ public:
 private:
   Limits limits_;
   std::uint64_t bytes_ = 0;
+  std::uint64_t peakBytes_ = 0;
   std::size_t surfaces_ = 0;
   bool rejected_ = false;
 };
@@ -742,6 +747,8 @@ struct RendererResourceStats {
   bool surfaceBudgetSupported = false;
   std::size_t surfaceCount = 0;
   std::uint64_t surfaceBytes = 0;
+  /// Most surface bytes reserved at once during the frame.
+  std::uint64_t surfacePeakBytes = 0;
   bool surfaceBudgetRejected = false;
   bool drawBudgetSupported = false;
   std::size_t drawCalls = 0;

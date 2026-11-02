@@ -3395,6 +3395,7 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .surfaceBudgetSupported = true,
       .surfaceCount = surfaceBudget_->surfaces(),
       .surfaceBytes = surfaceBudget_->bytes(),
+      .surfacePeakBytes = surfaceBudget_->peakBytes(),
       .surfaceBudgetRejected = surfaceBudget_->rejected(),
       .drawBudgetSupported = true,
       .drawCalls = drawBudget_->drawCalls(),
