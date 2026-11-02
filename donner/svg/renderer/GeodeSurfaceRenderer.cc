@@ -24,7 +24,6 @@ namespace {
 /// is first created for BGRA8. A canvas whose preferred format differs reopens with that format.
 constexpr gpu::TextureFormat kDefaultFormat = gpu::TextureFormat::BGRA8Unorm;
 
-
 void SetError(std::string* error, std::string message) {
   if (error != nullptr) {
     *error = std::move(message);
@@ -236,8 +235,8 @@ GeodeSurfaceRenderer::GeodeSurfaceRenderer(std::unique_ptr<Impl> impl) : impl_(s
 GeodeSurfaceRenderer::~GeodeSurfaceRenderer() = default;
 
 std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::Create(const SurfaceRequest& request,
-                                                                 Vector2i sizePx,
-                                                                 std::string* error) {
+                                                                   Vector2i sizePx,
+                                                                   std::string* error) {
   if (std::string invalid = CheckFrameSize(sizePx); !invalid.empty()) {
     SetError(error, std::move(invalid));
     return nullptr;
