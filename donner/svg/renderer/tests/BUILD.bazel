@@ -529,6 +529,7 @@ donner_cc_test(
     ],
     deps = [
         ":rgba_test_matchers",
+        "//donner/base",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/renderer",

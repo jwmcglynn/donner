@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -118,6 +119,19 @@ TEST(InvisibleFilterWorkTest, HiddenFilteredContentRunsNoFilters) {
       "<g opacity='0'><g opacity='0.5'><g>" + shapes + "</g></g></g>",
       "<g visibility='hidden'>" + shapes + "</g>",
       "<g style='opacity: 0'>" + shapes + "</g>",
+      // Content drawn for a hidden leaf comes after the leaf in draw order, outside its subtree.
+      "<defs><mask id='hiddenMask'>" + shapes +
+          "</mask></defs><rect width='64' height='64' opacity='0' mask='url(#hiddenMask)'/>",
+      "<defs><pattern id='hiddenTile' patternUnits='userSpaceOnUse' width='16' height='16'>" +
+          shapes + "</pattern></defs><rect width='64' height='64' opacity='0' fill='url(#hiddenTile)'/>",
+      "<defs><marker id='hiddenDot' markerWidth='8' markerHeight='8' "
+      "markerUnits='userSpaceOnUse'>" +
+          shapes +
+          "</marker></defs><path d='M 4 4 L 40 4' stroke='#000000' opacity='0' "
+          "marker-start='url(#hiddenDot)'/>",
+      "<defs><mask id='hiddenLeafMask'>" + shapes +
+          "</mask></defs><rect width='64' height='64' visibility='hidden' "
+          "mask='url(#hiddenLeafMask)'/>",
   };
   const Frame expected = Draw(Document(""));
   ASSERT_FALSE(expected.bitmap.empty());
@@ -157,17 +171,20 @@ TEST(InvisibleFilterWorkTest, ReferencedContentStaysFiltered) {
       "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'>"
       "<defs>" +
       std::string(kFlood) +
+      "<filter id='white' filterUnits='userSpaceOnUse' x='0' y='0' width='128' "
+      "height='64'><feFlood flood-color='#ffffff'/></filter></defs>"
+      "<rect width='128' height='128' fill='#ffffff'/>"
+      // The definitions sit in an invisible container; content drawn for a visible element that
+      // references them is visible.
+      "<g opacity='0'>"
       "<pattern id='tile' patternUnits='userSpaceOnUse' width='16' "
       "height='16'><rect width='16' height='16' fill='#2050d0' "
       "filter='url(#flood)'/></pattern>"
-      "<filter id='white' filterUnits='userSpaceOnUse' x='0' y='0' width='128' "
-      "height='64'><feFlood flood-color='#ffffff'/></filter>"
       "<mask id='reveal'><rect width='8' height='8' fill='#000000' "
       "filter='url(#white)'/></mask>"
       "<marker id='dot' markerWidth='8' markerHeight='8' refX='4' refY='4' "
       "markerUnits='userSpaceOnUse'><rect width='8' height='8' "
-      "fill='#2050d0' filter='url(#flood)'/></marker></defs>"
-      "<rect width='128' height='128' fill='#ffffff'/>";
+      "fill='#2050d0' filter='url(#flood)'/></marker></g>";
   struct Case {
     std::string body;
     int x;
@@ -204,6 +221,32 @@ TEST(InvisibleFilterWorkTest, TransparentPaintStillRunsItsFilter) {
       "<rect width='32' height='32' fill='#ffffff'/>"
       "<rect width='8' height='8' fill='#2050d0' fill-opacity='0' filter='url(#fill)'/></svg>");
   EXPECT_THAT(PixelAt(frame.bitmap, 16, 16), test::Rgba(Gt(180), Lt(80), Lt(80), 255));
+}
+
+/// A hidden leaf draws nothing, so its filter does not run even when the filter would paint with
+/// no source; browsers render nothing for it. A visible element inside a hidden group still draws
+/// and still runs its filter.
+TEST(InvisibleFilterWorkTest, HiddenLeafRunsNoFilterButVisibleChildOfHiddenGroupDoes) {
+  constexpr std::string_view kHead =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+      "<filter id='fill' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='32'>"
+      "<feFlood flood-color='#d02020'/></filter></defs>"
+      "<rect width='32' height='32' fill='#ffffff'/>";
+  const Frame hidden = Draw(std::string(kHead) +
+                            "<rect width='8' height='8' fill='#2050d0' visibility='hidden' "
+                            "filter='url(#fill)'/></svg>");
+  EXPECT_THAT(PixelAt(hidden.bitmap, 16, 16), test::Rgba(255, 255, 255, 255));
+  if (hidden.stats.filterBudgetSupported) {
+    EXPECT_EQ(hidden.stats.filterExecutions, 0u);
+  }
+
+  const Frame shown = Draw(std::string(kHead) +
+                           "<g visibility='hidden'><rect width='8' height='8' fill='#2050d0' "
+                           "visibility='visible' filter='url(#fill)'/></g></svg>");
+  EXPECT_THAT(PixelAt(shown.bitmap, 16, 16), test::Rgba(Gt(180), Lt(80), Lt(80), 255));
+  if (shown.stats.filterBudgetSupported) {
+    EXPECT_EQ(shown.stats.filterExecutions, 1u);
+  }
 }
 
 }  // namespace
