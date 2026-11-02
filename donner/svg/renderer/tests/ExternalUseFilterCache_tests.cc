@@ -230,9 +230,15 @@ void ExpectMutationRefilters(FilteredSpriteScene& scene, std::string_view label,
     (void)Draw(*uncached, scene);
   }
   EXPECT_GT(warmHits, 0u) << label << ": the warm frames must reuse a cached result";
+  const RendererBitmap before = uncached->takeSnapshot();
   mutate(scene);
   const FrameWork work = Draw(*renderer, scene);
   (void)Draw(*uncached, scene);
+  int changedPixels = 0;
+  editor::tests::CompareBitmapToBitmap(
+      uncached->takeSnapshot(), before, std::string(label) + "-mutation-visible",
+      editor::tests::ApprovedPixelToleranceParams(0.0f, 1 << 30), &changedPixels);
+  EXPECT_GT(changedPixels, 0) << label << ": the mutation must change the rendering";
   EXPECT_GE(work.executions, 1u) << label;
   editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(), label,
                                        params);
@@ -317,15 +323,13 @@ TEST(ExternalUseFilterCacheTest, CacheDoesNotThrashAndEvictedResultsRefilter) {
   constexpr int kDrawn = 64;
   std::optional<FilteredSpriteScene> scene = MakeScene(kSprites, kSprites);
   ASSERT_TRUE(scene.has_value());
+  // Every use shows a sprite starting at \p first; uses past kDrawn repeat earlier ones, so only
+  // kDrawn distinct sprites are drawn.
   const auto showSprites = [&](int first) {
     for (int i = 0; i < kSprites; ++i) {
-      const int sprite = (first + i) % kSprites;
+      const int sprite = (first + i % kDrawn) % kSprites;
       scene->uses[i].setHref(
           RcString(std::string(kExternalResourceUrl) + "#sprite-" + std::to_string(sprite)));
-      scene->uses[i].setTransform(
-          Transform2d::Translate(Vector2d((i % 12) * 20.0, (i / 12) * 30.0)));
-      // Only the first kDrawn uses show a sprite; the rest are hidden.
-      scene->uses[i].setStyle(i < kDrawn ? "display: inline" : "display: none");
     }
   };
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
@@ -348,7 +352,7 @@ TEST(ExternalUseFilterCacheTest, CacheDoesNotThrashAndEvictedResultsRefilter) {
   // Sprites 8..71 are drawn for a while; sprites 0..7 go stale and are evicted for them.
   showSprites(8);
   FrameWork shifted;
-  for (int frame = 0; frame < 4; ++frame) {
+  for (int frame = 0; frame < 6; ++frame) {
     shifted.evictions += Draw(*renderer, *scene).evictions;
   }
   EXPECT_GT(shifted.evictions, 0u);

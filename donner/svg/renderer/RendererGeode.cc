@@ -2815,15 +2815,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// subregion of its own, and three deviations from the element's bounding box stay inside the
   /// region. Otherwise the region or subregion clips the blur to a hard edge, which resampling at
   /// a sub-pixel offset would soften.
-  static bool BlurStaysInsideFilterRegion(const components::FilterGraph& graph,
-                                          const components::FilterNode& node,
-                                          const components::filter_primitive::GaussianBlur& blur) {
-    if (node.hasExplicitRegion() || node.hasAnimatedRegion() || !graph.elementBoundingBox ||
-        !graph.filterRegion) {
+  static bool BlurStaysInsideFilterRegion(const components::FilterNode& node,
+                                          const components::filter_primitive::GaussianBlur& blur,
+                                          const std::optional<Box2d>& contentBounds,
+                                          const Box2d& region) {
+    if (node.hasExplicitRegion() || node.hasAnimatedRegion() || !contentBounds) {
       return false;
     }
-    const Box2d& bounds = *graph.elementBoundingBox;
-    const Box2d& region = *graph.filterRegion;
+    const Box2d& bounds = *contentBounds;
     const double reachX = 3.0 * blur.stdDeviationX;
     const double reachY = 3.0 * blur.stdDeviationY;
     return bounds.topLeft.x - reachX >= region.topLeft.x &&
@@ -2839,6 +2838,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// is a Gaussian blur of at least one device pixel in each axis is smooth enough to resample at
   /// any fractional offset; any other result keeps its translation's sub-pixel bucket.
   static FilterResultPlacement filterResultPlacement(const components::FilterGraph& graph,
+                                                     const FilterResultContentKey& content,
+                                                     const Box2d& filterRegion,
                                                      const Transform2d& deviceFromFilter) {
     FilterResultPlacement placement;
     placement.linear = {deviceFromFilter.data[0], deviceFromFilter.data[1],
@@ -2852,7 +2853,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const bool smooth =
         blur != nullptr && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
         blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0 &&
-        BlurStaysInsideFilterRegion(graph, graph.nodes.back(), *blur);
+        BlurStaysInsideFilterRegion(graph.nodes.back(), *blur, content.contentBounds, filterRegion);
     if (!smooth) {
       const auto bucket = [](double translation) {
         const double fraction = translation - std::floor(translation);
@@ -7019,8 +7020,8 @@ CachedFilterLayerResult RendererGeode::pushCachedFilterLayer(
     pushFilterLayer(filterGraph, filterRegion);
     return CachedFilterLayerResult::Pushed;
   }
-  const FilterResultPlacement placement =
-      Impl::filterResultPlacement(filterGraph, impl_->deviceFromLocalTransform);
+  const FilterResultPlacement placement = Impl::filterResultPlacement(
+      filterGraph, content, *filterRegion, impl_->deviceFromLocalTransform);
   if (const auto* entry =
           impl_->filterResultCache.find(content, placement, impl_->filterResultFrame)) {
     impl_->drawFilterResult(entry->payload);

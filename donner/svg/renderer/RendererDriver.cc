@@ -3431,6 +3431,7 @@ std::optional<FilterResultContentKey> RendererDriver::cacheableFilterContent(
   key.filterRegion = graph.filterRegion;
   key.primitiveViewport = graph.primitiveViewport;
   key.userToPixelScale = graph.userToPixelScale;
+  key.contentBounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
   return key;
 }
 
