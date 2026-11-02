@@ -1115,7 +1115,8 @@ std::vector<Entity> CollectMainEntities(
 }
 
 /// Draw order of the last rendered instance in @p instance's subtree, itself when it has none.
-int SubtreeEndDrawOrder(Registry& registry, const components::RenderingInstanceComponent& instance) {
+int SubtreeEndDrawOrder(Registry& registry,
+                        const components::RenderingInstanceComponent& instance) {
   const auto* last =
       registry.try_get<components::RenderingInstanceComponent>(instance.subtreeLastEntity);
   return last != nullptr ? std::max(last->drawOrder, instance.drawOrder) : instance.drawOrder;
@@ -1767,8 +1768,7 @@ std::optional<std::vector<components::ResolvedFilterEffect>> collectFilterStages
 bool FilterResolvesAgainstObjectBounds(Registry& registry,
                                        const components::ResolvedFilterEffect& filter) {
   const auto stages = collectFilterStages(registry, filter);
-  return stages.has_value() &&
-         std::any_of(stages->begin(), stages->end(), [&](const auto& stage) {
+  return stages.has_value() && std::any_of(stages->begin(), stages->end(), [&](const auto& stage) {
            const auto* reference = std::get_if<ResolvedReference>(&stage);
            const auto* computed =
                reference ? registry.try_get<components::ComputedFilterComponent>(*reference)
@@ -3048,10 +3048,10 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry
   forgetAllEffectBounds();
   const RangeBoundsContext context{
       .allowMaskSuperset = options.allowMaskSuperset,
-      .filterObjectBounds =
-          [&](Entity entity, const components::RenderingInstanceComponent& instance) {
-            return filterObjectBounds(registry, entity, instance);
-          }};
+      .filterObjectBounds = [&](Entity entity,
+                                const components::RenderingInstanceComponent& instance) {
+        return filterObjectBounds(registry, entity, instance);
+      }};
   std::optional<Box2d> bounds =
       FinalizeRangeBounds(ScanRangeBounds(registry, view, lastEntity, surfaceFromCanvas, context),
                           canvasSize, options.clipToCanvas);
@@ -4834,9 +4834,9 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
   const std::vector<std::pair<int, Entity>>& uses = externalUseInstances(registry);
   const int lastDrawOrder = SubtreeEndDrawOrder(registry, instance);
-  for (auto it = std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity())),
-            last = uses.end();
-       it != last && it->first <= lastDrawOrder; ++it) {
+  const auto firstUse =
+      std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity()));
+  for (auto it = firstUse; it != uses.end() && it->first <= lastDrawOrder; ++it) {
     const std::optional<Box2d> content = externalUseContentBounds(registry, it->second);
     if (!content) {
       continue;

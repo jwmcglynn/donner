@@ -56,14 +56,14 @@ using Documents = std::map<std::string, std::string, std::less<>>;
 
 /// Settings that load @p documents for this document and, recursively, for the documents it
 /// references, so a referenced document can reference another.
-SVGDocument::Settings SettingsFor(const Documents& documents,
-                                  std::shared_ptr<components::DocumentResourceFamilyBudget> family) {
+SVGDocument::Settings SettingsFor(
+    const Documents& documents, std::shared_ptr<components::DocumentResourceFamilyBudget> family) {
   SVGDocument::Settings settings;
   settings.resourceLoader = std::make_unique<InMemoryLoader>(documents);
   settings.resourceFamilyBudget = family;
-  settings.svgParseCallback = [documents, family](const std::vector<uint8_t>& bytes,
-                                                  ParseWarningSink& warnings)
-      -> std::optional<SVGDocumentHandle> {
+  settings.svgParseCallback = [documents, family](
+                                  const std::vector<uint8_t>& bytes,
+                                  ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
     auto child = parser::SVGParser::ParseSVG(
         std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
         parser::SVGParser::Options(), SettingsFor(documents, family));
@@ -332,7 +332,6 @@ TEST(SubDocumentFiltersTest, HostMaskAndBoxClipAroundExternalUseMatchInDocument)
   }
 }
 
-
 /// External-use work a frame admits for @p document, drawn through a driver that shares @p work.
 std::size_t ExternalInstanceWork(SVGDocument& document,
                                  const std::shared_ptr<components::StyleResourceBudget>& work,
@@ -390,7 +389,8 @@ TEST(SubDocumentFiltersTest, EffectsAroundManyExternalUsesChargeNoExtraWork) {
     for (int y = 0; y < 4; ++y) {
       for (int x = 0; x < 8; ++x) {
         SCOPED_TRACE(testing::Message() << "occurrence " << x << "," << y);
-        EXPECT_THAT(PixelAt(bitmap, x * 4 + 1, y * 4 + 1), test::Rgba(Gt(180), Lt(80), Lt(80), 255));
+        EXPECT_THAT(PixelAt(bitmap, x * 4 + 1, y * 4 + 1),
+                    test::Rgba(Gt(180), Lt(80), Lt(80), 255));
       }
     }
   }
@@ -411,9 +411,9 @@ void ExpectExternalMatchesInDocument(const std::string& label, std::string_view 
   Documents documents = std::move(extraDocuments);
   documents["sheet.svg"] = head + "<defs>" + std::string(sheetDefs) + "</defs></svg>";
   SVGDocument external = Parse(head + withReference("sheet.svg#") + "</svg>", documents);
-  SVGDocument local = Parse(head + "<defs>" + std::string(sheetDefs) + "</defs>" +
-                                withReference("#") + "</svg>",
-                            documents);
+  SVGDocument local =
+      Parse(head + "<defs>" + std::string(sheetDefs) + "</defs>" + withReference("#") + "</svg>",
+            documents);
   Renderer externalRenderer;
   Renderer localRenderer;
   ExpectSameBitmap(Draw(externalRenderer, external), Draw(localRenderer, local), label);
@@ -446,8 +446,7 @@ TEST(SubDocumentFiltersTest, FeImageInsideReferencedDocument) {
 
 TEST(SubDocumentFiltersTest, ScaledRotatedUseUnderBoxEffects) {
   ExpectExternalMatchesInDocument(
-      "sub-document-scaled-rotated",
-      "<rect id='sprite' width='8' height='6' fill='#2050d0'/>",
+      "sub-document-scaled-rotated", "<rect id='sprite' width='8' height='6' fill='#2050d0'/>",
       "<defs>" + std::string(kTint) +
           "</defs><rect width='32' height='32' fill='#ffffff'/>"
           "<g filter='url(#tint)' clip-path='url(#left)' mask='url(#top)'>"
