@@ -553,6 +553,10 @@ public:
                                               std::size_t maximumGlyphOccurrences);
 
   /// Inject a sticky device loss so tests can verify renderer recovery and pooled-device disposal.
+  /// Enable or disable reuse of filter textures within a frame, so a test can compare against
+  /// textures that are each used once per frame.
+  void setWithinFrameTextureReuseForTesting(bool enabled);
+
   void injectDeviceLossForTesting();
 
   /// Inject transformed-filter suspension and following encoder-restoration failure once.

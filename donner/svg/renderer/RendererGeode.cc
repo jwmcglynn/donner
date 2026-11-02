@@ -1344,7 +1344,11 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
   }
   GeodeFilterPlan plan =
       PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, *buffer, engine);
-  if (expanded.exceedsViewport(viewportWidth, viewportHeight) &&
+  const bool largerThanViewport =
+      std::uint64_t{static_cast<uint32_t>(expanded.width)} *
+          static_cast<uint32_t>(expanded.height) >
+      std::uint64_t{static_cast<uint32_t>(viewportWidth)} * static_cast<uint32_t>(viewportHeight);
+  if (largerThanViewport &&
       !GeodeFilterPlanFits(filterGraph, plan, budget, surfaceBudget, engine)) {
     const GeodeFilterBuffer viewport{buffer->region, viewportWidth, viewportHeight, 0, 0};
     plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, viewport, engine);
@@ -2257,6 +2261,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
+    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
+    const auto reusable = std::find_if(
+        frameReusableTextures.begin(), frameReusableTextures.end(),
+        [&](const PendingRelease& r) { return RendererGeodeTextureKey::From(r.desc) == key; });
+    if (reusable != frameReusableTextures.end()) {
+      gpu::Texture texture = std::move(reusable->texture);
+      frameReusableTextures.erase(reusable);
+      return texture;
+    }
     return texturePool->acquire(desc);
   }
 
@@ -2346,29 +2359,61 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                       const gpu::TextureDescriptor& desc) override {
-    // An execution releases its intermediates once its work is recorded; a later filter in the
-    // frame can take them, so many small filters share a few textures instead of each holding its
-    // own until the frame ends.
+    // An execution releases its intermediates once its work is recorded; a later filter this
+    // renderer records in the frame can take them, so many small filters share a few textures
+    // instead of each holding its own until the frame ends. They reach the shared pool only after
+    // the frame submits.
     releaseTextureWithinFrame(std::move(texture), desc);
   }
 
   /**
-   * Return \p texture to the pool now, for a later acquisition in this frame, when every command
-   * naming it is already recorded in submission order: a later pass that reuses it runs after
-   * them. A texture a queue upload can write is deferred to the frame end instead, since an upload
-   * runs ahead of recorded work that is not submitted yet; so is everything once the frame's
-   * recording has failed.
+   * Make \p texture available to a later acquisition by this renderer in this frame, when every
+   * command naming it is already recorded in this renderer's submission order: a later pass that
+   * reuses it runs after them. The texture stays out of the device-shared pool, which another
+   * renderer could take from and submit ahead of this frame, and which can destroy what it
+   * cannot hold; it reaches the pool only once this frame is submitted. Its surface charge is
+   * released now and charged again when it is reused.
+   *
+   * A texture a queue upload can write is deferred to the frame end instead, since an upload runs
+   * ahead of recorded work that is not submitted yet; so is everything once the frame's recording
+   * has failed, or while within-frame reuse is disabled for a test.
    */
   void releaseTextureWithinFrame(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
       return;
     }
-    if (frameRecordingAbandoned || frameArenaWriteFailed || !frameRecordingOpen ||
-        gpu::HasAllFlags(desc.usage, gpu::TextureUsage::CopyDst)) {
+    if (!withinFrameReuseEnabled || frameRecordingAbandoned || frameArenaWriteFailed ||
+        !frameRecordingOpen || gpu::HasAllFlags(desc.usage, gpu::TextureUsage::CopyDst)) {
       releaseTextureAtFrameEnd(std::move(texture), desc);
       return;
     }
-    releaseTexture(std::move(texture), desc);
+    const bool releasedSurface =
+        desc.size.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
+        desc.size.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
+        surfaceBudget->release(static_cast<int>(desc.size.width),
+                               static_cast<int>(desc.size.height), 1,
+                               gpu::TextureFormatBytesPerTexel(desc.format));
+    UTILS_RELEASE_ASSERT(releasedSurface);
+    frameReusableTextures.push_back({std::move(texture), desc});
+  }
+
+  /// Textures this renderer released within its open frame, reusable only by its own later
+  /// acquisitions until the frame is submitted. Their surface charge is already released.
+  std::vector<PendingRelease> frameReusableTextures;
+  /// Whether \ref releaseTextureWithinFrame makes textures reusable within the frame.
+  bool withinFrameReuseEnabled = true;
+
+  /// Hand the frame's unreused within-frame textures to the pool once the frame is submitted, or
+  /// retain them when its submission is uncertain. Their surface charge was released already.
+  void drainFrameReusableTextures(bool submissionUncertain) {
+    for (PendingRelease& reusable : frameReusableTextures) {
+      if (submissionUncertain) {
+        failedFilterTextures.push_back(std::move(reusable));
+      } else {
+        recycleOrDestroyTexture(std::move(reusable.texture), reusable.desc);
+      }
+    }
+    frameReusableTextures.clear();
   }
 
   /// Keep unresolved frame resources alive until device teardown instead of recycling them.
@@ -2380,6 +2425,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void retainPendingFrameReleasesAfterFailure() {
+    drainFrameReusableTextures(/*submissionUncertain=*/true);
     for (PendingRelease& pending : framePendingReleases) {
       if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
         retainRecoverableTexture(std::move(pending.texture), pending.desc);
@@ -2391,6 +2437,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void drainPendingReleases() {
+    drainFrameReusableTextures(/*submissionUncertain=*/false);
     for (auto& pending : framePendingReleases) {
       releaseTexture(std::move(pending.texture), pending.desc);
     }
@@ -2837,6 +2884,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frame.savedEncoder = std::move(encoder);
     frame.savedTarget = aliasOf(target);
     frame.allocationRejected = true;
+    // The pop restores the clip stack from the frame, so the frame must hold it.
+    frame.savedClipStack = std::move(clipStack);
+    clipStack.clear();
     filterStack.push_back(std::move(frame));
     ++rejectedFilterDepth;
   }
@@ -5692,6 +5742,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGeneration();
 
     waitForQueueIdleAtTeardown();
+    drainFrameReusableTextures(/*submissionUncertain=*/false);
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
     releaseFrameTargetsAtTeardown();
@@ -6418,6 +6469,13 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   const gpu::Extent2d outerExtent = impl_->targetExtent();
   const int outerWidth = static_cast<int>(outerExtent.width);
   const int outerHeight = static_cast<int>(outerExtent.height);
+  if (filterRegion.has_value() &&
+      FilterRegionShowsNothing(*filterRegion, impl_->deviceFromLocalTransform, outerWidth,
+                               outerHeight)) {
+    // Nothing the layer produces can show, so neither its content nor its graph runs.
+    impl_->pushRejectedFilterFrame();
+    return;
+  }
   std::optional<GeodeFilterAdmission> admission = AdmitGeodeFilter(
       filterGraph, filterRegion, impl_->deviceFromLocalTransform, outerWidth, outerHeight,
       *impl_->filterExecutionBudget, *impl_->surfaceBudget, *impl_->filterEngine);
@@ -8444,6 +8502,10 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   return RendererGeodeTextureSnapshot::readTexture(impl_->device, exported.result(),
                                                    Vector2i(impl_->pixelWidth, impl_->pixelHeight),
                                                    AlphaType::Premultiplied, shouldCancel);
+}
+
+void RendererGeode::setWithinFrameTextureReuseForTesting(bool enabled) {
+  impl_->withinFrameReuseEnabled = enabled;
 }
 
 void RendererGeode::injectDeviceLossForTesting() {
