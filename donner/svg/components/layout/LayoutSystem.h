@@ -18,6 +18,21 @@
 namespace donner::svg::components {
 
 /**
+ * Registry context installed on a referenced document while an external `<use>` draws the element
+ * it names. That element is the root of the instance: absolute transforms stop at it, as if its
+ * parent were the `<use>` element, and the render tree is built from it alone.
+ */
+struct ExternalUseInstanceContext {
+  Entity root;  //!< The referenced element.
+};
+
+/// The root an external `<use>` is instantiating from \p registry, or `entt::null`.
+inline Entity ExternalUseInstanceRoot(const Registry& registry) {
+  const auto* context = registry.ctx().find<ExternalUseInstanceContext>();
+  return context ? context->root : entt::null;
+}
+
+/**
  * Handles layout and bounds calculations for SVG elements. This system is responsible for
  * calculating the the document size, viewBoxes, and the bounds for elements.
  *

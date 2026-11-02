@@ -4576,22 +4576,32 @@ private:
   bool installed_ = false;
 };
 
-/// Gives a referenced `<symbol>` or `<svg>` the viewport its external `<use>` establishes, for the
-/// lifetime of one occurrence.
-class ExternalUseViewportScope {
+/**
+ * Makes the element an external `<use>` references the root of an instance in its own document for
+ * one occurrence: layout places it relative to the use rather than its ancestors, and a referenced
+ * `<symbol>` or `<svg>` gets the viewport the use establishes.
+ */
+class ExternalUseInstanceScope {
 public:
-  ExternalUseViewportScope(Registry& child, Entity root, EntityHandle use) : root_(child, root) {
-    // Invalidate first: cached absolute transforms below the root must pick up the new viewport.
+  ExternalUseInstanceScope(Registry& child, Entity root, EntityHandle use) : root_(child, root) {
+    // Cached absolute transforms in the root's subtree differ between an instance (placed by the
+    // <use>, with the viewport it establishes) and the document's own layout, so both entering and
+    // leaving an instance drop them. Skipping this requires a cache key covering the instance root
+    // and the use-established viewport, plus a reset whenever the document is drawn on its own.
     components::LayoutSystem().invalidate(root_);
+    child.ctx().emplace<components::ExternalUseInstanceContext>(root);
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     (void)components::LayoutSystem().createShadowSizedElementComponent(
         child, root, use, root, components::ShadowBranchType::Main, disabledSink);
   }
 
-  ~ExternalUseViewportScope() { components::LayoutSystem().invalidate(root_); }
+  ~ExternalUseInstanceScope() {
+    root_.registry()->ctx().erase<components::ExternalUseInstanceContext>();
+    components::LayoutSystem().invalidate(root_);
+  }
 
-  ExternalUseViewportScope(const ExternalUseViewportScope&) = delete;
-  ExternalUseViewportScope& operator=(const ExternalUseViewportScope&) = delete;
+  ExternalUseInstanceScope(const ExternalUseInstanceScope&) = delete;
+  ExternalUseInstanceScope& operator=(const ExternalUseInstanceScope&) = delete;
 
 private:
   EntityHandle root_;
@@ -4633,7 +4643,8 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   const Transform2d surfaceFromHost =
       instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
   if (!fragment.empty()) {
-    const ExternalUseViewportScope viewport(child, root, EntityHandle(hostRegistry, hostEntity));
+    const ExternalUseInstanceScope instanceScope(child, root,
+                                                 EntityHandle(hostRegistry, hostEntity));
     drawAdmittedSubDocumentElement(subDocument, fragment, surfaceFromHost, hostRegistry,
                                    hostEntity);
   } else {
@@ -4737,7 +4748,7 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
     fontRenderScope.finish();
     recordChildFontDependencies(subDocument, entt::null, hostRegistry, hostEntity);
     if (verbose_) {
-      std::cerr << "[drawSubDocumentElement] Fragment '" << fragmentId << "' not found\n";
+      std::cerr << "[drawExternalUseInstance] Fragment '" << fragmentId << "' not found\n";
     }
     return;
   }
@@ -4749,7 +4760,7 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
     fontRenderScope.finish();
     recordChildFontDependencies(subDocument, entt::null, hostRegistry, hostEntity);
     if (verbose_) {
-      std::cerr << "[drawSubDocumentElement] No RenderingInstanceComponent for fragment '"
+      std::cerr << "[drawExternalUseInstance] No RenderingInstanceComponent for fragment '"
                 << fragmentId << "'\n";
     }
     return;
@@ -4759,14 +4770,10 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
     fontRenderScope.setCoverageRoot(targetEntity);
   }
 
-  // Place the target as a child of the <use>: strip its sub-document ancestors by undoing its
-  // world transform, then reapply its own transform and viewport. For each entity in the subtree:
-  //   finalTransform = entity * inverse(target) * targetContentFromParent * parentAbsolute
+  // Layout places the instance relative to the <use> element, so its transforms map directly into
+  // the use's space.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
-  surfaceFromCanvasTransform_ = targetInstance->worldFromEntityTransform.inverse() *
-                                components::LayoutSystem().getEntityContentFromParentTransform(
-                                    EntityHandle(subDocument.registry(), targetEntity)) *
-                                parentAbsoluteTransform;
+  surfaceFromCanvasTransform_ = parentAbsoluteTransform;
 
   // The render tree holds only the instance, so a full traversal applies every layer and viewport
   // clip a same-document instance gets. The target's viewport clip is in the <use> element's space,

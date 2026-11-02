@@ -447,8 +447,9 @@ private:
                                Entity hostEntity);
   /**
    * Draw the instance an external `<use>` references. Requires the occurrence's external-use style
-   * context, under which the sub-document's render tree holds only that instance. The `<use>`
-   * element's own opacity is applied by its caller's layer, not here.
+   * and instance contexts, under which the sub-document's render tree holds only that instance and
+   * its layout is relative to the `<use>`. The `<use>` element's own opacity is applied by its
+   * caller's layer, not here.
    */
   void drawAdmittedSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                                       const Transform2d& parentAbsoluteTransform,

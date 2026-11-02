@@ -1346,6 +1346,12 @@ INSTANTIATE_TEST_SUITE_P(
                               "x='4' y='4'",
                               {8, 8},
                               OpaqueBlue()},
+        ExternalUseTargetCase{"InsideDefsUnderSingularGroup",
+                              "<defs><g transform='scale(0)'>"
+                              "<rect id='t' width='8' height='8' fill='blue'/></g></defs>",
+                              "x='4' y='4'",
+                              {8, 8},
+                              OpaqueBlue()},
         ExternalUseTargetCase{"GroupInsideDefs",
                               "<defs><g id='t' fill='blue'><rect width='4' height='4'/>"
                               "<rect x='4' y='4' width='4' height='4' fill='lime'/></g></defs>",
@@ -1401,6 +1407,64 @@ INSTANTIATE_TEST_SUITE_P(
                               test::IsTransparent()}),
     [](const testing::TestParamInfo<ExternalUseTargetCase>& info) { return info.param.name; });
 
+// Masks, patterns and markers render only where they are referenced as resources, never through a
+// `<use>`.
+TEST(RendererPublicApiTest, ExternalUseOfResourceContainerDrawsNothing) {
+  const RendererBitmap empty =
+      RenderInlineDocument("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'/>");
+  for (const std::string_view tag : {"mask", "pattern", "marker"}) {
+    SCOPED_TRACE(tag);
+    const ExternalUseRenderResult actual = RenderExternalUse(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+        "<use href='external.svg#t'/></svg>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><" + std::string(tag) +
+            " id='t'><rect width='8' height='8' fill='blue'/></" + std::string(tag) + "></svg>");
+    editor::tests::CompareBitmapToBitmap(actual.bitmap, empty,
+                                         "external-use-resource-" + std::string(tag),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+constexpr std::string_view kSymbolResource =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+    "<symbol id='sym' viewBox='0 0 4 4'><rect width='6' height='6' fill='blue'/></symbol>"
+    "<rect x='12' y='12' width='4' height='4' fill='lime'/>"
+    "<use href='#sym' width='4' height='4'/></svg>";
+
+// Each occurrence sizes the shared symbol from its own <use>, and none of that state survives into
+// a later draw of the referenced document.
+TEST(RendererPublicApiTest, ExternalUseInstanceLeavesReferencedDocumentClean) {
+  auto fixture = MakeExternalUseFixture(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'>"
+      "<use href='external.svg#sym' width='8' height='8'/>"
+      "<use href='external.svg#sym' x='8' y='8' width='4' height='4'/>"
+      "<use href='external.svg' x='16'/></svg>",
+      kSymbolResource);
+  const RendererBitmap expected = RenderInlineDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='16'><defs>"
+      "<symbol id='sym' viewBox='0 0 4 4'><rect width='6' height='6' fill='blue'/></symbol></defs>"
+      "<use href='#sym' width='8' height='8'/><use href='#sym' x='8' y='8' width='4' height='4'/>"
+      "<image x='16' width='16' height='16' href='" +
+      SvgDataUrl(kSymbolResource) + "'/></svg>");
+  EXPECT_THAT(PixelAt(expected, 12, 12), test::IsTransparent());
+  EXPECT_THAT(PixelAt(expected, 11, 11), test::RgbaEq(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(expected, 17, 1), test::RgbaEq(0, 0, 255, 255));
+
+  Renderer renderer;
+  for (int frame = 0; frame < 2; ++frame) {
+    renderer.draw(fixture.document);
+    editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), expected,
+                                         "external-use-clean-frame-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  ASSERT_THAT(*fixture.child, testing::NotNull());
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  editor::tests::CompareBitmapToBitmap(
+      RenderPublicDocument(child), RenderInlineDocument(kSymbolResource),
+      "external-use-clean-child", editor::tests::PixelmatchIdentityParams());
+}
+
 // The host layer applies the `<use>` element's opacity, so the referenced content must not add a
 // second one.
 TEST(RendererPublicApiTest, ExternalUseOpacityAppliesOnce) {
@@ -1455,7 +1519,7 @@ TEST_P(UseHrefMutationTest, SetAttributeRetargetsAndRemoveAttributeClears) {
           targets + "<use id='host' " + attributeSource + "='" + base + "#a'/></svg>",
       "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>" + targets + "</svg>");
   auto host = fixture.document.querySelector("#host");
-  ASSERT_THAT(host.has_value(), testing::IsTrue());
+  ASSERT_THAT(host, testing::Optional(testing::_));
 
   Renderer renderer;
   renderer.draw(fixture.document);

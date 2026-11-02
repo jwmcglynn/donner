@@ -58,7 +58,6 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
-#include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -100,17 +99,15 @@ struct ContextPaintServers {
   bool resolveAtDrawTime = false;
 };
 
-/// The element an external `<use>` is instantiating from this document, or `entt::null`.
-Entity ExternalUseInstanceRoot(const Registry& registry) {
-  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
-  return occurrence ? occurrence->root : entt::null;
-}
-
-/// Whether \p entity is a `<use>` instance's copy: a shadow entity of a same-document use, or the
-/// root an external use is instantiating.
+/// Whether \p entity is a `<use>` instance's copy whose shadow-only children render: a shadow
+/// entity of a same-document use, or a `<symbol>` an external use is instantiating. An external use
+/// of another shadow-only container (mask, pattern, marker) renders nothing, per SVG 2.
 bool IsInstanceCopy(const Registry& registry, Entity entity) {
-  return registry.all_of<ShadowEntityComponent>(entity) ||
-         entity == ExternalUseInstanceRoot(registry);
+  if (registry.all_of<ShadowEntityComponent>(entity)) {
+    return true;
+  }
+  const auto* type = registry.try_get<ElementTypeComponent>(entity);
+  return entity == ExternalUseInstanceRoot(registry) && type && type->type() == ElementType::Symbol;
 }
 
 /**

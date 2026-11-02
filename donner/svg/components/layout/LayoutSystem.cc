@@ -527,6 +527,12 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
     }
 
     parents.push_back(parent);
+    // An external use instance is placed by its <use>, never by its ancestors in this document.
+    if (parent == ExternalUseInstanceRoot(registry)) {
+      parentFromWorld = Transform2d();
+      worldIsCanvas = false;
+      break;
+    }
   }
 
   if (parents.empty()) {
