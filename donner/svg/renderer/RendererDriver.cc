@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -3284,45 +3285,45 @@ bool IsTranslationInvariantFilterGraph(const components::FilterGraph& graph) {
 /// revision and the occurrence's retained styles. Everything that loads, lays out text, animates,
 /// instantiates or replays content elsewhere is excluded.
 bool IsCacheableFilteredContentType(ElementType type) {
-  switch (type) {
-    case ElementType::A:
-    case ElementType::Circle:
-    case ElementType::ClipPath:
-    case ElementType::Defs:
-    case ElementType::Desc:
-    case ElementType::Ellipse:
-    case ElementType::FeBlend:
-    case ElementType::FeColorMatrix:
-    case ElementType::FeComponentTransfer:
-    case ElementType::FeComposite:
-    case ElementType::FeConvolveMatrix:
-    case ElementType::FeDisplacementMap:
-    case ElementType::FeDropShadow:
-    case ElementType::FeFlood:
-    case ElementType::FeFuncA:
-    case ElementType::FeFuncB:
-    case ElementType::FeFuncG:
-    case ElementType::FeFuncR:
-    case ElementType::FeGaussianBlur:
-    case ElementType::FeMerge:
-    case ElementType::FeMergeNode:
-    case ElementType::FeMorphology:
-    case ElementType::FeOffset:
-    case ElementType::FeTile:
-    case ElementType::Filter:
-    case ElementType::G:
-    case ElementType::Line:
-    case ElementType::LinearGradient:
-    case ElementType::Metadata:
-    case ElementType::Path:
-    case ElementType::Polygon:
-    case ElementType::Polyline:
-    case ElementType::RadialGradient:
-    case ElementType::Rect:
-    case ElementType::Stop:
-    case ElementType::Title: return true;
-    default: return false;
-  }
+  static constexpr std::array kCacheableTypes = {
+      ElementType::A,
+      ElementType::Circle,
+      ElementType::ClipPath,
+      ElementType::Defs,
+      ElementType::Desc,
+      ElementType::Ellipse,
+      ElementType::FeBlend,
+      ElementType::FeColorMatrix,
+      ElementType::FeComponentTransfer,
+      ElementType::FeComposite,
+      ElementType::FeConvolveMatrix,
+      ElementType::FeDisplacementMap,
+      ElementType::FeDropShadow,
+      ElementType::FeFlood,
+      ElementType::FeFuncA,
+      ElementType::FeFuncB,
+      ElementType::FeFuncG,
+      ElementType::FeFuncR,
+      ElementType::FeGaussianBlur,
+      ElementType::FeMerge,
+      ElementType::FeMergeNode,
+      ElementType::FeMorphology,
+      ElementType::FeOffset,
+      ElementType::FeTile,
+      ElementType::Filter,
+      ElementType::G,
+      ElementType::Line,
+      ElementType::LinearGradient,
+      ElementType::Metadata,
+      ElementType::Path,
+      ElementType::Polygon,
+      ElementType::Polyline,
+      ElementType::RadialGradient,
+      ElementType::Rect,
+      ElementType::Stop,
+      ElementType::Title,
+  };
+  return std::find(kCacheableTypes.begin(), kCacheableTypes.end(), type) != kCacheableTypes.end();
 }
 
 /// Whether \p paint is a pattern, whose tile content the driver draws from elsewhere.
@@ -3342,6 +3343,22 @@ bool InstanceDrawsOnlyItsOwnContent(const components::RenderingInstanceComponent
 
 }  // namespace
 
+bool RendererDriver::isCacheableFilteredElement(Registry& registry, Entity element,
+                                                bool filteredRoot) const {
+  const auto* type = registry.try_get<components::ElementTypeComponent>(element);
+  if (type == nullptr || !IsCacheableFilteredContentType(type->type())) {
+    return false;
+  }
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(element);
+  if (instance == nullptr) {
+    return true;
+  }
+  const auto* stages = filteredRoot ? nullptr : preparedFilterStagesFor(element);
+  return InstanceDrawsOnlyItsOwnContent(*instance) &&
+         (stages == nullptr ||
+          std::all_of(stages->begin(), stages->end(), IsTranslationInvariantFilterGraph));
+}
+
 std::optional<FilterResultContentKey> RendererDriver::cacheableFilterContent(
     Registry& registry, Entity entity, const components::RenderingInstanceComponent& instance,
     const components::FilterGraph& graph) const {
@@ -3353,23 +3370,8 @@ std::optional<FilterResultContentKey> RendererDriver::cacheableFilterContent(
   while (!pending.empty()) {
     const Entity element = pending.back();
     pending.pop_back();
-    const auto* type = registry.try_get<components::ElementTypeComponent>(element);
-    if (type == nullptr || !IsCacheableFilteredContentType(type->type())) {
+    if (!isCacheableFilteredElement(registry, element, element == entity)) {
       return std::nullopt;
-    }
-    if (const auto* nested = registry.try_get<components::RenderingInstanceComponent>(element)) {
-      if (!InstanceDrawsOnlyItsOwnContent(*nested)) {
-        return std::nullopt;
-      }
-      if (element != entity) {
-        if (const auto* stages = preparedFilterStagesFor(element)) {
-          for (const components::FilterGraph& stage : *stages) {
-            if (!IsTranslationInvariantFilterGraph(stage)) {
-              return std::nullopt;
-            }
-          }
-        }
-      }
     }
     for (Entity child = registry.get<donner::components::TreeComponent>(element).firstChild();
          child != entt::null;
@@ -3513,54 +3515,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushClip(entityClip);
     }
 
-    bool drewCachedFilterResult = false;
-    if (filterLayerCount == 1 && filterResultScope_) {
-      const components::FilterGraph& stage = filterStages->front();
-      if (const std::optional<FilterResultContentKey> content =
-              cacheableFilterContent(registry, entity, instance, stage)) {
-        drewCachedFilterResult =
-            renderer_.pushCachedFilterLayer(*content, stage, stage.filterRegion) ==
-            CachedFilterLayerResult::Drawn;
-        if (!drewCachedFilterResult) {
-          ++pushedFilterLayers_;  // Popped by popFilterStages, as a layer pushFilterStages pushed.
-        }
-      } else {
-        pushFilterStages(filterStages);
-      }
-    } else {
-      pushFilterStages(filterStages);
-    }
-
-    if (drewCachedFilterResult) {
-      // The cached result stands in for everything the filter layer would have captured: the
-      // entity's own paint and its whole subtree. Their draws are recorded as painted so font
-      // coverage matches a frame that drew them.
-      components::ScopedFontResourceRender::recordDraw(registry, entity, /*excluded=*/false);
-      Entity consumed = entity;
-      if (HasPendingSubtree(view, registry, instance)) {
-        consumed = instance.subtreeInfo->lastRenderedEntity;
-        while (!view.done()) {
-          const Entity skipped = view.currentEntity();
-          components::ScopedFontResourceRender::recordDraw(registry, skipped, /*excluded=*/false);
-          view.advance();
-          if (skipped == consumed) {
-            break;
-          }
-        }
-      }
-      if (hasEntityClip) {
-        renderer_.popClip();
-      }
-      for (int mi = 0; mi < maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      if (hasIsolatedLayer) {
-        renderer_.popIsolatedLayer();
-      }
-      if (hasViewportClip) {
-        renderer_.popClip();
-      }
-      popSubtreeMarkersEndingAt(consumed);
+    if (pushFilterStagesOrDrawCached(registry, entity, instance, filterStages)) {
+      popEntityLayers(hasEntityClip, maskDepth, hasIsolatedLayer, hasViewportClip);
+      skipCachedFilterSubtree(view, registry, entity, instance);
       continue;
     }
 
@@ -3693,23 +3650,69 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       subtreeMarkers_.push_back(deferred);
     } else {
       popFilterStages(filterLayerCount);
-      if (hasEntityClip) {
-        renderer_.popClip();
-      }
-      for (int mi = 0; mi < maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      if (hasIsolatedLayer) {
-        renderer_.popIsolatedLayer();
-      }
-      if (hasViewportClip) {
-        renderer_.popClip();
-      }
+      popEntityLayers(hasEntityClip, maskDepth, hasIsolatedLayer, hasViewportClip);
     }
 
     // Pop deferred subtree layers when we reach their last entity.
     popSubtreeMarkersEndingAt(entity);
   }
+}
+
+void RendererDriver::popEntityLayers(bool hasEntityClip, int maskDepth, bool hasIsolatedLayer,
+                                     bool hasViewportClip) {
+  if (hasEntityClip) {
+    renderer_.popClip();
+  }
+  for (int mi = 0; mi < maskDepth; ++mi) {
+    renderer_.popMask();
+  }
+  if (hasIsolatedLayer) {
+    renderer_.popIsolatedLayer();
+  }
+  if (hasViewportClip) {
+    renderer_.popClip();
+  }
+}
+
+bool RendererDriver::pushFilterStagesOrDrawCached(
+    Registry& registry, Entity entity, const components::RenderingInstanceComponent& instance,
+    const std::vector<components::FilterGraph>* stages) {
+  const std::optional<FilterResultContentKey> content =
+      stages != nullptr && stages->size() == 1
+          ? cacheableFilterContent(registry, entity, instance, stages->front())
+          : std::nullopt;
+  if (!content) {
+    pushFilterStages(stages);
+    return false;
+  }
+  const components::FilterGraph& stage = stages->front();
+  if (renderer_.pushCachedFilterLayer(*content, stage, stage.filterRegion) ==
+      CachedFilterLayerResult::Drawn) {
+    return true;
+  }
+  ++pushedFilterLayers_;  // Popped by popFilterStages, as a layer pushFilterStages pushed.
+  return false;
+}
+
+void RendererDriver::skipCachedFilterSubtree(
+    RenderingInstanceView& view, Registry& registry, Entity entity,
+    const components::RenderingInstanceComponent& instance) {
+  // The cached result stands in for everything the filter layer would have captured: the entity's
+  // own paint and its whole subtree. Their draws are recorded as painted so font coverage matches
+  // a frame that drew them.
+  components::ScopedFontResourceRender::recordDraw(registry, entity, /*excluded=*/false);
+  Entity consumed = entity;
+  if (HasPendingSubtree(view, registry, instance)) {
+    consumed = instance.subtreeInfo->lastRenderedEntity;
+    bool reachedEnd = false;
+    while (!view.done() && !reachedEnd) {
+      const Entity skipped = view.currentEntity();
+      components::ScopedFontResourceRender::recordDraw(registry, skipped, /*excluded=*/false);
+      view.advance();
+      reachedEnd = skipped == consumed;
+    }
+  }
+  popSubtreeMarkersEndingAt(consumed);
 }
 
 void RendererDriver::popSubtreeMarkersEndingAt(Entity entity) {

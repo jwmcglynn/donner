@@ -94,9 +94,8 @@ public:
    */
   bool admitMiss(const FilterResultContentKey& content, const std::array<double, 4>& linear,
                  std::uint64_t frame) {
-    auto record = std::find_if(admissions_.begin(), admissions_.end(), [&](const Admission& a) {
-      return a.content.sameContent(content);
-    });
+    auto record = std::find_if(admissions_.begin(), admissions_.end(),
+                               [&](const Admission& a) { return a.content.sameContent(content); });
     if (record == admissions_.end()) {
       if (admissions_.size() >= kMaximumAdmissionRecords) {
         admissions_.erase(std::min_element(
@@ -106,7 +105,8 @@ public:
       admissions_.push_back(Admission{content, linear, frame});
       return true;
     }
-    const bool animating = record->linear != linear && frame - record->frame <= kAnimationWindowFrames;
+    const bool animating =
+        record->linear != linear && frame - record->frame <= kAnimationWindowFrames;
     record->linear = linear;
     record->frame = frame;
     return !animating;
@@ -127,8 +127,7 @@ public:
   std::vector<Payload> insert(FilterResultContentKey content, FilterResultPlacement placement,
                               Payload payload, std::uint64_t bytes) {
     std::vector<Payload> evicted = evictUntil(kMaximumEntries - 1, byteLimit_ - bytes);
-    entries_.push_back(
-        Entry{std::move(content), placement, std::move(payload), bytes, ++uses_});
+    entries_.push_back(Entry{std::move(content), placement, std::move(payload), bytes, ++uses_});
     bytes_ += bytes;
     return evicted;
   }

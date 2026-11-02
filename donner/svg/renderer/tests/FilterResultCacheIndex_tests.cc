@@ -64,8 +64,8 @@ TEST(FilterResultCacheIndexTest, EvictsLeastRecentlyUsedPastTheEntryBound) {
   auto document = std::make_shared<int>(0);
   Index index;
   for (std::uint32_t i = 0; i < Index::kMaximumEntries; ++i) {
-    EXPECT_TRUE(index.insert(Content(document, i), Linear(kIdentity), static_cast<int>(i), 1)
-                    .empty());
+    EXPECT_TRUE(
+        index.insert(Content(document, i), Linear(kIdentity), static_cast<int>(i), 1).empty());
   }
   // Touch the oldest so the second oldest becomes the victim.
   ASSERT_NE(index.find(Content(document, 0), Linear(kIdentity)), nullptr);
@@ -123,8 +123,8 @@ TEST(FilterResultCacheIndexTest, ScaleChangeAfterAQuietPeriodIsAdmitted) {
   Index index;
   const FilterResultContentKey content = Content(document, 1);
   EXPECT_TRUE(index.admitMiss(content, kIdentity, 1));
-  EXPECT_TRUE(index.admitMiss(content, {2.0, 0.0, 0.0, 2.0},
-                              1 + Index::kAnimationWindowFrames + 1));
+  EXPECT_TRUE(
+      index.admitMiss(content, {2.0, 0.0, 0.0, 2.0}, 1 + Index::kAnimationWindowFrames + 1));
 }
 
 TEST(FilterResultCacheIndexTest, ClearReturnsEveryPayload) {

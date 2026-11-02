@@ -506,6 +506,32 @@ private:
       Registry& registry, Entity entity, const components::RenderingInstanceComponent& instance,
       const components::FilterGraph& graph) const;
 
+  /// Whether \p element may lie in a cached filter layer's subtree: its type and paint draw only
+  /// its own content, and a filter of its own, unless it is the \p filteredRoot whose filter is
+  /// the layer, is translation invariant.
+  bool isCacheableFilteredElement(Registry& registry, Entity element, bool filteredRoot) const;
+
+  /// Pop the layers \ref traverse pushed for one entity, other than its filter layers, in pop
+  /// order.
+  void popEntityLayers(bool hasEntityClip, int maskDepth, bool hasIsolatedLayer,
+                       bool hasViewportClip);
+
+  /**
+   * Push \p entity's filter stages, drawing a cached result instead of its one stage when the
+   * renderer holds one for its content.
+   *
+   * @return True when a cached result was drawn: the entity's content and subtree are not drawn
+   *   and no filter layer is pushed.
+   */
+  bool pushFilterStagesOrDrawCached(Registry& registry, Entity entity,
+                                    const components::RenderingInstanceComponent& instance,
+                                    const std::vector<components::FilterGraph>* stages);
+
+  /// After \ref pushFilterStagesOrDrawCached drew a cached result: skip the entity's subtree,
+  /// recording its draws as painted for font coverage, and pop the subtree markers ending there.
+  void skipCachedFilterSubtree(RenderingInstanceView& view, Registry& registry, Entity entity,
+                               const components::RenderingInstanceComponent& instance);
+
   /// Pop the deferred layers of every subtree whose last rendered entity is \p entity.
   void popSubtreeMarkersEndingAt(Entity entity);
 

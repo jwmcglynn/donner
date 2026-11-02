@@ -2724,13 +2724,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     FilterResultPlacement placement;
     placement.linear = {deviceFromFilter.data[0], deviceFromFilter.data[1],
                         deviceFromFilter.data[2], deviceFromFilter.data[3]};
-    const auto* blur =
-        graph.nodes.empty()
-            ? nullptr
-            : std::get_if<components::filter_primitive::GaussianBlur>(&graph.nodes.back().primitive);
+    const auto* blur = graph.nodes.empty()
+                           ? nullptr
+                           : std::get_if<components::filter_primitive::GaussianBlur>(
+                                 &graph.nodes.back().primitive);
     const double scaleX = deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length();
     const double scaleY = deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length();
-    const bool smooth = blur != nullptr && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
+    const bool smooth = blur != nullptr &&
+                        graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
                         blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0;
     if (!smooth) {
       const auto bucket = [](double translation) {
@@ -2752,16 +2753,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // A whole-pixel move copies texels exactly, as the uncached composite does; only a fractional
     // move of a resampled result interpolates.
     const bool wholePixels = !payload.resampled || (NearEquals(delta.x, rounded.x, 1e-6) &&
-                                                     NearEquals(delta.y, rounded.y, 1e-6));
+                                                    NearEquals(delta.y, rounded.y, 1e-6));
     if (wholePixels) {
       delta = rounded;
     }
     encoder->setTransform(Transform2d());
-    encoder->drawTexture(payload.texture,
-                         Box2d(payload.deviceRect.topLeft + delta,
-                               payload.deviceRect.bottomRight + delta),
-                         kWholeTextureUv, 1.0, /*pixelated=*/wholePixels,
-                         /*sourceIsPremultiplied=*/true);
+    encoder->drawTexture(
+        payload.texture,
+        Box2d(payload.deviceRect.topLeft + delta, payload.deviceRect.bottomRight + delta),
+        kWholeTextureUv, 1.0, /*pixelated=*/wholePixels,
+        /*sourceIsPremultiplied=*/true);
     syncTransform();
   }
 
@@ -2771,29 +2772,49 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * Records nothing when the result reaches past the captured buffer, which would leave the cached
    * copy missing content another placement would show.
    */
-  void recordFilterResult(const FilterStackFrame& frame, const gpu::Texture& filtered,
+  /// The device-pixel rectangle covering \p frame's filter region, when the captured raster of
+  /// \p rasterSize holds all of it. The engine clips the result to the filter region, so those
+  /// pixels hold the whole result.
+  static std::optional<Box2d> FilterResultDeviceRect(const FilterStackFrame& frame,
+                                                     const gpu::Extent2d& rasterSize) {
+    const Box2d region = frame.deviceFromFilter.transformBox(frame.filterRegion);
+    const Box2d rect(Vector2d(std::floor(region.topLeft.x), std::floor(region.topLeft.y)),
+                     Vector2d(std::ceil(region.bottomRight.x), std::ceil(region.bottomRight.y)));
+    const Vector2d offset(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
+    const Box2d inRaster(rect.topLeft + offset, rect.bottomRight + offset);
+    const Box2d raster(Vector2d::Zero(), Vector2d(rasterSize.width, rasterSize.height));
+    const bool inside = inRaster.topLeft.x >= 0.0 && inRaster.topLeft.y >= 0.0 &&
+                        inRaster.bottomRight.x <= raster.bottomRight.x &&
+                        inRaster.bottomRight.y <= raster.bottomRight.y;
+    return inside && rect.width() > 0.0 && rect.height() > 0.0 ? std::optional<Box2d>(rect)
+                                                               : std::nullopt;
+  }
+
+  /// Whether \p frame's result may be recorded now: it was marked for recording, its graph executed
+  /// (a declined graph composites its unfiltered source, which a later frame with more budget
+  /// would filter), and the frame is recording normally.
+  [[nodiscard]] bool canRecordFilterResult(const FilterStackFrame& frame,
+                                           geode::FilterExecutionResult::Kind kind) const {
+    return frame.resultRecording && kind == geode::FilterExecutionResult::Kind::Output &&
+           frameGpuEncoder != nullptr && !frameRecordingAbandoned;
+  }
+
+  void recordFilterResult(const FilterStackFrame& frame, geode::FilterExecutionResult::Kind kind,
+                          const gpu::Texture& filtered,
                           const gpu::TextureDescriptor& filteredDesc) {
-    if (!frame.resultRecording || frameGpuEncoder == nullptr || frameRecordingAbandoned) {
+    if (!canRecordFilterResult(frame, kind)) {
       return;
     }
-    // The engine clips the result to the filter region, so the pixels covering the region hold
-    // all of it.
-    const Box2d region = frame.deviceFromFilter.transformBox(frame.filterRegion);
-    const double left = std::floor(region.topLeft.x);
-    const double top = std::floor(region.topLeft.y);
-    const double right = std::ceil(region.bottomRight.x);
-    const double bottom = std::ceil(region.bottomRight.y);
+    const std::optional<Box2d> rect = FilterResultDeviceRect(frame, filteredDesc.size);
+    if (!rect.has_value()) {
+      return;
+    }
+    const double left = rect->topLeft.x;
+    const double top = rect->topLeft.y;
     const double bufferLeft = left + frame.filterBufferOffsetX;
     const double bufferTop = top + frame.filterBufferOffsetY;
-    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
-        !std::isfinite(bottom) || bufferLeft < 0.0 || bufferTop < 0.0 ||
-        right + frame.filterBufferOffsetX > static_cast<double>(filteredDesc.size.width) ||
-        bottom + frame.filterBufferOffsetY > static_cast<double>(filteredDesc.size.height) ||
-        right <= left || bottom <= top) {
-      return;
-    }
-    const gpu::Extent2d extent{static_cast<uint32_t>(right - left),
-                               static_cast<uint32_t>(bottom - top)};
+    const gpu::Extent2d extent{static_cast<uint32_t>(rect->width()),
+                               static_cast<uint32_t>(rect->height())};
     const std::uint64_t bytes = std::uint64_t{extent.width} * extent.height *
                                 gpu::TextureFormatBytesPerTexel(filteredDesc.format);
     if (!filterResultCache.canHold(bytes) ||
@@ -2816,7 +2837,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     ++filterResultCacheRecords;
     FilterResultPayload payload{
-        std::move(texture), desc, Box2d(Vector2d(left, top), Vector2d(right, bottom)),
+        std::move(texture), desc, *rect,
         Vector2d(frame.deviceFromFilter.data[4], frame.deviceFromFilter.data[5]),
         frame.resultRecording->placement.fractionBucketX == FilterResultPlacement::kAnyFraction};
     retireFilterResults(filterResultCache.insert(frame.resultRecording->content,
@@ -6799,11 +6820,7 @@ void RendererGeode::popFilterLayer() {
   }
   // Recorded before the composite below, so the copy reads the result before anything else
   // samples it, in the same frame-encoder order as the viewport extraction copy.
-  // Only an executed graph is recorded: a declined graph composites its unfiltered source, which a
-  // later frame with more budget would filter.
-  if (filtered.kind == geode::FilterExecutionResult::Kind::Output) {
-    impl_->recordFilterResult(frame, *filteredTexture, filteredDesc);
-  }
+  impl_->recordFilterResult(frame, filtered.kind, *filteredTexture, filteredDesc);
   if (FilterInputBuffer{static_cast<int>(frame.layerDesc.size.width),
                         static_cast<int>(frame.layerDesc.size.height), frame.filterBufferOffsetX,
                         frame.filterBufferOffsetY}
