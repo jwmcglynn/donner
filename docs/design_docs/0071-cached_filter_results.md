@@ -211,12 +211,14 @@ filter's capture does not use the cache.
 ## Performance
 
 `//donner/svg/renderer/tests:external_use_sprite_tests_wallclock` with `--config=geode -c opt`,
-median frame time over 120 frames on an Apple GPU, cache disabled versus enabled:
+median frame time over 120 frames on an Apple GPU, cache disabled versus enabled. One run, with
+the host's load average between 44 and 56 from other jobs, so absolute times are noisy; the
+ratio is the signal.
 
 | Scene | Uncached | Cached |
 | --- | --- | --- |
-| 100 inner-glow blurred background sprites of 5 kinds, drifting, plus 3 vector sprites, 800x1750 | 37.7 ms | 3.6 ms |
-| 80 glowing pieces of 3 kinds falling with swap scaling, plus 4 lit bevels, 1206x2622 | 22.6 ms | 5.3 ms |
+| 100 inner-glow blurred background sprites of 5 kinds, drifting, plus 3 vector sprites, 800x1750 | 40.5 ms | 3.5 ms |
+| 80 glowing pieces of 3 kinds falling with swap scaling, plus 4 lit bevels, 1206x2622 | 23.9 ms | 4.6 ms |
 
 ## Security / Privacy
 
