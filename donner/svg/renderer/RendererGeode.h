@@ -544,8 +544,8 @@ public:
    * set, so a frame of many filtered elements reuses last frame's surfaces. An embedder whose
    * rendering pauses should call this to give that memory back: `ToFloor` when rendering goes
    * idle, and `All` when the app is backgrounded or hidden (for example on a browser
-   * `visibilitychange` to hidden) or the platform reports memory pressure. A device idle for two
-   * seconds also returns to the floor at its next frame or trim.
+   * `visibilitychange` to hidden) or the platform reports memory pressure. A device that renders
+   * nothing for two seconds also returns to the floor at its next frame or trim.
    *
    * @param level How much to free.
    */
