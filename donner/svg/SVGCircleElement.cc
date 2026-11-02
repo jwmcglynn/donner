@@ -74,6 +74,7 @@ void SVGCircleElement::invalidate() const {
 
 void SVGCircleElement::compute() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   auto& circle = handle_.get_or_emplace<components::CircleComponent>(access);
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   components::ShapeSystem().createComputedPath(handle_, circle, FontMetrics(), disabledSink);

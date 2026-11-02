@@ -4418,7 +4418,7 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   }
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
-  if (components::ExternalUseStyleRetention::RestoreSubtreesReadByOccurrence(registry)) {
+  if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
     RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
   }
 }
