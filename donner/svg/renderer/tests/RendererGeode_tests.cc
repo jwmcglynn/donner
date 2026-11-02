@@ -2703,6 +2703,98 @@ TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcros
       << "Unique texture sizes must not bypass the global pool budget";
 }
 
+/// Draws \p count sibling isolated layers, each filling its own column of the target with its own
+/// color, so a composite that ran after a later layer had reused its texture would show up as a
+/// wrong or missing column.
+void DrawSiblingLayerColumns(RendererGeode& renderer, int count, double columnWidth,
+                             double height) {
+  for (int index = 0; index < count; ++index) {
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.setPaint(solidFill(css::RGBA(static_cast<uint8_t>(40 * index), 255,
+                                          static_cast<uint8_t>(255 - 40 * index), 255)));
+    renderer.drawRect(Box2d::FromXYWH(columnWidth * index, 0.0, columnWidth, height),
+                      StrokeParams{});
+    renderer.popIsolatedLayer();
+  }
+}
+
+TEST_F(RendererGeodeTest, SiblingIsolatedLayersShareOneTextureWithinAFrame) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  // A size no other case uses, so nothing pooled by an earlier case can stand in for reuse.
+  constexpr int kLayers = 6;
+  constexpr double kColumnWidth = 7.0;
+  constexpr double kHeight = 13.0;
+  RenderViewport viewport;
+  viewport.size = Vector2d(kColumnWidth * kLayers, kHeight);
+  viewport.devicePixelRatio = 1.0;
+
+  RendererGeode renderer = createRenderer();
+  renderer.beginFrame(viewport);
+  DrawSiblingLayerColumns(renderer, kLayers, kColumnWidth, kHeight);
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 2u)
+      << "The frame creates its primary target and one layer texture; each later sibling takes "
+         "the texture the previous one finished compositing from, instead of one texture per "
+         "layer held to the end of the frame";
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  for (int index = 0; index < kLayers; ++index) {
+    EXPECT_THAT(PixelAt(bitmap, static_cast<int>(kColumnWidth * index + kColumnWidth / 2),
+                        static_cast<int>(kHeight / 2)),
+                RgbaEq(40 * index, 255, 255 - 40 * index, 255))
+        << "Layer " << index << " must composite its own content, not a later layer's";
+  }
+
+  renderer.beginFrame(viewport);
+  DrawSiblingLayerColumns(renderer, kLayers, kColumnWidth, kHeight);
+  renderer.endFrame();
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u)
+      << "A repeat frame takes its one layer texture back out of the pool";
+}
+
+TEST_F(RendererGeodeTest, NestedIsolatedLayersReuseOnlyTexturesTheirFrameFinishedWith) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  constexpr int kChildren = 4;
+  constexpr double kColumnWidth = 5.0;
+  constexpr double kHeight = 11.0;
+  RenderViewport viewport;
+  viewport.size = Vector2d(kColumnWidth * (kChildren + 1), kHeight);
+  viewport.devicePixelRatio = 1.0;
+
+  RendererGeode renderer = createRenderer();
+  renderer.beginFrame(viewport);
+  // The parent stays open while its children reuse one texture among themselves; it must never be
+  // handed to a child, and its own content must survive their composites.
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(kColumnWidth * kChildren, 0.0, kColumnWidth, kHeight),
+                    StrokeParams{});
+  DrawSiblingLayerColumns(renderer, kChildren, kColumnWidth, kHeight);
+  renderer.popIsolatedLayer();
+  // A sibling after the parent may take either finished texture.
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kColumnWidth, kHeight / 2), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 3u)
+      << "The primary target, the parent layer and one texture shared by every child and the "
+         "trailing sibling";
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  const int midY = static_cast<int>(kHeight * 3 / 4);
+  EXPECT_THAT(PixelAt(bitmap, static_cast<int>(kColumnWidth * kChildren + 2), midY),
+              RgbaEq(255, 0, 0, 255));
+  for (int index = 0; index < kChildren; ++index) {
+    EXPECT_THAT(PixelAt(bitmap, static_cast<int>(kColumnWidth * index + 2), midY),
+                RgbaEq(40 * index, 255, 255 - 40 * index, 255))
+        << "Child " << index;
+  }
+  EXPECT_THAT(PixelAt(bitmap, 2, 2), RgbaEq(0, 0, 255, 255));
+}
+
 TEST_F(RendererGeodeTest, SurfaceBudgetCountsPoolReuseAndNestedOffscreensBeforeAllocation) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 

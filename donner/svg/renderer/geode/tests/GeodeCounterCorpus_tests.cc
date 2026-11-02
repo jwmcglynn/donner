@@ -227,11 +227,11 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
 constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
-        /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 4, 20, 20},
+        /*violated=*/kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{0, 0, 20, 20},
         /*reason=*/
-        "gradient-painted paths under an opacity group re-upload geometry, allocate scratch "
-        "textures, and rebuild bind groups per draw",
+        "gradient-painted paths under an opacity group re-upload geometry and rebuild bind "
+        "groups per draw",
         /*tracking=*/
         "clears when gradient-painted paths and layer composites get the residency the "
         "solid-fill path already has",
@@ -449,14 +449,12 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"marker_segments",
-        /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 7, 203, 43},
+        /*violated=*/kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{0, 0, 203, 43},
         /*reason=*/
-        "every drawn marker instance re-uploads its geometry and allocates clip scratch "
-        "textures each frame",
-        /*tracking=*/
-        "clears when marker instance geometry gains per-entity residency and marker clips "
-        "reuse pooled scratch",
+        "every drawn marker instance re-uploads its geometry through the per-frame arena and "
+        "builds its own bind group",
+        /*tracking=*/"clears when marker instance geometry gains per-entity residency",
     },
     {
         /*scene=*/"marker_spec_example",

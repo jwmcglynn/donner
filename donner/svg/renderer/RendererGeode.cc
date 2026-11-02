@@ -2253,10 +2253,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  /// Acquire a pooled texture matching `desc`, or create a fresh one
-  /// on miss. Always increments the `textureCreates` counter on miss;
-  /// never on hit. Returns an invalid texture on device failure.
+  /// Acquire a texture matching `desc`: one this frame already finished with (see
+  /// `releaseTextureForReuseWithinFrame`), else a pooled one, else a fresh one. Always increments
+  /// the `textureCreates` counter on a fresh creation; never on reuse. Returns an invalid texture
+  /// on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
+    if (gpu::Texture reused = takeTextureReusableWithinFrame(desc); reused.isValid()) {
+      return reused;
+    }
     if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
@@ -2307,9 +2311,57 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   struct PendingRelease {
     gpu::Texture texture;
     gpu::TextureDescriptor desc;
+    /// Whether a later acquisition in this same frame may take the texture back out; see
+    /// `releaseTextureForReuseWithinFrame`.
+    bool reusableWithinFrame = false;
   };
   std::vector<PendingRelease> framePendingReleases;
   std::vector<PendingRelease> failedFilterTextures;
+
+  /**
+   * Hand \p texture back for reuse later in this frame, once the frame's recorded stream already
+   * holds every command that names it.
+   *
+   * The frame records into one ordered command stream: an encoder that next draws into the
+   * texture can only begin after the encoder now sampling it has ended its pass, so the reuse
+   * executes after those reads even though nothing has been submitted yet. Without this, every
+   * isolated layer of a frame holds its own target-sized texture until the frame ends, so a frame
+   * of many sibling layers allocates that many full-size surfaces at once and, past the pool's
+   * budget, recreates most of them every frame.
+   *
+   * The texture stays in the frame's pending releases, with its surface still reserved, so every
+   * frame-end path (submission, abandonment, teardown) treats it exactly as before. A texture a
+   * queue upload can write is not offered for reuse, since an upload runs ahead of recorded work
+   * that is not submitted yet; nor is anything once the frame's recording has failed.
+   */
+  void releaseTextureForReuseWithinFrame(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
+    if (!texture.isValid()) {
+      return;
+    }
+    if (!frameRecordingOpen || frameRecordingAbandoned || frameArenaWriteFailed ||
+        gpu::HasAllFlags(desc.usage, gpu::TextureUsage::CopyDst)) {
+      releaseTextureAtFrameEnd(std::move(texture), desc);
+      return;
+    }
+    framePendingReleases.push_back({std::move(texture), desc, /*reusableWithinFrame=*/true});
+  }
+
+  /// Take back a texture matching \p desc that this frame released for reuse, or an invalid
+  /// texture when there is none. Its surface reservation carries over to the new use.
+  gpu::Texture takeTextureReusableWithinFrame(const gpu::TextureDescriptor& desc) {
+    if (!frameRecordingOpen || frameRecordingAbandoned || frameArenaWriteFailed) {
+      return gpu::Texture{};
+    }
+    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
+    for (auto it = framePendingReleases.rbegin(); it != framePendingReleases.rend(); ++it) {
+      if (it->reusableWithinFrame && RendererGeodeTextureKey::From(it->desc) == key) {
+        gpu::Texture texture = std::move(it->texture);
+        framePendingReleases.erase(std::next(it).base());
+        return texture;
+      }
+    }
+    return gpu::Texture{};
+  }
 
   void drainFencedTextureBackings() {
     if (device) {
@@ -6359,7 +6411,7 @@ void RendererGeode::popIsolatedLayer() {
       // both `frame.layerTexture` and `snapshot` into the shared
       // one of the frame's command buffers; they must stay alive until it
       // is submitted at `endFrame`.
-      impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      impl_->releaseTextureForReuseWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
@@ -6378,8 +6430,9 @@ void RendererGeode::popIsolatedLayer() {
   impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
-  // Same deferred-release rationale as the blend-mode branch above.
-  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  // The composite above is the layer's last use, and whatever draws into the layer next records
+  // after this encoder ends its pass, so a later layer in this frame can take it.
+  impl_->releaseTextureForReuseWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
 }
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
