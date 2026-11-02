@@ -13,6 +13,7 @@
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1242,6 +1243,7 @@ public:
     executions_ = 0;
     refusedGraphs_ = 0;
     lastRefusalReason_ = RejectionReason::None;
+    priorRefusalReason_ = RejectionReason::None;
     workUnits_ = 0;
     intermediateBytes_ = 0;
     reservedGpuSurfaces_ = 0;
@@ -1253,7 +1255,12 @@ public:
     rejected_ = false;
   }
 
-  /** Release GPU-retained accounting after submitting one ordered command-buffer chunk. */
+  /**
+   * Release GPU-retained accounting after submitting one ordered command-buffer chunk.
+   *
+   * The memory refusal that started the chunk is withdrawn, so a graph the renderer retries and
+   * admits in the new chunk counts as neither refused nor against \ref kMaximumExecutions twice.
+   */
   bool beginChunkAfterSubmit() {
     if (rejectionReason_ != RejectionReason::MemoryLimit || activeGpuReservations_ != 0 ||
         intermediateBytes_ == 0) {
@@ -1264,6 +1271,9 @@ public:
     liveCpuCaptureBytes_ = 0;
     rejectionReason_ = RejectionReason::None;
     rejected_ = false;
+    // A memory refusal latches the frame, so it is the latest refusal and nothing was refused since.
+    --refusedGraphs_;
+    lastRefusalReason_ = priorRefusalReason_;
     ++chunks_;
     return true;
   }
@@ -1403,7 +1413,7 @@ private:
   /// Record a refused graph, latching the frame for frame-wide reasons or once attempts run out.
   void refuse(RejectionReason reason) {
     ++refusedGraphs_;
-    lastRefusalReason_ = reason;
+    priorRefusalReason_ = std::exchange(lastRefusalReason_, reason);
     if (LatchesFrame(reason) || executions_ + refusedGraphs_ >= kMaximumExecutions) {
       rejectionReason_ = reason;
       rejected_ = true;
@@ -1472,6 +1482,8 @@ private:
   std::uint64_t executions_ = 0;
   std::uint64_t refusedGraphs_ = 0;
   RejectionReason lastRefusalReason_ = RejectionReason::None;
+  /// Refusal reason before the latest one, restored when a chunk withdraws a memory refusal.
+  RejectionReason priorRefusalReason_ = RejectionReason::None;
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;
   std::uint64_t persistentGpuBytes_ = 0;
