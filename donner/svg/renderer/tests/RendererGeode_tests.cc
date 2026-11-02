@@ -3066,6 +3066,30 @@ TEST_F(RendererGeodeTest, NestedClipSurfaceRejectionSuppressesTheWholeInnerSubtr
       << "A clip whose required mask could not be allocated must fail closed.";
 }
 
+TEST_F(RendererGeodeTest, PathCacheStorageOfOneDrawnPathHasBoundedInitialAllocation) {
+  // Every document registry with a drawn path, including each externally referenced one, holds
+  // at least one page of path caches.
+  Registry registry;
+  const Entity entity = registry.create();
+  const Path path = PathBuilder().addRect(Box2d({1.0, 1.0}, {4.0, 4.0})).build();
+
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(PathShape{.path = &path, .sourceEntity = EntityHandle(registry, entity)},
+                    StrokeParams{});
+  renderer.endFrame();
+
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<geode::GeodePathCacheComponent>();
+  ASSERT_THAT(storage, testing::NotNull()) << "The draw must have cached its encode";
+  EXPECT_EQ(storage->size(), 1u);
+  EXPECT_LE(storage->capacity() * sizeof(geode::GeodePathCacheComponent), 128u * 1024u);
+  testing::Test::RecordProperty("component_bytes",
+                                std::to_string(sizeof(geode::GeodePathCacheComponent)));
+  testing::Test::RecordProperty("allocated_slots", std::to_string(storage->capacity()));
+}
+
 TEST_F(RendererGeodeTest, ResourceStatsAggregateEveryDocumentTouchedInTheFrame) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 
