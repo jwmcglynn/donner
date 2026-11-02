@@ -91,6 +91,8 @@ donner_cc_library(
         "SVGTitleElement.cc",
         "SVGUnknownElement.cc",
         "SVGUseElement.cc",
+        "UseReference.cc",
+        "UseReference.h",
     ],
     hdrs = [
         "AllSVGElements.h",

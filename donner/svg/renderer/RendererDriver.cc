@@ -3450,10 +3450,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const PreserveAspectRatio aspectRatio =
                 preserveAspectRatioComp != nullptr ? preserveAspectRatioComp->preserveAspectRatio
                                                    : PreserveAspectRatio::Default();
-            const double opacity = style.properties->opacity.get().value();
-
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
-            drawSubDocument(subDoc, sizedElement->bounds, aspectRatio, opacity,
+            drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
                             instance.worldFromEntityTransform * surfaceFromCanvasTransform_,
                             registry, entity);
           }
@@ -3684,9 +3682,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                                    : PreserveAspectRatio::Default();
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
-            drawSubDocument(
-                subDoc, sizedElement->bounds, aspectRatio, style.properties->opacity.get().value(),
-                instance.worldFromEntityTransform * surfaceFromCanvasTransform_, registry, entity);
+            drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
+                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_,
+                            registry, entity);
           }
         }
       } else if (const auto* image =
@@ -4578,6 +4576,42 @@ private:
   bool installed_ = false;
 };
 
+/**
+ * Makes the element an external `<use>` references the root of an instance in its own document for
+ * one occurrence: layout places it relative to the use rather than its ancestors, and a referenced
+ * `<symbol>` or `<svg>` gets the viewport the use establishes.
+ */
+class ExternalUseInstanceScope {
+public:
+  ExternalUseInstanceScope(Registry& child, Entity root, EntityHandle use) : root_(child, root) {
+    // Cached absolute transforms in the root's subtree differ between an instance, placed by the
+    // <use> with the viewport it establishes, and the document's own layout, so entering and
+    // leaving an instance drops them. Only those caches and the use-established viewport are
+    // occurrence state; skipping the drop requires a key covering the root and that viewport.
+    resetInstanceLayout();
+    child.ctx().emplace<components::ExternalUseInstanceContext>(root);
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    (void)components::LayoutSystem().createShadowSizedElementComponent(
+        child, root, use, root, components::ShadowBranchType::Main, disabledSink);
+  }
+
+  ~ExternalUseInstanceScope() {
+    root_.registry()->ctx().erase<components::ExternalUseInstanceContext>();
+    resetInstanceLayout();
+  }
+
+  ExternalUseInstanceScope(const ExternalUseInstanceScope&) = delete;
+  ExternalUseInstanceScope& operator=(const ExternalUseInstanceScope&) = delete;
+
+private:
+  void resetInstanceLayout() {
+    root_.remove<components::ComputedShadowSizedElementComponent>();
+    components::LayoutSystem().invalidateAbsoluteTransforms(root_);
+  }
+
+  EntityHandle root_;
+};
+
 }  // namespace
 
 void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view fragment,
@@ -4614,14 +4648,14 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   const Transform2d surfaceFromHost =
       instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
   if (!fragment.empty()) {
-    drawAdmittedSubDocumentElement(subDocument, fragment, surfaceFromHost,
-                                   style.properties->opacity.get().value(), hostRegistry,
-                                   hostEntity);
+    const ExternalUseInstanceScope instanceScope(child, root,
+                                                 EntityHandle(hostRegistry, hostEntity));
+    drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity);
   } else {
     const Vector2i size = subDocument.canvasSize();
     drawAdmittedSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
-                            PreserveAspectRatio::Default(), style.properties->opacity.get().value(),
-                            surfaceFromHost, hostRegistry, hostEntity);
+                            PreserveAspectRatio::Default(), surfaceFromHost, hostRegistry,
+                            hostEntity);
   }
   if (previousPaint) {
     child.ctx().get<components::RenderingContext>().restoreInitialPaintState(
@@ -4634,7 +4668,7 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
 }
 
 void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
-                                     const PreserveAspectRatio& aspectRatio, double opacity,
+                                     const PreserveAspectRatio& aspectRatio,
                                      const Transform2d& parentAbsoluteTransform,
                                      Registry& hostRegistry, Entity hostEntity) {
   const auto childAccess = subDocument.writeAccess();
@@ -4645,12 +4679,12 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
   const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             child->registry());
-  drawAdmittedSubDocument(subDocument, viewportBounds, aspectRatio, opacity,
-                          parentAbsoluteTransform, hostRegistry, hostEntity);
+  drawAdmittedSubDocument(subDocument, viewportBounds, aspectRatio, parentAbsoluteTransform,
+                          hostRegistry, hostEntity);
 }
 
 void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
-                                             const PreserveAspectRatio& aspectRatio, double opacity,
+                                             const PreserveAspectRatio& aspectRatio,
                                              const Transform2d& parentAbsoluteTransform,
                                              Registry& hostRegistry, Entity hostEntity) {
   // Prepare the sub-document's render tree (styles, layout, resources).
@@ -4667,12 +4701,6 @@ void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box
   ResolvedClip imageClip;
   imageClip.clipRect = viewportBounds;
   renderer_.pushClip(imageClip);
-
-  // Apply opacity as an isolated layer if needed.
-  const bool needsOpacityLayer = opacity < 1.0;
-  if (needsOpacityLayer) {
-    renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
-  }
 
   // Compute the base transform that maps sub-document coordinates into device space.
   // This composes:
@@ -4704,34 +4732,12 @@ void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
-  if (needsOpacityLayer) {
-    renderer_.popIsolatedLayer();
-  }
-
   renderer_.popClip();
 }
 
-void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                                            const Transform2d& parentAbsoluteTransform,
-                                            double opacity, Registry& hostRegistry,
-                                            Entity hostEntity) {
-  const auto childAccess = subDocument.writeAccess();
-  const auto child = subDocument.handle();
-  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) {
-    return;
-  }
-  const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
-  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
-                                                                            child->registry());
-  drawAdmittedSubDocumentElement(subDocument, fragmentId, parentAbsoluteTransform, opacity,
-                                 hostRegistry, hostEntity);
-}
-
-void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
-                                                    std::string_view fragmentId,
-                                                    const Transform2d& parentAbsoluteTransform,
-                                                    double opacity, Registry& hostRegistry,
-                                                    Entity hostEntity) {
+void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
+                                             const Transform2d& parentAbsoluteTransform,
+                                             Registry& hostRegistry, Entity hostEntity) {
   hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =
       true;
   // Prepare the sub-document's render tree.
@@ -4745,7 +4751,7 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
     fontRenderScope.finish();
     recordChildFontDependencies(subDocument, entt::null, hostRegistry, hostEntity);
     if (verbose_) {
-      std::cerr << "[drawSubDocumentElement] Fragment '" << fragmentId << "' not found\n";
+      std::cerr << "[drawExternalUseInstance] Fragment '" << fragmentId << "' not found\n";
     }
     return;
   }
@@ -4757,7 +4763,7 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
     fontRenderScope.finish();
     recordChildFontDependencies(subDocument, entt::null, hostRegistry, hostEntity);
     if (verbose_) {
-      std::cerr << "[drawSubDocumentElement] No RenderingInstanceComponent for fragment '"
+      std::cerr << "[drawExternalUseInstance] No RenderingInstanceComponent for fragment '"
                 << fragmentId << "'\n";
     }
     return;
@@ -4767,40 +4773,23 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
     fontRenderScope.setCoverageRoot(targetEntity);
   }
 
-  // Determine the subtree range: from the target entity to its last descendant.
-  const Entity lastEntity =
-      targetInstance->subtreeLastEntity != entt::null ? targetInstance->subtreeLastEntity
-      : targetInstance->subtreeInfo ? targetInstance->subtreeInfo->lastRenderedEntity
-                                    : targetEntity;
-
-  // Apply opacity as an isolated layer if needed.
-  const bool needsOpacityLayer = opacity < 1.0;
-  if (needsOpacityLayer) {
-    renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
-  }
-
-  // Set surfaceFromCanvasTransform to position the target element at the <use> element's location.
-  // The target's worldFromEntityTransform includes all ancestor transforms from the
-  // sub-document root. By composing parentAbsoluteTransform with the inverse of the target's
-  // transform, we strip the sub-document ancestors and place the element at the <use> position.
-  // For each entity in the subtree:
-  //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute *
-  //   entityFromTarget
+  // Layout places the instance relative to the <use> element, so its transforms map directly into
+  // the use's space.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
-  surfaceFromCanvasTransform_ =
-      parentAbsoluteTransform * targetInstance->worldFromEntityTransform.inverse();
+  surfaceFromCanvasTransform_ = parentAbsoluteTransform;
 
-  // Traverse only the target element's subtree from the sub-document's render tree.
+  // The render tree holds only the instance, so a full traversal applies every layer and viewport
+  // clip a same-document instance gets. The target's viewport clip is in the <use> element's space,
+  // and the host's pending subtree pops must not match sub-document entities.
+  renderer_.setTransform(parentAbsoluteTransform);
+  std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
   RenderingInstanceView subView(subDocument.registry());
-  traverseRange(subView, subDocument.registry(), targetEntity, lastEntity);
+  traverse(subView, subDocument.registry());
+  subtreeMarkers_ = std::move(hostSubtreeMarkers);
   fontRenderScope.finish();
   recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
-
-  if (needsOpacityLayer) {
-    renderer_.popIsolatedLayer();
-  }
 }
 
 void RendererDriver::setSubDocumentContextPaint(
@@ -4869,8 +4858,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
     subDriver.activeFontSubDocuments_ = activeFontSubDocuments_;
     subDriver.visitedFontSubDocuments_ = visitedFontSubDocuments_;
     subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
-                              imageNode->preserveAspectRatio, 1.0, Transform2d(), registry,
-                              hostEntity);
+                              imageNode->preserveAspectRatio, Transform2d(), registry, hostEntity);
     offscreen->endFrame();
 
     // Capture the rendered pixels.
