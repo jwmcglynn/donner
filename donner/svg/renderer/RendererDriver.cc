@@ -1660,9 +1660,11 @@ std::optional<components::FilterGraph> resolveFilterGraph(
 }
 
 /// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
+/// @param objectBounds The element's object bounding box when the caller already has it.
 std::optional<Box2d> computeFilterRegion(Registry& registry,
                                          const components::ResolvedFilterEffect& filter,
-                                         const components::RenderingInstanceComponent& instance) {
+                                         const components::RenderingInstanceComponent& instance,
+                                         const std::optional<Box2d>& objectBounds = std::nullopt) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
   if (!reference) {
     return std::nullopt;
@@ -1675,7 +1677,9 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
   // Determine the bounds reference for resolving percentages.
   const Box2d shapeBounds =
-      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
+      objectBounds ? *objectBounds
+                   : RenderingObjectBoundingBox(registry, instance.styleHandle(registry))
+                         .value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -1755,7 +1759,8 @@ std::optional<std::vector<components::ResolvedFilterEffect>> collectFilterStages
 std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
     Registry& registry, const components::ResolvedFilterEffect& filter,
     const components::RenderingInstanceComponent& instance, css::RGBA currentColor,
-    const Box2d& viewBox, const FontMetrics& fontMetrics) {
+    const Box2d& viewBox, const FontMetrics& fontMetrics,
+    const std::optional<Box2d>& objectBounds) {
   const auto resolved = collectFilterStages(registry, filter);
   if (!resolved) {
     return std::nullopt;
@@ -1777,7 +1782,7 @@ std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
       return std::nullopt;
     }
     nodeCount += graph->nodes.size();
-    graph->filterRegion = computeFilterRegion(registry, stage, instance);
+    graph->filterRegion = computeFilterRegion(registry, stage, instance, objectBounds);
     stages.push_back(std::move(*graph));
   }
   return stages;
@@ -3281,13 +3286,14 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         style.properties->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
+    const std::optional<Box2d> elementBounds = filterObjectBoundingBox(registry, entity);
     std::optional<std::vector<components::FilterGraph>> stages = resolveFilterStages(
         registry, instance->resolvedFilter.value(), *instance,
-        style.properties->color.get().value().rgba(), filterViewBox, filterFontMetrics);
+        style.properties->color.get().value().rgba(), filterViewBox, filterFontMetrics,
+        elementBounds);
     if (!stages) {
       continue;
     }
-    const std::optional<Box2d> elementBounds = filterObjectBoundingBox(registry, entity);
     if (configureFilterStages(*stages, filterViewBox, elementBounds) &&
         materializeFilterStages(*stages, registry, entity)) {
       preparedFilterGraphs_[entity] = std::move(*stages);
