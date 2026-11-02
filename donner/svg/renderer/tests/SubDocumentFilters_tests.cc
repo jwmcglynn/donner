@@ -145,8 +145,8 @@ void ExpectDimmedBackdrop(const RendererBitmap& bitmap) {
 }
 
 void ExpectSpriteMatchesInDocument(std::string_view sprite) {
-  SVGDocument external = Parse(Host("sheet.svg#" + std::string(sprite), false),
-                               {{"sheet.svg", Sheet()}});
+  SVGDocument external =
+      Parse(Host("sheet.svg#" + std::string(sprite), false), {{"sheet.svg", Sheet()}});
   SVGDocument local = Parse(Host("#" + std::string(sprite), true));
   Renderer externalRenderer;
   Renderer localRenderer;
@@ -238,8 +238,9 @@ TEST(SubDocumentFiltersTest, ReferencedContentUnderHostFilterIsNotCulled) {
            "<g filter='url(#shift)'>" +
            std::string(content) + "</g></svg>";
   };
-  SVGDocument local = Parse(host("<svg x='-24' width='16' height='16'>"
-                                 "<rect width='16' height='16' fill='#2050d0'/></svg>"));
+  SVGDocument local =
+      Parse(host("<svg x='-24' width='16' height='16'>"
+                 "<rect width='16' height='16' fill='#2050d0'/></svg>"));
   Renderer localRenderer;
   const RendererBitmap expected = Draw(localRenderer, local);
   EXPECT_THAT(PixelAt(expected, 8, 8), test::Rgba(Lt(60), Lt(100), Gt(180), 255));
