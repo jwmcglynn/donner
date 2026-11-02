@@ -1723,6 +1723,19 @@ TEST(RendererPublicApiTest, UseHrefPrecedenceRenders) {
   }
 }
 
+// `setHref("")` stores an empty `href`, which wins over `xlink:href`: nothing renders.
+TEST(RendererPublicApiTest, UseSetEmptyHrefRendersNothing) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+      "width='8' height='8'><defs><rect id='a' width='8' height='8' fill='red'/>"
+      "<rect id='b' width='8' height='8' fill='blue'/></defs>"
+      "<use id='host' href='#a' xlink:href='#b'/></svg>");
+  auto host = document.querySelector("#host");
+  ASSERT_THAT(host, testing::Optional(testing::_));
+  host->cast<SVGUseElement>().setHref(RcString());
+  EXPECT_THAT(PixelAt(RenderPublicDocument(document), 4, 4), test::IsTransparent());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     UseHrefMutations, UseHrefMutationTest,
     testing::Values(UseHrefMutationCase{"ExternalHref", "", "external.svg"},

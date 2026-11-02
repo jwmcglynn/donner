@@ -194,8 +194,28 @@ TEST(SVGUseElementTests, SetHrefUpdatesAttributeForLaterMutations) {
   EXPECT_THAT(use, HrefEq(RcString("#b")));
 
   use.setHref(RcString());
-  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Eq(std::nullopt));
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Optional(RcString()));
   EXPECT_THAT(use, HrefEq(RcString()));
+}
+
+/// `setHref("")` stores an empty `href`, which wins over `xlink:href` and leaves no reference.
+TEST(SVGUseElementTests, SetEmptyHrefOverridesXlinkHref) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a" xlink:href="#b")");
+  use.setHref(RcString());
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Optional(RcString()));
+  EXPECT_THAT(use, HrefEq(RcString()));
+  EXPECT_THAT(use.entityHandle().all_of<components::ShadowTreeComponent>(), testing::IsFalse());
+}
+
+/// Like the other typed setters, `setHref` changes the DOM without editing the source text.
+TEST(SVGUseElementTests, SetHrefLeavesSourceTextUnchanged) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a")");
+  const std::string source(document.source());
+  use.setHref(RcString("#b"));
+  EXPECT_THAT(use, HrefEq(RcString("#b")));
+  EXPECT_EQ(document.source(), source);
 }
 
 /// An empty `href` still takes precedence over `xlink:href`, leaving no reference.

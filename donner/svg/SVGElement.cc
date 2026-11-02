@@ -11,6 +11,7 @@
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGQuerySelector.h"
+#include "donner/svg/UseReference.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -25,10 +26,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
-#include "donner/svg/components/resources/ImageComponent.h"
-#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
-#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/LineComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -40,7 +38,6 @@
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/AnimationPresentation.h"
-#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 
@@ -104,34 +101,6 @@ bool IsUseHrefAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& nam
   return type && type->type() == ElementType::Use &&
          (name == xml::XMLQualifiedNameRef("href") ||
           name == xml::XMLQualifiedNameRef("xlink", "href"));
-}
-
-/**
- * Points a `<use>` at the reference its stored attributes resolve to, `href` taking precedence over
- * `xlink:href`, and tears down the previous instance. An empty or missing reference renders
- * nothing. This is the only writer of a use element's reference, so the attributes and the
- * rendered target never disagree.
- */
-void RetargetUseFromAttributes(EntityHandle handle) {
-  const auto* attributes = handle.try_get<donner::components::AttributesComponent>();
-  std::optional<RcString> href;
-  if (attributes != nullptr) {
-    href = attributes->getAttribute(xml::XMLQualifiedNameRef("href"));
-    if (!href) {
-      href = attributes->getAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
-    }
-  }
-  if (href.value_or(RcString()).empty()) {
-    handle.remove<components::ShadowTreeComponent>();
-  } else {
-    auto& shadowTree = handle.emplace_or_replace<components::ShadowTreeComponent>();
-    shadowTree.setMainHref(*href);
-    shadowTree.setsContextColors = true;
-  }
-  components::LayoutSystem().invalidate(handle);
-  components::ShadowTreeSystem().teardownInstances(handle);
-  handle.remove<components::ComputedShadowTreeComponent, components::ExternalUseComponent>();
-  components::RenderingContext(*handle.registry()).invalidateRenderTree();
 }
 
 bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& name,

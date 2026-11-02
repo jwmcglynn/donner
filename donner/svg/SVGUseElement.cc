@@ -1,25 +1,11 @@
 #include "donner/svg/SVGUseElement.h"
 
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/UseReference.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
-#include "donner/svg/components/resources/ImageComponent.h"
-#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
-#include "donner/svg/components/shadow/ShadowTreeSystem.h"
-#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
-namespace {
-
-void InvalidateUse(EntityHandle handle) {
-  components::LayoutSystem().invalidate(handle);
-  components::ShadowTreeSystem().teardownInstances(handle);
-  handle.remove<components::ComputedShadowTreeComponent, components::ExternalUseComponent>();
-  components::RenderingContext(*handle.registry()).invalidateRenderTree();
-}
-
-}  // namespace
 
 SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
@@ -28,13 +14,9 @@ SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGUseElement::setHref(const RcString& value) {
-  // The `href` attribute is the reference's single source of truth; the generic attribute write
-  // retargets the instance from it.
-  if (value.empty()) {
-    removeAttribute(xml::XMLQualifiedNameRef("href"));
-  } else {
-    setAttribute(xml::XMLQualifiedNameRef("href"), value);
-  }
+  // Like the other typed setters, this updates the DOM attribute without editing source text; the
+  // stored `href` attribute is what the reference is resolved from.
+  (void)setAttributeFromXMLMutation(xml::XMLQualifiedNameRef("href"), value);
 }
 
 RcString SVGUseElement::href() const {
@@ -52,7 +34,7 @@ void SVGUseElement::setX(Lengthd value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.x.set(
       value, css::Specificity::Override());
-  InvalidateUse(handle_);
+  InvalidateUseInstance(handle_);
 }
 
 void SVGUseElement::setY(Lengthd value) {
@@ -60,7 +42,7 @@ void SVGUseElement::setY(Lengthd value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.y.set(
       value, css::Specificity::Override());
-  InvalidateUse(handle_);
+  InvalidateUseInstance(handle_);
 }
 
 void SVGUseElement::setWidth(std::optional<Lengthd> value) {
@@ -68,7 +50,7 @@ void SVGUseElement::setWidth(std::optional<Lengthd> value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
-  InvalidateUse(handle_);
+  InvalidateUseInstance(handle_);
 }
 
 void SVGUseElement::setHeight(std::optional<Lengthd> value) {
@@ -76,7 +58,7 @@ void SVGUseElement::setHeight(std::optional<Lengthd> value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
-  InvalidateUse(handle_);
+  InvalidateUseInstance(handle_);
 }
 
 Lengthd SVGUseElement::x() const {
