@@ -3226,6 +3226,83 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
       << "Zoom inside the same scale bucket must reuse the fill encode.";
 }
 
+// One element drawn at two device scales in a frame must not make either draw depend on which
+// scale encoded it first. The blur turns sub-level coverage differences between a coarse and a
+// fine cubic encode into visible ones, so any history dependence shows up as differing pixels.
+TEST_F(RendererGeodeTest, FillEncodeAtTwoScalesDoesNotDependOnHistory) {
+  constexpr std::string_view kSprite = R"svg(
+        <filter id="blur" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2"/>
+        </filter>
+        <g id="sprite" filter="url(#blur)"><circle cx="16" cy="16" r="8" fill="#c040a0"/></g>)svg";
+  const auto parse = [&](std::string_view uses) {
+    ParseWarningSink warnings;
+    const std::string source =
+        std::string(
+            R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"><defs>)svg") +
+        std::string(kSprite) + "</defs>" + std::string(uses) + "</svg>";
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    EXPECT_THAT(parsed.hasError(), testing::IsFalse());
+    return std::move(parsed).result();
+  };
+  // Both copies draw the same circle entity. The magnified copy lands in a finer tolerance
+  // bucket than the identity-scale copy, which draws first.
+  constexpr std::string_view kSingleUse = R"svg(<use href="#sprite"/>)svg";
+  const std::string twoScales =
+      std::string(kSingleUse) +
+      R"svg(<use href="#sprite" transform="translate(64 0) scale(1.5)"/>)svg";
+
+  SVGDocument single = parse(kSingleUse);
+  RendererGeode singleRenderer = createRenderer();
+  singleRenderer.draw(single);
+  const RendererBitmap singleFrame = singleRenderer.takeSnapshot();
+  ASSERT_FALSE(singleFrame.empty());
+
+  SVGDocument document = parse(twoScales);
+  RendererGeode renderer = createRenderer();
+  std::vector<RendererBitmap> frames;
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+    frames.push_back(renderer.takeSnapshot());
+    ASSERT_FALSE(frames.back().empty());
+    if (frame > 0) {
+      EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+          << "Both scales stay cached, so frame " << frame << " must not re-encode.";
+    }
+  }
+
+  // Counts pixels whose RGBA bytes differ, so an exact comparison reports how far it drifted.
+  const auto countDifferingPixels = [](const RendererBitmap& actual,
+                                       const RendererBitmap& expected) -> size_t {
+    if (actual.dimensions != expected.dimensions) {
+      return std::numeric_limits<size_t>::max();
+    }
+    size_t differing = 0;
+    for (int y = 0; y < actual.dimensions.y; ++y) {
+      for (int x = 0; x < actual.dimensions.x; ++x) {
+        const size_t actualOffset = static_cast<size_t>(y) * actual.rowBytes + x * 4u;
+        const size_t expectedOffset = static_cast<size_t>(y) * expected.rowBytes + x * 4u;
+        if (!std::equal(actual.pixels.begin() + actualOffset,
+                        actual.pixels.begin() + actualOffset + 4,
+                        expected.pixels.begin() + expectedOffset)) {
+          ++differing;
+        }
+      }
+    }
+    return differing;
+  };
+  // Only the identity-scale half is compared against the single-use render.
+  const auto leftHalf = [](const RendererBitmap& bitmap) {
+    return editor::tests::CropBitmap(bitmap, Vector2i(0, 0), Vector2i(64, 64));
+  };
+  EXPECT_THAT(countDifferingPixels(leftHalf(frames[0]), leftHalf(singleFrame)), testing::Eq(0u))
+      << "The first frame must match the single-occurrence render exactly.";
+  for (size_t frame = 1; frame < frames.size(); ++frame) {
+    EXPECT_THAT(countDifferingPixels(frames[frame], frames[0]), testing::Eq(0u))
+        << "Frame " << frame << " must match frame 0 exactly.";
+  }
+}
+
 TEST_F(RendererGeodeTest, MidFrameOffscreenGeometryMutationPreservesRecordedOuterDraw) {
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(
