@@ -7889,8 +7889,10 @@ TEST_F(RendererGeodeTest, WithinFrameTextureReuseMatchesSingleUseTextures) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-// A filter whose intermediates exceed what the shared pool can hold still renders: a texture the
-// frame released is kept until the frame submits, never destroyed while its commands are pending.
+// A full-canvas blur on a canvas larger than 2048x2048 renders, and reusing its textures within
+// the frame matches single-use textures. On this backend the blur executes in tiles below the
+// shared pool's budget, so this guards the large-raster path rather than reproducing a texture
+// destroyed while pending; ManyDifferentlySizedFiltersInOneFrameSubmit covers that.
 TEST_F(RendererGeodeTest, FullCanvasBlurBeyondThePoolBudgetRenders) {
   const std::string source =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="2100">
@@ -7950,6 +7952,56 @@ TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
   editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(),
                                        "differently_sized_filters_submit",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// Filtered elements of many different sizes, each holding a region-sized surface until the frame
+// ends, need more than the pool's starting budget. Once warm, the pool keeps that whole working set
+// from frame to frame instead of destroying and recreating most of it every frame.
+TEST_F(RendererGeodeTest, VariedFilterSizesCreateNoTexturesOnceWarm) {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(kPhoneWidth) + "\" height=\"" + std::to_string(kPhoneHeight) +
+                       "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < 120; ++i) {
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(100 + (i % 8) * 140) +
+              "\" cy=\"" + std::to_string(100 + (i / 8) * 165) + "\" r=\"" +
+              std::to_string(40 + (i % 40) * 2) + "\" fill=\"#e05090\"/></g>";
+  }
+  source += "</svg>";
+  SVGDocument document = ParseDocumentOrFail(source);
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  renderer.draw(document);
+  ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.resourceStats().filterExecutions, testing::Gt(0u));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+}
+
+// A texture parked for reuse within the frame is still live memory, so it stays charged to the
+// frame's surface budget until the frame ends: right after a filter pops, nothing it allocated has
+// been released from the budget.
+TEST_F(RendererGeodeTest, ParkedFilterTexturesStayChargedUntilTheFrameEnds) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.popFilterLayer();
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.surfaceBytes, testing::Eq(stats.surfacePeakBytes));
+  renderer.endFrame();
 }
 
 // Textures one renderer releases within an open frame stay with it: another renderer on the same

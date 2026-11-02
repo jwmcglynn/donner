@@ -931,7 +931,15 @@ public:
   void beginFrame() {
     std::lock_guard lock(mutex_);
     ++currentFrameIndex_;
+    recentFrameReleases_.push_back(std::exchange(releasedSinceFrameStart_, 0));
+    if (recentFrameReleases_.size() > kBucketEvictAfterFrames) {
+      recentFrameReleases_.pop_front();
+    }
+    const uint64_t workingSet =
+        *std::max_element(recentFrameReleases_.begin(), recentFrameReleases_.end());
+    budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
     evictStalePoolBuckets();
+    (void)evictPoolEntriesToFit(0);
   }
 
   [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
@@ -939,7 +947,7 @@ public:
     RendererGeodeTexturePoolStats result;
     result.textureCount = pooledTextureCount_;
     result.bytes = pooledTextureBytes_;
-    result.budgetBytes = kTexturePoolBudgetBytes;
+    result.budgetBytes = budgetBytes_;
     for (const auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
       if (!bucket.free.empty()) {
@@ -986,9 +994,10 @@ public:
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
+    releasedSinceFrameStart_ += textureBytes;
     if (existingBucket != buckets_.end() &&
         existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
-        textureBytes * (existingBucket->second.free.size() + 1) > kMaxPoolBytesPerKey) {
+        textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
       destroyPooledTexture(std::move(texture));
       return;
     }
@@ -1015,11 +1024,19 @@ private:
   // concurrent intermediates (blur ping-pong reuse) is the follow-up that
   // would let the cap come back down.
   static constexpr std::size_t kMaxPoolEntriesPerKey = 16;
-  // Small surfaces of one size, such as the region-sized captures of many filtered instances in
-  // one frame, may exceed the entry cap up to this many bytes, so a frame of them reuses its
-  // previous frame's surfaces instead of recreating all but the first few.
-  static constexpr uint64_t kMaxPoolBytesPerKey = 16u * 1024u * 1024u;
+  // Surfaces of one size, such as the region-sized captures of many filtered instances in one
+  // frame, may exceed the entry cap up to a quarter of the current budget, so a frame of them
+  // reuses its previous frame's surfaces instead of recreating all but the first few.
+  /// Retention budget a pool starts with and never goes below.
   static constexpr uint64_t kTexturePoolBudgetBytes = 64u * 1024u * 1024u;
+  // The budget follows the most bytes released in one recent frame, up to this ceiling, so a
+  // frame's whole working set, such as one transient surface per filtered element, stays pooled
+  // for the next frame instead of being destroyed and recreated each frame.
+#ifdef __EMSCRIPTEN__
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 128u * 1024u * 1024u;
+#else
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 256u * 1024u * 1024u;
+#endif
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
@@ -1052,11 +1069,11 @@ private:
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
-    if (incomingBytes > kTexturePoolBudgetBytes) {
+    if (incomingBytes > budgetBytes_) {
       return false;
     }
 
-    while (pooledTextureBytes_ > kTexturePoolBudgetBytes - incomingBytes) {
+    while (pooledTextureBytes_ > budgetBytes_ - incomingBytes) {
       auto victim = buckets_.end();
       for (auto it = buckets_.begin(); it != buckets_.end(); ++it) {
         if (it->second.free.empty()) {
@@ -1098,6 +1115,12 @@ private:
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;
   uint64_t currentFrameIndex_ = 0;
+  /// Bytes returned to the pool since the last \ref beginFrame.
+  uint64_t releasedSinceFrameStart_ = 0;
+  /// Bytes returned in each recent frame, newest last.
+  std::deque<uint64_t> recentFrameReleases_;
+  /// Current retention budget; see \ref kMaximumTexturePoolBudgetBytes.
+  uint64_t budgetBytes_ = kTexturePoolBudgetBytes;
 };
 
 /// The one pool serving \p device, created on first use. Renderers sharing a device share its
@@ -2259,19 +2282,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
-    if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
+    if (!texturePool) {
       return gpu::Texture{};
     }
+    // A parked texture keeps its surface charge, which passes to the reuser.
+    if (gpu::Texture parked = takeFrameReusableTexture(desc); parked.isValid()) {
+      return parked;
+    }
+    if (!reserveTextureSurface(desc.size, desc.format)) {
+      return gpu::Texture{};
+    }
+    return texturePool->acquire(desc);
+  }
+
+  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any.
+  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc) {
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto reusable = std::find_if(
         frameReusableTextures.begin(), frameReusableTextures.end(),
         [&](const PendingRelease& r) { return RendererGeodeTextureKey::From(r.desc) == key; });
-    if (reusable != frameReusableTextures.end()) {
-      gpu::Texture texture = std::move(reusable->texture);
-      frameReusableTextures.erase(reusable);
-      return texture;
+    if (reusable == frameReusableTextures.end()) {
+      return gpu::Texture{};
     }
-    return texturePool->acquire(desc);
+    gpu::Texture texture = std::move(reusable->texture);
+    frameReusableTextures.erase(reusable);
+    return texture;
   }
 
   gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& desc) override {
@@ -2372,8 +2407,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * command naming it is already recorded in this renderer's submission order: a later pass that
    * reuses it runs after them. The texture stays out of the device-shared pool, which another
    * renderer could take from and submit ahead of this frame, and which can destroy what it
-   * cannot hold; it reaches the pool only once this frame is submitted. Its surface charge is
-   * released now and charged again when it is reused.
+   * cannot hold; it reaches the pool only once this frame is submitted. It stays charged to the
+   * frame's surface budget while parked, since it is still live memory, and the charge passes to
+   * its reuser.
    *
    * A texture a queue upload can write is deferred to the frame end instead, since an upload runs
    * ahead of recorded work that is not submitted yet; so is everything once the frame's recording
@@ -2388,30 +2424,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       releaseTextureAtFrameEnd(std::move(texture), desc);
       return;
     }
-    const bool releasedSurface =
-        desc.size.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
-        desc.size.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
-        surfaceBudget->release(static_cast<int>(desc.size.width),
-                               static_cast<int>(desc.size.height), 1,
-                               gpu::TextureFormatBytesPerTexel(desc.format));
-    UTILS_RELEASE_ASSERT(releasedSurface);
     frameReusableTextures.push_back({std::move(texture), desc});
   }
 
   /// Textures this renderer released within its open frame, reusable only by its own later
-  /// acquisitions until the frame is submitted. Their surface charge is already released.
+  /// acquisitions until the frame is submitted. Each is still charged to the surface budget.
   std::vector<PendingRelease> frameReusableTextures;
   /// Whether \ref releaseTextureWithinFrame makes textures reusable within the frame.
   bool withinFrameReuseEnabled = true;
 
-  /// Hand the frame's unreused within-frame textures to the pool once the frame is submitted, or
-  /// retain them when its submission is uncertain. Their surface charge was released already.
+  /// Hand the frame's unreused within-frame textures to the pool, releasing their surface charge,
+  /// once the frame is submitted; or retain them when its submission is uncertain, as the frame's
+  /// other pending releases are.
   void drainFrameReusableTextures(bool submissionUncertain) {
     for (PendingRelease& reusable : frameReusableTextures) {
-      if (submissionUncertain) {
-        failedFilterTextures.push_back(std::move(reusable));
+      if (!submissionUncertain) {
+        releaseTexture(std::move(reusable.texture), reusable.desc);
+      } else if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+        retainRecoverableTexture(std::move(reusable.texture), reusable.desc);
       } else {
-        recycleOrDestroyTexture(std::move(reusable.texture), reusable.desc);
+        failedFilterTextures.push_back(std::move(reusable));
       }
     }
     frameReusableTextures.clear();
@@ -5966,9 +5998,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGeneration();
 
     waitForQueueIdleAtTeardown();
+    const bool submissionUncertain = frameRecordingAbandoned || !device || device->isDeviceLost();
     retireFilterResults(filterResultCache.clear());
-    drainRetiredFilterResults(/*submissionUncertain=*/false);
-    drainFrameReusableTextures(/*submissionUncertain=*/false);
+    drainRetiredFilterResults(submissionUncertain);
+    drainFrameReusableTextures(submissionUncertain);
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
     releaseFrameTargetsAtTeardown();
@@ -6694,7 +6727,11 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
   if (!impl_->readyForFilterCapture()) {
-    impl_->filterStack.push_back({});
+    // A placeholder frame; its pop restores the clip stack it saves.
+    Impl::FilterStackFrame placeholder;
+    placeholder.savedClipStack = std::move(impl_->clipStack);
+    impl_->clipStack.clear();
+    impl_->filterStack.push_back(std::move(placeholder));
     return;
   }
   // The capture covers the target the result composites back onto, which is larger than the
