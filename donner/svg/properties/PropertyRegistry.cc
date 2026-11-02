@@ -3240,6 +3240,7 @@ namespace {
 
 template <typename T>
 bool SamePropertyValue(const T& lhs, const T& rhs) {
+  // TransformOrigin and the list-valued properties declare no equality operator of their own.
   if constexpr (std::is_same_v<T, TransformOrigin>) {
     return lhs.x == rhs.x && lhs.y == rhs.y;
   } else if constexpr (std::equality_comparable<T>) {

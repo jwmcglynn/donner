@@ -2,6 +2,8 @@
 /// @file
 /// Reuse of an external `<use>` target document's derived state across repeated draws.
 
+#include <cstddef>
+
 #include "donner/base/EcsRegistry.h"
 
 namespace donner::svg::components {
@@ -15,6 +17,11 @@ namespace donner::svg::components {
  * computed style for the `<use>`, and its fill and stroke. A draw with the same inputs reuses the
  * subtree's computed state; changed inputs restyle only that subtree. The state lives in the
  * referenced document's registry context.
+ *
+ * Only occurrences whose fill and stroke are none or a solid color are retained; one painted with
+ * a gradient or pattern reference is restyled for every draw and restored afterwards, so no state
+ * outliving a draw refers to the host document. Public reads of the document's own styles and
+ * rendering restore it with \ref RestoreStandalone first.
  */
 class ExternalUseStyleRetention {
 public:
@@ -33,14 +40,49 @@ public:
   static void PrepareOccurrence(Registry& registry);
 
   /**
-   * Restyle every subtree an occurrence styled, so the document renders with its own styles.
-   * Called before the document's render tree is instantiated without an occurrence.
+   * After the render tree is instantiated for the installed occurrence, restore to the document's
+   * own styles every other retained subtree that drawing the occurrence reads: a paint server,
+   * clip path, mask, marker, filter or instantiated element outside the occurrence's subtree, and
+   * the elements they inherit from.
+   *
+   * @param registry Referenced document's registry, with its occurrence context installed.
+   * @return True if a subtree was restored, in which case the caller instantiates the render tree
+   *   again before drawing.
+   */
+  static bool RestoreSubtreesReadByOccurrence(Registry& registry);
+
+  /**
+   * End the installed occurrence's draw, before its context is removed. Restores the occurrence's
+   * subtree and drops its rendering instances when it must not be retained: its paint refers to
+   * the host, or its restyle hit a style resource limit.
+   *
+   * @param registry Referenced document's registry, with its occurrence context installed.
+   */
+  static void FinishOccurrence(Registry& registry);
+
+  /**
+   * Restyle every subtree an occurrence styled and drop the occurrence's rendering instances and
+   * context paint, so the document renders and reads with its own styles.
    *
    * @param registry Document registry.
-   * @return True if any occurrence state was retained, in which case the caller also drops the
-   *   occurrence's context paint.
    */
-  static bool RestoreStandalone(Registry& registry);
+  static void RestoreStandalone(Registry& registry);
+
+  /**
+   * Whether \p entity's computed style currently reflects an occurrence rather than its document.
+   *
+   * @param registry Document registry.
+   * @param entity Element to test.
+   */
+  static bool IsOccurrenceStyled(const Registry& registry, Entity entity);
+
+  /**
+   * Whether any occurrence state is retained, so the document's rendering instances may reflect an
+   * occurrence.
+   *
+   * @param registry Document registry.
+   */
+  static bool HasOccurrenceState(const Registry& registry);
 };
 
 }  // namespace donner::svg::components

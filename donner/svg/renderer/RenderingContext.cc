@@ -1634,9 +1634,8 @@ void RenderingContext::clearInitialContextPaint() {
 }
 
 void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& warningSink) {
-  if (!registry_.ctx().contains<ExternalUseStyleContext>() &&
-      ExternalUseStyleRetention::RestoreStandalone(registry_)) {
-    clearInitialContextPaint();
+  if (!registry_.ctx().contains<ExternalUseStyleContext>()) {
+    ExternalUseStyleRetention::RestoreStandalone(registry_);
   }
 
   auto& renderState = getRenderTreeState(registry_);

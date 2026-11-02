@@ -4420,6 +4420,9 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   }
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+  if (components::ExternalUseStyleRetention::RestoreSubtreesReadByOccurrence(registry)) {
+    RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+  }
 }
 
 void RendererDriver::recordChildFontDependencies(SVGDocument& child, Entity target,
@@ -4533,6 +4536,7 @@ public:
     if (context.unsupportedResource && context.work->reportExternalResourceWarning()) {
       std::cerr << "External-use inherited cross-document URL resource is unsupported\n";
     }
+    components::ExternalUseStyleRetention::FinishOccurrence(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
       budget->setAggregateWorkBudget(nullptr);
     }
