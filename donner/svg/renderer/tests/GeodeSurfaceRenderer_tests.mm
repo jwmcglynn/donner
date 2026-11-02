@@ -107,6 +107,28 @@ TEST_F(GeodeSurfaceRendererTest, TrimmingTheTexturePoolKeepsPresenting) {
   EXPECT_FALSE(renderer->isDeviceLost());
 }
 
+// The host controls frame pacing through the surface renderer: the limit it sets is the one the
+// renderer applies, presenting keeps the frames in flight within it, and a disabled limit still
+// presents.
+TEST_F(GeodeSurfaceRendererTest, ForwardsTheFramesInFlightLimit) {
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
+  EXPECT_THAT(renderer->maxFramesInFlight(), Eq(2u));
+
+  document_->setCanvasSize(64, 64);
+  renderer->setMaxFramesInFlight(1);
+  EXPECT_THAT(renderer->maxFramesInFlight(), Eq(1u));
+  for (int frame = 0; frame < 4; ++frame) {
+    EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+    EXPECT_THAT(renderer->framesInFlight(), testing::Le(1u)) << "frame " << frame;
+  }
+
+  renderer->setMaxFramesInFlight(0);
+  EXPECT_THAT(renderer->maxFramesInFlight(), Eq(0u));
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+  EXPECT_FALSE(renderer->isDeviceLost());
+}
+
 TEST_F(GeodeSurfaceRendererTest, PresentsADocument) {
   std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
   ASSERT_THAT(renderer, NotNull());

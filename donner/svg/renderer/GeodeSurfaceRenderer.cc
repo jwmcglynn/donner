@@ -353,7 +353,24 @@ void GeodeSurfaceRenderer::trimTexturePool(RendererGeodeTexturePoolTrim level) {
   impl_->renderer->trimTexturePool(level);
 }
 
+void GeodeSurfaceRenderer::setMaxFramesInFlight(uint32_t frames) {
+  impl_->renderer->setMaxFramesInFlight(frames);
+}
+
+uint32_t GeodeSurfaceRenderer::maxFramesInFlight() const {
+  return impl_->renderer->maxFramesInFlight();
+}
+
+uint32_t GeodeSurfaceRenderer::framesInFlight() {
+  return impl_->renderer->framesInFlight();
+}
+
 GeodeSurfaceRenderer::FrameStatus GeodeSurfaceRenderer::draw(SVGDocument& document) {
+  if (isDeviceLost()) {
+    return FrameStatus::Failed;
+  }
+  // Pace before acquiring the frame: a wait for an earlier frame must not hold this one.
+  impl_->renderer->waitForFrameInFlightRoom();
   if (isDeviceLost()) {
     return FrameStatus::Failed;
   }

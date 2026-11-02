@@ -174,6 +174,23 @@ public:
    */
   void trimTexturePool(RendererGeodeTexturePoolTrim level);
 
+  /**
+   * Sets how many frames may be in flight, as \ref RendererGeode::setMaxFramesInFlight does.
+   * \ref draw waits for room before it acquires the next surface frame, so a paced wait never
+   * holds one. In WebAssembly builds nothing waits; the host reads \ref framesInFlight and skips
+   * a `requestAnimationFrame` tick while the GPU is behind.
+   *
+   * @param frames Most frames in flight, 1 to 8 (default 2); zero disables the limit.
+   */
+  void setMaxFramesInFlight(uint32_t frames);
+
+  /// The frames-in-flight limit; zero when disabled.
+  [[nodiscard]] uint32_t maxFramesInFlight() const;
+
+  /// Presented frames whose GPU work has not completed yet, observed without blocking. Zero once
+  /// the device is lost.
+  [[nodiscard]] uint32_t framesInFlight();
+
 private:
   struct Impl;
   struct SurfaceRequest;
