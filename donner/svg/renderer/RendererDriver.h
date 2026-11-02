@@ -464,6 +464,15 @@ private:
    * Surface culling stays off while a host filter layer is open.
    */
   void traverseSubDocument(Registry& registry, Entity firstEntity, Entity lastEntity);
+  /**
+   * The object bounding box a filter on @p entity resolves against. Content an external `<use>`
+   * in the subtree draws lives in another document, so it is added from that document's geometry,
+   * laid out with the occurrence's styles.
+   */
+  std::optional<Box2d> filterObjectBoundingBox(Registry& registry, Entity entity);
+  /// Bounds of the fragment an external `<use>` draws, in the `<use>` element's user space, or
+  /// nothing when @p hostEntity is not an external fragment reference.
+  std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
