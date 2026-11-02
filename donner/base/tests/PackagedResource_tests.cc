@@ -87,6 +87,23 @@ TEST(PackagedResource, InvalidDeferredCompletionEndsPendingAndAllowsExplicitRetr
   session.fail(kFixture);
 }
 
+TEST(PackagedResource, CorruptReinstallKeepsVerifiedBytesReadyAndNotFailed) {
+  PackagedResourceSession session;
+  ASSERT_EQ(session.install(kFixture, std::vector<uint8_t>{'a', 'b', 'c'}), true);
+  EXPECT_EQ(session.install(kFixture, std::vector<uint8_t>{'x', 'b', 'c'}), false);
+  EXPECT_THAT(session.error(), HasSubstr("Invalid packaged resource"));
+  EXPECT_EQ(session.install(kFixture, std::vector<uint8_t>{'a', 'b'}), false);
+  session.fail(kFixture);
+  EXPECT_EQ(session.request(kFixture, {}), false);
+  EXPECT_EQ(session.ready(kFixture), true);
+  EXPECT_EQ(session.failed(kFixture), false);
+  EXPECT_EQ(session.retry(kFixture), false);
+  const ResourceBytes loaded = session.load(kFixture);
+  ASSERT_THAT(loaded, NotNull());
+  EXPECT_THAT(*loaded, ElementsAre('a', 'b', 'c'));
+  EXPECT_EQ(session.retainedBytes(), 3u);
+}
+
 TEST(PackagedResource, CanonicalSerializationMatchesGeneratorFixture) {
   std::ifstream stream(
       Runfiles::instance().Rlocation("build_defs/testdata/packaged-resource-manifest.json"));

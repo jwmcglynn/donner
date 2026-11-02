@@ -1118,8 +1118,9 @@ FontHandle FontManager::fallbackFont() {
   }
 
   // Shapes measure `ch` on every preparation; a native miss stays recorded until the font is
-  // installed or retried, so do not query the resource provider again for it.
-  if (embedded::kPublicSansMediumOtf.failed()) {
+  // installed or retried, so do not query the resource provider again for it. Verified retained
+  // bytes always win over a recorded failure, so a ready font is never skipped.
+  if (embedded::kPublicSansMediumOtf.failed() && !embedded::kPublicSansMediumOtf.ready()) {
     return FontHandle();
   }
 
