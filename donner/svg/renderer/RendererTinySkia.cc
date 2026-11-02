@@ -1861,7 +1861,7 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
                               FilterInputBuffer{viewportWidth, viewportHeight, 0, 0}, surfaceCount);
   }
   if (!plan.has_value()) {
-    filterExecutionBudget_->reject();
+    filterExecutionBudget_->refuseOversizedGraph();
     return std::nullopt;
   }
 
@@ -3391,7 +3391,7 @@ void RendererTinySkia::setTextMaterializationBudgetForTesting(
 }
 
 RendererResourceStats RendererTinySkia::resourceStats() const {
-  return RendererResourceStats{
+  RendererResourceStats stats{
       .surfaceBudgetSupported = true,
       .surfaceCount = surfaceBudget_->surfaces(),
       .surfaceBytes = surfaceBudget_->bytes(),
@@ -3414,6 +3414,17 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .textGlyphOccurrences = textMaterializationBudget_->glyphOccurrences(),
       .textMaterializationBudgetRejected = textMaterializationBudget_->rejected(),
   };
+#ifdef DONNER_FILTERS_ENABLED
+  stats.filterBudgetSupported = true;
+  stats.filterExecutions = filterExecutionBudget_->executions();
+  stats.filterWorkUnits = filterExecutionBudget_->workUnits();
+  stats.filterRetainedBytes = filterExecutionBudget_->retainedBytes();
+  stats.filterCaptureBytesReserved = filterExecutionBudget_->captureBytesReserved();
+  stats.filterGraphsRefused = filterExecutionBudget_->refusedGraphs();
+  stats.filterBudgetRejected =
+      filterExecutionBudget_->rejected() || filterExecutionBudget_->refusedGraphs() != 0;
+#endif
+  return stats;
 }
 
 int RendererTinySkia::width() const {

@@ -733,6 +733,10 @@ struct RendererResourceStats {
   std::uint64_t filterWorkUnits = 0;
   std::uint64_t filterRetainedBytes = 0;
   std::uint64_t filterCaptureBytesReserved = 0;
+  /// Filter graphs refused this frame. A refusal for one graph's work leaves later graphs that fit
+  /// admitted; see \ref components::FilterExecutionBudget.
+  std::uint64_t filterGraphsRefused = 0;
+  /// Whether any filter graph was refused this frame, latched or not.
   bool filterBudgetRejected = false;
   bool geometryBudgetSupported = false;
   std::size_t geometryDraws = 0;
