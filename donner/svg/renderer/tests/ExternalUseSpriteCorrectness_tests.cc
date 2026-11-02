@@ -579,5 +579,64 @@ TEST(ExternalUseRetentionTest, StopColorAfterDrawUsesDocumentStyle) {
   EXPECT_EQ(color, css::Color(css::RGBA(0, 0, 0, 0xFF))) << "stop color reflects the host color";
 }
 
+TEST(ExternalUseRetentionTest, SymbolAtTwoSizesWithOnePaintKeepsEachViewport) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#sym" width="8" height="8"/>
+        <use href="sprites.svg#sym" x="8" width="4" height="4"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <symbol id="sym" viewBox="0 0 4 4"><rect width="4" height="4" fill="blue"/></symbol>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="blue"/><rect x="8" width="4" height="4" fill="blue"/>
+      </svg>)svg",
+               "symbol-two-sizes");
+}
+
+TEST(ExternalUseRetentionTest, RetainedTargetWithUseInsideDefsKeepsItsExpansion) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#t"/>
+        <use href="sprites.svg#b" x="8"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><g id="t">
+          <defs><rect id="r" width="8" height="8" fill="blue"/></defs><use href="#r"/>
+        </g></defs>
+        <rect id="b" width="8" height="8" fill="red"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="blue"/><rect x="8" width="8" height="8" fill="red"/>
+      </svg>)svg",
+               "use-inside-defs");
+}
+
+TEST(ExternalUseRetentionTest, UseTargetRootSurvivesInstanceOnlyRebuilds) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="sprites.svg#t"/>
+        <use href="sprites.svg#b" x="8"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><rect id="r" width="8" height="8" fill="blue"/></defs>
+        <use id="t" href="#r"/>
+        <rect id="b" width="8" height="8" fill="red"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="blue"/><rect x="8" width="8" height="8" fill="red"/>
+      </svg>)svg",
+               "use-target-root");
+}
+
 }  // namespace
 }  // namespace donner::svg::tests
