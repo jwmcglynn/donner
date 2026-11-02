@@ -671,8 +671,8 @@ prepare time with and without retained updates.
 
 Measured with that test (`-c opt`, Apple Silicon, a shared and loaded machine, so the ratios are
 the signal): 150 external uses across 7 sheets, every use moving each frame plus a few retargets
-and an occasional fade, median host-document prepare 1.33 ms before this change, 0.22 ms on a full rebuild that
-admits each sheet once, and 0.17 ms with the retained update.
+and an occasional fade, median host-document prepare 1.2 to 1.3 ms before this change (two runs), 0.23 ms on a full
+rebuild that admits each sheet once, and 0.16 ms with the retained update.
 
 `opacity` writes still take the whole-tree restyle and the full rebuild. Retaining them is a
 small change (restyle the written element and its descendants through the selective style pass,
