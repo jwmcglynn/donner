@@ -50,6 +50,7 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
     case svg::GpuWaitTimeoutSite::ReadbackMap: return "readback-map";
     case svg::GpuWaitTimeoutSite::QueueIdle: return "queue-idle";
     case svg::GpuWaitTimeoutSite::Present: return "present";
+    case svg::GpuWaitTimeoutSite::FramePacing: return "frame-pacing";
     case svg::GpuWaitTimeoutSite::Unknown: return "unknown";
   }
   return "unknown";

@@ -2799,6 +2799,20 @@ TEST_F(RendererGeodeTest, FramePacingWaitsForNothingWhileTheGpuKeepsUp) {
   EXPECT_TRUE(gpu.waitedFor.empty());
 }
 
+TEST_F(RendererGeodeTest, OffscreenRenderersInheritTheFramesInFlightLimit) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  for (const uint32_t limit : {0u, 3u}) {
+    renderer.setMaxFramesInFlight(limit);
+    std::unique_ptr<RendererInterface> child = renderer.createOffscreenInstance();
+    ASSERT_NE(child, nullptr);
+    // A Geode renderer's offscreen instances are Geode renderers.
+    auto* geodeChild = static_cast<RendererGeode*>(child.get());
+    EXPECT_EQ(geodeChild->maxFramesInFlight(), limit)
+        << "a disabled or raised limit must hold for persistent offscreen children";
+  }
+}
+
 TEST_F(RendererGeodeTest, FramePacingCanBeDisabled) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   RendererGeode renderer = createRenderer();
@@ -2835,7 +2849,7 @@ TEST_F(RendererGeodeTest, AFramePacingWaitThatStallsDeclaresTheDeviceLost) {
   DrawSolidFrame(renderer, css::RGBA(255, 0, 0, 255));
   EXPECT_TRUE(renderer.deviceLost()) << "a frame whose predecessor never completes must not wait "
                                         "forever or record over it";
-  EXPECT_EQ(device->lostState()->timedOutSite.load(), geode::GpuWaitSite::QueueIdle);
+  EXPECT_EQ(device->lostState()->timedOutSite.load(), geode::GpuWaitSite::FramePacing);
   EXPECT_EQ(gpu.waitedFor.size(), 1u);
   EXPECT_EQ(renderer.framesInFlight(), 0u) << "a lost device leaves no frame to wait for";
 }

@@ -41,6 +41,9 @@ enum class DeviceLostWaitSite : std::uint8_t {
   QueueIdle,
   /// A present's wait for its frame's own work to finish before the frame is shown.
   Present,
+  /// A renderer's wait, before a frame begins, for an earlier frame to finish so the frame stays
+  /// within its frames-in-flight limit.
+  FramePacing,
 };
 
 /// Stable diagnostic view of the first declaration that won a device-loss condition.

@@ -372,7 +372,9 @@ public:
    * than \p frames earlier frames are executing; the CPU then runs at most that many frames ahead
    * of the GPU, and waits at the frame boundary rather than in the middle of a frame. The wait is
    * bounded by GPU progress like every other GPU wait: a GPU that stops making progress for the
-   * shared bound declares the device lost instead of blocking forever.
+   * shared bound declares the device lost instead of blocking forever (wait site `FramePacing`).
+   * Each frame is paced on this renderer's own submissions, mid-frame splits included. Offscreen
+   * renderers created from this one inherit its limit.
    *
    * In WebAssembly builds the renderer never blocks the browser's thread, where completions only
    * arrive once it returns to the event loop: frames are admitted without waiting, and an embedder
@@ -391,6 +393,14 @@ public:
   /// This renderer's submitted frames whose GPU work has not completed yet, observed without
   /// blocking. Zero once the device is lost, since nothing more will complete.
   [[nodiscard]] uint32_t framesInFlight();
+
+  /**
+   * Waits now, rather than at the next `beginFrame`, until a frame can begin within the
+   * frames-in-flight limit. A presenting embedder calls it before acquiring the frame it draws
+   * into, so a paced wait never holds a presentation frame. Does nothing in WebAssembly builds or
+   * without a limit, like the wait in `beginFrame`.
+   */
+  void waitForFrameInFlightRoom();
 
   /// Replacement completion source for frame pacing. Test seam.
   struct FramePacingHooksForTesting {

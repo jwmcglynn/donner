@@ -106,6 +106,9 @@ enum class GpuWaitTimeoutSite : uint8_t {
   /// \ref GpuWaitTimeoutSite::None so a report never claims the driver declared a loss that one of
   /// the backend's own deadlines actually did.
   Unknown,
+  /// A renderer's wait, before a frame begins, for an earlier frame to finish so the frame stays
+  /// within its frames-in-flight limit.
+  FramePacing,
 };
 
 /**

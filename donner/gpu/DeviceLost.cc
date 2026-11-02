@@ -12,6 +12,7 @@ std::ostream& operator<<(std::ostream& os, DeviceLostWaitSite site) {
     case DeviceLostWaitSite::ReadbackMap: return os << "ReadbackMap";
     case DeviceLostWaitSite::QueueIdle: return os << "QueueIdle";
     case DeviceLostWaitSite::Present: return os << "Present";
+    case DeviceLostWaitSite::FramePacing: return os << "FramePacing";
   }
   return os << "DeviceLostWaitSite(" << static_cast<int>(site) << ")";
 }

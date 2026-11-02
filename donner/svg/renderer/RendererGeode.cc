@@ -1895,6 +1895,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                    submitted.error().message.c_str());
       return false;
     }
+    frameLastSubmittedSerial = std::max(frameLastSubmittedSerial, submitted.result());
     return true;
   }
 
@@ -2307,6 +2308,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Replaces the device as the pacer's completion source. Test seam.
   RendererGeode::FramePacingHooksForTesting framePacingHooks;
 
+  /// Serial of this renderer's last submission in the open frame, mid-frame splits included; zero
+  /// until the frame submits. A frame is paced on its own work, not on the device's last serial,
+  /// which on a shared device can be another renderer's.
+  uint64_t frameLastSubmittedSerial = 0;
+
+  /// Earlier frames waited for by `RendererGeode::waitForFrameInFlightRoom` before the next frame
+  /// began, added to that frame's counters.
+  uint64_t pacingWaitsBeforeFrame = 0;
+
   /// How the pacer observes and waits for this renderer's frames. Empty without a device: such a
   /// renderer submits nothing.
   geode::GeodeFramePacer::Backend framePacingBackend() const {
@@ -2337,13 +2347,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void admitFrameForPacing() {
     if (!device || device->isDeviceLost()) {
       framePacer.clear();
+      frameLastSubmittedSerial = 0;
       return;
     }
+    // An abandoned frame never reached endFrame, but submissions it split off did reach the queue.
+    framePacer.frameSubmitted(std::exchange(frameLastSubmittedSerial, 0));
     const geode::GeodeFramePacer::Admission admission = framePacer.admitFrame(framePacingBackend());
-    counters.framePacingWaits += admission.waits;
+    pacingWaitsBeforeFrame += admission.waits;
     if ((admission.stalled || admission.failed) && !device->isDeviceLost()) {
       device->markDeviceLostAfterWaitTimeout(
-          geode::GpuWaitSite::QueueIdle, admission.waited,
+          geode::GpuWaitSite::FramePacing, admission.waited,
           admission.stalled ? "an earlier frame's GPU work made no progress within the bounded "
                               "frame-pacing wait"
                             : "an earlier frame's GPU work failed before completing");
@@ -2358,7 +2371,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
     const geode::GeodeFramePacer::Backend backend = framePacingBackend();
-    framePacer.frameSubmitted(device->runtimeDevice().lastSubmittedSerial());
+    framePacer.frameSubmitted(std::exchange(frameLastSubmittedSerial, 0));
     counters.framesInFlight = framePacer.framesInFlight(backend);
   }
 
@@ -6312,6 +6325,10 @@ uint32_t RendererGeode::framesInFlight() {
   return impl_->framePacer.framesInFlight(impl_->framePacingBackend());
 }
 
+void RendererGeode::waitForFrameInFlightRoom() {
+  impl_->admitFrameForPacing();
+}
+
 void RendererGeode::setFramePacingHooksForTesting(FramePacingHooksForTesting hooks) {
   impl_->framePacingHooks = std::move(hooks);
 }
@@ -6326,6 +6343,7 @@ int RendererGeode::height() const {
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->resetForBeginFrame(viewport);
   impl_->admitFrameForPacing();
+  impl_->counters.framePacingWaits += std::exchange(impl_->pacingWaitsBeforeFrame, 0);
   if (impl_->device) {
     impl_->device->drainFencedTextureBackings();
     if (impl_->device->pendingFencedTextureBackings() != 0) {
@@ -8121,6 +8139,9 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   renderer->impl_->ownsTextMaterializationBudget = false;
   renderer->impl_->documentGeometryLimits = impl_->documentGeometryLimits;
   renderer->impl_->documentGeometryFrameState = impl_->documentGeometryFrameState;
+  // An embedder that paces frames itself disabled the limit; a persistent offscreen child, such as
+  // a thumbnail renderer, must not reintroduce waits the embedder turned off.
+  renderer->impl_->framePacer.setMaxFramesInFlight(impl_->framePacer.maxFramesInFlight());
   return renderer;
 }
 
@@ -8825,6 +8846,7 @@ GpuWaitTimeoutSite NeutralWaitSite(geode::GpuWaitSite site) {
     case geode::GpuWaitSite::ReadbackMap: return GpuWaitTimeoutSite::ReadbackMap;
     case geode::GpuWaitSite::QueueIdle: return GpuWaitTimeoutSite::QueueIdle;
     case geode::GpuWaitSite::Present: return GpuWaitTimeoutSite::Present;
+    case geode::GpuWaitSite::FramePacing: return GpuWaitTimeoutSite::FramePacing;
   }
   return GpuWaitTimeoutSite::Unknown;
 }
