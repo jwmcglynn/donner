@@ -529,10 +529,7 @@ class ResidentRepeatScene {
 public:
   explicit ResidentRepeatScene(GeodeDevice& device)
       : device_(device),
-        path_(PathBuilder()
-                  .addCircle(Vector2d(12, 12), 10)
-                  .addRoundedRect(Box2d({6, 6}, {18, 18}), 3, 3)
-                  .build()),
+        path_(BuildPath()),
         encoded_(GeodePathEncoder::encode(path_, FillRule::EvenOdd)) {
     stops_[0].offset = 0.0f;
     stops_[0].rgba[0] = 1.0f;
@@ -551,6 +548,17 @@ public:
   }
 
   bool encodedOk() const { return !encoded_.empty(); }
+
+  /// A curved, even-odd path with enough segments that its encode is far larger than one draw's
+  /// uniform, so an upload of the geometry stands out from the uniforms.
+  static Path BuildPath() {
+    PathBuilder builder;
+    builder.addCircle(Vector2d(12, 12), 10).addRoundedRect(Box2d({6, 6}, {18, 18}), 3, 3);
+    for (int i = 0; i < 24; ++i) {
+      builder.addCircle(Vector2d(4.0 + (i % 6) * 3.2, 4.0 + (i / 6) * 4.5), 1.5 + 0.1 * i);
+    }
+    return builder.build();
+  }
 
   /// Draws the scene into \p encoder. Resident draws share \p fillSlot or \p gradientSlot.
   void draw(GeoEncoder& encoder, RepeatForm form, bool gradient, bool clipped,
@@ -617,12 +625,34 @@ TEST_F(GeoEncoderTest, ResidentRepeatAndClippedDrawsMatchTheArenaPath) {
       fillSlot.slab = slab;
       GeodeResidentGradientSlot gradientSlot;
       gradientSlot.slab = slab;
+      // A cold pass makes the geometry resident; the warm pass that follows must upload only the
+      // per-draw uniforms. A draw that silently fell back to the arena would upload its whole
+      // encode again.
+      GeodeCounters arenaCounters;
+      GeodeCounters warmCounters;
+      for (GeodeCounters* counters : {&arenaCounters, &warmCounters}) {
+        GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                           kTargetSize);
+        device_->setCounters(counters);
+        scene.draw(encoder, counters == &arenaCounters ? RepeatForm::Arena : RepeatForm::Resident,
+                   gradient, clipped, counters == &arenaCounters ? unusedFill : fillSlot,
+                   counters == &arenaCounters ? unusedGradient : gradientSlot);
+        device_->setCounters(nullptr);
+      }
+      warmCounters = {};
       {
         GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
                            kTargetSize);
+        device_->setCounters(&warmCounters);
         scene.draw(encoder, RepeatForm::Resident, gradient, clipped, fillSlot, gradientSlot);
+        device_->setCounters(nullptr);
       }
       const std::vector<uint8_t> actual = readback();
+      // Each draw's uniform is under 1 KiB; the encode is several times that.
+      EXPECT_LE(warmCounters.bufferWriteBytes, 2u * 1024u)
+          << "a warm resident pass re-uploaded geometry";
+      EXPECT_GT(arenaCounters.bufferWriteBytes, 4u * warmCounters.bufferWriteBytes)
+          << "the arena pass must upload the geometry for the comparison to mean anything";
       EXPECT_TRUE(gradient ? gradientSlot.resident : fillSlot.resident)
           << "the repeated geometry must stay resident";
       EXPECT_TRUE(expected == actual) << "resident repeat draws diverged from the arena path";
@@ -635,11 +665,6 @@ TEST_F(GeoEncoderTest, ResidentRepeatAndClippedDrawsMatchTheArenaPath) {
   }
 }
 
-/// Record-slab slots use GLOBAL indices across chunks while byte offsets are
-/// per-buffer. After the slab grows, a freed slot from a later chunk must
-/// resolve back to its exact original buffer and buffer-relative offset;
-/// resolving the global index as a raw byte offset would alias another live
-/// slot's storage and two entities would share one record.
 /// entt removes a component mid-pool by move-assigning the LAST component
 /// over the removed slot (swap-and-pop). The move must transfer the record
 /// slot and its owning slab: if the moved-from component kept them, its
@@ -680,6 +705,11 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
   }
 }
 
+/// Record-slab slots use GLOBAL indices across chunks while byte offsets are
+/// per-buffer. After the slab grows, a freed slot from a later chunk must
+/// resolve back to its exact original buffer and buffer-relative offset;
+/// resolving the global index as a raw byte offset would alias another live
+/// slot's storage and two entities would share one record.
 TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
 
