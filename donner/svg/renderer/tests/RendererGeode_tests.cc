@@ -2836,6 +2836,7 @@ TEST_F(RendererGeodeTest, AFramePacingWaitThatStallsDeclaresTheDeviceLost) {
                                         "forever or record over it";
   EXPECT_EQ(device->lostState()->timedOutSite.load(), geode::GpuWaitSite::QueueIdle);
   EXPECT_EQ(gpu.waitedFor.size(), 1u);
+  EXPECT_EQ(renderer.framesInFlight(), 0u) << "a lost device leaves no frame to wait for";
 }
 
 TEST_F(RendererGeodeTest, EncodersOfAFrameShareArenaBuffersAcrossManyLayers) {

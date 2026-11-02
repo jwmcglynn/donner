@@ -389,7 +389,7 @@ public:
   [[nodiscard]] uint32_t maxFramesInFlight() const;
 
   /// This renderer's submitted frames whose GPU work has not completed yet, observed without
-  /// blocking.
+  /// blocking. Zero once the device is lost, since nothing more will complete.
   [[nodiscard]] uint32_t framesInFlight();
 
   /// Replacement completion source for frame pacing. Test seam.

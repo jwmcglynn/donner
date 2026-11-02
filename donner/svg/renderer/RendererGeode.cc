@@ -2350,11 +2350,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  /// Records the frame just submitted with the pacer and reports the frames now in flight.
-  /// @param submitted Whether the frame's work reached the queue; a frame that did not adds no
-  ///   entry.
-  void recordSubmittedFrameForPacing(bool submitted) {
-    if (!submitted || !device || !device->physicalDeviceOwner()->hasBackendDevice()) {
+  /// Records the frame just closed with the pacer and reports the frames now in flight. Called
+  /// whether or not the frame's final submission succeeded: submissions it split off earlier may
+  /// have reached the queue, and a frame that submitted nothing new adds no entry.
+  void recordSubmittedFrameForPacing() {
+    if (!device || !device->physicalDeviceOwner()->hasBackendDevice()) {
       return;
     }
     const geode::GeodeFramePacer::Backend backend = framePacingBackend();
@@ -6277,6 +6277,11 @@ uint32_t RendererGeode::maxFramesInFlight() const {
 }
 
 uint32_t RendererGeode::framesInFlight() {
+  // A lost device completes nothing more, so its frames are no longer waiting for anything.
+  if (!impl_->device || impl_->device->isDeviceLost()) {
+    impl_->framePacer.clear();
+    return 0;
+  }
   return impl_->framePacer.framesInFlight(impl_->framePacingBackend());
 }
 
@@ -6349,7 +6354,7 @@ void RendererGeode::endFrame() {
       impl_->markDeviceLostUnlessArenaUploadFailed(
           "the frame's command buffers could not be submitted");
     }
-    impl_->recordSubmittedFrameForPacing(submitted);
+    impl_->recordSubmittedFrameForPacing();
     impl_->frameRecordingOpen = false;
     impl_->frameGpuEncoders.clear();
     impl_->frameFinishedEncoders.clear();
