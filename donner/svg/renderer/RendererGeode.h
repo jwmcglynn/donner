@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -230,8 +231,22 @@ struct RendererGeodeTexturePoolStats {
   /// Estimated GPU bytes retained by reusable textures.
   uint64_t bytes = 0;
 
-  /// Hard upper bound for retained bytes.
+  /// Current upper bound for retained bytes. It follows the largest recent frame's working set,
+  /// between a 64 MiB floor and \ref maximumBudgetBytes.
   uint64_t budgetBytes = 0;
+
+  /// Most the budget can grow to: 256 MiB native, 96 MiB in WebAssembly builds.
+  uint64_t maximumBudgetBytes = 0;
+};
+
+/// How much \ref RendererGeode::trimTexturePool frees.
+enum class RendererGeodeTexturePoolTrim : uint8_t {
+  /// Apply only the idle decay: if no frame began recently, return to the floor budget.
+  IdleOnly,
+  /// Forget the recent working set and keep at most the 64 MiB floor of free textures.
+  ToFloor,
+  /// Drop every free texture.
+  All,
 };
 
 /**
@@ -520,6 +535,24 @@ public:
 
   /// Returns retained-memory instrumentation for the transient texture pool.
   [[nodiscard]] RendererGeodeTexturePoolStats texturePoolStats() const;
+
+  /**
+   * Free pooled textures that no frame is using, in the texture pool this renderer shares with
+   * every renderer on its device.
+   *
+   * The pool keeps free textures up to a budget that follows the largest recent frame's working
+   * set, so a frame of many filtered elements reuses last frame's surfaces. An embedder whose
+   * rendering pauses should call this to give that memory back: `ToFloor` when rendering goes
+   * idle, and `All` when the app is backgrounded or hidden (for example on a browser
+   * `visibilitychange` to hidden) or the platform reports memory pressure. A device idle for two
+   * seconds also returns to the floor at its next frame or trim.
+   *
+   * @param level How much to free.
+   */
+  void trimTexturePool(RendererGeodeTexturePoolTrim level);
+
+  /// Replace the clock the texture pool's idle decay reads, for a test.
+  void setTexturePoolClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock);
 
   /**
    * Whether cross-entity ordered batching is compiled into this build.
