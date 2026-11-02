@@ -134,6 +134,18 @@ private:
   bool resourceLimit_ = false;
 };
 
+/**
+ * Whether nothing \p registry renders can depend on a font resource: it holds no text, no length
+ * resolved against font metrics, no nested SVG document (whose text would be a dependency of its
+ * own), and no filter image (which can render a fragment or document that has text). Such a
+ * document's font dependency collection is empty for every target, whatever its revision, so it
+ * is answered without building the dependency graph. Constant time apart from a scan of the
+ * document's filters.
+ *
+ * @param registry Prepared document registry.
+ */
+bool RendersNothingFontDependent(const Registry& registry);
+
 /// Bounded reuse within one render preparation or font-refresh traversal. No entry survives the
 /// operation, and preparation changes invalidate both the graph and its target collections.
 class FontResourceGraphCache {
@@ -147,6 +159,9 @@ public:
     std::size_t cacheHits = 0;          ///< Target collections reused.
     std::size_t work = 0;               ///< Charged units against the cache work ceiling.
     bool resourceLimit = false;         ///< True after the work ceiling is exhausted.
+    /// Collections answered without building a graph because the document renders nothing that
+    /// depends on a font (see \ref RendersNothingFontDependent).
+    std::size_t fontIndependentCollections = 0;
   };
   /// Create a cache using caller-owned counters or internal counters.
   /// @param stats Optional counters that must outlive the cache.

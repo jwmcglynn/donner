@@ -6,6 +6,7 @@
 #include <map>
 #include <tuple>
 #include <unordered_set>
+#include <variant>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -16,7 +17,9 @@
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/resources/FontManager.h"
 
@@ -767,6 +770,40 @@ void FontResourceGraphCache::finishRefresh(const SVGDocumentHandle& document,
   entry.completedScope = HasCompletedCurrentScope(document->registry());
 }
 
+namespace {
+
+/// Whether \p registry holds any component of each of \p Types.
+template <typename... Types>
+bool HasAnyComponent(const Registry& registry) {
+  return (... || [&registry] {
+    const auto* storage = registry.storage<Types>();
+    return storage != nullptr && !storage->empty();
+  }());
+}
+
+}  // namespace
+
+bool RendersNothingFontDependent(const Registry& registry) {
+  if (HasAnyComponent<TextComponent, TextRootComponent, ComputedTextComponent,
+                      ComputedTextGeometryComponent, FontMetricDependenciesComponent,
+                      FontPaintDependenciesComponent, LoadedSVGImageComponent,
+                      ExternalUseComponent>(registry)) {
+    return false;
+  }
+  const auto* filters = registry.storage<ComputedFilterComponent>();
+  if (filters == nullptr) {
+    return true;
+  }
+  for (const auto& [entity, filter] : filters->each()) {
+    for (const auto& node : filter.filterGraph.nodes) {
+      if (std::holds_alternative<filter_primitive::Image>(node.primitive)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentHandle& document,
                                                               Entity target,
                                                               FontResourceGraph::Purpose purpose) {
@@ -776,6 +813,10 @@ FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentH
   if (purpose == FontResourceGraph::Purpose::RenderedFrame &&
       !HasCompletedCurrentScope(document->registry())) {
     return {.needsRender = true};
+  }
+  if (RendersNothingFontDependent(document->registry())) {
+    ++stats_->fontIndependentCollections;
+    return {};
   }
   auto& entry = entries_[document.get()];
   if (!prepareEntry(entry, document)) {

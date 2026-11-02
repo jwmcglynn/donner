@@ -8,9 +8,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/SpriteSceneFixture.h"
@@ -69,6 +73,84 @@ TEST_F(GeodeSpriteSceneTest, WarmStaticFrameUploadsOnlyPerDrawUniforms) {
   const RendererBitmap warmBitmap = renderer.takeSnapshot();
   editor::tests::CompareBitmapToBitmap(warmBitmap, cold, "sprite_scene_warm_vs_cold",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+/// Draws \p document with a driver over \p renderer and returns the font collection work it did.
+components::FontResourceGraphCache::Stats DrawCountingFontWork(RendererGeode& renderer,
+                                                               SVGDocument& document) {
+  RendererDriver::SecurityStats stats;
+  RendererDriver driver(renderer, false, &stats);
+  driver.draw(document);
+  return stats.nestedFontResources;
+}
+
+/// A sprite sheet with no text renders nothing that depends on a font, so drawing its sprites
+/// builds no font dependency graph and collects no dependencies, however many occurrences there
+/// are. Before, every occurrence rebuilt the sheet's graph.
+TEST_F(GeodeSpriteSceneTest, TextFreeSpritesSkipFontDependencyCollection) {
+  RendererGeode renderer(sharedDevice());
+  SpriteScene scene(SmallScene());
+  (void)DrawCountingFontWork(renderer, scene.document());
+  const components::FontResourceGraphCache::Stats work =
+      DrawCountingFontWork(renderer, scene.document());
+  EXPECT_EQ(work.graphBuilds, 0u);
+  EXPECT_EQ(work.targetCollections, 0u);
+  EXPECT_EQ(work.cacheHits, 0u);
+  EXPECT_GT(work.fontIndependentCollections, 0u);
+}
+
+/// Skipping the collection for text-free sheets changes no pixels: the same sprites drawn from a
+/// sheet that also carries an unreferenced text element, which keeps the collection running,
+/// render identically.
+TEST_F(GeodeSpriteSceneTest, SkippingFontCollectionLeavesTextFreeSpritesUnchanged) {
+  RendererGeode skipped(sharedDevice());
+  SpriteScene textFree(SmallScene());
+  (void)DrawCountingFontWork(skipped, textFree.document());
+  const RendererBitmap expectedSkip = skipped.takeSnapshot();
+  ASSERT_FALSE(expectedSkip.empty());
+
+  SpriteSceneOptions withText = SmallScene();
+  withText.unreferencedText = true;
+  RendererGeode collected(sharedDevice());
+  SpriteScene withUnreferencedText(withText);
+  const components::FontResourceGraphCache::Stats work =
+      DrawCountingFontWork(collected, withUnreferencedText.document());
+  EXPECT_EQ(work.fontIndependentCollections, 0u)
+      << "a sheet with text must still collect its dependencies";
+  EXPECT_GT(work.graphBuilds + work.cacheHits + work.targetCollections, 0u);
+  editor::tests::CompareBitmapToBitmap(collected.takeSnapshot(), expectedSkip,
+                                       "sprite_scene_font_skip_identity",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Sprites from a sheet with text keep their font dependency bookkeeping, and a text-free sheet
+/// that gains text starts collecting again on its next draw.
+TEST_F(GeodeSpriteSceneTest, FontCollectionStillRunsForTextAndAfterTheSheetGainsText) {
+  RendererGeode renderer(sharedDevice());
+  SpriteSceneOptions options = SmallScene();
+  options.includeText = true;
+  SpriteScene labeled(options);
+  const components::FontResourceGraphCache::Stats labeledWork =
+      DrawCountingFontWork(renderer, labeled.document());
+  EXPECT_GT(labeledWork.graphBuilds + labeledWork.targetCollections + labeledWork.cacheHits, 0u)
+      << "the labeled sheet's sprites must collect their font dependencies";
+  EXPECT_GT(labeledWork.fontIndependentCollections, 0u)
+      << "the scene's text-free sheets still skip";
+
+  SpriteScene scene(SmallScene());
+  (void)DrawCountingFontWork(renderer, scene.document());
+  const auto* external =
+      scene.use(0).unsafeEntityHandle().try_get<components::ExternalUseComponent>();
+  ASSERT_NE(external, nullptr);
+  SVGDocument sheet = SVGDocument::CreateFromHandle(external->subDocument);
+  auto sprite = sheet.querySelector("#" + std::string(external->fragment.str()));
+  ASSERT_TRUE(sprite.has_value());
+  sprite->appendChild(SVGTextElement::Create(sheet));
+
+  const components::FontResourceGraphCache::Stats afterEdit =
+      DrawCountingFontWork(renderer, scene.document());
+  EXPECT_GT(afterEdit.graphBuilds + afterEdit.targetCollections + afterEdit.cacheHits, 0u)
+      << "a sheet that gained text must collect its dependencies again";
 }
 
 }  // namespace

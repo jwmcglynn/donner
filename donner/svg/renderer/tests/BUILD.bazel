@@ -1269,6 +1269,8 @@ donner_cc_test(
         ":sprite_scene_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
         "@com_google_gtest//:gtest_main",
