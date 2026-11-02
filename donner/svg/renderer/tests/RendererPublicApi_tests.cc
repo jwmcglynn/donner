@@ -1475,6 +1475,31 @@ TEST_P(UseHrefMutationTest, SetAttributeRetargetsAndRemoveAttributeClears) {
   EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4), test::IsTransparent());
 }
 
+// `href` wins over `xlink:href` in either source order; removing it falls back to `xlink:href`.
+TEST(RendererPublicApiTest, UseHrefPrecedenceRenders) {
+  const std::string open =
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+      "width='8' height='8'><defs><rect id='a' width='8' height='8' fill='red'/>"
+      "<rect id='b' width='8' height='8' fill='blue'/></defs>";
+  for (const std::string_view attributes :
+       {"href='#a' xlink:href='#b'", "xlink:href='#b' href='#a'"}) {
+    SCOPED_TRACE(attributes);
+    SVGDocument document =
+        ParseDocument(open + "<use id='host' " + std::string(attributes) + "/></svg>");
+    Renderer renderer;
+    renderer.draw(document);
+    EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+                test::Rgba(255, 0, 0, 255));
+
+    auto host = document.querySelector("#host");
+    ASSERT_THAT(host, testing::Optional(testing::_));
+    host->removeAttribute(xml::XMLQualifiedNameRef("href"));
+    renderer.draw(document);
+    EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 4, 4),
+                test::Rgba(0, 0, 255, 255));
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     UseHrefMutations, UseHrefMutationTest,
     testing::Values(UseHrefMutationCase{"ExternalHref", "", "external.svg"},
