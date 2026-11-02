@@ -149,6 +149,11 @@ FrameWork Draw(RendererInterface& renderer, FilteredSpriteScene& scene) {
     }                                                                                           \
   } while (false)
 
+/// Most results the cache holds at once.
+std::size_t FilterResultCacheEntries() {
+  return 64;
+}
+
 std::unique_ptr<RendererInterface> MakeCachingRenderer() {
   return CreateRendererInstance(RendererBackend::Geode);
 }
@@ -238,7 +243,8 @@ void ExpectMutationRefilters(FilteredSpriteScene& scene, std::string_view label,
   editor::tests::CompareBitmapToBitmap(
       uncached->takeSnapshot(), before, std::string(label) + "-mutation-visible",
       editor::tests::ApprovedPixelToleranceParams(0.0f, 1 << 30), &changedPixels);
-  EXPECT_GT(changedPixels, 0) << label << ": the mutation must change the rendering";
+  // A dimension change reports -1, which also means the rendering changed.
+  EXPECT_NE(changedPixels, 0) << label << ": the mutation must change the rendering";
   EXPECT_GE(work.executions, 1u) << label;
   editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(), label,
                                        params);
@@ -314,51 +320,52 @@ TEST(ExternalUseFilterCacheTest, HostStyleChangeRefilters) {
   });
 }
 
-// More distinct sprites than the cache holds, all drawn every frame, do not evict each other: the
-// cache keeps what it holds and the rest render uncached. Sprites that stop being drawn are evicted
-// for new ones, and drawing an evicted sprite again runs its filter again.
+// More distinct results than the cache holds, all drawn every frame, do not evict each other: the
+// cache keeps what it holds and the rest render uncached. Results that stop being drawn are evicted
+// for new ones, and drawing an evicted result again runs its filter again. Each of 24 sprites is
+// drawn at three scales, giving 72 results while the sheet's style retention, which keeps 32
+// sprites, holds every sprite.
 TEST(ExternalUseFilterCacheTest, CacheDoesNotThrashAndEvictedResultsRefilter) {
   REQUIRE_CACHING_BACKEND();
-  constexpr int kSprites = 72;
-  constexpr int kDrawn = 64;
-  std::optional<FilteredSpriteScene> scene = MakeScene(kSprites, kSprites);
+  constexpr int kSprites = 24;
+  constexpr int kScales = 3;
+  std::optional<FilteredSpriteScene> scene = MakeScene(kSprites * kScales, kSprites);
   ASSERT_TRUE(scene.has_value());
-  // Every use shows a sprite starting at \p first; uses past kDrawn repeat earlier ones, so only
-  // kDrawn distinct sprites are drawn.
-  const auto showSprites = [&](int first) {
-    for (int i = 0; i < kSprites; ++i) {
-      const int sprite = (first + i % kDrawn) % kSprites;
+  const auto placeUses = [&](double lastScale) {
+    for (int i = 0; i < kSprites * kScales; ++i) {
+      const int sprite = i % kSprites;
+      const int scaleIndex = i / kSprites;
+      const double scale = scaleIndex == kScales - 1 ? lastScale : 1.0 + 0.25 * scaleIndex;
       scene->uses[i].setHref(
           RcString(std::string(kExternalResourceUrl) + "#sprite-" + std::to_string(sprite)));
+      scene->uses[i].setTransform(
+          Transform2d::Scale(scale) *
+          Transform2d::Translate(Vector2d((i % 12) * 20.0, (i / 12) * 30.0)));
     }
   };
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
 
-  // All 72 sprites drawn every frame: the cache fills and then refuses to evict sprites in use.
-  for (int i = 0; i < kSprites; ++i) {
-    scene->uses[i].setHref(
-        RcString(std::string(kExternalResourceUrl) + "#sprite-" + std::to_string(i)));
-    scene->uses[i].setTransform(Transform2d::Translate(Vector2d((i % 12) * 20.0, (i / 12) * 30.0)));
-  }
+  placeUses(1.5);
   FrameWork thrash;
   for (int frame = 0; frame < 4; ++frame) {
     const FrameWork work = Draw(*renderer, *scene);
     thrash.records += work.records;
     thrash.evictions += work.evictions;
   }
-  EXPECT_LE(thrash.records, static_cast<std::size_t>(kDrawn));
+  EXPECT_GT(thrash.records, 0u);
+  EXPECT_LE(thrash.records, FilterResultCacheEntries());
   EXPECT_EQ(thrash.evictions, 0u);
 
-  // Sprites 8..71 are drawn for a while; sprites 0..7 go stale and are evicted for them.
-  showSprites(8);
+  // The third scale changes: its old results go stale and are evicted for the new ones.
+  placeUses(1.75);
   FrameWork shifted;
   for (int frame = 0; frame < 6; ++frame) {
     shifted.evictions += Draw(*renderer, *scene).evictions;
   }
   EXPECT_GT(shifted.evictions, 0u);
 
-  // Sprite 0 comes back: its result was evicted, so its filter runs again.
-  showSprites(0);
+  // The old scale comes back: some of its results were evicted, so their filters run again.
+  placeUses(1.5);
   EXPECT_GT(Draw(*renderer, *scene).executions, 0u);
 }
 
@@ -499,9 +506,19 @@ constexpr std::string_view kTwoUseHost = R"svg(
     <use id="use-1" href="sprites.svg#sprite" width="32" height="32"/>
   </svg>)svg";
 
-TEST(ExternalUseFilterCacheTest, ResizingASymbolUseRefilters) {
+// Two uses of one symbol at different sizes establish different viewports for it, so they must not
+// share a cached result: the cached frames match uncached ones.
+TEST(ExternalUseFilterCacheTest, SymbolUsesOfDifferentSizesKeepSeparateResults) {
   REQUIRE_CACHING_BACKEND();
-  std::optional<FilteredSpriteScene> scene = MakeCustomScene(kTwoUseHost, R"svg(
+  std::optional<FilteredSpriteScene> scene = MakeCustomScene(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">
+      <rect width="100%" height="100%" fill="#f0f0e0"/>
+      <use id="use-0" href="sprites.svg#sprite" width="32" height="32"/>
+      <use id="use-1" href="sprites.svg#sprite" width="32" height="32" x="40"/>
+      <use id="use-2" href="sprites.svg#sprite" width="48" height="48" x="100"/>
+      <use id="use-3" href="sprites.svg#sprite" width="48" height="48" x="170"/>
+    </svg>)svg",
+                                                             R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
       <symbol id="sprite" viewBox="0 0 32 32">
         <filter id="f" x="-50%" y="-50%" width="200%" height="200%">
@@ -510,12 +527,17 @@ TEST(ExternalUseFilterCacheTest, ResizingASymbolUseRefilters) {
         <g filter="url(#f)"><circle cx="16" cy="16" r="8" fill="#c040a0"/></g>
       </symbol>
     </svg>)svg",
-                                                             2);
+                                                             4);
   ASSERT_TRUE(scene.has_value());
-  ExpectMutationRefilters(*scene, "symbol-viewport", [](FilteredSpriteScene& s) {
-    s.uses[0].setAttribute("width", "48");
-    s.uses[0].setAttribute("height", "48");
-  });
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::size_t hits = 0;
+  for (int frame = 0; frame < 3; ++frame) {
+    hits += Draw(*renderer, *scene).hits;
+  }
+  EXPECT_GT(hits, 0u);
+  editor::tests::CompareBitmapToBitmap(
+      renderer->takeSnapshot(), RenderUncached(*scene, RendererBackend::Geode), "symbol-viewports",
+      editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(ExternalUseFilterCacheTest, ChangingTheSheetStylesheetRefilters) {
