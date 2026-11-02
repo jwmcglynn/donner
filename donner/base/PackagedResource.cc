@@ -22,8 +22,6 @@
 #include <utility>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
-#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
-#include <unistd.h>
 #endif
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -93,14 +91,12 @@ std::string InstalledRoot() {
     return {};
   }
 #elif defined(__linux__) && !defined(__EMSCRIPTEN__)
-  std::array<char, 4096> buffer{};
-  const auto length = readlink("/proc/self/exe", buffer.data(), buffer.size());
-  if (length <= 0 || static_cast<size_t>(length) == buffer.size()) {
+  std::error_code ec;
+  const std::filesystem::path link = std::filesystem::read_symlink("/proc/self/exe", ec);
+  if (ec || link.empty()) {
     return {};
   }
-  std::error_code ec;
-  executable =
-      std::filesystem::canonical(std::string(buffer.data(), static_cast<size_t>(length)), ec);
+  executable = std::filesystem::canonical(link, ec);
   if (ec) {
     return {};
   }
@@ -398,6 +394,14 @@ struct PackagedResourceSession::Impl {
   size_t retained = 0;
   bool borrowed = false;
   std::string error;
+
+  /// Records a failure for \p sha256 unless verified bytes for it are already retained, so a
+  /// resource is never both ready and failed. Callers must hold \ref mutex.
+  void recordFailureLocked(const std::string& sha256) {
+    if (!bytes.contains(sha256)) {
+      failures.insert(sha256);
+    }
+  }
 };
 PackagedResourceSession::PackagedResourceSession(PackagedResourceProvider provider)
     : impl_(std::make_unique<Impl>(provider ? std::move(provider)
@@ -411,7 +415,8 @@ bool PackagedResourceSession::install(const PackagedResource& resource,
       ResourceSha256(bytes) != resource.sha256) {
     std::lock_guard lock(impl_->mutex);
     impl_->error = std::string("Invalid packaged resource: ") + resource.id;
-    impl_->failures.insert(resource.sha256);
+    // Rejected bytes never replace or invalidate bytes already verified for this digest.
+    impl_->recordFailureLocked(resource.sha256);
     impl_->pending.erase(resource.sha256);
     return false;
   }
@@ -421,7 +426,7 @@ bool PackagedResourceSession::install(const PackagedResource& resource,
   }
   if (bytes.size() > kMaximumEncodedBytes - impl_->retained) {
     impl_->error = "Packaged resource retention budget exceeded";
-    impl_->failures.insert(resource.sha256);
+    impl_->recordFailureLocked(resource.sha256);
     impl_->pending.erase(resource.sha256);
     return false;
   }
@@ -452,7 +457,7 @@ ResourceBytes PackagedResourceSession::load(const PackagedResource& resource) {
     std::lock_guard lock(impl_->mutex);
     impl_->error = std::string("Missing packaged resource: ") + resource.id;
 #ifndef __EMSCRIPTEN__
-    impl_->failures.insert(resource.sha256);
+    impl_->recordFailureLocked(resource.sha256);
 #endif
     return {};
   }
@@ -475,7 +480,7 @@ bool PackagedResourceSession::request(const PackagedResource& resource,
       return false;
     }
     if (impl_->pending.size() >= 128) {
-      impl_->failures.insert(resource.sha256);
+      impl_->recordFailureLocked(resource.sha256);
       impl_->error = "Too many pending packaged resources";
       return false;
     }
@@ -509,7 +514,7 @@ bool PackagedResourceSession::failed(const PackagedResource& resource) const {
 }
 void PackagedResourceSession::fail(const PackagedResource& resource) {
   std::lock_guard lock(impl_->mutex);
-  impl_->failures.insert(resource.sha256);
+  impl_->recordFailureLocked(resource.sha256);
   impl_->pending.erase(resource.sha256);
   impl_->error = std::string("Unavailable packaged resource: ") + resource.id;
 }

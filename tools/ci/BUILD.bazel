@@ -168,12 +168,16 @@ test_suite(
     tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],
 )
 
-# The standalone Geode module is incompatible unless the browser backend is selected. The editor
-# Wasm lane requests it explicitly so that such a configuration fails the build instead of quietly
-# skipping the audits that pin its browser selection.
+# The standalone Geode module and the GeodeSurfaceRenderer canvas link probe are incompatible unless
+# the browser backend is selected. The editor Wasm lane requests them explicitly so that such a
+# configuration fails the build instead of quietly skipping the audits that pin its browser
+# selection, and so that the canvas presentation path links on every pull request.
 filegroup(
     name = "geode_wasm_browser_module",
-    srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"],
+    srcs = [
+        "//donner/svg/renderer/wasm:donner_wasm_geode",
+        "//donner/svg/renderer/wasm:geode_surface_renderer_link_probe",
+    ],
     tags = ["manual"],
 )
 
@@ -181,8 +185,8 @@ filegroup(
 filegroup(
     name = "browser_bridge_link_probes",
     srcs = [
-        "//donner/gpu/browser:browser_bridge_link_probe",
-        "//donner/gpu/browser:browser_bridge_pthreads_link_probe",
+        "//donner/gpu/browser/link_probe:browser_bridge_link_probe",
+        "//donner/gpu/browser/link_probe:browser_bridge_pthreads_link_probe",
     ],
     tags = ["manual"],
 )
