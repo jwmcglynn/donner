@@ -4630,8 +4630,10 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   if (!fragment.empty()) {
     const ExternalUseInstanceScope instanceScope(child, root,
                                                  EntityHandle(hostRegistry, hostEntity));
+    components::ExternalUseStyleRetention::PrepareInstance(child);
     drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity);
   } else {
+    components::ExternalUseStyleRetention::PrepareInstance(child);
     const Vector2i size = subDocument.canvasSize();
     drawAdmittedSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
                             PreserveAspectRatio::Default(), surfaceFromHost, hostRegistry,

@@ -30,14 +30,23 @@ public:
   static constexpr std::size_t kMaximumRetainedSubtrees = 32;
 
   /**
-   * Prepare the referenced document for the occurrence installed in its
-   * \ref ExternalUseStyleContext, before its render tree is instantiated. Restyles the referenced
-   * subtree only when its retained inputs differ, and schedules an instance rebuild when the render
-   * tree was last built for a different occurrence.
+   * Prepare the referenced document's styles for the occurrence installed in its
+   * \ref ExternalUseStyleContext. Restyles the referenced subtree only when its retained inputs
+   * differ.
    *
    * @param registry Referenced document's registry, with its occurrence context installed.
    */
   static void PrepareOccurrence(Registry& registry);
+
+  /**
+   * Once the occurrence's instance layout is in place, schedule an instance rebuild when the render
+   * tree was last built for a different occurrence: another root, paint, or viewport the `<use>`
+   * establishes for a `<symbol>` or `<svg>`. A full rebuild is scheduled instead when the subtree
+   * holds a `<use>` whose shadow tree a rebuild for another root left uninstantiated.
+   *
+   * @param registry Referenced document's registry, with its occurrence context installed.
+   */
+  static void PrepareInstance(Registry& registry);
 
   /**
    * After the render tree is instantiated for the installed occurrence, restore every other
@@ -66,14 +75,23 @@ public:
    * Restyle every subtree an occurrence styled and drop the occurrence's rendering instances and
    * context paint, so the document renders and reads with its own styles.
    *
-   * Every public read of computed or derived state (styles, text metrics, layout transforms, shape
-   * geometry and bounds, rendering instances) calls this first under write access, or goes through
-   * render-tree instantiation, which does. A read-only accessor that cannot restore reports no
-   * value for occurrence-derived state instead.
+   * Render-tree instantiation calls this before preparing a document without an occurrence.
    *
    * @param registry Document registry.
    */
   static void RestoreStandalone(Registry& registry);
+
+  /**
+   * Before a public read of computed or derived state (styles, stops, text metrics, layout
+   * transforms, shape geometry and bounds, rendering instances): if an occurrence styled the
+   * document, restore it with \ref RestoreStandalone and prepare its render tree again, since
+   * restoring drops layout state that reads expect the preparation to have computed. Call under
+   * write access. A read-only accessor that cannot restore reports no value for occurrence-derived
+   * state instead.
+   *
+   * @param registry Document registry.
+   */
+  static void RestoreStandaloneForRead(Registry& registry);
 
   /**
    * Whether \p entity's computed style currently reflects an occurrence rather than its document.
