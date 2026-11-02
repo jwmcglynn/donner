@@ -104,9 +104,11 @@ RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
 /**
  * Renderer-owned allocation boundary for filter textures.
  *
- * Filter work is recorded into the renderer's frame command encoder, so textures must remain
- * unavailable for reuse until that frame submits. Implementations provide exact-descriptor
- * pooling and defer releases to the frame boundary.
+ * Filter work is recorded into the renderer's frame command encoder, so a released texture must
+ * not reach anything that can run ahead of that frame's submission: another renderer, a queue
+ * upload, or destruction. Implementations provide exact-descriptor pooling, and may let the same
+ * renderer's later recorded work in the frame reuse a released texture that no queue upload can
+ * write, since that work runs after everything already recorded.
  */
 class FilterTextureAllocator {
 public:
@@ -117,7 +119,9 @@ public:
   /// @param desc Descriptor the intermediate is allocated with.
   virtual gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& desc) = 0;
 
-  /// Hands \p texture back for reuse once the frame it was recorded into has submitted.
+  /// Hands \p texture back once its recorded work is complete in the renderer's command order. It
+  /// reaches a device-shared pool only after the frame submits; before that, only the same
+  /// renderer's later recorded work in the frame may reuse it.
   /// @param texture Texture to return; consumed.
   /// @param desc Descriptor \p texture was acquired with; must match, or the next acquire for
   ///   that descriptor misses its bucket.

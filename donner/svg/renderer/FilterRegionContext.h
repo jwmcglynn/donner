@@ -536,15 +536,17 @@ inline FilterInputBuffer ComputeRegionFilterInputBuffer(const components::Filter
                                                         const std::optional<Box2d>& filterRegion,
                                                         const Transform2d& deviceFromFilter,
                                                         int viewportWidth, int viewportHeight) {
-  const FilterInputBuffer viewportLayout = ComputeFilterInputBuffer(
-      graph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  const auto viewportLayout = [&] {
+    return ComputeFilterInputBuffer(graph, filterRegion, deviceFromFilter, viewportWidth,
+                                    viewportHeight);
+  };
   if (!filterRegion.has_value() || graph.keepsViewportAlignedCapture ||
       components::FilterGraphHasTurbulence(graph) || viewportWidth <= 0 || viewportHeight <= 0) {
-    return viewportLayout;
+    return viewportLayout();
   }
   const Box2d region = deviceFromFilter.transformBox(*filterRegion);
   if (!IsFiniteBox(region)) {
-    return viewportLayout;
+    return viewportLayout();
   }
   const std::optional<Box2d> visible = IntersectFilterBoxes(
       region, Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight)));
@@ -555,8 +557,23 @@ inline FilterInputBuffer ComputeRegionFilterInputBuffer(const components::Filter
   if (!raster.has_value()) {
     return FilterInputBuffer{1, 1, 0, 0};
   }
-  return PixelAlignedFilterRaster(*raster, FilterGraphReadsRasterEdges(graph))
-      .value_or(viewportLayout);
+  const std::optional<FilterInputBuffer> layout =
+      PixelAlignedFilterRaster(*raster, FilterGraphReadsRasterEdges(graph));
+  return layout ? *layout : viewportLayout();
+}
+
+/// Whether a filter region shows nothing on a \p viewportWidth by \p viewportHeight surface: it
+/// lies wholly outside it, so the layer's result is invisible and need not be captured or run.
+/// @param filterRegion Filter region in filter user space.
+/// @param deviceFromFilter Filter user space to surface pixels.
+/// @param viewportWidth Surface width. @param viewportHeight Surface height.
+inline bool FilterRegionShowsNothing(const Box2d& filterRegion, const Transform2d& deviceFromFilter,
+                                     int viewportWidth, int viewportHeight) {
+  const Box2d region = deviceFromFilter.transformBox(filterRegion);
+  return IsFiniteBox(region) &&
+         !IntersectFilterBoxes(region,
+                               Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight)))
+              .has_value();
 }
 
 /// Invert only finite, nonsingular transforms whose inverse remains finite.

@@ -7874,6 +7874,87 @@ TEST_F(RendererGeodeTest, ManySmallFiltersReusePooledSurfacesOnceWarm) {
   EXPECT_THAT(stats.surfacePeakBytes, testing::Lt(kPhoneTargetBytes + (std::uint64_t{32} << 20)));
 }
 
+// Reusing filter textures within a frame changes which texture each filter writes, never what it
+// writes.
+TEST_F(RendererGeodeTest, WithinFrameTextureReuseMatchesSingleUseTextures) {
+  SVGDocument document = ParseDocumentOrFail(GlowingPiecesSource(kPhoneWidth, kPhoneHeight, 80));
+  RendererGeode reusing = createRenderer();
+  reusing.draw(document);
+  reusing.draw(document);
+  RendererGeode singleUse = createRenderer();
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  editor::tests::CompareBitmapToBitmap(reusing.takeSnapshot(), singleUse.takeSnapshot(),
+                                       "within_frame_texture_reuse",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A filter whose intermediates exceed what the shared pool can hold still renders: a texture the
+// frame released is kept until the frame submits, never destroyed while its commands are pending.
+TEST_F(RendererGeodeTest, FullCanvasBlurBeyondThePoolBudgetRenders) {
+  const std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="2100">
+      <filter id="soft" x="0" y="0" width="1" height="1"><feGaussianBlur stdDeviation="6"/></filter>
+      <g filter="url(#soft)"><rect width="2100" height="2100" fill="#3070c0"/>
+        <rect x="1000" y="1000" width="100" height="100" fill="#ffffff"/></g>
+    </svg>)svg";
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode reusing = createRenderer();
+  reusing.draw(document);
+  ASSERT_THAT(reusing.deviceLost(), testing::IsFalse());
+  const RendererBitmap actual = reusing.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAt(actual, 400, 400), RgbaEq(48, 112, 192, 255));
+  RendererGeode singleUse = createRenderer();
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(), "full_canvas_blur_reuse",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Textures one renderer releases within an open frame stay with it: another renderer on the same
+// device could otherwise take one, write it, and submit ahead of the first renderer's frame.
+TEST_F(RendererGeodeTest, WithinFrameReleasesStayWithTheirRenderer) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  const auto drawFilter = [&](RendererGeode& renderer, const css::RGBA& color) {
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+    renderer.setPaint(solidFill(color));
+    renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+    renderer.popFilterLayer();
+  };
+
+  // A device of their own, so the shared pool starts empty and only these renderers feed it.
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode first(device);
+  RendererGeode second(device);
+  beginFrame(first);
+  const std::size_t pooledBefore = first.texturePoolStats().textureCount;
+  drawFilter(first, css::RGBA(200, 40, 40, 255));
+  EXPECT_THAT(first.texturePoolStats().textureCount, testing::Le(pooledBefore))
+      << "an open frame's released filter textures reached the shared pool";
+
+  beginFrame(second);
+  drawFilter(second, css::RGBA(40, 200, 40, 255));
+  second.endFrame();
+
+  drawFilter(first, css::RGBA(200, 40, 40, 255));
+  first.endFrame();
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  drawFilter(reference, css::RGBA(200, 40, 40, 255));
+  drawFilter(reference, css::RGBA(200, 40, 40, 255));
+  reference.endFrame();
+  editor::tests::CompareBitmapToBitmap(first.takeSnapshot(), reference.takeSnapshot(),
+                                       "within_frame_release_isolation",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Renders \p content in a \p size canvas, and again in a canvas with \p room more pixels on
 /// every side and the content moved by \p room, then requires the window of the second that
 /// shows the first canvas to match it: a filter near or past the canvas edge must read and show
@@ -7892,7 +7973,25 @@ void ExpectFilterEdgeParity(RendererGeode& renderer, const std::string& content,
     </filter>
     <filter id="stretch" x="-60%" y="-60%" width="220%" height="220%">
       <feGaussianBlur stdDeviation="1 7"/>
-    </filter>)svg";
+    </filter>
+    <filter id="shift" x="-60%" y="-60%" width="220%" height="220%">
+      <feOffset dx="-14" dy="-11"/>
+    </filter>
+    <filter id="sharpen">
+      <feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 5 -1 0 -1 0"/>
+    </filter>
+    <filter id="tiles" filterUnits="userSpaceOnUse" x="-40" y="-40" width="200" height="200">
+      <feOffset x="-10" y="-10" width="16" height="16" result="cell"/>
+      <feTile in="cell"/>
+    </filter>
+    <filter id="spot" x="-30%" y="-30%" width="160%" height="160%">
+      <feDiffuseLighting in="SourceAlpha" surfaceScale="3" lighting-color="#ffe0a0">
+        <fePointLight x="2" y="4" z="20"/>
+      </feDiffuseLighting>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+    <clipPath id="clip"><rect x="-6" y="-6" width="40" height="34"/></clipPath>
+    <mask id="fade"><rect x="-40" y="-40" width="200" height="200" fill="#808080"/></mask>)svg";
   const auto canvas = [&](int extent, int shift) {
     return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + std::to_string(extent) +
            "\" height=\"" + std::to_string(extent) + "\">" + filters + "<g transform=\"translate(" +
@@ -7913,7 +8012,7 @@ void ExpectFilterEdgeParity(RendererGeode& renderer, const std::string& content,
 
 TEST_F(RendererGeodeTest, FilterRegionsNearCanvasEdgesMatchFiltersWithRoom) {
   RendererGeode renderer = createRenderer();
-  const std::array<std::pair<std::string_view, std::string_view>, 5> cases{{
+  const std::array<std::pair<std::string_view, std::string_view>, 13> cases{{
       {"straddles_top_left",
        R"svg(<g filter="url(#glow)"><circle cx="6" cy="10" r="18" fill="#e05090"/></g>)svg"},
       {"straddles_bottom_right",
@@ -7924,6 +8023,22 @@ TEST_F(RendererGeodeTest, FilterRegionsNearCanvasEdgesMatchFiltersWithRoom) {
        R"svg(<g transform="translate(90 20) rotate(30)" filter="url(#glow)"><rect x="-20" y="-10" width="40" height="20" fill="#e0a020"/></g>)svg"},
       {"scaled",
        R"svg(<g transform="translate(-10 50) scale(2.5)" filter="url(#glow)"><circle cx="10" cy="6" r="8" fill="#6040e0"/></g>)svg"},
+      {"negative_offset_top_left",
+       R"svg(<g filter="url(#shift)"><rect x="4" y="2" width="30" height="26" fill="#30a050"/></g>)svg"},
+      {"convolve_duplicate_edges",
+       R"svg(<g filter="url(#sharpen)"><rect x="-8" y="70" width="40" height="40" fill="#5070c0"/></g>)svg"},
+      {"tile_user_space_source",
+       R"svg(<g filter="url(#tiles)"><circle cx="-4" cy="-4" r="7" fill="#c03080"/></g>)svg"},
+      {"point_light_near_edge",
+       R"svg(<g filter="url(#spot)"><rect x="-4" y="-2" width="36" height="30" fill="#a07030"/></g>)svg"},
+      {"nested_filters",
+       R"svg(<g filter="url(#glow)"><g filter="url(#shift)"><rect x="6" y="8" width="24" height="20" fill="#2080c0"/></g></g>)svg"},
+      {"under_ancestor_clip",
+       R"svg(<g clip-path="url(#clip)"><g filter="url(#wide)"><rect x="-6" y="0" width="30" height="20" fill="#d04040"/></g></g>)svg"},
+      {"under_opacity",
+       R"svg(<g opacity="0.6"><g filter="url(#glow)"><circle cx="90" cy="88" r="14" fill="#40a040"/></g></g>)svg"},
+      {"inside_mask",
+       R"svg(<g mask="url(#fade)"><g filter="url(#glow)"><rect x="70" y="-6" width="30" height="24" fill="#8040c0"/></g></g>)svg"},
   }};
   for (const auto& [label, content] : cases) {
     SCOPED_TRACE(label);
@@ -7943,7 +8058,7 @@ TEST_F(RendererGeodeTest, RotatedAnisotropicFilterNearCanvasEdgeMatchesFilterWit
       renderer,
       R"svg(<g transform="translate(8 60) rotate(40)" filter="url(#stretch)"><rect x="-14" y="-14" width="28" height="28" fill="#c02040"/></g>)svg",
       96, 64, "filter_edge_parity_rotated_anisotropic",
-      editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
+      editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true));
 }
 
 }  // namespace
