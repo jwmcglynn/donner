@@ -181,8 +181,8 @@ filegroup(
 filegroup(
     name = "browser_bridge_link_probes",
     srcs = [
-        "//donner/gpu/browser:browser_bridge_link_probe",
-        "//donner/gpu/browser:browser_bridge_pthreads_link_probe",
+        "//donner/gpu/browser/link_probe:browser_bridge_link_probe",
+        "//donner/gpu/browser/link_probe:browser_bridge_pthreads_link_probe",
     ],
     tags = ["manual"],
 )
