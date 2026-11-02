@@ -436,8 +436,12 @@ bool ReadsOutsideSubtree(Registry& registry, Entity root) {
   return false;
 }
 
-/// Whether \p root's subtree holds a `<use>` with a resolvable target but no instantiated shadow
-/// tree, as a use inside `<defs>` is left when the render tree was built for another root.
+/**
+ * Whether \p root's subtree holds a `<use>` the installed instance expands but that has no shadow
+ * tree, as a definition use is left when the render tree was built for another root. A full
+ * rebuild gives every such use a shadow tree component, even one whose expansion is refused for a
+ * cycle or a resource limit, so the check does not fire again until another root's rebuild.
+ */
 bool HasUnexpandedUse(Registry& registry, Entity root) {
   std::vector<Entity> pending{root};
   while (!pending.empty()) {
@@ -447,7 +451,8 @@ bool HasUnexpandedUse(Registry& registry, Entity root) {
     const auto* type = registry.try_get<ElementTypeComponent>(entity);
     if (shadowTree && type && type->type() == ElementType::Use &&
         !registry.all_of<ComputedShadowTreeComponent>(entity) &&
-        shadowTree->mainTargetEntity(registry)) {
+        shadowTree->mainTargetEntity(registry) &&
+        !IsDormantDefinitionUse(registry, entity, *shadowTree)) {
       return true;
     }
     for (Entity child = registry.get<donner::components::TreeComponent>(entity).firstChild();
@@ -566,6 +571,8 @@ void ExternalUseStyleRetention::RestoreStandaloneForRead(Registry& registry) {
   if (context == nullptr) {
     context = &registry.ctx().emplace<RenderingContext>(registry);
   }
+  // Preparation diagnostics are dropped here: a read reports values, not warnings. A later verbose
+  // render of the document that finds the render tree already prepared does not repeat them.
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   context->instantiateRenderTree(/*verbose=*/false, disabledSink);
 }

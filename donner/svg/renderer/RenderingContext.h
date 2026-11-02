@@ -18,6 +18,20 @@
 
 namespace donner::svg::components {
 
+class ShadowTreeComponent;
+
+/**
+ * Whether \p entity is a same-document `<use>` left unexpanded because it sits in a `<defs>`
+ * reached only through `<g>` ancestors. Inside an external use's instance, the walk stops at the
+ * installed instance root, so a definition use is expanded while that instance presents it.
+ *
+ * @param registry Document registry.
+ * @param entity Element to test.
+ * @param shadowTree The element's shadow tree component.
+ */
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree);
+
 /**
  * Rendering controller, which instantiates and and manages the rendering tree.
  *
