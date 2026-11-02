@@ -1109,6 +1109,85 @@ TEST(Path, PointAtArcLengthAsymmetricCurvesAdjustBinarySearchBothWays) {
   EXPECT_LT(late.point.x, 181.0);
 }
 
+TEST(Path, MeasuredCubicInvertsAnalyticParabolaArcLength) {
+  // This cubic is exactly (100t, 100t^2). Its speed has a closed-form integral, so neither
+  // retained production samples nor numerical quadrature supplies the requested distances.
+  const Path path = PathBuilder()
+                        .moveTo({0, 0})
+                        .curveTo({100.0 / 3, 0}, {200.0 / 3, 100.0 / 3}, {100, 100})
+                        .build();
+  const auto measured = path.measure();
+  ASSERT_TRUE(measured.valid());
+  for (double t : {0.1, 0.3, 0.6, 0.9}) {
+    SCOPED_TRACE(t);
+    const double distance = 50 * t * std::hypot(1.0, 2 * t) + 25 * std::asinh(2 * t);
+    const auto actual = measured.pointAtArcLength(distance);
+    ASSERT_TRUE(actual.valid);
+    EXPECT_NEAR(actual.point.x, 100 * t, 1e-8);
+    EXPECT_NEAR(actual.point.y, 100 * t * t, 1e-8);
+    EXPECT_NEAR(actual.angle, std::atan2(2 * t, 1.0), 1e-10);
+  }
+}
+
+TEST(Path, MeasuredCubicPreservesExactCollinearSamplesWithoutRemeasuring) {
+  const Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 0}, {0, 0}, {64, 0}).build();
+  const auto measured = path.measure();
+  ASSERT_THAT(measured.valid(), testing::IsTrue());
+  const auto workUnits = measured.measurementWorkUnits();
+  const auto retainedBytes = measured.retainedBytes();
+  for (double t : {0.0, 0.25, 0.5, 1.0}) {
+    SCOPED_TRACE(t);
+    const auto actual = measured.pointAtArcLength(64 * t * t * t);
+    ASSERT_THAT(actual.valid, testing::IsTrue());
+    EXPECT_THAT(actual.point, testing::Eq(Vector2d(64 * t * t * t, 0)));
+    EXPECT_THAT(actual.tangent, testing::Eq(Vector2d(t == 0.0 ? 64 : 192 * t * t, 0)));
+  }
+  EXPECT_THAT(measured.measurementWorkUnits(), testing::Eq(workUnits));
+  EXPECT_THAT(measured.retainedBytes(), testing::Eq(retainedBytes));
+}
+
+TEST(Path, MeasuredCubicPreservesStationaryAndZeroLengthSamples) {
+  const Path stationary = PathBuilder().moveTo({-1, 0}).curveTo({1, 0}, {-1, 0}, {1, 0}).build();
+  const auto middle = stationary.measure().pointAtArcLength(1.0);
+  ASSERT_THAT(middle.valid, testing::IsTrue());
+  EXPECT_THAT(middle.point, testing::Eq(Vector2d(0, 0)));
+  EXPECT_THAT(middle.tangent, testing::Eq(Vector2d(0, 0)));
+  EXPECT_THAT(middle.angle, testing::Eq(0.0));
+
+  const Path zeroLength = PathBuilder().moveTo({4, 5}).curveTo({4, 5}, {4, 5}, {4, 5}).build();
+  const auto zero = zeroLength.measure().pointAtArcLength(0.0);
+  ASSERT_THAT(zero.valid, testing::IsTrue());
+  EXPECT_THAT(zero.point, testing::Eq(Vector2d(4, 5)));
+  EXPECT_THAT(zero.tangent, testing::Eq(Vector2d(0, 0)));
+  EXPECT_THAT(zero.angle, testing::Eq(0.0));
+}
+
+TEST(Path, MeasuredTinyCubicQueriesRemainMonotoneWithoutWorseningTheLinearSeed) {
+  for (double scale : {1e-6, 1e-12}) {
+    SCOPED_TRACE(scale);
+    for (double controlFraction : {0.0, 0.01}) {
+      SCOPED_TRACE(controlFraction);
+      const Vector2d control(scale * controlFraction, 0);
+      const Path path = PathBuilder().moveTo({0, 0}).curveTo(control, control, {scale, 0}).build();
+      const auto measured = path.measure();
+      ASSERT_THAT(measured.valid(), testing::IsTrue());
+      double previousX = 0.0;
+      for (double fraction : {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}) {
+        SCOPED_TRACE(fraction);
+        const double distance = scale * fraction;
+        const auto actual = measured.pointAtArcLength(distance);
+        ASSERT_THAT(actual.valid, testing::IsTrue());
+        EXPECT_GE(actual.point.x, previousX);
+        const double linearSeedX = scale * (3 * controlFraction * fraction * (1 - fraction) +
+                                            fraction * fraction * fraction);
+        EXPECT_LE(std::abs(actual.point.x - distance),
+                  std::abs(linearSeedX - distance) + scale * 1e-14);
+        previousX = actual.point.x;
+      }
+    }
+  }
+}
+
 // =============================================================================
 // Path::pointAt / tangentAt / normalAt
 // =============================================================================
