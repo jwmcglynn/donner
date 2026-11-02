@@ -8,6 +8,7 @@ load(
     "donner_cc_library",
     "donner_cc_test",
     "donner_multi_transitioned_test",
+    "donner_perf_cc_test",
     "donner_transitioned_cc_test",
     "donner_variant_cc_test",
     "renderer_backend_compatible_with",
@@ -1983,6 +1984,42 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "external_use_sprite_scene",
+    testonly = 1,
+    srcs = ["ExternalUseSpriteScene.cc"],
+    hdrs = ["ExternalUseSpriteScene.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/encoding:base64",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/resources:resource_loader_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# Animated external-use sprite: the correctness half counts sprite-sheet restyles on the PR gate;
+# the wall-clock half compares bitmap and vector sprite frame times in the manual perf lane (run
+# it with `--config=geode` for the GPU backend).
+donner_perf_cc_test(
+    name = "external_use_sprite_tests",
+    correctness_srcs = ["ExternalUseSpriteCorrectness_tests.cc"],
+    wallclock_srcs = ["ExternalUseSpriteWallclock_tests.cc"],
+    deps = [
+        ":external_use_sprite_scene",
+        "//donner/base",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
