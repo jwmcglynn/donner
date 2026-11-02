@@ -34,8 +34,9 @@ class SVGDocument;
  *   layer's pixel extent no longer matches, \ref draw returns \ref FrameStatus::ResizeNeeded and
  *   presents nothing until \ref resize is called with the new size. A layer with empty bounds
  *   (not laid out in a window) is never reported as resized.
- * - The renderer configures the layer's `device`, `pixelFormat` (BGRA8), `drawableSize` and
- *   `opaque` properties. Do not change them yourself.
+ * - The renderer configures the layer's `device`, `pixelFormat` (BGRA8), `drawableSize`,
+ *   `framebufferOnly` and `opaque` properties. Do not change them yourself. Drawables allow GPU
+ *   copies (`framebufferOnly` is off), which blend modes need to read their backdrop.
  * - The layer is configured opaque, so transparent regions of a document composite as black.
  *   Give the document a background to control the color.
  * - A frame target must fit the renderer's surface budget (4 bytes per pixel within

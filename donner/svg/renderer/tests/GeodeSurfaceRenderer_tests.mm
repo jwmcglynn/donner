@@ -87,6 +87,9 @@ TEST_F(GeodeSurfaceRendererTest, ConfiguresTheLayerItPresentsTo) {
   EXPECT_THAT(layer_.drawableSize.width, Eq(64.0));
   EXPECT_THAT(layer_.drawableSize.height, Eq(64.0));
   EXPECT_TRUE(layer_.opaque) << "the documented opaque configuration";
+  EXPECT_FALSE(layer_.framebufferOnly)
+      << "blend modes copy their backdrop from the presentation target, which needs copyable "
+         "drawables";
 }
 
 TEST_F(GeodeSurfaceRendererTest, PresentsADocument) {
