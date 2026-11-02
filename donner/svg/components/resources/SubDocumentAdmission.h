@@ -55,12 +55,15 @@ public:
   bool admit(const SVGDocumentHandle& document, Reservation* reservation = nullptr) const;
 
   /**
-   * A value that changes whenever the owning document joins or leaves a family, or one of its
-   * families tightens its limits. Those are the only changes after which an unchanged document
-   * this cache already admitted can be refused, so an admission may be reused while this value and
-   * the document are unchanged.
+   * The inputs a re-admission of \p document would read, other than \p document's own nested
+   * documents: \p document's entity and payload size, the families of the owning document and of
+   * \p document (each by identity and limit revision), and both documents' membership revisions.
+   * While the fingerprint is unchanged, re-admitting \p document reaches the same verdict unless
+   * one of its nested documents grew.
+   *
+   * @param document A document this cache admitted.
    */
-  uint64_t revision() const;
+  std::vector<uint64_t> fingerprint(const SVGDocumentHandle& document) const;
 
   /// Inspect the ledger attached to an existing family without creating one.
   /// @param family Family whose admission counters are requested.

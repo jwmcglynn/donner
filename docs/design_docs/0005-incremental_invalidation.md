@@ -619,7 +619,7 @@ starts the full rebuild. A qualifying frame:
   rebuild does.
 
 Shadow trees are not torn down, no style is recomputed, and no external document is admitted
-again unless its resource family changed. The traversal still visits every rendered entity, so a retained
+again unless it or its resource families changed. The traversal still visits every rendered entity, so a retained
 frame costs `O(rendered entities)` with a small constant, not `O(changed entities)`; patching
 instances in place is a possible next step.
 
@@ -627,8 +627,13 @@ The two qualifying changes and their marks:
 
 | Change | Mutation path | Dirty flags |
 |--------|---------------|-------------|
-| Transform write | `setTransform()`, the `transform` attribute | `Layout`, `Transform`, `WorldTransform`, `RenderInstance`; descendants `WorldTransform`, `RenderInstance` |
+| Transform write | `SVGGraphicsElement::setTransform()` | `Layout`, `Transform`, `WorldTransform` on the element; `LayoutSystem::invalidate()` drops the descendants' cached absolute transforms without flagging them |
 | External `<use>` retarget | `setHref()`, `href` / `xlink:href` writes | `ShadowTree`, `RenderInstance`, plus the layout flags |
+| External `<use>` geometry | `setX()`, `setY()`, `setWidth()`, `setHeight()` | `ShadowTree`, `RenderInstance`, plus the layout flags: the instance is re-attached so that layer caches see a content change, not a move |
+
+A `transform` attribute written through `setAttribute()` also marks `Paint` (an XML transform edit
+is a settled change that re-rasterizes filtered layers), so it takes the full rebuild, as does any
+transform write while a stylesheet selects on `[transform]`.
 
 `href` writes on a `<use>` now request the whole-tree restyle only when a stylesheet selects on
 the attribute, as transform writes already did. An `href` write takes the retained path only when
@@ -653,11 +658,13 @@ or when one of these changes could reach a computed component:
 
 External documents are admitted to the resource family at most once per full rebuild,
 however many uses reference them (`ResourceManagerContext::loadAdmittedExternalSVG()`). A use
-retargeted between rebuilds reuses that admission while the document's resource families are
-unchanged (`SubDocumentCache::admissionRevision()`: the document has not joined or left a family
-and none has tightened its limits, the only changes that can refuse an unchanged, already admitted
-document), and is admitted again otherwise. Unchanged uses keep the documents they were given, as
-they did on frames with nothing dirty.
+retargeted between rebuilds reuses that admission only while the loader generation and
+`SubDocumentCache::admissionFingerprint()` are unchanged: the admitted document's entity and
+payload size, and the identity, limit revision and membership revision of the families of both
+the host and the admitted document. A nested document of the admitted one that grew is re-checked
+when the next full rebuild starts a new admission pass; until then, the memo also keeps the
+admitted documents referenced. Unchanged uses keep the documents they were given, as they did on
+frames with nothing dirty.
 
 `RenderTreeState::retainedUpdatesEnabled` forces the full rebuild for tests and diagnostics, and
 `RenderTreeState::counters` records full rebuilds, retained updates, shadow-tree teardowns and

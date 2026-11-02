@@ -125,8 +125,9 @@ public:
   /// Current parse, cache, and rejection counters.
   const SecurityStats& securityStats() const { return securityStats_; }
 
-  /// \ref SubDocumentAdmission::revision of the bound family, or zero when unbound.
-  uint64_t admissionRevision() const;
+  /// \ref SubDocumentAdmission::fingerprint of \p document, or empty when unbound.
+  /// @param document A document this cache admitted.
+  std::vector<uint64_t> admissionFingerprint(const SVGDocumentHandle& document) const;
 
   /// Number of times an already cached document was re-admitted to the resource family, which
   /// walks its whole retained resource graph.
