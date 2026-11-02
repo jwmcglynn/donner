@@ -268,8 +268,11 @@ void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
 
 /**
  * Parse parameters for an element-specific presentation attribute. The parser applies a `<use>`
- * element's geometry attributes through its typed setters, so an attribute written later takes
- * the same precedence or it would never replace the parsed value.
+ * element's geometry attributes through its typed setters, at override precedence, so an attribute
+ * written later takes the same precedence or it would never replace a parsed value. This departs
+ * from the presentation-attribute precedence other attributes use: a stylesheet `width` rule cannot
+ * override it, exactly as it cannot override the parsed attribute, and `removeAttribute()` (which
+ * writes `initial` through this path) resets the parsed value.
  */
 parser::PropertyParseFnParams ElementAttributeParams(ElementType elementType, std::string_view name,
                                                      std::string_view value) {

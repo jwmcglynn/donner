@@ -2038,6 +2038,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/compositor",
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_driver",

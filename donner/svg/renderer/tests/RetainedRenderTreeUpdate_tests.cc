@@ -16,13 +16,17 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/DonnerController.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -544,6 +548,244 @@ TEST(RetainedRenderTreeUpdateTest, ExternalUseViewportSettersMatchFreshDocuments
 TEST(RetainedRenderTreeUpdateTest, ExternalUseViewportAttributesMatchFreshDocuments) {
   ExpectUseViewportEditsMatchFreshDocuments(MakeExternalViewportHost, GeometryWrite::Attributes,
                                             "external-use-viewport-attributes");
+}
+
+FrameEdit SetTransformAttribute(std::string selector) {
+  return [selector](SVGDocument& document, int frame) {
+    Element(document, selector)
+        .setAttribute(
+            xml::XMLQualifiedNameRef("transform"),
+            "translate(" + std::to_string(3 * frame) + " " + std::to_string(2 * frame) + ")");
+  };
+}
+
+TEST(RetainedRenderTreeUpdateTest, TransformAttributeWritesTakeTheFullRebuild) {
+  // An XML transform edit is a settled change that also re-rasterizes filtered layers.
+  ExpectSourceFramesMatchFullRebuild(kNestedScene, SetTransformAttribute("#parent"),
+                                     ExpectedPath::FullRebuild, "transform-attribute");
+}
+
+TEST(RetainedRenderTreeUpdateTest, TransformSelectorsTakeTheFullRebuild) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+      <style>[transform] > rect { fill: red; }</style>
+      <g id="moved"><rect width="40" height="40" fill="navy"/></g>
+    </svg>)svg";
+  ExpectSourceFramesMatchFullRebuild(kSource, SetTransformAttribute("#moved"),
+                                     ExpectedPath::FullRebuild, "transform-selector");
+}
+
+TEST(RetainedRenderTreeUpdateTest, NonScalingStrokesMatchFullRebuild) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+      <g id="scaled">
+        <path d="M5 10 L40 10 L40 40 Z" stroke="black" stroke-width="3" fill="gold"
+              vector-effect="non-scaling-stroke"/>
+      </g>
+    </svg>)svg";
+  const FrameEdit scale = [](SVGDocument& document, int frame) {
+    Element(document, "#scaled")
+        .setTransform(Transform2d::Scale(Vector2d(2.0, 1.0)) *
+                      Transform2d::Translate(Vector2d(frame, 2.0 * frame)));
+  };
+  ExpectSourceFramesMatchFullRebuild(kSource, scale, ExpectedPath::Retained, "non-scaling-stroke");
+}
+
+/// Points spread over a 96x96 canvas for hit testing.
+std::vector<Vector2d> ProbePoints() {
+  std::vector<Vector2d> points;
+  for (int y = 2; y < 96; y += 6) {
+    for (int x = 2; x < 96; x += 6) {
+      points.emplace_back(x, y);
+    }
+  }
+  return points;
+}
+
+std::string HitId(DonnerController& controller, const Vector2d& point) {
+  const std::optional<SVGGraphicsElement> hit = controller.findIntersecting(point);
+  return hit ? std::string(hit->id()) + "/" + std::string(hit->tagName().name) : "none";
+}
+
+TEST(RetainedRenderTreeUpdateTest, BoundsAndHitTestsMatchFullRebuild) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+      <defs><rect id="tile" width="10" height="10" fill="teal"/></defs>
+      <g id="parent">
+        <circle id="dot" cx="20" cy="20" r="8" fill="orange"/>
+        <use id="tile-use" href="#tile" x="30" y="5"/>
+        <rect id="box" x="10" y="50" width="30" height="20" fill="navy"/>
+      </g>
+    </svg>)svg";
+  SVGDocument retained = Parse(kSource);
+  SVGDocument reference = Parse(kSource);
+  DisableRetainedUpdates(reference);
+  Renderer retainedRenderer;
+  Renderer referenceRenderer;
+  retainedRenderer.draw(retained);
+  referenceRenderer.draw(reference);
+
+  const uint64_t retainedBefore = ReadCounters(retained).retainedUpdates;
+  for (int frame = 1; frame <= kFrames; ++frame) {
+    for (SVGDocument* document : {&retained, &reference}) {
+      MoveElement("#parent")(*document, frame);
+    }
+    retainedRenderer.draw(retained);
+    referenceRenderer.draw(reference);
+
+    for (const std::string_view id : {"#dot", "#box"}) {
+      EXPECT_EQ(retained.querySelector(id)->cast<SVGGeometryElement>().worldBounds(),
+                reference.querySelector(id)->cast<SVGGeometryElement>().worldBounds())
+          << id << " frame " << frame;
+    }
+    DonnerController retainedController(retained);
+    DonnerController referenceController(reference);
+    for (const Vector2d& point : ProbePoints()) {
+      EXPECT_EQ(HitId(retainedController, point), HitId(referenceController, point))
+          << point << " frame " << frame;
+    }
+  }
+  EXPECT_EQ(ReadCounters(retained).retainedUpdates, retainedBefore + kFrames);
+}
+
+/// A host with one external `<use>` of the sprite sheet, plus \p style as its stylesheet.
+std::optional<SVGDocument> MakeStyledSpriteHost(std::string_view style) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><style>)" +
+          std::string(style) +
+          R"(</style><use id="sprite" href="sprites.svg#sprite-0" data-kind="hero"/></svg>)",
+      MakeSpriteSheetSource(SpriteKind::Vector));
+  if (!host) {
+    return std::nullopt;
+  }
+  return std::move(host->document);
+}
+
+const FrameEdit kNextSprite = [](SVGDocument& document, int frame) {
+  document.querySelector("#sprite")->cast<SVGUseElement>().setHref(
+      RcString("sprites.svg#sprite-" + std::to_string(frame % kSpriteSheetSpriteCount)));
+};
+
+TEST(RetainedRenderTreeUpdateTest, HrefSelectorsTakeTheFullRebuild) {
+  constexpr std::string_view kStyle = R"(use[href$="sprite-1"] { fill: red; })";
+  std::optional<SVGDocument> retained = MakeStyledSpriteHost(kStyle);
+  std::optional<SVGDocument> reference = MakeStyledSpriteHost(kStyle);
+  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ExpectFramesMatchFullRebuild(*retained, *reference, kNextSprite, ExpectedPath::FullRebuild,
+                               "href-selector");
+}
+
+TEST(RetainedRenderTreeUpdateTest, OtherAttributeSelectorsKeepRetargetsRetained) {
+  constexpr std::string_view kStyle = R"([data-kind="hero"] { fill: red; })";
+  std::optional<SVGDocument> retained = MakeStyledSpriteHost(kStyle);
+  std::optional<SVGDocument> reference = MakeStyledSpriteHost(kStyle);
+  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ExpectFramesMatchFullRebuild(*retained, *reference, kNextSprite, ExpectedPath::Retained,
+                               "other-selector");
+}
+
+TEST(RetainedRenderTreeUpdateTest, CrossDocumentRetargetsMatchFullRebuild) {
+  // Two uses draw from sheets 0 and 1; sheet 2 is referenced by nothing until a retarget, so its
+  // first retarget loads and admits a document the last full rebuild never saw.
+  constexpr SpriteFieldOptions kField{.sprites = 2, .sheets = 3, .spritesPerSheet = 4};
+  std::optional<SpriteFieldScene> retained = MakeSpriteFieldScene(kField);
+  std::optional<SpriteFieldScene> reference = MakeSpriteFieldScene(kField);
+  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  const FrameEdit hop = [](SVGDocument& document, int frame) {
+    const int sheet = (frame + 1) % 3;
+    document.querySelector("#u0")->cast<SVGUseElement>().setHref(
+        RcString("sheet-" + std::to_string(sheet) + ".svg#sprite-" + std::to_string(frame % 4)));
+  };
+  ExpectFramesMatchFullRebuild(retained->document, reference->document, hop, ExpectedPath::Retained,
+                               "cross-document");
+}
+
+/// Promotes the external `<use>` `#use` of \p document into a compositor layer, applies
+/// \p edit, and returns the composited frame that follows. With no edit, renders the same steps
+/// on an unedited document, which is the uncached reference for the edited state.
+RendererBitmap CompositeAfterPromotion(SVGDocument& document,
+                                       const std::function<void(SVGUseElement&)>& edit,
+                                       bool editBeforePromotion) {
+  const RenderViewport viewport{Vector2d(96, 96), 1.0};
+  Renderer renderer;
+  compositor::CompositorController compositor(document, renderer);
+  compositor.renderFrame(viewport);
+  SVGUseElement use = document.querySelector("#use")->cast<SVGUseElement>();
+  const Entity entity = use.unsafeEntityHandle().entity();
+  if (editBeforePromotion && edit) {
+    edit(use);
+  }
+  compositor.promoteEntity(entity);
+  compositor.renderFrame(viewport);
+  if (!editBeforePromotion && edit) {
+    edit(use);
+  }
+  compositor.renderFrame(viewport);
+  compositor.renderFrame(viewport);
+  return renderer.takeSnapshot();
+}
+
+std::optional<SVGDocument> MakeCompositedHost(std::string_view useAttributes) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">)"
+      R"(<rect width="96" height="96" fill="white"/><use id="use" opacity="0.5" )" +
+          std::string(useAttributes) + "/></svg>",
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><defs>)" +
+          std::string(kViewportTargets) +
+          R"(<g id="plain"><rect width="10" height="10" fill="purple"/></g></defs></svg>)");
+  if (!host) {
+    return std::nullopt;
+  }
+  return std::move(host->document);
+}
+
+TEST(RetainedRenderTreeUpdateTest, PromotedExternalUseResizeMatchesUncachedRender) {
+  std::optional<SVGDocument> edited =
+      MakeCompositedHost(R"(href="sprites.svg#symbol" x="4" y="4" width="20" height="20")");
+  std::optional<SVGDocument> fresh =
+      MakeCompositedHost(R"(href="sprites.svg#symbol" x="4" y="4" width="50" height="30")");
+  ASSERT_TRUE(edited.has_value() && fresh.has_value());
+  const RendererBitmap actual = CompositeAfterPromotion(
+      *edited,
+      [](SVGUseElement& use) {
+        use.setWidth(Lengthd(50));
+        use.setHeight(Lengthd(30));
+      },
+      /*editBeforePromotion=*/false);
+  const RendererBitmap expected = CompositeAfterPromotion(*fresh, {}, false);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "promoted-use-resize",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RetainedRenderTreeUpdateTest, PromotedExternalUseMoveMatchesUncachedRender) {
+  std::optional<SVGDocument> edited =
+      MakeCompositedHost(R"(href="sprites.svg#symbol" x="4" y="4" width="20" height="20")");
+  std::optional<SVGDocument> fresh =
+      MakeCompositedHost(R"svg(href="sprites.svg#symbol" x="4" y="4" width="20" height="20" )svg"
+                         R"svg(transform="translate(30 12)")svg");
+  ASSERT_TRUE(edited.has_value() && fresh.has_value());
+  const RendererBitmap actual = CompositeAfterPromotion(
+      *edited,
+      [](SVGUseElement& use) { use.setTransform(Transform2d::Translate(Vector2d(30, 12))); },
+      /*editBeforePromotion=*/false);
+  const RendererBitmap expected = CompositeAfterPromotion(*fresh, {}, false);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "promoted-use-move",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RetainedRenderTreeUpdateTest, PromotingAJustRetargetedExternalUseMatchesUncachedRender) {
+  std::optional<SVGDocument> edited =
+      MakeCompositedHost(R"(href="sprites.svg#symbol" width="40" height="40")");
+  std::optional<SVGDocument> fresh =
+      MakeCompositedHost(R"(href="sprites.svg#plain" width="40" height="40")");
+  ASSERT_TRUE(edited.has_value() && fresh.has_value());
+  // Promotion happens between the retarget and the next prepare, while the instance is stale.
+  const RendererBitmap actual = CompositeAfterPromotion(
+      *edited, [](SVGUseElement& use) { use.setHref(RcString("sprites.svg#plain")); },
+      /*editBeforePromotion=*/true);
+  const RendererBitmap expected = CompositeAfterPromotion(*fresh, {}, true);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "promoted-use-retarget",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace
