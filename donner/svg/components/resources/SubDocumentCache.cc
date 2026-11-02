@@ -60,6 +60,10 @@ bool SubDocumentCache::acceptsCachedDocument(const SVGDocumentHandle& document) 
   return admission_ && admission_->admit(document);
 }
 
+uint64_t SubDocumentCache::admissionRevision() const {
+  return admission_ ? admission_->revision() : 0;
+}
+
 bool SubDocumentCache::bindFamily(Registry& registry) {
   familyBound_ = true;
   admission_ = SubDocumentAdmission::Bind(registry, limits_);

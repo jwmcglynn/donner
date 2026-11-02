@@ -143,22 +143,17 @@ void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
   for (const Entity entity : plan.retargetedUses) {
     // The previous instance's font dependencies no longer apply; drawing records the new ones.
     registry.remove<FontPaintDependenciesComponent>(entity);
-    // Admitted again: the resource family may have changed since the last full rebuild.
     AttachExternalUse(registry, entity,
-                      registry.get<ShadowTreeComponent>(entity).mainHref().value(),
-                      ExternalUseAdmission::Now, warningSink);
+                      registry.get<ShadowTreeComponent>(entity).mainHref().value(), warningSink);
   }
 }
 
 void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
-                       ExternalUseAdmission admission, ParseWarningSink& warningSink) {
+                       ParseWarningSink& warningSink) {
   const Reference ref(href);
   auto& resourceManager = registry.ctx().get<ResourceManagerContext>();
-  std::optional<SVGDocumentHandle> subDocument =
-      admission == ExternalUseAdmission::OncePerRebuild
-          ? resourceManager.loadAdmittedExternalSVG(ref.documentUrl(), warningSink)
-          : resourceManager.loadExternalSVG(ref.documentUrl(), warningSink);
-  if (subDocument) {
+  if (std::optional<SVGDocumentHandle> subDocument =
+          resourceManager.loadAdmittedExternalSVG(ref.documentUrl(), warningSink)) {
     registry.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDocument),
                                                       RcString(ref.fragment()));
   }

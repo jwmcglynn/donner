@@ -618,8 +618,8 @@ starts the full rebuild. A qualifying frame:
   transforms, clip-path geometry, context-paint remaps and subtree ranges exactly as the full
   rebuild does.
 
-Shadow trees are not torn down, no style is recomputed, and only a retargeted use admits its
-external document again. The traversal still visits every rendered entity, so a retained
+Shadow trees are not torn down, no style is recomputed, and no external document is admitted
+again unless its resource family changed. The traversal still visits every rendered entity, so a retained
 frame costs `O(rendered entities)` with a small constant, not `O(changed entities)`; patching
 instances in place is a possible next step.
 
@@ -653,9 +653,11 @@ or when one of these changes could reach a computed component:
 
 External documents are admitted to the resource family at most once per full rebuild,
 however many uses reference them (`ResourceManagerContext::loadAdmittedExternalSVG()`). A use
-retargeted between rebuilds is admitted again (`loadExternalSVG()`), since the family may have
-changed since the last rebuild; unchanged uses keep the documents they were given, as they did
-on frames with nothing dirty.
+retargeted between rebuilds reuses that admission while the document's resource families are
+unchanged (`SubDocumentCache::admissionRevision()`: the document has not joined or left a family
+and none has tightened its limits, the only changes that can refuse an unchanged, already admitted
+document), and is admitted again otherwise. Unchanged uses keep the documents they were given, as
+they did on frames with nothing dirty.
 
 `RenderTreeState::retainedUpdatesEnabled` forces the full rebuild for tests and diagnostics, and
 `RenderTreeState::counters` records full rebuilds, retained updates, shadow-tree teardowns and

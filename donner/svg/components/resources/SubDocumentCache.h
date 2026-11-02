@@ -125,6 +125,9 @@ public:
   /// Current parse, cache, and rejection counters.
   const SecurityStats& securityStats() const { return securityStats_; }
 
+  /// \ref SubDocumentAdmission::revision of the bound family, or zero when unbound.
+  uint64_t admissionRevision() const;
+
   /// Number of times an already cached document was re-admitted to the resource family, which
   /// walks its whole retained resource graph.
   size_t cachedDocumentAdmissions() const { return cachedDocumentAdmissions_; }

@@ -33,6 +33,8 @@ struct SubDocumentAdmissionState {
   SubDocumentCache::Limits limits;
   SubDocumentAdmission::Stats stats;
   bool originalRootAssigned = false;
+  /// Bumped whenever a requesting cache tightens \ref limits.
+  uint64_t limitsRevision = 0;
   std::unordered_map<const Registry*, std::weak_ptr<SubDocumentAdmissionLease>> members;
 };
 
@@ -69,7 +71,16 @@ namespace {
 
 struct SubDocumentAdmissionMemberships {
   std::vector<std::shared_ptr<SubDocumentAdmissionLease>> leases;
+  /// Bumped whenever \ref leases gains or loses a family.
+  uint64_t revision = 0;
 };
+
+bool SameLimits(const SubDocumentCache::Limits& lhs, const SubDocumentCache::Limits& rhs) {
+  return lhs.maximumDocuments == rhs.maximumDocuments &&
+         lhs.maximumParseAttempts == rhs.maximumParseAttempts &&
+         lhs.maximumAggregateEntities == rhs.maximumAggregateEntities &&
+         lhs.maximumAggregatePayloadBytes == rhs.maximumAggregatePayloadBytes;
+}
 
 void Tighten(SubDocumentCache::Limits& limits, const SubDocumentCache::Limits& requested) {
   limits.maximumDocuments = std::min(limits.maximumDocuments, requested.maximumDocuments);
@@ -79,6 +90,15 @@ void Tighten(SubDocumentCache::Limits& limits, const SubDocumentCache::Limits& r
       std::min(limits.maximumAggregateEntities, requested.maximumAggregateEntities);
   limits.maximumAggregatePayloadBytes =
       std::min(limits.maximumAggregatePayloadBytes, requested.maximumAggregatePayloadBytes);
+}
+
+/// Tighten \p state's limits, recording a change for \ref SubDocumentAdmission::revision.
+void TightenState(SubDocumentAdmissionState& state, const SubDocumentCache::Limits& requested) {
+  const SubDocumentCache::Limits before = state.limits;
+  Tighten(state.limits, requested);
+  if (!SameLimits(before, state.limits)) {
+    ++state.limitsRevision;
+  }
 }
 
 void RejectLocked(const std::vector<std::shared_ptr<SubDocumentAdmissionState>>& states) {
@@ -343,11 +363,13 @@ struct SubDocumentAdmission::Transaction {
         if (!context.contains<SubDocumentAdmissionMemberships>()) {
           context.emplace<SubDocumentAdmissionMemberships>();
         }
-        auto& memberships = context.get<SubDocumentAdmissionMemberships>().leases;
+        auto& membershipContext = context.get<SubDocumentAdmissionMemberships>();
+        auto& memberships = membershipContext.leases;
         for (auto it = memberships.begin(); it != memberships.end();) {
           if ((*it)->state.expired()) {
             retired.push_back(std::move(*it));
             it = memberships.erase(it);
+            ++membershipContext.revision;
           } else {
             ++it;
           }
@@ -355,6 +377,7 @@ struct SubDocumentAdmission::Transaction {
         if (update.fresh) {
           state.members.insert_or_assign(update.node->registry, update.lease);
           memberships.push_back(update.lease);
+          ++membershipContext.revision;
         }
         update.lease->entities = update.entities;
         update.lease->payloadBytes = update.payloadBytes;
@@ -428,7 +451,7 @@ std::shared_ptr<SubDocumentAdmission> SubDocumentAdmission::Bind(
       }
     }
     for (const auto& state : states) {
-      Tighten(state->limits, limits);
+      TightenState(*state, limits);
     }
   }
   Snapshot snapshot(states);
@@ -528,6 +551,29 @@ bool SubDocumentAdmission::admit(const SVGDocumentHandle& document,
     return false;
   }
   return Apply(snapshot, states, reservation);
+}
+
+uint64_t SubDocumentAdmission::revision() const {
+  // Every counter only grows, so their sum changes whenever any of them does.
+  uint64_t result = 0;
+  auto owner = owner_.lock();
+  std::lock_guard lock(AdmissionMutex());
+  for (const auto& weakState : states_) {
+    if (const auto state = weakState.lock()) {
+      result += state->limitsRevision;
+    }
+  }
+  if (owner) {
+    if (const auto* memberships = owner->registry->ctx().find<SubDocumentAdmissionMemberships>()) {
+      result += memberships->revision;
+      for (const auto& lease : memberships->leases) {
+        if (const auto state = lease->state.lock()) {
+          result += state->limitsRevision;
+        }
+      }
+    }
+  }
+  return result;
 }
 
 SubDocumentAdmission::Stats SubDocumentAdmission::GetStats(

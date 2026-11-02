@@ -89,14 +89,12 @@ std::optional<SpriteFieldScene> WarmField(Renderer& renderer) {
   return scene;
 }
 
-/// Asserts that \p after differs from \p before only by \p frames retained updates and
-/// \p admissions re-admissions of cached documents, one per retargeted use.
-void ExpectOnlyRetainedUpdates(const WorkCounters& before, const WorkCounters& after, int frames,
-                               std::size_t admissions = 0) {
+/// Asserts that \p after differs from \p before only by \p frames retained updates.
+void ExpectOnlyRetainedUpdates(const WorkCounters& before, const WorkCounters& after, int frames) {
   EXPECT_EQ(after.renderTree.fullRebuilds, before.renderTree.fullRebuilds);
   EXPECT_EQ(after.renderTree.retainedUpdates, before.renderTree.retainedUpdates + frames);
   EXPECT_EQ(after.renderTree.shadowTreeTeardowns, before.renderTree.shadowTreeTeardowns);
-  EXPECT_EQ(after.cachedAdmissions, before.cachedAdmissions + admissions);
+  EXPECT_EQ(after.cachedAdmissions, before.cachedAdmissions);
 }
 
 TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
@@ -145,8 +143,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUse
     renderer.draw(scene->document);
   }
   const WorkCounters after = ReadCounters(scene->document);
-  // Each retargeted use admits its document again; no other document is re-admitted.
-  ExpectOnlyRetainedUpdates(before, after, kMeasuredFrames, edited);
+  ExpectOnlyRetainedUpdates(before, after, kMeasuredFrames);
   EXPECT_EQ(after.renderTree.retargetedUses, before.renderTree.retargetedUses + edited);
   EXPECT_EQ(restyles.restyles(), 0u);
 }
@@ -159,13 +156,11 @@ TEST(SpriteFieldPrepareCorrectnessTest, GameFramesBetweenFadesKeepTheRenderTree)
   // The measured frames move and retarget sprites; none of them is a fade frame.
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
-  std::size_t retargeted = 0;
   for (int frame = kWarmFrames; frame < kWarmFrames + kMeasuredFrames; ++frame) {
     AdvanceSpriteField(*scene, frame, SpriteFieldChange::All);
-    retargeted += EditedUses(frame);
     renderer.draw(scene->document);
   }
-  ExpectOnlyRetainedUpdates(before, ReadCounters(scene->document), kMeasuredFrames, retargeted);
+  ExpectOnlyRetainedUpdates(before, ReadCounters(scene->document), kMeasuredFrames);
   EXPECT_EQ(restyles.restyles(), 0u);
 }
 
