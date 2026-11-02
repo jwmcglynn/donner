@@ -930,7 +930,15 @@ public:
   void beginFrame() {
     std::lock_guard lock(mutex_);
     ++currentFrameIndex_;
+    recentFrameReleases_.push_back(std::exchange(releasedSinceFrameStart_, 0));
+    if (recentFrameReleases_.size() > kBucketEvictAfterFrames) {
+      recentFrameReleases_.pop_front();
+    }
+    const uint64_t workingSet =
+        *std::max_element(recentFrameReleases_.begin(), recentFrameReleases_.end());
+    budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
     evictStalePoolBuckets();
+    (void)evictPoolEntriesToFit(0);
   }
 
   [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
@@ -938,7 +946,7 @@ public:
     RendererGeodeTexturePoolStats result;
     result.textureCount = pooledTextureCount_;
     result.bytes = pooledTextureBytes_;
-    result.budgetBytes = kTexturePoolBudgetBytes;
+    result.budgetBytes = budgetBytes_;
     for (const auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
       if (!bucket.free.empty()) {
@@ -985,9 +993,10 @@ public:
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
+    releasedSinceFrameStart_ += textureBytes;
     if (existingBucket != buckets_.end() &&
         existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
-        textureBytes * (existingBucket->second.free.size() + 1) > kMaxPoolBytesPerKey) {
+        textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
       destroyPooledTexture(std::move(texture));
       return;
     }
@@ -1014,11 +1023,19 @@ private:
   // concurrent intermediates (blur ping-pong reuse) is the follow-up that
   // would let the cap come back down.
   static constexpr std::size_t kMaxPoolEntriesPerKey = 16;
-  // Small surfaces of one size, such as the region-sized captures of many filtered instances in
-  // one frame, may exceed the entry cap up to this many bytes, so a frame of them reuses its
-  // previous frame's surfaces instead of recreating all but the first few.
-  static constexpr uint64_t kMaxPoolBytesPerKey = 16u * 1024u * 1024u;
+  // Surfaces of one size, such as the region-sized captures of many filtered instances in one
+  // frame, may exceed the entry cap up to a quarter of the current budget, so a frame of them
+  // reuses its previous frame's surfaces instead of recreating all but the first few.
+  /// Retention budget a pool starts with and never goes below.
   static constexpr uint64_t kTexturePoolBudgetBytes = 64u * 1024u * 1024u;
+  // The budget follows the most bytes released in one recent frame, up to this ceiling, so a
+  // frame's whole working set, such as one transient surface per filtered element, stays pooled
+  // for the next frame instead of being destroyed and recreated each frame.
+#ifdef __EMSCRIPTEN__
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 128u * 1024u * 1024u;
+#else
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 256u * 1024u * 1024u;
+#endif
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
@@ -1051,11 +1068,11 @@ private:
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
-    if (incomingBytes > kTexturePoolBudgetBytes) {
+    if (incomingBytes > budgetBytes_) {
       return false;
     }
 
-    while (pooledTextureBytes_ > kTexturePoolBudgetBytes - incomingBytes) {
+    while (pooledTextureBytes_ > budgetBytes_ - incomingBytes) {
       auto victim = buckets_.end();
       for (auto it = buckets_.begin(); it != buckets_.end(); ++it) {
         if (it->second.free.empty()) {
@@ -1097,6 +1114,12 @@ private:
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;
   uint64_t currentFrameIndex_ = 0;
+  /// Bytes returned to the pool since the last \ref beginFrame.
+  uint64_t releasedSinceFrameStart_ = 0;
+  /// Bytes returned in each recent frame, newest last.
+  std::deque<uint64_t> recentFrameReleases_;
+  /// Current retention budget; see \ref kMaximumTexturePoolBudgetBytes.
+  uint64_t budgetBytes_ = kTexturePoolBudgetBytes;
 };
 
 /// The one pool serving \p device, created on first use. Renderers sharing a device share its
