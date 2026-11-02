@@ -18,6 +18,7 @@ from tools import bcr_dependency_closure as closure
 # Build files the query must report, so a broken query or package list cannot pass vacuously.
 REQUIRED_BUILD_FILES = {
     "//donner/gpu:BUILD.bazel",
+    "//donner/gpu/browser:BUILD.bazel",
     "//donner/gpu/metal:BUILD.bazel",
     "//donner/gpu/shader:BUILD.bazel",
     "//donner/gpu/shader/wgsl:BUILD.bazel",

@@ -1,0 +1,77 @@
+"""Link probes for the browser GPU backend.
+
+They live in their own package because linking a WebAssembly module needs the Emscripten rules,
+which are a development-only dependency of Donner. A module that depends on Donner sees none of
+those repositories, so the browser backend's own package must not load them.
+"""
+
+load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//donner/gpu/browser:pthreads_transition.bzl", "pthreads_transitioned_target")
+
+# Links the bridge against its JavaScript library.
+#
+# What this catches: a function the C++ half references that the JavaScript half does not define.
+# Emscripten resolves every declared entry point against the library at link time, so a rename or
+# deletion on either side fails the build rather than a browser call.
+#
+# What it does NOT catch: parameter drift. A JavaScript function ignores extra arguments and reads
+# missing ones as undefined, so a changed parameter list links clean. The values that cross are
+# kept in agreement instead by the protocol table in BrowserWireCodes.h, which both halves compare
+# element by element before a device is requested.
+cc_binary(
+    name = "_browser_bridge_link_probe",
+    srcs = ["browser_bridge_link_probe.cc"],
+    additional_linker_inputs = ["//donner/gpu/browser:library_donner_gpu.js"],
+    linkopts = [
+        "-sENVIRONMENT=web",
+        "-sEXIT_RUNTIME=0",
+        # The bridge hands the thread back to the browser while a mapping is pending, which unwinds
+        # and rewinds through Asyncify; both production WebAssembly configurations enable it, and
+        # linking without it here would leave the yield unresolved.
+        "-sASYNCIFY=1",
+        "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
+    ],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+)
+
+wasm_cc_binary(
+    name = "browser_bridge_link_probe",
+    cc_target = ":_browser_bridge_link_probe",
+    outputs = [
+        "_browser_bridge_link_probe.js",
+        "_browser_bridge_link_probe.wasm",
+    ],
+    # Deliberately not `manual`: a link gate that no lane builds is not a gate. This is reached by
+    # a wildcard build under the WebAssembly Geode configuration, the same way the renderer module
+    # beside it is, and carries that lane's tag.
+    tags = ["codeql_wasm_geode"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//tools/ci:__pkg__"],
+)
+
+# The same probe with WebAssembly threads enabled, the way the editor's module is built. The bridge
+# hands a texture share's release made on another thread to the thread that owns the share through
+# a proxying queue, which exists only in a threaded build, so only this probe compiles and links
+# that path. Reached by the same wildcard build as the probe above.
+pthreads_transitioned_target(
+    name = "browser_bridge_pthreads_link_probe",
+    dep = ":browser_bridge_link_probe",
+    tags = ["codeql_wasm_geode"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//tools/ci:__pkg__"],
+)
