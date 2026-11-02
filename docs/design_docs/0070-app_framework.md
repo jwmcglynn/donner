@@ -111,9 +111,11 @@ Donner App depends on three changes that are open as pull requests:
         `-sFILESYSTEM=0`. The loader checks the page manifest against resources registered in the
         module at compile time, so the macro generates that registration for the application's
         assets and an asset change relinks the module.
-  - [ ] Enforce that frame callbacks never suspend: limit Asyncify instrumentation to the
-        device-creation path (`ASYNCIFY_ONLY`) or assert in debug builds that no unwind starts
-        inside the frame callback.
+  - [ ] Enforce that frame callbacks never suspend: link the web module with Asyncify
+        instrumentation limited to the device-creation path (`ASYNCIFY_ONLY`), so an attempt to
+        suspend from any other call path traps. The browser smoke test then fails on such a trap,
+        which makes it the CI target for this guarantee in optimized builds. A debug-build
+        assertion that no unwind starts inside the frame callback is diagnostic tooling only.
   - [ ] HTML template with a WebGPU capability message, served as `index.html`.
 - [ ] Milestone 5: `donner_app` macro and transitions
   - [ ] `name` (native), `name_web` (site directory) and `name_web_serve` (local development
@@ -250,8 +252,10 @@ resumed).
 
 All `Application` callbacks run on one thread: the main thread on macOS, and the browser's main
 thread in the single-threaded web runner. The web runner suspends through ASYNCIFY only inside
-`main()`, while the GPU device is requested; frame callbacks never suspend, and a re-entry guard
-skips a frame if one is somehow still running. A threaded web runner (for example the editor's
+`main()`, while the GPU device is requested. Frame callbacks never suspend: Asyncify
+instrumentation is limited to the device-creation path, so a suspension attempt anywhere else
+traps and fails the browser smoke test. A re-entry guard skips a frame if one is somehow still
+running. A threaded web runner (for example the editor's
 proxy-to-pthread model) is a possible later option; it would follow the GPU ownership rules in
 AGENTS.md and require cross-origin isolation headers.
 
