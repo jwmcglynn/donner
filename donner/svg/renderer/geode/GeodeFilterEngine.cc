@@ -66,10 +66,63 @@ struct FilterResourceCache {
   struct RuntimeBlock {
     gpu::Buffer buffer;
     uint64_t size = 0;
+    /// Bytes staged for the next upload, sized to the block on first use.
+    std::vector<uint8_t> staged;
+    /// Byte range of \ref staged written since the last upload; empty when begin >= end.
+    uint64_t dirtyBegin = std::numeric_limits<uint64_t>::max();
+    uint64_t dirtyEnd = 0;
   };
+
+  /**
+   * A slot holding \p data, staged rather than uploaded: \ref uploadStagedParameters writes every
+   * block's staged range in one call each. Slots are never reused within a frame, so staging
+   * cannot change bytes recorded work already reads. Null buffer when the scratch cannot grow.
+   */
+  RuntimeParameterSlot stageRuntimeParameterSlot(GeodeDevice& device,
+                                                 std::span<const uint8_t> data) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const RuntimeParameterSlot slot = acquireRuntimeParameterSlotLocked(device, data.size());
+    if (slot.buffer == nullptr) {
+      return slot;
+    }
+    RuntimeBlock& block = runtime[runtimeIndex];
+    if (block.staged.size() != block.size) {
+      block.staged.assign(static_cast<size_t>(block.size), 0u);
+    }
+    std::copy(data.begin(), data.end(), block.staged.begin() + static_cast<ptrdiff_t>(slot.offset));
+    block.dirtyBegin = std::min(block.dirtyBegin, slot.offset);
+    block.dirtyEnd = std::max(block.dirtyEnd, slot.offset + data.size());
+    return slot;
+  }
+
+  /**
+   * Upload every staged parameter range, one write per block. Call before any command buffer that
+   * reads the staged slots reaches the queue. False when an upload is refused.
+   */
+  [[nodiscard]] bool uploadStagedParameters(GeodeDevice& device) {
+    std::lock_guard<std::mutex> lock(mutex);
+    bool uploaded = true;
+    for (RuntimeBlock& block : runtime) {
+      if (block.dirtyBegin >= block.dirtyEnd) {
+        continue;
+      }
+      const std::span<const uint8_t> bytes(block.staged.data() + block.dirtyBegin,
+                                           static_cast<size_t>(block.dirtyEnd - block.dirtyBegin));
+      uploaded =
+          !device.runtimeDevice().writeBuffer(block.buffer, block.dirtyBegin, bytes).hasError() &&
+          uploaded;
+      block.dirtyBegin = std::numeric_limits<uint64_t>::max();
+      block.dirtyEnd = 0;
+    }
+    return uploaded;
+  }
 
   RuntimeParameterSlot acquireRuntimeParameterSlot(GeodeDevice& device, size_t size) {
     std::lock_guard<std::mutex> lock(mutex);
+    return acquireRuntimeParameterSlotLocked(device, size);
+  }
+
+  RuntimeParameterSlot acquireRuntimeParameterSlotLocked(GeodeDevice& device, size_t size) {
     const uint64_t aligned = align(size);
     if (runtimeIndex < runtime.size() && aligned > runtime[runtimeIndex].size - runtimeCursor) {
       ++runtimeIndex;
@@ -287,15 +340,12 @@ struct FilterResourceArena {
   /// cannot bind a backend buffer. It shares the runtime one instead: a buffer per pass would put
   /// an allocation on every filter primitive of every frame.
   /// @param data Bytes to upload.
+  ///
+  /// The bytes are staged and uploaded together when this execution's chunk closes (see
+  /// \ref closeCommandBuffer), one write per scratch block instead of one per pass.
   FilterResourceCache::RuntimeParameterSlot writeRuntimeParameterSlot(
       std::span<const uint8_t> data) {
-    const FilterResourceCache::RuntimeParameterSlot slot =
-        resourceCache_.acquireRuntimeParameterSlot(device_, data.size());
-    if (slot.buffer == nullptr ||
-        device_.runtimeDevice().writeBuffer(*slot.buffer, slot.offset, data).hasError()) {
-      return {};
-    }
-    return slot;
+    return resourceCache_.stageRuntimeParameterSlot(device_, data);
   }
 
   /// A bind group over \p entries, owned by this arena until the frame ends. Null when the
@@ -496,8 +546,14 @@ struct FilterResourceArena {
     // Read before the chunk closes: passes in a chunk that is dropped rather than accepted never
     // reach a command buffer, so they must not be left counted against the bound.
     passesInOpenChunk_ = 0;
+    // The chunk's passes read parameters staged for them; they reach the queue ahead of it.
+    const bool parametersUploaded = resourceCache_.uploadStagedParameters(device_);
     gpu::Result<gpu::CommandBuffer> commands = commandEncoder_->finish();
     commandEncoder_.reset();
+    if (!parametersUploaded) {
+      // Nothing of this chunk reaches the queue, so its passes never read the refused bytes.
+      return false;
+    }
     if (!commands.hasResult()) {
       submissionUncertain_ = true;
       device_.markDeviceLost("filter command buffer could not be finished safely");

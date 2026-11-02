@@ -114,6 +114,16 @@ public:
    */
   void recycle(bool discardBuffers);
 
+  /**
+   * Upload every arena's staged bytes, one write per arena. Encoders sharing these arenas stage
+   * their per-draw data rather than uploading it when they finish, so the frame owner calls this
+   * before every submission of command buffers that read them.
+   *
+   * @param device Runtime device the arena buffers belong to.
+   * @return False when an upload was refused; the frame must then be abandoned.
+   */
+  [[nodiscard]] bool uploadStaged(gpu::Device& device);
+
   /// Bytes of the buffers the arenas currently draw into, excluding outgrown ones.
   [[nodiscard]] uint64_t capacityBytes() const;
 

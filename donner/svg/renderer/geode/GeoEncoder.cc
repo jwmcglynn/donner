@@ -434,6 +434,21 @@ void GeoEncoderFrameArenas::recycle(bool discardBuffers) {
   }
 }
 
+bool GeoEncoderFrameArenas::uploadStaged(gpu::Device& device) {
+  bool uploaded = true;
+  for (GeoEncoderArena* arena : storage_->arenas.all()) {
+    if (arena->pendingBytes.empty()) {
+      continue;
+    }
+    uploaded =
+        arena->buffer.isValid() &&
+        !device.writeBuffer(arena->buffer, arena->pendingOffset, arena->pendingBytes).hasError() &&
+        uploaded;
+    arena->pendingBytes.clear();
+  }
+  return uploaded;
+}
+
 uint64_t GeoEncoderFrameArenas::capacityBytes() const {
   uint64_t bytes = 0;
   for (GeoEncoderArena* arena : storage_->arenas.all()) {
@@ -3629,7 +3644,11 @@ void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
 }
 
 void GeoEncoder::finish() {
-  impl_->flushArenas();
+  // Staged bytes in a frame's shared arenas upload once, before the frame submits (see
+  // GeoEncoderFrameArenas::uploadStaged); an encoder's own arenas upload now.
+  if (impl_->arenas == &impl_->ownArenas) {
+    impl_->flushArenas();
+  }
   if (impl_->passOpen) {
     (void)impl_->pass->end();
     impl_->pass = nullptr;

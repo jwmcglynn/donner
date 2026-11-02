@@ -2743,6 +2743,10 @@ TEST_F(RendererGeodeTest, EncodersOfAFrameShareArenaBuffersAcrossManyLayers) {
   renderer.endFrame();
   EXPECT_EQ(renderer.lastFrameTimings().counters.bufferCreates, 0u)
       << "A repeat frame reuses the arena buffers the previous frame grew";
+  const geode::GeodeCounters& warm = renderer.lastFrameTimings().counters;
+  EXPECT_LE(warm.bufferWrites, 7u * warm.submits)
+      << "The frame's encoders stage their per-draw data in the shared arenas, which upload at "
+         "most once per arena kind per submission, not once per encoder";
 
   const RendererBitmap bitmap = renderer.takeSnapshot();
   for (int index = 0; index < kLayers; index += 7) {

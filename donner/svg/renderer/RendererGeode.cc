@@ -1801,6 +1801,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameCommandBuffers.empty()) {
       return true;
     }
+    // The frame's encoders staged their per-draw data in the shared arenas; it reaches the queue
+    // ahead of the command buffers that read it.
+    if (!frameArenas.uploadStaged(device->runtimeDevice())) {
+      frameArenaWriteFailed = true;
+      return false;
+    }
     gpu::Result<uint64_t> submitted = device->runtimeDevice().submit(frameCommandBuffers);
     frameCommandBuffers.clear();
     if (submitted.hasError()) {
@@ -6155,7 +6161,10 @@ void RendererGeode::endFrame() {
     // not be able to take the renderer down.
     const bool submitted = impl_->closeFrameGpuEncoder(false) && impl_->submitFrameCommandBuffers();
     if (!submitted) {
-      impl_->device->markDeviceLost("the frame's command buffers could not be submitted");
+      // A refused arena upload abandons the frame without declaring the device lost, as it does
+      // when the refusal surfaces while recording.
+      impl_->markDeviceLostUnlessArenaUploadFailed(
+          "the frame's command buffers could not be submitted");
     }
     impl_->frameRecordingOpen = false;
     impl_->frameGpuEncoders.clear();
