@@ -4937,6 +4937,8 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
     return std::nullopt;
   }
   const ExternalUseInstanceScope instanceScope(child, root, EntityHandle(hostRegistry, hostEntity));
+  // The render tree may hold another occurrence's instance, as drawing finds it.
+  components::ExternalUseStyleRetention::PrepareInstance(child);
   prepareSubDocument(subDocument);
   // The instance is laid out relative to the <use> element, so its world space is the use's. Its
   // own external uses are measured in this layout too, then forgotten with it.

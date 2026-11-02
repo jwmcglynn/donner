@@ -497,5 +497,47 @@ TEST(SubDocumentFiltersTest, NestedExternalUsesUnderBoxEffects) {
   ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-nested");
 }
 
+/// Measuring one occurrence for a host box effect while the referenced document's render tree last
+/// held another occurrence of the same document lays the measured one out first, so every frame
+/// matches a fresh render.
+TEST(SubDocumentFiltersTest, MeasuredOccurrenceAfterAnotherMatchesFreshRender) {
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  const Documents documents = {
+      {"sheet.svg", head + "<defs><rect id='small' width='4' height='4' fill='#2050d0'/>"
+                           "<rect id='big' width='24' height='12' fill='#20a020'/>"
+                           "<symbol id='symbol' viewBox='0 0 10 10'><rect width='10' height='10' "
+                           "fill='#d0a020'/></symbol></defs></svg>"},
+  };
+  struct Pair {
+    std::string effect;  ///< The occurrence a host box clip measures.
+    std::string other;   ///< Another occurrence of the same document.
+  };
+  // Different targets, and one symbol drawn into two different viewports.
+  const Pair pairs[] = {
+      {"<g clip-path='url(#left)'><use href='sheet.svg#big' y='16'/></g>",
+       "<use href='sheet.svg#small' x='26' y='2'/>"},
+      {"<g clip-path='url(#left)'><use href='sheet.svg#symbol' y='16' width='24' height='12'/>"
+       "</g>",
+       "<use href='sheet.svg#symbol' x='24' width='6' height='6'/>"},
+  };
+  for (const auto& [effect, other] : pairs) {
+    for (const bool otherLast : {false, true}) {
+      SCOPED_TRACE(testing::Message() << otherLast << " " << effect);
+      const std::string source = head + "<defs>" + std::string(kTint) +
+                                 "</defs><rect width='32' height='32' fill='#ffffff'/>" +
+                                 (otherLast ? effect + other : other + effect) + "</svg>";
+      SVGDocument document = Parse(source, documents);
+      Renderer renderer;
+      for (int frame = 0; frame < 3; ++frame) {
+        SCOPED_TRACE(frame);
+        SVGDocument fresh = Parse(source, documents);
+        Renderer freshRenderer;
+        ExpectSameBitmap(Draw(renderer, document), Draw(freshRenderer, fresh),
+                         "sub-document-measured-after-other");
+      }
+    }
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
