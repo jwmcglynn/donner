@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <optional>
 
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -21,6 +22,11 @@ struct ComputedResourceOpacities {
  * parent.
  */
 struct ComputedStyleComponent {
+  /// Limit initial storage for this large component while retaining paged pointer stability:
+  /// every document registry, including each externally referenced one, allocates at least one
+  /// page.
+  static constexpr std::size_t page_size = 64;
+
   /// The computed style properties. \c std::nullopt may be present mid-computation before all
   /// properties have been cascaded.
   std::optional<PropertyRegistry> properties;

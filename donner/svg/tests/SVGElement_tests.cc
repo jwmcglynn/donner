@@ -1187,18 +1187,28 @@ TEST_F(SVGElementTests, PresentationProbePatternTransformRetainsAuthoredName) {
   EXPECT_THAT(pattern.getAttribute("transform"), testing::Eq(std::nullopt));
 }
 
-TEST_F(SVGElementTests, StyleStorageSmallPageHasBoundedInitialAllocation) {
+/// Requires one \p Component to allocate a bounded first page: every document registry, including
+/// each externally referenced one, holds at least one page of every component it uses.
+template <typename Component>
+void ExpectBoundedInitialStorage() {
   Registry registry;
   const Entity entity = registry.create();
-  registry.emplace<components::StyleComponent>(entity);
+  registry.emplace<Component>(entity);
   const Registry& readOnly = registry;
-  const auto* storage = readOnly.storage<components::StyleComponent>();
+  const auto* storage = readOnly.storage<Component>();
   ASSERT_THAT(storage, testing::NotNull());
   EXPECT_EQ(storage->size(), 1u);
-  EXPECT_LE(storage->capacity() * sizeof(components::StyleComponent), 512u * 1024u);
-  testing::Test::RecordProperty("component_bytes",
-                                std::to_string(sizeof(components::StyleComponent)));
+  EXPECT_LE(storage->capacity() * sizeof(Component), 512u * 1024u);
+  testing::Test::RecordProperty("component_bytes", std::to_string(sizeof(Component)));
   testing::Test::RecordProperty("allocated_slots", std::to_string(storage->capacity()));
+}
+
+TEST_F(SVGElementTests, StyleStorageSmallPageHasBoundedInitialAllocation) {
+  ExpectBoundedInitialStorage<components::StyleComponent>();
+}
+
+TEST_F(SVGElementTests, ComputedStyleStorageSmallPageHasBoundedInitialAllocation) {
+  ExpectBoundedInitialStorage<components::ComputedStyleComponent>();
 }
 
 TEST_F(SVGElementTests, StyleStorageGrowthKeepsComponentAddressesAndValues) {

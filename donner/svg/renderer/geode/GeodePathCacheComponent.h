@@ -36,6 +36,10 @@ namespace donner::geode {
 /// `RendererGeode.cc` references unqualified via `geode::` inside the
 /// `donner::svg` namespace.
 struct GeodePathCacheComponent {
+  /// Limit initial storage for this large component while retaining paged pointer stability:
+  /// every document registry with a drawn path allocates at least one page.
+  static constexpr std::size_t page_size = 64;
+
   /// Fill-slot encode. Populated on first encode; reused on hit.
   /// Reset by the entt signal listener when geometry changes.
   std::optional<EncodedPath> fillEncode;
