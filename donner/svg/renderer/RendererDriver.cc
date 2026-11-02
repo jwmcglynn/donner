@@ -1088,6 +1088,34 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
   return result;
 }
 
+/// Snapshot main-pass render instances in draw order, leaving out offscreen feImage shadow
+/// instances (see \ref collectOffscreenFeImageShadowEntities). Filter preparation can reorder
+/// rendering instance storage, so traversals iterate this snapshot rather than a live view.
+///
+/// With @p range, the snapshot starts at `range->first` (empty when it is not found) and ends at
+/// `range->second` inclusive, or at the last instance when that is never reached. Without it, the
+/// snapshot holds every instance.
+std::vector<Entity> CollectMainEntities(
+    Registry& registry, std::optional<std::pair<Entity, Entity>> range = std::nullopt) {
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(registry);
+  std::vector<Entity> entities;
+  RenderingInstanceView view(registry);
+  while (range && !view.done() && view.currentEntity() != range->first) {
+    view.advance();
+  }
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    const Entity entity = view.currentEntity();
+    reachedLast = range && entity == range->second;
+    if (feImageShadowEntities.count(entity) == 0) {
+      entities.push_back(entity);
+    }
+    view.advance();
+  }
+  return entities;
+}
+
 void SamplePreparedImageDimension(components::FilterNode& node, std::size_t index,
                                   std::optional<Lengthd>& dimension,
                                   const components::AnimationValueContext& context,
@@ -1634,9 +1662,11 @@ std::optional<components::FilterGraph> resolveFilterGraph(
 }
 
 /// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
+/// @param objectBounds The element's object bounding box when the caller already has it.
 std::optional<Box2d> computeFilterRegion(Registry& registry,
                                          const components::ResolvedFilterEffect& filter,
-                                         const components::RenderingInstanceComponent& instance) {
+                                         const components::RenderingInstanceComponent& instance,
+                                         const std::optional<Box2d>& objectBounds = std::nullopt) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
   if (!reference) {
     return std::nullopt;
@@ -1649,7 +1679,9 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
   // Determine the bounds reference for resolving percentages.
   const Box2d shapeBounds =
-      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
+      objectBounds
+          ? *objectBounds
+          : RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -1729,7 +1761,8 @@ std::optional<std::vector<components::ResolvedFilterEffect>> collectFilterStages
 std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
     Registry& registry, const components::ResolvedFilterEffect& filter,
     const components::RenderingInstanceComponent& instance, css::RGBA currentColor,
-    const Box2d& viewBox, const FontMetrics& fontMetrics) {
+    const Box2d& viewBox, const FontMetrics& fontMetrics,
+    const std::optional<Box2d>& objectBounds) {
   const auto resolved = collectFilterStages(registry, filter);
   if (!resolved) {
     return std::nullopt;
@@ -1751,7 +1784,7 @@ std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
       return std::nullopt;
     }
     nodeCount += graph->nodes.size();
-    graph->filterRegion = computeFilterRegion(registry, stage, instance);
+    graph->filterRegion = computeFilterRegion(registry, stage, instance, objectBounds);
     stages.push_back(std::move(*graph));
   }
   return stages;
@@ -2243,17 +2276,7 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
     return false;
   }
 
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(document.registry());
-  std::vector<Entity> mainEntities;
-  RenderingInstanceView instances(document.registry());
-  while (!instances.done()) {
-    const Entity entity = instances.currentEntity();
-    if (feImageShadowEntities.count(entity) == 0) {
-      mainEntities.push_back(entity);
-    }
-    instances.advance();
-  }
+  const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
   if (mainEntities.empty()) {
     renderer_.beginFrame(viewport);
@@ -2339,19 +2362,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   // nothing is dirty), so without this filter the 2nd+ render of a document containing an feImage
   // fragment reference would draw the referenced fragment as if it were main content. See
   // `collectOffscreenFeImageShadowEntities`.
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(document.registry());
-  std::vector<Entity> mainEntities;
-  {
-    RenderingInstanceView snapshot(document.registry());
-    while (!snapshot.done()) {
-      const Entity entity = snapshot.currentEntity();
-      if (feImageShadowEntities.count(entity) == 0) {
-        mainEntities.push_back(entity);
-      }
-      snapshot.advance();
-    }
-  }
+  const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
   // Pre-pass: resolve + pre-render feImage fragments, caching per-entity. Must run before the
   // main traverse so the main view doesn't observe the storage mutation that
@@ -2433,17 +2444,7 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(document.registry());
-  std::vector<Entity> mainEntities;
-  RenderingInstanceView instances(document.registry());
-  while (!instances.done()) {
-    const Entity entity = instances.currentEntity();
-    if (feImageShadowEntities.count(entity) == 0) {
-      mainEntities.push_back(entity);
-    }
-    instances.advance();
-  }
+  const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
   if (mainEntities.empty()) {
     return;
@@ -2547,14 +2548,18 @@ void RendererDriver::popEndedSubtrees(std::vector<DeferredPop>& markers, Entity 
   }
 }
 
+bool RendererDriver::hasOpenFilterLayer(const std::vector<DeferredPop>& markers) const {
+  return insideEnclosingFilterLayer_ ||
+         std::any_of(markers.begin(), markers.end(),
+                     [](const DeferredPop& marker) { return marker.filterLayerCount != 0; });
+}
+
 bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
                                          const components::RenderingInstanceComponent& instance,
                                          const components::ComputedStyleComponent& style,
                                          const std::vector<DeferredPop>& markers) const {
   if (!earlyLeafViewportCulling_ || !IsPlainVisibleLeaf(instance) ||
-      !HasNeutralLeafCompositing(style) ||
-      std::any_of(markers.begin(), markers.end(),
-                  [](const DeferredPop& marker) { return marker.filterLayerCount != 0; })) {
+      !HasNeutralLeafCompositing(style) || hasOpenFilterLayer(markers)) {
     return false;
   }
   const auto bounds = DeviceDrawableBoundsWithStroke(
@@ -2578,23 +2583,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   // left in the pool by a prior render's feImage pre-pass (see
   // `collectOffscreenFeImageShadowEntities` + `draw()`); they are offscreen-only and must not be
   // drawn as main content on a re-render (e.g. an editor partial re-draw).
-  const std::unordered_set<Entity> feImageShadowEntities =
-      collectOffscreenFeImageShadowEntities(registry);
-  std::vector<Entity> rangeEntities;
-  {
-    RenderingInstanceView scanView(registry);
-    while (!scanView.done() && scanView.currentEntity() != firstEntity) {
-      scanView.advance();
-    }
-    bool reachedLast = false;
-    while (!scanView.done() && !reachedLast) {
-      reachedLast = (scanView.currentEntity() == lastEntity);
-      if (feImageShadowEntities.count(scanView.currentEntity()) == 0) {
-        rangeEntities.push_back(scanView.currentEntity());
-      }
-      scanView.advance();
-    }
-  }
+  const std::vector<Entity> rangeEntities =
+      CollectMainEntities(registry, std::pair(firstEntity, lastEntity));
 
   prepareFilterGraphs(registry, rangeEntities);
 
@@ -2673,6 +2663,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
     ResolvedClip entityClip =
         toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
+    applyExternalUseClipBounds(entityClip, registry, instance);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
@@ -3040,6 +3031,7 @@ void RendererDriver::pushFilterStages(const std::vector<components::FilterGraph>
     for (auto it = stages->rbegin(); it != stages->rend(); ++it) {
       renderer_.pushFilterLayer(*it, it->filterRegion);
     }
+    pushedFilterLayers_ += stages->size();
   }
 }
 
@@ -3047,6 +3039,7 @@ void RendererDriver::popFilterStages(std::size_t count) {
   for (std::size_t i = 0; i < count; ++i) {
     renderer_.popFilterLayer();
   }
+  pushedFilterLayers_ -= count;
 }
 
 bool RendererDriver::reservePreparedFilterGraph(const components::FilterGraph& filterGraph) {
@@ -3438,14 +3431,14 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         style.properties->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
-    std::optional<std::vector<components::FilterGraph>> stages = resolveFilterStages(
-        registry, instance->resolvedFilter.value(), *instance,
-        style.properties->color.get().value().rgba(), filterViewBox, filterFontMetrics);
+    const std::optional<Box2d> elementBounds = objectBoundingBox(registry, entity);
+    std::optional<std::vector<components::FilterGraph>> stages =
+        resolveFilterStages(registry, instance->resolvedFilter.value(), *instance,
+                            style.properties->color.get().value().rgba(), filterViewBox,
+                            filterFontMetrics, elementBounds);
     if (!stages) {
       continue;
     }
-    const std::optional<Box2d> elementBounds =
-        RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
     if (configureFilterStages(*stages, filterViewBox, elementBounds) &&
         materializeFilterStages(*stages, registry, entity)) {
       preparedFilterGraphs_[entity] = std::move(*stages);
@@ -3513,6 +3506,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // then clip-path, then filter innermost.
     ResolvedClip entityClip =
         toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
+    applyExternalUseClipBounds(entityClip, registry, instance);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -3527,6 +3521,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         drewCachedFilterResult =
             renderer_.pushCachedFilterLayer(*content, stage, stage.filterRegion) ==
             CachedFilterLayerResult::Drawn;
+        if (!drewCachedFilterResult) {
+          ++pushedFilterLayers_;  // Popped by popFilterStages, as a layer pushFilterStages pushed.
+        }
       } else {
         pushFilterStages(filterStages);
       }
@@ -3596,10 +3593,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // clip/filter/isolation layers above.
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
-      const bool insideFilterLayer =
-          hasFilterLayer ||
-          std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
-                      [](const DeferredPop& m) { return m.filterLayerCount != 0; });
+      const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(subtreeMarkers_);
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
                 components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
@@ -3801,6 +3795,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     // Per SVG spec, apply paint → filter → clip-path → mask.
     ResolvedClip entityClip =
         toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
+    applyExternalUseClipBounds(entityClip, registry, instance);
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -3838,10 +3833,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     // clip/filter/isolation layers above.
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
-      const bool insideFilterLayer =
-          hasFilterLayer ||
-          std::any_of(localDeferred.begin(), localDeferred.end(),
-                      [](const DeferredPop& m) { return m.filterLayerCount != 0; });
+      const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(localDeferred);
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
                 components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
@@ -4111,7 +4103,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   // Text geometry is not a computed path, so ask for the element's object bounding box rather than
   // the shape bounds, which would be empty for a text element or a text span.
   const Box2d shapeLocalBounds =
-      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
+      objectBoundingBox(registry, instance.styleHandle(registry).entity()).value_or(Box2d());
 
   for (const auto* m : chain) {
     if (!m->subtreeInfo || !m->reference.handle.valid()) {
@@ -4893,8 +4885,7 @@ void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box
   surfaceFromCanvasTransform_ = baseTransform;
 
   // Traverse the sub-document's render tree, emitting draw calls to the same renderer.
-  RenderingInstanceView subView(subDocument.registry());
-  traverse(subView, subDocument.registry());
+  traverseSubDocument(subDocument.registry(), entt::null, entt::null);
   fontRenderScope.finish();
   recordChildFontDependencies(
       subDocument, subDocument.registry().ctx().get<components::SVGDocumentContext>().rootEntity,
@@ -4949,20 +4940,125 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   surfaceFromCanvasTransform_ = parentAbsoluteTransform;
 
   // The render tree holds only the instance, so a full traversal applies every layer and viewport
-  // clip a same-document instance gets. The target's viewport clip is in the <use> element's space,
-  // and the host's pending subtree pops must not match sub-document entities.
+  // clip a same-document instance gets. The target's viewport clip is in the <use> element's space.
   renderer_.setTransform(parentAbsoluteTransform);
-  std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
   std::optional<FilterResultScope> hostFilterResultScope =
       std::exchange(filterResultScope_, ExternalUseFilterResultScope(subDocument, targetEntity));
-  RenderingInstanceView subView(subDocument.registry());
-  traverse(subView, subDocument.registry());
+  traverseSubDocument(subDocument.registry(), entt::null, entt::null);
   filterResultScope_ = std::move(hostFilterResultScope);
-  subtreeMarkers_ = std::move(hostSubtreeMarkers);
   fontRenderScope.finish();
   recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
+}
+
+std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entity entity) {
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+  std::optional<Box2d> bounds =
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+  const auto externalUses = registry.view<const components::ExternalUseComponent>();
+  if (externalUses.begin() == externalUses.end()) {
+    return bounds;
+  }
+  const Entity lastEntity =
+      instance.subtreeInfo ? instance.subtreeInfo->lastRenderedEntity : entity;
+  const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
+  for (const Entity descendant : CollectMainEntities(registry, std::pair(entity, lastEntity))) {
+    const std::optional<Box2d> content = externalUseContentBounds(registry, descendant);
+    if (!content) {
+      continue;
+    }
+    const auto& useInstance = registry.get<components::RenderingInstanceComponent>(descendant);
+    const Box2d box =
+        (useInstance.worldFromEntityTransform * entityFromWorld).transformBox(*content);
+    bounds = bounds ? Box2d::Union(*bounds, box) : box;
+  }
+  return bounds;
+}
+
+void RendererDriver::applyExternalUseClipBounds(
+    ResolvedClip& clip, Registry& registry,
+    const components::RenderingInstanceComponent& instance) {
+  const auto externalUses = registry.view<const components::ExternalUseComponent>();
+  if (!instance.clipPath || instance.clipPath->units != ClipPathUnits::ObjectBoundingBox ||
+      externalUses.begin() == externalUses.end()) {
+    return;
+  }
+  if (const auto bounds = objectBoundingBox(registry, instance.styleHandle(registry).entity())) {
+    clip.clipPathUnitsTransform =
+        Transform2d::Scale(bounds->size()) * Transform2d::Translate(bounds->topLeft);
+  }
+}
+
+std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegistry,
+                                                              Entity hostEntity) {
+  const auto& instance = hostRegistry.get<components::RenderingInstanceComponent>(hostEntity);
+  const auto* externalUse =
+      instance.dataHandle(hostRegistry).try_get<components::ExternalUseComponent>();
+  if (externalUse == nullptr || !externalUse->subDocument || externalUse->fragment.empty()) {
+    return std::nullopt;
+  }
+  const auto& style = instance.styleHandle(hostRegistry).get<components::ComputedStyleComponent>();
+  SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
+  const auto access = subDocument.writeAccess();
+  Registry& child = subDocument.registry();
+  if (!beginSubDocumentFontTraversal(subDocument.handle(), hostRegistry, hostEntity)) {
+    return std::nullopt;
+  }
+  const ActiveFontSubDocument active(*activeFontSubDocuments_, subDocument.handle().get());
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            child);
+  const Entity root = components::FindAttachedEntityById(child, externalUse->fragment);
+  if (root == entt::null || !style.properties) {
+    return std::nullopt;
+  }
+  // Lay the fragment out with the occurrence's styles, exactly as drawing it does.
+  ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
+                              instance.resolvedStroke, externalUseStyleWork_);
+  if (!scope.installed()) {
+    return std::nullopt;
+  }
+  const ExternalUseInstanceScope instanceScope(child, root, EntityHandle(hostRegistry, hostEntity));
+  components::ExternalUseStyleRetention::PrepareInstance(child);
+  prepareSubDocument(subDocument);
+  // The instance is laid out relative to the <use> element, so its world space is the use's.
+  const EntityHandle target(child, root);
+  const std::optional<Box2d> local = components::ShapeSystem().getShapeBounds(target);
+  if (!local) {
+    return std::nullopt;
+  }
+  return components::LayoutSystem().getEntityFromWorldTransform(target).transformBox(*local);
+}
+
+void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
+                                         Entity lastEntity) {
+  // Snapshot before preparing filters: feImage preparation can reorder instance storage.
+  const std::vector<Entity> entities =
+      firstEntity == entt::null ? CollectMainEntities(registry)
+                                : CollectMainEntities(registry, std::pair(firstEntity, lastEntity));
+  auto hostFilterGraphs = std::exchange(preparedFilterGraphs_, {});
+  std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
+  // A filter layer the host has open can pull off-surface sub-document content into view, so the
+  // sub-document must not cull against the surface while one is open.
+  const bool hostInsideFilterLayer =
+      std::exchange(insideEnclosingFilterLayer_, pushedFilterLayers_ != 0);
+  // The feImage recursion guard holds entity ids of the registry being prepared.
+  std::unordered_set<entt::id_type>* hostFeImageGuard =
+      std::exchange(feImageFragmentGuard_, nullptr);
+  prepareFilterGraphs(registry, entities);
+  if (firstEntity == entt::null) {
+    RenderingInstanceView view(registry, entities);
+    traverse(view, registry);
+  } else {
+    // A range draw reads paint-server content that sorts after the range from the view, so it walks
+    // the live render tree, created after preparation may have reordered it.
+    RenderingInstanceView view(registry);
+    traverseRange(view, registry, firstEntity, lastEntity);
+  }
+  feImageFragmentGuard_ = hostFeImageGuard;
+  insideEnclosingFilterLayer_ = hostInsideFilterLayer;
+  subtreeMarkers_ = std::move(hostSubtreeMarkers);
+  preparedFilterGraphs_ = std::move(hostFilterGraphs);
 }
 
 void RendererDriver::setSubDocumentContextPaint(

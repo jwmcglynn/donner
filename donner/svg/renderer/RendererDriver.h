@@ -454,6 +454,29 @@ private:
   void drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
                                const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
                                Entity hostEntity);
+  /**
+   * Draw a sub-document's render instances from @p firstEntity through @p lastEntity, or its whole
+   * render tree when @p firstEntity is null, into the current frame.
+   *
+   * Prepared filter graphs and pending subtree pops are keyed by entity, and a sub-document's
+   * entity ids overlap its host's. The sub-document therefore draws with its own prepared filter
+   * graphs, pending-pop stack and feImage recursion guard, and the host's are restored afterwards.
+   * Surface culling stays off while a host filter layer is open.
+   */
+  void traverseSubDocument(Registry& registry, Entity firstEntity, Entity lastEntity);
+  /**
+   * The object bounding box of @p entity, which filters, masks and clip paths resolve against.
+   * Content an external `<use>` in the subtree draws lives in another document, so it is added
+   * from that document's geometry, laid out with the occurrence's styles.
+   */
+  std::optional<Box2d> objectBoundingBox(Registry& registry, Entity entity);
+  /// Resolve objectBoundingBox clip units of @p instance over the content external `<use>`
+  /// elements in its subtree draw, which @p clip's own resolution cannot see.
+  void applyExternalUseClipBounds(ResolvedClip& clip, Registry& registry,
+                                  const components::RenderingInstanceComponent& instance);
+  /// Bounds of the fragment an external `<use>` draws, in the `<use>` element's user space, or
+  /// nothing when @p hostEntity is not an external fragment reference.
+  std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
@@ -499,6 +522,9 @@ private:
     int maskDepth = 0;
   };
   void popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity);
+  /// True when one of @p markers, or a host of the document being drawn, has a filter layer open.
+  /// Surface culling is unsafe then: a filter can move content from outside the surface into view.
+  bool hasOpenFilterLayer(const std::vector<DeferredPop>& markers) const;
   [[nodiscard]] bool shouldCullEarlyLeaf(Registry& registry,
                                          const components::RenderingInstanceComponent& instance,
                                          const components::ComputedStyleComponent& style,
@@ -567,6 +593,13 @@ private:
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
   /// instances via pointer.
   std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
+
+  /// Filter layers currently pushed on the renderer by this driver.
+  std::size_t pushedFilterLayers_ = 0;
+
+  /// True while drawing a sub-document under a filter layer its host opened. Culling against the
+  /// surface is unsafe there, as it is under the sub-document's own filter layers.
+  bool insideEnclosingFilterLayer_ = false;
 
   /// Nesting depth of the current feImage fragment pre-render. The visited-set above stops a
   /// *cyclic* reference (A→A, A→B→A) because it keys on the light-tree entity, but a sufficiently
