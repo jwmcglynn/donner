@@ -239,11 +239,14 @@ void ExpectMutationRefilters(FilteredSpriteScene& scene, std::string_view label,
   mutate(scene);
   const FrameWork work = Draw(*renderer, scene);
   (void)Draw(*uncached, scene);
-  int changedPixels = 0;
-  editor::tests::CompareBitmapToBitmap(
-      uncached->takeSnapshot(), before, std::string(label) + "-mutation-visible",
-      editor::tests::ApprovedPixelToleranceParams(0.0f, 1 << 30), &changedPixels);
-  // A dimension change reports -1, which also means the rendering changed.
+  const RendererBitmap after = uncached->takeSnapshot();
+  // A change of canvas size counts as visible without a pixel comparison.
+  int changedPixels = -1;
+  if (after.dimensions == before.dimensions) {
+    editor::tests::CompareBitmapToBitmap(after, before, std::string(label) + "-mutation-visible",
+                                         editor::tests::ApprovedPixelToleranceParams(0.0f, 1 << 30),
+                                         &changedPixels);
+  }
   EXPECT_NE(changedPixels, 0) << label << ": the mutation must change the rendering";
   EXPECT_GE(work.executions, 1u) << label;
   editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(), label,
@@ -530,14 +533,17 @@ TEST(ExternalUseFilterCacheTest, SymbolUsesOfDifferentSizesKeepSeparateResults) 
                                                              4);
   ASSERT_TRUE(scene.has_value());
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::unique_ptr<RendererInterface> uncached = MakeCachingRenderer();
+  uncached->setFilterResultCacheEnabled(false);
   std::size_t hits = 0;
   for (int frame = 0; frame < 3; ++frame) {
     hits += Draw(*renderer, *scene).hits;
+    (void)Draw(*uncached, *scene);
   }
   EXPECT_GT(hits, 0u);
-  editor::tests::CompareBitmapToBitmap(
-      renderer->takeSnapshot(), RenderUncached(*scene, RendererBackend::Geode), "symbol-viewports",
-      editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(),
+                                       "symbol-viewports",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(ExternalUseFilterCacheTest, ChangingTheSheetStylesheetRefilters) {
