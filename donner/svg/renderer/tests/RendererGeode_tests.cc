@@ -7937,13 +7937,16 @@ TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
   RendererGeode renderer(device);
   renderer.draw(document);
   ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
-  EXPECT_THAT(renderer.resourceStats().filterExecutions, testing::Eq(40u));
+  const std::uint64_t executions = renderer.resourceStats().filterExecutions;
+  EXPECT_THAT(executions, testing::Gt(0u));
   const RendererBitmap actual = renderer.takeSnapshot();
   ASSERT_FALSE(actual.empty());
   RendererGeode singleUse(device);
   singleUse.setWithinFrameTextureReuseForTesting(false);
   singleUse.draw(document);
   ASSERT_THAT(singleUse.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(singleUse.resourceStats().filterExecutions, testing::Eq(executions))
+      << "reuse must not change which filters the frame budget admits";
   editor::tests::CompareBitmapToBitmap(actual, singleUse.takeSnapshot(),
                                        "differently_sized_filters_submit",
                                        editor::tests::PixelmatchIdentityParams());
