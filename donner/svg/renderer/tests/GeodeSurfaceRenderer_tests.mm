@@ -21,6 +21,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/GeodeSurfaceRenderer.h"
+#include "donner/svg/renderer/RendererGeode.h"
 
 namespace donner::svg {
 namespace {
@@ -90,6 +91,20 @@ TEST_F(GeodeSurfaceRendererTest, ConfiguresTheLayerItPresentsTo) {
   EXPECT_FALSE(layer_.framebufferOnly)
       << "blend modes copy their backdrop from the presentation target, which needs copyable "
          "drawables";
+}
+
+// A host that hides the surface trims the texture pool; drawing afterwards presents as before.
+TEST_F(GeodeSurfaceRendererTest, TrimmingTheTexturePoolKeepsPresenting) {
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
+
+  document_->setCanvasSize(64, 64);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+  renderer->trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+  renderer->trimTexturePool(RendererGeodeTexturePoolTrim::ToFloor);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
+  EXPECT_FALSE(renderer->isDeviceLost());
 }
 
 TEST_F(GeodeSurfaceRendererTest, PresentsADocument) {

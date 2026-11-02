@@ -3,6 +3,7 @@
 /// Presents SVG documents to a host-owned window surface (a Core Animation Metal layer or a browser
 /// canvas) with the Geode renderer.
 
+#include <cstdint>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -11,6 +12,8 @@
 #include "donner/base/Vector2.h"
 
 namespace donner::svg {
+
+enum class RendererGeodeTexturePoolTrim : uint8_t;
 
 class SVGDocument;
 
@@ -161,6 +164,15 @@ public:
 
   /// True once the GPU device has been lost; every later \ref draw returns Failed.
   bool isDeviceLost() const;
+
+  /**
+   * Frees pooled textures no frame is using, as \ref RendererGeode::trimTexturePool does. Call
+   * it with `RendererGeodeTexturePoolTrim::All` when the host hides the surface, for example on a
+   * browser `visibilitychange` to hidden, and with `ToFloor` when drawing pauses.
+   *
+   * @param level How much to free.
+   */
+  void trimTexturePool(RendererGeodeTexturePoolTrim level);
 
 private:
   struct Impl;

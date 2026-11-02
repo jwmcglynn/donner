@@ -1346,6 +1346,7 @@ objc_library(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:geode_surface_renderer",
+        "//donner/svg/renderer:renderer_geode",
         "@com_google_gtest//:gtest",
     ],
     alwayslink = True,
