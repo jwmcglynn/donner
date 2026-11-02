@@ -883,6 +883,20 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                               const FillDrawArgs& args);
 
+  /// Upload `encoded` into `slot` when its residence is missing, stale, or on another device.
+  /// @return Whether the slot now holds `encoded` on this device.
+  bool ensureResidentFillGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
+
+  /// Draw `slot`'s resident geometry with a per-draw uniform from the frame arena, for a draw the
+  /// slot's own uniform and cached bind group cannot carry: a repeat while a frame that already
+  /// recorded the slot is open (the slot's single uniform belongs to that draw), or a draw under a
+  /// clip mask or clip polygon (the cached bind group binds the identity coverage). Only the
+  /// uniform is uploaded; the geometry stays where it is.
+  /// @return False when the geometry could not be made resident; the caller falls back to the
+  ///   arena path.
+  bool submitResidentGeometryFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                      const FillDrawArgs& args);
+
   /// Shared ensure path: upload geometry if stale, then write the batch
   /// uniform and the instance record if changed. Used by the solo
   /// resident draw and the cross-entity batch path.
@@ -937,6 +951,24 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool submitResidentGradientDraw(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
                                   GradientUniforms& u);
 
+  /// Draw a gradient fill of `slot`: the slot's own uniform and cached bind group for the first
+  /// unclipped draw in the open frames, the slot's geometry with a per-draw uniform otherwise, and
+  /// the arena path inside a mask pass or when the geometry cannot be made resident.
+  void submitResidentGradientFill(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
+                                  GradientUniforms& u, uint64_t frameId);
+
+  /// Gradient form of @ref ensureResidentFillGeometry.
+  bool ensureResidentGradientGeometry(GeodeResidentGradientSlot& slot, const EncodedPath& encoded);
+
+  /// Gradient form of @ref submitResidentGeometryFillDraw: the slot's resident geometry with a
+  /// per-draw gradient uniform from the frame arena.
+  bool submitResidentGeometryGradientDraw(GeodeResidentGradientSlot& slot,
+                                          const EncodedPath& encoded, GradientUniforms& u);
+
+  /// Copy the encode's grid parameters and bounding polygon into a gradient uniform. Shared by
+  /// every gradient draw form so they stay byte-identical.
+  static void writeGradientGeometryUniforms(GradientUniforms& u, const EncodedPath& encoded);
+
   /// Write and retain one gradient uniform snapshot when it changed. A
   /// rejected CPU-mirror reservation keeps rendering but skips the cache.
   void publishGradientUniform(GeodeResidentGradientSlot& slot, const GradientUniforms& u);
@@ -977,13 +1009,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// by the linear and radial gradient paths. `u` is filled in by the
   /// caller except for the grid params, which this writes from `encoded`.
   void submitGradientDraw(GradientUniforms& u, const EncodedPath& encoded) {
-    u.gridYBase = encoded.yBase;
-    u.gridHStride = encoded.hStride;
-    u.gridHBandCount = encoded.hBandCount;
-    u.gridXBase = encoded.xBase;
-    u.gridVStride = encoded.vStride;
-    u.gridVBandCount = encoded.vBandCount;
-    writeBoundingPolygonUniforms(u, encoded);
+    writeGradientGeometryUniforms(u, encoded);
 
     const auto bandsAlloc = allocStorageOrDummy(arenas->bandArena, encoded.bands.data(),
                                                 encoded.bands.size() * sizeof(EncodedPath::Band));
@@ -2294,6 +2320,77 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   return true;
 }
 
+bool GeoEncoder::Impl::ensureResidentFillGeometry(GeodeResidentSlot& slot,
+                                                  const EncodedPath& encoded) {
+  const uint64_t fingerprint = residentFingerprint(encoded);
+  const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
+                          slot.encodedFingerprint != fingerprint ||
+                          slot.owningDeviceId != device->deviceId();
+  if (needUpload) {
+    uploadResidentGeometry(slot, encoded);
+    slot.encodedKey = &encoded;
+    slot.encodedFingerprint = fingerprint;
+  }
+  return slot.resident && slot.buffer.isValid();
+}
+
+bool GeoEncoder::Impl::submitResidentGeometryFillDraw(GeodeResidentSlot& slot,
+                                                      const EncodedPath& encoded,
+                                                      const FillDrawArgs& args) {
+  if (!ensurePassOpen()) {
+    return false;
+  }
+  bindSolidPipeline();
+  // A re-upload here takes a fresh slab range: a draw recorded earlier in the frame keeps reading
+  // the range it bound, which the slab does not hand out again until every open frame submits.
+  if (!ensureResidentFillGeometry(slot, encoded)) {
+    return false;
+  }
+
+  // The uniform is built exactly as the arena path builds it, then its geometry bases are pointed
+  // at the slot's tight ranges, which is all that differs between the two.
+  Uniforms u = {};
+  populateBatchUniform(u, args, transform, /*identityMvp=*/false);
+  InstanceRecord record = {};
+  populateInstanceRecord(record, encoded, args, Transform2d());
+  copyRecordParamsToUniform(u, record);
+  writeSoloGeometryBases(u, slot);
+  const Allocation uniAlloc =
+      allocInArena(arenas->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
+
+  const gpu::BufferRef buf = slot.buffer;
+  const auto region = [&buf](uint32_t binding, const GeodeResidentSlot::Region& r) {
+    return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
+  };
+  const GridRegionSpan grid = gridRegionSpan(slot);
+  const gpu::BindGroup* drawBindGroup = makeDrawBindGroup(gpu::BindGroupDescriptor{
+      "GeodeResidentGeometryBindGroup",
+      pipeline->bindGroupLayout(),
+      {gpu::BindGroupEntry{FillBinding("uniforms"),
+                           gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+       region(FillBinding("bands"), slot.bands), region(FillBinding("curveData"), slot.curves),
+       gpu::BindGroupEntry{FillBinding("patternTexture"),
+                           gpu::TextureViewBinding{args.patternView}},
+       gpu::BindGroupEntry{FillBinding("patternSampler"), gpu::SamplerBinding{args.patternSampler}},
+       gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
+                           gpu::TextureViewBinding{currentClipMaskView()}},
+       gpu::BindGroupEntry{FillBinding("instances"),
+                           gpu::BufferBinding{*gpuContext->identityInstanceRecordBuffer, 0,
+                                              sizeof(InstanceRecord)}},
+       region(FillBinding("vBands"), slot.vBands), region(FillBinding("vCurveData"), slot.vCurves),
+       gpu::BindGroupEntry{FillBinding("gridData"),
+                           gpu::BufferBinding{buf, grid.offset, grid.size}},
+       region(FillBinding("paintData"), slot.paint)}});
+  if (drawBindGroup == nullptr) {
+    return false;
+  }
+
+  recordGeometryDebugDraw(encoded);
+  (void)pass->setBindGroup(0, *drawBindGroup);
+  (void)pass->draw(slot.vertexCount, 1, 0, 0);
+  return true;
+}
+
 void GeoEncoder::Impl::publishSlotPaint(GeodeResidentSlot& slot, const FillDrawArgs& args) {
   if (args.linearGradient == nullptr && args.radialGradient == nullptr) {
     slot.paintMode = args.paintMode;
@@ -2353,19 +2450,9 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   // slots, so the device-id guard no longer fires in normal operation; it is
   // a defensive cross-check, because WebGPU rejects cross-device buffers and
   // bind groups.
-  const uint64_t fingerprint = residentFingerprint(encoded);
-  const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
-                          slot.encodedFingerprint != fingerprint ||
-                          slot.owningDeviceId != device->deviceId();
-  if (needUpload) {
-    uploadResidentGeometry(slot, encoded);
-    slot.encodedKey = &encoded;
-    slot.encodedFingerprint = fingerprint;
-  }
-
   // The upload can fail (no slab, a device mismatch that the caller has
   // not re-wired yet, or a chunk allocation failure).
-  if (!slot.resident || !slot.buffer.isValid()) {
+  if (!ensureResidentFillGeometry(slot, encoded)) {
     return false;
   }
 
@@ -2539,8 +2626,17 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // Residence is only safe (bind group stable, uniform clip flags zero)
   // when no clip mask / clip polygon / mask pass is active. Otherwise fall
   // back to the per-frame arena path so clipped / masked draws stay exact.
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive || impl_->maskPassOpen) {
+  if (impl_->maskPassOpen) {
     submitFillDraw(args, {}, /*requireAdmission=*/false);
+    return;
+  }
+  // A clipped draw still reads the slot's geometry, and only its uniform and coverage binding
+  // differ from the cached bind group, so it keeps the geometry resident and takes a per-draw
+  // uniform instead of re-uploading the whole encode.
+  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive) {
+    if (!impl_->submitResidentGeometryFillDraw(slot, encoded, args)) {
+      submitFillDraw(args, {}, /*requireAdmission=*/false);
+    }
     return;
   }
   // A slot's single uniform buffer can only carry one draw's uniform per
@@ -2563,10 +2659,16 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // publishes its paint through that uniform rather than through a shared
   // per-entity record, so the earlier recorded draw of this slot keeps its
   // own parameters at submit time.
+  //
+  // The repeat still draws the same geometry, so it binds the slot's resident ranges with a
+  // uniform of its own from the frame arena: a sprite drawn many times a frame uploads its
+  // geometry once, not once per occurrence.
   if (slot.owningDeviceId == impl_->device->deviceId() &&
       (impl_->device->frameStampClaimed(slot.lastResidentFrame) ||
        impl_->device->frameStampClaimed(slot.lastSceneFrame))) {
-    submitFillDraw(args, {}, /*requireAdmission=*/false);
+    if (!impl_->submitResidentGeometryFillDraw(slot, encoded, args)) {
+      submitFillDraw(args, {}, /*requireAdmission=*/false);
+    }
     return;
   }
   slot.lastResidentFrame = frameId;
@@ -3216,11 +3318,8 @@ void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot&
   slot.bindGroup = std::move(created).result();
 }
 
-bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slot,
-                                                  const EncodedPath& encoded, GradientUniforms& u) {
-  // The grid parameters and the bounding polygon are derived from the
-  // encode, not the paint; fill them exactly like the arena path so a
-  // draw that flips between the two stays byte-identical.
+void GeoEncoder::Impl::writeGradientGeometryUniforms(GradientUniforms& u,
+                                                     const EncodedPath& encoded) {
   u.gridYBase = encoded.yBase;
   u.gridHStride = encoded.hStride;
   u.gridHBandCount = encoded.hBandCount;
@@ -3228,13 +3327,11 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
   u.gridVStride = encoded.vStride;
   u.gridVBandCount = encoded.vBandCount;
   writeBoundingPolygonUniforms(u, encoded);
+}
 
-  if (!ensurePassOpen()) {
-    return false;
-  }
-  bindGradientPipeline();
-
-  // Same residence / invalidation guards as `submitResidentFillDraw`.
+bool GeoEncoder::Impl::ensureResidentGradientGeometry(GeodeResidentGradientSlot& slot,
+                                                      const EncodedPath& encoded) {
+  // Same residence / invalidation guards as `ensureResidentFillGeometry`.
   const uint64_t fingerprint = residentFingerprint(encoded);
   const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
                           slot.encodedFingerprint != fingerprint ||
@@ -3244,10 +3341,93 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
     slot.encodedKey = &encoded;
     slot.encodedFingerprint = fingerprint;
   }
+  return slot.resident && slot.buffer.isValid();
+}
+
+bool GeoEncoder::Impl::submitResidentGeometryGradientDraw(GeodeResidentGradientSlot& slot,
+                                                          const EncodedPath& encoded,
+                                                          GradientUniforms& u) {
+  writeGradientGeometryUniforms(u, encoded);
+  if (!ensurePassOpen()) {
+    return false;
+  }
+  bindGradientPipeline();
+  if (!ensureResidentGradientGeometry(slot, encoded)) {
+    return false;
+  }
+
+  const Allocation uniAlloc =
+      allocInArena(arenas->uniformArena, &u, sizeof(GradientUniforms), kUniformOffsetAlignment);
+  const gpu::BufferRef buf = slot.buffer;
+  const auto region = [&buf](uint32_t binding, const GeodeResidentGradientSlot::Region& r) {
+    return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
+  };
+  const gpu::BindGroup* drawBindGroup = makeDrawBindGroup(gpu::BindGroupDescriptor{
+      "GeodeResidentGeometryGradientBindGroup",
+      gradientPipeline->bindGroupLayout(),
+      {gpu::BindGroupEntry{GradientBinding("uniforms"),
+                           gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
+       region(GradientBinding("bands"), slot.bands),
+       region(GradientBinding("curveData"), slot.curves),
+       gpu::BindGroupEntry{GradientBinding("clipMaskTexture"),
+                           gpu::TextureViewBinding{currentClipMaskView()}},
+       region(GradientBinding("vBands"), slot.vBands),
+       region(GradientBinding("vCurveData"), slot.vCurves),
+       region(GradientBinding("hBandGrid"), slot.hGrid),
+       region(GradientBinding("vBandGrid"), slot.vGrid),
+       region(GradientBinding("hCurveIndices"), slot.hRefs),
+       region(GradientBinding("vCurveIndices"), slot.vRefs)}});
+  if (drawBindGroup == nullptr) {
+    return false;
+  }
+
+  recordGeometryDebugDraw(encoded);
+  (void)pass->setBindGroup(0, *drawBindGroup);
+  (void)pass->draw(slot.vertexCount, 1, 0, 0);
+  return true;
+}
+
+void GeoEncoder::Impl::submitResidentGradientFill(GeodeResidentGradientSlot& slot,
+                                                  const EncodedPath& encoded, GradientUniforms& u,
+                                                  uint64_t frameId) {
+  if (maskPassOpen) {
+    submitGradientArenaFallback(u, encoded);
+    return;
+  }
+  // The slot's own uniform and cached bind group serve one unclipped draw per still-open frame
+  // (the stamp claim covers a same-frame repeat and an offscreen pass drawing while an outer frame
+  // on this device has recorded against the slot). Any other draw of the slot still reads the
+  // same geometry, so it binds those resident ranges with a per-draw uniform, mirroring
+  // `fillPathResident`.
+  const bool claimed = (slot.owningDeviceId == device->deviceId() || slot.owningDeviceId == 0) &&
+                       device->frameStampClaimed(slot.lastResidentFrame);
+  if (activeClipMaskView != nullptr || clipPolygonActive || claimed) {
+    if (!submitResidentGeometryGradientDraw(slot, encoded, u)) {
+      submitGradientArenaFallback(u, encoded);
+    }
+    return;
+  }
+  slot.lastResidentFrame = frameId;
+  if (!submitResidentGradientDraw(slot, encoded, u)) {
+    submitGradientArenaFallback(u, encoded);
+  }
+}
+
+bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slot,
+                                                  const EncodedPath& encoded, GradientUniforms& u) {
+  // The grid parameters and the bounding polygon are derived from the
+  // encode, not the paint; fill them exactly like the arena path so a
+  // draw that flips between the two stays byte-identical.
+  writeGradientGeometryUniforms(u, encoded);
+
+  if (!ensurePassOpen()) {
+    return false;
+  }
+  bindGradientPipeline();
 
   // Upload failure: report it so the caller routes the draw through the
   // per-frame arena path.
-  if (!slot.resident || !slot.buffer.isValid()) {
+  if (!ensureResidentGradientGeometry(slot, encoded)) {
     return false;
   }
 
@@ -3341,22 +3521,7 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
   GradientUniforms u = {};
   impl_->buildLinearGradientUniforms(u, params, rule);
 
-  // Residence is only safe (bind group stable, uniform clip flags zero)
-  // when no clip mask / clip polygon / mask pass is active, and a slot's
-  // single uniform can only carry one draw per still-open frame (the stamp
-  // claim covers a same-frame repeat and an offscreen pass drawing while an
-  // outer frame on this device has recorded against the slot). Fall back to
-  // the per-frame arena path in both cases, mirroring `fillPathResident`.
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive || impl_->maskPassOpen ||
-      ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
-       impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
-    impl_->submitGradientArenaFallback(u, encoded);
-    return;
-  }
-  slot.lastResidentFrame = frameId;
-  if (!impl_->submitResidentGradientDraw(slot, encoded, u)) {
-    impl_->submitGradientArenaFallback(u, encoded);
-  }
+  impl_->submitResidentGradientFill(slot, encoded, u, frameId);
 }
 
 void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
@@ -3370,16 +3535,7 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
   GradientUniforms u = {};
   impl_->buildRadialGradientUniforms(u, params, rule);
 
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive || impl_->maskPassOpen ||
-      ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
-       impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
-    impl_->submitGradientArenaFallback(u, encoded);
-    return;
-  }
-  slot.lastResidentFrame = frameId;
-  if (!impl_->submitResidentGradientDraw(slot, encoded, u)) {
-    impl_->submitGradientArenaFallback(u, encoded);
-  }
+  impl_->submitResidentGradientFill(slot, encoded, u, frameId);
 }
 
 void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity) {

@@ -522,6 +522,124 @@ TEST_F(GeoEncoderTest, IllConditionedShearStillRasterizesHalfPixelHalo) {
 /// resolve back to its exact original buffer and buffer-relative offset;
 /// resolving the global index as a raw byte offset would alias another live
 /// slot's storage and two entities would share one record.
+/// How a repeated draw of one encoded path reaches the GPU, for the pixel comparisons below.
+enum class RepeatForm {
+  Arena,     //!< Every draw re-uploads its geometry to the per-frame arenas.
+  Resident,  //!< Draws of one resident slot inside one frame generation.
+};
+
+/// Shared shape for the repeat comparisons: a curved, even-odd path drawn twice at two
+/// placements, optionally under a clip polygon, solid or with a radial gradient.
+class ResidentRepeatScene {
+public:
+  explicit ResidentRepeatScene(GeodeDevice& device)
+      : device_(device),
+        path_(PathBuilder()
+                  .addCircle(Vector2d(12, 12), 10)
+                  .addRoundedRect(Box2d({6, 6}, {18, 18}), 3, 3)
+                  .build()),
+        encoded_(GeodePathEncoder::encode(path_, FillRule::EvenOdd)) {
+    stops_[0].offset = 0.0f;
+    stops_[0].rgba[0] = 1.0f;
+    stops_[0].rgba[1] = 0.9f;
+    stops_[0].rgba[2] = 0.2f;
+    stops_[0].rgba[3] = 1.0f;
+    stops_[1].offset = 1.0f;
+    stops_[1].rgba[0] = 0.1f;
+    stops_[1].rgba[1] = 0.2f;
+    stops_[1].rgba[2] = 0.8f;
+    stops_[1].rgba[3] = 0.7f;
+    radial_.center = Vector2d(10, 10);
+    radial_.focalCenter = Vector2d(8, 8);
+    radial_.radius = 12.0;
+    radial_.stops = std::span<const RadialGradientParams::Stop>(stops_.data(), stops_.size());
+  }
+
+  bool encodedOk() const { return !encoded_.empty(); }
+
+  /// Draws the scene into \p encoder. Resident draws share \p fillSlot or \p gradientSlot.
+  void draw(GeoEncoder& encoder, RepeatForm form, bool gradient, bool clipped,
+            GeodeResidentSlot& fillSlot, GeodeResidentGradientSlot& gradientSlot) {
+    encoder.clear(css::RGBA(0, 0, 0, 0));
+    if (clipped) {
+      const Vector2d corners[4] = {Vector2d(4, 2), Vector2d(60, 10), Vector2d(56, 62),
+                                   Vector2d(2, 50)};
+      encoder.setClipPolygon(corners);
+    }
+    const uint64_t frame = device_.beginFrameGeneration();
+    for (const Transform2d& placement :
+         {Transform2d::Translate(Vector2d(3, 4)),
+          Transform2d::Scale(1.5) * Transform2d::Translate(Vector2d(26, 22))}) {
+      encoder.setTransform(placement);
+      if (gradient) {
+        if (form == RepeatForm::Arena) {
+          encoder.fillPathRadialGradient(path_, radial_, FillRule::EvenOdd, &encoded_);
+        } else {
+          encoder.fillPathRadialGradientResident(gradientSlot, encoded_, radial_, FillRule::EvenOdd,
+                                                 frame);
+        }
+      } else if (form == RepeatForm::Arena) {
+        encoder.fillPath(path_, css::RGBA(30, 200, 90, 220), FillRule::EvenOdd, &encoded_);
+      } else {
+        encoder.fillPathResident(fillSlot, encoded_, css::RGBA(30, 200, 90, 220), FillRule::EvenOdd,
+                                 frame);
+      }
+    }
+    encoder.finish();
+    device_.endFrameGeneration(frame);
+  }
+
+private:
+  GeodeDevice& device_;
+  Path path_;
+  EncodedPath encoded_;
+  std::array<RadialGradientParams::Stop, 2> stops_;
+  RadialGradientParams radial_;
+};
+
+/// A slot's second draw in one frame, and any clipped draw, cannot use the slot's own uniform and
+/// cached bind group; it keeps reading the slot's resident geometry with a uniform of its own. The
+/// pixels must match drawing the same encode through the arena path every time.
+TEST_F(GeoEncoderTest, ResidentRepeatAndClippedDrawsMatchTheArenaPath) {
+  ResidentRepeatScene scene(*device_);
+  ASSERT_TRUE(scene.encodedOk());
+  for (const bool gradient : {false, true}) {
+    for (const bool clipped : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << (gradient ? "radial gradient" : "solid") << (clipped ? ", clipped" : ""));
+      GeodeResidentSlot unusedFill;
+      GeodeResidentGradientSlot unusedGradient;
+      {
+        GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                           kTargetSize);
+        scene.draw(encoder, RepeatForm::Arena, gradient, clipped, unusedFill, unusedGradient);
+      }
+      const std::vector<uint8_t> expected = readback();
+
+      auto slab =
+          std::make_shared<GeodeResidentSlab>(device_->deviceId(), device_->handleRetirement());
+      GeodeResidentSlot fillSlot;
+      fillSlot.slab = slab;
+      GeodeResidentGradientSlot gradientSlot;
+      gradientSlot.slab = slab;
+      {
+        GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                           kTargetSize);
+        scene.draw(encoder, RepeatForm::Resident, gradient, clipped, fillSlot, gradientSlot);
+      }
+      const std::vector<uint8_t> actual = readback();
+      EXPECT_TRUE(gradient ? gradientSlot.resident : fillSlot.resident)
+          << "the repeated geometry must stay resident";
+      EXPECT_TRUE(expected == actual) << "resident repeat draws diverged from the arena path";
+      size_t covered = 0;
+      for (size_t i = 3; i < actual.size(); i += 4) {
+        covered += actual[i] != 0 ? 1u : 0u;
+      }
+      EXPECT_GT(covered, 200u) << "the scene must draw visible coverage";
+    }
+  }
+}
+
 /// entt removes a component mid-pool by move-assigning the LAST component
 /// over the removed slot (swap-and-pop). The move must transfer the record
 /// slot and its owning slab: if the moved-from component kept them, its

@@ -1258,6 +1258,32 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "geode_sprite_scene_tests_impl",
+    srcs = ["GeodeSpriteScene_tests.cc"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":sprite_scene_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Transition wrapper: reachable from `bazel test //...` without --config=geode.
+donner_multi_transitioned_test(
+    name = "geode_sprite_scene_tests",
+    testonly = 1,
+    dep = ":geode_sprite_scene_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_cc_library(
     name = "sprite_scene_fixture",
     testonly = 1,
