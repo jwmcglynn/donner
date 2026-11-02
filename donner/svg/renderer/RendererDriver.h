@@ -396,7 +396,7 @@ private:
   void renderMaskContents(RenderingInstanceView& view, Registry& registry,
                           const components::RenderingInstanceComponent& instance,
                           const components::ResolvedMask& mask, const Box2d& shapeLocalBounds);
-  int renderMask(RenderingInstanceView& view, Registry& registry,
+  int renderMask(RenderingInstanceView& view, Registry& registry, Entity entity,
                  const components::RenderingInstanceComponent& instance,
                  const components::ResolvedMask& mask);
   void renderPattern(RenderingInstanceView& view, Registry& registry,
@@ -460,11 +460,11 @@ private:
    */
   void traverseSubDocument(Registry& registry, Entity firstEntity, Entity lastEntity);
   /**
-   * The object bounding box a filter on @p entity resolves against. Content an external `<use>`
-   * in the subtree draws lives in another document, so it is added from that document's geometry,
-   * laid out with the occurrence's styles.
+   * The object bounding box of @p entity, which filters, masks and clip paths resolve against.
+   * Content an external `<use>` in the subtree draws lives in another document, so it is added
+   * from that document's geometry, laid out with the occurrence's styles.
    */
-  std::optional<Box2d> filterObjectBoundingBox(Registry& registry, Entity entity);
+  std::optional<Box2d> objectBoundingBox(Registry& registry, Entity entity);
   /// Bounds of the fragment an external `<use>` draws, in the `<use>` element's user space, or
   /// nothing when @p hostEntity is not an external fragment reference.
   std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity);
