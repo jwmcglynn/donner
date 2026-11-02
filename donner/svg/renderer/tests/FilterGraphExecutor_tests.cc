@@ -762,8 +762,13 @@ TEST(FilterGraphExecutorTest, RejectsAggregateWorkAcrossSeparateFilterExecutions
   }
   EXPECT_GT(maximumSurfaceExecutions, 0u);
   EXPECT_LT(maximumSurfaceExecutions, components::FilterExecutionBudget::kMaximumExecutions);
-  EXPECT_TRUE(budget.rejected());
   EXPECT_LE(budget.workUnits(), components::kMaximumFilterFrameWorkUnits);
+  // Exceeding the remaining work refuses that graph alone; a graph that still fits runs.
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_EQ(budget.refusedGraphs(), 1u);
+  EXPECT_EQ(budget.lastRefusalReason(),
+            components::FilterExecutionBudget::RejectionReason::WorkLimit);
+  EXPECT_TRUE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
 }
 
 TEST(FilterGraphExecutorTest, ReservesCaptureMemoryBeforeAllocationAndLatchesRejection) {
@@ -803,7 +808,7 @@ TEST(FilterGraphExecutorTest, PermanentRejectionCannotStartMemoryChunk) {
 
   EXPECT_FALSE(
       budget.reserve(invalidGraph, 1, components::FilterMemoryModel::GpuAllNodes, 4).has_value());
-  EXPECT_EQ(budget.rejectionReason(),
+  EXPECT_EQ(budget.lastRefusalReason(),
             components::FilterExecutionBudget::RejectionReason::InvalidGraph);
   EXPECT_FALSE(budget.beginChunkAfterSubmit());
   EXPECT_EQ(budget.chunks(), 0u);
@@ -889,7 +894,7 @@ TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
     cpuReservations.push_back(*reservation);
   }
   EXPECT_FALSE(cpuReservations.empty());
-  EXPECT_TRUE(cpuBudget.rejected());
+  EXPECT_EQ(cpuBudget.refusedGraphs(), 1u);
   EXPECT_EQ(cpuBudget.captureBytesReserved(), cpuReservations.size() * kCaptureBytes);
   EXPECT_EQ(cpuBudget.retainedBytes(), cpuReservations.size() * kCaptureBytes);
   EXPECT_LE(cpuBudget.retainedBytes(), components::kMaximumFilterFrameBytes);
