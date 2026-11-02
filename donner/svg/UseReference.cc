@@ -31,8 +31,8 @@ bool IsExternalHref(const std::optional<RcString>& href) {
 
 /**
  * Whether retargeting \p handle to \p newHref can leave the rest of the render tree in place: the
- * use is presented, draws an external document instance before and after, and owns no shadow tree,
- * so nothing in this document's tree is created or destroyed.
+ * use is presented, owns no shadow tree, had no reference or an external one, and gets an external
+ * one, so nothing in this document's tree is created or destroyed.
  */
 bool CanRetargetInPlace(EntityHandle handle, const std::optional<RcString>& newHref) {
   if (!IsExternalHref(newHref) || handle.all_of<components::ComputedShadowTreeComponent>() ||

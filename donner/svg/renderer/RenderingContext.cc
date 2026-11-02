@@ -1590,7 +1590,8 @@ void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSin
       // Same-document resolution failed. Check if this is an external reference.
       const RcString href = shadowTreeComponent.mainHref().value();
       if (Reference(href).isExternal()) {
-        AttachExternalUse(registry, entity, href, warningSink);
+        AttachExternalUse(registry, entity, href, ExternalUseAdmission::OncePerRebuild,
+                          warningSink);
       } else {
         ParseDiagnostic err;
         err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +

@@ -16,6 +16,7 @@
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/graph/Reference.h"
 
@@ -101,8 +102,10 @@ bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
     return false;
   }
   if (Has(flags, DirtyFlagsComponent::Layout)) {
-    // A viewport change reaches every descendant's lengths.
-    if (registry.all_of<ViewBoxComponent>(entity)) {
+    // A viewport change reaches every descendant's lengths, and recomputing the layout reads the
+    // entity's computed style.
+    if (registry.all_of<ViewBoxComponent>(entity) ||
+        !registry.all_of<ComputedStyleComponent>(entity)) {
       return false;
     }
     plan.layoutEntities.push_back(entity);
@@ -140,16 +143,22 @@ void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
   for (const Entity entity : plan.retargetedUses) {
     // The previous instance's font dependencies no longer apply; drawing records the new ones.
     registry.remove<FontPaintDependenciesComponent>(entity);
+    // Admitted again: the resource family may have changed since the last full rebuild.
     AttachExternalUse(registry, entity,
-                      registry.get<ShadowTreeComponent>(entity).mainHref().value(), warningSink);
+                      registry.get<ShadowTreeComponent>(entity).mainHref().value(),
+                      ExternalUseAdmission::Now, warningSink);
   }
 }
 
 void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
-                       ParseWarningSink& warningSink) {
+                       ExternalUseAdmission admission, ParseWarningSink& warningSink) {
   const Reference ref(href);
   auto& resourceManager = registry.ctx().get<ResourceManagerContext>();
-  if (auto subDocument = resourceManager.loadAdmittedExternalSVG(ref.documentUrl(), warningSink)) {
+  std::optional<SVGDocumentHandle> subDocument =
+      admission == ExternalUseAdmission::OncePerRebuild
+          ? resourceManager.loadAdmittedExternalSVG(ref.documentUrl(), warningSink)
+          : resourceManager.loadExternalSVG(ref.documentUrl(), warningSink);
+  if (subDocument) {
     registry.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDocument),
                                                       RcString(ref.fragment()));
   }
