@@ -25,8 +25,10 @@ per `CAMetalLayer`. The renderer opens the Metal root, Geode context and runtime
 surface, and retires them in the order this guide describes. Pass drawable sizes
 in pixels (the layer's `bounds.size` times its `contentsScale`), keep
 `contentsScale` equal to the display's backing scale, and call `resize()` when
-`draw()` returns `ResizeNeeded`. The renderer configures the layer's device,
-pixel format, drawable size and opacity; the host must not change them.
+`draw()` returns `ResizeNeeded`. Round each axis of the pixel size to the
+nearest whole pixel. The renderer configures the layer's device, pixel format,
+drawable size and opacity; the host must not change them. It always selects the
+Metal backend and ignores `DONNER_GPU_BACKEND`.
 
 The code below is quoted from `examples/geode_embed.cc`, so it is the code that
 builds; `//examples:geode_embed_builds_test` compiles the example in ordinary

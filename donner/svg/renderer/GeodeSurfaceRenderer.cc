@@ -9,6 +9,7 @@
 #include "donner/gpu/Device.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 
@@ -26,6 +27,21 @@ void SetError(std::string* error, std::string message) {
 
 bool IsPositive(const Vector2i& size) {
   return size.x > 0 && size.y > 0;
+}
+
+/// Describes why \p size cannot be a frame target, or returns empty when it can. The frame
+/// target must fit the renderer's surface budget, or the renderer would skip drawing it.
+std::string CheckFrameSize(const Vector2i& size) {
+  if (!IsPositive(size)) {
+    return "drawable size must be positive";
+  }
+  constexpr std::uint64_t kBytesPerPixel = 4;
+  const std::uint64_t bytes =
+      static_cast<std::uint64_t>(size.x) * static_cast<std::uint64_t>(size.y) * kBytesPerPixel;
+  if (bytes > RendererSurfaceBudget::kMaximumBytes) {
+    return "drawable size exceeds the renderer's surface budget";
+  }
+  return {};
 }
 
 template <typename Container, typename Value>
@@ -167,8 +183,8 @@ std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::CreateForMetalLayer(
     SetError(error, "metalLayer is null");
     return nullptr;
   }
-  if (!IsPositive(sizePx)) {
-    SetError(error, "drawable size must be positive");
+  if (std::string invalid = CheckFrameSize(sizePx); !invalid.empty()) {
+    SetError(error, std::move(invalid));
     return nullptr;
   }
 
@@ -190,8 +206,8 @@ std::unique_ptr<GeodeSurfaceRenderer> GeodeSurfaceRenderer::CreateForMetalLayer(
 }
 
 bool GeodeSurfaceRenderer::resize(Vector2i sizePx, std::string* error) {
-  if (!IsPositive(sizePx)) {
-    SetError(error, "drawable size must be positive");
+  if (std::string invalid = CheckFrameSize(sizePx); !invalid.empty()) {
+    SetError(error, std::move(invalid));
     return false;
   }
   if (sizePx == impl_->size) {

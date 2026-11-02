@@ -23,8 +23,9 @@ class SVGDocument;
  * Host contract:
  * - The layer outlives the renderer. Destroy the renderer first.
  * - The drawable size passed to \ref CreateForMetalLayer and \ref resize is in pixels and must
- *   equal the layer's `bounds.size` multiplied by its `contentsScale`. Keep `contentsScale` equal
- *   to the display's backing scale; a layer-hosting view does not update it for you. When the
+ *   equal the layer's `bounds.size` multiplied by its `contentsScale`, rounded to the nearest
+ *   pixel on each axis. Keep `contentsScale` equal to the display's backing scale; a
+ *   layer-hosting view does not update it for you. When the
  *   layer's pixel extent no longer matches, \ref draw returns \ref FrameStatus::ResizeNeeded and
  *   presents nothing until \ref resize is called with the new size. A layer with empty bounds
  *   (not laid out in a window) is never reported as resized.
@@ -32,9 +33,12 @@ class SVGDocument;
  *   `opaque` properties. Do not change them yourself.
  * - The layer is configured opaque, so transparent regions of a document composite as black.
  *   Give the document a background to control the color.
+ * - A frame target must fit the renderer's surface budget (4 bytes per pixel within
+ *   `RendererSurfaceBudget::kMaximumBytes`); larger sizes are rejected. Documents whose layers,
+ *   masks or patterns need more storage near that limit can still fail to draw.
  * - Calls must come from one thread at a time.
  *
- * Typical use from a macOS view:
+ * Typical use from a macOS view that is already in a window:
  *
  * ```cpp
  * CAMetalLayer* layer = [CAMetalLayer layer];
@@ -42,9 +46,11 @@ class SVGDocument;
  * view.wantsLayer = YES;
  * layer.contentsScale = view.window.backingScaleFactor;
  * const NSSize px = [view convertSizeToBacking:view.bounds.size];
+ * const Vector2i sizePx(static_cast<int>(std::lround(px.width)),
+ *                       static_cast<int>(std::lround(px.height)));
  * std::string error;
- * auto presenter = GeodeSurfaceRenderer::CreateForMetalLayer(
- *     (__bridge void*)layer, Vector2i(px.width, px.height), &error);
+ * auto presenter =
+ *     GeodeSurfaceRenderer::CreateForMetalLayer((__bridge void*)layer, sizePx, &error);
  * // Each frame, after updating contentsScale and calling resize() if the view changed:
  * document.setCanvasSize(presenter->size().x, presenter->size().y);
  * presenter->draw(document);
@@ -75,7 +81,8 @@ public:
    *   positive.
    * @param error When non-null, receives a description of why creation failed.
    * @return The renderer, or nullptr when the layer is null or not a `CAMetalLayer`, the size is
-   *   empty, Metal is unavailable, or the surface cannot present BGRA8 render targets.
+   *   empty or exceeds the surface budget, Metal is unavailable, or the surface cannot present
+   *   BGRA8 render targets.
    */
   static std::unique_ptr<GeodeSurfaceRenderer> CreateForMetalLayer(void* metalLayer,
                                                                    Vector2i sizePx,
@@ -96,8 +103,8 @@ public:
    * @param sizePx New size in pixels (`bounds.size * contentsScale`). Both dimensions must be
    *   positive.
    * @param error When non-null, receives a description of why the resize failed.
-   * @return False when the size is empty or the surface cannot be reconfigured; the previous size
-   *   remains in effect.
+   * @return False when the size is empty, exceeds the surface budget, or the surface cannot be
+   *   reconfigured; the previous size remains in effect.
    */
   [[nodiscard]] bool resize(Vector2i sizePx, std::string* error = nullptr);
 

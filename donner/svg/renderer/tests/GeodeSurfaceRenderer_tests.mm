@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
@@ -161,6 +162,32 @@ TEST_F(GeodeSurfaceRendererTest, RejectsAnEmptySize) {
   EXPECT_THAT(error, HasSubstr("positive"));
   // The error out-parameter is optional.
   EXPECT_THAT(GeodeSurfaceRenderer::CreateForMetalLayer(layer(), Vector2i(-1, 64)), IsNull());
+}
+
+/// A frame target larger than the renderer's surface budget would never be drawn, so it is
+/// refused up front rather than presented undrawn.
+TEST_F(GeodeSurfaceRendererTest, RejectsASizeBeyondTheSurfaceBudget) {
+  std::string error;
+  EXPECT_THAT(GeodeSurfaceRenderer::CreateForMetalLayer(layer(), Vector2i(16384, 16384), &error),
+              IsNull());
+  EXPECT_THAT(error, HasSubstr("surface budget"));
+
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(64, 64));
+  ASSERT_THAT(renderer, NotNull());
+  EXPECT_FALSE(renderer->resize(Vector2i(16384, 16384), &error));
+  EXPECT_THAT(error, HasSubstr("surface budget"));
+  EXPECT_THAT(renderer->size(), Eq(Vector2i(64, 64)));
+}
+
+/// Fractional point bounds round to the nearest pixel on each axis, which is the extent the
+/// layer reports; a host that resizes to that rounded extent presents again.
+TEST_F(GeodeSurfaceRendererTest, AcceptsTheRoundedExtentOfFractionalBounds) {
+  layer_.bounds = CGRectMake(0, 0, 32.25, 20.75);
+  layer_.contentsScale = 2.0;  // 64.5 x 41.5 rounds to 65 x 42.
+  std::unique_ptr<GeodeSurfaceRenderer> renderer = create(Vector2i(65, 42));
+  ASSERT_THAT(renderer, NotNull());
+  document_->setCanvasSize(65, 42);
+  EXPECT_THAT(DrawUntilNotSkipped(*renderer, *document_), Eq(FrameStatus::Presented));
 }
 
 }  // namespace
