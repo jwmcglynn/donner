@@ -1941,6 +1941,36 @@ donner_cc_library(
     ],
 )
 
+donner_cc_test(
+    name = "filter_result_cache_index_tests",
+    srcs = ["FilterResultCacheIndex_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:filter_result_cache",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Cached filter results of filtered sprites drawn through external <use>. The counter and
+# invalidation cases need the Geode backend, which caches; the pixel cases run on every variant.
+donner_cc_test(
+    name = "external_use_filter_cache_tests",
+    srcs = ["ExternalUseFilterCache_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "geode",
+    ],
+    deps = [
+        ":external_use_sprite_scene",
+        ":renderer_test_backend",
+        "//donner/base",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Animated external-use sprite: the correctness half counts sprite-sheet restyles on the PR gate;
 # the wall-clock half compares bitmap and vector sprite frame times in the manual perf lane (run
 # it with `--config=geode` for the GPU backend).
