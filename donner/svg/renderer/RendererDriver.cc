@@ -3287,8 +3287,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
     if (!stages) {
       continue;
     }
-    const std::optional<Box2d> elementBounds =
-        RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
+    const std::optional<Box2d> elementBounds = filterObjectBoundingBox(registry, entity);
     if (configureFilterStages(*stages, filterViewBox, elementBounds) &&
         materializeFilterStages(*stages, registry, entity)) {
       preparedFilterGraphs_[entity] = std::move(*stages);
@@ -4780,6 +4779,64 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
   if (needsOpacityLayer) {
     renderer_.popIsolatedLayer();
   }
+}
+
+std::optional<Box2d> RendererDriver::filterObjectBoundingBox(Registry& registry, Entity entity) {
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+  std::optional<Box2d> bounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+  const auto externalUses = registry.view<const components::ExternalUseComponent>();
+  if (externalUses.begin() == externalUses.end()) {
+    return bounds;
+  }
+  const Entity lastEntity =
+      instance.subtreeInfo ? instance.subtreeInfo->lastRenderedEntity : entity;
+  const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
+  for (const Entity descendant :
+       CollectMainEntities(registry, std::pair(entity, lastEntity))) {
+    const std::optional<Box2d> content = externalUseContentBounds(registry, descendant);
+    if (!content) {
+      continue;
+    }
+    const auto& useInstance = registry.get<components::RenderingInstanceComponent>(descendant);
+    const Box2d box =
+        (useInstance.worldFromEntityTransform * entityFromWorld).transformBox(*content);
+    bounds = bounds ? Box2d::Union(*bounds, box) : box;
+  }
+  return bounds;
+}
+
+std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegistry,
+                                                              Entity hostEntity) {
+  const auto& instance = hostRegistry.get<components::RenderingInstanceComponent>(hostEntity);
+  const auto* externalUse =
+      instance.dataHandle(hostRegistry).try_get<components::ExternalUseComponent>();
+  if (externalUse == nullptr || !externalUse->subDocument || externalUse->fragment.empty()) {
+    return std::nullopt;
+  }
+  const auto& style =
+      instance.styleHandle(hostRegistry).get<components::ComputedStyleComponent>();
+  SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
+  const auto access = subDocument.writeAccess();
+  Registry& child = subDocument.registry();
+  if (!beginSubDocumentFontTraversal(subDocument.handle(), hostRegistry, hostEntity)) {
+    return std::nullopt;
+  }
+  const ActiveFontSubDocument active(*activeFontSubDocuments_, subDocument.handle().get());
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            child);
+  const Entity root = components::FindAttachedEntityById(child, externalUse->fragment);
+  if (root == entt::null || !style.properties) {
+    return std::nullopt;
+  }
+  // Lay the fragment out with the occurrence's styles, exactly as drawing it does.
+  ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
+                              instance.resolvedStroke, externalUseStyleWork_);
+  if (!scope.installed()) {
+    return std::nullopt;
+  }
+  prepareSubDocument(subDocument);
+  // Drawing maps the fragment's own user space onto the <use> element's.
+  return components::ShapeSystem().getShapeBounds(EntityHandle(child, root));
 }
 
 void RendererDriver::traverseSubDocument(Registry& registry, Entity firstEntity,
