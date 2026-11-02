@@ -2701,14 +2701,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void drawFilterResult(const FilterResultPayload& payload) {
     Vector2d delta = Vector2d(deviceFromLocalTransform.data[4], deviceFromLocalTransform.data[5]) -
                      payload.recordTranslation;
-    if (!payload.resampled) {
-      delta = Vector2d(std::round(delta.x), std::round(delta.y));
+    const Vector2d rounded(std::round(delta.x), std::round(delta.y));
+    // A whole-pixel move copies texels exactly, as the uncached composite does; only a fractional
+    // move of a resampled result interpolates.
+    const bool wholePixels = !payload.resampled || (NearEquals(delta.x, rounded.x, 1e-6) &&
+                                                     NearEquals(delta.y, rounded.y, 1e-6));
+    if (wholePixels) {
+      delta = rounded;
     }
     encoder->setTransform(Transform2d());
     encoder->drawTexture(payload.texture,
                          Box2d(payload.deviceRect.topLeft + delta,
                                payload.deviceRect.bottomRight + delta),
-                         kWholeTextureUv, 1.0, /*pixelated=*/!payload.resampled,
+                         kWholeTextureUv, 1.0, /*pixelated=*/wholePixels,
                          /*sourceIsPremultiplied=*/true);
     syncTransform();
   }

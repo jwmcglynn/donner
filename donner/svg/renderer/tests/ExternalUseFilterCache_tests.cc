@@ -57,7 +57,7 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
     out << "<g filter=\"url(#filter-" << sprite << ")\">";
     out << "<circle id=\"dot-" << sprite << "\" cx=\"16\" cy=\"16\" r=\"" << 6 + sprite % 5
         << R"(" fill="#c040a0"/>)";
-    out << R"(<rect x="8" y="20" width="16" height="6" fill="#30a0e0"/>)";
+    out << R"(<rect x="8" y="20" width="16" height="6" fill="currentColor"/>)";
     out << "</g></g>";
   }
   out << "</svg>";
@@ -68,7 +68,7 @@ std::string MakeFilteredSheet(int spriteCount, SpriteFilter filter) {
 std::string MakeHost(int occurrences) {
   std::ostringstream out;
   out << R"(<svg xmlns="http://www.w3.org/2000/svg" width=")" << kHostWidth << "\" height=\""
-      << kHostHeight << R"("><rect width="100%" height="100%" fill="#f0f0e0"/>)";
+      << kHostHeight << R"(" color="#30a0e0"><rect width="100%" height="100%" fill="#f0f0e0"/>)";
   for (int i = 0; i < occurrences; ++i) {
     out << "<use id=\"use-" << i << "\" href=\"sprites.svg#sprite-0\"/>";
   }
@@ -103,7 +103,7 @@ std::optional<FilteredSpriteScene> MakeScene(int occurrences, int spriteCount = 
 /// Places occurrence \p index for \p frame; \p step is the per-frame motion in pixels.
 void PlaceOccurrence(FilteredSpriteScene& scene, int index, int frame, double step) {
   scene.uses[index].setTransform(Transform2d::Translate(
-      Vector2d(10.0 + index * 44.0 + frame * step, 20.0 + (index % 3) * 50.0 + frame * step / 2)));
+      Vector2d(10.0 + index * 44.0 + frame * step, 20.0 + (index % 3) * 50.0 + frame * step)));
 }
 
 void PlaceAll(FilteredSpriteScene& scene, int frame, double step) {
@@ -272,8 +272,8 @@ TEST(ExternalUseFilterCacheTest, HostStyleChangeRefilters) {
   std::optional<FilteredSpriteScene> scene = MakeScene(2);
   ASSERT_TRUE(scene.has_value());
   ExpectMutationRefilters(*scene, "host-style", [](FilteredSpriteScene& s) {
-    // The sprite's shapes set their own fill, so change an inherited property they use.
-    s.host.document.querySelector("#use-0")->setStyle("visibility: hidden");
+    // The sprite's bar is painted with currentColor, which inherits from the use.
+    s.host.document.querySelector("#use-0")->setStyle("color: #e0a020");
   });
 }
 
