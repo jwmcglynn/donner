@@ -28,17 +28,13 @@ SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGUseElement::setHref(const RcString& value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
-  DocumentWriteAccess& access = mutation.access();
+  // The `href` attribute is the reference's single source of truth; the generic attribute write
+  // retargets the instance from it.
   if (value.empty()) {
-    handle_.remove<components::ShadowTreeComponent>(access);
+    removeAttribute(xml::XMLQualifiedNameRef("href"));
   } else {
-    auto& shadowTree = handle_.emplace_or_replace<components::ShadowTreeComponent>(access);
-    shadowTree.setMainHref(value);
-    shadowTree.setsContextColors = true;
+    setAttribute(xml::XMLQualifiedNameRef("href"), value);
   }
-
-  InvalidateUse(handle_);
 }
 
 RcString SVGUseElement::href() const {

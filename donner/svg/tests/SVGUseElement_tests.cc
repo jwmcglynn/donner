@@ -183,6 +183,33 @@ TEST(SVGUseElementTests, SettingXlinkHrefKeepsHrefTarget) {
   EXPECT_THAT(use, HrefEq(RcString("#b")));
 }
 
+/// `setHref` writes the `href` attribute, so a later attribute mutation keeps its target.
+TEST(SVGUseElementTests, SetHrefUpdatesAttributeForLaterMutations) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a")");
+  use.setHref(RcString("#b"));
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Optional(RcString("#b")));
+
+  use.removeAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+  EXPECT_THAT(use, HrefEq(RcString("#b")));
+
+  use.setHref(RcString());
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Eq(std::nullopt));
+  EXPECT_THAT(use, HrefEq(RcString()));
+}
+
+/// An empty `href` still takes precedence over `xlink:href`, leaving no reference.
+TEST(SVGUseElementTests, EmptyHrefOverridesXlinkHref) {
+  SVGDocument document;
+  for (const std::string_view attributes :
+       {R"(href="" xlink:href="#b")", R"(xlink:href="#b" href="")"}) {
+    SCOPED_TRACE(attributes);
+    SVGUseElement use = ParseUse(document, attributes);
+    EXPECT_THAT(use, HrefEq(RcString()));
+    EXPECT_THAT(use.entityHandle().all_of<components::ShadowTreeComponent>(), testing::IsFalse());
+  }
+}
+
 /// An empty href removes the reference, so rendering reports no unresolved target.
 TEST(SVGUseElementTests, SetEmptyHrefRemovesReference) {
   SVGDocument document;
