@@ -1933,10 +1933,10 @@ TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentWarningsToSink) {
   EXPECT_THAT(WarningReasons(warnings), ElementsAre(kChildParseWarning));
 }
 
-TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentPreparationWarningsToSink) {
-  // The referenced subtree itself holds an unresolved `<use>`, which is only found when the
-  // sub-document is prepared for rendering, not when it is loaded. The child is prepared again for
-  // each of the two occurrences and on every draw, but the warning is delivered once.
+/// Parses a host with two occurrences of an external subtree that itself holds an unresolved
+/// `<use>`, which is only found when the sub-document is prepared for rendering, not when it is
+/// loaded.
+SVGDocument ParseExternalUseHostWithChildPreparationWarning() {
   SVGDocument::Settings settings;
   settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
@@ -1949,8 +1949,14 @@ TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentPreparationWarnings
         <use href="external.svg#tile" x="4"/>
       </svg>)svg",
       parseWarnings, parser::SVGParser::Options(), std::move(settings));
-  ASSERT_FALSE(parsed.hasError());
-  SVGDocument document = std::move(parsed.result());
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentPreparationWarningsToSink) {
+  // The child is prepared again for each of the two occurrences and on every draw, but the warning
+  // is delivered once.
+  SVGDocument document = ParseExternalUseHostWithChildPreparationWarning();
   // Verbose, so the stderr check shows the sink takes precedence over printing.
   Renderer renderer(/*verbose=*/true);
   ParseWarningSink firstDraw;
@@ -1962,6 +1968,16 @@ TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentPreparationWarnings
   ParseWarningSink secondDraw;
   renderer.draw(document, secondDraw);
   EXPECT_THAT(WarningReasons(secondDraw), testing::IsEmpty());
+}
+
+TEST(RendererPublicApiTest, DisabledSinkLeavesSubDocumentPreparationWarningsForALaterSink) {
+  SVGDocument document = ParseExternalUseHostWithChildPreparationWarning();
+  Renderer renderer;
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  renderer.draw(document, disabled);
+  ParseWarningSink collecting;
+  renderer.draw(document, collecting);
+  EXPECT_THAT(WarningReasons(collecting), ElementsAre(kUnresolvedUseWarning));
 }
 
 TEST(RendererPublicApiTest, DrawReportsSameDocumentWarningsToSink) {

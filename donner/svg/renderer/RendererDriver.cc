@@ -4395,8 +4395,9 @@ namespace {
 /**
  * Preparation warnings a sub-document has already delivered to a host sink. An external use
  * invalidates its child document's derived state around every traversal, so the child is prepared
- * again for each occurrence and each frame and repeats the same warnings; each distinct warning is
- * delivered once per loaded sub-document instead.
+ * again for each occurrence and each frame and repeats the same warnings. Each warning, matched by
+ * its text and location, is delivered once per loaded sub-document instead, so identical warnings
+ * without a location are merged.
  */
 struct ReportedSubDocumentWarnings {
   std::unordered_set<std::string> keys;
@@ -4419,9 +4420,10 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
   }
-  if (warningSink_ == nullptr) {
-    // Without a host sink these warnings are discarded even when verbose: printing them would
-    // repeat them for every traversal.
+  if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
+    // Without a collecting host sink these warnings are discarded even when verbose: printing them
+    // would repeat them for every traversal. Nothing is recorded, so a later draw with a collecting
+    // sink still receives them.
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
     return;
@@ -4430,9 +4432,7 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   // the host sink once.
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-  auto& reported = registry.ctx().contains<ReportedSubDocumentWarnings>()
-                       ? registry.ctx().get<ReportedSubDocumentWarnings>()
-                       : registry.ctx().emplace<ReportedSubDocumentWarnings>();
+  auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
   for (const ParseDiagnostic& warning : warnings.warnings()) {
     if (reported.keys.size() < ParseWarningSink::kMaximumWarnings &&
         reported.keys.insert(SubDocumentWarningKey(warning)).second) {
