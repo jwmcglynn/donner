@@ -460,6 +460,32 @@ private:
                             Entity hostEntity);
   void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
                                  Entity hostEntity, const std::optional<Box2d>& filterRegion);
+  /// Content identity shared by every filtered element of the external-use instance being drawn.
+  struct FilterResultScope {
+    const Registry* registry = nullptr;  ///< Registry of the instance's document.
+    FilterResultContentKey content;      ///< Key fields every filtered element shares.
+  };
+
+  /**
+   * The cache scope for the instance rooted at \p instanceRoot of \p subDocument, drawn for the
+   * occurrence installed in its context: present only while the occurrence's styles are retained
+   * and the document has no animation.
+   */
+  static std::optional<FilterResultScope> ExternalUseFilterResultScope(SVGDocument& subDocument,
+                                                                       Entity instanceRoot);
+
+  /**
+   * Content key for the filter \p graph of \p entity when its result may be cached: it lies in
+   * the current \ref filterResultScope_, its graph is translation invariant, and its subtree
+   * holds only elements whose rendering the key covers.
+   */
+  std::optional<FilterResultContentKey> cacheableFilterContent(
+      Registry& registry, Entity entity, const components::RenderingInstanceComponent& instance,
+      const components::FilterGraph& graph) const;
+
+  /// Pop the deferred layers of every subtree whose last rendered entity is \p entity.
+  void popSubtreeMarkersEndingAt(Entity entity);
+
   void setSubDocumentContextPaint(SVGDocument& subDocument,
                                   const components::ResolvedPaintServer& contextFill,
                                   const components::ResolvedPaintServer& contextStroke);
@@ -566,6 +592,9 @@ private:
   /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main
   /// traversal never mutates \ref components::RenderingInstanceComponent storage mid-iteration.
   std::unordered_map<Entity, std::vector<components::FilterGraph>> preparedFilterGraphs_;
+
+  /// Set while an external-use instance whose filter results may be cached is traversed.
+  std::optional<FilterResultScope> filterResultScope_;
 };
 
 }  // namespace donner::svg

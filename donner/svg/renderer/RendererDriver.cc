@@ -32,7 +32,9 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -3269,7 +3271,149 @@ void MarkViewportAlignedFilterCaptures(
   }
 }
 
+/// Whether a filter graph's result moves with a translation of its input: its primitives read
+/// nothing positioned in device or viewport space. feTurbulence evaluates noise from raster
+/// coordinates, lighting resolves light positions against the pixel raster, and feImage can read
+/// content loaded independently of the document's revision.
+bool IsTranslationInvariantFilterGraph(const components::FilterGraph& graph) {
+  if (graph.keepsViewportAlignedCapture || graph.empty()) {
+    return false;
+  }
+  return std::none_of(graph.nodes.begin(), graph.nodes.end(), [](const components::FilterNode& n) {
+    return std::holds_alternative<components::filter_primitive::Image>(n.primitive) ||
+           std::holds_alternative<components::filter_primitive::Turbulence>(n.primitive) ||
+           std::holds_alternative<components::filter_primitive::DiffuseLighting>(n.primitive) ||
+           std::holds_alternative<components::filter_primitive::SpecularLighting>(n.primitive);
+  });
+}
+
+/// Element types whose rendering inside a cached filter layer is a function of the document's
+/// revision and the occurrence's retained styles. Everything that loads, lays out text, animates,
+/// instantiates or replays content elsewhere is excluded.
+bool IsCacheableFilteredContentType(ElementType type) {
+  switch (type) {
+    case ElementType::A:
+    case ElementType::Circle:
+    case ElementType::ClipPath:
+    case ElementType::Defs:
+    case ElementType::Desc:
+    case ElementType::Ellipse:
+    case ElementType::FeBlend:
+    case ElementType::FeColorMatrix:
+    case ElementType::FeComponentTransfer:
+    case ElementType::FeComposite:
+    case ElementType::FeConvolveMatrix:
+    case ElementType::FeDisplacementMap:
+    case ElementType::FeDropShadow:
+    case ElementType::FeFlood:
+    case ElementType::FeFuncA:
+    case ElementType::FeFuncB:
+    case ElementType::FeFuncG:
+    case ElementType::FeFuncR:
+    case ElementType::FeGaussianBlur:
+    case ElementType::FeMerge:
+    case ElementType::FeMergeNode:
+    case ElementType::FeMorphology:
+    case ElementType::FeOffset:
+    case ElementType::FeTile:
+    case ElementType::Filter:
+    case ElementType::G:
+    case ElementType::Line:
+    case ElementType::LinearGradient:
+    case ElementType::Metadata:
+    case ElementType::Path:
+    case ElementType::Polygon:
+    case ElementType::Polyline:
+    case ElementType::RadialGradient:
+    case ElementType::Rect:
+    case ElementType::Stop:
+    case ElementType::Title: return true;
+    default: return false;
+  }
+}
+
+/// Whether \p paint is a pattern, whose tile content the driver draws from elsewhere.
+bool IsPatternPaint(const components::ResolvedPaintServer& paint) {
+  const auto* reference = std::get_if<components::PaintResolvedReference>(&paint);
+  return reference != nullptr &&
+         reference->reference.handle.all_of<components::ComputedPatternComponent>();
+}
+
+/// Whether \p instance draws only its own geometry: no pattern paint, mask, marker or text span.
+bool InstanceDrawsOnlyItsOwnContent(const components::RenderingInstanceComponent& instance) {
+  return !IsPatternPaint(instance.resolvedFill) && !IsPatternPaint(instance.resolvedStroke) &&
+         !instance.mask.has_value() && !instance.markerStart.has_value() &&
+         !instance.markerMid.has_value() && !instance.markerEnd.has_value() &&
+         instance.textSpanRoot == entt::null;
+}
+
 }  // namespace
+
+std::optional<FilterResultContentKey> RendererDriver::cacheableFilterContent(
+    Registry& registry, Entity entity, const components::RenderingInstanceComponent& instance,
+    const components::FilterGraph& graph) const {
+  if (!filterResultScope_ || filterResultScope_->registry != &registry ||
+      instance.isShadow(registry) || !IsTranslationInvariantFilterGraph(graph)) {
+    return std::nullopt;
+  }
+  std::vector<Entity> pending{entity};
+  while (!pending.empty()) {
+    const Entity element = pending.back();
+    pending.pop_back();
+    const auto* type = registry.try_get<components::ElementTypeComponent>(element);
+    if (type == nullptr || !IsCacheableFilteredContentType(type->type())) {
+      return std::nullopt;
+    }
+    if (const auto* nested = registry.try_get<components::RenderingInstanceComponent>(element)) {
+      if (!InstanceDrawsOnlyItsOwnContent(*nested)) {
+        return std::nullopt;
+      }
+      if (element != entity) {
+        if (const auto* stages = preparedFilterStagesFor(element)) {
+          for (const components::FilterGraph& stage : *stages) {
+            if (!IsTranslationInvariantFilterGraph(stage)) {
+              return std::nullopt;
+            }
+          }
+        }
+      }
+    }
+    for (Entity child = registry.get<donner::components::TreeComponent>(element).firstChild();
+         child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      pending.push_back(child);
+    }
+  }
+  FilterResultContentKey key = filterResultScope_->content;
+  key.filteredElement = entt::to_integral(entity);
+  key.filterRegion = graph.filterRegion;
+  key.primitiveViewport = graph.primitiveViewport;
+  key.userToPixelScale = graph.userToPixelScale;
+  return key;
+}
+
+std::optional<RendererDriver::FilterResultScope> RendererDriver::ExternalUseFilterResultScope(
+    SVGDocument& subDocument, Entity instanceRoot) {
+  Registry& registry = subDocument.registry();
+  const std::optional<std::uint64_t> epoch =
+      components::ExternalUseStyleRetention::RetainedStyleEpoch(registry);
+  if (!epoch || !registry.view<components::AnimationTimingComponent>().empty() ||
+      !registry.view<components::AnimatedValuesComponent>().empty()) {
+    return std::nullopt;
+  }
+  FilterResultScope scope;
+  scope.registry = &registry;
+  scope.content.document = subDocument.handle();
+  scope.content.documentRevision = subDocument.handle()->revision();
+  scope.content.fontResourceRevision = subDocument.fontResourceRevision();
+  scope.content.styleEpoch = *epoch;
+  scope.content.instanceRoot = entt::to_integral(instanceRoot);
+  if (const auto* sized =
+          registry.try_get<components::ComputedShadowSizedElementComponent>(instanceRoot)) {
+    scope.content.instanceViewport = sized->bounds;
+  }
+  return scope;
+}
 
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
@@ -3375,7 +3519,53 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(filterStages);
+    bool drewCachedFilterResult = false;
+    if (filterLayerCount == 1 && filterResultScope_) {
+      const components::FilterGraph& stage = filterStages->front();
+      if (const std::optional<FilterResultContentKey> content =
+              cacheableFilterContent(registry, entity, instance, stage)) {
+        drewCachedFilterResult =
+            renderer_.pushCachedFilterLayer(*content, stage, stage.filterRegion) ==
+            CachedFilterLayerResult::Drawn;
+      } else {
+        pushFilterStages(filterStages);
+      }
+    } else {
+      pushFilterStages(filterStages);
+    }
+
+    if (drewCachedFilterResult) {
+      // The cached result stands in for everything the filter layer would have captured: the
+      // entity's own paint and its whole subtree. Their draws are recorded as painted so font
+      // coverage matches a frame that drew them.
+      components::ScopedFontResourceRender::recordDraw(registry, entity, /*excluded=*/false);
+      Entity consumed = entity;
+      if (HasPendingSubtree(view, registry, instance)) {
+        consumed = instance.subtreeInfo->lastRenderedEntity;
+        while (!view.done()) {
+          const Entity skipped = view.currentEntity();
+          components::ScopedFontResourceRender::recordDraw(registry, skipped, /*excluded=*/false);
+          view.advance();
+          if (skipped == consumed) {
+            break;
+          }
+        }
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
+      }
+      for (int mi = 0; mi < maskDepth; ++mi) {
+        renderer_.popMask();
+      }
+      if (hasIsolatedLayer) {
+        renderer_.popIsolatedLayer();
+      }
+      if (hasViewportClip) {
+        renderer_.popClip();
+      }
+      popSubtreeMarkersEndingAt(consumed);
+      continue;
+    }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =
@@ -3524,23 +3714,27 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
 
     // Pop deferred subtree layers when we reach their last entity.
-    while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
-      const DeferredPop& deferred = subtreeMarkers_.back();
-      popFilterStages(deferred.filterLayerCount);
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
-      }
-      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      if (deferred.hasIsolatedLayer) {
-        renderer_.popIsolatedLayer();
-      }
-      if (deferred.hasViewportClip) {
-        renderer_.popClip();
-      }
-      subtreeMarkers_.pop_back();
+    popSubtreeMarkersEndingAt(entity);
+  }
+}
+
+void RendererDriver::popSubtreeMarkersEndingAt(Entity entity) {
+  while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
+    const DeferredPop& deferred = subtreeMarkers_.back();
+    popFilterStages(deferred.filterLayerCount);
+    if (deferred.hasEntityClip) {
+      renderer_.popClip();
     }
+    for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+      renderer_.popMask();
+    }
+    if (deferred.hasIsolatedLayer) {
+      renderer_.popIsolatedLayer();
+    }
+    if (deferred.hasViewportClip) {
+      renderer_.popClip();
+    }
+    subtreeMarkers_.pop_back();
   }
 }
 
@@ -4759,8 +4953,11 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   // and the host's pending subtree pops must not match sub-document entities.
   renderer_.setTransform(parentAbsoluteTransform);
   std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
+  std::optional<FilterResultScope> hostFilterResultScope =
+      std::exchange(filterResultScope_, ExternalUseFilterResultScope(subDocument, targetEntity));
   RenderingInstanceView subView(subDocument.registry());
   traverse(subView, subDocument.registry());
+  filterResultScope_ = std::move(hostFilterResultScope);
   subtreeMarkers_ = std::move(hostSubtreeMarkers);
   fontRenderScope.finish();
   recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
