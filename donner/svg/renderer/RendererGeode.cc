@@ -6753,14 +6753,16 @@ void RendererGeode::popFilterLayer() {
                            static_cast<int>(outerExtent.height))) {
     // The result lies in a raster placed over part of the outer target, or past its edges by an
     // input margin. Raster texel (0, 0) sits at target pixel (-offsetX, -offsetY), so draw the
-    // whole raster there, pixel aligned; the target clips whatever lies past its edges.
+    // whole raster there, pixel aligned; the target clips whatever lies past its edges. Nearest
+    // sampling copies each texel exactly, as the viewport extraction copy it replaces did, where
+    // interpolation could land a hair off texel centers for raster sizes that do not divide evenly.
     impl_->encoder->setTransform(Transform2d());
     impl_->encoder->drawTexture(*filteredTexture,
                                 Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
                                                 -static_cast<double>(frame.filterBufferOffsetY),
                                                 static_cast<double>(filteredDesc.size.width),
                                                 static_cast<double>(filteredDesc.size.height)),
-                                kWholeTextureUv, 1.0, /*pixelated=*/false,
+                                kWholeTextureUv, 1.0, /*pixelated=*/true,
                                 /*sourceIsPremultiplied=*/true);
     impl_->syncTransform();
   } else {
