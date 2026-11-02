@@ -3289,36 +3289,61 @@ TEST_F(RendererGeodeTest, FillEncodeAtTwoScalesDoesNotDependOnHistory) {
     }
   }
 
-  // Counts pixels whose RGBA bytes differ, so an exact comparison reports how far it drifted.
-  const auto countDifferingPixels = [](const RendererBitmap& actual,
-                                       const RendererBitmap& expected) -> size_t {
-    if (actual.dimensions != expected.dimensions) {
-      return std::numeric_limits<size_t>::max();
-    }
-    size_t differing = 0;
-    for (int y = 0; y < actual.dimensions.y; ++y) {
-      for (int x = 0; x < actual.dimensions.x; ++x) {
-        const size_t actualOffset = static_cast<size_t>(y) * actual.rowBytes + x * 4u;
-        const size_t expectedOffset = static_cast<size_t>(y) * expected.rowBytes + x * 4u;
-        if (!std::equal(actual.pixels.begin() + actualOffset,
-                        actual.pixels.begin() + actualOffset + 4,
-                        expected.pixels.begin() + expectedOffset)) {
-          ++differing;
-        }
-      }
-    }
-    return differing;
-  };
   // Only the identity-scale half is compared against the single-use render.
   const auto leftHalf = [](const RendererBitmap& bitmap) {
     return editor::tests::CropBitmap(bitmap, Vector2i(0, 0), Vector2i(64, 64));
   };
-  EXPECT_THAT(countDifferingPixels(leftHalf(frames[0]), leftHalf(singleFrame)), testing::Eq(0u))
-      << "The first frame must match the single-occurrence render exactly.";
+  editor::tests::CompareBitmapToBitmap(leftHalf(frames[0]), leftHalf(singleFrame),
+                                       "fill_encode_two_scales_first_frame_vs_single",
+                                       editor::tests::PixelmatchIdentityParams());
   for (size_t frame = 1; frame < frames.size(); ++frame) {
-    EXPECT_THAT(countDifferingPixels(frames[frame], frames[0]), testing::Eq(0u))
-        << "Frame " << frame << " must match frame 0 exactly.";
+    editor::tests::CompareBitmapToBitmap(frames[frame], frames[0],
+                                         "fill_encode_two_scales_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
   }
+}
+
+// More tolerance buckets of one element in a frame than it keeps encodes must not make them evict
+// each other on every draw. The buckets cached first stay cached, the rest draw from a scratch
+// encode, and every frame after the first renders the same.
+TEST_F(RendererGeodeTest, FillEncodeAtThreeScalesDoesNotThrash) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="192" height="64">
+        <defs>
+          <circle id="sprite" cx="8" cy="8" r="6" fill="#c040a0"/>
+        </defs>
+        <use href="#sprite"/>
+        <use href="#sprite" transform="translate(32 0) scale(1.5)"/>
+        <use href="#sprite" transform="translate(80 0) scale(3)"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  RendererGeode renderer = createRenderer();
+
+  std::vector<RendererBitmap> frames;
+  std::vector<uint64_t> bufferWriteBytes;
+  for (int frame = 0; frame < 4; ++frame) {
+    renderer.draw(document);
+    frames.push_back(renderer.takeSnapshot());
+    ASSERT_FALSE(frames.back().empty());
+    const auto& counters = renderer.lastFrameTimings().counters;
+    bufferWriteBytes.push_back(counters.bufferWriteBytes);
+    if (frame > 0) {
+      EXPECT_THAT(counters.pathEncodes, testing::Le(1u))
+          << "Only the bucket without a cached encode may encode in warm frame " << frame << ".";
+    }
+  }
+  for (size_t frame = 2; frame < frames.size(); ++frame) {
+    EXPECT_THAT(bufferWriteBytes[frame], testing::Eq(bufferWriteBytes[1]))
+        << "Warm frame " << frame << " must upload no more than the first warm frame.";
+    editor::tests::CompareBitmapToBitmap(frames[frame], frames[1],
+                                         "fill_encode_three_scales_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  editor::tests::CompareBitmapToBitmap(frames[1], frames[0], "fill_encode_three_scales_frame_1",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererGeodeTest, MidFrameOffscreenGeometryMutationPreservesRecordedOuterDraw) {

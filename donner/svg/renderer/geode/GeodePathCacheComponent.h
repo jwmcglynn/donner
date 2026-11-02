@@ -23,15 +23,11 @@
 
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
+#include "donner/svg/renderer/geode/GeodeFillVariants.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 
 namespace donner::geode {
-
-/// Number of fill encodes an entity keeps, one per device-derived tolerance bucket. See
-/// `GeodePathCacheComponent::FillVariant`; `GeodeResidentPathSlots` keeps one resident fill slot
-/// per variant.
-inline constexpr std::size_t kGeodeFillVariantCount = 2;
 
 /// Per-entity cache of Geode's encoded-path output (and strokeToFill
 /// result). Installed lazily by `RendererGeode` at the encode call
@@ -54,6 +50,9 @@ struct GeodePathCacheComponent {
     GeodeGeometryCacheReservation reservation;
     /// Value of `fillUseClock` when this variant last served a draw; picks the variant to replace.
     std::uint64_t lastUse = 0;
+    /// Frame index of the last draw this variant served. A variant used in the current frame is
+    /// never replaced, so more buckets in one frame than variants cannot evict each other.
+    std::uint64_t lastUseFrame = 0;
 
     /// True when this variant holds the encode a draw at \p drawTolerance would build.
     ///
@@ -67,7 +66,8 @@ struct GeodePathCacheComponent {
   };
 
   /// Number of tolerance buckets cached at once. Two covers an element drawn at its rest scale
-  /// and an animated scale in the same frame; a third bucket replaces the least recently used.
+  /// and an animated scale in the same frame. A further bucket replaces the least recently used
+  /// variant, unless every variant served a draw this frame; then it draws from a scratch encode.
   static constexpr std::size_t kFillVariantCount = kGeodeFillVariantCount;
 
   /// Fill encodes, one per recently drawn tolerance bucket. Populated on first encode for a
