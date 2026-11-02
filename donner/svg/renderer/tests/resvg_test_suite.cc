@@ -914,11 +914,12 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-a-text-child.svg",
                  Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")
                      .requireFeature(RendererBackendFeature::Text, "text rendering")},
-                {"with-an-image-child.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-with-an-image-child.png")
-                     .withMaxPixelsDifferent(350)
-                     .withReason("Image child edge AA")},
+                // The image draws the nested SVG at 0.8x, so its 0.5035-unit black letter strokes
+                // are about 0.4 device pixels wide. Geode's analytic coverage of those strokes and
+                // of the small shape boundaries differs from the reference on 442 pixels, every one
+                // adjacent to a color boundary (median channel delta 7, max 102). The same SVG at
+                // 1x and larger (structure/image/external-svg) matches at default parameters.
+                {"with-an-image-child.svg", Params().withGeodeMaxPixelsDifferent(500)},
                 {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
