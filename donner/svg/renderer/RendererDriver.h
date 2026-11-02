@@ -25,6 +25,7 @@ namespace donner::svg {
 namespace components {
 class StyleResourceBudget;
 struct ComputedStyleComponent;
+struct MaskComponent;
 }  // namespace components
 
 struct RendererDriverTextFrameCache;
@@ -454,6 +455,50 @@ private:
   void drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
                                const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
                                Entity hostEntity);
+  /**
+   * Draw a sub-document's whole render tree into the current frame.
+   *
+   * Prepared filter graphs and pending subtree pops are keyed by entity, and a sub-document's
+   * entity ids overlap its host's. The sub-document therefore draws with its own prepared filter
+   * graphs, pending-pop stack and feImage recursion guard, and the host's are restored afterwards.
+   * Surface culling stays off while a host filter layer is open.
+   */
+  void traverseSubDocument(Registry& registry);
+  /**
+   * The object bounding box of @p entity, which filters, masks and clip paths resolve against.
+   *
+   * Content an external `<use>` fragment in the subtree draws lives in another document, so it is
+   * added from that document's geometry, laid out with the occurrence's styles, including the
+   * fragment's own external uses. A `<use>` of a whole external document contributes nothing.
+   * Results are kept for the frame, or until the registry's layout changes for another occurrence.
+   */
+  std::optional<Box2d> objectBoundingBox(Registry& registry, Entity entity);
+  /// The object bounding box for @p instance's filter, or nothing when no referenced filter uses
+  /// objectBoundingBox units, so units that do not need it measure nothing.
+  std::optional<Box2d> filterObjectBounds(Registry& registry, Entity entity,
+                                          const components::RenderingInstanceComponent& instance);
+  /// The box @p mask resolves against: the full object bounding box only for objectBoundingBox
+  /// mask or content units.
+  Box2d maskObjectBounds(Registry& registry, const components::RenderingInstanceComponent& instance,
+                         const components::MaskComponent& mask);
+  /// Instances in @p registry that draw an external `<use>`, as (draw order, entity) in draw order.
+  /// Built once per frame per registry.
+  const std::vector<std::pair<int, Entity>>& externalUseInstances(Registry& registry);
+  /// Forget bounds and instance lists measured in @p registry.
+  void forgetEffectBounds(const Registry& registry);
+  /// Forget bounds and instance lists measured in every registry.
+  void forgetAllEffectBounds();
+  /// Reset prepared filters, measured bounds and the pushed filter layer count for a new frame.
+  void resetFrameEffectState();
+  /// Resolve objectBoundingBox clip units of @p instance over the content external `<use>`
+  /// elements in its subtree draw, which @p clip's own resolution cannot see.
+  void applyExternalUseClipBounds(ResolvedClip& clip, Registry& registry,
+                                  const components::RenderingInstanceComponent& instance);
+  /// Bounds of the fragment an external `<use>` draws, in the `<use>` element's user space, or
+  /// nothing when @p hostEntity is not an external fragment reference. Kept for the frame.
+  std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity);
+  /// Measure \ref externalUseContentBounds without the frame cache.
+  std::optional<Box2d> measureExternalUseContent(Registry& hostRegistry, Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
@@ -473,6 +518,9 @@ private:
     int maskDepth = 0;
   };
   void popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity);
+  /// True when one of @p markers, or a host of the document being drawn, has a filter layer open.
+  /// Surface culling is unsafe then: a filter can move content from outside the surface into view.
+  bool hasOpenFilterLayer(const std::vector<DeferredPop>& markers) const;
   [[nodiscard]] bool shouldCullEarlyLeaf(Registry& registry,
                                          const components::RenderingInstanceComponent& instance,
                                          const components::ComputedStyleComponent& style,
@@ -542,6 +590,13 @@ private:
   /// instances via pointer.
   std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
 
+  /// Filter layers currently pushed on the renderer by this driver.
+  std::size_t pushedFilterLayers_ = 0;
+
+  /// True while drawing a sub-document under a filter layer its host opened. Culling against the
+  /// surface is unsafe there, as it is under the sub-document's own filter layers.
+  bool insideEnclosingFilterLayer_ = false;
+
   /// Nesting depth of the current feImage fragment pre-render. The visited-set above stops a
   /// *cyclic* reference (A→A, A→B→A) because it keys on the light-tree entity, but a sufficiently
   /// long *acyclic* chain (filter1→rect3→filter2→rect4→...) still recurses once per link and could
@@ -566,6 +621,15 @@ private:
   /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main
   /// traversal never mutates \ref components::RenderingInstanceComponent storage mid-iteration.
   std::unordered_map<Entity, std::vector<components::FilterGraph>> preparedFilterGraphs_;
+
+  /// Per-registry object bounding boxes measured this frame; see \ref objectBoundingBox.
+  std::unordered_map<const Registry*, std::unordered_map<Entity, std::optional<Box2d>>>
+      objectBoundsCache_;
+  /// Per-registry external `<use>` content bounds measured this frame.
+  std::unordered_map<const Registry*, std::unordered_map<Entity, std::optional<Box2d>>>
+      externalUseBoundsCache_;
+  /// Per-registry external `<use>` instances in draw order; see \ref externalUseInstances.
+  std::unordered_map<const Registry*, std::vector<std::pair<int, Entity>>> externalUseInstances_;
 };
 
 }  // namespace donner::svg
