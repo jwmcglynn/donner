@@ -1999,7 +1999,7 @@ TEST(RendererPublicApiTest, TruncatedSubDocumentPreparationWarningsMarkTheHostSi
   Renderer renderer;
   ParseWarningSink warnings;
   renderer.draw(document, warnings);
-  EXPECT_FALSE(warnings.warnings().empty());
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
   EXPECT_TRUE(warnings.resourceLimitExceeded());
 }
 

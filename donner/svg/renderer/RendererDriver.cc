@@ -4430,7 +4430,9 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   }
   // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
   // the host sink once. A warning dropped by a resource limit, here or in the collecting sink,
-  // marks the host sink truncated so it does not look complete.
+  // marks the host sink truncated so it does not look complete. As with any sink limit, the host
+  // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
+  // again on every traversal, each later draw of it reports truncation too.
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
   auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
