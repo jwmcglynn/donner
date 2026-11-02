@@ -70,6 +70,7 @@ double SVGStopElement::stopOpacity() const {
 
 css::Color SVGStopElement::computedStopColor() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(access), disabledSink);
@@ -78,6 +79,7 @@ css::Color SVGStopElement::computedStopColor() const {
 
 double SVGStopElement::computedStopOpacity() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(access), disabledSink);
