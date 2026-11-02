@@ -1,8 +1,9 @@
 """Link probes for the browser GPU backend.
 
-They live in their own package because linking a WebAssembly module needs the Emscripten rules,
-which are a development-only dependency of Donner. A module that depends on Donner sees none of
-those repositories, so the browser backend's own package must not load them.
+They live in their own package, outside the production closure, because linking a WebAssembly
+module needs the Emscripten rules, which are a development-only dependency of Donner. A module
+that depends on Donner sees none of those repositories, so the browser backend's own package must
+not load them.
 """
 
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
