@@ -4875,10 +4875,14 @@ const std::vector<std::pair<int, Entity>>& RendererDriver::externalUseInstances(
   if (!inserted || externalUses.begin() == externalUses.end()) {
     return entry->second;
   }
+  // Offscreen feImage shadows number their own draw orders and are not drawn in the main tree.
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(registry);
   for (auto view = registry.view<const components::RenderingInstanceComponent>();
        const Entity entity : view) {
     const auto& instance = view.get<const components::RenderingInstanceComponent>(entity);
-    if (instance.dataHandle(registry).all_of<components::ExternalUseComponent>()) {
+    if (instance.dataHandle(registry).all_of<components::ExternalUseComponent>() &&
+        !feImageShadowEntities.contains(entity)) {
       entry->second.emplace_back(instance.drawOrder, entity);
     }
   }

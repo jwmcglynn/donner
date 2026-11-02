@@ -441,7 +441,8 @@ TEST(SubDocumentFiltersTest, FeImageInsideReferencedDocument) {
       "<filter id='paste' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='32'>"
       "<feImage href='#picture'/></filter>"
       "<rect id='sprite' x='4' y='4' width='16' height='16' fill='#2050d0' filter='url(#paste)'/>",
-      "<rect width='32' height='32' fill='#ffffff'/><use href='{ref}sprite'/>");
+      "<rect width='32' height='32' fill='#ffffff'/>"
+      "<use href='{ref}sprite' transform='translate(2 1) scale(1.25)'/>");
 }
 
 TEST(SubDocumentFiltersTest, ScaledRotatedUseUnderBoxEffects) {
@@ -495,6 +496,48 @@ TEST(SubDocumentFiltersTest, NestedExternalUsesUnderBoxEffects) {
   // The box spans both levels, so its left half keeps part of the leaf, tinted red.
   EXPECT_THAT(PixelAt(expected, 12, 18), test::Rgba(Gt(120), Lt(80), Lt(80), 255));
   ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-nested");
+}
+
+
+/// An feImage that draws an external `<use>` keeps its offscreen copy of that use out of the box of
+/// an unrelated element earlier in the document, on every frame. The offscreen copy numbers its
+/// own draw order from zero, so its `<use>` could land inside the early group's draw-order range.
+TEST(SubDocumentFiltersTest, FeImageExternalContentStaysOutOfOtherBoxes) {
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  const std::string farDefs = "<rect id='far' x='22' y='22' width='8' height='8' fill='#20a020'/>";
+  const auto host = [&](std::string_view defs, std::string_view farReference) {
+    return head + "<defs>" + std::string(defs) +
+           "<filter id='mark'><feFlood flood-color='#d02020' flood-opacity='0.5'/></filter>"
+           "<filter id='paste' filterUnits='userSpaceOnUse' x='16' y='0' width='16' height='16'>"
+           "<feImage href='#frag'/></filter><g id='frag'><rect width='1' height='1' "
+           "fill='none'/><rect width='1' height='1' fill='none'/><use href='" +
+           std::string(farReference) + "' transform='translate(-4 -20)'/></g></defs>"
+           "<rect width='32' height='32' fill='#ffffff'/>"
+           "<g filter='url(#mark)'><rect x='2' y='2' width='6' height='6' fill='#2050d0'/></g>"
+
+           "<rect x='16' y='0' width='16' height='16' fill='#000000' filter='url(#paste)'/></svg>";
+  };
+  SVGDocument external = Parse(host("", "sheet.svg#far"),
+                               {{"sheet.svg", head + "<defs>" + farDefs + "</defs></svg>"}});
+  SVGDocument local = Parse(host(farDefs, "#far"));
+  Renderer externalRenderer;
+  Renderer localRenderer;
+  for (int frame = 0; frame < 3; ++frame) {
+    SCOPED_TRACE(frame);
+    const RendererBitmap expected = Draw(localRenderer, local);
+    // The flood covers only the small group's box, which ends above y = 9.
+    EXPECT_THAT(PixelAt(expected, 4, 14), test::Rgba(255, 255, 255, 255));
+    const RendererBitmap actual = Draw(externalRenderer, external);
+    // Compare the left half, where the early group draws. The feImage paste on the right does not
+    // yet draw external content from a fragment in <defs>.
+    int mismatches = 0;
+    for (int y = 0; y < 32; ++y) {
+      for (int x = 0; x < 16; ++x) {
+        mismatches += PixelAt(actual, x, y) != PixelAt(expected, x, y) ? 1 : 0;
+      }
+    }
+    EXPECT_EQ(mismatches, 0);
+  }
 }
 
 }  // namespace
