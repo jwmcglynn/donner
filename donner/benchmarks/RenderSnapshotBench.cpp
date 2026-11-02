@@ -45,7 +45,10 @@ using donner::svg::parser::SVGParser;
 
 class NullRenderer final : public RendererInterface {
 public:
-  void draw(SVGDocument&) override {}
+  void draw(SVGDocument& document) override { RendererDriver(*this).draw(document); }
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override {
+    RendererDriver(*this, /*verbose=*/false, nullptr, nullptr, &warningSink).draw(document);
+  }
   [[nodiscard]] int width() const override { return 0; }
   [[nodiscard]] int height() const override { return 0; }
   void beginFrame(const RenderViewport&) override {}

@@ -3807,7 +3807,10 @@ MATCHER(IsBlueish, "pixel has dominant blue channel") {
 
 class DefaultMethodRenderer final : public RendererInterface {
 public:
-  void draw(SVGDocument&) override {}
+  void draw(SVGDocument& document) override { RendererDriver(*this).draw(document); }
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override {
+    RendererDriver(*this, /*verbose=*/false, nullptr, nullptr, &warningSink).draw(document);
+  }
   int width() const override { return 0; }
   int height() const override { return 0; }
   void beginFrame(const RenderViewport&) override {}

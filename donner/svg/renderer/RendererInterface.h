@@ -1516,18 +1516,15 @@ public:
    * cached results does not report its warnings again, so a document that has not changed since
    * the previous draw usually reports none.
    *
-   * Declared after the existing virtual methods. The default compatibility implementation calls
-   * the one-argument \ref draw and reports nothing, so existing implementations keep compiling;
-   * the built-in backends override it.
+   * Every implementation must deliver the warnings of the preparation it performs to
+   * @p warningSink; one that renders through \ref RendererDriver passes the sink to the driver's
+   * constructor.
    *
    * @param document The SVG document to render.
    * @param warningSink Receives preparation warnings. Pass \ref ParseWarningSink::Disabled to
    *   discard them.
    */
-  virtual void draw(SVGDocument& document, ParseWarningSink& warningSink) {
-    (void)warningSink;
-    draw(document);
-  }
+  virtual void draw(SVGDocument& document, ParseWarningSink& warningSink) = 0;
 };
 
 }  // namespace donner::svg

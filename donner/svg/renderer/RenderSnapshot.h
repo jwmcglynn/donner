@@ -109,8 +109,13 @@ public:
       std::size_t maximumCapturedFontBytes = RenderSnapshot::kMaximumCapturedFontBytes,
       std::size_t maximumCapturedDecorationBytes = RenderSnapshot::kMaximumCapturedDecorationBytes);
 
-  using RendererInterface::draw;
+  /**
+   * The recorder is the backend a \ref RendererDriver records into; it never prepares or draws a
+   * document itself, so neither draw overload records anything or produces warnings.
+   */
   void draw(SVGDocument& document) override;
+  /// See \ref draw(SVGDocument&): no preparation runs, so @p warningSink receives nothing.
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override;
   [[nodiscard]] int width() const override;
   [[nodiscard]] int height() const override;
   void beginFrame(const RenderViewport& viewport) override;

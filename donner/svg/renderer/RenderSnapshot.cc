@@ -776,6 +776,8 @@ RenderSnapshotRecorder::RenderSnapshotRecorder(RenderSnapshot& snapshot,
 
 void RenderSnapshotRecorder::draw(SVGDocument&) {}
 
+void RenderSnapshotRecorder::draw(SVGDocument&, ParseWarningSink&) {}
+
 int RenderSnapshotRecorder::width() const {
   return offscreenFactory_.width();
 }

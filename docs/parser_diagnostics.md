@@ -235,6 +235,10 @@ the same warnings again, so an unchanged document usually reports nothing on lat
 source ranges of a referenced document's warnings point into that document's source, not the
 host's, so format them with `operator<<` rather than with `DiagnosticRenderer` over the host source.
 
+A custom `RendererInterface` implementation must implement both `draw` overloads. One that renders
+through `RendererDriver` passes the sink to the driver, which routes every warning found while
+preparing the document to it.
+
 ### Rendering diagnostics
 
 `DiagnosticRenderer` formats diagnostics with source context, caret/tilde indicators, and
