@@ -202,7 +202,9 @@ TEST(ExternalUseFilterCacheTest, DisabledCacheRunsTheFilterForEveryOccurrence) {
 /// with the cache disabled that drew the same frames. The uncached oracle repeats the history
 /// rather than rendering fresh, so only the cache differs between the two.
 void ExpectMutationRefilters(FilteredSpriteScene& scene, std::string_view label,
-                             const std::function<void(FilteredSpriteScene&)>& mutate) {
+                             const std::function<void(FilteredSpriteScene&)>& mutate,
+                             const editor::tests::BitmapGoldenCompareParams& params =
+                                 editor::tests::PixelmatchIdentityParams()) {
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
   std::unique_ptr<RendererInterface> uncached = MakeCachingRenderer();
   uncached->setFilterResultCacheEnabled(false);
@@ -216,7 +218,7 @@ void ExpectMutationRefilters(FilteredSpriteScene& scene, std::string_view label,
   (void)Draw(*uncached, scene);
   EXPECT_GE(work.executions, 1u) << label;
   editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), uncached->takeSnapshot(), label,
-                                       editor::tests::PixelmatchIdentityParams());
+                                       params);
 }
 
 TEST(ExternalUseFilterCacheTest, MutatingTheSpriteRefilters) {
@@ -241,9 +243,15 @@ TEST(ExternalUseFilterCacheTest, ScalingAnOccurrenceRefilters) {
   REQUIRE_CACHING_BACKEND();
   std::optional<FilteredSpriteScene> scene = MakeScene(2);
   ASSERT_TRUE(scene.has_value());
-  ExpectMutationRefilters(*scene, "scaled-occurrence", [](FilteredSpriteScene& s) {
-    s.uses[1].setTransform(Transform2d::Scale(1.5) * Transform2d::Translate(Vector2d(90, 60)));
-  });
+  // Re-running the unscaled sprite's blur after another occurrence's larger, scaled filter ran in
+  // the same frames moves a few dozen pixels by one level, cache or not, so the cached and
+  // uncached frames are held to the suite's default per-pixel threshold here.
+  ExpectMutationRefilters(
+      *scene, "scaled-occurrence",
+      [](FilteredSpriteScene& s) {
+        s.uses[1].setTransform(Transform2d::Scale(1.5) * Transform2d::Translate(Vector2d(90, 60)));
+      },
+      editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
 }
 
 TEST(ExternalUseFilterCacheTest, RotatingAnOccurrenceRefilters) {
