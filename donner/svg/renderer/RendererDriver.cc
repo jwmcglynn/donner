@@ -7,6 +7,8 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -4388,6 +4390,26 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
   return *fontCollectionCache_;
 }
 
+namespace {
+
+/**
+ * Preparation warnings a sub-document has already delivered to a host sink. An external use
+ * invalidates its child document's derived state around every traversal, so the child is prepared
+ * again for each occurrence and each frame and repeats the same warnings; each distinct warning is
+ * delivered once per loaded sub-document instead.
+ */
+struct ReportedSubDocumentWarnings {
+  std::unordered_set<std::string> keys;
+};
+
+std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
+  std::ostringstream key;
+  key << warning;
+  return std::move(key).str();
+}
+
+}  // namespace
+
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
@@ -4397,11 +4419,26 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
   }
+  if (warningSink_ == nullptr) {
+    // Without a host sink these warnings are discarded even when verbose: printing them would
+    // repeat them for every traversal.
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+    return;
+  }
   // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
-  // the host sink. Without one they are discarded even when verbose, as before the sink existed.
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(
-      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink);
+  // the host sink once.
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  auto& reported = registry.ctx().contains<ReportedSubDocumentWarnings>()
+                       ? registry.ctx().get<ReportedSubDocumentWarnings>()
+                       : registry.ctx().emplace<ReportedSubDocumentWarnings>();
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    if (reported.keys.size() < ParseWarningSink::kMaximumWarnings &&
+        reported.keys.insert(SubDocumentWarningKey(warning)).second) {
+      warningSink_->add(ParseDiagnostic(warning));
+    }
+  }
 }
 
 void RendererDriver::prepareDocument(SVGDocument& document) {
