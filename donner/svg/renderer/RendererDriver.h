@@ -449,6 +449,15 @@ private:
   void drawAdmittedSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                                       const Transform2d& parentAbsoluteTransform, double opacity,
                                       Registry& hostRegistry, Entity hostEntity);
+  /**
+   * Draw a sub-document's render instances from @p firstEntity through @p lastEntity, or its whole
+   * render tree when @p firstEntity is null, into the current frame.
+   *
+   * Prepared filter graphs and pending subtree pops are keyed by entity, and a sub-document's
+   * entity ids overlap its host's. The sub-document therefore draws with its own prepared filter
+   * graphs and an empty pending-pop stack, and the host's are restored afterwards.
+   */
+  void traverseSubDocument(Registry& registry, Entity firstEntity, Entity lastEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
