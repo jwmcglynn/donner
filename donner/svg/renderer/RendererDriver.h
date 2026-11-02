@@ -460,7 +460,8 @@ private:
    *
    * Prepared filter graphs and pending subtree pops are keyed by entity, and a sub-document's
    * entity ids overlap its host's. The sub-document therefore draws with its own prepared filter
-   * graphs and an empty pending-pop stack, and the host's are restored afterwards.
+   * graphs, pending-pop stack and feImage recursion guard, and the host's are restored afterwards.
+   * Surface culling stays off while a host filter layer is open.
    */
   void traverseSubDocument(Registry& registry, Entity firstEntity, Entity lastEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
@@ -550,6 +551,13 @@ private:
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
   /// instances via pointer.
   std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
+
+  /// Filter layers currently pushed on the renderer by this driver.
+  std::size_t pushedFilterLayers_ = 0;
+
+  /// True while drawing a sub-document under a filter layer its host opened. Culling against the
+  /// surface is unsafe there, as it is under the sub-document's own filter layers.
+  bool insideEnclosingFilterLayer_ = false;
 
   /// Nesting depth of the current feImage fragment pre-render. The visited-set above stops a
   /// *cyclic* reference (A→A, A→B→A) because it keys on the light-tree entity, but a sufficiently
