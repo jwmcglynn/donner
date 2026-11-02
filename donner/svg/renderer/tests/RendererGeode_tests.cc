@@ -8254,5 +8254,128 @@ TEST_F(RendererGeodeTest, RotatedAnisotropicFilterNearCanvasEdgeMatchesFilterWit
       editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true));
 }
 
+components::FilterGraph CacheBlurGraph(double sigma) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = sigma, .stdDeviationY = sigma};
+  graph.nodes.push_back(blur);
+  return graph;
+}
+
+// A result recorded in a frame that is abandoned before it submits was never copied, so a later
+// frame must filter again rather than draw the unwritten texture.
+TEST_F(RendererGeodeTest, CachedResultOfAbandonedFrameIsNotReused) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_TRUE(device);
+  RendererGeode renderer(device);
+  const components::FilterGraph graph = CacheBlurGraph(2.0);
+  const Box2d region({4, 4}, {44, 44});
+  auto owner = std::make_shared<int>(0);
+  FilterResultContentKey key;
+  key.document = owner;
+  key.filterRegion = region;
+  const auto drawSprite = [&] {
+    renderer.setTransform(Transform2d::Translate(Vector2d(8, 8)));
+    const CachedFilterLayerResult result = renderer.pushCachedFilterLayer(key, graph, region);
+    if (result == CachedFilterLayerResult::Pushed) {
+      renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+      renderer.drawRect(Box2d({12, 12}, {36, 36}), StrokeParams{});
+      renderer.popFilterLayer();
+    }
+    renderer.setTransform(Transform2d());
+    return result;
+  };
+
+  beginFrame(renderer);
+  EXPECT_EQ(drawSprite(), CachedFilterLayerResult::Pushed);
+  EXPECT_EQ(drawSprite(), CachedFilterLayerResult::Pushed);
+  ASSERT_EQ(renderer.resourceStats().filterResultCacheRecords, 1u);
+  // A later draw in the same frame fails its arena write, so the frame, and the copy that filled
+  // the cache texture, is abandoned unsubmitted.
+  renderer.injectActiveArenaWriteFailureForTesting();
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({56, 56}, {60, 60}), StrokeParams{});
+  renderer.endFrame();
+  ASSERT_FALSE(renderer.deviceLost());
+
+  beginFrame(renderer);
+  EXPECT_EQ(drawSprite(), CachedFilterLayerResult::Pushed);
+  renderer.endFrame();
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  // The sprite's rect covers 20..44 after the translation; its center must be painted.
+  EXPECT_GT(PixelAt(bitmap, 32, 32)[3], 128);
+}
+
+// Recording a result never takes from the frame's surface budget: under a tight budget, a frame
+// that caches draws every filter an uncached frame draws.
+TEST_F(RendererGeodeTest, CacheRecordsDoNotStarveLaterFilters) {
+  constexpr double kSize = 512.0;
+  constexpr int kSprites = 25;
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_TRUE(device);
+  const components::FilterGraph graph = CacheBlurGraph(2.0);
+  const Box2d spriteRegion({0, 0}, {96, 96});
+  const Box2d lastRegion({496, 496}, {510, 510});
+  auto owner = std::make_shared<int>(0);
+
+  struct Result {
+    int spritesDrawn = 0;
+    int lastAlpha = -1;
+  };
+  const auto drawFrames = [&](bool cacheEnabled, std::uint64_t limitBytes) {
+    RendererGeode renderer(device);
+    renderer.setFilterResultCacheEnabled(cacheEnabled);
+    renderer.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces, limitBytes);
+    RenderViewport viewport;
+    viewport.size = Vector2d(kSize, kSize);
+    viewport.devicePixelRatio = 1.0;
+    Result result;
+    // Two frames, so the cache both admits and records.
+    for (int frame = 0; frame < 2; ++frame) {
+      renderer.beginFrame(viewport);
+      for (int i = 0; i < kSprites; ++i) {
+        FilterResultContentKey key;
+        key.document = owner;
+        key.filteredElement = static_cast<std::uint32_t>(i);
+        key.filterRegion = spriteRegion;
+        renderer.setTransform(Transform2d::Translate(Vector2d((i % 5) * 100.0, (i / 5) * 100.0)));
+        if (renderer.pushCachedFilterLayer(key, graph, spriteRegion) ==
+            CachedFilterLayerResult::Pushed) {
+          renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+          renderer.drawRect(Box2d({20, 20}, {76, 76}), StrokeParams{});
+          renderer.popFilterLayer();
+        }
+      }
+      renderer.setTransform(Transform2d());
+      renderer.pushFilterLayer(graph, lastRegion);
+      renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+      renderer.drawRect(Box2d({500, 500}, {506, 506}), StrokeParams{});
+      renderer.popFilterLayer();
+      renderer.endFrame();
+    }
+    const RendererBitmap bitmap = renderer.takeSnapshot();
+    if (!bitmap.empty()) {
+      result.lastAlpha = PixelAt(bitmap, 503, 503)[3];
+      for (int i = 0; i < kSprites; ++i) {
+        if (PixelAt(bitmap, (i % 5) * 100 + 48, (i / 5) * 100 + 48)[3] > 128) {
+          ++result.spritesDrawn;
+        }
+      }
+    }
+    return result;
+  };
+
+  for (std::uint64_t kb = 1024; kb <= 16384; kb += 448) {
+    const Result uncached = drawFrames(false, kb * 1024);
+    const Result cached = drawFrames(true, kb * 1024);
+    EXPECT_GE(cached.spritesDrawn, uncached.spritesDrawn) << kb << " KiB";
+    if (uncached.lastAlpha > 0) {
+      EXPECT_GT(cached.lastAlpha, 0) << kb << " KiB: the last filter drew only without the cache";
+    }
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
