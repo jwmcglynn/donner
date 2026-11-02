@@ -13,6 +13,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/FontResourceGraph.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -97,6 +98,41 @@ TEST_F(GeodeSpriteSceneTest, TextFreeSpritesSkipFontDependencyCollection) {
   EXPECT_EQ(work.targetCollections, 0u);
   EXPECT_EQ(work.cacheHits, 0u);
   EXPECT_GT(work.fontIndependentCollections, 0u);
+}
+
+/// The shortcut answers exactly what the full collection would for a text-free sheet: no
+/// dependencies, and the same rendered-frame coverage status, for drawn and undrawn sprites and
+/// for both purposes.
+TEST_F(GeodeSpriteSceneTest, FontIndependentCollectionMatchesTheFullGraph) {
+  RendererGeode renderer(sharedDevice());
+  SpriteScene scene(SmallScene());
+  (void)DrawCountingFontWork(renderer, scene.document());
+  const auto* external =
+      scene.use(0).unsafeEntityHandle().try_get<components::ExternalUseComponent>();
+  ASSERT_NE(external, nullptr);
+  SVGDocument sheet = SVGDocument::CreateFromHandle(external->subDocument);
+  const Registry& registry = sheet.registry();
+  ASSERT_TRUE(components::RendersNothingFontDependent(registry));
+  const components::FontResourceGraph graph(registry);
+  for (const char* id : {"#s0", "#s1", "#s2", "#s0-glow", "#s2-glow"}) {
+    const auto sprite = sheet.querySelector(id);
+    ASSERT_TRUE(sprite.has_value()) << id;
+    const Entity target = sprite->unsafeEntityHandle().entity();
+    for (const auto purpose : {components::FontResourceGraph::Purpose::CompleteTarget,
+                               components::FontResourceGraph::Purpose::RenderedFrame}) {
+      SCOPED_TRACE(testing::Message()
+                   << id
+                   << (purpose == components::FontResourceGraph::Purpose::RenderedFrame
+                           ? " rendered"
+                           : " complete"));
+      components::FontResourceGraphCache cache;
+      const auto shortcut = cache.collect(external->subDocument, target, purpose);
+      const auto full = graph.collect(registry, target, purpose);
+      EXPECT_EQ(shortcut.dependencies, full.dependencies);
+      EXPECT_EQ(shortcut.needsRender, full.needsRender);
+      EXPECT_EQ(shortcut.resourceLimit, full.resourceLimit);
+    }
+  }
 }
 
 /// Skipping the collection for text-free sheets changes no pixels: the same sprites drawn from a

@@ -790,13 +790,28 @@ bool RendersNothingFontDependent(const Registry& registry) {
                       ExternalUseComponent>(registry)) {
     return false;
   }
-  const auto* filters = registry.storage<ComputedFilterComponent>();
-  if (filters == nullptr) {
-    return true;
+  if (const auto* filters = registry.storage<ComputedFilterComponent>()) {
+    for (const auto& [entity, filter] : filters->each()) {
+      for (const auto& node : filter.filterGraph.nodes) {
+        if (std::holds_alternative<filter_primitive::Image>(node.primitive)) {
+          return false;
+        }
+      }
+    }
   }
-  for (const auto& [entity, filter] : filters->each()) {
-    for (const auto& node : filter.filterGraph.nodes) {
-      if (std::holds_alternative<filter_primitive::Image>(node.primitive)) {
+  // An element reference in a filter function list is a fragment the full collection reports as
+  // unprepared until it renders, so a document that has one keeps the full collection. The render
+  // tree, not the DOM, is scanned: it is what the collection walks, and a filter that has not been
+  // computed yet still appears here.
+  if (const auto* instances = registry.storage<RenderingInstanceComponent>()) {
+    for (const auto& [entity, instance] : instances->each()) {
+      const auto* effects = instance.resolvedFilter
+                                ? std::get_if<std::vector<FilterEffect>>(&*instance.resolvedFilter)
+                                : nullptr;
+      if (effects != nullptr &&
+          std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
+            return effect.is<FilterEffect::ElementReference>();
+          })) {
         return false;
       }
     }
@@ -816,7 +831,10 @@ FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentH
   }
   if (RendersNothingFontDependent(document->registry())) {
     ++stats_->fontIndependentCollections;
-    return {};
+    // No dependencies and nothing unprepared, but rendered-frame evidence still covers only what
+    // the completed scope drew, exactly as the full collection reports it.
+    return {.needsRender = purpose == FontResourceGraph::Purpose::RenderedFrame &&
+                           !HasRenderCoverage(document->registry(), target)};
   }
   auto& entry = entries_[document.get()];
   if (!prepareEntry(entry, document)) {

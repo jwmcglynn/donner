@@ -1270,6 +1270,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/components:font_resource_graph",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
