@@ -107,6 +107,25 @@ TEST(PackagedResource, HashKnownVectorsAndBlockBoundaries) {
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
 }
 
+TEST(PackagedResource, RecordedMissIsNotReQueriedUntilInstalled) {
+  int providerCalls = 0;
+  PackagedResourceSession session([&providerCalls](const PackagedResource&) -> ResourceBytes {
+    ++providerCalls;
+    return {};
+  });
+
+  EXPECT_THAT(session.load(kFixture), testing::IsNull());
+  EXPECT_THAT(session.load(kFixture), testing::IsNull());
+#ifndef __EMSCRIPTEN__
+  EXPECT_EQ(providerCalls, 1);
+#endif
+
+  ASSERT_EQ(session.install(kFixture, std::vector<uint8_t>{'a', 'b', 'c'}), true);
+  const ResourceBytes installed = session.load(kFixture);
+  ASSERT_THAT(installed, NotNull());
+  EXPECT_THAT(*installed, ElementsAre('a', 'b', 'c'));
+}
+
 TEST(PackagedResource, OwnsInstalledBytesAndLeaseSurvivesSessionTeardown) {
   auto session = std::make_shared<PackagedResourceSession>();
   std::vector<uint8_t> input{'a', 'b', 'c'};

@@ -1117,10 +1117,13 @@ FontHandle FontManager::fallbackFont() {
     return fallbackHandle_;
   }
 
-  const Entity entity = registry_.create();
-
   // Keep a verified owning lease until the manager has copied its private face data.
   const ResourceLease fallback(embedded::kPublicSansMediumOtf);
+  if (fallback.empty()) {
+    return FontHandle();
+  }
+
+  const Entity entity = registry_.create();
   std::vector<uint8_t> data(fallback.bytes().begin(), fallback.bytes().end());
   if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
     registry_.destroy(entity);

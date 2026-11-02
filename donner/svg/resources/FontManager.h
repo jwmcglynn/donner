@@ -401,12 +401,14 @@ public:
   /**
    * Get the handle for the packaged fallback font (Public Sans).
    *
-   * The font loads on first use from the application's packaged resources. When it is not
-   * installed this returns an invalid handle without printing a diagnostic, and a later call
-   * retries, so a resource installed afterwards is picked up. Report a missing installation once
-   * at startup with \ref donner::PreparePackagedResources. Without the font, text that matches no
-   * other available font has no face to render with, and the `ch` unit uses its CSS fallback of
-   * 0.5em; shapes render normally.
+   * The font loads on first use from the application's packaged resources. When it is
+   * unavailable (not installed, rejected by its integrity check, or over the resource or font
+   * budget) this returns an invalid handle without printing a diagnostic. A later call succeeds
+   * once the resource is installed into the session; a recorded miss is not re-queried from the
+   * provider until then. Hosts report a missing installation at startup with
+   * \ref donner::PreparePackagedResources, and rendering reports it once per document that
+   * contains text. Without the font, text that matches no other available font has no face to
+   * render with, and the `ch` unit uses its CSS fallback of 0.5em; shapes render normally.
    *
    * @return The fallback font, or an invalid handle if the packaged font is unavailable.
    */

@@ -2036,6 +2036,33 @@ void InstantiateNestedMarkerTrees(Registry& registry, ParseWarningSink& warningS
   }
 }
 
+#ifdef DONNER_TEXT_ENABLED
+/// Registry context marker: the document's missing packaged fallback font was already reported.
+struct MissingFallbackFontReported {};
+
+/**
+ * Warn once per document when it contains text and the packaged fallback font is unavailable,
+ * since text that matches no other font then has no face to draw with.
+ *
+ * @param registry Document registry.
+ * @param fontManager The document's font manager.
+ * @param warningSink Receives the warning.
+ */
+void ReportMissingFallbackFontOnce(Registry& registry, FontManager& fontManager,
+                                   ParseWarningSink& warningSink) {
+  if (!warningSink.isEnabled() || registry.ctx().contains<MissingFallbackFontReported>() ||
+      registry.view<TextRootComponent>().empty() || fontManager.fallbackFont()) {
+    return;
+  }
+
+  registry.ctx().emplace<MissingFallbackFontReported>();
+  warningSink.add(ParseDiagnostic::Warning(
+      "Packaged fallback font (Public Sans) is unavailable; text that matches no @font-face, "
+      "provider or system font is not rendered",
+      FileOffset::Offset(0)));
+}
+#endif
+
 }  // namespace
 
 void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
@@ -2068,6 +2095,7 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
       fontManager.addFontFace(face);
     }
     registry_.ctx().emplace<TextEngine>(fontManager, registry_);
+    ReportMissingFallbackFontOnce(registry_, fontManager, warningSink);
   }
 #endif
 

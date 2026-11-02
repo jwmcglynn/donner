@@ -8,6 +8,8 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <span>
@@ -46,6 +48,51 @@ using testing::NotNull;
 using testing::Optional;
 
 namespace donner::svg::components {
+
+namespace {
+
+/// Write \p text to the stderr file descriptor unbuffered, for death-test output matching.
+void WriteStderr(std::string_view text) {
+  (void)write(STDERR_FILENO, text.data(), text.size());
+}
+
+/**
+ * Install an application resource session whose provider has no resources, reporting a setup
+ * failure on stderr.
+ *
+ * @param providerQueries Incremented on each provider query, if not null.
+ * @return True if the session was installed.
+ */
+bool InstallUnavailablePackagedResources(int* providerQueries) {
+  if (SetPackagedResourceSession(std::make_shared<PackagedResourceSession>(
+          [providerQueries](const PackagedResource&) -> ResourceBytes {
+            if (providerQueries != nullptr) {
+              ++*providerQueries;
+            }
+            return {};
+          }))) {
+    return true;
+  }
+  WriteStderr("setup failed: the resource session is not replaceable\n");
+  return false;
+}
+
+/**
+ * Format the shape-only resource test's observations with a fixed precision.
+ *
+ * @param rectWidth Width of the `ch`-sized rect.
+ * @param warnings Number of preparation warnings.
+ * @param providerQueries Number of resource provider queries.
+ */
+std::string FormatShapeOnlyReport(double rectWidth, size_t warnings, int providerQueries) {
+  std::array<char, 128> report{};
+  std::snprintf(report.data(), report.size(),
+                "[/prepare] rect width: %.1f, warnings: %zu, provider queries: %d", rectWidth,
+                warnings, providerQueries);
+  return report.data();
+}
+
+}  // namespace
 
 class RenderingContextTest : public ::testing::Test {
 protected:
@@ -92,36 +139,77 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeBasic) {
   ctx.instantiateRenderTree(false, warningSink_);
 }
 
+// With text enabled, `ch` measurement asks for the fallback font once; the recorded miss is final.
+#ifdef DONNER_TEXT_ENABLED
+constexpr char kExpectedShapeOnlyReport[] =
+    "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0, warnings: 0, provider queries: 1$";
+#else
+constexpr char kExpectedShapeOnlyReport[] =
+    "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0, warnings: 0, provider queries: 0$";
+#endif
+
 TEST_F(RenderingContextTest, ShapeOnlyDocumentNeedsNoPackagedFallbackFont) {
   // A re-executed child has no borrowed resource views, so it can install its own session. Any
   // diagnostic printed between the two markers breaks the expected adjacent text.
   GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_EXIT(
       {
-        if (!SetPackagedResourceSession(std::make_shared<PackagedResourceSession>(
-                [](const PackagedResource&) -> ResourceBytes { return {}; }))) {
+        int providerQueries = 0;
+        if (!InstallUnavailablePackagedResources(&providerQueries)) {
           std::_Exit(3);
         }
         auto document = ParseSVG(R"(
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
             <rect id="r" width="2ch" height="10" font-size="10"/>
+            <rect x="20" width="10" height="10"/>
+            <circle cx="50" cy="50" r="5"/>
           </svg>
         )");
 
-        const auto writeStderr = [](std::string_view text) {
-          (void)write(STDERR_FILENO, text.data(), text.size());
-        };
-        writeStderr("[prepare]");
+        WriteStderr("[prepare]");
         RenderingContext ctx(document.registry());
+        ctx.instantiateRenderTree(false, warningSink_);
         ctx.instantiateRenderTree(false, warningSink_);
         // Without a font to measure, `ch` is 0.5em per CSS Values.
         const auto* path =
             document.querySelector("#r").value().entityHandle().try_get<ComputedPathComponent>();
-        writeStderr("[/prepare] rect width: " +
-                    std::to_string(path ? path->spline.bounds().width() : -1.0));
+        WriteStderr(FormatShapeOnlyReport(path ? path->spline.bounds().width() : -1.0,
+                                          warningSink_.warnings().size(), providerQueries));
         std::_Exit(0);
       },
-      testing::ExitedWithCode(0), "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0");
+      testing::ExitedWithCode(0), kExpectedShapeOnlyReport);
+}
+
+TEST_F(RenderingContextTest, TextDocumentReportsMissingFallbackFontOnce) {
+  constexpr std::string_view kTextSvg = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="20">Hi</text></svg>
+  )";
+#ifndef DONNER_TEXT_ENABLED
+  GTEST_SKIP() << "Text is disabled in this renderer variant";
+#endif
+
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        if (!InstallUnavailablePackagedResources(nullptr)) {
+          std::_Exit(3);
+        }
+        auto document = ParseSVG(kTextSvg);
+        ParseWarningSink warnings;
+        RenderingContext ctx(document.registry());
+        ctx.instantiateRenderTree(false, warnings);
+        ctx.instantiateRenderTree(false, warnings);
+
+        std::string report = "[warnings]";
+        for (const ParseDiagnostic& warning : warnings.warnings()) {
+          report += " " + std::string(warning.reason) + ";";
+        }
+        WriteStderr(report);
+        std::_Exit(0);
+      },
+      testing::ExitedWithCode(0),
+      "\\[warnings\\] Packaged fallback font \\(Public Sans\\) is unavailable; text that matches "
+      "no @font-face, provider or system font is not rendered;$");
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeVerbose) {

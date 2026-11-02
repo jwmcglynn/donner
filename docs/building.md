@@ -250,12 +250,16 @@ Bazel 7 and 8, it builds `@donner//donner/base`, `@donner//donner/css`, `@donner
 checked-in consumer module against it. See \ref GettingStarted for the `MODULE.bazel`,
 `BUILD.bazel` and `.bazelrc` a consumer needs.
 
-Depending on `@donner` links code only; it does not install Donner's packaged resources. Documents
-without text render with none. Text needs the packaged Public Sans fallback font at run time, in a
-`<executable>.assets` or `donner-assets` directory beside the executable or through a
-`donner::PackagedResourceSession` provider, as \ref GettingStarted describes for the native
-examples. Call `donner::PreparePackagedResources()` at startup to report a missing installation;
-the renderer itself does not print one.
+Depending on `@donner` links code only; it does not install Donner's packaged resources, and no
+supported way to package them for a consumer module exists yet. Documents without text render with
+none. Text that matches no `@font-face`, provider or system font needs the packaged Public Sans
+fallback font at run time. A native program looks for it in a resource directory: inside a macOS
+app bundle, `Contents/Resources/donner-assets`; otherwise `<executable>.assets` or `donner-assets`
+beside the executable. A program that ships the font file itself can install it at startup with
+`DonnerInstallPackagedResource()`, keyed by the SHA-256 that `DonnerPackagedResourceManifest()`
+lists. Call `donner::PreparePackagedResources()` at startup to report a missing installation.
+Rendering a document that contains text without the fallback font adds one warning per document
+to the rendering warnings; the font manager itself does not print.
 
 A consumer module can build the same `Renderer` API on Geode by setting the two flags that
 `--config=geode` sets inside this repository:
