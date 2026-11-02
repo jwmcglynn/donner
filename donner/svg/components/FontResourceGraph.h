@@ -137,8 +137,9 @@ private:
 /**
  * Whether nothing \p registry renders can depend on a font resource: it holds no text, no length
  * resolved against font metrics, no nested SVG document (whose text would be a dependency of its
- * own), no filter image (which can render a fragment or document that has text), and no filter
- * function list naming an element (a fragment the collection reports as unprepared). Such a
+ * own), no filter image (which can render a fragment or document that has text), no filter
+ * function list naming an element (a fragment the collection reports as unprepared), and no
+ * overflowed font dependency list (a resource limit the collection reports). Such a
  * document's font dependency collection has no dependencies and nothing unprepared for every
  * target, whatever its revision, so it is answered without building the dependency graph.
  * Constant time apart from a scan of the document's filters and rendering instances, which a

@@ -784,6 +784,11 @@ bool HasAnyComponent(const Registry& registry) {
 /// Whether \p registry holds a component that makes its rendering depend on a font: constant
 /// time, the first half of \ref RendersNothingFontDependent.
 bool HasFontDependentComponents(const Registry& registry) {
+  // An overflowed font dependency list is a resource limit the full collection reports.
+  if (const auto* manager = registry.ctx().find<FontManager>();
+      manager != nullptr && manager->fontDependenciesOverflowed()) {
+    return true;
+  }
   return HasAnyComponent<TextComponent, TextRootComponent, ComputedTextComponent,
                          ComputedTextGeometryComponent, FontMetricDependenciesComponent,
                          FontPaintDependenciesComponent, LoadedSVGImageComponent,
