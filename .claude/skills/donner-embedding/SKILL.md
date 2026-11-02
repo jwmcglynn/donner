@@ -158,7 +158,7 @@ Consumers tune features with the module extension (`config/extensions.bzl`):
 ```py
 donner = use_extension("@donner//config:extensions.bzl", "donner")
 donner.configure(
-    renderer = "tiny_skia",   # accepted values: "tiny_skia", "skia"
+    renderer = "tiny_skia",   # "tiny_skia" (default) or "geode"; "skia" is a legacy alias
     filters = True,
     text = True,              # stb_truetype tier: TTF/OTF, kern-table kerning
     text_full = False,        # FreeType + HarfBuzz + WOFF2 tier
