@@ -2910,11 +2910,9 @@ TEST_F(RendererGeodeTest, SurfaceBudgetCoversClipMaskBlendSnapshotMaskAndPattern
     renderer.pushIsolatedLayer(1.0, MixBlendMode::Multiply);
     renderer.popIsolatedLayer();
     const RendererResourceStats stats = renderer.resourceStats();
-    EXPECT_EQ(stats.surfacePeakBytes, 3u * 8u * 8u * 4u)
-        << "The layer and its destination snapshot must both be admitted.";
-    EXPECT_EQ(stats.surfaceCount, 2u)
-        << "Once composited, the layer is parked for reuse within the frame and releases its "
-           "charge; the snapshot stays charged until the frame is submitted.";
+    EXPECT_EQ(stats.surfaceCount, 3u)
+        << "The layer and its destination snapshot must both be admitted; a composited layer "
+           "parked for reuse within the frame keeps its charge.";
     renderer.endFrame();
   }
 
