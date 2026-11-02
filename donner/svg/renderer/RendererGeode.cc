@@ -39,6 +39,7 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/FilterRegionContext.h"
+#include "donner/svg/renderer/FilterResultCacheIndex.h"
 #include "donner/svg/renderer/HeadlessDevicePool.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -2562,6 +2563,194 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::deque<PendingRelease> maskLayerTextures;
   };
 
+  /// A filter result held by \ref filterResultCache: its texture and the device rectangle it
+  /// covered at the translation it was recorded at.
+  struct FilterResultPayload {
+    gpu::Texture texture;
+    gpu::TextureDescriptor desc;
+    Box2d deviceRect;            ///< Pixel-aligned rectangle the texture covered when recorded.
+    Vector2d recordTranslation;  ///< Translation of the device transform when recorded.
+    bool resampled = false;      ///< Whether it is drawn at any fractional offset, bilinearly.
+  };
+
+  struct FilterStackFrame;
+
+  /// What a filter layer recording into the cache needs at pop.
+  struct FilterResultRecording {
+    FilterResultContentKey content;
+    FilterResultPlacement placement;
+  };
+
+  /// Filter results kept across frames, keyed by content and placement. Its textures are charged
+  /// to every frame's surface budget as one aggregate surface; see \ref chargeFilterResultCache.
+  FilterResultCacheIndex<FilterResultPayload> filterResultCache;
+  bool filterResultCacheEnabled = true;
+  /// Whether this frame's surface budget holds the cache's aggregate surface.
+  bool filterResultCacheSurfaceCharged = false;
+  /// Evicted results whose textures the frame's recorded commands may still sample. Returned to
+  /// the pool once the frame is submitted, without a surface-budget release: the frame-start
+  /// charge, not a per-texture reservation, accounts for them.
+  std::vector<PendingRelease> retiredFilterResults;
+  std::size_t filterResultCacheHits = 0;
+  std::size_t filterResultCacheRecords = 0;
+  std::size_t filterResultCacheEvictions = 0;
+
+  /// Queue evicted payloads for retirement after the frame.
+  void retireFilterResults(std::vector<FilterResultPayload> payloads) {
+    filterResultCacheEvictions += payloads.size();
+    for (FilterResultPayload& payload : payloads) {
+      retiredFilterResults.push_back({std::move(payload.texture), payload.desc});
+    }
+  }
+
+  /// Return retired results to the pool, or retain them when the frame's submission is uncertain.
+  void drainRetiredFilterResults(bool submissionUncertain) {
+    for (PendingRelease& retired : retiredFilterResults) {
+      if (submissionUncertain) {
+        failedFilterTextures.push_back(std::move(retired));
+      } else {
+        recycleOrDestroyTexture(std::move(retired.texture), retired.desc);
+      }
+    }
+    retiredFilterResults.clear();
+  }
+
+  /// Charge the cache's textures to a frame's freshly reset surface budget, evicting least
+  /// recently used results until they fit. A lost device drops every result.
+  void chargeFilterResultCache() {
+    filterResultCacheSurfaceCharged = false;
+    if (!device || device->isDeviceLost()) {
+      retireFilterResults(filterResultCache.clear());
+      return;
+    }
+    retireFilterResults(filterResultCache.dropExpired());
+    if (filterResultCache.size() == 0) {
+      return;
+    }
+    while (filterResultCache.size() != 0 &&
+           !surfaceBudget->canReserveBytes(filterResultCache.bytes(), 1)) {
+      retireFilterResults(filterResultCache.setByteLimit(filterResultCache.bytes() - 1));
+    }
+    retireFilterResults(
+        filterResultCache.setByteLimit(FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes));
+    if (filterResultCache.size() != 0) {
+      filterResultCacheSurfaceCharged = surfaceBudget->reserveBytes(filterResultCache.bytes(), 1);
+    }
+  }
+
+  /// Whether a filter layer pushed now may draw from or record into the cache: a top-level layer
+  /// of an open, healthy frame, outside any mask, pattern tile or other filter capture.
+  [[nodiscard]] bool filterResultCacheUsable() const {
+    return filterResultCacheEnabled && ownsSurfaceBudget && device && !device->isDeviceLost() &&
+           encoder && frameRecordingOpen && !frameRecordingAbandoned && !frameArenaWriteFailed &&
+           filterStack.empty() && rejectedFilterDepth == 0 && maskStack.empty() &&
+           patternStack.empty() && readyForFilterCapture();
+  }
+
+  /// Fractional translation buckets per device pixel for results whose edges stay sharp.
+  static constexpr int kFilterResultFractionBuckets = 4;
+
+  /// Where a result of \p graph drawn through \p deviceFromFilter is valid. A graph whose result
+  /// is a Gaussian blur of at least one device pixel in each axis is smooth enough to resample at
+  /// any fractional offset; any other result keeps its translation's sub-pixel bucket.
+  static FilterResultPlacement filterResultPlacement(const components::FilterGraph& graph,
+                                                     const Transform2d& deviceFromFilter) {
+    FilterResultPlacement placement;
+    placement.linear = {deviceFromFilter.data[0], deviceFromFilter.data[1],
+                        deviceFromFilter.data[2], deviceFromFilter.data[3]};
+    const auto* blur =
+        graph.nodes.empty()
+            ? nullptr
+            : std::get_if<components::filter_primitive::GaussianBlur>(&graph.nodes.back().primitive);
+    const double scaleX = deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length();
+    const double scaleY = deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length();
+    const bool smooth = blur != nullptr && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
+                        blur->stdDeviationX * scaleX >= 1.0 && blur->stdDeviationY * scaleY >= 1.0;
+    if (!smooth) {
+      const auto bucket = [](double translation) {
+        const double fraction = translation - std::floor(translation);
+        return std::clamp(static_cast<int>(fraction * kFilterResultFractionBuckets), 0,
+                          kFilterResultFractionBuckets - 1);
+      };
+      placement.fractionBucketX = bucket(deviceFromFilter.data[4]);
+      placement.fractionBucketY = bucket(deviceFromFilter.data[5]);
+    }
+    return placement;
+  }
+
+  /// Draw \p payload at the current device transform's translation.
+  void drawFilterResult(const FilterResultPayload& payload) {
+    Vector2d delta = Vector2d(deviceFromLocalTransform.data[4], deviceFromLocalTransform.data[5]) -
+                     payload.recordTranslation;
+    if (!payload.resampled) {
+      delta = Vector2d(std::round(delta.x), std::round(delta.y));
+    }
+    encoder->setTransform(Transform2d());
+    encoder->drawTexture(payload.texture,
+                         Box2d(payload.deviceRect.topLeft + delta,
+                               payload.deviceRect.bottomRight + delta),
+                         kWholeTextureUv, 1.0, /*pixelated=*/!payload.resampled,
+                         /*sourceIsPremultiplied=*/true);
+    syncTransform();
+  }
+
+  /**
+   * Copy the part of \p filtered that holds \p frame's result into the cache. Requires the frame
+   * encoder to be recording after the filter's execution and before anything samples \p filtered.
+   * Records nothing when the result reaches past the captured buffer, which would leave the cached
+   * copy missing content another placement would show.
+   */
+  void recordFilterResult(const FilterStackFrame& frame, const gpu::Texture& filtered,
+                          const gpu::TextureDescriptor& filteredDesc) {
+    if (!frame.resultRecording || frameGpuEncoder == nullptr || frameRecordingAbandoned) {
+      return;
+    }
+    const Box2d region = frame.deviceFromFilter.transformBox(frame.filterRegion);
+    const double left = std::floor(region.topLeft.x) - 1.0;
+    const double top = std::floor(region.topLeft.y) - 1.0;
+    const double right = std::ceil(region.bottomRight.x) + 1.0;
+    const double bottom = std::ceil(region.bottomRight.y) + 1.0;
+    const double bufferLeft = left + frame.filterBufferOffsetX;
+    const double bufferTop = top + frame.filterBufferOffsetY;
+    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
+        !std::isfinite(bottom) || bufferLeft < 0.0 || bufferTop < 0.0 ||
+        right + frame.filterBufferOffsetX > static_cast<double>(filteredDesc.size.width) ||
+        bottom + frame.filterBufferOffsetY > static_cast<double>(filteredDesc.size.height) ||
+        right <= left || bottom <= top) {
+      return;
+    }
+    const gpu::Extent2d extent{static_cast<uint32_t>(right - left),
+                               static_cast<uint32_t>(bottom - top)};
+    const std::uint64_t bytes = std::uint64_t{extent.width} * extent.height *
+                                gpu::TextureFormatBytesPerTexel(filteredDesc.format);
+    if (!filterResultCache.canHold(bytes) ||
+        !surfaceBudget->reserveBytes(bytes, filterResultCacheSurfaceCharged ? 0 : 1)) {
+      return;
+    }
+    filterResultCacheSurfaceCharged = true;
+    const gpu::TextureDescriptor desc{"RendererGeodeFilterResult", extent, filteredDesc.format,
+                                      gpu::TextureUsage::CopyDst | gpu::TextureUsage::Sampled};
+    gpu::Texture texture = texturePool ? texturePool->acquire(desc) : gpu::Texture{};
+    if (!texture.isValid()) {
+      return;
+    }
+    const gpu::Status copied = frameGpuEncoder->copyTextureToTexture(
+        filtered, texture, extent,
+        gpu::Origin2d{static_cast<uint32_t>(bufferLeft), static_cast<uint32_t>(bufferTop)});
+    if (copied.hasError()) {
+      recycleOrDestroyTexture(std::move(texture), desc);
+      return;
+    }
+    ++filterResultCacheRecords;
+    FilterResultPayload payload{
+        std::move(texture), desc, Box2d(Vector2d(left, top), Vector2d(right, bottom)),
+        Vector2d(frame.deviceFromFilter.data[4], frame.deviceFromFilter.data[5]),
+        frame.resultRecording->placement.fractionBucketX == FilterResultPlacement::kAnyFraction};
+    retireFilterResults(filterResultCache.insert(frame.resultRecording->content,
+                                                 frame.resultRecording->placement,
+                                                 std::move(payload), bytes));
+  }
+
   /// State for an in-progress filter layer. Captures all draws
   /// between `pushFilterLayer` / `popFilterLayer` into an offscreen texture,
   /// then runs the stored `FilterGraph` through `GeodeFilterEngine` and
@@ -2584,6 +2773,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     int filterBufferOffsetY = 0;  // Input margin past the outer target's top edge.
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
+    /// Set when this layer's result is recorded into the filter result cache at pop.
+    std::optional<FilterResultRecording> resultRecording;
   };
   // Non-copyability here is incidental: the move-only `savedEncoder` and `layerTexture` members
   // supply it, not an explicit `= delete`. The assert pins it because `savedClipStack` holds
@@ -5451,6 +5642,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     } else {
       drainPendingReleases();
     }
+    drainRetiredFilterResults(frameRecordingAbandoned);
+    filterResultCacheHits = 0;
+    filterResultCacheRecords = 0;
+    filterResultCacheEvictions = 0;
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -5494,6 +5689,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     if (ownsSurfaceBudget) {
       surfaceBudget->reset();
+      chargeFilterResultCache();
     }
     if (ownsTextMaterializationBudget) {
       textMaterializationBudget->reset();
@@ -5673,6 +5869,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGeneration();
 
     waitForQueueIdleAtTeardown();
+    retireFilterResults(filterResultCache.clear());
+    drainRetiredFilterResults(/*submissionUncertain=*/false);
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
     releaseFrameTargetsAtTeardown();
@@ -5988,6 +6186,12 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .textGlyphDecodeWork = impl_->textMaterializationBudget->decodeWork(),
       .textGlyphOccurrences = impl_->textMaterializationBudget->glyphOccurrences(),
       .textMaterializationBudgetRejected = impl_->textMaterializationBudget->rejected(),
+      .filterResultCacheSupported = true,
+      .filterResultCacheHits = impl_->filterResultCacheHits,
+      .filterResultCacheRecords = impl_->filterResultCacheRecords,
+      .filterResultCacheEvictions = impl_->filterResultCacheEvictions,
+      .filterResultCacheEntries = impl_->filterResultCache.size(),
+      .filterResultCacheBytes = impl_->filterResultCache.bytes(),
   };
 }
 
@@ -6108,6 +6312,7 @@ void RendererGeode::endFrame() {
   // submits, so acquiring these on the next frame will schedule the
   // new writes after the previous submit's GPU work completes.
   impl_->drainPendingReleases();
+  impl_->drainRetiredFilterResults(impl_->frameRecordingAbandoned);
 
   // The documents the frame drew are still held, so give back what it borrowed from them now.
   impl_->releaseFrameLoans();
@@ -6507,6 +6712,13 @@ void RendererGeode::popFilterLayer() {
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
+  // Recorded before the composite below, so the copy reads the result before anything else
+  // samples it, in the same frame-encoder order as the viewport extraction copy.
+  // Only an executed graph is recorded: a declined graph composites its unfiltered source, which a
+  // later frame with more budget would filter.
+  if (filtered.kind == geode::FilterExecutionResult::Kind::Output) {
+    impl_->recordFilterResult(frame, *filteredTexture, filteredDesc);
+  }
   if (FilterInputBuffer{static_cast<int>(frame.layerDesc.size.width),
                         static_cast<int>(frame.layerDesc.size.height), frame.filterBufferOffsetX,
                         frame.filterBufferOffsetY}
@@ -6555,6 +6767,47 @@ void RendererGeode::popFilterLayer() {
   impl_->releaseTextureAtFrameEnd(std::move(filtered.texture), filtered.desc);
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
   impl_->filterExecutionBudget->release(frame.filterReservation);
+}
+
+CachedFilterLayerResult RendererGeode::pushCachedFilterLayer(
+    const FilterResultContentKey& content, const components::FilterGraph& filterGraph,
+    const std::optional<Box2d>& filterRegion) {
+  impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  if (!impl_->filterResultCacheUsable() || !filterRegion.has_value() ||
+      ShouldPlanGeodeLocalRaster(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                                 /*fullExecutionFits=*/true)) {
+    // A layer composited through the transformed local raster is not translation invariant in
+    // device space; it renders uncached.
+    pushFilterLayer(filterGraph, filterRegion);
+    return CachedFilterLayerResult::Pushed;
+  }
+  const FilterResultPlacement placement =
+      Impl::filterResultPlacement(filterGraph, impl_->deviceFromLocalTransform);
+  if (const auto* entry = impl_->filterResultCache.find(content, placement)) {
+    impl_->drawFilterResult(entry->payload);
+    ++impl_->filterResultCacheHits;
+    return CachedFilterLayerResult::Drawn;
+  }
+  const bool record =
+      impl_->filterResultCache.admitMiss(content, placement.linear, impl_->currentFrameIndex);
+  pushFilterLayer(filterGraph, filterRegion);
+  if (record && !impl_->filterStack.empty()) {
+    Impl::FilterStackFrame& frame = impl_->filterStack.back();
+    if (!frame.allocationRejected && frame.layerTexture.isValid()) {
+      frame.resultRecording = Impl::FilterResultRecording{content, placement};
+    }
+  }
+  return CachedFilterLayerResult::Pushed;
+}
+
+void RendererGeode::setFilterResultCacheEnabled(bool enabled) {
+  impl_->filterResultCacheEnabled = enabled;
+  if (!enabled) {
+    impl_->retireFilterResults(impl_->filterResultCache.clear());
+    if (!impl_->frameRecordingOpen) {
+      impl_->drainRetiredFilterResults(/*submissionUncertain=*/false);
+    }
+  }
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {

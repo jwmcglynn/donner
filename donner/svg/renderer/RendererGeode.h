@@ -374,6 +374,14 @@ public:
 
   void pushFilterLayer(const components::FilterGraph& filterGraph,
                        const std::optional<Box2d>& filterRegion) override;
+  /// Draws a cached result when one matches \p content at the current transform's linear part,
+  /// otherwise pushes the layer and may record its result; see
+  /// \ref RendererInterface::pushCachedFilterLayer.
+  CachedFilterLayerResult pushCachedFilterLayer(const FilterResultContentKey& content,
+                                                const components::FilterGraph& filterGraph,
+                                                const std::optional<Box2d>& filterRegion) override;
+  /// Enables or disables the filter result cache; disabling drops every cached result.
+  void setFilterResultCacheEnabled(bool enabled) override;
   void popFilterLayer() override;
 
   void pushMask(const std::optional<Box2d>& maskBounds) override {
