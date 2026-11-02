@@ -919,6 +919,54 @@ donner_variant_cc_test(
 )
 
 donner_cc_test(
+    name = "mixed_vertical_text_convergence_tests_impl",
+    srcs = ["MixedVerticalTextConvergence_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":decoration_test_scene",
+        ":renderer_test_backend",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/css",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/text:components",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_backend_full",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_variant_cc_test(
+    name = "mixed_vertical_text_convergence_tests",
+    dep = ":mixed_vertical_text_convergence_tests_impl",
+    named_variants = [
+        {
+            "name": "tiny_full",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "true",
+        },
+        {
+            "name": "geode_full",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "true",
+        },
+    ],
+    opens_gpu_device = True,
+)
+
+donner_cc_test(
     name = "text_engine_scripted_tests",
     srcs = ["TextEngineScripted_tests.cc"],
     deps = [
