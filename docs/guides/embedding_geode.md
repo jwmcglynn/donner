@@ -182,6 +182,24 @@ example. A host that discards an acquired frame calls
 
 \snippet geode_embed.cc frame_status
 
+## Texture memory between frames {#EmbeddingGeodeTexturePool}
+
+Renderers on one device share a pool of free textures, so a frame can reuse the surfaces the
+previous frame used for layers, masks and filters instead of creating them again. The pool's
+budget follows the largest working set of recent frames: it starts at 64 MiB and grows to at most
+256 MiB on native builds, or 96 MiB in WebAssembly builds, where a phone browser may reclaim a tab
+whose GPU memory grows. A scene with many filtered elements therefore keeps their surfaces
+resident while it renders.
+
+When rendering stops, give that memory back with `RendererGeode::trimTexturePool`:
+
+- `RendererGeodeTexturePoolTrim::ToFloor` when the app goes idle, keeping at most 64 MiB.
+- `RendererGeodeTexturePoolTrim::All` when the app is hidden or backgrounded, for example on a
+  browser `visibilitychange` to `hidden`, or on a platform memory warning.
+
+A device that begins no frame for two seconds also returns to the 64 MiB floor at its next frame
+or trim. Textures a frame is using are never freed by a trim.
+
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 
 Logical contexts over one root share its `DeviceLostState`. Runtime backends
