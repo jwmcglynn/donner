@@ -9,6 +9,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 
 namespace donner::svg {
 
@@ -137,6 +138,7 @@ std::optional<Path> SVGGraphicsElement::resolvedSimpleClipPathOutline(std::size_
   }
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   Registry& registry = *handle_.registry();
+  components::ExternalUseStyleRetention::RestoreStandalone(registry);
   const auto* instance = registry.try_get<components::RenderingInstanceComponent>(handle_.entity());
   if (instance == nullptr || !instance->visible) {
     return std::nullopt;
