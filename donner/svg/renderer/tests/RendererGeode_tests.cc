@@ -50,6 +50,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -2973,8 +2974,10 @@ TEST_F(RendererGeodeTest, ResourceStatsAggregateEveryDocumentTouchedInTheFrame) 
   const auto* secondCache = secondRegistry.try_get<geode::GeodePathCacheComponent>(secondEntity);
   ASSERT_NE(firstCache, nullptr);
   ASSERT_NE(secondCache, nullptr);
-  ASSERT_FALSE(firstCache->fillEncode.has_value()) << "Fixture must reject the first document.";
-  ASSERT_TRUE(secondCache->fillEncode.has_value()) << "Fixture must admit the second document.";
+  ASSERT_FALSE(firstCache->fillVariants[0].encode.has_value())
+      << "Fixture must reject the first document.";
+  ASSERT_TRUE(secondCache->fillVariants[0].encode.has_value())
+      << "Fixture must admit the second document.";
   EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected)
       << "Touching a clean second document must not erase the first document's rejection.";
   renderer.endFrame();
@@ -3040,7 +3043,7 @@ TEST_F(RendererGeodeTest, CacheBudgetRejectsBeforeInsertionAndUsesTransientFallb
 
   const auto* cache = document.registry().try_get<geode::GeodePathCacheComponent>(entity);
   ASSERT_NE(cache, nullptr);
-  EXPECT_FALSE(cache->fillEncode.has_value())
+  EXPECT_FALSE(cache->fillVariants[0].encode.has_value())
       << "Rejected retained geometry must not enter the document cache.";
   const RendererResourceStats stats = renderer.resourceStats();
   EXPECT_TRUE(stats.geometryBudgetRejected);
@@ -3193,20 +3196,29 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
     RendererDriver(renderer).drawEntityRange(document.registry(), source.entity(), source.entity(),
                                              viewport, Transform2d::Scale(scale));
   };
+  const auto encodeAtScale = [&](double scale) -> const geode::EncodedPath* {
+    const auto* cache = source.try_get<geode::GeodePathCacheComponent>();
+    if (cache == nullptr) {
+      return nullptr;
+    }
+    const std::optional<std::size_t> variant =
+        cache->fillVariantFor(geode::FillCubicToleranceFor(Transform2d::Scale(scale)));
+    return variant ? &*cache->fillVariants[*variant].encode : nullptr;
+  };
   renderAtScale(1.0);
-  const auto* cache = source.try_get<geode::GeodePathCacheComponent>();
-  ASSERT_THAT(cache, testing::NotNull());
-  ASSERT_THAT(cache->fillEncode, testing::Optional(testing::_));
-  const size_t initialCurveCount = cache->fillEncode->curves.size();
+  const geode::EncodedPath* initialEncode = encodeAtScale(1.0);
+  ASSERT_THAT(initialEncode, testing::NotNull());
+  const size_t initialCurveCount = initialEncode->curves.size();
 
   renderAtScale(32.0);
-  ASSERT_THAT(cache->fillEncode, testing::Optional(testing::_));
-  EXPECT_THAT(cache->fillEncode->curves.size(), testing::Gt(initialCurveCount));
+  const geode::EncodedPath* zoomedEncode = encodeAtScale(32.0);
+  ASSERT_THAT(zoomedEncode, testing::NotNull());
+  EXPECT_THAT(zoomedEncode->curves.size(), testing::Gt(initialCurveCount));
   EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(1u));
 
   // This cubic has x(t) = t and y(t) = t^3, so its shape has an exact reference.
   double maximumDeviceError = 0.0;
-  for (const auto& curve : cache->fillEncode->curves) {
+  for (const auto& curve : zoomedEncode->curves) {
     if (curve.p2x <= curve.p0x) {
       continue;
     }
@@ -3224,6 +3236,12 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
   renderAtScale(25.0);
   EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
       << "Zoom inside the same scale bucket must reuse the fill encode.";
+
+  renderAtScale(1.0);
+  EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+      << "Zooming back out must reuse the encode still cached for the original bucket.";
+  EXPECT_THAT(encodeAtScale(1.0)->curves.size(), testing::Eq(initialCurveCount))
+      << "The identity-scale draw must use the identity-bucket encode, not the finer one.";
 }
 
 // One element drawn at two device scales in a frame must not make either draw depend on which
