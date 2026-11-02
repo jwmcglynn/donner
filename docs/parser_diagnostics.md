@@ -214,6 +214,31 @@ auto subResult = SubParser::Parse(substring, subSink);
 parentSink.mergeFromSubparser(std::move(subSink), parentOffset);
 ```
 
+### Render-time warnings
+
+Some problems surface only when a document is prepared for rendering: an `href` that resolves to
+nothing, or the parse warnings of an SVG document loaded for `<use href="other.svg#id">`. Pass a
+sink to `draw` to receive them:
+
+```cpp
+Renderer renderer;
+ParseWarningSink renderWarnings;
+renderer.draw(document, renderWarnings);
+for (const ParseDiagnostic& warning : renderWarnings.warnings()) {
+  // Log, filter, or surface the warning.
+}
+```
+
+The one-argument `draw(document)` discards these warnings, or prints them to stderr when the
+renderer was created with `verbose = true`. A draw that reuses cached preparation does not report
+the same warnings again, so an unchanged document usually reports nothing on later frames. The
+source ranges of a referenced document's warnings point into that document's source, not the
+host's, so format them with `operator<<` rather than with `DiagnosticRenderer` over the host source.
+
+A custom `RendererInterface` implementation must implement both `draw` overloads. One that renders
+through `RendererDriver` passes the sink to the driver, which routes every warning found while
+preparing the document to it.
+
 ### Rendering diagnostics
 
 `DiagnosticRenderer` formats diagnostics with source context, caret/tilde indicators, and

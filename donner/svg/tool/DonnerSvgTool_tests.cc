@@ -814,6 +814,102 @@ TEST_F(DonnerSvgToolFileTest, ParseWarningsArePrintedUnlessQuiet) {
   EXPECT_THAT(quietOut.str(), testing::HasSubstr("Rendered size: 4x4"));
 }
 
+TEST_F(DonnerSvgToolFileTest, RenderWarningsArePrintedUnlessQuiet) {
+  WriteSvg("external.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                                <rect id="tile" x="bad" width="2" height="2"/>
+                              </svg>)");
+  const std::filesystem::path inputPath =
+      WriteSvg("host.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                                <use href="external.svg#tile"/>
+                              </svg>)");
+
+  std::ostringstream noisyOut;
+  std::ostringstream noisyErr;
+  testing::internal::CaptureStderr();
+  EXPECT_EQ(RunTool({"--preview", inputPath.string()}, &noisyOut, &noisyErr), 0);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+  EXPECT_THAT(noisyErr.str(), testing::IsEmpty());
+  EXPECT_THAT(noisyOut.str(), testing::Not(testing::HasSubstr("Parse warnings:")));
+  EXPECT_THAT(noisyOut.str(), testing::HasSubstr("Render warnings:"));
+  EXPECT_THAT(noisyOut.str(), testing::HasSubstr("Invalid length or percentage"));
+
+  std::ostringstream quietOut;
+  std::ostringstream quietErr;
+  testing::internal::CaptureStderr();
+  EXPECT_EQ(RunTool({"--quiet", "--preview", inputPath.string()}, &quietOut, &quietErr), 0);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::IsEmpty());
+  EXPECT_THAT(quietErr.str(), testing::IsEmpty());
+  EXPECT_THAT(quietOut.str(), testing::Not(testing::HasSubstr("Render warnings:")));
+  EXPECT_THAT(quietOut.str(), testing::HasSubstr("Rendered size: 4x4"));
+}
+
+TEST_F(DonnerSvgToolFileTest, RenderWarningsRepeatedAcrossGifFramesArePrintedOnce) {
+  const std::filesystem::path inputPath = WriteSvg(
+      "animated-missing.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+          <use href="#missing"/>
+          <rect width="2" height="2" fill="blue">
+            <animate attributeName="x" from="0" to="2" dur="1s" fill="freeze"/>
+          </rect>
+        </svg>)");
+  const std::filesystem::path gifPath = tmpDir_ / "animated-missing.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "4", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+
+  constexpr std::string_view kWarning = "Failed to resolve shadow tree target with href '#missing'";
+  const std::string output = out.str();
+  std::vector<std::size_t> warningOffsets;
+  for (std::size_t pos = output.find(kWarning); pos != std::string::npos;
+       pos = output.find(kWarning, pos + kWarning.size())) {
+    warningOffsets.push_back(pos);
+  }
+  EXPECT_THAT(output, testing::HasSubstr("Frames: 4 rendered"));
+  EXPECT_THAT(warningOffsets, testing::SizeIs(1)) << output;
+}
+
+TEST_F(DonnerSvgToolFileTest, RenderWarningRepeatedPastTheSinkLimitIsNotReportedAsOmitted) {
+  const std::filesystem::path inputPath =
+      WriteSvg("long-missing.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+          <use href="#missing"/>
+          <rect width="1" height="1" fill="blue">
+            <animate attributeName="x" from="0" to="1" dur="20s" fill="freeze"/>
+          </rect>
+        </svg>)");
+  const std::filesystem::path gifPath = tmpDir_ / "long-missing.gif";
+
+  // More frames than ParseWarningSink::kMaximumWarnings, each re-reporting the same warning.
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "11", "--fps", "100", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 1100 rendered"));
+  EXPECT_THAT(out.str(),
+              testing::HasSubstr("Failed to resolve shadow tree target with href '#missing'"));
+  EXPECT_THAT(out.str(), testing::Not(testing::HasSubstr("further render warnings omitted")));
+}
+
+TEST_F(DonnerSvgToolFileTest, RenderWarningsArePrintedWhenCanvasSizingFails) {
+  const std::filesystem::path inputPath =
+      WriteSvg("missing.svg", R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                                   <use href="#missing"/>
+                                 </svg>)");
+
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(RunTool({"--scale", "100000", inputPath.string()}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("makes the canvas larger than"));
+  EXPECT_THAT(out.str(), testing::HasSubstr("Render warnings:"));
+  EXPECT_THAT(out.str(),
+              testing::HasSubstr("Failed to resolve shadow tree target with href '#missing'"));
+}
+
 TEST_F(DonnerSvgToolFileTest, ParseWarningsEscapeUnicodeTerminalControls) {
   std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect x=")";
   source.append("\xc2\x9b", 2);

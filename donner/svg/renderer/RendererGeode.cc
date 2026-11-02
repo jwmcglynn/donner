@@ -5886,6 +5886,14 @@ RendererGeode& RendererGeode::operator=(RendererGeode&& other) noexcept {
 }
 
 void RendererGeode::draw(SVGDocument& document) {
+  drawDocument(document, nullptr);
+}
+
+void RendererGeode::draw(SVGDocument& document, ParseWarningSink& warningSink) {
+  drawDocument(document, &warningSink);
+}
+
+void RendererGeode::drawDocument(SVGDocument& document, ParseWarningSink* warningSink) {
   // No-op mode: if adapter/device acquisition failed there is no GPU to
   // render with. Return before running the driver so none of the
   // per-element callbacks (drawPath, pushClip, pushFilterLayer, ...)
@@ -5902,7 +5910,7 @@ void RendererGeode::draw(SVGDocument& document) {
   // `GeodePathCacheComponent`.
   impl_->ensureCacheInvalidationWired(document.registry());
 
-  RendererDriver driver(*this, impl_->verbose);
+  RendererDriver driver(*this, impl_->verbose, nullptr, nullptr, warningSink);
   driver.draw(document);
 }
 

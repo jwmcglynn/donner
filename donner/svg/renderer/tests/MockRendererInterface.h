@@ -15,6 +15,7 @@ namespace donner::svg::tests {
 class MockRendererInterface : public RendererInterface {
 public:
   MOCK_METHOD(void, draw, (SVGDocument & document), (override));
+  MOCK_METHOD(void, draw, (SVGDocument & document, ParseWarningSink& warningSink), (override));
   MOCK_METHOD(int, width, (), (const, override));
   MOCK_METHOD(int, height, (), (const, override));
   MOCK_METHOD(void, beginFrame, (const RenderViewport& viewport), (override));

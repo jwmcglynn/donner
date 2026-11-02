@@ -7,6 +7,8 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -114,6 +116,21 @@ struct RendererDriverTextFrameCache {
 };
 
 namespace {
+
+/**
+ * Deliver one render warning to the host's sink, or print it to stderr only in verbose mode.
+ *
+ * @param warningSink Host destination, or null when the host did not provide one.
+ * @param verbose Whether warnings without a host destination are printed.
+ * @param warning The warning to deliver.
+ */
+void ReportRenderWarning(ParseWarningSink* warningSink, bool verbose, ParseDiagnostic&& warning) {
+  if (warningSink != nullptr) {
+    warningSink->add(std::move(warning));
+  } else if (verbose) {
+    std::cerr << warning << '\n';
+  }
+}
 
 class ScopedTextPathMeasurementWorkEpoch {
 public:
@@ -2092,14 +2109,16 @@ void RendererDriver::syncFilterPreparationStats() {
 
 RendererDriver::RendererDriver(
     RendererInterface& renderer, bool verbose, SecurityStats* securityStats,
-    std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork)
+    std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork,
+    ParseWarningSink* warningSink)
     : renderer_(renderer),
       verbose_(verbose),
       textFrameCache_(std::make_unique<RendererDriverTextFrameCache>()),
       externalUseStyleWork_(externalUseStyleWork
                                 ? std::move(externalUseStyleWork)
                                 : std::make_shared<components::StyleResourceBudget>()),
-      securityStats_(securityStats) {
+      securityStats_(securityStats),
+      warningSink_(warningSink) {
   if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
     filterPreparationBudget_ = shared;
   }
@@ -2134,13 +2153,7 @@ void RendererDriver::draw(SVGDocument& document) {
       DocumentWriteAccess access = document.writeAccess();
       const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
           *externalUseStyleWork_, document.registry());
-      ParseWarningSink warnings;
-      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-      if (warnings.hasWarnings()) {
-        for (const ParseDiagnostic& warning : warnings.warnings()) {
-          std::cerr << warning << '\n';
-        }
-      }
+      prepareDocument(document);
       drawPreparedDocument(document);
       return;
     }
@@ -2153,14 +2166,7 @@ void RendererDriver::draw(SVGDocument& document) {
                                                                             document.registry());
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-  if (warnings.hasWarnings()) {
-    for (const ParseDiagnostic& warning : warnings.warnings()) {
-      std::cerr << warning << '\n';
-    }
-  }
+  prepareDocument(document);
 
   drawPreparedDocument(document);
 }
@@ -2176,31 +2182,19 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
       const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
           *externalUseStyleWork_, document.registry());
 
-      ParseWarningSink warnings;
-      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-      if (warnings.hasWarnings()) {
-        for (const ParseDiagnostic& warning : warnings.warnings()) {
-          std::cerr << warning << '\n';
-        }
-      }
+      prepareDocument(document);
 
       snapshot.setSourceRevision(document.handle()->revision());
       RenderSnapshotRecorder recorder(snapshot, renderer_);
-      RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_);
+      RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_,
+                                    warningSink_);
       snapshotDriver.drawPreparedDocument(document, viewport, surfaceFromCanvas);
     }
     if (snapshot.fontPayloadLimitExceeded()) {
       DocumentWriteAccess access = document.writeAccess();
       const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
           *externalUseStyleWork_, document.registry());
-      ParseWarningSink warnings;
-      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-      if (warnings.hasWarnings()) {
-        for (const ParseDiagnostic& warning : warnings.warnings()) {
-          std::cerr << warning << '\n';
-        }
-      }
+      prepareDocument(document);
       drawPreparedDocument(document, viewport, surfaceFromCanvas);
       return;
     }
@@ -2212,14 +2206,7 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-  if (warnings.hasWarnings()) {
-    for (const ParseDiagnostic& warning : warnings.warnings()) {
-      std::cerr << warning << '\n';
-    }
-  }
+  prepareDocument(document);
 
   drawPreparedDocument(document, viewport, surfaceFromCanvas);
 }
@@ -2235,8 +2222,7 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  prepareDocument(document);
   if (shouldCancel && shouldCancel()) {
     return false;
   }
@@ -2276,19 +2262,12 @@ RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-  if (warnings.hasWarnings()) {
-    for (const ParseDiagnostic& warning : warnings.warnings()) {
-      std::cerr << warning << '\n';
-    }
-  }
+  prepareDocument(document);
 
   snapshot.setSourceRevision(document.handle()->revision());
 
   RenderSnapshotRecorder recorder(snapshot, renderer_);
-  RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_);
+  RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_, warningSink_);
   snapshotDriver.drawPreparedDocument(document);
   return snapshot;
 }
@@ -2428,8 +2407,10 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  // Atlas tiles never print: without a host sink their warnings are discarded even when verbose.
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(
+      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink);
 
   const std::unordered_set<Entity> feImageShadowEntities =
       collectOffscreenFeImageShadowEntities(document.registry());
@@ -4407,6 +4388,27 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
   return *fontCollectionCache_;
 }
 
+namespace {
+
+/**
+ * Preparation warnings a sub-document has already delivered to a host sink. An external use
+ * invalidates its child document's derived state around every traversal, so the child is prepared
+ * again for each occurrence and each frame and repeats the same warnings. Each warning, matched by
+ * its text and location, is delivered once per loaded sub-document instead, so identical warnings
+ * without a location are merged.
+ */
+struct ReportedSubDocumentWarnings {
+  std::unordered_set<std::string> keys;
+};
+
+std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
+  std::ostringstream key;
+  key << warning;
+  return std::move(key).str();
+}
+
+}  // namespace
+
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
@@ -4416,8 +4418,51 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
   }
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+  if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
+    // Without a collecting host sink these warnings are discarded even when verbose: printing them
+    // would repeat them for every traversal. Nothing is recorded, so a later draw with a collecting
+    // sink still receives them.
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+    return;
+  }
+  // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
+  // the host sink once. A warning dropped by a resource limit, here or in the collecting sink,
+  // marks the host sink truncated so it does not look complete. As with any sink limit, the host
+  // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
+  // again on every traversal, each later draw of it reports truncation too.
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
+  bool truncated = warnings.resourceLimitExceeded();
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    std::string key = SubDocumentWarningKey(warning);
+    if (reported.keys.contains(key)) {
+      continue;
+    }
+    if (reported.keys.size() >= ParseWarningSink::kMaximumWarnings) {
+      truncated = true;
+      continue;
+    }
+    reported.keys.insert(std::move(key));
+    warningSink_->add(ParseDiagnostic(warning));
+  }
+  if (truncated) {
+    warningSink_->markResourceLimitExceeded();
+  }
+}
+
+void RendererDriver::prepareDocument(SVGDocument& document) {
+  if (warningSink_ != nullptr) {
+    RendererUtils::prepareDocumentForRendering(document, verbose_, *warningSink_);
+    return;
+  }
+  // Without a host sink, only verbose mode pays for formatting warnings.
+  ParseWarningSink warnings = verbose_ ? ParseWarningSink() : ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    std::cerr << warning << '\n';
+  }
 }
 
 void RendererDriver::recordChildFontDependencies(SVGDocument& child, Entity target,
@@ -4516,8 +4561,11 @@ public:
                         const components::ComputedStyleComponent& style,
                         const components::ResolvedPaintServer& fill,
                         const components::ResolvedPaintServer& stroke,
-                        std::shared_ptr<components::StyleResourceBudget> work)
+                        std::shared_ptr<components::StyleResourceBudget> work,
+                        ParseWarningSink* warningSink, bool verbose)
       : registry_(child),
+        warningSink_(warningSink),
+        verbose_(verbose),
         hostLease_(
             EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
     if (!style.properties || child.ctx().contains<components::ExternalUseStyleContext>() ||
@@ -4548,7 +4596,10 @@ public:
     }
     auto& context = registry_.ctx().get<components::ExternalUseStyleContext>();
     if (context.unsupportedResource && context.work->reportExternalResourceWarning()) {
-      std::cerr << "External-use inherited cross-document URL resource is unsupported\n";
+      ReportRenderWarning(warningSink_, verbose_,
+                          ParseDiagnostic::Warning(
+                              "External-use inherited cross-document URL resource is unsupported",
+                              FileOffset::EndOfString()));
     }
     InvalidateExternalUseDerivedState(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
@@ -4571,6 +4622,8 @@ private:
   }
 
   Registry& registry_;
+  ParseWarningSink* warningSink_;
+  bool verbose_;
   ElementAnchor hostLease_;
   std::array<ElementAnchor, 2> resourceLeases_;
   bool installed_ = false;
@@ -4634,7 +4687,8 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
     return;
   }
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
-                              instance.resolvedStroke, externalUseStyleWork_);
+                              instance.resolvedStroke, externalUseStyleWork_, warningSink_,
+                              verbose_);
   if (!scope.installed()) {
     return;
   }
@@ -4844,7 +4898,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
     viewport.devicePixelRatio = 1.0;
     offscreen->beginFrame(viewport);
 
-    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_);
+    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_, warningSink_);
     subDriver.renderingSize_ = targetSize;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
     subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
@@ -5010,7 +5064,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     // Create a sub-driver for offscreen rendering and share the recursion guard. The depth is
     // carried into the sub-driver (one level deeper) so the chain-length cap above accumulates
     // across the whole nested-fragment recursion, not just within a single driver instance.
-    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_);
+    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_, warningSink_);
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
     subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;

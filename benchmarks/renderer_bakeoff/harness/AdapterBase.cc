@@ -50,6 +50,11 @@ void AdapterBase::draw(svg::SVGDocument& document) {
   driver.draw(document);
 }
 
+void AdapterBase::draw(svg::SVGDocument& document, ParseWarningSink& warningSink) {
+  svg::RendererDriver driver(*this, /*verbose=*/false, nullptr, nullptr, &warningSink);
+  driver.draw(document);
+}
+
 bool AdapterBase::admitAll(const std::vector<Feature>& features) {
   bool all = true;
   for (const Feature feature : features) {

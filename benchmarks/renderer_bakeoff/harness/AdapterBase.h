@@ -9,6 +9,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -58,6 +59,7 @@ public:
   void resetUsage() { usage_.reset(); }
 
   void draw(svg::SVGDocument& document) override;
+  void draw(svg::SVGDocument& document, ParseWarningSink& warningSink) override;
   [[nodiscard]] int width() const override { return pixelWidth_; }
   [[nodiscard]] int height() const override { return pixelHeight_; }
 

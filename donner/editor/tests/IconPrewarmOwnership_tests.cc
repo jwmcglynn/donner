@@ -111,6 +111,10 @@ public:
     ++drawCalls;
     RendererTinySkia::draw(document);
   }
+  void draw(svg::SVGDocument& document, ParseWarningSink& warningSink) override {
+    ++drawCalls;
+    RendererTinySkia::draw(document, warningSink);
+  }
   void beginFrame(const svg::RenderViewport& viewport) override {
     ++frameCalls;
     RendererTinySkia::beginFrame(viewport);

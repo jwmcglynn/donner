@@ -350,6 +350,14 @@ public:
 
   void draw(SVGDocument& document) override;
 
+  /**
+   * Draws the SVG document and reports the warnings found while preparing it.
+   *
+   * @param document The SVG document to render.
+   * @param warningSink Receives preparation warnings instead of stderr.
+   */
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override;
+
   [[nodiscard]] int width() const override;
   [[nodiscard]] int height() const override;
 
@@ -623,6 +631,9 @@ public:
 private:
   RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose,
                 std::function<void()> constructionHook);
+
+  /// Shared body of both \ref draw overloads; a null @p warningSink keeps the verbose-only default.
+  void drawDocument(SVGDocument& document, ParseWarningSink* warningSink);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
