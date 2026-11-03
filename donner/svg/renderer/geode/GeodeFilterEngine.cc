@@ -1552,7 +1552,8 @@ struct ReducedBlurPlan {
 /// Power-of-two reduction factor for a blur of \p deviation device pixels along one axis.
 uint32_t ReducedBlurFactor(double deviation) {
   uint32_t factor = 1;
-  while (factor < kMaximumReducedBlurFactor && deviation >= 2.0 * factor * kMinimumReducedBlurDeviation) {
+  while (factor < kMaximumReducedBlurFactor &&
+         deviation >= 2.0 * factor * kMinimumReducedBlurDeviation) {
     factor *= 2;
   }
   return factor;
@@ -1612,8 +1613,7 @@ double ReducedBlurSupport(double deviation) {
   if (factor == 1) {
     return 0.0;
   }
-  const double radius =
-      std::min(std::ceil(3.0 * ReducedBlurDeviation(deviation, factor)), 127.0);
+  const double radius = std::min(std::ceil(3.0 * ReducedBlurDeviation(deviation, factor)), 127.0);
   return (radius + 2.0) * factor;
 }
 
@@ -2391,7 +2391,8 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
       }
     }
   }
-  const char* scratchLabel = reduced.reduced() ? "GaussianBlurReducedScratch" : "GaussianBlurScratch";
+  const char* scratchLabel =
+      reduced.reduced() ? "GaussianBlurReducedScratch" : "GaussianBlurScratch";
   for (size_t i = 0; i < plan.count; ++i) {
     FilterTexture& output = scratch[i % scratch.size()];
     if (!output) {

@@ -65,8 +65,8 @@ PaintParams SolidFill(const css::RGBA& rgba) {
 /// Difference between two straight-alpha snapshots, measured on premultiplied channels so that
 /// nearly transparent pixels do not magnify it.
 struct ImageError {
-  int maximum = 0;          //!< Largest channel difference, in 8-bit levels.
-  double mean = 0.0;        //!< Mean channel difference over covered pixels.
+  int maximum = 0;           //!< Largest channel difference, in 8-bit levels.
+  double mean = 0.0;         //!< Mean channel difference over covered pixels.
   size_t coveredPixels = 0;  //!< Pixels with nonzero alpha in either image.
 };
 
@@ -122,8 +122,8 @@ FilterGraph GlowGraph(double deviation) {
   blur.result = RcString("blurred");
   graph.nodes.push_back(blur);
   FilterNode flood;
-  flood.primitive = fp::Flood{.floodColor = css::Color(css::RGBA(255, 220, 64, 255)),
-                              .floodOpacity = 0.8};
+  flood.primitive =
+      fp::Flood{.floodColor = css::Color(css::RGBA(255, 220, 64, 255)), .floodOpacity = 0.8};
   graph.nodes.push_back(flood);
   FilterNode tint;
   tint.primitive = fp::Composite{.op = fp::Composite::Operator::In};
@@ -162,8 +162,7 @@ void DrawChecker(RendererGeode& renderer) {
       const bool odd = ((x + y) / 2) % 2 != 0;
       renderer.setPaint(odd ? SolidFill(css::RGBA(255, 128, 0, 255))
                             : SolidFill(css::RGBA(0, 64, 255, 160)));
-      renderer.drawRect(Box2d({static_cast<double>(x), static_cast<double>(y)},
-                              {x + 2.0, y + 2.0}),
+      renderer.drawRect(Box2d({static_cast<double>(x), static_cast<double>(y)}, {x + 2.0, y + 2.0}),
                         StrokeParams{});
     }
   }
@@ -172,14 +171,15 @@ void DrawChecker(RendererGeode& renderer) {
 class GeodeReducedResolutionBlurTest : public testing::Test {
 protected:
   static std::shared_ptr<geode::GeodeDevice> SharedDevice() {
-    static auto device =
-        std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+    static auto device = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
     return device;
   }
 
   void SetUp() override { ASSERT_THAT(SharedDevice(), testing::NotNull()); }
 
-  void TearDown() override { SharedDevice()->filterEngine().setReducedResolutionBlurForTesting(true); }
+  void TearDown() override {
+    SharedDevice()->filterEngine().setReducedResolutionBlurForTesting(true);
+  }
 
   /// Renders \p scene through \p graph over the whole viewport scaled by \p scale.
   /// @param reduced Whether reduced-resolution blur is allowed.
@@ -234,7 +234,9 @@ struct BlurCase {
   bool linearRgb = false;
 };
 
-void PrintTo(const BlurCase& value, std::ostream* output) { *output << value.name; }
+void PrintTo(const BlurCase& value, std::ostream* output) {
+  *output << value.name;
+}
 
 class ReducedBlurErrorTest : public GeodeReducedResolutionBlurTest,
                              public testing::WithParamInterface<BlurCase> {};
@@ -245,11 +247,11 @@ TEST_P(ReducedBlurErrorTest, StaysWithinToleranceOfFullResolution) {
                                                        .stdDeviationY = test.deviationY,
                                                        .edgeMode = test.edgeMode},
                                       test.linearRgb);
-  for (const auto& [sceneName, scene] : std::vector<std::pair<std::string, Scene>>{
-           {"square", DrawSquare},
-           {"disc", DrawDisc},
-           {"thin_lines", DrawThinLines},
-           {"checker", DrawChecker}}) {
+  for (const auto& [sceneName, scene] :
+       std::vector<std::pair<std::string, Scene>>{{"square", DrawSquare},
+                                                  {"disc", DrawDisc},
+                                                  {"thin_lines", DrawThinLines},
+                                                  {"checker", DrawChecker}}) {
     SCOPED_TRACE(sceneName);
     const ImageError error = measure(graph, scene, std::string(test.name) + "/" + sceneName);
     EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));

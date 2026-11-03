@@ -34,10 +34,10 @@ inline constexpr uint32_t kGaussianBlurEdgeWrap = 2;
  * Host layout for the `params` uniform resource of the Gaussian blur program.
  */
 struct alignas(8) GaussianBlurParams {
-  float stdDeviation = 0.0f;         //!< Gaussian standard deviation in pixels.
-  uint32_t axis = 0;                 //!< Zero for horizontal and one for vertical sampling.
-  uint32_t edgeMode = 0;             //!< Transparent, duplicate, or wrap edge behavior.
-  uint32_t kernelType = 0;           //!< Gaussian, box, or three-box cascade kernel selection.
+  float stdDeviation = 0.0f;  //!< Gaussian standard deviation in pixels.
+  uint32_t axis = 0;          //!< Zero for horizontal and one for vertical sampling.
+  uint32_t edgeMode = 0;      //!< Transparent, duplicate, or wrap edge behavior.
+  uint32_t kernelType = 0;    //!< Gaussian, box, or three-box cascade kernel selection.
   /// Inclusive box-kernel extent below zero, the cascade window, or the horizontal resample factor.
   int32_t boxLeft = 0;
   /// Inclusive box-kernel extent above zero, or the vertical resample factor.
