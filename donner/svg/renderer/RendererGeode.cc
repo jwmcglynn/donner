@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -1695,11 +1696,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // and a filter execution inside the frame adds the chunks it closes here.
   std::vector<gpu::CommandBuffer> frameCommandBuffers;
 
-  // Runtime handles the filter executions of this frame recorded against. They belong to
-  // executions that have already finished, and the frame's submission re-validates every resource
-  // its command buffers name, so they are dropped only once that submission has happened.
-  std::vector<geode::RetainedFilterResources> frameRetainedFilterResources;
-
   // Whether a frame is open for recording. Distinct from `frameGpuEncoder`, which is null while
   // a filter executes between the frame's own encoders.
   bool frameRecordingOpen = false;
@@ -1869,11 +1865,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  /// Keep what a filter execution's command buffers reference alive until the frame submits.
-  void retainUntilFrameSubmits(geode::RetainedFilterResources resources) override {
-    frameRetainedFilterResources.push_back(std::move(resources));
-  }
-
   /// Submit every command buffer the frame has accumulated as one submission, in recording order.
   [[nodiscard]] bool submitFrameCommandBuffers() {
     if (frameArenaWriteFailed) {
@@ -1983,7 +1974,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandBuffers.clear();
-    frameRetainedFilterResources.clear();
     frameRecordingOpen = false;
     frameImportedTextureViews.clear();
     frameSnapshotImports.clear();
@@ -2836,6 +2826,28 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                 "A copyable filter stack frame would let vector growth copy its clip entries.");
   std::vector<ClipStackEntry> clipStack;
   std::vector<FilterStackFrame> filterStack;
+
+  /// Debug check that \p texture, about to be parked for reuse within the frame, names nothing an
+  /// open push still draws into or composites from: a later acquisition would otherwise overwrite
+  /// it. Compares runtime identities, which an alias shares with the texture it names.
+  void assertNotOpenStackTexture([[maybe_unused]] const gpu::Texture& texture) const {
+#ifndef NDEBUG
+    const auto same = [&](const gpu::Texture& other) {
+      return other.isValid() && other.slotIndex() == texture.slotIndex() &&
+             other.generation() == texture.generation();
+    };
+    assert(!same(target));
+    for (const LayerStackFrame& frame : layerStack) {
+      assert(!same(frame.savedTarget) && !same(frame.layerTexture));
+    }
+    for (const FilterStackFrame& frame : filterStack) {
+      assert(!same(frame.savedTarget) && !same(frame.layerTexture));
+    }
+    for (const MaskStackFrame& frame : maskStack) {
+      assert(!same(frame.savedTarget) && !same(frame.maskTexture) && !same(frame.contentTexture));
+    }
+#endif
+  }
   std::size_t rejectedFilterDepth = 0;
 
   /// How far right and down the active filter captures move what is drawn into them, in pixels.
@@ -5713,8 +5725,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
-    // Nothing still allocates from the frame arenas; an unfinished frame's work never reaches the
-    // queue, so its buffers can serve the next frame unless its uploads failed.
+    // Nothing still allocates from the frame arenas. Whatever of an unfinished frame reached the
+    // queue (a mid-frame split submits part of it) was submitted ahead of anything the next frame
+    // records or uploads, so its buffers can serve the next frame unless its uploads failed.
     frameArenas.recycle(/*discardBuffers=*/frameArenaWriteFailed);
     // An unfinished frame can leave pattern tiles, clips, open scopes, and pending releases
     // behind. Retire them before resetting their budget. Unsubmitted work returns to the pool;
@@ -5737,8 +5750,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // A sibling renderer may still have unsubmitted reads of the shared filter scratch.
     if (device && device->oldestOpenFrameGeneration() == std::numeric_limits<uint64_t>::max()) {
       device->filterEngine().beginFrame();
-      // Nor may it age draw bind groups another renderer's open frame may still name.
-      device->bindGroupCache().beginFrame();
+    }
+    // The bind group caches release only what no open frame can name, so they age even while
+    // other renderers' frames overlap this one.
+    if (device) {
+      device->bindGroupCache().evict(device->oldestOpenFrameGeneration(),
+                                     device->latestFrameGeneration());
+      device->filterEngine().evictCachedObjects(device->oldestOpenFrameGeneration(),
+                                                device->latestFrameGeneration());
     }
     if (texturePool) {
       texturePool->beginFrame();
@@ -6105,6 +6124,13 @@ bool RendererGeode::debugGeometryOverlay() const {
 FrameTimings RendererGeode::lastFrameTimings() const {
   FrameTimings timings;
   timings.counters = impl_->counters;
+  if (impl_->device) {
+    timings.counters.bindGroupCacheEntries =
+        impl_->device->bindGroupCache().size() + impl_->device->filterEngine().cachedObjectCount();
+    timings.counters.bindGroupCacheRetired =
+        impl_->device->bindGroupCache().retiredSize() +
+        impl_->device->filterEngine().retiredCachedObjectCount();
+  }
   // `renderPassNs` / `totalGpuNs` stay zero until timestamp support lands.
   return timings;
 }
@@ -6409,7 +6435,6 @@ void RendererGeode::endFrame() {
     impl_->frameArenas.recycle(/*discardBuffers=*/!submitted || impl_->frameArenaWriteFailed);
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
-    impl_->frameRetainedFilterResources.clear();
     impl_->frameImportedTextureViews.clear();
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
@@ -6684,6 +6709,7 @@ void RendererGeode::popIsolatedLayer() {
       // The blend composite is the layer's last use, and whatever draws into it next records after
       // this encoder ends its pass, so a later layer in this frame can take it. The snapshot is a
       // copy destination, so it waits for the frame's submission.
+      impl_->assertNotOpenStackTexture(frame.layerTexture);
       impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
@@ -6707,6 +6733,7 @@ void RendererGeode::popIsolatedLayer() {
   // after this encoder ends its pass. Without reuse, every isolated layer of a frame held its own
   // target-sized texture until the frame ended, so a frame of many sibling layers allocated that
   // many full-size surfaces at once and, past the pool's budget, recreated most of them each frame.
+  impl_->assertNotOpenStackTexture(frame.layerTexture);
   impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
 }
 

@@ -2917,6 +2917,147 @@ TEST_F(RendererGeodeTest, ARepeatFrameOfArenaFillsCreatesNoBindGroups) {
   EXPECT_EQ(first.pixels, second.pixels);
 }
 
+TEST_F(RendererGeodeTest, ARepeatFrameWithNewColorsReusesBindGroupsAndUploadsTheColors) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  constexpr int kRects = 12;
+  const auto drawFrame = [&](RendererGeode& renderer, int colorShift) {
+    beginFrame(renderer);
+    for (int index = 0; index < kRects; ++index) {
+      renderer.setPaint(
+          solidFill(css::RGBA(static_cast<uint8_t>(20 * index), static_cast<uint8_t>(colorShift),
+                              static_cast<uint8_t>(250 - colorShift), 255)));
+      renderer.drawRect(Box2d::FromXYWH(5.0 * index, 0.0, 5.0, kViewportSize), StrokeParams{});
+    }
+    renderer.endFrame();
+  };
+
+  RendererGeode renderer = createRenderer();
+  drawFrame(renderer, 10);
+  drawFrame(renderer, 200);
+  // Same geometry, so the same arena regions and cached bind groups: only the uniform bytes
+  // differ, and they must reach the GPU even though no bind group is rebuilt.
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  for (int index = 0; index < kRects; ++index) {
+    EXPECT_THAT(PixelAt(bitmap, 5 * index + 2, 32), RgbaEq(20 * index, 200, 50, 255))
+        << "Rect " << index << " must show this frame's color, not the cached frame's";
+  }
+}
+
+TEST_F(RendererGeodeTest, SharedArenaGrowthMidFrameKeepsEarlierEncodersDraws) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  // The middle layer draws enough to outgrow the shared uniform arena, so the first layer's draws
+  // stay in the buffer it retires and the last layer's land in the one it grows into.
+  constexpr int kTinyRects = 400;
+  const auto drawFrame = [&](RendererGeode& renderer, uint8_t green) {
+    beginFrame(renderer);
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.setPaint(solidFill(css::RGBA(255, green, 0, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 16.0, kViewportSize), StrokeParams{});
+    renderer.popIsolatedLayer();
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.setPaint(solidFill(css::RGBA(0, green, 255, 255)));
+    for (int index = 0; index < kTinyRects; ++index) {
+      renderer.drawRect(Box2d::FromXYWH(24.0 + (index % 16), 24.0 + (index / 16) % 16, 1.0, 1.0),
+                        StrokeParams{});
+    }
+    renderer.popIsolatedLayer();
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    renderer.setPaint(solidFill(css::RGBA(0, 255, green, 255)));
+    renderer.drawRect(Box2d::FromXYWH(48.0, 0.0, 16.0, kViewportSize), StrokeParams{});
+    renderer.popIsolatedLayer();
+    renderer.endFrame();
+  };
+
+  RendererGeode renderer = createRenderer();
+  for (const uint8_t green : {uint8_t{10}, uint8_t{90}}) {
+    drawFrame(renderer, green);
+    const RendererBitmap bitmap = renderer.takeSnapshot();
+    EXPECT_THAT(PixelAt(bitmap, 8, 32), RgbaEq(255, green, 0, 255)) << "Before the growth";
+    EXPECT_THAT(PixelAt(bitmap, 30, 30), RgbaEq(0, green, 255, 255)) << "Across the growth";
+    EXPECT_THAT(PixelAt(bitmap, 56, 32), RgbaEq(0, 255, green, 255)) << "After the growth";
+  }
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bufferCreates, 0u)
+      << "The second frame starts in the buffers the first frame grew";
+}
+
+/// Draws one frame whose first path's size, and so every later draw's arena offsets, depends on
+/// \p variant, so its bind group keys differ from the frames around it.
+void DrawChurningFrame(RendererGeode& renderer, int variant) {
+  PathBuilder builder;
+  builder.moveTo({1.0, 1.0});
+  const int points = 3 + variant % 29;
+  for (int index = 0; index < points; ++index) {
+    builder.lineTo({1.0 + 2.0 * index, index % 2 == 0 ? 20.0 : 4.0});
+  }
+  builder.closePath();
+  const Path path = builder.build();
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawPath(PathShape{.path = &path}, StrokeParams{});
+  for (int index = 0; index < 4; ++index) {
+    renderer.drawRect(Box2d::FromXYWH(8.0 * index, 40.0, 8.0, 8.0), StrokeParams{});
+  }
+}
+
+TEST_F(RendererGeodeTest, BindGroupCacheAgesWhileRenderersFramesOverlap) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode first = createRenderer();
+  RendererGeode second = createRenderer();
+  // Staggered frames: one renderer's frame is always open while the other begins, so there is
+  // never a moment with no open frame on the device.
+  beginFrame(first);
+  DrawChurningFrame(first, 0);
+  for (int round = 1; round <= 60; ++round) {
+    beginFrame(second);
+    DrawChurningFrame(second, 2 * round);
+    first.endFrame();
+    beginFrame(first);
+    DrawChurningFrame(first, 2 * round + 1);
+    second.endFrame();
+  }
+  first.endFrame();
+
+  EXPECT_LE(sharedDevice()->bindGroupCache().size(), 200u)
+      << "Entries no open frame can name are released even though frames always overlap";
+}
+
+TEST_F(RendererGeodeTest, BindGroupCacheCapNeverRetiresWhatAnOpenFrameNamed) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  geode::GeodeBindGroupCache& cache = sharedDevice()->bindGroupCache();
+  cache.setMaximumEntriesForTesting(16);
+  RendererGeode first = createRenderer();
+  RendererGeode second = createRenderer();
+
+  beginFrame(first);
+  first.setPaint(solidFill(css::RGBA(30, 180, 90, 255)));
+  for (int index = 0; index < 8; ++index) {
+    first.drawRect(Box2d::FromXYWH(8.0 * index, 0.0, 8.0, 8.0), StrokeParams{});
+  }
+  // While the first frame stays open, another renderer churns well past the cap. Everything named
+  // since the first frame opened may be named by it, so the cap is exceeded rather than honored.
+  for (int round = 0; round < 30; ++round) {
+    beginFrame(second);
+    DrawChurningFrame(second, round);
+    second.endFrame();
+  }
+  EXPECT_GT(cache.size(), 16u) << "Entries an open frame may name stay live past the cap";
+  first.endFrame();
+  const RendererBitmap bitmap = first.takeSnapshot();
+  EXPECT_THAT(PixelAt(bitmap, 4, 4), RgbaEq(30, 180, 90, 255))
+      << "The open frame's bind groups were kept, so its submission succeeds";
+  EXPECT_THAT(PixelAt(bitmap, 60, 4), RgbaEq(30, 180, 90, 255));
+
+  // Once no frame overlaps, churning frames retire and then release what they no longer name.
+  for (int round = 0; round < 2 * geode::GeodeBindGroupCache::kRetainedGenerations; ++round) {
+    beginFrame(second);
+    DrawChurningFrame(second, 100 + round);
+    second.endFrame();
+  }
+  EXPECT_LE(cache.size(), 32u);
+  EXPECT_LE(second.lastFrameTimings().counters.bindGroupCacheRetired, 32u);
+  cache.setMaximumEntriesForTesting(geode::GeodeBindGroupCache::kMaximumEntries);
+}
+
 TEST_F(RendererGeodeTest, SiblingIsolatedLayersShareOneTextureWithinAFrame) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   // A size no other case uses, so nothing pooled by an earlier case can stand in for reuse.
@@ -8295,6 +8436,86 @@ TEST_F(RendererGeodeTest, WarmFilterPassesReuseBindGroupsAndBatchParameterUpload
   RecordProperty("five_pass_bindgroups", std::to_string(fiveCounters.bindgroupCreates));
   RecordProperty("one_pass_writes", std::to_string(oneCounters.bufferWrites));
   RecordProperty("five_pass_writes", std::to_string(fiveCounters.bufferWrites));
+}
+
+TEST_F(RendererGeodeTest, AFilterPassWhoseOwnLookupsReachTheCapKeepsItsEarlierLookups) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  // A cap of one: every miss inside a pass would retire the views the pass already looked up.
+  // A pass holds those views across its later lookups, so they must stay valid.
+  SVGDocument document = ParseDocumentOrFail(ChainedBlurDocument(3));
+  RendererGeode reference = createRenderer();
+  reference.draw(document);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  sharedDevice()->filterEngine().setCachedObjectCapForTesting(1);
+  RendererGeode renderer = createRenderer();
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+    EXPECT_EQ(renderer.takeSnapshot().pixels, expected.pixels) << "Frame " << frame;
+  }
+  sharedDevice()->filterEngine().setCachedObjectCapForTesting(
+      geode::GeodeBindGroupCache::kMaximumEntries);
+}
+
+TEST_F(RendererGeodeTest, AWarmFilterFrameWithANewBlurRadiusShowsTheNewBlur) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  SVGDocument document = ParseDocumentOrFail(ChainedBlurDocument(1));
+  RendererGeode renderer = createRenderer();
+  const auto [warm, before] = WarmFrame(renderer, document);
+
+  // Same primitive, region and pass plan (both radii stay below the box-blur switch at 2), so the
+  // same parameter slot and cached bind groups; only the staged parameters differ.
+  auto blur = document.querySelector("feGaussianBlur");
+  ASSERT_TRUE(blur.has_value());
+  blur->setAttribute("stdDeviation", "1.6");
+  renderer.draw(document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, warm.bindgroupCreates)
+      << "The new radius rebuilds no filter bind group; only the composite's own group, which a "
+         "warm frame builds anyway, is created";
+  const RendererBitmap after = renderer.takeSnapshot();
+
+  SVGDocument expectedDocument = ParseDocumentOrFail(ChainedBlurDocument(1));
+  auto expectedBlur = expectedDocument.querySelector("feGaussianBlur");
+  ASSERT_TRUE(expectedBlur.has_value());
+  expectedBlur->setAttribute("stdDeviation", "1.6");
+  RendererGeode fresh = createRenderer();
+  fresh.draw(expectedDocument);
+  const RendererBitmap expected = fresh.takeSnapshot();
+
+  EXPECT_NE(after.pixels, before.pixels) << "The new radius must reach the blur pass";
+  EXPECT_EQ(after.pixels, expected.pixels)
+      << "A warm frame must render exactly what a cold renderer renders for the new radius";
+}
+
+/// A document of \p groups filtered squares in a row, each its own color.
+std::string FilteredSquaresDocument(int groups, uint8_t green) {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="16"><filter id="f" )svg"
+      R"svg(x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="0.5"/>)svg"
+      R"svg(</filter>)svg";
+  for (int index = 0; index < groups; ++index) {
+    source += "<g filter=\"url(#f)\"><rect x=\"" + std::to_string(10 * index) +
+              "\" y=\"0\" width=\"10\" height=\"16\" fill=\"rgb(" + std::to_string(10 * index) +
+              "," + std::to_string(green) + ",200)\"/></g>";
+  }
+  return source + "</svg>";
+}
+
+TEST_F(RendererGeodeTest, FilteredLayersOnBothSidesOfASubmissionSplitRenderAndUpdate) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  constexpr int kGroups = 20;  // More command buffers than one submission carries.
+  RendererGeode renderer = createRenderer();
+  for (const uint8_t green : {uint8_t{30}, uint8_t{30}, uint8_t{160}}) {
+    SVGDocument document = ParseDocumentOrFail(FilteredSquaresDocument(kGroups, green));
+    renderer.draw(document);
+    const geode::GeodeCounters& counters = renderer.lastFrameTimings().counters;
+    ASSERT_GE(counters.submits, 2u) << "The frame must split, or this proves nothing about it";
+    const RendererBitmap bitmap = renderer.takeSnapshot();
+    for (int index = 0; index < kGroups; ++index) {
+      EXPECT_THAT(PixelAt(bitmap, 10 * index + 5, 8), RgbaEq(10 * index, green, 200, 255))
+          << "Square " << index << " with green " << int(green);
+    }
+  }
 }
 
 constexpr int kPhoneWidth = 1206;

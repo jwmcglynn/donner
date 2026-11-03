@@ -2,6 +2,7 @@
 /// @file
 /// Cross-frame cache of bind groups and whole-texture views, keyed by exact resource identity.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -29,25 +30,45 @@ namespace donner::geode {
  * contents of a bound buffer or texture are free to change between frames; a bind group only
  * names them.
  *
- * Entries no lookup has named for \ref kRetainedFrames frames are dropped at \ref beginFrame,
- * which the owner must call only when no frame that could have recorded work naming them is
- * still unsubmitted. Thread-safe.
+ * Lifetime follows the device's frame generations. Every lookup stamps its entry with a
+ * generation at or after that of the frame recording the use (callers pass the device's latest
+ * generation). An entry stamped before the oldest open generation was last named by frames that
+ * have all closed, so it may be released. \ref evict releases such entries once they are also
+ * \ref kRetainedGenerations old.
+ *
+ * The live-entry cap is soft. An insertion past it retires the least recently stamped entries
+ * that no open frame named, and only those: an entry stamped at or after the oldest open
+ * generation stays live even past the cap, until that frame closes and the entry ages out.
+ * Retired entries keep their map nodes (extracted, not erased), so a pointer handed out earlier
+ * stays valid until a later \ref evict releases them, which it does once no open frame can name
+ * them. How long that takes, and so how large the retired list grows, depends on how long the
+ * oldest open frame stays open.
+ *
+ * Thread-safe; the frame generations it is given come from GeodeDevice, whose frame bookkeeping
+ * requires that all renderers on one device run on one thread.
  */
 class GeodeBindGroupCache {
 public:
-  /// Frames an entry survives without being named. Pooled resources can come back in a
-  /// different order from one frame to the next, so entries outlive more than one frame.
-  static constexpr uint64_t kRetainedFrames = 4;
+  /// Generations an entry survives without being named, so pooled resources that come back in a
+  /// different order from one frame to the next still hit.
+  static constexpr uint64_t kRetainedGenerations = 8;
+
+  /// Live entries (views plus bind groups) kept before the least recently stamped are retired.
+  static constexpr std::size_t kMaximumEntries = 4096;
 
   /**
    * The bind group \p descriptor describes, created on a miss.
    *
    * @param device Device to create on a miss.
    * @param descriptor Layout and bound resources; the label is used only on a miss.
-   * @return The bind group, valid until an eviction at a later \ref beginFrame, or null when the
-   *   runtime refuses it.
+   * @param useGeneration A frame generation at or after that of the frame recording this use.
+   * @param oldestOpenGeneration The device's oldest open frame generation, `~0` when none is open.
+   *   Only entries stamped before it may be retired to make room.
+   * @return The bind group, valid at least until that frame has closed, or null when the runtime
+   *   refuses it.
    */
-  const gpu::BindGroup* bindGroup(gpu::Device& device, gpu::BindGroupDescriptor descriptor) {
+  const gpu::BindGroup* bindGroup(gpu::Device& device, gpu::BindGroupDescriptor descriptor,
+                                  uint64_t useGeneration, uint64_t oldestOpenGeneration) {
     Key key;
     key.words.reserve(1 + descriptor.entries.size() * 4);
     key.words.push_back(IdentityKey(descriptor.layout.slotIndex(), descriptor.layout.generation()));
@@ -74,15 +95,16 @@ public:
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto found = bindGroups_.find(key); found != bindGroups_.end()) {
-      found->second.lastUsedFrame = frame_;
+      found->second.stamp = std::max(found->second.stamp, useGeneration);
       return &found->second.value;
     }
     gpu::Result<gpu::BindGroup> created = device.createBindGroup(std::move(descriptor));
     if (!created.hasResult()) {
       return nullptr;
     }
+    retireOverCapacityLocked(std::min(oldestOpenGeneration, useGeneration));
     auto [inserted, unused] = bindGroups_.emplace(
-        std::move(key), Entry<gpu::BindGroup>{std::move(created).result(), frame_});
+        std::move(key), Entry<gpu::BindGroup>{std::move(created).result(), useGeneration});
     (void)unused;
     return &inserted->second.value;
   }
@@ -93,15 +115,19 @@ public:
    * @param device Device to create on a miss.
    * @param texture Live texture to view.
    * @param label Debug label, used only on a miss.
-   * @return The view, valid until an eviction at a later \ref beginFrame, or null when the
-   *   runtime refuses it.
+   * @param useGeneration A frame generation at or after that of the frame recording this use.
+   * @param oldestOpenGeneration The device's oldest open frame generation, `~0` when none is open.
+   *   Only entries stamped before it may be retired to make room.
+   * @return The view, valid at least until that frame has closed, or null when the runtime
+   *   refuses it.
    */
   const gpu::TextureView* textureView(gpu::Device& device, const gpu::Texture& texture,
-                                      RcString label) {
+                                      RcString label, uint64_t useGeneration,
+                                      uint64_t oldestOpenGeneration) {
     const uint64_t key = IdentityKey(texture.slotIndex(), texture.generation());
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto found = views_.find(key); found != views_.end()) {
-      found->second.lastUsedFrame = frame_;
+      found->second.stamp = std::max(found->second.stamp, useGeneration);
       return &found->second.value;
     }
     gpu::Result<gpu::TextureView> created =
@@ -109,28 +135,50 @@ public:
     if (!created.hasResult()) {
       return nullptr;
     }
+    retireOverCapacityLocked(std::min(oldestOpenGeneration, useGeneration));
     auto [inserted, unused] =
-        views_.emplace(key, Entry<gpu::TextureView>{std::move(created).result(), frame_});
+        views_.emplace(key, Entry<gpu::TextureView>{std::move(created).result(), useGeneration});
     (void)unused;
     return &inserted->second.value;
   }
 
-  /// Advance the frame and drop entries not named for \ref kRetainedFrames frames. Call only when
-  /// no frame that could have recorded work naming the entries is still unsubmitted.
-  void beginFrame() {
+  /**
+   * Release what no open frame can name: retired entries stamped before \p oldestOpenGeneration,
+   * and live entries stamped before it that are also \ref kRetainedGenerations older than
+   * \p latestGeneration.
+   *
+   * @param oldestOpenGeneration The device's oldest open frame generation, `~0` when none is open.
+   * @param latestGeneration The device's most recently minted frame generation.
+   */
+  void evict(uint64_t oldestOpenGeneration, uint64_t latestGeneration) {
     std::lock_guard<std::mutex> lock(mutex_);
-    ++frame_;
-    const auto stale = [&](const auto& item) {
-      return item.second.lastUsedFrame + kRetainedFrames < frame_;
+    const auto releasable = [&](uint64_t stamp) {
+      return stamp < oldestOpenGeneration && stamp + kRetainedGenerations <= latestGeneration;
     };
-    std::erase_if(views_, stale);
-    std::erase_if(bindGroups_, stale);
+    std::erase_if(views_, [&](const auto& item) { return releasable(item.second.stamp); });
+    std::erase_if(bindGroups_, [&](const auto& item) { return releasable(item.second.stamp); });
+    std::erase_if(retiredViews_,
+                  [&](const auto& node) { return node.mapped().stamp < oldestOpenGeneration; });
+    std::erase_if(retiredBindGroups_,
+                  [&](const auto& node) { return node.mapped().stamp < oldestOpenGeneration; });
   }
 
-  /// Number of cached bind groups and views.
+  /// Number of live (lookup-reachable) bind groups and views.
   [[nodiscard]] std::size_t size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return views_.size() + bindGroups_.size();
+  }
+
+  /// Number of retired entries still held for frames that may name them.
+  [[nodiscard]] std::size_t retiredSize() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return retiredViews_.size() + retiredBindGroups_.size();
+  }
+
+  /// Replace the live-entry cap of \ref kMaximumEntries, for tests.
+  void setMaximumEntriesForTesting(std::size_t maximumEntries) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    maximumEntries_ = std::max<std::size_t>(maximumEntries, 1);
   }
 
 private:
@@ -141,7 +189,7 @@ private:
   template <typename Value>
   struct Entry {
     Value value;
-    uint64_t lastUsedFrame = 0;
+    uint64_t stamp = 0;  ///< Latest generation that named the entry.
   };
 
   struct Key {
@@ -159,11 +207,63 @@ private:
     }
   };
 
+  /// Before an insertion that would exceed the cap, retire the least recently stamped live
+  /// entries stamped before \p retirableBefore, down to three quarters of the cap so a churning
+  /// frame pays the scan rarely. Entries stamped at or after it may be named by an open frame and
+  /// stay live, so the cap is exceeded until they age out. Retiring extracts the map node, so
+  /// pointers into it stay valid until \ref evict releases it.
+  void retireOverCapacityLocked(uint64_t retirableBefore) {
+    const std::size_t live = views_.size() + bindGroups_.size();
+    if (live < maximumEntries_) {
+      return;
+    }
+    const std::size_t target = maximumEntries_ - maximumEntries_ / 4;
+    std::vector<uint64_t> stamps;
+    stamps.reserve(live);
+    for (const auto& item : views_) {
+      if (item.second.stamp < retirableBefore) {
+        stamps.push_back(item.second.stamp);
+      }
+    }
+    for (const auto& item : bindGroups_) {
+      if (item.second.stamp < retirableBefore) {
+        stamps.push_back(item.second.stamp);
+      }
+    }
+    const std::size_t retireCount = std::min(stamps.size(), live - std::min(live, target));
+    if (retireCount == 0) {
+      return;
+    }
+    std::nth_element(stamps.begin(), stamps.begin() + static_cast<std::ptrdiff_t>(retireCount - 1),
+                     stamps.end());
+    const uint64_t cutoff = stamps[retireCount - 1];
+    std::size_t retired = 0;
+    for (auto it = views_.begin(); it != views_.end() && retired < retireCount;) {
+      const auto current = it++;
+      if (current->second.stamp <= cutoff && current->second.stamp < retirableBefore) {
+        retiredViews_.push_back(views_.extract(current));
+        ++retired;
+      }
+    }
+    for (auto it = bindGroups_.begin(); it != bindGroups_.end() && retired < retireCount;) {
+      const auto current = it++;
+      if (current->second.stamp <= cutoff && current->second.stamp < retirableBefore) {
+        retiredBindGroups_.push_back(bindGroups_.extract(current));
+        ++retired;
+      }
+    }
+  }
+
   mutable std::mutex mutex_;
-  uint64_t frame_ = 0;
+  std::size_t maximumEntries_ = kMaximumEntries;
   // Node-based maps: lookups hand out pointers that must survive later insertions.
-  std::unordered_map<uint64_t, Entry<gpu::TextureView>> views_;
-  std::unordered_map<Key, Entry<gpu::BindGroup>, KeyHash> bindGroups_;
+  using ViewMap = std::unordered_map<uint64_t, Entry<gpu::TextureView>>;
+  using BindGroupMap = std::unordered_map<Key, Entry<gpu::BindGroup>, KeyHash>;
+  ViewMap views_;
+  BindGroupMap bindGroups_;
+  // Extracted nodes: each keeps the allocation a handed-out pointer points into.
+  std::vector<ViewMap::node_type> retiredViews_;
+  std::vector<BindGroupMap::node_type> retiredBindGroups_;
 };
 
 }  // namespace donner::geode

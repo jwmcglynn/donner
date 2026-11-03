@@ -124,9 +124,6 @@ public:
    */
   [[nodiscard]] bool uploadStaged(gpu::Device& device);
 
-  /// Bytes of the buffers the arenas currently draw into, excluding outgrown ones.
-  [[nodiscard]] uint64_t capacityBytes() const;
-
 private:
   friend class GeoEncoder;
   struct Storage;

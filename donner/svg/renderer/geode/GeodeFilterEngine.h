@@ -13,6 +13,7 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <array>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -136,38 +137,6 @@ public:
                                                    const gpu::TextureDescriptor& desc) = 0;
 };
 
-/// Runtime handles a filter execution's recorded commands reference, moved to whatever outlives
-/// those commands.
-struct RetainedFilterResources {
-  RetainedFilterResources() = default;
-  ~RetainedFilterResources() = default;
-
-  // Move-only, explicitly. The handles this holds are move-only, so a copy could never have
-  // worked; deleting it matters because a `std::deque` member advertises a copy constructor that
-  // fails only once instantiated, and its move is `noexcept` in one standard library but not
-  // another, so `std::vector` reallocation reached for that copy on one of them and not the other.
-  RetainedFilterResources(const RetainedFilterResources&) = delete;
-  RetainedFilterResources& operator=(const RetainedFilterResources&) = delete;
-
-  /// Construct by moving another instance's state.
-  /// @param other Source object.
-  RetainedFilterResources(RetainedFilterResources&& other) = default;
-
-  /// Replace this object's state by moving another instance.
-  /// @param other Source object.
-  /// @return This object after the move.
-  RetainedFilterResources& operator=(RetainedFilterResources&& other) = default;
-
-  std::deque<gpu::TextureView> textureViews;  //!< Views the commands attach to or sample.
-  std::deque<gpu::BindGroup> bindGroups;      //!< Bind groups the commands bind.
-};
-
-static_assert(!std::is_copy_constructible_v<RetainedFilterResources>,
-              "RetainedFilterResources owns move-only handles: a copy must be rejected here on "
-              "every standard library, not only on one whose containers reach for it");
-static_assert(std::is_move_constructible_v<RetainedFilterResources>,
-              "RetainedFilterResources is moved into the frame that outlives the execution");
-
 /**
  * Renderer-owned collection point for the command buffers one frame records.
  *
@@ -186,15 +155,6 @@ public:
 
   /// True when the frame refused an upload and must discard its recorded commands without loss.
   [[nodiscard]] virtual bool frameUploadRefused() const { return false; }
-
-  /// Keeps the handles a command buffer added here references alive until the frame submits.
-  ///
-  /// A submission re-validates every resource a recorded command names, so anything an execution
-  /// would otherwise drop when it finishes has to outlive the frame it recorded into rather than
-  /// the execution that recorded it.
-  ///
-  /// @param resources Handles the added command buffers reference; consumed.
-  virtual void retainUntilFrameSubmits(RetainedFilterResources resources) = 0;
 };
 
 /**
@@ -401,6 +361,24 @@ public:
    * device).
    */
   void beginFrame();
+
+  /**
+   * Release cached pass views and bind groups no open frame can name (see GeodeBindGroupCache).
+   * Safe while other frames are open.
+   * @param oldestOpenGeneration The device's oldest open frame generation, `~0` when none is open.
+   * @param latestGeneration The device's most recently minted frame generation.
+   */
+  void evictCachedObjects(uint64_t oldestOpenGeneration, uint64_t latestGeneration);
+
+  /// Cached pass views and bind groups that lookups can reach.
+  [[nodiscard]] std::size_t cachedObjectCount() const;
+
+  /// Cached pass views and bind groups retired past the cap, held until no open frame can name
+  /// them.
+  [[nodiscard]] std::size_t retiredCachedObjectCount() const;
+
+  /// Replace the pass cache's live-entry cap, for tests.
+  void setCachedObjectCapForTesting(std::size_t maximumEntries);
 
   /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
   uint64_t retainedBufferBytes() const;

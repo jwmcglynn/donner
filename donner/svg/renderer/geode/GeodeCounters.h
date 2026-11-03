@@ -166,6 +166,15 @@ struct GeodeCounters {
   /// Never above the renderer's frames-in-flight limit when one is set.
   uint64_t framesInFlight = 0;
 
+  /// Bind groups and texture views the device's draw and filter caches can reach, read when the
+  /// frame's timings are taken. Not a per-frame count; a steadily growing value means they are
+  /// not aging.
+  uint64_t bindGroupCacheEntries = 0;
+
+  /// Cache entries retired past the caches' cap and held until no open frame can name them, read
+  /// with \ref bindGroupCacheEntries. A value that keeps growing means some frame stays open.
+  uint64_t bindGroupCacheRetired = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };
