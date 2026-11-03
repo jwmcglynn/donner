@@ -47,7 +47,7 @@ constexpr int kMaximumChannelError = 3;
 
 /// Largest mean premultiplied channel difference, in 8-bit levels, over the pixels either result
 /// covers.
-constexpr double kMaximumMeanChannelError = 0.5;
+constexpr double kMaximumMeanChannelError = 0.25;
 
 constexpr int kViewport = 320;
 
@@ -159,13 +159,15 @@ void DrawThinLines(RendererGeode& renderer) {
   }
 }
 
-/// A two-pixel checkerboard in two colors.
+/// A two-pixel checkerboard in two colors. Its average is what a wide blur converges to, so the
+/// colors keep that average off a half-level rounding boundary, where the two results would round
+/// apart by a level over the whole blurred interior while agreeing to within float precision.
 void DrawChecker(RendererGeode& renderer) {
   for (int y = 120; y < 200; y += 2) {
     for (int x = 120; x < 200; x += 2) {
       const bool odd = ((x + y) / 2) % 2 != 0;
-      renderer.setPaint(odd ? SolidFill(css::RGBA(255, 128, 0, 255))
-                            : SolidFill(css::RGBA(0, 64, 255, 160)));
+      renderer.setPaint(odd ? SolidFill(css::RGBA(250, 130, 10, 255))
+                            : SolidFill(css::RGBA(0, 60, 240, 151)));
       renderer.drawRect(Box2d({static_cast<double>(x), static_cast<double>(y)}, {x + 2.0, y + 2.0}),
                         StrokeParams{});
     }
