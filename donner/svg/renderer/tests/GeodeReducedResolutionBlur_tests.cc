@@ -73,9 +73,9 @@ PaintParams SolidFill(const css::RGBA& rgba) {
 /// Difference between two straight-alpha snapshots, measured on premultiplied channels so that
 /// nearly transparent pixels do not magnify it.
 struct ImageError {
-  int maximum = 0;           //!< Largest channel difference, in 8-bit levels.
-  double mean = 0.0;         //!< Mean channel difference over covered pixels.
-  size_t coveredPixels = 0;  //!< Pixels with nonzero alpha in either image.
+  int maximum = 0;                    //!< Largest channel difference, in 8-bit levels.
+  double mean = 0.0;                  //!< Mean channel difference over covered pixels.
+  size_t coveredPixels = 0;           //!< Pixels with nonzero alpha in either image.
   Vector2i worst = Vector2i::Zero();  //!< Pixel holding the largest difference.
 };
 
@@ -279,8 +279,7 @@ TEST_P(ReducedBlurErrorTest, StaysWithinToleranceOfFullResolution) {
 
 INSTANTIATE_TEST_SUITE_P(
     Deviations, ReducedBlurErrorTest,
-    testing::Values(BlurCase{"sigma6", 6, 6}, BlurCase{"sigma8", 8, 8},
-                    BlurCase{"sigma12", 12, 12},
+    testing::Values(BlurCase{"sigma6", 6, 6}, BlurCase{"sigma8", 8, 8}, BlurCase{"sigma12", 12, 12},
                     BlurCase{"sigma16", 16, 16}, BlurCase{"sigma24", 24, 24},
                     BlurCase{"sigma40", 40, 40}, BlurCase{"sigma64", 64, 64},
                     BlurCase{"anisotropic_x", 20, 3}, BlurCase{"anisotropic_y", 1.5, 30},

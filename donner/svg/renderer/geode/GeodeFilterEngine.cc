@@ -2419,8 +2419,8 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
     device_.countFilterBlurTaps(uint64_t{width} * height * factorX * factorY);
     for (uint32_t axis = 0; axis < 2; ++axis) {
       if (reduced.factors[axis] > 1 && reduced.widths[axis] > 0.0) {
-        plan.passes[plan.count++] = BlurDispatch{
-            axis, static_cast<float>(reduced.widths[axis]), std::nullopt, 0, /*spline=*/true};
+        plan.passes[plan.count++] = BlurDispatch{axis, static_cast<float>(reduced.widths[axis]),
+                                                 std::nullopt, 0, /*spline=*/true};
       }
     }
   }
