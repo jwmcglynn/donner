@@ -353,6 +353,10 @@ void GeodeSurfaceRenderer::trimTexturePool(RendererGeodeTexturePoolTrim level) {
   impl_->renderer->trimTexturePool(level);
 }
 
+void GeodeSurfaceRenderer::setSpriteSubpixelPlacement(SpriteSubpixelPlacement placement) {
+  impl_->renderer->setSpriteSubpixelPlacement(placement);
+}
+
 GeodeSurfaceRenderer::FrameStatus GeodeSurfaceRenderer::draw(SVGDocument& document) {
   if (isDeviceLost()) {
     return FrameStatus::Failed;

@@ -117,7 +117,10 @@ occurrence is cacheable when:
   gradients, clip paths, filter primitives), or the referenced `<symbol>` or `<svg>`;
 - no element draws content from elsewhere: no mask, marker, pattern paint, text, image or nested
   `<use>`;
-- every filter in the subtree is translation invariant (no lighting, turbulence or `feImage`);
+- every filter in the subtree is translation invariant: no turbulence, no `feImage`, and lighting
+  only from a distant light (a point or spot light is positioned on the pixel raster; lighting
+  has no kernel unit length, so its normals come from neighboring device pixels and move with
+  the input);
 - no element has a `mix-blend-mode` other than `normal`, which would read a backdrop the cached
   rasterization does not have.
 
@@ -127,47 +130,66 @@ coverage. A clip path or a `<symbol>` viewport only shrinks what is painted.
 
 ### Recording and drawing
 
-Recording reuses the filter layer capture without its filter. `pushSpriteRecording` begins a
-capture over the sprite's bounds with an empty graph, so the pop composites the captured content
-back unchanged, records it into the shared index under the sprite key, and runs nothing. A
-capture is not a filter: it is not admitted through the frame's filter budget, so it neither
-spends nor latches it. Before it begins, it checks that the frame's surface budget holds the
-capture; when it does not, `pushSpriteRecording` returns false having changed nothing, and the
-occurrence draws exactly as it would uncached. A hit draws the texture with
-`drawFilterResult`: on the pixel grid at the whole-pixel delta from where it was recorded, or
-resampled bilinearly at an exact fractional offset when the placement allows it. The
-pending-until-submit commit, the thrash guard, the record-time budget check, trimming and idle
-decay are those of cached filter results.
+A sprite is recorded the way Flash's `cacheAsBitmap` renders a display object: in isolation,
+into its own surface. `pushSpriteRecording` begins a capture sized to the sprite's whole bounds on
+the device pixel grid, whether or not they lie on the canvas, and the driver does not cull the
+sprite's content against the canvas while it records. So a sprite partly or wholly past the
+canvas edge records all of what it paints, and every later occurrence can draw it. The capture
+is a filter layer surface with an empty graph: the pop composites the captured content back
+unchanged, records it into the shared index under the sprite key, and runs nothing. A capture is
+not a filter: it is not admitted through the frame's filter budget, so it neither spends nor
+latches it. Before it begins, it checks that the frame's surface budget holds the capture; when
+it does not, `pushSpriteRecording` returns false having changed nothing, and the occurrence draws
+exactly as it would uncached. A hit draws the texture with `drawFilterResult`: on the pixel grid
+at the whole-pixel delta from where it was recorded, or resampled bilinearly at an exact
+fractional offset when the placement allows it. The pending-until-submit commit, the thrash
+guard, the record-time budget check, trimming and idle decay are those of cached filter results.
 
 Admission is two-touch as for filter results: a miss at a linear transform records only after a
 second miss at the same linear transform within the admission window, so a continuously
-changing scale never records. Because two-touch admission makes every new sprite of a scene
-record in the same frame, a frame begins at most eight captures; the rest record in the following
-frames. An occurrence whose bounds reach past the visible capture is drawn
-but not recorded; a later occurrence fully inside the canvas records it, and every occurrence
-then draws it.
+changing scale never records. Scale and rotation reuse a rasterization only when they match
+exactly; there is no tolerance. Two-touch admission makes every new sprite of a scene record in
+the same frame, so a frame begins at most 32 captures, whose surfaces take at most an eighth of
+the frame surface byte limit; the rest record in the following frames, and a scene of a hundred
+or so sprites warms within a few frames. A capture that can never begin (its surface would be
+larger than any surface may be) is remembered for its key and never admitted again; since the
+key changes with any revision or transform that could make it fit, nothing is lost. A filter
+result whose region reached past the raster the canvas allowed is likewise not marked for
+recording again for 30 frames.
 
 ### Sub-pixel placement
 
-A sprite is kept per quarter-pixel bucket of its translation and drawn on the pixel grid, so
-sharp edges are never smeared; positions differ from an uncached render by less than a quarter
-pixel. When everything the sprite paints is one filtered element (outside it only plain
-containers, and no clip or mask on it) whose filter result may be resampled under the cached
-filter result rules (a final blur of at least one device pixel, fed from the source through
-per-pixel primitives only, fading inside its region), the sprite is resampled at any offset
-instead: one rasterization serves every position, and each premultiplied channel differs from an
-uncached render by a few levels at most (4 measured).
+`setSpriteSubpixelPlacement` chooses how a sprite is placed at a fractional device translation;
+`GeodeSurfaceRenderer` forwards it.
+
+- `Exact`, the default: a sprite is kept per quarter-pixel bucket of its translation and drawn on
+  the pixel grid, so sharp edges are never smeared; positions differ from an uncached render by
+  less than a quarter pixel. A sprite content keeps at most four buckets per linear transform.
+  When everything the sprite paints is one filtered element (outside it only plain containers,
+  and no clip or mask on it) whose filter result may be resampled under the cached filter result
+  rules (a final blur of at least one device pixel, fed from the source through per-pixel
+  primitives only, fading inside its region), the sprite is resampled at any offset instead: one
+  rasterization serves every position, and each premultiplied channel differs from an uncached
+  render by a few levels at most (4 measured).
+- `Resample`, as Flash smooths a cached bitmap: a sprite is kept once per content and linear
+  transform and drawn bilinearly at its exact translation. It is recorded with one extra device
+  pixel of transparent margin so its edges resample against transparency. A sprite moving by
+  fractions of a pixel every frame hits every frame; the price is that sharp edges soften by up
+  to half a device pixel, which moves coverage at edge pixels by up to about half (160 of 255
+  levels bounds it in the test), while interiors match.
 
 ### Memory
 
-Sprites and filter results share the index: at most 64 entries and the smaller of a quarter of
-the frame surface byte limit and 64 MiB native or 16 MiB WebAssembly. Sprites hold at most 48 of
-the entries and three quarters of the byte limit: at a quota, a new sprite replaces the least
-recently used sprites that neither of the last two frames drew, or is not recorded, so filter
-results keep room. Nothing is evicted for a sprite the index or the frame's surface budget would
-then refuse anyway. A sprite content keeps
-at most four quarter-pixel buckets per linear transform, so a sharp sprite moving by fractions of
-a pixel does not take sixteen entries; its other buckets draw uncached. `trimTexturePool` with
+Sprites and filter results share the index: at most 256 entries and the smaller of a quarter of
+the frame surface byte limit and 64 MiB native or 32 MiB WebAssembly (about 200 sprites of
+200x200 pixels, on top of the texture pool's 96 MiB WebAssembly ceiling). Each kind has its own
+share: sprites hold at most 192 of the entries and three quarters of the byte limit, filter layer
+results at most 64 entries. When a share is full, a new result replaces the least recently used
+results of its own kind that neither of the last two frames drew, or is not recorded, so neither
+kind crowds out the other. Nothing is evicted for a result the index or the frame's surface budget
+would then refuse anyway. Under `Exact` placement a sprite content keeps at most four quarter-pixel
+buckets per linear transform, so a sharp sprite moving by fractions of a pixel does not take
+sixteen entries; its other buckets draw uncached. `trimTexturePool` with
 `ToFloor` or `All` and the two-second idle decay drop sprites with the filter results.
 `setSpriteCacheEnabled(false)` stops caching sprites while filter results stay cached; disabling
 the filter result cache disables both.
@@ -204,6 +226,11 @@ backends):
   translation moved by whole pixels, and within 0.1 over at most 160 edge pixels of the render at
   the actual translation; a single blurred element is resampled at any offset with one
   rasterization, within the bilinear bound;
+- large sprites partly past the canvas, drawn before the rest, record whole and every occurrence
+  hits from the fourth frame; a sprite lit by a distant light is cached and exact, and one lit by
+  a point light is not cached;
+- under `Resample` placement, sprites moving by a fraction of a pixel every frame record once and
+  hit every frame, differing from an exact render only at edges, within half a pixel's coverage;
 - fallbacks: a `mix-blend-mode`, text, an image, `opacity: inherit` on the root, or a host
   gradient paint is never cached and matches an uncached render exactly;
 - host-dependent sizing: a size from a stylesheet on the `<use>`, and a viewport-unit size across
@@ -211,7 +238,8 @@ backends):
 - host effects: a clip around the occurrences draws them cached and exact; a filter around them
   draws them uncached and exact;
 - a `<symbol>` that scales a blurred child, at fractional offsets, within the bucket bound;
-- on Geode: a capture the surface budget refuses still draws every occurrence; an abandoned
+- on Geode: a capture the surface budget refuses still draws every occurrence; a capture that
+  can never begin is not admitted again; an abandoned
   recording frame is never reused; captures run no filter and never reject the filter budget;
 - disabling the filter result cache drops held sprites.
 

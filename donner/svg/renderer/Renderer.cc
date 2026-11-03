@@ -566,6 +566,10 @@ void Renderer::setSpriteCacheEnabled(bool enabled) {
   impl_->setSpriteCacheEnabled(enabled);
 }
 
+void Renderer::setSpriteSubpixelPlacement(SpriteSubpixelPlacement placement) {
+  impl_->setSpriteSubpixelPlacement(placement);
+}
+
 void Renderer::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->pushMask(maskBounds);
 }

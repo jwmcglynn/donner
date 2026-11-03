@@ -408,6 +408,9 @@ public:
   void popSpriteRecording() override;
   /// Enables or disables caching sprite occurrences; disabling drops every cached result.
   void setSpriteCacheEnabled(bool enabled) override;
+  /// Sets how cached sprites are placed at fractional translations; see
+  /// \ref RendererInterface::setSpriteSubpixelPlacement.
+  void setSpriteSubpixelPlacement(SpriteSubpixelPlacement placement) override;
   void popFilterLayer() override;
 
   void pushMask(const std::optional<Box2d>& maskBounds) override {

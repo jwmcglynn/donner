@@ -60,13 +60,13 @@ template <typename Payload>
 class FilterResultCacheIndex {
 public:
   /// Most results kept at once.
-  static constexpr std::size_t kMaximumEntries = 64;
+  static constexpr std::size_t kMaximumEntries = 256;
   /// Most result bytes kept at once.
   static constexpr std::uint64_t kMaximumBytes = 64ULL * 1024 * 1024;
   /// Frames within which a second miss at a linear transform admits the content.
   static constexpr std::uint64_t kAdmissionWindowFrames = 120;
   /// Most contents whose recent misses are remembered for admission.
-  static constexpr std::size_t kMaximumAdmissionRecords = 128;
+  static constexpr std::size_t kMaximumAdmissionRecords = 512;
   /// Most linear transforms remembered per content.
   static constexpr std::size_t kLinearsPerContent = 4;
 

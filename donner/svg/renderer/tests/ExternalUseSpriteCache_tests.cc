@@ -655,7 +655,10 @@ TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
       EXPECT_EQ(work.spriteRecords, 0u) << "frame " << frame;
     }
   }
-  ExpectMatchesUncached(*renderer, scene, "sprite-off-canvas");
+  // A sprite rendered in its own surface can round an anti-aliased clip edge one premultiplied
+  // level differently from the same draw on the canvas (measured on these doubled sprites).
+  ExpectMatchesUncached(*renderer, scene, "sprite-off-canvas",
+                        editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
 }
 
 /// Largest premultiplied channel difference, and the number of pixels differing by more than

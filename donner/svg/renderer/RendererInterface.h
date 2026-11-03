@@ -1642,6 +1642,15 @@ public:
    * ignore the call.
    */
   virtual void setSpriteCacheEnabled(bool enabled) { (void)enabled; }
+
+  /**
+   * How cached sprites are placed at fractional device translations. The default,
+   * \ref SpriteSubpixelPlacement::Exact, keeps a rasterization per quarter-pixel bucket and never
+   * softens an edge; \ref SpriteSubpixelPlacement::Resample keeps one per content and transform and
+   * resamples it, which suits sprites that move by fractions of a pixel every frame. Changing it
+   * drops every cached result. Backends without a cache ignore the call.
+   */
+  virtual void setSpriteSubpixelPlacement(SpriteSubpixelPlacement placement) { (void)placement; }
 };
 
 }  // namespace donner::svg

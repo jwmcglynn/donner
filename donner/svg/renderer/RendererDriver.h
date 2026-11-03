@@ -751,6 +751,8 @@ private:
     SpriteMeasureStamp stamp;                       ///< Stamp at the probe.
   };
   std::optional<PendingSpriteMeasure> pendingSpriteMeasure_;
+  /// Sprite recordings open around the current traversal; content inside one is never culled.
+  int spriteRecordingDepth_ = 0;
 };
 
 }  // namespace donner::svg

@@ -14,6 +14,7 @@
 namespace donner::svg {
 
 enum class RendererGeodeTexturePoolTrim : uint8_t;
+enum class SpriteSubpixelPlacement : std::uint8_t;
 
 class SVGDocument;
 
@@ -173,6 +174,10 @@ public:
    * @param level How much to free.
    */
   void trimTexturePool(RendererGeodeTexturePoolTrim level);
+
+  /// Sets how cached sprites are placed at fractional translations, as
+  /// \ref RendererGeode::setSpriteSubpixelPlacement does.
+  void setSpriteSubpixelPlacement(SpriteSubpixelPlacement placement);
 
 private:
   struct Impl;

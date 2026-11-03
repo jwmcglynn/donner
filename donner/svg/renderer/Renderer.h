@@ -240,6 +240,9 @@ public:
   /// Forwards \ref RendererInterface::setSpriteCacheEnabled to the active backend.
   void setSpriteCacheEnabled(bool enabled) override;
 
+  /// Forwards \ref RendererInterface::setSpriteSubpixelPlacement to the active backend.
+  void setSpriteSubpixelPlacement(SpriteSubpixelPlacement placement) override;
+
   /**
    * Begins mask rendering.
    *

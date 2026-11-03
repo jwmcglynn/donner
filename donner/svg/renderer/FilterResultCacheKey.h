@@ -90,6 +90,18 @@ struct SpriteResampling {
   std::optional<Box2d> contentBounds;
 };
 
+/// How a cached sprite is placed at a fractional device translation (see
+/// \ref RendererInterface::setSpriteSubpixelPlacement).
+enum class SpriteSubpixelPlacement : std::uint8_t {
+  /// Keep a rasterization per quarter-pixel bucket of the translation and draw it on the pixel
+  /// grid: edges stay as sharp as uncached, and land within a quarter pixel of where they would.
+  Exact,
+  /// Keep one rasterization per content and linear transform and draw it bilinearly at the exact
+  /// translation, as Flash's smoothed bitmaps do: a sprite moving by fractions of a pixel hits
+  /// every frame, and its sharp edges soften by up to half a device pixel.
+  Resample,
+};
+
 /// Outcome of \ref RendererInterface::drawCachedSprite.
 enum class CachedSpriteResult : std::uint8_t {
   /// The cached sprite was drawn. The caller draws none of the occurrence's content.

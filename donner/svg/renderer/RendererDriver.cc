@@ -3312,19 +3312,36 @@ void MarkViewportAlignedFilterCaptures(
   }
 }
 
+/// Whether a lighting primitive's light has a position: a point or spot light is placed in the
+/// pixel raster, so the result depends on where the input lands; a distant light shines from a
+/// direction only. Lighting has no kernel unit length, so its surface normals come from
+/// neighboring device pixels and move with the input.
+template <typename Lighting>
+bool HasPositionedLight(const Lighting& lighting) {
+  return !lighting.light.has_value() ||
+         lighting.light->type != components::filter_primitive::LightSource::Type::Distant;
+}
+
 /// Whether a filter graph's result moves with a translation of its input: its primitives read
 /// nothing positioned in device or viewport space. feTurbulence evaluates noise from raster
-/// coordinates, lighting resolves light positions against the pixel raster, and feImage can read
-/// content loaded independently of the document's revision.
+/// coordinates, a point or spot light is positioned against the pixel raster, and feImage can
+/// read content loaded independently of the document's revision. Lighting from a distant light
+/// is invariant.
 bool IsTranslationInvariantFilterGraph(const components::FilterGraph& graph) {
   if (graph.keepsViewportAlignedCapture || graph.empty()) {
     return false;
   }
   return std::none_of(graph.nodes.begin(), graph.nodes.end(), [](const components::FilterNode& n) {
+    using components::filter_primitive::DiffuseLighting;
+    using components::filter_primitive::SpecularLighting;
+    if (const auto* diffuse = std::get_if<DiffuseLighting>(&n.primitive)) {
+      return HasPositionedLight(*diffuse);
+    }
+    if (const auto* specular = std::get_if<SpecularLighting>(&n.primitive)) {
+      return HasPositionedLight(*specular);
+    }
     return std::holds_alternative<components::filter_primitive::Image>(n.primitive) ||
-           std::holds_alternative<components::filter_primitive::Turbulence>(n.primitive) ||
-           std::holds_alternative<components::filter_primitive::DiffuseLighting>(n.primitive) ||
-           std::holds_alternative<components::filter_primitive::SpecularLighting>(n.primitive);
+           std::holds_alternative<components::filter_primitive::Turbulence>(n.primitive);
   });
 }
 
@@ -5319,7 +5336,11 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   const bool recording = sprite.record && renderer_.pushSpriteRecording(
                                               sprite.content, sprite.bounds,
                                               sprite.resampling ? &*sprite.resampling : nullptr);
+  // A recording rasterizes the whole sprite, including what lies off the canvas, so nothing in it
+  // may be culled against the canvas.
+  spriteRecordingDepth_ += recording ? 1 : 0;
   traverseSubDocument(subDocument.registry());
+  spriteRecordingDepth_ -= recording ? 1 : 0;
   pendingSpriteMeasure_.reset();
   if (recording) {
     renderer_.popSpriteRecording();
@@ -5500,7 +5521,7 @@ void RendererDriver::traverseSubDocument(Registry& registry) {
   // A filter layer the host has open can pull off-surface sub-document content into view, so the
   // sub-document must not cull against the surface while one is open.
   const bool hostInsideFilterLayer =
-      std::exchange(insideEnclosingFilterLayer_, pushedFilterLayers_ != 0);
+      std::exchange(insideEnclosingFilterLayer_, pushedFilterLayers_ != 0 || spriteRecordingDepth_ != 0);
   // The feImage recursion guard holds entity ids of the registry being prepared.
   std::unordered_set<entt::id_type>* hostFeImageGuard =
       std::exchange(feImageFragmentGuard_, nullptr);
