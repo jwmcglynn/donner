@@ -2752,27 +2752,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   FilterResultCacheIndex<FilterResultPayload> filterResultCache;
   /// Most bytes of held filter results. Native builds allow the index's 64 MiB. Browsers on phones
   /// reclaim a tab whose GPU process grows, and held results sit on top of the texture pool's
-  /// 96 MiB Wasm ceiling, so Wasm keeps 16 MiB, growing with the canvas to twice the frame
-  /// target's bytes, at most 32 MiB: a small canvas keeps the old bound, and only a large one,
-  /// whose frame already costs that much memory, holds more sprites.
+  /// 96 MiB Wasm ceiling, so Wasm keeps 16 MiB. On a game scene of about 125 sprites at a
+  /// 1206x2622 canvas, resampled sprites hit as often under 16 MiB as under 25 MiB.
 #ifdef __EMSCRIPTEN__
-  static constexpr std::uint64_t kMinimumFilterResultCacheBytes = 16ULL * 1024 * 1024;
-  static constexpr std::uint64_t kMaximumFilterResultCacheBytes = 32ULL * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumFilterResultCacheBytes = 16ULL * 1024 * 1024;
 #else
-  static constexpr std::uint64_t kMinimumFilterResultCacheBytes =
-      FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes;
   static constexpr std::uint64_t kMaximumFilterResultCacheBytes =
       FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes;
 #endif
-
-  /// The held-result byte bound for the current frame target; see
-  /// \ref kMaximumFilterResultCacheBytes.
-  [[nodiscard]] std::uint64_t filterResultCacheByteBound() const {
-    const std::uint64_t targetBytes = std::uint64_t{static_cast<std::uint32_t>(pixelWidth)} *
-                                      static_cast<std::uint32_t>(pixelHeight) * 4;
-    return std::clamp(targetBytes * 2, kMinimumFilterResultCacheBytes,
-                      kMaximumFilterResultCacheBytes);
-  }
   /// Pool clock time of this renderer's last frame that prepared the cache.
   std::optional<std::chrono::steady_clock::time_point> lastFilterResultFrameTime;
   /// Whether the open frame split its submission, so work it recorded may have reached the queue.
@@ -2877,7 +2864,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     dropIdleFilterResults();
     markFilterResultActivity();
     retireFilterResults(filterResultCache.setByteLimit(
-        std::min(surfaceBudget->limitBytes() / 4, filterResultCacheByteBound())));
+        std::min(surfaceBudget->limitBytes() / 4, kMaximumFilterResultCacheBytes)));
   }
 
   /// Whether a filter layer pushed now may draw from or record into the cache: a top-level layer
