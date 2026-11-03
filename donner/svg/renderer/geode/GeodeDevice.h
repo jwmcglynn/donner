@@ -759,6 +759,10 @@ public:
     }
   }
 
+  /// The most recently minted frame generation, or zero before the first frame. At or after the
+  /// generation of every frame that has begun.
+  uint64_t latestFrameGeneration() const { return frameGeneration_; }
+
   /// Oldest generation whose frame has not closed yet, or `~0` when no frame is
   /// open. Anything a generation at or after this touched may still be read by
   /// an unsubmitted draw.

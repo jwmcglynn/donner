@@ -342,20 +342,23 @@ constexpr uint32_t kGradientKindRadial = 1u;
 /// defaults to 256 in the WebGPU limits every Geode backend follows.
 ///
 /// Lifetime: when the arena grows, the previous buffer is moved into
-/// `retired` and kept alive for the encoder's lifetime. Commands
-/// already recorded into the command encoder that reference the
-/// old buffer remain valid because the owning handle keeps the buffer
-/// alive until the `Arena` itself is destroyed (at encoder destruction,
-/// after `finish()` has submitted all work).
+/// `retired`, so commands already recorded against it stay valid. An
+/// encoder's own arenas keep retired buffers until the encoder is
+/// destroyed, after its work has been submitted. A frame's shared arenas
+/// keep them until the frame's \ref GeoEncoderFrameArenas::recycle, after
+/// the frame has been submitted.
 struct GeoEncoderArena {
   gpu::Buffer buffer;
   uint64_t capacity = 0;
   uint64_t offset = 0;  // Next unused byte within `buffer`.
-  /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`),
-  /// re-stamped on every growth. Arena buffers are recycled through the
-  /// device's buffer pool, so two arenas at different times can hold the
-  /// same handle address with completely different contents; anything
-  /// that caches across frames must compare this id instead.
+  /// Identity of `buffer` (see `GeodeDevice::AllocateBufferId`), stamped
+  /// whenever the arena takes a buffer, fresh or pooled. Arena buffers are
+  /// recycled through the device's buffer pool, so two arenas at different
+  /// times can hold the same handle address; anything that caches across
+  /// frames must compare this id instead. A frame's shared arenas keep their
+  /// buffer, and its id, from frame to frame with new contents each frame,
+  /// so the id may key caches that only bind the buffer (bind groups), never
+  /// caches of what it holds.
   uint64_t bufferId = 0;
   std::vector<gpu::Buffer> retired;
   /// Owned geometry bytes awaiting one bounded upload before submission or buffer growth.
@@ -426,11 +429,9 @@ void GeoEncoderFrameArenas::recycle(bool discardBuffers) {
       arena->buffer = gpu::Buffer();
       arena->capacity = 0;
     }
+    // The arena keeps its buffer and identity: bind groups cached over its regions stay valid,
+    // and the next frame's staged bytes replace the contents before it submits.
     arena->offset = 0;
-    if (arena->buffer.isValid()) {
-      // Same buffer, new contents: anything keyed on the identity must not match last frame's.
-      arena->bufferId = GeodeDevice::AllocateBufferId();
-    }
   }
 }
 
@@ -447,14 +448,6 @@ bool GeoEncoderFrameArenas::uploadStaged(gpu::Device& device) {
     arena->pendingBytes.clear();
   }
   return uploaded;
-}
-
-uint64_t GeoEncoderFrameArenas::capacityBytes() const {
-  uint64_t bytes = 0;
-  for (GeoEncoderArena* arena : storage_->arenas.all()) {
-    bytes += arena->buffer.isValid() ? arena->capacity : 0;
-  }
-  return bytes;
 }
 
 struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
@@ -773,7 +766,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// @return The bind group, or null when the runtime refuses it.
   const gpu::BindGroup* makeDrawBindGroup(gpu::BindGroupDescriptor descriptor) {
     if (arenas != &ownArenas) {
-      return device->bindGroupCache().bindGroup(*gpuContext->gpuDevice, std::move(descriptor));
+      return device->bindGroupCache().bindGroup(*gpuContext->gpuDevice, std::move(descriptor),
+                                                device->latestFrameGeneration());
     }
     gpu::Result<gpu::BindGroup> created = gpuContext->gpuDevice->createBindGroup(descriptor);
     if (created.hasError()) {

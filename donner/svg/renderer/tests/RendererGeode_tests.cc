@@ -2781,6 +2781,79 @@ TEST_F(RendererGeodeTest, ARepeatFrameOfArenaFillsCreatesNoBindGroups) {
   EXPECT_EQ(first.pixels, second.pixels);
 }
 
+/// Draws one frame whose first path's size, and so every later draw's arena offsets, depends on
+/// \p variant, so its bind group keys differ from the frames around it.
+void DrawChurningFrame(RendererGeode& renderer, int variant) {
+  PathBuilder builder;
+  builder.moveTo({1.0, 1.0});
+  const int points = 3 + variant % 29;
+  for (int index = 0; index < points; ++index) {
+    builder.lineTo({1.0 + 2.0 * index, index % 2 == 0 ? 20.0 : 4.0});
+  }
+  builder.closePath();
+  const Path path = builder.build();
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawPath(PathShape{.path = &path}, StrokeParams{});
+  for (int index = 0; index < 4; ++index) {
+    renderer.drawRect(Box2d::FromXYWH(8.0 * index, 40.0, 8.0, 8.0), StrokeParams{});
+  }
+}
+
+TEST_F(RendererGeodeTest, BindGroupCacheAgesWhileRenderersFramesOverlap) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode first = createRenderer();
+  RendererGeode second = createRenderer();
+  // Staggered frames: one renderer's frame is always open while the other begins, so there is
+  // never a moment with no open frame on the device.
+  beginFrame(first);
+  DrawChurningFrame(first, 0);
+  for (int round = 1; round <= 60; ++round) {
+    beginFrame(second);
+    DrawChurningFrame(second, 2 * round);
+    first.endFrame();
+    beginFrame(first);
+    DrawChurningFrame(first, 2 * round + 1);
+    second.endFrame();
+  }
+  first.endFrame();
+
+  EXPECT_LE(sharedDevice()->bindGroupCache().size(), 200u)
+      << "Entries no open frame can name are released even though frames always overlap";
+}
+
+TEST_F(RendererGeodeTest, BindGroupCacheCapRetiresWithoutDroppingAnOpenFramesGroups) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  geode::GeodeBindGroupCache& cache = sharedDevice()->bindGroupCache();
+  cache.setMaximumEntriesForTesting(16);
+  RendererGeode first = createRenderer();
+  RendererGeode second = createRenderer();
+
+  beginFrame(first);
+  first.setPaint(solidFill(css::RGBA(30, 180, 90, 255)));
+  for (int index = 0; index < 8; ++index) {
+    first.drawRect(Box2d::FromXYWH(8.0 * index, 0.0, 8.0, 8.0), StrokeParams{});
+  }
+  // While the first frame stays open, another renderer churns well past the cap.
+  for (int round = 0; round < 30; ++round) {
+    beginFrame(second);
+    DrawChurningFrame(second, round);
+    second.endFrame();
+    EXPECT_LE(cache.size(), 16u);
+  }
+  first.endFrame();
+  const RendererBitmap bitmap = first.takeSnapshot();
+  EXPECT_THAT(PixelAt(bitmap, 4, 4), RgbaEq(30, 180, 90, 255))
+      << "The open frame's bind groups were retired, not released, so its submission succeeds";
+  EXPECT_THAT(PixelAt(bitmap, 60, 4), RgbaEq(30, 180, 90, 255));
+  EXPECT_GE(first.lastFrameTimings().counters.bindGroupCacheEntries, cache.size());
+
+  beginFrame(first);
+  first.endFrame();
+  EXPECT_EQ(cache.retiredSize(), 0u)
+      << "Retired entries are released once no open frame names them";
+  cache.setMaximumEntriesForTesting(geode::GeodeBindGroupCache::kMaximumEntries);
+}
+
 TEST_F(RendererGeodeTest, SiblingIsolatedLayersShareOneTextureWithinAFrame) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   // A size no other case uses, so nothing pooled by an earlier case can stand in for reuse.

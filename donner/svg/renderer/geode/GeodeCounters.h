@@ -157,6 +157,11 @@ struct GeodeCounters {
   /// set does not fit and every frame repays the upload.
   uint64_t glyphResidencyEvictions = 0;
 
+  /// Bind groups and texture views the device's draw and filter caches hold (live plus retired),
+  /// read when the frame's timings are taken. Not a per-frame count: it is bounded by the caches'
+  /// eviction and cap, and a steadily growing value means they are not aging.
+  uint64_t bindGroupCacheEntries = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };

@@ -231,10 +231,6 @@ public:
     return true;
   }
 
-  void retainUntilFrameSubmits(RetainedFilterResources resources) override {
-    retained_.push_back(std::move(resources));
-  }
-
   /// Command buffers the frame is holding.
   size_t collected() const { return commandBuffers_.size(); }
 
@@ -255,14 +251,12 @@ public:
     }
     EXPECT_THAT(device_.runtimeDevice().submit(commandBuffers_).hasResult(), testing::IsTrue());
     commandBuffers_.clear();
-    retained_.clear();
     ++submissions_;
   }
 
 private:
   GeodeDevice& device_;
   std::vector<gpu::CommandBuffer> commandBuffers_;
-  std::vector<RetainedFilterResources> retained_;
   size_t submitAt_ = 0;
   size_t submissions_ = 0;
   bool refuse_ = false;

@@ -146,14 +146,9 @@ struct FilterResourceCache {
     return result;
   }
 
-  /// Views and pass bind groups kept across frames; see GeodeBindGroupCache.
-  GeodeBindGroupCache objects;
-
-  /// Start a frame: parameter slots restart from the first block, and views and bind groups no
-  /// pass named recently are dropped. Call only when no frame that could have recorded work
-  /// naming them is still unsubmitted.
+  /// Start a frame: parameter slots restart from the first block. Call only when no frame that
+  /// could have recorded work naming them is still unsubmitted.
   void beginFrame() {
-    objects.beginFrame();
     std::lock_guard<std::mutex> lock(mutex);
     runtimeIndex = 0;
     runtimeCursor = 0;
@@ -172,6 +167,11 @@ private:
   std::deque<RuntimeBlock> runtime;
   size_t runtimeIndex = 0;
   uint64_t runtimeCursor = 0;
+
+public:
+  /// Views and pass bind groups kept across frames; see GeodeBindGroupCache. Declared after the
+  /// parameter blocks so it is destroyed first: its bind groups name those buffers.
+  GeodeBindGroupCache objects;
 };
 
 struct FilterResourceArena {
@@ -319,7 +319,8 @@ struct FilterResourceArena {
   const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
     // Views outlive the arena in the engine's cache, so every later frame that names the same
     // texture binds the same view, and the bind groups over it can be reused too.
-    return resourceCache_.objects.textureView(device_.runtimeDevice(), texture, std::move(label));
+    return resourceCache_.objects.textureView(device_.runtimeDevice(), texture, std::move(label),
+                                              device_.latestFrameGeneration());
   }
 
   /// A parameter slot holding \p data for uniform or read-only storage binding. Null buffer when
@@ -349,7 +350,8 @@ struct FilterResourceArena {
     // runtime counts the groups it does create.
     return resourceCache_.objects.bindGroup(
         device_.runtimeDevice(),
-        gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
+        gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)},
+        device_.latestFrameGeneration());
   }
 
   /// Records one compute dispatch into this execution's runtime-owned command encoder.
@@ -1404,6 +1406,18 @@ void GeodeFilterEngine::beginFrame() {
   if (resourceCache_) {
     resourceCache_->beginFrame();
   }
+}
+
+void GeodeFilterEngine::evictCachedObjects(uint64_t oldestOpenGeneration,
+                                           uint64_t latestGeneration) {
+  if (resourceCache_) {
+    resourceCache_->objects.evict(oldestOpenGeneration, latestGeneration);
+  }
+}
+
+std::size_t GeodeFilterEngine::cachedObjectCount() const {
+  return resourceCache_ ? resourceCache_->objects.size() + resourceCache_->objects.retiredSize()
+                        : 0;
 }
 
 namespace {}  // namespace
