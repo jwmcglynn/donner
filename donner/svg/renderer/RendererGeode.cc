@@ -2752,14 +2752,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   FilterResultCacheIndex<FilterResultPayload> filterResultCache;
   /// Most bytes of held filter results. Native builds allow the index's 64 MiB. Browsers on phones
   /// reclaim a tab whose GPU process grows, and held results sit on top of the texture pool's
-  /// 96 MiB Wasm ceiling, so Wasm keeps 32 MiB: about 200 sprite results of 200x200 pixels, which a
-  /// scene of a hundred or so sprites with their filter results fits.
+  /// 96 MiB Wasm ceiling, so Wasm keeps 16 MiB, growing with the canvas to twice the frame
+  /// target's bytes, at most 32 MiB: a small canvas keeps the old bound, and only a large one,
+  /// whose frame already costs that much memory, holds more sprites.
 #ifdef __EMSCRIPTEN__
+  static constexpr std::uint64_t kMinimumFilterResultCacheBytes = 16ULL * 1024 * 1024;
   static constexpr std::uint64_t kMaximumFilterResultCacheBytes = 32ULL * 1024 * 1024;
 #else
+  static constexpr std::uint64_t kMinimumFilterResultCacheBytes =
+      FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes;
   static constexpr std::uint64_t kMaximumFilterResultCacheBytes =
       FilterResultCacheIndex<FilterResultPayload>::kMaximumBytes;
 #endif
+
+  /// The held-result byte bound for the current frame target; see
+  /// \ref kMaximumFilterResultCacheBytes.
+  [[nodiscard]] std::uint64_t filterResultCacheByteBound() const {
+    const std::uint64_t targetBytes = std::uint64_t{static_cast<std::uint32_t>(pixelWidth)} *
+                                      static_cast<std::uint32_t>(pixelHeight) * 4;
+    return std::clamp(targetBytes * 2, kMinimumFilterResultCacheBytes,
+                      kMaximumFilterResultCacheBytes);
+  }
   /// Pool clock time of this renderer's last frame that prepared the cache.
   std::optional<std::chrono::steady_clock::time_point> lastFilterResultFrameTime;
   /// Whether the open frame split its submission, so work it recorded may have reached the queue.
@@ -2864,7 +2877,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     dropIdleFilterResults();
     markFilterResultActivity();
     retireFilterResults(filterResultCache.setByteLimit(
-        std::min(surfaceBudget->limitBytes() / 4, kMaximumFilterResultCacheBytes)));
+        std::min(surfaceBudget->limitBytes() / 4, filterResultCacheByteBound())));
   }
 
   /// Whether a filter layer pushed now may draw from or record into the cache: a top-level layer
@@ -3173,6 +3186,52 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Impossible,  ///< No frame can hold it: its surface is larger than any surface may be.
   };
 
+  /// The surface a sprite over \p bounds is rendered into: its whole bounds on the device pixel
+  /// grid, with its origin on the grid region-sized filter rasters use, so the sprite rasterizes
+  /// against the same device pixel phase as it does on the canvas.
+  struct SpriteSurface {
+    double left = 0.0;
+    double top = 0.0;
+    double width = 0.0;
+    double height = 0.0;
+    std::uint64_t bytes = 0;
+  };
+
+  /// The surface for \p bounds, or nullopt when no surface may be that large.
+  std::optional<SpriteSurface> spriteSurfaceFor(const Box2d& bounds) const {
+    const Box2d device = deviceFromLocalTransform.transformBox(bounds);
+    const double grid = kFilterInputBufferGranularity;
+    SpriteSurface surface;
+    surface.left = std::floor(device.topLeft.x / grid) * grid;
+    surface.top = std::floor(device.topLeft.y / grid) * grid;
+    surface.width = std::ceil(device.bottomRight.x) - surface.left;
+    surface.height = std::ceil(device.bottomRight.y) - surface.top;
+    constexpr double kMaximumOrigin = std::numeric_limits<int>::max() / 2;
+    const bool valid = std::abs(surface.left) <= kMaximumOrigin &&
+                       std::abs(surface.top) <= kMaximumOrigin && surface.width >= 1.0 &&
+                       surface.height >= 1.0 &&
+                       surface.width <= components::kMaximumFilterSurfaceDimension &&
+                       surface.height <= components::kMaximumFilterSurfaceDimension;
+    if (!valid) {
+      return std::nullopt;
+    }
+    surface.bytes = static_cast<std::uint64_t>(surface.width) *
+                    static_cast<std::uint64_t>(surface.height) *
+                    gpu::TextureFormatBytesPerTexel(gpuTextureFormat());
+    return surface;
+  }
+
+  /// Whether this frame has room for a sprite capture of \p bytes: within the share of the
+  /// surface byte limit captures may take per frame (the first capture always may), and within
+  /// what the surface budget still holds.
+  [[nodiscard]] bool spriteCaptureFits(std::uint64_t bytes) const {
+    const bool withinShare =
+        spriteCapturesThisFrame == 0 ||
+        spriteCaptureBytesThisFrame + bytes <=
+            surfaceBudget->limitBytes() / kSpriteCaptureBudgetShare;
+    return withinShare && surfaceBudget->canReserveBytes(bytes, 1);
+  }
+
   /**
    * Begin capturing a sprite over \p bounds in the current user space. The sprite is rendered in
    * isolation into its own surface, sized to the whole of its bounds on the device pixel grid,
@@ -3185,29 +3244,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (rejectedFilterDepth != 0 || !readyForFilterCapture()) {
       return SpriteCapture::NoRoomNow;
     }
-    // The surface's origin sits on the same grid region-sized filter rasters use, so the sprite
-    // rasterizes against the same device pixel phase as it does on the canvas.
-    const Box2d device = deviceFromLocalTransform.transformBox(bounds);
-    const double grid = kFilterInputBufferGranularity;
-    const double left = std::floor(device.topLeft.x / grid) * grid;
-    const double top = std::floor(device.topLeft.y / grid) * grid;
-    const double width = std::ceil(device.bottomRight.x) - left;
-    const double height = std::ceil(device.bottomRight.y) - top;
-    if (!std::isfinite(left) || !std::isfinite(top) || !(width >= 1.0) || !(height >= 1.0) ||
-        width > components::kMaximumFilterSurfaceDimension ||
-        height > components::kMaximumFilterSurfaceDimension ||
-        std::abs(left) > std::numeric_limits<int>::max() / 2 ||
-        std::abs(top) > std::numeric_limits<int>::max() / 2) {
+    const std::optional<SpriteSurface> surface = spriteSurfaceFor(bounds);
+    if (!surface) {
       return SpriteCapture::Impossible;
     }
-    const std::uint64_t bytes = static_cast<std::uint64_t>(width) *
-                                static_cast<std::uint64_t>(height) *
-                                gpu::TextureFormatBytesPerTexel(gpuTextureFormat());
-    if (spriteCaptureBytesThisFrame + bytes > surfaceBudget->limitBytes() / kSpriteCaptureBudgetShare &&
-        spriteCapturesThisFrame != 0) {
-      return SpriteCapture::NoRoomNow;
-    }
-    if (!surfaceBudget->canReserveBytes(bytes, 1)) {
+    const double left = surface->left;
+    const double top = surface->top;
+    const double width = surface->width;
+    const double height = surface->height;
+    const std::uint64_t bytes = surface->bytes;
+    if (!spriteCaptureFits(bytes)) {
       return SpriteCapture::NoRoomNow;
     }
     GeodeFilterAdmission admission;
@@ -7521,9 +7567,8 @@ CachedSpriteResult RendererGeode::drawCachedSprite(const FilterResultContentKey&
   if (!content.sprite || !impl_->spriteCacheEnabled || !impl_->filterResultCacheUsable()) {
     return CachedSpriteResult::Uncached;
   }
-  const FilterResultPlacement placement =
-      Impl::spritePlacement(content, bounds, resampling, impl_->deviceFromLocalTransform,
-                            impl_->spriteSubpixelPlacement);
+  const FilterResultPlacement placement = Impl::spritePlacement(
+      content, bounds, resampling, impl_->deviceFromLocalTransform, impl_->spriteSubpixelPlacement);
   if (const auto* entry =
           impl_->filterResultCache.find(content, placement, impl_->filterResultFrame)) {
     impl_->drawFilterResult(entry->payload);
@@ -7537,9 +7582,8 @@ CachedSpriteResult RendererGeode::drawCachedSprite(const FilterResultContentKey&
 bool RendererGeode::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
                                         const SpriteResampling* resampling) {
   impl_->flushPendingBatch();
-  const FilterResultPlacement placement =
-      Impl::spritePlacement(content, bounds, resampling, impl_->deviceFromLocalTransform,
-                            impl_->spriteSubpixelPlacement);
+  const FilterResultPlacement placement = Impl::spritePlacement(
+      content, bounds, resampling, impl_->deviceFromLocalTransform, impl_->spriteSubpixelPlacement);
   const Box2d captureBounds =
       impl_->spriteSubpixelPlacement == SpriteSubpixelPlacement::Resample
           ? Impl::spriteResampleBounds(bounds, impl_->deviceFromLocalTransform)

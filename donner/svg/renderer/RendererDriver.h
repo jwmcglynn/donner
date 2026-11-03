@@ -508,6 +508,11 @@ private:
   /// an empty box when nothing is filtered, or nullopt when the subtree may not be cached.
   std::optional<Box2d> spriteFilterBounds(Registry& registry, Entity root) const;
 
+  /// Traverse the external-use instance of \p targetEntity, measuring it for \p sprite when its
+  /// measurement is stale and recording it when the renderer admitted it.
+  void traverseSpriteInstance(SVGDocument& subDocument, Entity targetEntity,
+                              const SpriteProbe& sprite);
+
   void drawExternalUseInstance(SVGDocument& subDocument, std::string_view fragmentId,
                                const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
                                Entity hostEntity, const SpriteProbe& sprite);

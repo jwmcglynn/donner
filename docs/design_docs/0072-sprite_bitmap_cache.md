@@ -181,8 +181,10 @@ recording again for 30 frames.
 ### Memory
 
 Sprites and filter results share the index: at most 256 entries and the smaller of a quarter of
-the frame surface byte limit and 64 MiB native or 32 MiB WebAssembly (about 200 sprites of
-200x200 pixels, on top of the texture pool's 96 MiB WebAssembly ceiling). Each kind has its own
+the frame surface byte limit and 64 MiB native. On WebAssembly, where a phone browser reclaims a
+tab whose GPU process grows, the bound is 16 MiB, growing with the canvas to twice the frame
+target's bytes, at most 32 MiB: a small canvas keeps the old bound, and only a canvas whose frame
+already costs that much holds more (a phone-sized 1206x2622 canvas gets about 25 MiB). Each kind has its own
 share: sprites hold at most 192 of the entries and three quarters of the byte limit, filter layer
 results at most 64 entries. When a share is full, a new result replaces the least recently used
 results of its own kind that neither of the last two frames drew, or is not recorded, so neither

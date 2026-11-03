@@ -5327,6 +5327,16 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   renderer_.setTransform(parentAbsoluteTransform);
   std::optional<FilterResultScope> hostFilterResultScope =
       std::exchange(filterResultScope_, ExternalUseFilterResultScope(subDocument, targetEntity));
+  traverseSpriteInstance(subDocument, targetEntity, sprite);
+  filterResultScope_ = std::move(hostFilterResultScope);
+  fontRenderScope.finish();
+  recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
+
+  surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
+}
+
+void RendererDriver::traverseSpriteInstance(SVGDocument& subDocument, Entity targetEntity,
+                                            const SpriteProbe& sprite) {
   if (sprite.entry != nullptr && !sprite.entry->measuredAt(sprite.stamp)) {
     // Measured once the traversal has prepared the instance's filter graphs.
     pendingSpriteMeasure_ =
@@ -5345,11 +5355,6 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
   if (recording) {
     renderer_.popSpriteRecording();
   }
-  filterResultScope_ = std::move(hostFilterResultScope);
-  fontRenderScope.finish();
-  recordChildFontDependencies(subDocument, targetEntity, hostRegistry, hostEntity);
-
-  surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 }
 
 std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entity entity) {
@@ -5520,8 +5525,8 @@ void RendererDriver::traverseSubDocument(Registry& registry) {
   std::vector<DeferredPop> hostSubtreeMarkers = std::exchange(subtreeMarkers_, {});
   // A filter layer the host has open can pull off-surface sub-document content into view, so the
   // sub-document must not cull against the surface while one is open.
-  const bool hostInsideFilterLayer =
-      std::exchange(insideEnclosingFilterLayer_, pushedFilterLayers_ != 0 || spriteRecordingDepth_ != 0);
+  const bool hostInsideFilterLayer = std::exchange(
+      insideEnclosingFilterLayer_, pushedFilterLayers_ != 0 || spriteRecordingDepth_ != 0);
   // The feImage recursion guard holds entity ids of the registry being prepared.
   std::unordered_set<entt::id_type>* hostFeImageGuard =
       std::exchange(feImageFragmentGuard_, nullptr);

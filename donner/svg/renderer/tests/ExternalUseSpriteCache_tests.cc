@@ -9,13 +9,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <utility>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -629,8 +629,8 @@ TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
     host << "<use id=\"use-" << i << "\" href=\"sprites.svg#sprite-1\"/>";
   }
   host << "</svg>";
-  std::optional<ExternalUseDocument> document = MakeExternalUseDocument(host.str(),
-                                                                        std::string(kSheet));
+  std::optional<ExternalUseDocument> document =
+      MakeExternalUseDocument(host.str(), std::string(kSheet));
   ASSERT_TRUE(document.has_value());
   SpriteScene scene{std::move(*document), {}};
   for (int i = 0; i < 32; ++i) {
@@ -641,9 +641,9 @@ TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
   for (int frame = 0; frame < 6; ++frame) {
     for (int i = 0; i < 12; ++i) {
       // Doubled and hanging past the left, top or bottom edge.
-      scene.uses[i].setTransform(Transform2d::Scale(2.0) *
-                                 Transform2d::Translate(Vector2d(-24.0 + (i % 4) * 70.0 + frame,
-                                                                 i < 4 ? -30.0 : 160.0)));
+      scene.uses[i].setTransform(
+          Transform2d::Scale(2.0) *
+          Transform2d::Translate(Vector2d(-24.0 + (i % 4) * 70.0 + frame, i < 4 ? -30.0 : 160.0)));
     }
     for (int i = 12; i < 32; ++i) {
       scene.uses[i].setTransform(Transform2d::Translate(
