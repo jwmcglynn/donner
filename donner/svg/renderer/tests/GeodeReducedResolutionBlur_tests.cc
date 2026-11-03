@@ -49,6 +49,14 @@ constexpr int kMaximumChannelError = 3;
 /// covers.
 constexpr double kMaximumMeanChannelError = 0.25;
 
+/// Mean tolerance for a blur along one axis only. Averaging a block keeps where its content's mass
+/// is only to within the block, and with the other axis unblurred nothing averages that away
+/// between rows: a row of the checker whose first cell is opaque and the next row, whose first
+/// cell is translucent, both reduce to the same blocks, so each row's blurred edge sits up to a
+/// texel from where the full-resolution blur puts it. A blur along both axes averages the rows
+/// and keeps to \ref kMaximumMeanChannelError.
+constexpr double kMaximumOneAxisMeanChannelError = 1.0;
+
 constexpr int kViewport = 320;
 
 /// Content drawn inside the filter layer.
@@ -241,6 +249,7 @@ struct BlurCase {
   double deviationY;
   fp::GaussianBlur::EdgeMode edgeMode = fp::GaussianBlur::EdgeMode::None;
   bool linearRgb = false;
+  double meanTolerance = kMaximumMeanChannelError;
 };
 
 void PrintTo(const BlurCase& value, std::ostream* output) {
@@ -264,17 +273,19 @@ TEST_P(ReducedBlurErrorTest, StaysWithinToleranceOfFullResolution) {
     SCOPED_TRACE(sceneName);
     const ImageError error = measure(graph, scene, std::string(test.name) + "/" + sceneName);
     EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));
-    EXPECT_THAT(error.mean, testing::Le(kMaximumMeanChannelError));
+    EXPECT_THAT(error.mean, testing::Le(test.meanTolerance));
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Deviations, ReducedBlurErrorTest,
-    testing::Values(BlurCase{"sigma8", 8, 8}, BlurCase{"sigma12", 12, 12},
+    testing::Values(BlurCase{"sigma6", 6, 6}, BlurCase{"sigma8", 8, 8},
+                    BlurCase{"sigma12", 12, 12},
                     BlurCase{"sigma16", 16, 16}, BlurCase{"sigma24", 24, 24},
                     BlurCase{"sigma40", 40, 40}, BlurCase{"sigma64", 64, 64},
                     BlurCase{"anisotropic_x", 20, 3}, BlurCase{"anisotropic_y", 1.5, 30},
-                    BlurCase{"one_axis", 24, 0},
+                    BlurCase{"one_axis", 24, 0, fp::GaussianBlur::EdgeMode::None, false,
+                             kMaximumOneAxisMeanChannelError},
                     BlurCase{"duplicate_edges", 16, 16, fp::GaussianBlur::EdgeMode::Duplicate},
                     BlurCase{"linear_rgb", 16, 16, fp::GaussianBlur::EdgeMode::None, true}),
     [](const testing::TestParamInfo<BlurCase>& info) { return std::string(info.param.name); });
@@ -335,7 +346,7 @@ TEST_F(GeodeReducedResolutionBlurTest, UnblurredSourceInAGlowStaysFullResolution
 // Below the threshold nothing changes: the reduced path is not taken and the output is bitwise
 // the full-resolution one.
 TEST_F(GeodeReducedResolutionBlurTest, SmallBlurIsNotReduced) {
-  for (double deviation : {2.0, 5.0, 7.9}) {
+  for (double deviation : {2.0, 4.0, 5.9}) {
     SCOPED_TRACE(deviation);
     const FilterGraph graph =
         BlurGraph(fp::GaussianBlur{.stdDeviationX = deviation, .stdDeviationY = deviation});
@@ -384,24 +395,27 @@ TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
   EXPECT_THAT(reduced.filterPixels, testing::Eq(shared + 3 * kReducedLayer + kLayer));
 }
 
-// Tiled execution reduces each tile on its own grid; the halo covers the reduced kernel, so the
-// tiles still agree with the untiled full-resolution blur within the same tolerance.
-TEST_F(GeodeReducedResolutionBlurTest, TiledReducedBlurMatchesUntiledFullResolution) {
-  const FilterGraph graph = BlurGraph(fp::GaussianBlur{.stdDeviationX = 10, .stdDeviationY = 10});
-  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
-  ASSERT_THAT(tiledDevice, testing::NotNull());
-  tiledDevice->filterEngine().setMaximumTileExtentForTesting(160);
-  geode::GeodeCounters counters;
-  const RendererBitmap tiled = render(graph, DrawDisc, true, &counters, 1.0, tiledDevice);
-  ASSERT_THAT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u));
-  EXPECT_THAT(counters.reducedResolutionBlurs,
-              testing::Eq(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions));
-  const RendererBitmap full = render(graph, DrawDisc, false);
-  const ImageError error = Compare(tiled, full);
-  std::cout << "reduced blur error tiled_sigma10/disc: max " << error.maximum << " mean "
-            << error.mean << "\n";
-  EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));
-  EXPECT_THAT(error.mean, testing::Le(kMaximumMeanChannelError));
+// Tiled execution reduces each tile on the untiled execution's block grid, and the halo covers the
+// reduced kernel, so the tiles reproduce the untiled reduced blur exactly.
+TEST_F(GeodeReducedResolutionBlurTest, TiledReducedBlurMatchesUntiledReducedBlur) {
+  for (double deviation : {10.0, 24.0}) {
+    SCOPED_TRACE(deviation);
+    const FilterGraph graph =
+        BlurGraph(fp::GaussianBlur{.stdDeviationX = deviation, .stdDeviationY = deviation});
+    std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(tiledDevice, testing::NotNull());
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(304);
+    geode::GeodeCounters counters;
+    const RendererBitmap tiled = render(graph, DrawDisc, true, &counters, 1.0, tiledDevice);
+    const uint64_t tiles = tiledDevice->filterEngine().lastExecutionMemory().tileExecutions;
+    ASSERT_THAT(tiles, testing::Gt(1u));
+    EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(tiles));
+    const RendererBitmap untiled = render(graph, DrawDisc, true);
+    EXPECT_THAT(Compare(tiled, untiled).maximum, testing::Eq(0));
+    const ImageError error = Compare(tiled, render(graph, DrawDisc, false));
+    EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));
+    EXPECT_THAT(error.mean, testing::Le(kMaximumMeanChannelError));
+  }
 }
 
 }  // namespace

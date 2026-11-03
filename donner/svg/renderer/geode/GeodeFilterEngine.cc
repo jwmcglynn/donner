@@ -1402,6 +1402,10 @@ struct FilterGraphExecution {
   FilterTexture runNodes();
   FilterTexture runTiled(const FilterTilePlan& plan);
   FilterTexture inputFor(const svg::components::FilterNode& node, size_t index) const;
+  /// Position of the working textures' first texel on the untiled source grid.
+  gpu::Origin2d gridOrigin() const {
+    return {static_cast<uint32_t>(tileOrigin.x), static_cast<uint32_t>(tileOrigin.y)};
+  }
   FilterTexture clip(FilterTexture input, const Box2d& region, bool transformed,
                      bool resolve = false);
   void record(const svg::components::FilterNode& node, const Box2d& subregion, FilterTexture output,
@@ -1534,7 +1538,7 @@ BoxBlurPlan computeBoxPasses(double sigma) {
 /// reduced by the largest power of two that keeps its deviation at or above this, so the reduced
 /// kernel still spans several texels and the bilinear enlargement interpolates a signal that is
 /// already smooth on the scale of one reduced texel.
-constexpr double kMinimumReducedBlurDeviation = 4.0;
+constexpr double kMinimumReducedBlurDeviation = 3.0;
 
 /// Largest per-axis reduction factor.
 constexpr uint32_t kMaximumReducedBlurFactor = 16;
@@ -1612,14 +1616,15 @@ ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool wrapE
 }
 
 /// Device pixels a reduced blur along one axis reads on either side of an output texel: the
-/// reduced spline's taps plus the reduced texel each bilinear tap and block average spans.
+/// reduced spline's taps plus the reduced texel each bilinear tap and block average spans, and one
+/// more for the blocks' alignment to the untiled grid.
 double ReducedBlurSupport(double deviation) {
   const uint32_t factor = ReducedBlurFactor(deviation);
   if (factor == 1) {
     return 0.0;
   }
   const double radius = std::min(std::ceil(1.5 * ReducedBlurWidth(deviation, factor)), 127.0);
-  return (radius + 2.0) * factor;
+  return (radius + 3.0) * factor;
 }
 
 /// Conservative sampling support of one graph in device pixels.
@@ -2159,7 +2164,8 @@ FilterTexture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
   const std::optional<Box2d> clip = blurClip(sx, sy);
   clipMergedIntoBlur = clip.has_value();
   return engine.applyGaussianBlur(arena, toNodeSpace(input), sx, sy,
-                                  toShaderEdgeMode(primitive.edgeMode), clip ? &*clip : nullptr);
+                                  toShaderEdgeMode(primitive.edgeMode), clip ? &*clip : nullptr,
+                                  execution.gridOrigin());
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Offset& primitive) {
@@ -2266,7 +2272,7 @@ FilterTexture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
   const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
   return engine.applyDropShadow(arena, toNodeSpace(input), primitive, sx, sy,
                                 svg::BoundedSignedFilterPixels(offset.x),
-                                svg::BoundedSignedFilterPixels(offset.y));
+                                svg::BoundedSignedFilterPixels(offset.y), execution.gridOrigin());
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
@@ -2378,7 +2384,8 @@ BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviatio
 
 FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, FilterTexture input,
                                                    double stdDeviationX, double stdDeviationY,
-                                                   uint32_t edgeMode, const Box2d* outputClip) {
+                                                   uint32_t edgeMode, const Box2d* outputClip,
+                                                   gpu::Origin2d gridOrigin) {
   if (!input) {
     return {};
   }
@@ -2391,17 +2398,20 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
   // A reduced axis is shrunk, blurred with a spline matching the full-resolution kernel's shape
   // and variance, and enlarged again; an axis left at full resolution keeps its exact passes, run
   // on the shrunken image of the other axis.
+  // Reduced blocks sit on the untiled source grid, so a tile reduces exactly the blocks the untiled
+  // execution would and its core matches the untiled result.
   const uint32_t factorX = reduced.factors[0];
   const uint32_t factorY = reduced.factors[1];
-  const uint32_t width = (input.width() + factorX - 1) / factorX;
-  const uint32_t height = (input.height() + factorY - 1) / factorY;
+  const ResampleGrid grid{factorX, factorY, gridOrigin.x % factorX, gridOrigin.y % factorY};
+  const uint32_t width = (input.width() + grid.phaseX + factorX - 1) / factorX;
+  const uint32_t height = (input.height() + grid.phaseY + factorY - 1) / factorY;
   FilterTexture current = input;
   std::array<FilterTexture, 2> scratch{};
   BlurDispatchPlan plan = CreateBlurDispatchPlan(factorX == 1 ? stdDeviationX : 0.0,
                                                  factorY == 1 ? stdDeviationY : 0.0, edgeMode);
   if (reduced.reduced()) {
     scratch[1] = createIntermediateTexture(arena, width, height, "GaussianBlurReducedScratch");
-    current = runResamplePass(arena, input, scratch[1], factorX, factorY, edgeMode,
+    current = runResamplePass(arena, input, scratch[1], grid, edgeMode,
                               gpu::shader::programs::kGaussianBlurKernelDownsample, nullptr);
     if (!current) {
       return {};
@@ -2447,7 +2457,7 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
   }
   const FilterTexture output =
       createIntermediateTexture(arena, input.width(), input.height(), "GaussianBlurReducedOutput");
-  current = runResamplePass(arena, current, output, factorX, factorY, edgeMode,
+  current = runResamplePass(arena, current, output, grid, edgeMode,
                             gpu::shader::programs::kGaussianBlurKernelUpsample, outputClip);
   if (current) {
     device_.countFilterBlurTaps(uint64_t{input.width()} * input.height() * 4);
@@ -2457,9 +2467,9 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
 }
 
 FilterTexture GeodeFilterEngine::runResamplePass(FilterResourceArena& arena, FilterTexture input,
-                                                 FilterTexture output, uint32_t factorX,
-                                                 uint32_t factorY, uint32_t edgeMode,
-                                                 uint32_t kernelType, const Box2d* clip) {
+                                                 FilterTexture output, const ResampleGrid& grid,
+                                                 uint32_t edgeMode, uint32_t kernelType,
+                                                 const Box2d* clip) {
   if (!input || !output) {
     return {};
   }
@@ -2467,8 +2477,8 @@ FilterTexture GeodeFilterEngine::runResamplePass(FilterResourceArena& arena, Fil
   gpu::shader::programs::GaussianBlurParams params{};
   params.edgeMode = edgeMode;
   params.kernelType = kernelType;
-  params.boxLeft = static_cast<int32_t>(factorX);
-  params.boxRight = static_cast<int32_t>(factorY);
+  params.boxLeft = static_cast<int32_t>(grid.factorX | (grid.phaseX << 8));
+  params.boxRight = static_cast<int32_t>(grid.factorY | (grid.phaseY << 8));
   if (clip != nullptr) {
     // Corners arrive pre-rounded (floor/ceil), so the integer casts are exact.
     params.clipMin = {static_cast<int32_t>(clip->topLeft.x), static_cast<int32_t>(clip->topLeft.y)};
@@ -3315,7 +3325,7 @@ FilterTexture GeodeFilterEngine::applySpecularLighting(
 FilterTexture GeodeFilterEngine::applyDropShadow(
     FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::DropShadow& primitive, double pixelStdDevX,
-    double pixelStdDevY, double pixelDx, double pixelDy) {
+    double pixelStdDevY, double pixelDx, double pixelDy, gpu::Origin2d gridOrigin) {
   if (!input) {
     return {};
   }
@@ -3326,8 +3336,9 @@ FilterTexture GeodeFilterEngine::applyDropShadow(
   // Blur the input first (if any deviation). The compose shader reads the
   // blurred texture's alpha at (coord - offset); blurring RGB at the same
   // time is free because we already have to walk the taps.
-  FilterTexture blurred = applyGaussianBlur(arena, input, pixelStdDevX, pixelStdDevY,
-                                            gpu::shader::programs::kGaussianBlurEdgeTransparent);
+  FilterTexture blurred =
+      applyGaussianBlur(arena, input, pixelStdDevX, pixelStdDevY,
+                        gpu::shader::programs::kGaussianBlurEdgeTransparent, nullptr, gridOrigin);
   if (!blurred) {
     return {};
   }

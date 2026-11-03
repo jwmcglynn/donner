@@ -87,9 +87,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let coord = vec2<i32>(gid.xy);
   let size = vec2<i32>(textureDimensions(inputTexture));
+  let factor = vec2<i32>((params.boxLeft % 256i), (params.boxRight % 256i));
+  let phase = vec2<i32>((params.boxLeft / 256i), (params.boxRight / 256i));
   if ((params.kernelType == kKernelDownsample)) {
-    let factor = vec2<i32>(params.boxLeft, params.boxRight);
-    let origin = (coord * factor);
+    let origin = ((coord * factor) - phase);
     var blockSum: vec4<f32> = vec4<f32>(0f, 0f, 0f, 0f);
     for (var row: i32 = 0i; (row < factor.y); row = (row + 1i)) {
       for (var column: i32 = 0i; (column < factor.x); column = (column + 1i)) {
@@ -100,8 +101,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   if ((params.kernelType == kKernelUpsample)) {
-    let factor = vec2<f32>(f32(params.boxLeft), f32(params.boxRight));
-    let position = (((vec2<f32>(coord) + vec2<f32>(0.5f, 0.5f)) / factor) - vec2<f32>(0.5f, 0.5f));
+    let position = (((vec2<f32>((coord + phase)) + vec2<f32>(0.5f, 0.5f)) / vec2<f32>(factor)) - vec2<f32>(0.5f, 0.5f));
     let base = floor(position);
     let weight = (position - base);
     let limit = (size - vec2<i32>(1i, 1i));

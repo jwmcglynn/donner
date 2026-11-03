@@ -296,6 +296,16 @@ struct FilterExecutionMemory {
   uint64_t total() const { return textures + persistentBuffers; }
 };
 
+/// Reduced-resolution blur grid: each axis is reduced by a power-of-two factor, and its blocks
+/// start a phase of texels before the working texture's first texel so they line up with the
+/// untiled source.
+struct ResampleGrid {
+  uint32_t factorX = 1;  //!< Horizontal reduction, in [1, 16].
+  uint32_t factorY = 1;  //!< Vertical reduction, in [1, 16].
+  uint32_t phaseX = 0;   //!< Horizontal block phase, below \ref factorX.
+  uint32_t phaseY = 0;   //!< Vertical block phase, below \ref factorY.
+};
+
 /**
  * GPU filter-graph executor.
  *
@@ -444,9 +454,12 @@ private:
   /// @param stdDeviationY Standard deviation in Y (pixels).
   /// @param edgeMode A `kGaussianBlurEdge*` edge mode.
   /// @return The blurred texture.
+  /// @param outputClip Optional output clip, in input texels.
+  /// @param gridOrigin Position of \p input's first texel on the untiled source grid, which
+  ///   reduced blocks align to.
   FilterTexture applyGaussianBlur(FilterResourceArena& arena, FilterTexture input,
                                   double stdDeviationX, double stdDeviationY, uint32_t edgeMode,
-                                  const Box2d* outputClip = nullptr);
+                                  const Box2d* outputClip, gpu::Origin2d gridOrigin);
 
   /// Run a single blur pass (horizontal or vertical).
   /// @param input Source texture for this pass.
@@ -464,16 +477,16 @@ private:
                             uint32_t edgeMode, const Box2d* clip, uint32_t kernelType);
 
   /// One resampling dispatch of the blur program: a block-average downsample or a bilinear
-  /// upsample by \p factorX horizontally and \p factorY vertically.
+  /// upsample on \p grid.
   /// @param input Source texture. @param output Destination texture, sized for the resample.
-  /// @param factorX Horizontal factor. @param factorY Vertical factor.
+  /// @param grid Reduction factors and block alignment.
   /// @param edgeMode Edge handling for the downsample's partial blocks.
   /// @param kernelType `kGaussianBlurKernelDownsample` or `kGaussianBlurKernelUpsample`.
   /// @param clip Optional output clip, in output texels.
   /// @return \p output, or empty when the pass could not record.
   FilterTexture runResamplePass(FilterResourceArena& arena, FilterTexture input,
-                                FilterTexture output, uint32_t factorX, uint32_t factorY,
-                                uint32_t edgeMode, uint32_t kernelType, const Box2d* clip);
+                                FilterTexture output, const ResampleGrid& grid, uint32_t edgeMode,
+                                uint32_t kernelType, const Box2d* clip);
 
   /// One box-blur dispatch of the 3-pass approximation of a Gaussian for sigma >= 2.0, matching
   /// tiny-skia's passes.
@@ -639,11 +652,12 @@ private:
   /// @param pixelStdDevY Blur standard deviation in pixel units (Y).
   /// @param pixelDx Offset in pixel units (X).
   /// @param pixelDy Offset in pixel units (Y).
+  /// @param gridOrigin Position of \p input's first texel on the untiled source grid.
   /// @return The drop-shadowed texture.
   FilterTexture applyDropShadow(FilterResourceArena& arena, FilterTexture input,
                                 const svg::components::filter_primitive::DropShadow& primitive,
                                 double pixelStdDevX, double pixelStdDevY, double pixelDx,
-                                double pixelDy);
+                                double pixelDy, gpu::Origin2d gridOrigin);
 
   /// Blit an external image into a freshly-allocated filter-sized texture (feImage).
   /// @param primitive The feImage parameters (imageData, preserveAspectRatio, fragmentId, ...).

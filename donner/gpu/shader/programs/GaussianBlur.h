@@ -13,13 +13,15 @@ inline constexpr uint32_t kGaussianBlurKernelBox = 1;
 /// \ref GaussianBlurParams::boxLeft at once, with transparent edges; mirrored as
 /// `kKernelBoxCascade`.
 inline constexpr uint32_t kGaussianBlurKernelBoxCascade = 2;
-/// \ref GaussianBlurParams::kernelType averaging each \ref GaussianBlurParams::boxLeft by
-/// \ref GaussianBlurParams::boxRight block of the input into one output texel, reading past the
-/// input through the edge mode; mirrored as `kKernelDownsample`.
+/// \ref GaussianBlurParams::kernelType averaging each block of the input into one output texel,
+/// reading past the input through the edge mode. The low byte of \ref GaussianBlurParams::boxLeft
+/// and \ref GaussianBlurParams::boxRight is the block width and height, and the bits above it the
+/// block phase: output texel `j` covers input texels `[j * factor - phase, (j + 1) * factor -
+/// phase)`. Mirrored as `kKernelDownsample`.
 inline constexpr uint32_t kGaussianBlurKernelDownsample = 3;
-/// \ref GaussianBlurParams::kernelType bilinearly enlarging the input by
-/// \ref GaussianBlurParams::boxLeft horizontally and \ref GaussianBlurParams::boxRight vertically,
-/// clamping at the input edge; mirrored as `kKernelUpsample`.
+/// \ref GaussianBlurParams::kernelType bilinearly enlarging the input by the factors and phases
+/// encoded as for `kGaussianBlurKernelDownsample`, its inverse, clamping at the input edge;
+/// mirrored as `kKernelUpsample`.
 inline constexpr uint32_t kGaussianBlurKernelUpsample = 4;
 /// \ref GaussianBlurParams::kernelType for a sampled quadratic B-spline, the limit shape of three
 /// equal box passes, whose full width is \ref GaussianBlurParams::stdDeviation (its variance is a
@@ -42,9 +44,10 @@ struct alignas(8) GaussianBlurParams {
   uint32_t axis = 0;          //!< Zero for horizontal and one for vertical sampling.
   uint32_t edgeMode = 0;      //!< Transparent, duplicate, or wrap edge behavior.
   uint32_t kernelType = 0;    //!< Gaussian, box, or three-box cascade kernel selection.
-  /// Inclusive box-kernel extent below zero, the cascade window, or the horizontal resample factor.
+  /// Inclusive box-kernel extent below zero, the cascade window, or the horizontal resample factor
+  /// and phase.
   int32_t boxLeft = 0;
-  /// Inclusive box-kernel extent above zero, or the vertical resample factor.
+  /// Inclusive box-kernel extent above zero, or the vertical resample factor and phase.
   int32_t boxRight = 0;
   std::array<int32_t, 2> clipMin{};  //!< Inclusive output clip origin.
   std::array<int32_t, 2> clipMax{};  //!< Exclusive output clip limit.
@@ -56,9 +59,9 @@ struct alignas(8) GaussianBlurParams {
  * Returns the WGSL projection and reflected interface used by the Geode backend.
  * The filter admission path bounds finite sigma to [0,256], box extents to [0,240], cascade
  * windows to [2,481], and supplies equally sized nonempty source and destination textures, except
- * for the resampling kernels: a downsample destination is the source divided by the factors in
- * `boxLeft` and `boxRight` (rounded up), an upsample destination is at most the source multiplied
- * by them, and both factors are in [1,16]. The
+ * for the resampling kernels: a downsample destination is the source plus its phase divided by
+ * the factor (rounded up), an upsample destination is at most that many blocks less the phase,
+ * factors are in [1,16] and phases are below their factors. The
  * cascade kernel weighs each input tap by how many ways the three box passes reach it, so it
  * equals the three passes without discarding what they spread past the texture edge. The shader
  * caps Gaussian support at 127 pixels and applies its optional output clip before the [0,1]
