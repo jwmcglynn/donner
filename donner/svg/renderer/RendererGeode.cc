@@ -3137,7 +3137,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Whether \p bytes recorded for \p content would fit its kind's share once the results of that
   /// kind no recent frame drew were evicted. Checked before a sprite is captured, so a full share
   /// never costs a capture whose result would be dropped.
-  [[nodiscard]] bool shareCanHold(const FilterResultContentKey& content, std::uint64_t bytes) const {
+  [[nodiscard]] bool shareCanHold(const FilterResultContentKey& content,
+                                  std::uint64_t bytes) const {
     const bool sprite = content.sprite;
     const auto sameKind = [sprite](const FilterResultContentKey& held,
                                    const FilterResultPlacement&) { return held.sprite == sprite; };
