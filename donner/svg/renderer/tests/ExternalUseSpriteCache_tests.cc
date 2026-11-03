@@ -640,14 +640,16 @@ TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
   std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
   for (int frame = 0; frame < 6; ++frame) {
     for (int i = 0; i < 12; ++i) {
-      // Doubled and hanging past the left, top or bottom edge.
-      scene.uses[i].setTransform(
-          Transform2d::Scale(2.0) *
-          Transform2d::Translate(Vector2d(-24.0 + (i % 4) * 70.0 + frame, i < 4 ? -30.0 : 160.0)));
+      // Doubled and hanging past the top, bottom or right edge. No two sprites overlap: a cached
+      // sprite drawn over another sprite rounds differently (see BackdropRoundingIsBounded).
+      const Vector2d offset = i < 8 ? Vector2d(-24.0 + (i % 4) * 70.0, i < 4 ? -30.0 : 160.0)
+                                    : Vector2d(250.0, 20.0 + 40.0 * (i - 8));
+      scene.uses[i].setTransform(Transform2d::Scale(2.0) *
+                                 Transform2d::Translate(offset + Vector2d(frame, 0.0)));
     }
     for (int i = 12; i < 32; ++i) {
       scene.uses[i].setTransform(Transform2d::Translate(
-          Vector2d(10.0 + ((i - 12) % 10) * 24.0 + frame, 60.0 + ((i - 12) / 10) * 40.0)));
+          Vector2d(10.0 + ((i - 12) % 10) * 22.0 + frame, 60.0 + ((i - 12) / 10) * 40.0)));
     }
     const FrameWork work = Draw(*renderer, scene);
     if (frame >= 3) {
@@ -655,10 +657,7 @@ TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
       EXPECT_EQ(work.spriteRecords, 0u) << "frame " << frame;
     }
   }
-  // A sprite rendered in its own surface can round an anti-aliased clip edge one premultiplied
-  // level differently from the same draw on the canvas (measured on these doubled sprites).
-  ExpectMatchesUncached(*renderer, scene, "sprite-off-canvas",
-                        editor::tests::ApprovedPixelToleranceParams(0.02f, 0));
+  ExpectMatchesUncached(*renderer, scene, "sprite-off-canvas");
 }
 
 /// Largest premultiplied channel difference, and the number of pixels differing by more than
@@ -682,6 +681,53 @@ std::pair<int, int> PremultipliedDifference(const RendererBitmap& a, const Rende
     }
   }
   return {maximum, count};
+}
+
+// A cached sprite composited over content already on the canvas can differ from drawing its
+// shapes there directly by one premultiplied level, and only where it is partly transparent.
+//
+// The uncached path blends each shape onto the canvas: an anti-aliased edge pixel becomes
+// round(source * coverage + backdrop * (1 - coverage)), one rounding to 8 bits. The cached path
+// first stores the sprite on its own transparent surface, which rounds source * coverage to 8 bits,
+// and then blends that onto the canvas, a second rounding. Over a transparent backdrop the second
+// blend is a copy, so the two paths match exactly (every other parity test here); over an opaque
+// backdrop the two roundings can land one level apart. The same holds for a pixel a sprite's
+// opacity group or a semi-transparent fill leaves partly transparent. Fully covered, opaque
+// pixels match exactly. Storing sprites at higher precision would remove the extra rounding for
+// a single shape but double their memory, and still not match a sprite whose own shapes overlap
+// at partly transparent pixels, since flattening a group before blending it is not associative
+// under 8-bit rounding.
+TEST(ExternalUseSpriteCacheTest, BackdropRoundingIsBounded) {
+  REQUIRE_CACHING_BACKEND();
+  std::ostringstream host;
+  host << R"(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">)"
+       << R"(<rect width="256" height="192" fill="#e0d0a0"/>)";
+  for (int i = 0; i < 3; ++i) {
+    host << "<use id=\"use-" << i << "\" href=\"sprites.svg#sprite-0\"/>";
+  }
+  host << "</svg>";
+  std::optional<ExternalUseDocument> document =
+      MakeExternalUseDocument(host.str(), std::string(kSheet));
+  ASSERT_TRUE(document.has_value());
+  SpriteScene scene{std::move(*document), {}};
+  for (int i = 0; i < 3; ++i) {
+    scene.uses.push_back(
+        scene.host.document.querySelector("#use-" + std::to_string(i))->cast<SVGUseElement>());
+  }
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::size_t hits = 0;
+  for (int frame = 0; frame < 4; ++frame) {
+    PlaceAll(scene, frame, 2.0);
+    hits += Draw(*renderer, scene).spriteHits;
+  }
+  EXPECT_GT(hits, 0u);
+  const RendererBitmap cached = renderer->takeSnapshot();
+  const RendererBitmap exact = RenderUncached(scene);
+  ASSERT_EQ(cached.dimensions, exact.dimensions);
+  const auto [maximum, differing] = PremultipliedDifference(cached, exact, 0);
+  EXPECT_LE(maximum, 1) << "One extra 8-bit rounding moves a channel by at most one level";
+  // Only the sprites' anti-aliased edges and semi-transparent parts can differ.
+  EXPECT_LE(differing, 3 * 300);
 }
 
 // Under the resample policy a sprite moving by fractions of a pixel every frame hits on every

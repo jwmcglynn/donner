@@ -31,8 +31,9 @@ path draw or filter execution.
   sheet, a change to the style the referenced root inherits from the `<use>`, the `<use>`
   element's fill or stroke (context paint), its `x`, `y`, `width` or `height`, a `setHref`
   retarget, or a change to the non-translation part of the device transform.
-- Cached frames match uncached frames exactly for whole-pixel motion; sub-pixel motion has the
-  documented bounded error of cached filter results.
+- Cached frames match uncached frames exactly for whole-pixel motion over a transparent backdrop,
+  and within one premultiplied level over other content (see Compositing over a backdrop);
+  sub-pixel motion has the documented bounded error of cached filter results.
 - Several static scales of one sprite each keep a rasterization; a continuously animated scale
   falls back to the uncached path without recording a rasterization per frame.
 - Rasterizations share the cached filter results' memory bound, trim and idle rules.
@@ -157,6 +158,23 @@ key changes with any revision or transform that could make it fit, nothing is lo
 result whose region reached past the raster the canvas allowed is likewise not marked for
 recording again for 30 frames.
 
+### Compositing over a backdrop
+
+Drawing a sprite from the cache flattens it first, which costs one extra 8-bit rounding wherever
+the sprite is partly transparent and lands on content already drawn. The uncached path blends
+each shape onto the canvas: an anti-aliased edge pixel becomes
+`round(source * coverage + backdrop * (1 - coverage))`, rounded once. The cached path stores the
+sprite on its own transparent surface first, which rounds `source * coverage` to 8 bits, and then
+blends that onto the canvas, rounding again. Over a transparent backdrop the second blend is a
+copy and the two paths match exactly; over an opaque backdrop the two roundings can land one level
+apart. The same holds for pixels an opacity group or a semi-transparent fill leaves partly
+transparent; fully covered, opaque pixels match exactly. This is the usual cost of caching a
+group as a bitmap and is inherent to it: storing sprites at higher precision would remove the
+extra rounding for a single shape but double their memory, and would still not match a sprite
+whose own shapes overlap at partly transparent pixels, because flattening a group before blending
+it is not associative under 8-bit rounding. `BackdropRoundingIsBounded` holds it to at most one
+level.
+
 ### Sub-pixel placement
 
 `setSpriteSubpixelPlacement` chooses how a sprite is placed at a fractional device translation;
@@ -232,7 +250,8 @@ backends):
   the actual translation; a single blurred element is resampled at any offset with one
   rasterization, within the bilinear bound;
 - large sprites partly past the canvas, drawn before the rest, record whole and every occurrence
-  hits from the fourth frame; a sprite lit by a distant light is cached and exact, and one lit by
+  hits from the fourth frame, exactly; over an opaque backdrop cached sprites stay within one
+  premultiplied level of an uncached render; a sprite lit by a distant light is cached and exact, and one lit by
   a point light is not cached;
 - under `Resample` placement, sprites moving by a fraction of a pixel every frame record once and
   hit every frame, differing from an exact render only at edges, within half a pixel's coverage;
