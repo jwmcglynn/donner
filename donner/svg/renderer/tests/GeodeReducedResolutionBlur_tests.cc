@@ -393,8 +393,9 @@ TEST_F(GeodeReducedResolutionBlurTest, WrappedAndDuplicatedEdgeBlursAreNotReduce
 // The counters report the filter's work. A 320x320 layer blurred at deviation 16 is reduced by four
 // on both axes. At full resolution each axis is one pass of the three-box cascade over the layer,
 // whose 30-texel window reads 89 texels per output texel. Reduced, the layer is averaged down to
-// 82x82 (80 blocks plus an apron block each side, 16 reads each), blurred there with a
-// 7.52-texel spline per axis (25 reads each), and enlarged back to 320x320 (4 reads each).
+// 83x83 (80 blocks, an apron block each side and room for any block phase; 16 reads each), blurred
+// there with a 7.52-texel spline per axis (25 reads each), and enlarged back to 320x320 (4 reads
+// each).
 TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
   const FilterGraph graph = BlurGraph(fp::GaussianBlur{.stdDeviationX = 16, .stdDeviationY = 16});
   geode::GeodeCounters reduced;
@@ -402,8 +403,8 @@ TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
   render(graph, DrawSquare, true, &reduced);
   render(graph, DrawSquare, false, &full);
   constexpr uint64_t kLayer = uint64_t{kViewport} * kViewport;
-  // 320 / 4 blocks plus one block of apron on either side.
-  constexpr uint64_t kReducedLayer = uint64_t{82} * 82;
+  // 320 / 4 blocks, one block of apron on either side, and one more so every block phase fits.
+  constexpr uint64_t kReducedLayer = uint64_t{83} * 83;
   EXPECT_THAT(reduced.reducedResolutionBlurs, testing::Eq(1u));
   EXPECT_THAT(full.reducedResolutionBlurs, testing::Eq(0u));
   EXPECT_THAT(full.filterBlurTaps, testing::Eq(2 * kLayer * 89));
