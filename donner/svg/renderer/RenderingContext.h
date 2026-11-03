@@ -186,7 +186,7 @@ private:
 
   /**
    * Bring the computed components up to date without the full rebuild when the frame's dirty set
-   * only moves content or retargets external `<use>` elements; see
+   * only moves content, changes its compositing, or retargets external `<use>` elements; see
    * \ref RetainedUpdatePlan.
    *
    * @param warningSink Sink to collect warnings.

@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 /// A game-like scene: many external `<use>` sprites, drawn from several sprite sheets, that move
-/// every frame, with `setHref` retargets within a sheet and occasional `opacity` writes.
+/// every frame, with occasional `opacity` writes and `setHref` retargets within a sheet.
 
 #include <optional>
 #include <string>
@@ -31,7 +31,7 @@ enum class SpriteFieldChange {
   Move,      //!< Every use gets a new transform.
   Opacity,   //!< A few uses get a new `opacity` attribute.
   Retarget,  //!< A few uses are pointed at another sprite of the same sheet.
-  All,       //!< Moves and retargets every frame and fades every eighth, as a game does.
+  All,       //!< All of the above, as a game frame does.
 };
 
 /**
