@@ -276,6 +276,11 @@ void markCompositingDirty(EntityHandle handle) {
         EntityHandle(registry, child), [](EntityHandle desc) {
           components::StyleSystem().invalidateComputed(desc);
           markDirty(desc, kCompositingDirtyFlags);
+          // Text below the written element memoizes each span's opacity, which `opacity: inherit`
+          // ties to this element, so its layout is dropped too (taking the full rebuild).
+          if (desc.all_of<components::TextRootComponent>()) {
+            (void)components::InvalidateTextLayout(desc);
+          }
         });
   }
 }

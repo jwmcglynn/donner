@@ -315,6 +315,19 @@ TEST(RetainedRenderTreeUpdateTest, OpacityAndMovesMatchFullRebuild) {
                                      ExpectedPath::Retained, "opacity-move");
 }
 
+TEST(RetainedRenderTreeUpdateTest, OpacityOverInheritingTextTakesTheFullRebuild) {
+  // Text memoizes each span's opacity, which `opacity: inherit` ties to the faded group.
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+      <g id="faded">
+        <text x="8" y="48" font-size="32" fill="navy" style="opacity: inherit"><tspan
+          style="opacity: inherit">Ab</tspan></text>
+      </g>
+    </svg>)svg";
+  ExpectSourceFramesMatchFullRebuild(kSource, SetOpacity("#faded"), ExpectedPath::FullRebuild,
+                                     "opacity-inherit-text");
+}
+
 TEST(RetainedRenderTreeUpdateTest, OpacitySelectorsTakeTheFullRebuild) {
   constexpr std::string_view kSource = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
