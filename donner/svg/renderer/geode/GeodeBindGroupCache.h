@@ -179,6 +179,7 @@ public:
   void setMaximumEntriesForTesting(std::size_t maximumEntries) {
     std::lock_guard<std::mutex> lock(mutex_);
     maximumEntries_ = std::max<std::size_t>(maximumEntries, 1);
+    fruitlessScanBefore_ = ~uint64_t{0};
   }
 
 private:
@@ -217,6 +218,13 @@ private:
     if (live < maximumEntries_) {
       return;
     }
+    // A scan that found too little to retire stays fruitless until something new becomes
+    // retirable (a later generation) or enough entries arrive to be worth another pass, so a
+    // heavy frame past the cap does not rescan every live entry on each insertion.
+    if (retirableBefore == fruitlessScanBefore_ &&
+        live < fruitlessScanLive_ + maximumEntries_ / 4) {
+      return;
+    }
     const std::size_t target = maximumEntries_ - maximumEntries_ / 4;
     std::vector<uint64_t> stamps;
     stamps.reserve(live);
@@ -230,7 +238,14 @@ private:
         stamps.push_back(item.second.stamp);
       }
     }
-    const std::size_t retireCount = std::min(stamps.size(), live - std::min(live, target));
+    const std::size_t wanted = live - std::min(live, target);
+    const std::size_t retireCount = std::min(stamps.size(), wanted);
+    if (retireCount < wanted) {
+      fruitlessScanBefore_ = retirableBefore;
+      fruitlessScanLive_ = live;
+    } else {
+      fruitlessScanBefore_ = ~uint64_t{0};
+    }
     if (retireCount == 0) {
       return;
     }
@@ -256,6 +271,10 @@ private:
 
   mutable std::mutex mutex_;
   std::size_t maximumEntries_ = kMaximumEntries;
+  /// Retirement bound and live count of the last scan that could not retire down to its target;
+  /// see \ref retireOverCapacityLocked. `~0` when the last scan reached it.
+  uint64_t fruitlessScanBefore_ = ~uint64_t{0};
+  std::size_t fruitlessScanLive_ = 0;
   // Node-based maps: lookups hand out pointers that must survive later insertions.
   using ViewMap = std::unordered_map<uint64_t, Entry<gpu::TextureView>>;
   using BindGroupMap = std::unordered_map<Key, Entry<gpu::BindGroup>, KeyHash>;
