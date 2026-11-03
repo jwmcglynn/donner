@@ -767,7 +767,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   const gpu::BindGroup* makeDrawBindGroup(gpu::BindGroupDescriptor descriptor) {
     if (arenas != &ownArenas) {
       return device->bindGroupCache().bindGroup(*gpuContext->gpuDevice, std::move(descriptor),
-                                                device->latestFrameGeneration());
+                                                device->latestFrameGeneration(),
+                                                device->oldestOpenFrameGeneration());
     }
     gpu::Result<gpu::BindGroup> created = gpuContext->gpuDevice->createBindGroup(descriptor);
     if (created.hasError()) {

@@ -32,12 +32,20 @@ namespace donner::geode {
  *
  * Lifetime follows the device's frame generations. Every lookup stamps its entry with a
  * generation at or after that of the frame recording the use (callers pass the device's latest
- * generation). An entry stamped before the oldest open generation is named only by frames that
- * have closed, so it may be released. \ref evict releases such entries once they are also
- * \ref kRetainedGenerations old. Past the live-entry cap, the least recently stamped entries
- * leave the cache at once but are only retired: a later \ref evict releases them once no open
- * frame can name them, so the cache stays bounded without dropping anything an unsubmitted frame
- * recorded. Thread-safe.
+ * generation). An entry stamped before the oldest open generation was last named by frames that
+ * have all closed, so it may be released. \ref evict releases such entries once they are also
+ * \ref kRetainedGenerations old.
+ *
+ * The live-entry cap is soft. An insertion past it retires the least recently stamped entries
+ * that no open frame named, and only those: an entry stamped at or after the oldest open
+ * generation stays live even past the cap, until that frame closes and the entry ages out.
+ * Retired entries keep their map nodes (extracted, not erased), so a pointer handed out earlier
+ * stays valid until a later \ref evict releases them, which it does once no open frame can name
+ * them. How long that takes, and so how large the retired list grows, depends on how long the
+ * oldest open frame stays open.
+ *
+ * Thread-safe; the frame generations it is given come from GeodeDevice, whose frame bookkeeping
+ * requires that all renderers on one device run on one thread.
  */
 class GeodeBindGroupCache {
 public:
@@ -54,11 +62,13 @@ public:
    * @param device Device to create on a miss.
    * @param descriptor Layout and bound resources; the label is used only on a miss.
    * @param useGeneration A frame generation at or after that of the frame recording this use.
+   * @param oldestOpenGeneration The device's oldest open frame generation, `~0` when none is open.
+   *   Only entries stamped before it may be retired to make room.
    * @return The bind group, valid at least until that frame has closed, or null when the runtime
    *   refuses it.
    */
   const gpu::BindGroup* bindGroup(gpu::Device& device, gpu::BindGroupDescriptor descriptor,
-                                  uint64_t useGeneration) {
+                                  uint64_t useGeneration, uint64_t oldestOpenGeneration) {
     Key key;
     key.words.reserve(1 + descriptor.entries.size() * 4);
     key.words.push_back(IdentityKey(descriptor.layout.slotIndex(), descriptor.layout.generation()));
@@ -92,7 +102,7 @@ public:
     if (!created.hasResult()) {
       return nullptr;
     }
-    retireOverCapacityLocked();
+    retireOverCapacityLocked(std::min(oldestOpenGeneration, useGeneration));
     auto [inserted, unused] = bindGroups_.emplace(
         std::move(key), Entry<gpu::BindGroup>{std::move(created).result(), useGeneration});
     (void)unused;
@@ -106,11 +116,14 @@ public:
    * @param texture Live texture to view.
    * @param label Debug label, used only on a miss.
    * @param useGeneration A frame generation at or after that of the frame recording this use.
+   * @param oldestOpenGeneration The device's oldest open frame generation, `~0` when none is open.
+   *   Only entries stamped before it may be retired to make room.
    * @return The view, valid at least until that frame has closed, or null when the runtime
    *   refuses it.
    */
   const gpu::TextureView* textureView(gpu::Device& device, const gpu::Texture& texture,
-                                      RcString label, uint64_t useGeneration) {
+                                      RcString label, uint64_t useGeneration,
+                                      uint64_t oldestOpenGeneration) {
     const uint64_t key = IdentityKey(texture.slotIndex(), texture.generation());
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto found = views_.find(key); found != views_.end()) {
@@ -122,7 +135,7 @@ public:
     if (!created.hasResult()) {
       return nullptr;
     }
-    retireOverCapacityLocked();
+    retireOverCapacityLocked(std::min(oldestOpenGeneration, useGeneration));
     auto [inserted, unused] =
         views_.emplace(key, Entry<gpu::TextureView>{std::move(created).result(), useGeneration});
     (void)unused;
@@ -145,9 +158,9 @@ public:
     std::erase_if(views_, [&](const auto& item) { return releasable(item.second.stamp); });
     std::erase_if(bindGroups_, [&](const auto& item) { return releasable(item.second.stamp); });
     std::erase_if(retiredViews_,
-                  [&](const auto& item) { return item.stamp < oldestOpenGeneration; });
+                  [&](const auto& node) { return node.mapped().stamp < oldestOpenGeneration; });
     std::erase_if(retiredBindGroups_,
-                  [&](const auto& item) { return item.stamp < oldestOpenGeneration; });
+                  [&](const auto& node) { return node.mapped().stamp < oldestOpenGeneration; });
   }
 
   /// Number of live (lookup-reachable) bind groups and views.
@@ -194,48 +207,49 @@ private:
     }
   };
 
-  /// Before an insertion that would exceed the cap, move the least recently stamped live entries
-  /// to the retired lists, down to three quarters of the cap so a churning frame pays the scan
-  /// rarely. Pointers already handed out stay valid: retired entries are only moved, and moving a
-  /// handle keeps the runtime object it names.
-  void retireOverCapacityLocked() {
+  /// Before an insertion that would exceed the cap, retire the least recently stamped live
+  /// entries stamped before \p retirableBefore, down to three quarters of the cap so a churning
+  /// frame pays the scan rarely. Entries stamped at or after it may be named by an open frame and
+  /// stay live, so the cap is exceeded until they age out. Retiring extracts the map node, so
+  /// pointers into it stay valid until \ref evict releases it.
+  void retireOverCapacityLocked(uint64_t retirableBefore) {
     const std::size_t live = views_.size() + bindGroups_.size();
     if (live < maximumEntries_) {
       return;
     }
     const std::size_t target = maximumEntries_ - maximumEntries_ / 4;
-    const std::size_t retireCount = live - std::min(live, target);
-    if (retireCount == 0) {
-      return;
-    }
     std::vector<uint64_t> stamps;
     stamps.reserve(live);
     for (const auto& item : views_) {
-      stamps.push_back(item.second.stamp);
+      if (item.second.stamp < retirableBefore) {
+        stamps.push_back(item.second.stamp);
+      }
     }
     for (const auto& item : bindGroups_) {
-      stamps.push_back(item.second.stamp);
+      if (item.second.stamp < retirableBefore) {
+        stamps.push_back(item.second.stamp);
+      }
+    }
+    const std::size_t retireCount = std::min(stamps.size(), live - std::min(live, target));
+    if (retireCount == 0) {
+      return;
     }
     std::nth_element(stamps.begin(), stamps.begin() + static_cast<std::ptrdiff_t>(retireCount - 1),
                      stamps.end());
     const uint64_t cutoff = stamps[retireCount - 1];
     std::size_t retired = 0;
     for (auto it = views_.begin(); it != views_.end() && retired < retireCount;) {
-      if (it->second.stamp <= cutoff) {
-        retiredViews_.push_back(std::move(it->second));
-        it = views_.erase(it);
+      const auto current = it++;
+      if (current->second.stamp <= cutoff && current->second.stamp < retirableBefore) {
+        retiredViews_.push_back(views_.extract(current));
         ++retired;
-      } else {
-        ++it;
       }
     }
     for (auto it = bindGroups_.begin(); it != bindGroups_.end() && retired < retireCount;) {
-      if (it->second.stamp <= cutoff) {
-        retiredBindGroups_.push_back(std::move(it->second));
-        it = bindGroups_.erase(it);
+      const auto current = it++;
+      if (current->second.stamp <= cutoff && current->second.stamp < retirableBefore) {
+        retiredBindGroups_.push_back(bindGroups_.extract(current));
         ++retired;
-      } else {
-        ++it;
       }
     }
   }
@@ -243,10 +257,13 @@ private:
   mutable std::mutex mutex_;
   std::size_t maximumEntries_ = kMaximumEntries;
   // Node-based maps: lookups hand out pointers that must survive later insertions.
-  std::unordered_map<uint64_t, Entry<gpu::TextureView>> views_;
-  std::unordered_map<Key, Entry<gpu::BindGroup>, KeyHash> bindGroups_;
-  std::vector<Entry<gpu::TextureView>> retiredViews_;
-  std::vector<Entry<gpu::BindGroup>> retiredBindGroups_;
+  using ViewMap = std::unordered_map<uint64_t, Entry<gpu::TextureView>>;
+  using BindGroupMap = std::unordered_map<Key, Entry<gpu::BindGroup>, KeyHash>;
+  ViewMap views_;
+  BindGroupMap bindGroups_;
+  // Extracted nodes: each keeps the allocation a handed-out pointer points into.
+  std::vector<ViewMap::node_type> retiredViews_;
+  std::vector<BindGroupMap::node_type> retiredBindGroups_;
 };
 
 }  // namespace donner::geode

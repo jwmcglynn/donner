@@ -320,7 +320,8 @@ struct FilterResourceArena {
     // Views outlive the arena in the engine's cache, so every later frame that names the same
     // texture binds the same view, and the bind groups over it can be reused too.
     return resourceCache_.objects.textureView(device_.runtimeDevice(), texture, std::move(label),
-                                              device_.latestFrameGeneration());
+                                              device_.latestFrameGeneration(),
+                                              device_.oldestOpenFrameGeneration());
   }
 
   /// A parameter slot holding \p data for uniform or read-only storage binding. Null buffer when
@@ -351,7 +352,7 @@ struct FilterResourceArena {
     return resourceCache_.objects.bindGroup(
         device_.runtimeDevice(),
         gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)},
-        device_.latestFrameGeneration());
+        device_.latestFrameGeneration(), device_.oldestOpenFrameGeneration());
   }
 
   /// Records one compute dispatch into this execution's runtime-owned command encoder.
@@ -1416,8 +1417,17 @@ void GeodeFilterEngine::evictCachedObjects(uint64_t oldestOpenGeneration,
 }
 
 std::size_t GeodeFilterEngine::cachedObjectCount() const {
-  return resourceCache_ ? resourceCache_->objects.size() + resourceCache_->objects.retiredSize()
-                        : 0;
+  return resourceCache_ ? resourceCache_->objects.size() : 0;
+}
+
+std::size_t GeodeFilterEngine::retiredCachedObjectCount() const {
+  return resourceCache_ ? resourceCache_->objects.retiredSize() : 0;
+}
+
+void GeodeFilterEngine::setCachedObjectCapForTesting(std::size_t maximumEntries) {
+  if (resourceCache_) {
+    resourceCache_->objects.setMaximumEntriesForTesting(maximumEntries);
+  }
 }
 
 namespace {}  // namespace

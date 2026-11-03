@@ -2885,7 +2885,7 @@ TEST_F(RendererGeodeTest, BindGroupCacheAgesWhileRenderersFramesOverlap) {
       << "Entries no open frame can name are released even though frames always overlap";
 }
 
-TEST_F(RendererGeodeTest, BindGroupCacheCapRetiresWithoutDroppingAnOpenFramesGroups) {
+TEST_F(RendererGeodeTest, BindGroupCacheCapNeverRetiresWhatAnOpenFrameNamed) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   geode::GeodeBindGroupCache& cache = sharedDevice()->bindGroupCache();
   cache.setMaximumEntriesForTesting(16);
@@ -2897,24 +2897,28 @@ TEST_F(RendererGeodeTest, BindGroupCacheCapRetiresWithoutDroppingAnOpenFramesGro
   for (int index = 0; index < 8; ++index) {
     first.drawRect(Box2d::FromXYWH(8.0 * index, 0.0, 8.0, 8.0), StrokeParams{});
   }
-  // While the first frame stays open, another renderer churns well past the cap.
+  // While the first frame stays open, another renderer churns well past the cap. Everything named
+  // since the first frame opened may be named by it, so the cap is exceeded rather than honored.
   for (int round = 0; round < 30; ++round) {
     beginFrame(second);
     DrawChurningFrame(second, round);
     second.endFrame();
-    EXPECT_LE(cache.size(), 16u);
   }
+  EXPECT_GT(cache.size(), 16u) << "Entries an open frame may name stay live past the cap";
   first.endFrame();
   const RendererBitmap bitmap = first.takeSnapshot();
   EXPECT_THAT(PixelAt(bitmap, 4, 4), RgbaEq(30, 180, 90, 255))
-      << "The open frame's bind groups were retired, not released, so its submission succeeds";
+      << "The open frame's bind groups were kept, so its submission succeeds";
   EXPECT_THAT(PixelAt(bitmap, 60, 4), RgbaEq(30, 180, 90, 255));
-  EXPECT_GE(first.lastFrameTimings().counters.bindGroupCacheEntries, cache.size());
 
-  beginFrame(first);
-  first.endFrame();
-  EXPECT_EQ(cache.retiredSize(), 0u)
-      << "Retired entries are released once no open frame names them";
+  // Once no frame overlaps, churning frames retire and then release what they no longer name.
+  for (int round = 0; round < 2 * geode::GeodeBindGroupCache::kRetainedGenerations; ++round) {
+    beginFrame(second);
+    DrawChurningFrame(second, 100 + round);
+    second.endFrame();
+  }
+  EXPECT_LE(cache.size(), 32u);
+  EXPECT_LE(second.lastFrameTimings().counters.bindGroupCacheRetired, 32u);
   cache.setMaximumEntriesForTesting(geode::GeodeBindGroupCache::kMaximumEntries);
 }
 
@@ -8202,6 +8206,25 @@ TEST_F(RendererGeodeTest, WarmFilterPassesReuseBindGroupsAndBatchParameterUpload
   RecordProperty("five_pass_bindgroups", std::to_string(fiveCounters.bindgroupCreates));
   RecordProperty("one_pass_writes", std::to_string(oneCounters.bufferWrites));
   RecordProperty("five_pass_writes", std::to_string(fiveCounters.bufferWrites));
+}
+
+TEST_F(RendererGeodeTest, AFilterPassWhoseOwnLookupsReachTheCapKeepsItsEarlierLookups) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  // A cap of one: every miss inside a pass would retire the views the pass already looked up.
+  // A pass holds those views across its later lookups, so they must stay valid.
+  SVGDocument document = ParseDocumentOrFail(ChainedBlurDocument(3));
+  RendererGeode reference = createRenderer();
+  reference.draw(document);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  sharedDevice()->filterEngine().setCachedObjectCapForTesting(1);
+  RendererGeode renderer = createRenderer();
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+    EXPECT_EQ(renderer.takeSnapshot().pixels, expected.pixels) << "Frame " << frame;
+  }
+  sharedDevice()->filterEngine().setCachedObjectCapForTesting(
+      geode::GeodeBindGroupCache::kMaximumEntries);
 }
 
 TEST_F(RendererGeodeTest, AWarmFilterFrameWithANewBlurRadiusShowsTheNewBlur) {

@@ -742,6 +742,9 @@ public:
    * Pair with `endFrameGeneration`. A cache that must not recycle memory an
    * unsubmitted frame still reads compares against
    * `oldestOpenFrameGeneration()` rather than against its own index.
+   *
+   * The generation bookkeeping is not synchronized: every renderer on one
+   * device must begin and end its frames on the same thread.
    */
   uint64_t beginFrameGeneration() {
     const uint64_t generation = ++frameGeneration_;

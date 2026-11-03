@@ -6023,9 +6023,11 @@ FrameTimings RendererGeode::lastFrameTimings() const {
   FrameTimings timings;
   timings.counters = impl_->counters;
   if (impl_->device) {
-    timings.counters.bindGroupCacheEntries = impl_->device->bindGroupCache().size() +
-                                             impl_->device->bindGroupCache().retiredSize() +
-                                             impl_->device->filterEngine().cachedObjectCount();
+    timings.counters.bindGroupCacheEntries =
+        impl_->device->bindGroupCache().size() + impl_->device->filterEngine().cachedObjectCount();
+    timings.counters.bindGroupCacheRetired =
+        impl_->device->bindGroupCache().retiredSize() +
+        impl_->device->filterEngine().retiredCachedObjectCount();
   }
   // `renderPassNs` / `totalGpuNs` stay zero until timestamp support lands.
   return timings;

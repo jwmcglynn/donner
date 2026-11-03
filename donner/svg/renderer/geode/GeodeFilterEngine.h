@@ -370,8 +370,15 @@ public:
    */
   void evictCachedObjects(uint64_t oldestOpenGeneration, uint64_t latestGeneration);
 
-  /// Cached pass views and bind groups, live plus retired.
+  /// Cached pass views and bind groups that lookups can reach.
   [[nodiscard]] std::size_t cachedObjectCount() const;
+
+  /// Cached pass views and bind groups retired past the cap, held until no open frame can name
+  /// them.
+  [[nodiscard]] std::size_t retiredCachedObjectCount() const;
+
+  /// Replace the pass cache's live-entry cap, for tests.
+  void setCachedObjectCapForTesting(std::size_t maximumEntries);
 
   /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
   uint64_t retainedBufferBytes() const;
