@@ -32,7 +32,8 @@ path draw or filter execution.
   element's fill or stroke (context paint), its `x`, `y`, `width` or `height`, a `setHref`
   retarget, or a change to the non-translation part of the device transform.
 - Cached frames match uncached frames exactly for whole-pixel motion over a transparent backdrop,
-  and within one premultiplied level over other content (see Compositing over a backdrop);
+  and over other content within one premultiplied level per layer the sprite is flattened
+  through (see Compositing over a backdrop);
   sub-pixel motion has the documented bounded error of cached filter results.
 - Several static scales of one sprite each keep a rasterization; a continuously animated scale
   falls back to the uncached path without recording a rasterization per frame.
@@ -167,13 +168,18 @@ each shape onto the canvas: an anti-aliased edge pixel becomes
 sprite on its own transparent surface first, which rounds `source * coverage` to 8 bits, and then
 blends that onto the canvas, rounding again. Over a transparent backdrop the second blend is a
 copy and the two paths match exactly; over an opaque backdrop the two roundings can land one level
-apart. The same holds for pixels an opacity group or a semi-transparent fill leaves partly
-transparent; fully covered, opaque pixels match exactly. This is the usual cost of caching a
+apart. A layer inside the sprite (an opacity group or a filter) is composited onto the sprite's
+surface and that surface onto the canvas, where the uncached path composites the layer onto the
+canvas once, so each such layer can add one more level at the pixels it leaves partly
+transparent. Fully covered, opaque pixels match exactly. This is the usual cost of caching a
 group as a bitmap and is inherent to it: storing sprites at higher precision would remove the
 extra rounding for a single shape but double their memory, and would still not match a sprite
 whose own shapes overlap at partly transparent pixels, because flattening a group before blending
-it is not associative under 8-bit rounding. `BackdropRoundingIsBounded` holds it to at most one
-level.
+it is not associative under 8-bit rounding. `BackdropRoundingIsBounded` holds a single filled
+path to one level and a sprite with an opacity group and a filtered group to two, both measured
+at those bounds, with only edge and semi-transparent pixels differing. The same mechanism made
+two overlapping sprites in an earlier version of the off-canvas test differ by one level; that
+test now places its sprites apart and is exact.
 
 ### Sub-pixel placement
 
@@ -250,8 +256,8 @@ backends):
   the actual translation; a single blurred element is resampled at any offset with one
   rasterization, within the bilinear bound;
 - large sprites partly past the canvas, drawn before the rest, record whole and every occurrence
-  hits from the fourth frame, exactly; over an opaque backdrop cached sprites stay within one
-  premultiplied level of an uncached render; a sprite lit by a distant light is cached and exact, and one lit by
+  hits from the fourth frame, exactly; over an opaque backdrop a cached path stays within one
+  premultiplied level of an uncached render and a sprite with two inner layers within two; a sprite lit by a distant light is cached and exact, and one lit by
   a point light is not cached;
 - under `Resample` placement, sprites moving by a fraction of a pixel every frame record once and
   hit every frame, differing from an exact render only at edges, within half a pixel's coverage;

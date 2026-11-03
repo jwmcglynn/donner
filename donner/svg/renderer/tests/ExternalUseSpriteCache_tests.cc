@@ -649,7 +649,7 @@ TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
     }
     for (int i = 12; i < 32; ++i) {
       scene.uses[i].setTransform(Transform2d::Translate(
-          Vector2d(10.0 + ((i - 12) % 10) * 22.0 + frame, 60.0 + ((i - 12) / 10) * 40.0)));
+          Vector2d(10.0 + ((i - 12) % 7) * 32.0 + frame, 60.0 + ((i - 12) / 7) * 40.0)));
     }
     const FrameWork work = Draw(*renderer, scene);
     if (frame >= 3) {
@@ -672,8 +672,10 @@ std::pair<int, int> PremultipliedDifference(const RendererBitmap& a, const Rende
       const std::uint8_t* pb = &b.pixels[static_cast<std::size_t>(y) * b.rowBytes + x * 4u];
       int pixel = 0;
       for (int c = 0; c < 4; ++c) {
-        const int va = c == 3 ? pa[3] : pa[c] * pa[3] / 255;
-        const int vb = c == 3 ? pb[3] : pb[c] * pb[3] / 255;
+        // Snapshots are straight alpha, unpremultiplied from 8-bit premultiplied values with
+        // rounding, so rounding back recovers the premultiplied values exactly.
+        const int va = c == 3 ? pa[3] : (pa[c] * pa[3] + 127) / 255;
+        const int vb = c == 3 ? pb[3] : (pb[c] * pb[3] + 127) / 255;
         pixel = std::max(pixel, std::abs(va - vb));
       }
       maximum = std::max(maximum, pixel);
@@ -683,32 +685,23 @@ std::pair<int, int> PremultipliedDifference(const RendererBitmap& a, const Rende
   return {maximum, count};
 }
 
-// A cached sprite composited over content already on the canvas can differ from drawing its
-// shapes there directly by one premultiplied level, and only where it is partly transparent.
-//
-// The uncached path blends each shape onto the canvas: an anti-aliased edge pixel becomes
-// round(source * coverage + backdrop * (1 - coverage)), one rounding to 8 bits. The cached path
-// first stores the sprite on its own transparent surface, which rounds source * coverage to 8 bits,
-// and then blends that onto the canvas, a second rounding. Over a transparent backdrop the second
-// blend is a copy, so the two paths match exactly (every other parity test here); over an opaque
-// backdrop the two roundings can land one level apart. The same holds for a pixel a sprite's
-// opacity group or a semi-transparent fill leaves partly transparent. Fully covered, opaque
-// pixels match exactly. Storing sprites at higher precision would remove the extra rounding for
-// a single shape but double their memory, and still not match a sprite whose own shapes overlap
-// at partly transparent pixels, since flattening a group before blending it is not associative
-// under 8-bit rounding.
-TEST(ExternalUseSpriteCacheTest, BackdropRoundingIsBounded) {
-  REQUIRE_CACHING_BACKEND();
+/// Draws three moving occurrences of \p fragment over an opaque backdrop with a caching renderer
+/// and returns the largest premultiplied channel difference from an uncached render, and the
+/// number of pixels that differ at all.
+std::pair<int, int> CachedDifferenceOverBackdrop(std::string_view fragment) {
   std::ostringstream host;
   host << R"(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">)"
        << R"(<rect width="256" height="192" fill="#e0d0a0"/>)";
   for (int i = 0; i < 3; ++i) {
-    host << "<use id=\"use-" << i << "\" href=\"sprites.svg#sprite-0\"/>";
+    host << "<use id=\"use-" << i << "\" href=\"sprites.svg#" << fragment << "\"/>";
   }
   host << "</svg>";
   std::optional<ExternalUseDocument> document =
       MakeExternalUseDocument(host.str(), std::string(kSheet));
-  ASSERT_TRUE(document.has_value());
+  EXPECT_TRUE(document.has_value());
+  if (!document) {
+    return {-1, -1};
+  }
   SpriteScene scene{std::move(*document), {}};
   for (int i = 0; i < 3; ++i) {
     scene.uses.push_back(
@@ -720,14 +713,42 @@ TEST(ExternalUseSpriteCacheTest, BackdropRoundingIsBounded) {
     PlaceAll(scene, frame, 2.0);
     hits += Draw(*renderer, scene).spriteHits;
   }
-  EXPECT_GT(hits, 0u);
+  EXPECT_GT(hits, 0u) << fragment;
   const RendererBitmap cached = renderer->takeSnapshot();
   const RendererBitmap exact = RenderUncached(scene);
-  ASSERT_EQ(cached.dimensions, exact.dimensions);
-  const auto [maximum, differing] = PremultipliedDifference(cached, exact, 0);
-  EXPECT_LE(maximum, 1) << "One extra 8-bit rounding moves a channel by at most one level";
-  // Only the sprites' anti-aliased edges and semi-transparent parts can differ.
-  EXPECT_LE(differing, 3 * 300);
+  EXPECT_EQ(cached.dimensions, exact.dimensions);
+  return PremultipliedDifference(cached, exact, 0);
+}
+
+// A cached sprite composited over content already on the canvas can differ from drawing its
+// shapes there directly, by one premultiplied level per layer it is flattened through, and only
+// where it is partly transparent.
+//
+// The uncached path blends each shape onto the canvas: an anti-aliased edge pixel becomes
+// round(source * coverage + backdrop * (1 - coverage)), one rounding to 8 bits. The cached path
+// first stores the sprite on its own transparent surface, which rounds source * coverage to 8 bits,
+// and then blends that onto the canvas, a second rounding. Over a transparent backdrop the second
+// blend is a copy, so the two paths match exactly (every other parity test here); over an opaque
+// backdrop the two roundings can land one level apart. A layer inside the sprite (an opacity group,
+// a filter) is composited onto the sprite's surface and that surface onto the canvas, where the
+// uncached path composites the layer onto the canvas once, so each such layer can add one more
+// level. Fully covered, opaque pixels match exactly. Storing sprites at higher precision would
+// remove the extra rounding for a single shape but double their memory, and still not match a
+// sprite whose own shapes overlap at partly transparent pixels, since flattening a group before
+// blending it is not associative under 8-bit rounding.
+TEST(ExternalUseSpriteCacheTest, BackdropRoundingIsBounded) {
+  REQUIRE_CACHING_BACKEND();
+  // One filled path: one extra rounding.
+  const auto [pathMaximum, pathPixels] = CachedDifferenceOverBackdrop("sprite-1");
+  // Measured: at most 1 level, on 102 edge pixels of 3 sprites.
+  EXPECT_LE(pathMaximum, 1);
+  EXPECT_LE(pathPixels, 3 * 40) << "Only anti-aliased edge pixels may differ";
+  // A clipped gradient fill under an opacity group and a blurred group: the groups' layers are
+  // flattened onto the sprite first, one more rounding.
+  const auto [layeredMaximum, layeredPixels] = CachedDifferenceOverBackdrop("sprite-0");
+  // Measured: at most 2 levels, on 69 pixels of 3 sprites.
+  EXPECT_LE(layeredMaximum, 2);
+  EXPECT_LE(layeredPixels, 3 * 30) << "Only edge and semi-transparent pixels may differ";
 }
 
 // Under the resample policy a sprite moving by fractions of a pixel every frame hits on every
