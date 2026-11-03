@@ -222,6 +222,29 @@ TEST(ExternalUseSpriteCacheTest, TranslationAndOpacityKeepTheCache) {
   ExpectMatchesUncached(*renderer, *scene, "sprite-translation-opacity");
 }
 
+// Moving occurrences through their `x` and `y` attributes translates them like a transform does:
+// after the first recording every frame draws them from the cache, exactly.
+TEST(ExternalUseSpriteCacheTest, AttributeMotionKeepsTheCache) {
+  REQUIRE_CACHING_BACKEND();
+  std::optional<SpriteScene> scene = MakeScene(3);
+  ASSERT_TRUE(scene.has_value());
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::size_t records = 0;
+  for (int frame = 0; frame < 8; ++frame) {
+    for (int i = 0; i < 3; ++i) {
+      scene->uses[i].setAttribute("x", std::to_string(24 + 60 * i + 3 * frame));
+      scene->uses[i].setAttribute("y", std::to_string(24 + 2 * frame));
+    }
+    const FrameWork work = Draw(*renderer, *scene);
+    records += work.spriteRecords;
+    if (frame >= 2) {
+      EXPECT_EQ(work.spriteHits, 3u) << "frame " << frame;
+    }
+  }
+  EXPECT_EQ(records, 1u);
+  ExpectMatchesUncached(*renderer, *scene, "sprite-attribute-motion");
+}
+
 /**
  * A rasterization kept per quarter-pixel bucket is drawn on the pixel grid: a hit at a fractional
  * translation in the recorded bucket is exactly the uncached render at the recorded translation
