@@ -59,9 +59,10 @@ struct alignas(8) GaussianBlurParams {
  * Returns the WGSL projection and reflected interface used by the Geode backend.
  * The filter admission path bounds finite sigma to [0,256], box extents to [0,240], cascade
  * windows to [2,481], and supplies equally sized nonempty source and destination textures, except
- * for the resampling kernels: a downsample destination is the source plus its phase divided by
- * the factor (rounded up), an upsample destination is at most that many blocks less the phase,
- * factors are in [1,16] and phases are below twice their factors. The
+ * for the resampling kernels: along a reduced axis a downsample destination holds at least the
+ * source plus its phase divided by the factor (rounded up) plus one apron block, an upsample
+ * destination is the full-resolution source, factors are in [1,16] and phases are below twice
+ * their factors. The
  * cascade kernel weighs each input tap by how many ways the three box passes reach it, so it
  * equals the three passes without discarding what they spread past the texture edge. The shader
  * caps Gaussian support at 127 pixels and applies its optional output clip before the [0,1]

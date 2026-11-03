@@ -796,30 +796,37 @@ TEST_F(GeodeFilterEngineTest, GpuPreflightCoversTheTexturesActuallyRetained) {
   EXPECT_THAT(estimatedBytes, testing::Ge(allocator_->retainedTextureBytes));
 }
 
-// A blur's box passes run in the textures the preflight counts, with no larger working layout,
-// so the preflight stays an upper bound on a source large enough for the passes to spread.
+// A blur's box passes, or its reduced-resolution passes, run in the textures the preflight counts,
+// with no larger working layout, so the preflight stays an upper bound on a source large enough
+// for the passes to spread.
 TEST_F(GeodeFilterEngineTest, WideBlurOnLargerSourceStaysWithinPreflight) {
   using namespace svg::components;
   setSource(gpu::TextureDescriptor{"blur source",
                                    {64, 64},
                                    gpu::TextureFormat::RGBA8Unorm,
                                    gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  for (const FilterPrimitive& primitive :
-       {FilterPrimitive(filter_primitive::GaussianBlur{.stdDeviationX = 20, .stdDeviationY = 20}),
-        FilterPrimitive(filter_primitive::DropShadow{.stdDeviationX = 20, .stdDeviationY = 20})}) {
-    FilterGraph graph;
-    FilterNode node;
-    node.primitive = primitive;
-    graph.nodes.push_back(node);
-    const uint64_t retainedBefore = engine_->retainedBufferBytes();
-    runGraph(graph, "");
-    uint64_t work = 0;
-    uint64_t estimated = 0;
-    ASSERT_TRUE(
-        FilterGraphExecutionCost(graph, 64 * 64, FilterMemoryModel::GpuAllNodes, work, estimated));
-    EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
-    EXPECT_EQ(engine_->lastExecutionMemory().textures, allocator_->retainedTextureBytes);
+  for (const bool reduced : {false, true}) {
+    SCOPED_TRACE(reduced);
+    engine_->setReducedResolutionBlurForTesting(reduced);
+    for (const FilterPrimitive& primitive :
+         {FilterPrimitive(filter_primitive::GaussianBlur{.stdDeviationX = 20, .stdDeviationY = 20}),
+          FilterPrimitive(
+              filter_primitive::DropShadow{.stdDeviationX = 20, .stdDeviationY = 20})}) {
+      FilterGraph graph;
+      FilterNode node;
+      node.primitive = primitive;
+      graph.nodes.push_back(node);
+      const uint64_t retainedBefore = engine_->retainedBufferBytes();
+      runGraph(graph, "");
+      uint64_t work = 0;
+      uint64_t estimated = 0;
+      ASSERT_TRUE(FilterGraphExecutionCost(graph, 64 * 64, FilterMemoryModel::GpuAllNodes, work,
+                                           estimated));
+      EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+      EXPECT_EQ(engine_->lastExecutionMemory().textures, allocator_->retainedTextureBytes);
+    }
   }
+  engine_->setReducedResolutionBlurForTesting(true);
 }
 
 // A reduced blur's two reduced scratch textures and full-resolution result stay within the
@@ -847,6 +854,40 @@ TEST_F(GeodeFilterEngineTest, ReducedBlurStaysWithinPreflightAndSkipsTinyInputs)
                                          FilterMemoryModel::GpuAllNodes, work, estimated));
     EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
   }
+}
+
+// Tiles at different block phases take one reduced texture size, so a tiled reduced blur reuses
+// its scratch across tiles and stays within the tiled plan's preflight.
+TEST_F(GeodeFilterEngineTest, TiledReducedBlurStaysWithinItsPlanPreflight) {
+  using namespace svg::components;
+  setSource(gpu::TextureDescriptor{"blur source",
+                                   {317, 317},
+                                   gpu::TextureFormat::RGBA8Unorm,
+                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  engine_->setMaximumTileExtentForTesting(160);
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  FilterNode node;
+  node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 10, .stdDeviationY = 10};
+  graph.nodes.push_back(node);
+  const FilterTilePlan plan = engine_->executionPlan(graph, 317, 317, Transform2d());
+  ASSERT_THAT(plan.tiles, testing::Gt(4u));
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  const uint64_t retainedBefore = engine_->retainedBufferBytes();
+  allocator_ = std::make_unique<RefusingTextureAllocator>(device_->runtimeDevice(), "");
+  FilterExecutionResult result = engine_->execute(
+      graph, source_, sourceDesc_, Box2d({0, 0}, {317, 317}), Transform2d(), *allocator_);
+  device_->setCounters(nullptr);
+  ASSERT_THAT(result.kind, testing::Eq(FilterExecutionResult::Kind::Output));
+  allocator_->releaseFilterTextureAtFrameEnd(std::move(result.texture), result.desc);
+  EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(plan.tiles));
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
+                                       work, estimated, plan.pixels(), plan.tiles));
+  EXPECT_GE(estimated + plan.additionalTextureBytes() + retainedBefore,
+            engine_->lastExecutionMemory().total());
 }
 
 TEST_F(GeodeFilterEngineTest, RepeatedMergeInputReusesItsColorConversion) {

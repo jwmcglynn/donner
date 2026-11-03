@@ -79,6 +79,68 @@ fn pairCountPrefix(terms: i32, narrow: i32, wide: i32) -> i32 {
   return ((narrow * wide) - ((rest * (rest + 1i)) / 2i));
 }
 
+fn resampleFactor() -> vec2<i32> {
+  return vec2<i32>((params.boxLeft % 256i), (params.boxRight % 256i));
+}
+
+fn resamplePhase() -> vec2<i32> {
+  return vec2<i32>((params.boxLeft / 256i), (params.boxRight / 256i));
+}
+
+fn isResampleKernel() -> bool {
+  return ((params.kernelType == kKernelDownsample) || (params.kernelType == kKernelUpsample));
+}
+
+fn downsampleBlock(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+  let factor = resampleFactor();
+  let origin = ((coord * factor) - resamplePhase());
+  var blockSum: vec4<f32> = vec4<f32>(0f, 0f, 0f, 0f);
+  for (var row: i32 = 0i; (row < factor.y); row = (row + 1i)) {
+    for (var column: i32 = 0i; (column < factor.x); column = (column + 1i)) {
+      blockSum = (blockSum + sampleEdge((origin + vec2<i32>(column, row)), size));
+    }
+  }
+  return (blockSum / f32((factor.x * factor.y)));
+}
+
+fn upsampleTap(position: i32, factor: i32) -> vec2<f32> {
+  let residue = (((2i * (position % factor)) + 1i) - factor);
+  let before = (residue < 0i);
+  let base = ((position / factor) - select(0i, 1i, before));
+  let weight = (f32(select(residue, (residue + (2i * factor)), before)) / f32((2i * factor)));
+  return vec2<f32>(f32(base), weight);
+}
+
+fn upsampleBilinear(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+  let factor = resampleFactor();
+  let position = (coord + resamplePhase());
+  let tapX = upsampleTap(position.x, factor.x);
+  let tapY = upsampleTap(position.y, factor.y);
+  let limit = (size - vec2<i32>(1i, 1i));
+  let base = vec2<i32>(i32(tapX.x), i32(tapY.x));
+  let low = clamp(base, vec2<i32>(0i, 0i), limit);
+  let high = clamp((base + vec2<i32>(1i, 1i)), vec2<i32>(0i, 0i), limit);
+  let top = mix(textureLoad(inputTexture, low, 0i), textureLoad(inputTexture, vec2<i32>(high.x, low.y), 0i), tapX.y);
+  let bottom = mix(textureLoad(inputTexture, vec2<i32>(low.x, high.y), 0i), textureLoad(inputTexture, high, 0i), tapX.y);
+  return mix(top, bottom, tapY.y);
+}
+
+fn resample(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+  if ((params.kernelType == kKernelDownsample)) {
+    return downsampleBlock(coord, size);
+  }
+  return upsampleBilinear(coord, size);
+}
+
+fn tapWeight(distance: f32, inverseVariance: f32, spline: bool) -> f32 {
+  if (spline) {
+    let t = (abs(distance) / params.stdDeviation);
+    let outer = select(0f, ((0.5f * (1.5f - t)) * (1.5f - t)), (t < 1.5f));
+    return select(outer, (0.75f - (t * t)), (t <= 0.5f));
+  }
+  return exp((((-distance) * distance) * inverseVariance));
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let extent = textureDimensions(outputTexture);
@@ -87,29 +149,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let coord = vec2<i32>(gid.xy);
   let size = vec2<i32>(textureDimensions(inputTexture));
-  let factor = vec2<i32>((params.boxLeft % 256i), (params.boxRight % 256i));
-  let phase = vec2<i32>((params.boxLeft / 256i), (params.boxRight / 256i));
-  if ((params.kernelType == kKernelDownsample)) {
-    let origin = ((coord * factor) - phase);
-    var blockSum: vec4<f32> = vec4<f32>(0f, 0f, 0f, 0f);
-    for (var row: i32 = 0i; (row < factor.y); row = (row + 1i)) {
-      for (var column: i32 = 0i; (column < factor.x); column = (column + 1i)) {
-        blockSum = (blockSum + sampleEdge((origin + vec2<i32>(column, row)), size));
-      }
-    }
-    textureStore(outputTexture, coord, applyClip(coord, (blockSum / f32((factor.x * factor.y)))));
-    return;
-  }
-  if ((params.kernelType == kKernelUpsample)) {
-    let position = (((vec2<f32>((coord + phase)) + vec2<f32>(0.5f, 0.5f)) / vec2<f32>(factor)) - vec2<f32>(0.5f, 0.5f));
-    let base = floor(position);
-    let weight = (position - base);
-    let limit = (size - vec2<i32>(1i, 1i));
-    let low = clamp(vec2<i32>(base), vec2<i32>(0i, 0i), limit);
-    let high = clamp((vec2<i32>(base) + vec2<i32>(1i, 1i)), vec2<i32>(0i, 0i), limit);
-    let top = mix(textureLoad(inputTexture, low, 0i), textureLoad(inputTexture, vec2<i32>(high.x, low.y), 0i), weight.x);
-    let bottom = mix(textureLoad(inputTexture, vec2<i32>(low.x, high.y), 0i), textureLoad(inputTexture, high, 0i), weight.x);
-    textureStore(outputTexture, coord, applyClip(coord, mix(top, bottom, weight.y)));
+  if (isResampleKernel()) {
+    textureStore(outputTexture, coord, applyClip(coord, resample(coord, size)));
     return;
   }
   if ((params.kernelType == kKernelBoxCascade)) {
@@ -157,12 +198,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var weightSum: f32 = 0f;
   for (var index: i32 = (-radius); (index <= radius); index = (index + 1i)) {
     let distance = f32(index);
-    var weight: f32 = exp((((-distance) * distance) * inverseVariance));
-    if (spline) {
-      let t = (abs(distance) / params.stdDeviation);
-      let outer = select(0f, ((0.5f * (1.5f - t)) * (1.5f - t)), (t < 1.5f));
-      weight = select(outer, (0.75f - (t * t)), (t <= 0.5f));
-    }
+    let weight = tapWeight(distance, inverseVariance, spline);
     sum = (sum + (sampleEdge((coord + select(vec2<i32>(0i, index), vec2<i32>(index, 0i), (params.axis == 0u))), size) * weight));
     weightSum = (weightSum + weight);
   }

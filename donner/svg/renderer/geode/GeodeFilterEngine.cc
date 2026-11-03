@@ -1627,14 +1627,83 @@ ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool trans
 /// reach `radius` blocks beyond that, and each block spans \p factor texels, so the farthest texel
 /// read is `(radius + 2) * factor - 1` away whatever the block alignment. The radius is computed
 /// in single precision exactly as the blur program computes it.
-double ReducedBlurSupport(double deviation) {
-  const uint32_t factor = ReducedBlurFactor(deviation);
+double ReducedBlurSupport(uint32_t factor, double width) {
   if (factor == 1) {
     return 0.0;
   }
-  const float width = static_cast<float>(ReducedBlurWidth(deviation, factor));
-  const double radius = std::min(std::ceil(1.5f * width), 127.0f);
+  const double radius = std::min(std::ceil(1.5f * static_cast<float>(width)), 127.0f);
   return (radius + 2.0) * factor - 1.0;
+}
+
+/// Reduced blur layout for one input: the reduction, its block grid, and the reduced extent.
+struct ReducedBlurLayout {
+  ReducedBlurPlan plan;  //!< Reduction per axis; unreduced when the layout would not save memory.
+  ResampleGrid grid;     //!< Block factors and phases.
+  uint32_t width = 0;    //!< Reduced texture width, or the input width when unreduced.
+  uint32_t height = 0;   //!< Reduced texture height, or the input height when unreduced.
+};
+
+/// Reduced extent of \p size texels along an axis reduced by \p factor. A reduced axis keeps one
+/// block of apron on either side, so the reduced blur spreads content past the input edge into it
+/// and the enlargement near the edge interpolates toward that spill, as a full-resolution blur
+/// with room past the edge would. The extent covers the largest phase, so every tile of an
+/// execution takes the same reduced size and the texture pool reuses it across tiles.
+uint32_t ReducedExtent(uint32_t size, uint32_t factor) {
+  return factor > 1 ? (size + 3 * factor - 2) / factor + 1 : size;
+}
+
+/// Lays out the reduction \p plan of a \p size input whose first texel sits at \p origin on the
+/// untiled source grid. Blocks start on multiples of the factor on that grid, one block of apron
+/// before the input, so a tile reduces exactly the blocks the untiled execution would.
+ReducedBlurLayout LayoutReducedBlur(ReducedBlurPlan plan, gpu::Extent2d size,
+                                    gpu::Origin2d origin) {
+  // The reduced path holds two reduced scratch textures beside the full-resolution result (and a
+  // clip output when the clip is not folded in); the filter preflight budgets three
+  // full-resolution textures per blur. Keep the reduction only while both scratch textures fit in
+  // one, which leaves inputs a few blocks across at full resolution.
+  if (plan.reduced() && 2 * uint64_t{ReducedExtent(size.width, plan.factors[0])} *
+                                ReducedExtent(size.height, plan.factors[1]) >
+                            uint64_t{size.width} * size.height) {
+    plan = ReducedBlurPlan{};
+  }
+  const auto phase = [](uint32_t position, uint32_t factor) {
+    return factor > 1 ? position % factor + factor : 0u;
+  };
+  ReducedBlurLayout layout;
+  layout.plan = plan;
+  layout.grid = ResampleGrid{plan.factors[0], plan.factors[1], phase(origin.x, plan.factors[0]),
+                             phase(origin.y, plan.factors[1])};
+  layout.width = ReducedExtent(size.width, plan.factors[0]);
+  layout.height = ReducedExtent(size.height, plan.factors[1]);
+  return layout;
+}
+
+/// Device pixels the full-resolution kernel for \p deviation reads on either side of a texel.
+double FullResolutionBlurSupport(double deviation) {
+  if (!(deviation > 0)) {
+    return 0;
+  }
+  const BoxBlurPlan boxes = deviation >= 2.0 ? computeBoxPasses(deviation) : BoxBlurPlan{};
+  if (boxes.numPasses == 0) {
+    return std::min(std::ceil(3.0f * static_cast<float>(deviation)), 127.0f);
+  }
+  int left = 0;
+  int right = 0;
+  for (int index = 0; index < boxes.numPasses; ++index) {
+    left += boxes.passes[index].left;
+    right += boxes.passes[index].right;
+  }
+  return std::max(left, right);
+}
+
+/// Device pixels a blur of \p deviationX by \p deviationY reads on either side of a texel,
+/// whether it runs at full or reduced resolution.
+Vector2d BlurSupport(double deviationX, double deviationY, bool transparentEdges) {
+  const ReducedBlurPlan reduced = PlanReducedBlur(deviationX, deviationY, transparentEdges);
+  return Vector2d(std::max(FullResolutionBlurSupport(deviationX),
+                           ReducedBlurSupport(reduced.factors[0], reduced.widths[0])),
+                  std::max(FullResolutionBlurSupport(deviationY),
+                           ReducedBlurSupport(reduced.factors[1], reduced.widths[1])));
 }
 
 /// Conservative sampling support of one graph in device pixels.
@@ -1651,29 +1720,13 @@ struct FilterSamplingHalo {
                       : 0;
   }
 
-  static double blur(double deviation) {
-    if (!(deviation > 0)) {
-      return 0;
-    }
-    const BoxBlurPlan boxes = deviation >= 2.0 ? computeBoxPasses(deviation) : BoxBlurPlan{};
-    if (boxes.numPasses != 0) {
-      int left = 0;
-      int right = 0;
-      for (int index = 0; index < boxes.numPasses; ++index) {
-        left += boxes.passes[index].left;
-        right += boxes.passes[index].right;
-      }
-      return std::max<double>(std::max(left, right), ReducedBlurSupport(deviation));
-    }
-    return std::min(std::ceil(3.0f * static_cast<float>(deviation)), 127.0f);
-  }
-
   bool add(const fp::GaussianBlur& value) {
     if (value.edgeMode == fp::GaussianBlur::EdgeMode::Wrap) {
       return false;
     }
-    halo += Vector2d(blur(deviation(value.stdDeviationX, bounds.x, scale.x)),
-                     blur(deviation(value.stdDeviationY, bounds.y, scale.y)));
+    halo += BlurSupport(deviation(value.stdDeviationX, bounds.x, scale.x),
+                        deviation(value.stdDeviationY, bounds.y, scale.y),
+                        value.edgeMode == fp::GaussianBlur::EdgeMode::None);
     return true;
   }
 
@@ -1696,8 +1749,9 @@ struct FilterSamplingHalo {
 
   bool add(const fp::DropShadow& value) {
     add(fp::Offset{value.dx, value.dy});
-    halo += Vector2d(blur(deviation(value.stdDeviationX, bounds.x, scale.x)),
-                     blur(deviation(value.stdDeviationY, bounds.y, scale.y)));
+    halo += BlurSupport(deviation(value.stdDeviationX, bounds.x, scale.x),
+                        deviation(value.stdDeviationY, bounds.y, scale.y),
+                        /*transparentEdges=*/true);
     return true;
   }
 
@@ -2390,7 +2444,70 @@ BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviatio
   return result;
 }
 
+/// Passes for a blur reduced by \p reduced: the full-resolution passes of the axes it leaves at
+/// full resolution, then one spline pass per reduced axis, all run on the reduced image.
+BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviationY,
+                                        uint32_t edgeMode, const ReducedBlurPlan& reduced) {
+  BlurDispatchPlan result =
+      CreateBlurDispatchPlan(reduced.factors[0] == 1 ? stdDeviationX : 0.0,
+                             reduced.factors[1] == 1 ? stdDeviationY : 0.0, edgeMode);
+  for (uint32_t axis = 0; axis < 2; ++axis) {
+    if (reduced.factors[axis] > 1 && reduced.widths[axis] > 0.0) {
+      result.passes[result.count++] = BlurDispatch{axis, static_cast<float>(reduced.widths[axis]),
+                                                   std::nullopt, 0, /*spline=*/true};
+    }
+  }
+  return result;
+}
+
 }  // namespace
+
+/// Runs a blur's dispatch plan through the engine's blur program.
+struct BlurPassRunner {
+  /// Runs \p plan from \p current, ping-ponging through \p scratch (allocated on demand at
+  /// \p extent), and applies \p outputClip to the last pass.
+  static FilterTexture runPasses(GeodeFilterEngine& engine, FilterResourceArena& arena,
+                                 const BlurDispatchPlan& plan, FilterTexture current,
+                                 std::array<FilterTexture, 2>& scratch, gpu::Extent2d extent,
+                                 uint32_t edgeMode, const Box2d* outputClip,
+                                 const char* scratchLabel) {
+    for (size_t i = 0; i < plan.count && current; ++i) {
+      FilterTexture& output = scratch[i % scratch.size()];
+      if (!output) {
+        output = createIntermediateTexture(arena, extent.width, extent.height, scratchLabel);
+      }
+      const Box2d* clip = i + 1 == plan.count ? outputClip : nullptr;
+      current = runPass(engine, arena, plan.passes[i], current, output, extent, edgeMode, clip);
+    }
+    return current;
+  }
+
+  /// Runs one pass and counts the texels it reads.
+  static FilterTexture runPass(GeodeFilterEngine& engine, FilterResourceArena& arena,
+                               const BlurDispatch& pass, FilterTexture input, FilterTexture output,
+                               gpu::Extent2d extent, uint32_t edgeMode, const Box2d* clip) {
+    using namespace gpu::shader::programs;
+    FilterTexture result;
+    if (pass.cascadeWindow != 0) {
+      result = engine.runBoxBlurPass(arena, input, output, extent.width, extent.height,
+                                     pass.cascadeWindow, 0, pass.axis, edgeMode, clip,
+                                     kGaussianBlurKernelBoxCascade);
+    } else if (pass.box) {
+      result =
+          engine.runBoxBlurPass(arena, input, output, extent.width, extent.height, pass.box->left,
+                                pass.box->right, pass.axis, edgeMode, clip, kGaussianBlurKernelBox);
+    } else {
+      result = engine.runBlurPass(
+          arena, input, output, extent.width, extent.height, pass.deviation, pass.axis, edgeMode,
+          clip, pass.spline ? kGaussianBlurKernelQuadraticSpline : kGaussianBlurKernelGaussian);
+    }
+    if (result) {
+      engine.device_.countFilterBlurTaps(uint64_t{extent.width} * extent.height *
+                                         BlurPassTaps(pass));
+    }
+    return result;
+  }
+};
 
 FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, FilterTexture input,
                                                    double stdDeviationX, double stdDeviationY,
@@ -2402,95 +2519,39 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
 
   // A reduced axis is shrunk, blurred with a spline matching the full-resolution kernel's shape
   // and variance, and enlarged again; an axis left at full resolution keeps its exact passes, run
-  // on the shrunken image of the other axis. Reduced blocks sit on the untiled source grid, so a
-  // tile reduces exactly the blocks the untiled execution would and its core matches the untiled
-  // result.
-  ReducedBlurPlan reduced =
+  // on the shrunken image of the other axis.
+  const ReducedBlurLayout layout = LayoutReducedBlur(
       reducedResolutionBlur_
           ? PlanReducedBlur(stdDeviationX, stdDeviationY,
                             edgeMode == gpu::shader::programs::kGaussianBlurEdgeTransparent)
-          : ReducedBlurPlan{};
-  // A reduced axis keeps one block of apron on either side, so the reduced blur spreads content
-  // past the input edge into it and the enlargement near the edge interpolates toward that spill,
-  // as a full-resolution blur with room past the edge would.
-  const auto blockPhase = [](uint32_t origin, uint32_t factor) {
-    return factor > 1 ? origin % factor + factor : 0u;
-  };
-  const auto reducedExtent = [](uint32_t size, uint32_t phase, uint32_t factor) {
-    return (size + phase + factor - 1) / factor + (factor > 1 ? 1u : 0u);
-  };
-  // The reduced path holds two reduced scratch textures and the full-resolution result; the
-  // filter preflight budgets three full-resolution textures for a blur. Keep the reduction only
-  // while its scratch fits in two of them, which leaves inputs a few blocks across at full
-  // resolution.
-  if (reduced.reduced() &&
-      2 *
-              uint64_t{reducedExtent(input.width(), blockPhase(gridOrigin.x, reduced.factors[0]),
-                                     reduced.factors[0])} *
-              reducedExtent(input.height(), blockPhase(gridOrigin.y, reduced.factors[1]),
-                            reduced.factors[1]) >
-          2 * uint64_t{input.width()} * input.height()) {
-    reduced = ReducedBlurPlan{};
-  }
-  const uint32_t factorX = reduced.factors[0];
-  const uint32_t factorY = reduced.factors[1];
-  const ResampleGrid grid{factorX, factorY, blockPhase(gridOrigin.x, factorX),
-                          blockPhase(gridOrigin.y, factorY)};
-  const uint32_t width = reducedExtent(input.width(), grid.phaseX, factorX);
-  const uint32_t height = reducedExtent(input.height(), grid.phaseY, factorY);
-  FilterTexture current = input;
+          : ReducedBlurPlan{},
+      {input.width(), input.height()}, gridOrigin);
+  const bool reduced = layout.plan.reduced();
+  const BlurDispatchPlan plan =
+      CreateBlurDispatchPlan(stdDeviationX, stdDeviationY, edgeMode, layout.plan);
   std::array<FilterTexture, 2> scratch{};
-  BlurDispatchPlan plan = CreateBlurDispatchPlan(factorX == 1 ? stdDeviationX : 0.0,
-                                                 factorY == 1 ? stdDeviationY : 0.0, edgeMode);
-  if (reduced.reduced()) {
-    scratch[1] = createIntermediateTexture(arena, width, height, "GaussianBlurReducedScratch");
-    current = runResamplePass(arena, input, scratch[1], grid, edgeMode,
+  FilterTexture current = input;
+  if (reduced) {
+    scratch[1] =
+        createIntermediateTexture(arena, layout.width, layout.height, "GaussianBlurReducedScratch");
+    current = runResamplePass(arena, input, scratch[1], layout.grid, edgeMode,
                               gpu::shader::programs::kGaussianBlurKernelDownsample, nullptr);
     if (!current) {
       return {};
     }
-    device_.countFilterBlurTaps(uint64_t{width} * height * factorX * factorY);
-    for (uint32_t axis = 0; axis < 2; ++axis) {
-      if (reduced.factors[axis] > 1 && reduced.widths[axis] > 0.0) {
-        plan.passes[plan.count++] = BlurDispatch{axis, static_cast<float>(reduced.widths[axis]),
-                                                 std::nullopt, 0, /*spline=*/true};
-      }
-    }
+    device_.countFilterBlurTaps(uint64_t{layout.width} * layout.height * layout.grid.factorX *
+                                layout.grid.factorY);
   }
-  const char* scratchLabel =
-      reduced.reduced() ? "GaussianBlurReducedScratch" : "GaussianBlurScratch";
-  for (size_t i = 0; i < plan.count; ++i) {
-    FilterTexture& output = scratch[i % scratch.size()];
-    if (!output) {
-      output = createIntermediateTexture(arena, width, height, scratchLabel);
-    }
-    const BlurDispatch& pass = plan.passes[i];
-    const Box2d* clip = i + 1 == plan.count && !reduced.reduced() ? outputClip : nullptr;
-    if (pass.cascadeWindow != 0) {
-      current =
-          runBoxBlurPass(arena, current, output, width, height, pass.cascadeWindow, 0, pass.axis,
-                         edgeMode, clip, gpu::shader::programs::kGaussianBlurKernelBoxCascade);
-    } else if (pass.box) {
-      current =
-          runBoxBlurPass(arena, current, output, width, height, pass.box->left, pass.box->right,
-                         pass.axis, edgeMode, clip, gpu::shader::programs::kGaussianBlurKernelBox);
-    } else {
-      current = runBlurPass(arena, current, output, width, height, pass.deviation, pass.axis,
-                            edgeMode, clip,
-                            pass.spline ? gpu::shader::programs::kGaussianBlurKernelQuadraticSpline
-                                        : gpu::shader::programs::kGaussianBlurKernelGaussian);
-    }
-    if (!current) {
-      return {};
-    }
-    device_.countFilterBlurTaps(uint64_t{width} * height * BlurPassTaps(pass));
-  }
-  if (!reduced.reduced()) {
+  current =
+      BlurPassRunner::runPasses(*this, arena, plan, current, scratch, {layout.width, layout.height},
+                                edgeMode, reduced ? nullptr : outputClip,
+                                reduced ? "GaussianBlurReducedScratch" : "GaussianBlurScratch");
+  if (!current || !reduced) {
     return current;
   }
   const FilterTexture output =
       createIntermediateTexture(arena, input.width(), input.height(), "GaussianBlurReducedOutput");
-  current = runResamplePass(arena, current, output, grid, edgeMode,
+  current = runResamplePass(arena, current, output, layout.grid, edgeMode,
                             gpu::shader::programs::kGaussianBlurKernelUpsample, outputClip);
   if (current) {
     device_.countFilterBlurTaps(uint64_t{input.width()} * input.height() * 4);

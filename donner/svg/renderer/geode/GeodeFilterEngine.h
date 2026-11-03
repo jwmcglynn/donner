@@ -296,9 +296,10 @@ struct FilterExecutionMemory {
   uint64_t total() const { return textures + persistentBuffers; }
 };
 
-/// Reduced-resolution blur grid: each axis is reduced by a power-of-two factor, and its blocks
-/// start a phase of texels before the working texture's first texel: one block of apron past the
-/// edge, plus the offset that lines the blocks up with the untiled source.
+/// Reduced-resolution blur grid: each axis is reduced by a power-of-two factor, and on a reduced
+/// axis its blocks start a phase of texels before the working texture's first texel: one block of
+/// apron past the edge, plus the offset that lines the blocks up with the untiled source. An axis
+/// with factor one has phase zero and no apron.
 struct ResampleGrid {
   uint32_t factorX = 1;  //!< Horizontal reduction, in [1, 16].
   uint32_t factorY = 1;  //!< Vertical reduction, in [1, 16].
@@ -440,6 +441,7 @@ private:
   friend struct FilterResourceArena;
   friend struct FilterGraphExecution;
   friend struct FilterNodeExecution;
+  friend struct BlurPassRunner;
 
   /// Two-pass separable Gaussian blur via compute shader.
   ///
