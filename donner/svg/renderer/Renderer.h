@@ -231,7 +231,7 @@ public:
                                       const SpriteResampling* resampling = nullptr) override;
 
   /// Forwards \ref RendererInterface::pushSpriteRecording to the active backend.
-  void pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+  bool pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
                            const SpriteResampling* resampling = nullptr) override;
 
   /// Forwards \ref RendererInterface::popSpriteRecording to the active backend.

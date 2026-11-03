@@ -402,7 +402,7 @@ public:
   CachedSpriteResult drawCachedSprite(const FilterResultContentKey& content, const Box2d& bounds,
                                       const SpriteResampling* resampling = nullptr) override;
   /// Begins recording a sprite admitted by \ref drawCachedSprite.
-  void pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+  bool pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
                            const SpriteResampling* resampling = nullptr) override;
   /// Ends the recording \ref pushSpriteRecording began.
   void popSpriteRecording() override;

@@ -1611,20 +1611,25 @@ public:
   }
 
   /**
-   * Begin capturing a sprite occurrence that \ref drawCachedSprite admitted for recording. The
-   * content drawn until \ref popSpriteRecording is composited as usual and recorded under
-   * \p content for later draws. Only valid after \ref drawCachedSprite returned
+   * Begin capturing a sprite occurrence that \ref drawCachedSprite admitted for recording. When
+   * it returns true, the content drawn until \ref popSpriteRecording is composited as usual and
+   * recorded under \p content for later draws. When it returns false nothing was begun: the frame
+   * has no room for the capture, and the caller draws the content as usual without calling
+   * \ref popSpriteRecording. A refused capture changes no budget state, so the content draws
+   * exactly as it would have without the cache. Only valid after \ref drawCachedSprite returned
    * \ref CachedSpriteResult::Record for the same arguments and transform.
    *
    * @param content Identity of the sprite's content, as for \ref drawCachedSprite.
    * @param bounds Bounds of the sprite, as for \ref drawCachedSprite.
    * @param resampling As for \ref drawCachedSprite.
+   * @return Whether the capture began.
    */
-  virtual void pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+  virtual bool pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
                                    const SpriteResampling* resampling = nullptr) {
     (void)content;
     (void)bounds;
     (void)resampling;
+    return false;
   }
 
   /// End the capture \ref pushSpriteRecording began.

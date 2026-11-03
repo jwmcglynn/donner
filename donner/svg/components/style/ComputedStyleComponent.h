@@ -31,6 +31,10 @@ struct ComputedStyleComponent {
   std::optional<ComputedResourceOpacities> resourceOpacities;
   bool externalFill = false;    ///< Ordinary fill inherited from the scoped external-use host.
   bool externalStroke = false;  ///< Ordinary stroke inherited from the scoped external-use host.
+  /// Set on the root of an external-use instance whose own style uses `inherit` for a property
+  /// that does not inherit by default, such as `opacity: inherit`: that value is read from the
+  /// host `<use>` element.
+  bool inheritsHostNonInheritedProperty = false;
 };
 
 }  // namespace donner::svg::components

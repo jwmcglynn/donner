@@ -77,6 +77,9 @@ one index, one memory bound and one eviction policy:
   DOM mutation or font load in the sheet changes them.
 - `styleEpoch`: the id of the occurrence's inputs (below).
 - `instanceRoot`: the referenced element.
+- `userToPixelScale`: carries the host rendering size, which the sheet's filter graphs scale
+  lengths by. (`primitiveViewport` stays unset: primitive lengths resolve against the sheet's own
+  viewports, which its revision and the occurrence's sizing cover.)
 - `filterRegion`: the sprite's bounds in the `<use>` element's user space, grown by one device
   pixel at the occurrence's scale.
 - The placement: the exact linear part of the device transform, plus the quarter-pixel bucket of
@@ -85,19 +88,28 @@ one index, one memory bound and one eviction policy:
 **Occurrence inputs.** The style an occurrence contributes is what the referenced root inherits
 from the `<use>`: the `<use>` element's computed style reduced to inherited properties, its
 resource opacities, its fill and stroke (none or a solid color; a paint server reference is not
-cached, since it names host content), and its `x`, `y`, `width` and `height` (a percentage
-resolves against the host viewport and is not cached). Each sheet keeps a table of recently seen
+cached, since it names host content), and its `x`, `y`, `width` and `height` in pixels. Those are
+resolved exactly as the instance layout resolves them, from the same properties, against the host
+viewport the `<use>` sits in and with the same font metrics, so a percentage or a viewport unit
+follows the host viewport, and a size from a stylesheet is keyed precisely when layout uses it.
+Each sheet keeps a table of recently seen
 inputs, at most 64, in its registry context; each distinct set gets a process-unique id. Because
 the inputs hold only inherited properties, the `<use>` element's own opacity, transform or blend
 mode never change the id. They apply outside the cached content, exactly as they do uncached.
+The one way a sheet reads a non-inherited host value is the `inherit` keyword on a property
+that does not inherit, such as `opacity: inherit`, on the referenced root: style computation
+marks such a root, and its occurrences are not cached. (Descendants that use `inherit` read the
+root's value, which comes from the sheet.)
 
 ### Eligibility and bounds
 
-The driver measures each set of inputs once per sheet revision, during the first draw after the
-sheet changed, once the instance's filter graphs are prepared. An occurrence is cacheable when:
+The driver measures each set of inputs once per sheet revision, font revision and host rendering
+size, during the first draw after one changed, once the instance's filter graphs are prepared. An
+occurrence is cacheable when:
 
 - its styles are retained for the occurrence (the cached filter result rule: no paint server
   reference from the host, no style resource limit hit) and the sheet has no animation;
+- its root does not use `inherit` on a property that does not inherit;
 - every element in the referenced subtree is one a cached filter layer may hold (shapes, groups,
   gradients, clip paths, filter primitives), or the referenced `<symbol>` or `<svg>`;
 - no element draws content from elsewhere: no mask, marker, pattern paint, text, image or nested
@@ -112,18 +124,23 @@ coverage. A clip path or a `<symbol>` viewport only shrinks what is painted.
 
 ### Recording and drawing
 
-Recording reuses the cached filter result machinery. `pushSpriteRecording` pushes a filter layer
-over the sprite's bounds whose graph is a zero offset in sRGB, which passes the captured content
-through without color conversion. Its pop records the result into the shared index under the
-sprite key and composites it, as a filter result is. A hit draws the texture with
+Recording reuses the filter layer capture without its filter. `pushSpriteRecording` begins a
+capture over the sprite's bounds with an empty graph, so the pop composites the captured content
+back unchanged, records it into the shared index under the sprite key, and runs nothing. A
+capture is not a filter: it is not admitted through the frame's filter budget, so it neither
+spends nor latches it. Before it begins, it checks that the frame's surface budget holds the
+capture; when it does not, `pushSpriteRecording` returns false having changed nothing, and the
+occurrence draws exactly as it would uncached. A hit draws the texture with
 `drawFilterResult`: on the pixel grid at the whole-pixel delta from where it was recorded, or
-resampled bilinearly at an exact fractional offset when the placement allows it. The capture,
-the pending-until-submit commit, the thrash guard, the budget check, trimming and idle decay are
-all those of cached filter results.
+resampled bilinearly at an exact fractional offset when the placement allows it. The
+pending-until-submit commit, the thrash guard, the record-time budget check, trimming and idle
+decay are those of cached filter results.
 
 Admission is two-touch as for filter results: a miss at a linear transform records only after a
 second miss at the same linear transform within the admission window, so a continuously
-changing scale never records. An occurrence whose bounds reach past the visible capture is drawn
+changing scale never records. Because two-touch admission makes every new sprite of a scene
+record in the same frame, a frame begins at most eight captures; the rest record in the following
+frames. An occurrence whose bounds reach past the visible capture is drawn
 but not recorded; a later occurrence fully inside the canvas records it, and every occurrence
 then draws it.
 
@@ -141,10 +158,28 @@ uncached render by a few levels at most (4 measured).
 ### Memory
 
 Sprites and filter results share the index: at most 64 entries and the smaller of a quarter of
-the frame surface byte limit and 64 MiB native or 16 MiB WebAssembly. `trimTexturePool` with
+the frame surface byte limit and 64 MiB native or 16 MiB WebAssembly. Sprites hold at most 48 of
+the entries: at the quota, a new sprite replaces the least recently used sprite that neither of
+the last two frames drew, or is not recorded, so filter results keep room. A sprite content keeps
+at most four quarter-pixel buckets per linear transform, so a sharp sprite moving by fractions of
+a pixel does not take sixteen entries; its other buckets draw uncached. `trimTexturePool` with
 `ToFloor` or `All` and the two-second idle decay drop sprites with the filter results.
 `setSpriteCacheEnabled(false)` stops caching sprites while filter results stay cached; disabling
 the filter result cache disables both.
+
+### What a hit skips
+
+A hit returns before the sheet is touched, so the work an uncached draw does for the sheet on the
+way does not happen:
+
+- the occurrence's style retention is not consulted, so the retained subtree's last-drawn order is
+  not refreshed and it may be evicted from the retention while its sprite stays cached; the next
+  uncached draw restyles it;
+- the host's font dependencies for the occurrence are marked prepared without a traversal; cached
+  content holds no text, so it has none;
+- nothing in the sheet reports a pending invalidation. Content whose pixels can change without a
+  sheet revision (images, `feImage`, nested `<use>`, text with loadable fonts) is never cached;
+  font loads change the font revision in the key.
 
 ## Testing and Validation
 
@@ -164,8 +199,15 @@ backends):
   translation moved by whole pixels, and within 0.1 over at most 160 edge pixels of the render at
   the actual translation; a single blurred element is resampled at any offset with one
   rasterization, within the bilinear bound;
-- fallbacks: a `mix-blend-mode`, text, or a host gradient paint is never cached and matches an
-  uncached render exactly;
+- fallbacks: a `mix-blend-mode`, text, an image, `opacity: inherit` on the root, or a host
+  gradient paint is never cached and matches an uncached render exactly;
+- host-dependent sizing: a size from a stylesheet on the `<use>`, and a viewport-unit size across
+  a host resize, match an uncached render exactly;
+- host effects: a clip around the occurrences draws them cached and exact; a filter around them
+  draws them uncached and exact;
+- a `<symbol>` that scales a blurred child, at fractional offsets, within the bucket bound;
+- on Geode: a capture the surface budget refuses still draws every occurrence; an abandoned
+  recording frame is never reused; captures run no filter and never reject the filter budget;
 - disabling the filter result cache drops held sprites.
 
 The existing cached filter result tests run with sprites disabled so they keep measuring filter
@@ -183,19 +225,16 @@ occurrence painted with a host paint server is not cached.
 - **Key on the sheet's retained style epoch**, as filter results do. The epoch is known only after
   the occurrence's styles are installed, which is the work a hit must skip. Comparing the
   occurrence inputs directly is cheap and is what the retention compares anyway.
-- **A dedicated capture layer** instead of a pass-through filter layer. The filter layer already
-  sizes its surface to the region, records exact device rectangles and composites the same way;
-  the extra pass runs only on a recording frame.
+- **A pass-through filter layer** (a zero offset) for the capture. It would be admitted through
+  the frame's filter budget, so a refused admission would drop the occurrence's content and latch
+  the frame's filter rejection, and every recording would spend a filter execution. The capture
+  reuses the filter layer's surface sizing, recording and compositing without its admission.
 - **Rasterize at a fixed scale and transform the bitmap** for every scale. Scaling a raster
   softens edges and loses the vector fidelity of uncached draws; recording per linear transform
   keeps output identical.
 
 ## Open Questions
 
-- An `inherit` keyword in the sheet for a property that does not inherit (for example
-  `opacity: inherit` on the referenced root) reads a value the inherited-only inputs omit. Such
-  sheets are rare; covering them means including the full computed style when the subtree uses
-  `inherit` on a non-inherited property.
 - Whether a fully cached sheet should also skip its per-frame font bookkeeping on the host side
   beyond marking the host's font dependencies prepared.
 - Atlas packing and instancing of cached sprites (the next milestone).

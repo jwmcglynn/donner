@@ -12,7 +12,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/Length.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -34,7 +34,9 @@ struct SpriteOccurrenceInputs {
   std::optional<components::ComputedResourceOpacities> resourceOpacities;  ///< Resource opacities.
   components::ResolvedPaintServer fill;    ///< The `<use>` element's fill, none or a solid color.
   components::ResolvedPaintServer stroke;  ///< The `<use>` element's stroke, none or a solid color.
-  std::array<std::optional<Lengthd>, 4> geometry;  ///< The `<use>` `x`, `y`, `width`, `height`.
+  /// The `<use>` element's `x`, `y`, `width` and `height` in pixels, resolved the way layout
+  /// resolves them for the instance, against the host viewport; an unset size stays unset.
+  std::array<std::optional<double>, 4> geometry;
 
   /// Whether \p other describes the same occurrence inputs.
   [[nodiscard]] bool matches(const SpriteOccurrenceInputs& other) const {
@@ -43,6 +45,20 @@ struct SpriteOccurrenceInputs {
            components::IsProvablySamePaint(fill, other.fill) &&
            components::IsProvablySamePaint(stroke, other.stroke) && inherited == other.inherited;
   }
+};
+
+/**
+ * What an occurrence's measurement (eligibility, bounds, resampling hint) was derived from besides
+ * its inputs: the sheet's revisions, and the host rendering size the sheet's filter graphs are
+ * configured with.
+ */
+struct SpriteMeasureStamp {
+  std::uint64_t revision = 0;      ///< Sheet mutation revision.
+  std::uint64_t fontRevision = 0;  ///< Sheet font resource revision.
+  Vector2i renderingSize;          ///< Host rendering size.
+
+  /// Equality operator.
+  bool operator==(const SpriteMeasureStamp&) const = default;
 };
 
 /**
@@ -66,9 +82,8 @@ public:
     std::uint64_t lastUse = 0;      ///< Use sequence of the last lookup.
 
     /// Whether \ref bounds were measured at these sheet revisions.
-    bool measured = false;
-    std::uint64_t measuredRevision = 0;      ///< Sheet mutation revision measured at.
-    std::uint64_t measuredFontRevision = 0;  ///< Sheet font resource revision measured at.
+    /// What the measurement below was derived from, once measured.
+    std::optional<SpriteMeasureStamp> measured;
     /// Bounds of what the occurrence paints, in the `<use>` element's user space; unset when its
     /// content may not be cached.
     std::optional<Box2d> bounds;
@@ -80,9 +95,9 @@ public:
     /// Painted bounds of the filtered element in its user space, when known.
     std::optional<Box2d> filteredContentBounds;
 
-    /// Whether the measurement is current for the sheet at \p revision and \p fontRevision.
-    [[nodiscard]] bool measuredAt(std::uint64_t revision, std::uint64_t fontRevision) const {
-      return measured && measuredRevision == revision && measuredFontRevision == fontRevision;
+    /// Whether the measurement is current for \p stamp.
+    [[nodiscard]] bool measuredAt(const SpriteMeasureStamp& stamp) const {
+      return measured == stamp;
     }
   };
 

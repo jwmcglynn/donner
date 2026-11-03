@@ -458,8 +458,7 @@ private:
     /// The occurrence's entry in its sheet's \ref SpriteOccurrenceTable, or null when the
     /// occurrence may not be cached.
     SpriteOccurrenceTable::Entry* entry = nullptr;
-    std::uint64_t revision = 0;      ///< Sheet mutation revision at the probe.
-    std::uint64_t fontRevision = 0;  ///< Sheet font resource revision at the probe.
+    SpriteMeasureStamp stamp;        ///< Sheet revisions and host rendering size at the probe.
     bool drawn = false;              ///< The renderer drew the cached sprite.
     bool record = false;             ///< The renderer admitted the sprite for recording.
     FilterResultContentKey content;  ///< The sprite's key, when \ref drawn or \ref record.
@@ -482,7 +481,7 @@ private:
    * cached as a sprite, and the bounds of what it paints, into \p entry.
    */
   void measureSprite(SpriteOccurrenceTable::Entry& entry, SVGDocument& subDocument, Entity root,
-                     std::uint64_t revision, std::uint64_t fontRevision) const;
+                     const SpriteMeasureStamp& stamp) const;
 
   /// Look up the probed occurrence of \p root in the renderer's sprite cache at \p surfaceFromHost,
   /// drawing it when the renderer holds it, and fill \p probe's key and outcome.
@@ -749,8 +748,7 @@ private:
     SpriteOccurrenceTable::Entry* entry = nullptr;  ///< Entry to measure into.
     SVGDocument* subDocument = nullptr;             ///< The occurrence's sheet.
     Entity root = entt::null;                       ///< The referenced root.
-    std::uint64_t revision = 0;                     ///< Sheet revision at the probe.
-    std::uint64_t fontRevision = 0;                 ///< Sheet font revision at the probe.
+    SpriteMeasureStamp stamp;                       ///< Stamp at the probe.
   };
   std::optional<PendingSpriteMeasure> pendingSpriteMeasure_;
 };

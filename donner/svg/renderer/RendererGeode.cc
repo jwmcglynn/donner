@@ -3039,6 +3039,100 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return graph;
   }
 
+  /// Most sprite captures one frame begins. Two-touch admission makes every new sprite of a scene
+  /// record in the same frame; the cap spreads that work over the next frames.
+  static constexpr int kMaximumSpriteCapturesPerFrame = 8;
+  /// Most quarter-pixel buckets kept per sprite content and linear transform. A sharp sprite moving
+  /// by fractions of a pixel would otherwise fill the shared index with up to sixteen buckets.
+  static constexpr std::size_t kMaximumSpriteBucketsPerContent = 4;
+  /// Most results held for sprites, so they leave room in the shared index for filter results.
+  static constexpr std::size_t kMaximumSpriteEntries =
+      FilterResultCacheIndex<FilterResultPayload>::kMaximumEntries * 3 / 4;
+
+  /// Sprite captures begun in the open frame.
+  int spriteCapturesThisFrame = 0;
+
+  /// Whether a missed sprite at \p placement is recorded now: it missed before at the same linear
+  /// transform (two-touch admission), the frame has capture budget left, and the content does not
+  /// already hold its share of buckets.
+  bool admitSprite(const FilterResultContentKey& content, const FilterResultPlacement& placement) {
+    const bool admitted = filterResultCache.admitMiss(content, placement.linear, filterResultFrame);
+    if (!admitted || spriteCapturesThisFrame >= kMaximumSpriteCapturesPerFrame) {
+      return false;
+    }
+    const std::size_t buckets =
+        filterResultCache.countIf([&](const FilterResultContentKey& held,
+                                      const FilterResultPlacement& heldPlacement) {
+          return heldPlacement.linear == placement.linear && held.sameContent(content);
+        });
+    return buckets < kMaximumSpriteBucketsPerContent;
+  }
+
+  /// Keep sprites within their quota before recording \p content: when it is a sprite and the
+  /// quota is full, evict the least recently used sprite no recent frame drew.
+  /// @return False when no room can be made.
+  bool makeRoomForSprite(const FilterResultContentKey& content) {
+    if (!content.sprite) {
+      return true;
+    }
+    const auto isSprite = [](const FilterResultContentKey& held, const FilterResultPlacement&) {
+      return held.sprite;
+    };
+    if (filterResultCache.countIf(isSprite) < kMaximumSpriteEntries) {
+      return true;
+    }
+    std::optional<FilterResultPayload> evicted =
+        filterResultCache.evictStale(isSprite, filterResultFrame);
+    if (!evicted) {
+      return false;
+    }
+    std::vector<FilterResultPayload> payloads;
+    payloads.push_back(std::move(*evicted));
+    retireFilterResults(std::move(payloads));
+    return true;
+  }
+
+  /**
+   * Begin capturing a sprite over \p bounds in the current user space, as a filter layer with no
+   * graph: the capture is composited back unchanged when it pops, and the pop records it. Unlike
+   * a filter layer, a capture the frame has no room for is not begun and leaves no state behind:
+   * no rejected layer, no filter budget charge or rejection, no surface budget rejection.
+   *
+   * @return Whether the capture began.
+   */
+  bool beginSpriteCapture(const Box2d& bounds) {
+    if (rejectedFilterDepth != 0 || !readyForFilterCapture()) {
+      return false;
+    }
+    const gpu::Extent2d outer = targetExtent();
+    const int width = static_cast<int>(outer.width);
+    const int height = static_cast<int>(outer.height);
+    if (FilterRegionShowsNothing(bounds, deviceFromLocalTransform, width, height)) {
+      return false;
+    }
+    const std::optional<GeodeFilterBuffer> buffer = MakeGeodeFilterBuffer(
+        bounds,
+        ComputeRegionFilterInputBuffer(spriteCaptureGraph(bounds), bounds,
+                                       deviceFromLocalTransform, width, height),
+        width, height);
+    if (!buffer.has_value() ||
+        !surfaceBudget->canReserveBytes(std::uint64_t{static_cast<std::uint32_t>(buffer->width)} *
+                                            static_cast<std::uint32_t>(buffer->height) *
+                                            gpu::TextureFormatBytesPerTexel(gpuTextureFormat()),
+                                        1)) {
+      return false;
+    }
+    GeodeFilterAdmission admission;
+    admission.region = buffer->region;
+    admission.bufferWidth = buffer->width;
+    admission.bufferHeight = buffer->height;
+    admission.bufferOffsetX = buffer->offsetX;
+    admission.bufferOffsetY = buffer->offsetY;
+    components::FilterGraph passThrough;
+    passThrough.filterRegion = bounds;
+    return beginFilterCapture(passThrough, admission, deviceFromLocalTransform);
+  }
+
   /// Where a sprite's rasterization is valid: its linear part, and per quarter-pixel bucket unless
   /// \p resampling shows its one filtered element's result may be resampled at any offset.
   static FilterResultPlacement spritePlacement(const FilterResultContentKey& content,
@@ -3113,8 +3207,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// would filter), and the frame is recording normally.
   [[nodiscard]] bool canRecordFilterResult(const FilterStackFrame& frame,
                                            geode::FilterExecutionResult::Kind kind) const {
-    return frame.resultRecording && kind == geode::FilterExecutionResult::Kind::Output &&
-           frameGpuEncoder != nullptr && !frameRecordingAbandoned && !frameArenaWriteFailed;
+    // A sprite capture runs no graph; its captured source is the result.
+    const bool result = kind == geode::FilterExecutionResult::Kind::Output ||
+                        (frame.resultRecording && frame.resultRecording->content.sprite &&
+                         kind == geode::FilterExecutionResult::Kind::SourceGraphic);
+    return frame.resultRecording && result && frameGpuEncoder != nullptr &&
+           !frameRecordingAbandoned && !frameArenaWriteFailed;
   }
 
   void recordFilterResult(const FilterStackFrame& frame, geode::FilterExecutionResult::Kind kind,
@@ -3138,6 +3236,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const gpu::Extent2d textureSize = extent;
     const std::uint64_t bytes = std::uint64_t{textureSize.width} * textureSize.height *
                                 gpu::TextureFormatBytesPerTexel(filteredDesc.format);
+    if (!makeRoomForSprite(frame.resultRecording->content)) {
+      return;
+    }
     // Recording never takes from this frame's surface budget; it only requires that the budget
     // still has ample room, so a frame near its limit spends what is left on its own surfaces.
     if (!filterResultCache.canInsert(bytes, filterResultFrame) ||
@@ -6114,6 +6215,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     filterResultCacheEvictions = 0;
     spriteCacheHits = 0;
     spriteCacheRecords = 0;
+    spriteCapturesThisFrame = 0;
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -7302,11 +7404,6 @@ CachedSpriteResult RendererGeode::drawCachedSprite(const FilterResultContentKey&
   if (!content.sprite || !impl_->spriteCacheEnabled || !impl_->filterResultCacheUsable()) {
     return CachedSpriteResult::Uncached;
   }
-  const components::FilterGraph graph = Impl::spriteCaptureGraph(bounds);
-  if (ShouldPlanGeodeLocalRaster(graph, bounds, impl_->deviceFromLocalTransform,
-                                 /*fullExecutionFits=*/true)) {
-    return CachedSpriteResult::Uncached;
-  }
   const FilterResultPlacement placement =
       Impl::spritePlacement(content, bounds, resampling, impl_->deviceFromLocalTransform);
   if (const auto* entry =
@@ -7315,23 +7412,21 @@ CachedSpriteResult RendererGeode::drawCachedSprite(const FilterResultContentKey&
     ++impl_->spriteCacheHits;
     return CachedSpriteResult::Drawn;
   }
-  return impl_->filterResultCache.admitMiss(content, placement.linear, impl_->filterResultFrame)
-             ? CachedSpriteResult::Record
-             : CachedSpriteResult::Uncached;
+  return impl_->admitSprite(content, placement) ? CachedSpriteResult::Record
+                                                : CachedSpriteResult::Uncached;
 }
 
-void RendererGeode::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+bool RendererGeode::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
                                         const SpriteResampling* resampling) {
-  const components::FilterGraph graph = Impl::spriteCaptureGraph(bounds);
+  impl_->flushPendingBatch();
   const FilterResultPlacement placement =
       Impl::spritePlacement(content, bounds, resampling, impl_->deviceFromLocalTransform);
-  pushFilterLayer(graph, bounds);
-  if (!impl_->filterStack.empty()) {
-    Impl::FilterStackFrame& frame = impl_->filterStack.back();
-    if (!frame.allocationRejected && frame.layerTexture.isValid()) {
-      frame.resultRecording = Impl::FilterResultRecording{content, placement};
-    }
+  if (!impl_->beginSpriteCapture(bounds)) {
+    return false;
   }
+  ++impl_->spriteCapturesThisFrame;
+  impl_->filterStack.back().resultRecording = Impl::FilterResultRecording{content, placement};
+  return true;
 }
 
 void RendererGeode::popSpriteRecording() {

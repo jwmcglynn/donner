@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -238,6 +239,40 @@ public:
     admissions_.clear();
     bytes_ = 0;
     return dropped;
+  }
+
+  /// Number of held results for which \p predicate holds on their content key and placement.
+  template <typename Predicate>
+  [[nodiscard]] std::size_t countIf(const Predicate& predicate) const {
+    return static_cast<std::size_t>(
+        std::count_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
+          return predicate(entry.content, entry.placement);
+        }));
+  }
+
+  /**
+   * Evict the least recently used result for which \p predicate holds, unless it was used in
+   * \p frame or the frame before, so a quota of one kind of result turns over without evicting
+   * results the current frames draw.
+   *
+   * @return The evicted payload, or nullopt when no such result may be evicted.
+   */
+  template <typename Predicate>
+  std::optional<Payload> evictStale(const Predicate& predicate, std::uint64_t frame) {
+    auto victim = entries_.end();
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+      if (predicate(it->content, it->placement) && it->lastUsedFrame + 1 < frame &&
+          (victim == entries_.end() || it->lastUsed < victim->lastUsed)) {
+        victim = it;
+      }
+    }
+    if (victim == entries_.end()) {
+      return std::nullopt;
+    }
+    bytes_ -= victim->bytes;
+    std::optional<Payload> evicted(std::move(victim->payload));
+    entries_.erase(victim);
+    return evicted;
   }
 
   /// Number of results held, pending ones included.

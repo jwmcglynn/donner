@@ -553,9 +553,9 @@ CachedSpriteResult Renderer::drawCachedSprite(const FilterResultContentKey& cont
   return impl_->drawCachedSprite(content, bounds, resampling);
 }
 
-void Renderer::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
+bool Renderer::pushSpriteRecording(const FilterResultContentKey& content, const Box2d& bounds,
                                    const SpriteResampling* resampling) {
-  impl_->pushSpriteRecording(content, bounds, resampling);
+  return impl_->pushSpriteRecording(content, bounds, resampling);
 }
 
 void Renderer::popSpriteRecording() {

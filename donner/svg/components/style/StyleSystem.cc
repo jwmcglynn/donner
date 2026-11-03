@@ -721,6 +721,8 @@ PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity 
   const PropertyState fillState = properties.fill.state;
   const PropertyState strokeState = properties.stroke.state;
   PropertyRegistry result;
+  computed.inheritsHostNonInheritedProperty =
+      occurrence != nullptr && properties.inheritsNonInheritedProperty();
   if (occurrence) {
     result = inheritExternalParent(properties, *occurrence->parent.properties);
     if (BlockExternalResources(result, properties)) {
