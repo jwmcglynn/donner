@@ -8182,6 +8182,103 @@ TEST_F(RendererGeodeTest, ManyDifferentlySizedFiltersInOneFrameSubmit) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// A document of 120 glowing circles of 40 sizes on the phone-sized canvas, whose filters hold more
+/// region-sized surfaces until the frame ends than the pool's starting budget, but less than its
+/// native ceiling.
+std::string VariedGlowSource() {
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                       std::to_string(kPhoneWidth) + "\" height=\"" + std::to_string(kPhoneHeight) +
+                       "\">";
+  source += R"svg(<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>)svg";
+  for (int i = 0; i < 120; ++i) {
+    source += "<g filter=\"url(#glow)\"><circle cx=\"" + std::to_string(100 + (i % 8) * 140) +
+              "\" cy=\"" + std::to_string(100 + (i / 8) * 165) + "\" r=\"" +
+              std::to_string(40 + (i % 40) * 2) + "\" fill=\"#e05090\"/></g>";
+  }
+  return source + "</svg>";
+}
+
+constexpr std::uint64_t kPoolFloorBytes = std::uint64_t{64} << 20;
+
+// Filtered elements of many different sizes need more than the pool's starting budget. Once warm,
+// the pool keeps that whole working set from frame to frame instead of destroying and recreating
+// most of it every frame. This holds while the working set stays under the pool's ceiling.
+TEST_F(RendererGeodeTest, VariedFilterSizesCreateNoTexturesOnceWarm) {
+  SVGDocument document = ParseDocumentOrFail(VariedGlowSource());
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  renderer.draw(document);
+  ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.resourceStats().filterExecutions, testing::Gt(0u));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+  const RendererGeodeTexturePoolStats pool = renderer.texturePoolStats();
+  EXPECT_THAT(pool.budgetBytes, testing::Gt(kPoolFloorBytes));
+  EXPECT_THAT(pool.budgetBytes, testing::Le(pool.maximumBudgetBytes));
+}
+
+// An embedder can give the pool's free textures back: to the floor when rendering goes idle, and
+// all of them when the app is hidden.
+TEST_F(RendererGeodeTest, TrimTexturePoolFreesFreeTextures) {
+  SVGDocument document = ParseDocumentOrFail(VariedGlowSource());
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(document);
+  }
+  ASSERT_THAT(renderer.texturePoolStats().bytes, testing::Gt(kPoolFloorBytes));
+
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::ToFloor);
+  EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Le(kPoolFloorBytes));
+  EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Eq(kPoolFloorBytes));
+
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Eq(0u));
+  EXPECT_THAT(renderer.texturePoolStats().textureCount, testing::Eq(0u));
+}
+
+// A device that stops rendering forgets its working set after two seconds, whether the next
+// event is a frame or an idle trim, so a scene rendered once does not keep its peak forever.
+TEST_F(RendererGeodeTest, IdleTexturePoolReturnsToItsFloor) {
+  SVGDocument heavy = ParseDocumentOrFail(VariedGlowSource());
+  SVGDocument light = ParseDocumentOrFail(GlowingPiecesSource(64, 64, 0));
+  for (const bool viaFrame : {false, true}) {
+    SCOPED_TRACE(viaFrame ? "next frame" : "idle trim");
+    // Declared first so it outlives the pool whose clock reads it.
+    auto now = std::chrono::steady_clock::time_point();
+    std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    RendererGeode renderer(device);
+    renderer.setTexturePoolClockForTesting([&now] { return now; });
+    for (int frame = 0; frame < 3; ++frame) {
+      now += std::chrono::milliseconds(16);
+      renderer.draw(heavy);
+    }
+    ASSERT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+
+    now += std::chrono::seconds(1);
+    renderer.trimTexturePool(RendererGeodeTexturePoolTrim::IdleOnly);
+    EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes))
+        << "a second of idle keeps the working set";
+
+    now += std::chrono::seconds(2);
+    if (viaFrame) {
+      renderer.draw(light);
+    } else {
+      renderer.trimTexturePool(RendererGeodeTexturePoolTrim::IdleOnly);
+    }
+    EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Eq(kPoolFloorBytes));
+    EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Le(kPoolFloorBytes));
+  }
+}
+
 // A texture parked for reuse within the frame is still live memory, so it stays charged to the
 // frame's surface budget until the frame ends: right after a filter pops, nothing it allocated has
 // been released from the budget.
@@ -8200,6 +8297,40 @@ TEST_F(RendererGeodeTest, ParkedFilterTexturesStayChargedUntilTheFrameEnds) {
   const RendererResourceStats stats = renderer.resourceStats();
   EXPECT_THAT(stats.surfaceBytes, testing::Eq(stats.surfacePeakBytes));
   renderer.endFrame();
+}
+
+// A frame that takes longer than the idle decay is activity, not idleness: the textures it returns
+// when it ends keep the device's working set for the frame after it.
+TEST_F(RendererGeodeTest, SlowFrameKeepsTheTexturePoolWorkingSet) {
+  using namespace components;
+  SVGDocument heavy = ParseDocumentOrFail(VariedGlowSource());
+  // Declared first so it outlives the pool whose clock reads it.
+  auto now = std::chrono::steady_clock::time_point();
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  renderer.setTexturePoolClockForTesting([&now] { return now; });
+  for (int frame = 0; frame < 3; ++frame) {
+    now += std::chrono::milliseconds(16);
+    renderer.draw(heavy);
+  }
+  ASSERT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  graph.nodes.push_back(blur);
+  beginFrame(renderer);
+  now += std::chrono::seconds(3);  // The frame itself takes three seconds.
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(200, 40, 40, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  now += std::chrono::milliseconds(100);
+  renderer.draw(heavy);
+  EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
 }
 
 // Textures one renderer releases within an open frame stay with it: another renderer on the same

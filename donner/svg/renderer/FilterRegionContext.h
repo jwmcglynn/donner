@@ -440,7 +440,7 @@ inline FilterInputBuffer ComputeFilterInputBuffer(const components::FilterGraph&
 
 /// Raster dimensions of a region-bounded layout round up to this many pixels, so a region that
 /// moves by a fraction of a pixel, or regions of nearby sizes, keep one texture size.
-inline constexpr int kFilterInputBufferGranularity = 32;
+inline constexpr int kFilterInputBufferGranularity = 64;
 
 /// Whether a primitive of \p graph extends its input at the raster edge, duplicating or wrapping
 /// edge pixels, so the raster must end exactly where its content does.
