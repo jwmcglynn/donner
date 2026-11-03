@@ -154,5 +154,34 @@ TEST(ExternalUseSpriteCacheGeodeTest, CapturesDoNotSpendTheFilterBudget) {
   EXPECT_FALSE(renderer.resourceStats().filterBudgetRejected);
 }
 
+// A sprite whose capture can never be begun (it is larger than any surface may be) is refused
+// once and never admitted for recording again, so it cannot take capture budget every frame.
+TEST(ExternalUseSpriteCacheGeodeTest, ImpossibleCaptureIsNotRetried) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_TRUE(device);
+  RendererGeode renderer(device);
+  auto owner = std::make_shared<int>(0);
+  FilterResultContentKey key;
+  key.document = owner;
+  key.sprite = true;
+  const Box2d bounds({0, 0}, {6000, 20});
+  key.filterRegion = bounds;
+  RenderViewport viewport;
+  viewport.size = Vector2d(64, 64);
+  viewport.devicePixelRatio = 1.0;
+  int records = 0;
+  for (int frame = 0; frame < 4; ++frame) {
+    renderer.beginFrame(viewport);
+    for (int draw = 0; draw < 3; ++draw) {
+      if (renderer.drawCachedSprite(key, bounds) == CachedSpriteResult::Record) {
+        ++records;
+        EXPECT_FALSE(renderer.pushSpriteRecording(key, bounds));
+      }
+    }
+    renderer.endFrame();
+  }
+  EXPECT_EQ(records, 1) << "Admitted once, refused, and never admitted again.";
+}
+
 }  // namespace
 }  // namespace donner::svg

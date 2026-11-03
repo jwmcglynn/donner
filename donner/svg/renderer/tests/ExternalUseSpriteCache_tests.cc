@@ -5,7 +5,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <utility>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -66,6 +70,22 @@ constexpr std::string_view kSheet = R"svg(
       <rect x="2" y="2" width="4" height="4" fill="#e0e020"/>
     </symbol>
     <g id="imaged"><image width="8" height="8" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></g>
+    <filter id="distant" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="height"/>
+      <feDiffuseLighting in="height" surfaceScale="3" result="light">
+        <feDistantLight azimuth="225" elevation="45"/></feDiffuseLighting>
+      <feComposite in="light" in2="SourceAlpha" operator="in"/>
+    </filter>
+    <filter id="spot" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="height"/>
+      <feDiffuseLighting in="height" surfaceScale="3" result="light">
+        <fePointLight x="10" y="10" z="20"/></feDiffuseLighting>
+      <feComposite in="light" in2="SourceAlpha" operator="in"/>
+    </filter>
+    <g id="lit"><g filter="url(#distant)"><rect x="2" y="2" width="28" height="16" rx="4"
+      fill="#c08040"/></g></g>
+    <g id="pointlit"><g filter="url(#spot)"><rect x="2" y="2" width="28" height="16" rx="4"
+      fill="#c08040"/></g></g>
     <g id="blended"><rect width="20" height="20" fill="#20c0c0" style="mix-blend-mode: multiply"/></g>
     <g id="text"><text x="2" y="20" font-size="12">Ab</text></g>
   </svg>)svg";
@@ -576,6 +596,117 @@ TEST(ExternalUseSpriteCacheTest, ScaledSymbolWithBlurAtFractionalOffsets) {
   EXPECT_GT(hits, 0u);
   ExpectMatchesUncached(*renderer, *scene, "sprite-scaled-symbol-blur",
                         editor::tests::ApprovedPixelToleranceParams(0.1f, 160));
+}
+
+// Lighting from a distant light moves with its input, so a sprite lit that way is cached, and
+// matches an uncached render exactly; a point light is positioned on the raster, so it is not.
+TEST(ExternalUseSpriteCacheTest, DistantLightIsCachedAndPointLightIsNot) {
+  REQUIRE_CACHING_BACKEND();
+  std::optional<SpriteScene> scene = MakeScene(3, "lit");
+  ASSERT_TRUE(scene.has_value());
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::size_t hits = 0;
+  for (int frame = 0; frame < 4; ++frame) {
+    PlaceAll(*scene, frame, 2.0);
+    hits += Draw(*renderer, *scene).spriteHits;
+  }
+  EXPECT_GT(hits, 0u);
+  ExpectMatchesUncached(*renderer, *scene, "sprite-distant-light");
+  ExpectNeverCached("pointlit", "", "sprite-point-light");
+}
+
+// Sprites recorded in isolation record whole even when they reach past the canvas: large sprites
+// partly off the canvas, drawn before the rest, record once and then hit like every other sprite,
+// so they cannot starve the later sprites' recordings.
+TEST(ExternalUseSpriteCacheTest, OffCanvasSpritesRecordAndDoNotStarveOthers) {
+  REQUIRE_CACHING_BACKEND();
+  std::ostringstream host;
+  host << R"(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">)";
+  for (int i = 0; i < 12; ++i) {
+    host << "<use id=\"use-" << i << "\" href=\"sprites.svg#sprite-0\"/>";
+  }
+  for (int i = 12; i < 32; ++i) {
+    host << "<use id=\"use-" << i << "\" href=\"sprites.svg#sprite-1\"/>";
+  }
+  host << "</svg>";
+  std::optional<ExternalUseDocument> document = MakeExternalUseDocument(host.str(),
+                                                                        std::string(kSheet));
+  ASSERT_TRUE(document.has_value());
+  SpriteScene scene{std::move(*document), {}};
+  for (int i = 0; i < 32; ++i) {
+    scene.uses.push_back(
+        scene.host.document.querySelector("#use-" + std::to_string(i))->cast<SVGUseElement>());
+  }
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  for (int frame = 0; frame < 6; ++frame) {
+    for (int i = 0; i < 12; ++i) {
+      // Doubled and hanging past the left, top or bottom edge.
+      scene.uses[i].setTransform(Transform2d::Scale(2.0) *
+                                 Transform2d::Translate(Vector2d(-24.0 + (i % 4) * 70.0 + frame,
+                                                                 i < 4 ? -30.0 : 160.0)));
+    }
+    for (int i = 12; i < 32; ++i) {
+      scene.uses[i].setTransform(Transform2d::Translate(
+          Vector2d(10.0 + ((i - 12) % 10) * 24.0 + frame, 60.0 + ((i - 12) / 10) * 40.0)));
+    }
+    const FrameWork work = Draw(*renderer, scene);
+    if (frame >= 3) {
+      EXPECT_EQ(work.spriteHits, 32u) << "frame " << frame;
+      EXPECT_EQ(work.spriteRecords, 0u) << "frame " << frame;
+    }
+  }
+  ExpectMatchesUncached(*renderer, scene, "sprite-off-canvas");
+}
+
+/// Largest premultiplied channel difference, and the number of pixels differing by more than
+/// \p levels, between two bitmaps of one size.
+std::pair<int, int> PremultipliedDifference(const RendererBitmap& a, const RendererBitmap& b,
+                                            int levels) {
+  int maximum = 0;
+  int count = 0;
+  for (int y = 0; y < a.dimensions.y; ++y) {
+    for (int x = 0; x < a.dimensions.x; ++x) {
+      const std::uint8_t* pa = &a.pixels[static_cast<std::size_t>(y) * a.rowBytes + x * 4u];
+      const std::uint8_t* pb = &b.pixels[static_cast<std::size_t>(y) * b.rowBytes + x * 4u];
+      int pixel = 0;
+      for (int c = 0; c < 4; ++c) {
+        const int va = c == 3 ? pa[3] : pa[c] * pa[3] / 255;
+        const int vb = c == 3 ? pb[3] : pb[c] * pb[3] / 255;
+        pixel = std::max(pixel, std::abs(va - vb));
+      }
+      maximum = std::max(maximum, pixel);
+      count += pixel > levels ? 1 : 0;
+    }
+  }
+  return {maximum, count};
+}
+
+// Under the resample policy a sprite moving by fractions of a pixel every frame hits on every
+// frame after its one recording, and differs from an exact render only at its edges, by at most
+// half a pixel's coverage.
+TEST(ExternalUseSpriteCacheTest, ResamplePolicyHitsUnderSubpixelMotion) {
+  REQUIRE_CACHING_BACKEND();
+  std::optional<SpriteScene> scene = MakeScene(3);
+  ASSERT_TRUE(scene.has_value());
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  renderer->setSpriteSubpixelPlacement(SpriteSubpixelPlacement::Resample);
+  std::size_t records = 0;
+  for (int frame = 0; frame < 10; ++frame) {
+    PlaceAll(*scene, frame, 0.37);
+    const FrameWork work = Draw(*renderer, *scene);
+    records += work.spriteRecords;
+    if (frame >= 2) {
+      EXPECT_EQ(work.spriteHits, 3u) << "frame " << frame;
+    }
+  }
+  EXPECT_EQ(records, 1u);
+  const RendererBitmap cached = renderer->takeSnapshot();
+  const RendererBitmap exact = RenderUncached(*scene);
+  ASSERT_EQ(cached.dimensions, exact.dimensions);
+  const auto [maximum, edgePixels] = PremultipliedDifference(cached, exact, 2);
+  EXPECT_LE(maximum, 160) << "Resampling moves an edge by at most half a pixel of coverage";
+  // Each 32x32 sprite has at most a few hundred edge pixels; its interior matches.
+  EXPECT_LE(edgePixels, 3 * 400);
 }
 
 TEST(ExternalUseSpriteCacheTest, BackdropBlendIsNotCached) {
