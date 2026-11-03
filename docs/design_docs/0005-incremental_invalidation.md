@@ -688,7 +688,9 @@ rebuild that admits each sheet once, and 0.16 ms with the retained update.
 through the selective style pass, then the instances are rebuilt. `CompositorController` refuses a
 promotion while any entity still carries a pending `Style` dirty flag, as it already did while a
 whole-tree restyle or full rebuild was pending, so it never trusts styles or instances a pending
-attribute write made stale.
+attribute write made stale. Two cases keep the full rebuild: an `opacity` write on or above text,
+because text layout memoizes each span's opacity (which `opacity: inherit` ties to an ancestor), and
+`opacity` on a `<stop>`, which stays on the plain style path.
 
 `<use>` geometry written through the DOM: the parser applies `x`, `y`, `width` and `height` through
 the typed setters, at override precedence, so a later `setAttribute()` of the same attribute was
