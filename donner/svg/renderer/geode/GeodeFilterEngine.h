@@ -411,6 +411,11 @@ public:
   /// @param extent Maximum dimension, between 16 and 512 pixels.
   void setMaximumTileExtentForTesting(uint32_t extent);
 
+  /// Enables or disables reduced-resolution Gaussian blur (on by default). With it disabled every
+  /// blur runs at full resolution, which is the reference reduced blurs are measured against.
+  /// @param enabled True to allow reduced-resolution blur.
+  void setReducedResolutionBlurForTesting(bool enabled) { reducedResolutionBlur_ = enabled; }
+
   /// Invokes p hook after each accepted command chunk. Test seam for later-chunk failures.
   void setChunkSubmittedHookForTesting(std::function<void(size_t)> hook);
 
@@ -427,6 +432,12 @@ private:
   friend struct FilterNodeExecution;
 
   /// Two-pass separable Gaussian blur via compute shader.
+  ///
+  /// A blur whose device-space deviation along an axis is large runs that axis at reduced
+  /// resolution: the input is averaged down by a power of two, blurred there with a deviation
+  /// matching the full-resolution kernel's variance, and bilinearly enlarged into a
+  /// full-resolution result. The reduction keeps the reduced deviation at four texels or more, so
+  /// the result stays within a small fixed tolerance of the full-resolution blur.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
   /// @param stdDeviationY Standard deviation in Y (pixels).
@@ -447,6 +458,18 @@ private:
   FilterTexture runBlurPass(FilterResourceArena& arena, FilterTexture input, FilterTexture output,
                             uint32_t width, uint32_t height, float stdDeviation, uint32_t axis,
                             uint32_t edgeMode, const Box2d* clip = nullptr);
+
+  /// One resampling dispatch of the blur program: a block-average downsample or a bilinear
+  /// upsample by \p factorX horizontally and \p factorY vertically.
+  /// @param input Source texture. @param output Destination texture, sized for the resample.
+  /// @param factorX Horizontal factor. @param factorY Vertical factor.
+  /// @param edgeMode Edge handling for the downsample's partial blocks.
+  /// @param kernelType `kGaussianBlurKernelDownsample` or `kGaussianBlurKernelUpsample`.
+  /// @param clip Optional output clip, in output texels.
+  /// @return \p output, or empty when the pass could not record.
+  FilterTexture runResamplePass(FilterResourceArena& arena, FilterTexture input,
+                                FilterTexture output, uint32_t factorX, uint32_t factorY,
+                                uint32_t edgeMode, uint32_t kernelType, const Box2d* clip);
 
   /// One box-blur dispatch of the 3-pass approximation of a Gaussian for sigma >= 2.0, matching
   /// tiny-skia's passes.
@@ -747,6 +770,7 @@ private:
   FilterExecutionMemory lastExecutionMemory_;
   uint32_t preferredTileExtent_ = 512;
   bool adaptiveTiles_ = true;
+  bool reducedResolutionBlur_ = true;
 
   std::function<void(size_t)> chunkSubmittedHookForTesting_;
 };

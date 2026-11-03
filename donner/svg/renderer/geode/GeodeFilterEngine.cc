@@ -316,15 +316,19 @@ struct FilterResourceArena {
     return &bindGroups_.back();
   }
 
-  /// Records one compute dispatch into this execution's runtime-owned command encoder.
+  /// Records one compute dispatch covering \p extent into this execution's runtime-owned command
+  /// encoder, and counts the texels it writes.
   ///
   /// @param label Debug label for the pass.
   /// @param pipeline Compute pipeline to dispatch.
   /// @param bindGroup Bind group for group 0.
-  /// @param workgroupsX Workgroup count along x. @param workgroupsY Workgroup count along y.
+  /// @param extent Output texels the pass writes, one invocation each.
+  /// @param shape Workgroup shape of \p pipeline.
   [[nodiscard]] bool dispatchComputePass(RcString label, const gpu::ComputePipeline& pipeline,
-                                         const gpu::BindGroup& bindGroup, uint32_t workgroupsX,
-                                         uint32_t workgroupsY) {
+                                         const gpu::BindGroup& bindGroup, gpu::Extent2d extent,
+                                         gpu::WorkgroupSize shape) {
+    const uint32_t workgroupsX = (extent.width + shape.x - 1) / shape.x;
+    const uint32_t workgroupsY = (extent.height + shape.y - 1) / shape.y;
     gpu::CommandEncoder* commands = commandEncoder();
     if (commands == nullptr) {
       return false;
@@ -343,6 +347,7 @@ struct FilterResourceArena {
       return false;
     }
 
+    device_.countFilterPixels(uint64_t{extent.width} * extent.height);
     return true;
   }
 
@@ -1027,10 +1032,8 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 
   const gpu::Extent2d extent =
       destinationExtent.value_or(gpu::Extent2d{.width = input.width(), .height = input.height()});
-  const gpu::WorkgroupSize shape = program.workgroupSize;
-  return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
-                                   (extent.width + shape.x - 1) / shape.x,
-                                   (extent.height + shape.y - 1) / shape.y);
+  return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup, extent,
+                                   program.workgroupSize);
 }
 
 /// Records a two-input pass, with an optional uniform block, through the runtime.
@@ -1074,11 +1077,9 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   }
   const gpu::BindGroup* bindGroup =
       arena.createRuntimeBindGroup(program.bindGroupLayout, std::move(entries), RcString(label));
-  const gpu::WorkgroupSize shape = program.workgroupSize;
   return bindGroup != nullptr &&
-         arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
-                                   (extent.width + shape.x - 1) / shape.x,
-                                   (extent.height + shape.y - 1) / shape.y);
+         arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup, extent,
+                                   program.workgroupSize);
 }
 
 /// Resolve an input reference to a texture.
@@ -1529,6 +1530,93 @@ BoxBlurPlan computeBoxPasses(double sigma) {
   return plan;
 }
 
+/// Smallest standard deviation, in reduced pixels, a reduced-resolution blur runs at. A blur is
+/// reduced by the largest power of two that keeps its deviation at or above this, so the reduced
+/// blur still spans at least this many texels and the bilinear enlargement interpolates a signal
+/// that is already smooth on the scale of one reduced texel.
+constexpr double kMinimumReducedBlurDeviation = 4.0;
+
+/// Largest per-axis reduction factor.
+constexpr uint32_t kMaximumReducedBlurFactor = 16;
+
+/// Per-axis reduction of one blur: how much to shrink each axis, and the deviation to blur the
+/// shrunken image with. A factor of one leaves that axis at full resolution.
+struct ReducedBlurPlan {
+  std::array<uint32_t, 2> factors{1, 1};       //!< Power-of-two reduction per axis.
+  std::array<double, 2> deviations{0.0, 0.0};  //!< Deviation in reduced pixels per reduced axis.
+
+  /// True when at least one axis is reduced.
+  bool reduced() const { return factors[0] > 1 || factors[1] > 1; }
+};
+
+/// Power-of-two reduction factor for a blur of \p deviation device pixels along one axis.
+uint32_t ReducedBlurFactor(double deviation) {
+  uint32_t factor = 1;
+  while (factor < kMaximumReducedBlurFactor && deviation >= 2.0 * factor * kMinimumReducedBlurDeviation) {
+    factor *= 2;
+  }
+  return factor;
+}
+
+/// Variance in device pixels squared of the full-resolution kernel for \p deviation: the three
+/// box passes' summed variances when the box approximation applies, the sampled Gaussian's
+/// otherwise.
+double FullResolutionBlurVariance(double deviation) {
+  const BoxBlurPlan boxes = deviation >= 2.0 ? computeBoxPasses(deviation) : BoxBlurPlan{};
+  if (boxes.numPasses == 0) {
+    return deviation * deviation;
+  }
+  double variance = 0.0;
+  for (int index = 0; index < boxes.numPasses; ++index) {
+    const double width = boxes.passes[index].left + boxes.passes[index].right + 1;
+    variance += (width * width - 1.0) / 12.0;
+  }
+  return variance;
+}
+
+/// Deviation, in reduced pixels, that makes the reduced pipeline's kernel match the variance of
+/// the full-resolution kernel along one axis reduced by \p factor. Averaging \p factor texels
+/// adds (factor^2 - 1) / 12 and bilinear enlargement adds (factor^2 - 1) / 6, so the reduced blur
+/// supplies the rest.
+double ReducedBlurDeviation(double deviation, uint32_t factor) {
+  const double scale = factor;
+  const double remaining = FullResolutionBlurVariance(deviation) - (scale * scale - 1.0) / 4.0;
+  return std::sqrt(std::max(remaining, 0.0)) / scale;
+}
+
+/// Reduction for a blur of \p deviationX by \p deviationY device pixels. Wrapping edges are never
+/// reduced: a reduced texel straddling the wrap seam would mix both edges.
+ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool wrapEdges) {
+  ReducedBlurPlan plan;
+  if (wrapEdges) {
+    return plan;
+  }
+  const std::array<double, 2> deviations{deviationX, deviationY};
+  for (size_t axis = 0; axis < deviations.size(); ++axis) {
+    const double deviation = deviations[axis];
+    if (!(deviation > 0.0) || !std::isfinite(deviation)) {
+      continue;
+    }
+    plan.factors[axis] = ReducedBlurFactor(deviation);
+    if (plan.factors[axis] > 1) {
+      plan.deviations[axis] = ReducedBlurDeviation(deviation, plan.factors[axis]);
+    }
+  }
+  return plan;
+}
+
+/// Device pixels a reduced blur along one axis reads on either side of an output texel: the
+/// reduced Gaussian's taps plus the reduced texel each bilinear tap and block average spans.
+double ReducedBlurSupport(double deviation) {
+  const uint32_t factor = ReducedBlurFactor(deviation);
+  if (factor == 1) {
+    return 0.0;
+  }
+  const double radius =
+      std::min(std::ceil(3.0 * ReducedBlurDeviation(deviation, factor)), 127.0);
+  return (radius + 2.0) * factor;
+}
+
 /// Conservative sampling support of one graph in device pixels.
 struct FilterSamplingHalo {
   Vector2d scale;
@@ -1555,7 +1643,7 @@ struct FilterSamplingHalo {
         left += boxes.passes[index].left;
         right += boxes.passes[index].right;
       }
-      return std::max(left, right);
+      return std::max<double>(std::max(left, right), ReducedBlurSupport(deviation));
     }
     return std::min(std::ceil(3.0f * static_cast<float>(deviation)), 127.0f);
   }
@@ -2273,18 +2361,44 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
     return {};
   }
 
-  const uint32_t width = input.width();
-  const uint32_t height = input.height();
-  const BlurDispatchPlan plan = CreateBlurDispatchPlan(stdDeviationX, stdDeviationY, edgeMode);
-  std::array<FilterTexture, 2> scratch{};
+  const ReducedBlurPlan reduced =
+      reducedResolutionBlur_
+          ? PlanReducedBlur(stdDeviationX, stdDeviationY,
+                            edgeMode == gpu::shader::programs::kGaussianBlurEdgeWrap)
+          : ReducedBlurPlan{};
+  // A reduced axis is shrunk, blurred with a Gaussian matching the full-resolution kernel's
+  // variance, and enlarged again; an axis left at full resolution keeps its exact passes, run on
+  // the shrunken image of the other axis.
+  const uint32_t factorX = reduced.factors[0];
+  const uint32_t factorY = reduced.factors[1];
+  const uint32_t width = (input.width() + factorX - 1) / factorX;
+  const uint32_t height = (input.height() + factorY - 1) / factorY;
   FilterTexture current = input;
+  std::array<FilterTexture, 2> scratch{};
+  BlurDispatchPlan plan = CreateBlurDispatchPlan(factorX == 1 ? stdDeviationX : 0.0,
+                                                 factorY == 1 ? stdDeviationY : 0.0, edgeMode);
+  if (reduced.reduced()) {
+    scratch[1] = createIntermediateTexture(arena, width, height, "GaussianBlurReducedScratch");
+    current = runResamplePass(arena, input, scratch[1], factorX, factorY, edgeMode,
+                              gpu::shader::programs::kGaussianBlurKernelDownsample, nullptr);
+    if (!current) {
+      return {};
+    }
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+      if (reduced.factors[axis] > 1 && reduced.deviations[axis] > 0.0) {
+        plan.passes[plan.count++] =
+            BlurDispatch{axis, static_cast<float>(reduced.deviations[axis]), std::nullopt};
+      }
+    }
+  }
+  const char* scratchLabel = reduced.reduced() ? "GaussianBlurReducedScratch" : "GaussianBlurScratch";
   for (size_t i = 0; i < plan.count; ++i) {
     FilterTexture& output = scratch[i % scratch.size()];
     if (!output) {
-      output = createIntermediateTexture(arena, width, height, "GaussianBlurScratch");
+      output = createIntermediateTexture(arena, width, height, scratchLabel);
     }
     const BlurDispatch& pass = plan.passes[i];
-    const Box2d* clip = i + 1 == plan.count ? outputClip : nullptr;
+    const Box2d* clip = i + 1 == plan.count && !reduced.reduced() ? outputClip : nullptr;
     if (pass.cascadeWindow != 0) {
       current =
           runBoxBlurPass(arena, current, output, width, height, pass.cascadeWindow, 0, pass.axis,
@@ -2301,7 +2415,48 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
       return {};
     }
   }
+  if (!reduced.reduced()) {
+    return current;
+  }
+  const FilterTexture output =
+      createIntermediateTexture(arena, input.width(), input.height(), "GaussianBlurReducedOutput");
+  current = runResamplePass(arena, current, output, factorX, factorY, edgeMode,
+                            gpu::shader::programs::kGaussianBlurKernelUpsample, outputClip);
+  if (current) {
+    device_.countReducedResolutionBlur();
+  }
   return current;
+}
+
+FilterTexture GeodeFilterEngine::runResamplePass(FilterResourceArena& arena, FilterTexture input,
+                                                 FilterTexture output, uint32_t factorX,
+                                                 uint32_t factorY, uint32_t edgeMode,
+                                                 uint32_t kernelType, const Box2d* clip) {
+  if (!input || !output) {
+    return {};
+  }
+
+  gpu::shader::programs::GaussianBlurParams params{};
+  params.edgeMode = edgeMode;
+  params.kernelType = kernelType;
+  params.boxLeft = static_cast<int32_t>(factorX);
+  params.boxRight = static_cast<int32_t>(factorY);
+  if (clip != nullptr) {
+    // Corners arrive pre-rounded (floor/ceil), so the integer casts are exact.
+    params.clipMin = {static_cast<int32_t>(clip->topLeft.x), static_cast<int32_t>(clip->topLeft.y)};
+    params.clipMax = {static_cast<int32_t>(clip->bottomRight.x),
+                      static_cast<int32_t>(clip->bottomRight.y)};
+    params.clipActive = 1;
+  }
+
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, blurProgram_, input, output, UniformBytes(params),
+          kernelType == gpu::shader::programs::kGaussianBlurKernelDownsample ? "BlurDownsamplePass"
+                                                                             : "BlurUpsamplePass",
+          nullptr, gpu::Extent2d{output.width(), output.height()})) {
+    return {};
+  }
+  return output;
 }
 
 FilterTexture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, FilterTexture input,
@@ -2498,10 +2653,8 @@ FilterTexture GeodeFilterEngine::applyFlood(
     return {};
   }
 
-  const gpu::WorkgroupSize workgroup = floodProgram_.workgroupSize;
   if (!arena.dispatchComputePass("FilterFloodPass", floodProgram_.pipeline, *bindGroup,
-                                 (width + workgroup.x - 1) / workgroup.x,
-                                 (height + workgroup.y - 1) / workgroup.y)) {
+                                 {width, height}, floodProgram_.workgroupSize)) {
     return {};
   }
 
@@ -2841,10 +2994,8 @@ FilterTexture GeodeFilterEngine::applyTurbulence(
   if (bindGroup == nullptr) {
     return {};
   }
-  const auto workgroup = turbulenceProgram_.workgroupSize;
   if (!arena.dispatchComputePass("FilterTurbulencePass", turbulenceProgram_.pipeline, *bindGroup,
-                                 (width + workgroup.x - 1) / workgroup.x,
-                                 (height + workgroup.y - 1) / workgroup.y)) {
+                                 {width, height}, turbulenceProgram_.workgroupSize)) {
     return {};
   }
   return output;

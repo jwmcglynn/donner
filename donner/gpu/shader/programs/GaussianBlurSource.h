@@ -23,6 +23,8 @@ struct BlurParams {
 
 const kKernelBox: u32 = 1u;
 const kKernelBoxCascade: u32 = 2u;
+const kKernelDownsample: u32 = 3u;
+const kKernelUpsample: u32 = 4u;
 const kEdgeTransparent: u32 = 0u;
 const kEdgeDuplicate: u32 = 1u;
 
@@ -84,6 +86,31 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let coord = vec2<i32>(gid.xy);
   let size = vec2<i32>(textureDimensions(inputTexture));
+  if ((params.kernelType == kKernelDownsample)) {
+    let factor = vec2<i32>(params.boxLeft, params.boxRight);
+    let origin = (coord * factor);
+    var blockSum: vec4<f32> = vec4<f32>(0f, 0f, 0f, 0f);
+    for (var row: i32 = 0i; (row < factor.y); row = (row + 1i)) {
+      for (var column: i32 = 0i; (column < factor.x); column = (column + 1i)) {
+        blockSum = (blockSum + sampleEdge((origin + vec2<i32>(column, row)), size));
+      }
+    }
+    textureStore(outputTexture, coord, applyClip(coord, (blockSum / f32((factor.x * factor.y)))));
+    return;
+  }
+  if ((params.kernelType == kKernelUpsample)) {
+    let factor = vec2<f32>(f32(params.boxLeft), f32(params.boxRight));
+    let position = (((vec2<f32>(coord) + vec2<f32>(0.5f, 0.5f)) / factor) - vec2<f32>(0.5f, 0.5f));
+    let base = floor(position);
+    let weight = (position - base);
+    let limit = (size - vec2<i32>(1i, 1i));
+    let low = clamp(vec2<i32>(base), vec2<i32>(0i, 0i), limit);
+    let high = clamp((vec2<i32>(base) + vec2<i32>(1i, 1i)), vec2<i32>(0i, 0i), limit);
+    let top = mix(textureLoad(inputTexture, low, 0i), textureLoad(inputTexture, vec2<i32>(high.x, low.y), 0i), weight.x);
+    let bottom = mix(textureLoad(inputTexture, vec2<i32>(low.x, high.y), 0i), textureLoad(inputTexture, high, 0i), weight.x);
+    textureStore(outputTexture, coord, applyClip(coord, mix(top, bottom, weight.y)));
+    return;
+  }
   if ((params.kernelType == kKernelBoxCascade)) {
     let half = (params.boxLeft / 2i);
     let even = ((params.boxLeft % 2i) == 0i);

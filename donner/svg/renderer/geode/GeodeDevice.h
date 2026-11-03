@@ -778,6 +778,20 @@ public:
     return stamp != ~uint64_t{0} && stamp >= oldestOpenFrameGeneration();
   }
 
+  /// Record \p pixels texels written by one filter compute pass.
+  /// @param pixels Output extent of the pass, width times height.
+  void countFilterPixels(uint64_t pixels) const {
+    if (counters_) {
+      counters_->filterPixels += pixels;
+    }
+  }
+  /// Record one Gaussian blur executed at reduced resolution.
+  void countReducedResolutionBlur() const {
+    if (counters_) {
+      ++counters_->reducedResolutionBlurs;
+    }
+  }
+
   /// Record one glyph occurrence served from an already-resident outline.
   void countGlyphResidencyHit() const {
     if (counters_) {

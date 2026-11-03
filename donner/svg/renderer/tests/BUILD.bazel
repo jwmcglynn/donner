@@ -1967,3 +1967,33 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+# Bounded error of reduced-resolution blur against the full-resolution path, and its counters.
+donner_cc_test(
+    name = "geode_reduced_resolution_blur_tests_impl",
+    srcs = ["GeodeReducedResolutionBlur_tests.cc"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/css:core",
+        "//donner/svg",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:stroke_params",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_reduced_resolution_blur_tests",
+    size = "medium",
+    testonly = 1,
+    dep = ":geode_reduced_resolution_blur_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
