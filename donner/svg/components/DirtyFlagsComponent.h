@@ -27,6 +27,10 @@ struct DirtyFlagsComponent {
     RenderInstance = 1 << 7,  //!< RenderingInstanceComponent needs update.
     ShadowTree = 1 << 8,      //!< Shadow tree needs re-instantiation.
     TextGeometry = 1 << 9,    //!< ComputedTextGeometryComponent needs recomputation.
+    /// Only compositing properties changed (`opacity`): the style is recomputed and the render
+    /// instance rebuilt, but no geometry, paint, filter or shadow-tree input changed. Always set
+    /// together with \ref Style.
+    Compositing = 1 << 10,
 
     /// Compound flag: style change that may affect paint, filter, and render instance.
     StyleCascade = Style | Paint | Filter | RenderInstance,

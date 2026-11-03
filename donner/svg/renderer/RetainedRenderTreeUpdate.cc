@@ -17,6 +17,7 @@
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/graph/Reference.h"
 
@@ -29,11 +30,14 @@ constexpr uint16_t kMoveFlags = DirtyFlagsComponent::Layout | DirtyFlagsComponen
                                 DirtyFlagsComponent::RenderInstance;
 
 /// Every change a retained update can apply.
-constexpr uint16_t kRetainedFlags = kMoveFlags | DirtyFlagsComponent::ShadowTree;
+constexpr uint16_t kRetainedFlags = kMoveFlags | DirtyFlagsComponent::Style |
+                                    DirtyFlagsComponent::Compositing |
+                                    DirtyFlagsComponent::ShadowTree;
 
 /// Changes to an element's own inputs, as opposed to an ancestor's transform.
-constexpr uint16_t kOwnChangeFlags =
-    DirtyFlagsComponent::Transform | DirtyFlagsComponent::ShadowTree;
+constexpr uint16_t kOwnChangeFlags = DirtyFlagsComponent::Transform |
+                                     DirtyFlagsComponent::Compositing |
+                                     DirtyFlagsComponent::ShadowTree;
 
 /// Facts about the whole document that the per-entity checks consult.
 struct DocumentFacts {
@@ -87,6 +91,13 @@ bool Has(uint16_t flags, uint16_t flag) {
   return (flags & flag) != 0;
 }
 
+/// Whether \p flags only name changes a retained update applies; a style change is only known to
+/// be local when it is a compositing change.
+bool FlagsAreRetainable(uint16_t flags) {
+  return (flags & ~kRetainedFlags) == 0 &&
+         (!Has(flags, DirtyFlagsComponent::Style) || Has(flags, DirtyFlagsComponent::Compositing));
+}
+
 /// Whether no computed component reads the changed inputs of \p entity.
 bool ChangeStaysLocal(const Registry& registry, Entity entity, uint16_t flags,
                       const DocumentFacts& facts) {
@@ -101,7 +112,7 @@ bool ChangeStaysLocal(const Registry& registry, Entity entity, uint16_t flags,
 /// Check one dirty entity against the retained-update rules, adding its work to \p plan.
 bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
                      const DocumentFacts& facts, RetainedUpdatePlan& plan) {
-  if ((flags & ~kRetainedFlags) != 0 || !ChangeStaysLocal(registry, entity, flags, facts)) {
+  if (!FlagsAreRetainable(flags) || !ChangeStaysLocal(registry, entity, flags, facts)) {
     return false;
   }
   if (Has(flags, DirtyFlagsComponent::Layout)) {
@@ -119,6 +130,7 @@ bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
     }
     plan.retargetedUses.push_back(entity);
   }
+  plan.restyle |= Has(flags, DirtyFlagsComponent::Style);
   return true;
 }
 
@@ -149,6 +161,11 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
 
 void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
                          ParseWarningSink& warningSink) {
+  // With the render tree built and no whole-tree restyle requested, this is the selective pass:
+  // it restyles only the entities flagged Style.
+  if (plan.restyle) {
+    StyleSystem().computeAllStyles(registry, warningSink);
+  }
   for (const Entity entity : plan.layoutEntities) {
     LayoutSystem().recomputeInvalidatedLayout(EntityHandle(registry, entity), warningSink);
   }
