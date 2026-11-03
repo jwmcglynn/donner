@@ -68,6 +68,7 @@ struct ImageError {
   int maximum = 0;           //!< Largest channel difference, in 8-bit levels.
   double mean = 0.0;         //!< Mean channel difference over covered pixels.
   size_t coveredPixels = 0;  //!< Pixels with nonzero alpha in either image.
+  Vector2i worst = Vector2i::Zero();  //!< Pixel holding the largest difference.
 };
 
 ImageError Compare(const RendererBitmap& actual, const RendererBitmap& expected) {
@@ -89,7 +90,10 @@ ImageError Compare(const RendererBitmap& actual, const RendererBitmap& expected)
         const int actualValue = channel == 3 ? a[3] : (a[channel] * a[3] + 127) / 255;
         const int expectedValue = channel == 3 ? e[3] : (e[channel] * e[3] + 127) / 255;
         const int difference = std::abs(actualValue - expectedValue);
-        error.maximum = std::max(error.maximum, difference);
+        if (difference > error.maximum) {
+          error.maximum = difference;
+          error.worst = Vector2i(x, y);
+        }
         sum += difference;
       }
     }
@@ -217,11 +221,14 @@ protected:
     EXPECT_FALSE(full.empty());
     EXPECT_THAT(reducedCounters.reducedResolutionBlurs, testing::Ge(1u)) << label;
     EXPECT_THAT(fullCounters.reducedResolutionBlurs, testing::Eq(0u)) << label;
-    EXPECT_THAT(reducedCounters.filterPixels, testing::Lt(fullCounters.filterPixels)) << label;
+    EXPECT_THAT(reducedCounters.filterBlurTaps * 2, testing::Lt(fullCounters.filterBlurTaps))
+        << label;
     const ImageError error = Compare(reduced, full);
-    std::cout << "reduced blur error " << label << ": max " << error.maximum << " mean "
-              << error.mean << " over " << error.coveredPixels << " px, filter pixels "
-              << reducedCounters.filterPixels << " vs " << fullCounters.filterPixels << "\n";
+    std::cout << "reduced blur error " << label << ": max " << error.maximum << " at "
+              << error.worst << " mean " << error.mean << " over " << error.coveredPixels
+              << " px, filter pixels " << reducedCounters.filterPixels << " vs "
+              << fullCounters.filterPixels << ", blur taps " << reducedCounters.filterBlurTaps
+              << " vs " << fullCounters.filterBlurTaps << "\n";
     return error;
   }
 };
@@ -351,10 +358,12 @@ TEST_F(GeodeReducedResolutionBlurTest, WrappedBlurIsNotReduced) {
   EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(0u));
 }
 
-// The counters report the filter's fill work: the reduced blur of a 320x320 layer at deviation 16
-// (factor 4 on both axes) writes the full-resolution result once and otherwise works on 80x80
-// images, far below the two full-resolution box passes it replaces.
-TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterPixels) {
+// The counters report the filter's work. A 320x320 layer blurred at deviation 16 is reduced by four
+// on both axes. At full resolution each axis is one pass of the three-box cascade over the layer,
+// whose 30-texel window reads 89 texels per output texel. Reduced, the layer is averaged down to
+// 80x80 (16 reads each), blurred there with a 7.52-texel spline per axis (25 reads each), and
+// enlarged back to 320x320 (4 reads each).
+TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
   const FilterGraph graph = BlurGraph(fp::GaussianBlur{.stdDeviationX = 16, .stdDeviationY = 16});
   geode::GeodeCounters reduced;
   geode::GeodeCounters full;
@@ -364,12 +373,13 @@ TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterPixels) {
   constexpr uint64_t kReducedLayer = kLayer / 16;
   EXPECT_THAT(reduced.reducedResolutionBlurs, testing::Eq(1u));
   EXPECT_THAT(full.reducedResolutionBlurs, testing::Eq(0u));
-  // Full resolution: two box passes over the layer plus the clip and resolve passes the graph
-  // shares with the reduced run.
+  EXPECT_THAT(full.filterBlurTaps, testing::Eq(2 * kLayer * 89));
+  EXPECT_THAT(reduced.filterBlurTaps,
+              testing::Eq(kReducedLayer * 16 + 2 * kReducedLayer * 25 + kLayer * 4));
+  // Texels written: the clip and resolve passes are shared; the two full-resolution blur passes
+  // become one downsample and two blur passes on the reduced image plus one enlargement.
   const uint64_t shared = full.filterPixels - 2 * kLayer;
-  // Reduced: one downsample and two blur passes on the reduced image, and one enlargement.
   EXPECT_THAT(reduced.filterPixels, testing::Eq(shared + 3 * kReducedLayer + kLayer));
-  EXPECT_THAT(full.filterPixels, testing::Gt(reduced.filterPixels + kLayer / 2));
 }
 
 // Tiled execution reduces each tile on its own grid; the halo covers the reduced kernel, so the

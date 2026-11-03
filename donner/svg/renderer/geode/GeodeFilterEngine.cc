@@ -2331,6 +2331,20 @@ struct BlurDispatchPlan {
   size_t count = 0;
 };
 
+/// Input texels one output texel of \p pass reads away from the input edges, mirroring the blur
+/// program's loops.
+uint64_t BlurPassTaps(const BlurDispatch& pass) {
+  if (pass.cascadeWindow != 0) {
+    // Three box passes of one window span three windows less one or two texels.
+    return 3 * static_cast<uint64_t>(pass.cascadeWindow) - (pass.cascadeWindow % 2 == 0 ? 1 : 2);
+  }
+  if (pass.box) {
+    return static_cast<uint64_t>(pass.box->left) + pass.box->right + 1;
+  }
+  const float reach = (pass.spline ? 1.5f : 3.0f) * pass.deviation;
+  return 2 * static_cast<uint64_t>(std::min(std::ceil(reach), 127.0f)) + 1;
+}
+
 /// With transparent edges, every box pass after the first reads what the earlier passes spread
 /// past the texture edge, so the three passes run as one cascade kernel that samples the input
 /// directly. Other edge modes resolve the edge on each pass's input.
@@ -2392,6 +2406,7 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
     if (!current) {
       return {};
     }
+    device_.countFilterBlurTaps(uint64_t{width} * height * factorX * factorY);
     for (uint32_t axis = 0; axis < 2; ++axis) {
       if (reduced.factors[axis] > 1 && reduced.widths[axis] > 0.0) {
         plan.passes[plan.count++] = BlurDispatch{
@@ -2425,6 +2440,7 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
     if (!current) {
       return {};
     }
+    device_.countFilterBlurTaps(uint64_t{width} * height * BlurPassTaps(pass));
   }
   if (!reduced.reduced()) {
     return current;
@@ -2434,6 +2450,7 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
   current = runResamplePass(arena, current, output, factorX, factorY, edgeMode,
                             gpu::shader::programs::kGaussianBlurKernelUpsample, outputClip);
   if (current) {
+    device_.countFilterBlurTaps(uint64_t{input.width()} * input.height() * 4);
     device_.countReducedResolutionBlur();
   }
   return current;

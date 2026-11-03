@@ -785,6 +785,13 @@ public:
       counters_->filterPixels += pixels;
     }
   }
+  /// Record \p taps input texels read by Gaussian blur passes.
+  /// @param taps Output texels of a pass times the taps each reads.
+  void countFilterBlurTaps(uint64_t taps) const {
+    if (counters_) {
+      counters_->filterBlurTaps += taps;
+    }
+  }
   /// Record one Gaussian blur executed at reduced resolution.
   void countReducedResolutionBlur() const {
     if (counters_) {

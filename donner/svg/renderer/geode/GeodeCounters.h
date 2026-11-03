@@ -163,6 +163,13 @@ struct GeodeCounters {
   /// the device pixel ratio squared.
   uint64_t filterPixels = 0;
 
+  /// Input texels the Gaussian blur passes read this frame: each pass's output texels times the
+  /// taps one of them reads away from the input edges, including the reduced path's averaging and
+  /// enlargement. Blur cost scales with this rather than with \ref filterPixels, because a
+  /// full-resolution pass reads about three deviations' worth of texels on either side of each
+  /// output texel.
+  uint64_t filterBlurTaps = 0;
+
   /// Gaussian blurs (including the blur inside a drop shadow) that ran at reduced resolution: the
   /// input averaged down by a power of two per axis, blurred there, and bilinearly enlarged back
   /// into the full-resolution result. Counted once per blur per tile.
