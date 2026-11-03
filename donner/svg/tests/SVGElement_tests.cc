@@ -754,13 +754,46 @@ TEST_F(SVGElementTests, NonInheritedPresentationAttributeDoesNotPropagateToDesce
   ASSERT_TRUE(sibling.has_value());
 
   doc.registry().clear<components::DirtyFlagsComponent>();
-  parent->setAttribute("opacity", "0.5");
+  parent->setAttribute("flood-color", "red");
 
   const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
 
   EXPECT_EQ(child->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, OpacityWriteRestylesTheSubtreeButNotSiblings) {
+  // A descendant may say `opacity: inherit`, so an opacity write restyles the written element's
+  // subtree; elements outside it stay clean.
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->setAttribute("opacity", "0.5");
+
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::Style));
+
+  const auto* childDirty = child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
+
   EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
 }
 
