@@ -822,6 +822,37 @@ TEST_F(GeodeFilterEngineTest, WideBlurOnLargerSourceStaysWithinPreflight) {
   }
 }
 
+// A reduced blur holds two reduced scratch textures and its full-resolution result, never more
+// than the two full-resolution scratch textures it replaces, and an input too small to save
+// anything stays at full resolution.
+TEST_F(GeodeFilterEngineTest, ReducedBlurRetainsNoMoreThanFullResolution) {
+  using namespace svg::components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 20, .stdDeviationY = 20};
+  graph.nodes.push_back(node);
+  for (const gpu::Extent2d extent : {gpu::Extent2d{64, 64}, gpu::Extent2d{1, 1}}) {
+    SCOPED_TRACE(testing::Message() << extent.width << "x" << extent.height);
+    setSource(gpu::TextureDescriptor{"blur source", extent, gpu::TextureFormat::RGBA8Unorm,
+                                     gpu::TextureUsage::Sampled});
+    std::array<uint64_t, 2> retained{};
+    std::array<uint64_t, 2> reducedBlurs{};
+    for (bool reduced : {true, false}) {
+      engine_->setReducedResolutionBlurForTesting(reduced);
+      GeodeCounters counters;
+      device_->setCounters(&counters);
+      runGraph(graph, "");
+      device_->setCounters(nullptr);
+      retained[reduced ? 0 : 1] = engine_->lastExecutionMemory().textures;
+      reducedBlurs[reduced ? 0 : 1] = counters.reducedResolutionBlurs;
+    }
+    engine_->setReducedResolutionBlurForTesting(true);
+    EXPECT_THAT(reducedBlurs[0], testing::Eq(extent.width > 1 ? 1u : 0u));
+    EXPECT_THAT(reducedBlurs[1], testing::Eq(0u));
+    EXPECT_THAT(retained[0], testing::Le(retained[1]));
+  }
+}
+
 TEST_F(GeodeFilterEngineTest, RepeatedMergeInputReusesItsColorConversion) {
   using namespace svg::components;
   FilterGraph graph;
@@ -866,6 +897,7 @@ std::vector<AllocationRefusalCase> AllocationRefusalCases() {
   using namespace svg::components::filter_primitive;
   const GaussianBlur gaussian{.stdDeviationX = 1, .stdDeviationY = 1};
   const GaussianBlur boxBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  const GaussianBlur reducedBlur{.stdDeviationX = 20, .stdDeviationY = 20};
   const ColorMatrix matrix{.type = ColorMatrix::Type::Saturate, .values = {0.5}};
   const Morphology morphology{.radiusX = 1, .radiusY = 1};
   const ConvolveMatrix convolve{.orderX = 1, .orderY = 1, .kernelMatrix = {0.5}, .divisor = 1};
@@ -883,6 +915,9 @@ std::vector<AllocationRefusalCase> AllocationRefusalCases() {
       {"GaussianSecondScratch", gaussian, "GaussianBlurScratch", false, false, 2},
       {"BoxFirstScratch", boxBlur, "GaussianBlurScratch"},
       {"BoxSecondScratch", boxBlur, "GaussianBlurScratch", false, false, 2},
+      {"ReducedFirstScratch", reducedBlur, "GaussianBlurReducedScratch"},
+      {"ReducedSecondScratch", reducedBlur, "GaussianBlurReducedScratch", false, false, 2},
+      {"ReducedOutput", reducedBlur, "GaussianBlurReducedOutput"},
       {"Flood", Flood{}, "FilterFloodOutput"},
       {"Offset", Offset{.dx = 1}, "FilterOffsetOutput"},
       {"ColorMatrix", matrix, "FilterColorMatrixOutput"},
