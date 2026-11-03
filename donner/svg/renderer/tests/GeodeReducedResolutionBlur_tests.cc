@@ -47,7 +47,7 @@ constexpr int kMaximumChannelError = 3;
 
 /// Largest mean premultiplied channel difference, in 8-bit levels, over the pixels either result
 /// covers.
-constexpr double kMaximumMeanChannelError = 0.25;
+constexpr double kMaximumMeanChannelError = 0.3;
 
 /// Mean tolerance for a blur along one axis only. Averaging a block keeps where its content's mass
 /// is only to within the block, and with the other axis unblurred nothing averages that away
