@@ -822,10 +822,10 @@ TEST_F(GeodeFilterEngineTest, WideBlurOnLargerSourceStaysWithinPreflight) {
   }
 }
 
-// A reduced blur holds two reduced scratch textures and its full-resolution result, never more
-// than the two full-resolution scratch textures it replaces, and an input too small to save
-// anything stays at full resolution.
-TEST_F(GeodeFilterEngineTest, ReducedBlurRetainsNoMoreThanFullResolution) {
+// A reduced blur's two reduced scratch textures and full-resolution result stay within the
+// preflight a blur is admitted with, and an input too small to save anything stays at full
+// resolution.
+TEST_F(GeodeFilterEngineTest, ReducedBlurStaysWithinPreflightAndSkipsTinyInputs) {
   using namespace svg::components;
   FilterGraph graph;
   FilterNode node;
@@ -835,21 +835,17 @@ TEST_F(GeodeFilterEngineTest, ReducedBlurRetainsNoMoreThanFullResolution) {
     SCOPED_TRACE(testing::Message() << extent.width << "x" << extent.height);
     setSource(gpu::TextureDescriptor{"blur source", extent, gpu::TextureFormat::RGBA8Unorm,
                                      gpu::TextureUsage::Sampled});
-    std::array<uint64_t, 2> retained{};
-    std::array<uint64_t, 2> reducedBlurs{};
-    for (bool reduced : {true, false}) {
-      engine_->setReducedResolutionBlurForTesting(reduced);
-      GeodeCounters counters;
-      device_->setCounters(&counters);
-      runGraph(graph, "");
-      device_->setCounters(nullptr);
-      retained[reduced ? 0 : 1] = engine_->lastExecutionMemory().textures;
-      reducedBlurs[reduced ? 0 : 1] = counters.reducedResolutionBlurs;
-    }
-    engine_->setReducedResolutionBlurForTesting(true);
-    EXPECT_THAT(reducedBlurs[0], testing::Eq(extent.width > 1 ? 1u : 0u));
-    EXPECT_THAT(reducedBlurs[1], testing::Eq(0u));
-    EXPECT_THAT(retained[0], testing::Le(retained[1]));
+    GeodeCounters counters;
+    device_->setCounters(&counters);
+    const uint64_t retainedBefore = engine_->retainedBufferBytes();
+    runGraph(graph, "");
+    device_->setCounters(nullptr);
+    EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(extent.width > 1 ? 1u : 0u));
+    uint64_t work = 0;
+    uint64_t estimated = 0;
+    ASSERT_TRUE(FilterGraphExecutionCost(graph, uint64_t{extent.width} * extent.height,
+                                         FilterMemoryModel::GpuAllNodes, work, estimated));
+    EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
   }
 }
 

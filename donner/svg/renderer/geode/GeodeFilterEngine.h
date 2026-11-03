@@ -448,7 +448,8 @@ private:
   /// matching the full-resolution kernel's variance, and bilinearly enlarged into a
   /// full-resolution result. The reduced kernel is the quadratic spline three box passes converge
   /// to, and the reduction keeps the reduced deviation at a few texels or more, so the result
-  /// stays within a small fixed tolerance of the full-resolution blur.
+  /// stays within a small fixed tolerance of the full-resolution blur. Only transparent edges, the
+  /// default, are reduced, and only when both axes together shrink by four or more.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
   /// @param stdDeviationY Standard deviation in Y (pixels).

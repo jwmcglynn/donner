@@ -296,7 +296,6 @@ INSTANTIATE_TEST_SUITE_P(
                     BlurCase{"anisotropic_x", 20, 3}, BlurCase{"anisotropic_y", 1.5, 30},
                     BlurCase{"one_axis", 24, 0, fp::GaussianBlur::EdgeMode::None, false,
                              kMaximumOneAxisMeanChannelError},
-                    BlurCase{"duplicate_edges", 16, 16, fp::GaussianBlur::EdgeMode::Duplicate},
                     BlurCase{"linear_rgb", 16, 16, fp::GaussianBlur::EdgeMode::None, true}),
     [](const testing::TestParamInfo<BlurCase>& info) { return std::string(info.param.name); });
 
@@ -374,14 +373,21 @@ TEST_F(GeodeReducedResolutionBlurTest, SmallBlurIsNotReduced) {
   }
 }
 
-// Wrapping edges never reduce: a reduced texel at the seam would average both edges together.
-TEST_F(GeodeReducedResolutionBlurTest, WrappedBlurIsNotReduced) {
-  const FilterGraph graph = BlurGraph(fp::GaussianBlur{
-      .stdDeviationX = 20, .stdDeviationY = 20, .edgeMode = fp::GaussianBlur::EdgeMode::Wrap});
-  geode::GeodeCounters counters;
-  const RendererBitmap reduced = render(graph, DrawSquare, true, &counters);
-  EXPECT_FALSE(reduced.empty());
-  EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(0u));
+// Only transparent edges reduce: a wrapped reduced texel at the seam would average both edges, and
+// duplicated edges at full resolution clamp each pass's output, which a reduced blur would not
+// reproduce where content touches the edge.
+TEST_F(GeodeReducedResolutionBlurTest, WrappedAndDuplicatedEdgeBlursAreNotReduced) {
+  for (const fp::GaussianBlur::EdgeMode edgeMode :
+       {fp::GaussianBlur::EdgeMode::Wrap, fp::GaussianBlur::EdgeMode::Duplicate}) {
+    SCOPED_TRACE(static_cast<int>(edgeMode));
+    const FilterGraph graph =
+        BlurGraph(fp::GaussianBlur{.stdDeviationX = 20, .stdDeviationY = 20, .edgeMode = edgeMode});
+    geode::GeodeCounters counters;
+    const RendererBitmap reduced = render(graph, DrawEdgeTouching, true, &counters);
+    EXPECT_FALSE(reduced.empty());
+    EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(0u));
+    EXPECT_THAT(Compare(reduced, render(graph, DrawEdgeTouching, false)).maximum, testing::Eq(0));
+  }
 }
 
 // The counters report the filter's work. A 320x320 layer blurred at deviation 16 is reduced by four

@@ -1594,11 +1594,14 @@ double ReducedBlurWidth(double deviation, uint32_t factor) {
   return 2.0 * std::sqrt(std::max(remaining, 0.0)) / scale;
 }
 
-/// Reduction for a blur of \p deviationX by \p deviationY device pixels. Wrapping edges are never
-/// reduced: a reduced texel straddling the wrap seam would mix both edges.
-ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool wrapEdges) {
+/// Reduction for a blur of \p deviationX by \p deviationY device pixels. Only transparent edges,
+/// the default, are reduced. A wrapped reduced texel straddling the seam would mix both edges, and
+/// the full-resolution duplicate mode clamps each box pass's own output at the edge rather than
+/// extending the input, which a reduced blur clamping its own passes does not reproduce within
+/// the tolerance when content touches the edge.
+ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool transparentEdges) {
   ReducedBlurPlan plan;
-  if (wrapEdges) {
+  if (!transparentEdges) {
     return plan;
   }
   const std::array<double, 2> deviations{deviationX, deviationY};
@@ -2405,7 +2408,7 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
   ReducedBlurPlan reduced =
       reducedResolutionBlur_
           ? PlanReducedBlur(stdDeviationX, stdDeviationY,
-                            edgeMode == gpu::shader::programs::kGaussianBlurEdgeWrap)
+                            edgeMode == gpu::shader::programs::kGaussianBlurEdgeTransparent)
           : ReducedBlurPlan{};
   // A reduced axis keeps one block of apron on either side, so the reduced blur spreads content
   // past the input edge into it and the enlargement near the edge interpolates toward that spill,
