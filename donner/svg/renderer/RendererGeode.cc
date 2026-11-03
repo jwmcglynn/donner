@@ -3226,9 +3226,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// what the surface budget still holds.
   [[nodiscard]] bool spriteCaptureFits(std::uint64_t bytes) const {
     const bool withinShare =
-        spriteCapturesThisFrame == 0 ||
-        spriteCaptureBytesThisFrame + bytes <=
-            surfaceBudget->limitBytes() / kSpriteCaptureBudgetShare;
+        spriteCapturesThisFrame == 0 || spriteCaptureBytesThisFrame + bytes <=
+                                            surfaceBudget->limitBytes() / kSpriteCaptureBudgetShare;
     return withinShare && surfaceBudget->canReserveBytes(bytes, 1);
   }
 
