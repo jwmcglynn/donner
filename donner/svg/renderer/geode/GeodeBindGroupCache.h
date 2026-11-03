@@ -215,58 +215,65 @@ private:
   /// pointers into it stay valid until \ref evict releases it.
   void retireOverCapacityLocked(uint64_t retirableBefore) {
     const std::size_t live = views_.size() + bindGroups_.size();
-    if (live < maximumEntries_) {
+    if (!scanWorthwhileLocked(live, retirableBefore)) {
       return;
     }
-    // A scan that found too little to retire stays fruitless until something new becomes
-    // retirable (a later generation) or enough entries arrive to be worth another pass, so a
-    // heavy frame past the cap does not rescan every live entry on each insertion.
-    if (retirableBefore == fruitlessScanBefore_ &&
-        live < fruitlessScanLive_ + maximumEntries_ / 4) {
-      return;
-    }
-    const std::size_t target = maximumEntries_ - maximumEntries_ / 4;
     std::vector<uint64_t> stamps;
     stamps.reserve(live);
-    for (const auto& item : views_) {
-      if (item.second.stamp < retirableBefore) {
-        stamps.push_back(item.second.stamp);
-      }
-    }
-    for (const auto& item : bindGroups_) {
-      if (item.second.stamp < retirableBefore) {
-        stamps.push_back(item.second.stamp);
-      }
-    }
+    AppendRetirableStamps(views_, retirableBefore, stamps);
+    AppendRetirableStamps(bindGroups_, retirableBefore, stamps);
+    const std::size_t target = maximumEntries_ - maximumEntries_ / 4;
     const std::size_t wanted = live - std::min(live, target);
     const std::size_t retireCount = std::min(stamps.size(), wanted);
-    if (retireCount < wanted) {
-      fruitlessScanBefore_ = retirableBefore;
-      fruitlessScanLive_ = live;
-    } else {
-      fruitlessScanBefore_ = ~uint64_t{0};
-    }
+    // Remember a scan that cannot reach its target, so the next insertions skip it.
+    fruitlessScanBefore_ = retireCount < wanted ? retirableBefore : ~uint64_t{0};
+    fruitlessScanLive_ = live;
     if (retireCount == 0) {
       return;
     }
     std::nth_element(stamps.begin(), stamps.begin() + static_cast<std::ptrdiff_t>(retireCount - 1),
                      stamps.end());
-    const uint64_t cutoff = stamps[retireCount - 1];
-    std::size_t retired = 0;
-    for (auto it = views_.begin(); it != views_.end() && retired < retireCount;) {
-      const auto current = it++;
-      if (current->second.stamp <= cutoff && current->second.stamp < retirableBefore) {
-        retiredViews_.push_back(views_.extract(current));
-        ++retired;
+    const uint64_t cutoff = std::min(stamps[retireCount - 1], retirableBefore - 1);
+    const std::size_t retired = RetireNodes(views_, retiredViews_, cutoff, retireCount);
+    (void)RetireNodes(bindGroups_, retiredBindGroups_, cutoff, retireCount - retired);
+  }
+
+  /// Whether an insertion at \p live entries should scan for entries to retire: only past the
+  /// cap, and not again after a scan that found too little until something new becomes
+  /// retirable (a later generation) or enough entries arrive to be worth another pass, so a
+  /// heavy frame past the cap does not rescan every live entry on each insertion.
+  [[nodiscard]] bool scanWorthwhileLocked(std::size_t live, uint64_t retirableBefore) const {
+    if (live < maximumEntries_) {
+      return false;
+    }
+    return retirableBefore != fruitlessScanBefore_ ||
+           live >= fruitlessScanLive_ + maximumEntries_ / 4;
+  }
+
+  /// Append the stamps of \p map's entries stamped before \p retirableBefore to \p stamps.
+  template <typename Map>
+  static void AppendRetirableStamps(const Map& map, uint64_t retirableBefore,
+                                    std::vector<uint64_t>& stamps) {
+    for (const auto& item : map) {
+      if (item.second.stamp < retirableBefore) {
+        stamps.push_back(item.second.stamp);
       }
     }
-    for (auto it = bindGroups_.begin(); it != bindGroups_.end() && retired < retireCount;) {
+  }
+
+  /// Extract up to \p count of \p map's entries stamped at or before \p cutoff into \p retired.
+  /// @return How many were extracted.
+  template <typename Map, typename Retired>
+  static std::size_t RetireNodes(Map& map, Retired& retired, uint64_t cutoff, std::size_t count) {
+    std::size_t moved = 0;
+    for (auto it = map.begin(); it != map.end() && moved < count;) {
       const auto current = it++;
-      if (current->second.stamp <= cutoff && current->second.stamp < retirableBefore) {
-        retiredBindGroups_.push_back(bindGroups_.extract(current));
-        ++retired;
+      if (current->second.stamp <= cutoff) {
+        retired.push_back(map.extract(current));
+        ++moved;
       }
     }
+    return moved;
   }
 
   mutable std::mutex mutex_;
