@@ -754,7 +754,7 @@ TEST_F(SVGElementTests, NonInheritedPresentationAttributeDoesNotPropagateToDesce
   ASSERT_TRUE(sibling.has_value());
 
   doc.registry().clear<components::DirtyFlagsComponent>();
-  parent->setAttribute("flood-color", "red");
+  parent->setAttribute("flood-opacity", "0.5");
 
   const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);

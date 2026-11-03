@@ -118,8 +118,11 @@ bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
   if (Has(flags, DirtyFlagsComponent::Layout)) {
     // A viewport change reaches every descendant's lengths, and recomputing the layout reads the
     // entity's computed style.
+    // An entity also flagged Style has its computed style recreated by the selective restyle,
+    // which ApplyRetainedUpdate runs before recomputing layout.
     if (registry.all_of<ViewBoxComponent>(entity) ||
-        !registry.all_of<ComputedStyleComponent>(entity)) {
+        (!registry.all_of<ComputedStyleComponent>(entity) &&
+         !Has(flags, DirtyFlagsComponent::Style))) {
       return false;
     }
     plan.layoutEntities.push_back(entity);
