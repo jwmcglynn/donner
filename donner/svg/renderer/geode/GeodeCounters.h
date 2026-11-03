@@ -157,10 +157,9 @@ struct GeodeCounters {
   /// set does not fit and every frame repays the upload.
   uint64_t glyphResidencyEvictions = 0;
 
-  /// Texels written by filter compute passes this frame: the output extent of every dispatch the
-  /// filter engine records, summed across primitives, intermediate passes and tiles. This is the
-  /// frame's filter fill work, so it falls when a blur runs at reduced resolution and grows with
-  /// the device pixel ratio squared.
+  /// Texels written by filter compute passes this frame: the output extent of every compute
+  /// dispatch the filter engine records, summed across primitives, intermediate passes and tiles.
+  /// Texture copies and clears are not counted. It grows with the device pixel ratio squared.
   uint64_t filterPixels = 0;
 
   /// Input texels the Gaussian blur passes read this frame: each pass's output texels times the

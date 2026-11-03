@@ -297,13 +297,13 @@ struct FilterExecutionMemory {
 };
 
 /// Reduced-resolution blur grid: each axis is reduced by a power-of-two factor, and its blocks
-/// start a phase of texels before the working texture's first texel so they line up with the
-/// untiled source.
+/// start a phase of texels before the working texture's first texel: one block of apron past the
+/// edge, plus the offset that lines the blocks up with the untiled source.
 struct ResampleGrid {
   uint32_t factorX = 1;  //!< Horizontal reduction, in [1, 16].
   uint32_t factorY = 1;  //!< Vertical reduction, in [1, 16].
-  uint32_t phaseX = 0;   //!< Horizontal block phase, below \ref factorX.
-  uint32_t phaseY = 0;   //!< Vertical block phase, below \ref factorY.
+  uint32_t phaseX = 0;   //!< Horizontal block phase, below twice \ref factorX.
+  uint32_t phaseY = 0;   //!< Vertical block phase, below twice \ref factorY.
 };
 
 /**
@@ -453,10 +453,10 @@ private:
   /// @param stdDeviationX Standard deviation in X (pixels).
   /// @param stdDeviationY Standard deviation in Y (pixels).
   /// @param edgeMode A `kGaussianBlurEdge*` edge mode.
-  /// @return The blurred texture.
   /// @param outputClip Optional output clip, in input texels.
   /// @param gridOrigin Position of \p input's first texel on the untiled source grid, which
   ///   reduced blocks align to.
+  /// @return The blurred texture.
   FilterTexture applyGaussianBlur(FilterResourceArena& arena, FilterTexture input,
                                   double stdDeviationX, double stdDeviationY, uint32_t edgeMode,
                                   const Box2d* outputClip, gpu::Origin2d gridOrigin);

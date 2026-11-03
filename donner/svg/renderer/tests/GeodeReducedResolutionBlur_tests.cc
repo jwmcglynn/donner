@@ -167,6 +167,14 @@ void DrawThinLines(RendererGeode& renderer) {
   }
 }
 
+/// Content touching three edges of the filter region, so the blur spills past the raster edge.
+void DrawEdgeTouching(RendererGeode& renderer) {
+  renderer.setPaint(SolidFill(css::RGBA(30, 90, 200, 255)));
+  renderer.drawRect(Box2d({-4, -4}, {kViewport + 4.0, 150}), StrokeParams{});
+  renderer.setPaint(SolidFill(css::RGBA(240, 200, 40, 200)));
+  renderer.drawEllipse(Box2d({250, 200}, {kViewport + 40.0, 340}), StrokeParams{});
+}
+
 /// A two-pixel checkerboard in two colors. Its average is what a wide blur converges to, so the
 /// colors keep that average off a half-level rounding boundary, where the two results would round
 /// apart by a level over the whole blurred interior while agreeing to within float precision.
@@ -198,17 +206,19 @@ protected:
   /// Renders \p scene through \p graph over the whole viewport scaled by \p scale.
   /// @param reduced Whether reduced-resolution blur is allowed.
   /// @param counters Receives the frame's counters when non-null.
+  /// @param size Square viewport size in pixels.
   RendererBitmap render(const FilterGraph& graph, const Scene& scene, bool reduced,
                         geode::GeodeCounters* counters = nullptr, double scale = 1.0,
-                        const std::shared_ptr<geode::GeodeDevice>& device = SharedDevice()) {
+                        const std::shared_ptr<geode::GeodeDevice>& device = SharedDevice(),
+                        int size = kViewport) {
     device->filterEngine().setReducedResolutionBlurForTesting(reduced);
     RendererGeode renderer(device);
     RenderViewport viewport;
-    viewport.size = Vector2d(kViewport, kViewport);
+    viewport.size = Vector2d(size, size);
     viewport.devicePixelRatio = 1.0;
     renderer.beginFrame(viewport);
     renderer.setTransform(Transform2d::Scale(scale));
-    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewport / scale, kViewport / scale}));
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {size / scale, size / scale}));
     renderer.setTransform(Transform2d());
     scene(renderer);
     renderer.popFilterLayer();
@@ -269,7 +279,8 @@ TEST_P(ReducedBlurErrorTest, StaysWithinToleranceOfFullResolution) {
        std::vector<std::pair<std::string, Scene>>{{"square", DrawSquare},
                                                   {"disc", DrawDisc},
                                                   {"thin_lines", DrawThinLines},
-                                                  {"checker", DrawChecker}}) {
+                                                  {"checker", DrawChecker},
+                                                  {"edge_touching", DrawEdgeTouching}}) {
     SCOPED_TRACE(sceneName);
     const ImageError error = measure(graph, scene, std::string(test.name) + "/" + sceneName);
     EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));
@@ -345,10 +356,13 @@ TEST_F(GeodeReducedResolutionBlurTest, UnblurredSourceInAGlowStaysFullResolution
 // Below the threshold nothing changes: the reduced path is not taken and the output is bitwise
 // the full-resolution one.
 TEST_F(GeodeReducedResolutionBlurTest, SmallBlurIsNotReduced) {
-  for (double deviation : {2.0, 4.0, 5.9}) {
-    SCOPED_TRACE(deviation);
+  // Below six on both axes nothing reduces, and a reduction by two along one axis only would save
+  // too little to pay for its two extra passes.
+  for (const auto& [deviationX, deviationY] : std::vector<std::pair<double, double>>{
+           {2.0, 2.0}, {4.0, 4.0}, {5.9, 5.9}, {8.0, 0.0}, {3.0, 10.0}}) {
+    SCOPED_TRACE(testing::Message() << deviationX << "," << deviationY);
     const FilterGraph graph =
-        BlurGraph(fp::GaussianBlur{.stdDeviationX = deviation, .stdDeviationY = deviation});
+        BlurGraph(fp::GaussianBlur{.stdDeviationX = deviationX, .stdDeviationY = deviationY});
     geode::GeodeCounters reducedCounters;
     geode::GeodeCounters fullCounters;
     const RendererBitmap reduced = render(graph, DrawDisc, true, &reducedCounters);
@@ -373,8 +387,8 @@ TEST_F(GeodeReducedResolutionBlurTest, WrappedBlurIsNotReduced) {
 // The counters report the filter's work. A 320x320 layer blurred at deviation 16 is reduced by four
 // on both axes. At full resolution each axis is one pass of the three-box cascade over the layer,
 // whose 30-texel window reads 89 texels per output texel. Reduced, the layer is averaged down to
-// 80x80 (16 reads each), blurred there with a 7.52-texel spline per axis (25 reads each), and
-// enlarged back to 320x320 (4 reads each).
+// 82x82 (80 blocks plus an apron block each side, 16 reads each), blurred there with a
+// 7.52-texel spline per axis (25 reads each), and enlarged back to 320x320 (4 reads each).
 TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
   const FilterGraph graph = BlurGraph(fp::GaussianBlur{.stdDeviationX = 16, .stdDeviationY = 16});
   geode::GeodeCounters reduced;
@@ -382,7 +396,8 @@ TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
   render(graph, DrawSquare, true, &reduced);
   render(graph, DrawSquare, false, &full);
   constexpr uint64_t kLayer = uint64_t{kViewport} * kViewport;
-  constexpr uint64_t kReducedLayer = kLayer / 16;
+  // 320 / 4 blocks plus one block of apron on either side.
+  constexpr uint64_t kReducedLayer = uint64_t{82} * 82;
   EXPECT_THAT(reduced.reducedResolutionBlurs, testing::Eq(1u));
   EXPECT_THAT(full.reducedResolutionBlurs, testing::Eq(0u));
   EXPECT_THAT(full.filterBlurTaps, testing::Eq(2 * kLayer * 89));
@@ -395,25 +410,37 @@ TEST_F(GeodeReducedResolutionBlurTest, CountersReportReducedFilterWork) {
 }
 
 // Tiled execution reduces each tile on the untiled execution's block grid, and the halo covers the
-// reduced kernel, so the tiles reproduce the untiled reduced blur exactly.
+// reduced kernel, so the tiles reproduce the untiled reduced blur exactly. The odd 317-pixel layer
+// leaves a partial block at its far edge, and the tile extents are chosen so tiles start at
+// origins that are not multiples of the reduction factor, which exercises the blocks' phase.
 TEST_F(GeodeReducedResolutionBlurTest, TiledReducedBlurMatchesUntiledReducedBlur) {
-  for (double deviation : {10.0, 24.0}) {
+  constexpr int kSize = 317;
+  for (const auto& [deviation, extent] :
+       std::vector<std::pair<double, uint32_t>>{{10.0, 160}, {24.0, 240}}) {
     SCOPED_TRACE(deviation);
     const FilterGraph graph =
         BlurGraph(fp::GaussianBlur{.stdDeviationX = deviation, .stdDeviationY = deviation});
     std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
     ASSERT_THAT(tiledDevice, testing::NotNull());
-    tiledDevice->filterEngine().setMaximumTileExtentForTesting(304);
-    geode::GeodeCounters counters;
-    const RendererBitmap tiled = render(graph, DrawDisc, true, &counters, 1.0, tiledDevice);
-    const uint64_t tiles = tiledDevice->filterEngine().lastExecutionMemory().tileExecutions;
-    ASSERT_THAT(tiles, testing::Gt(1u));
-    EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(tiles));
-    const RendererBitmap untiled = render(graph, DrawDisc, true);
-    EXPECT_THAT(Compare(tiled, untiled).maximum, testing::Eq(0));
-    const ImageError error = Compare(tiled, render(graph, DrawDisc, false));
-    EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));
-    EXPECT_THAT(error.mean, testing::Le(kMaximumMeanChannelError));
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(extent);
+    for (const auto& [sceneName, scene] : std::vector<std::pair<std::string, Scene>>{
+             {"disc", DrawDisc}, {"edge_touching", DrawEdgeTouching}}) {
+      SCOPED_TRACE(sceneName);
+      geode::GeodeCounters counters;
+      const RendererBitmap tiled = render(graph, scene, true, &counters, 1.0, tiledDevice, kSize);
+      const uint64_t tiles = tiledDevice->filterEngine().lastExecutionMemory().tileExecutions;
+      ASSERT_THAT(tiles, testing::Gt(2u));
+      EXPECT_THAT(counters.reducedResolutionBlurs, testing::Eq(tiles));
+      const RendererBitmap untiled =
+          render(graph, scene, true, nullptr, 1.0, SharedDevice(), kSize);
+      EXPECT_THAT(Compare(tiled, untiled).maximum, testing::Eq(0));
+      const ImageError error =
+          Compare(tiled, render(graph, scene, false, nullptr, 1.0, SharedDevice(), kSize));
+      std::cout << "reduced blur error tiled_sigma" << deviation << "/" << sceneName << ": max "
+                << error.maximum << " at " << error.worst << " mean " << error.mean << "\n";
+      EXPECT_THAT(error.maximum, testing::Le(kMaximumChannelError));
+      EXPECT_THAT(error.mean, testing::Le(kMaximumMeanChannelError));
+    }
   }
 }
 

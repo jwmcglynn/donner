@@ -1612,19 +1612,26 @@ ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool wrapE
       plan.widths[axis] = ReducedBlurWidth(deviation, plan.factors[axis]);
     }
   }
+  // Reducing by two along one axis only would save little, at the cost of two extra passes.
+  if (plan.factors[0] * plan.factors[1] < 4) {
+    return ReducedBlurPlan{};
+  }
   return plan;
 }
 
-/// Device pixels a reduced blur along one axis reads on either side of an output texel: the
-/// reduced spline's taps plus the reduced texel each bilinear tap and block average spans, and one
-/// more for the blocks' alignment to the untiled grid.
+/// Device pixels a reduced blur along one axis reads on either side of an output texel. The texel
+/// lies in one reduced block, its bilinear taps reach the neighbouring block, the spline's taps
+/// reach `radius` blocks beyond that, and each block spans \p factor texels, so the farthest texel
+/// read is `(radius + 2) * factor - 1` away whatever the block alignment. The radius is computed
+/// in single precision exactly as the blur program computes it.
 double ReducedBlurSupport(double deviation) {
   const uint32_t factor = ReducedBlurFactor(deviation);
   if (factor == 1) {
     return 0.0;
   }
-  const double radius = std::min(std::ceil(1.5 * ReducedBlurWidth(deviation, factor)), 127.0);
-  return (radius + 3.0) * factor;
+  const float width = static_cast<float>(ReducedBlurWidth(deviation, factor));
+  const double radius = std::min(std::ceil(1.5f * width), 127.0f);
+  return (radius + 2.0) * factor - 1.0;
 }
 
 /// Conservative sampling support of one graph in device pixels.
@@ -2400,23 +2407,34 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
           ? PlanReducedBlur(stdDeviationX, stdDeviationY,
                             edgeMode == gpu::shader::programs::kGaussianBlurEdgeWrap)
           : ReducedBlurPlan{};
-  const auto reducedExtent = [&](uint32_t size, uint32_t origin, uint32_t factor) {
-    return (size + origin % factor + factor - 1) / factor;
+  // A reduced axis keeps one block of apron on either side, so the reduced blur spreads content
+  // past the input edge into it and the enlargement near the edge interpolates toward that spill,
+  // as a full-resolution blur with room past the edge would.
+  const auto blockPhase = [](uint32_t origin, uint32_t factor) {
+    return factor > 1 ? origin % factor + factor : 0u;
   };
-  // The reduced path holds two reduced scratch textures and the full-resolution result where the
-  // full-resolution path holds two full-resolution scratch textures. Keep it only when that is no
-  // more memory, which also leaves inputs a few blocks across at full resolution.
+  const auto reducedExtent = [](uint32_t size, uint32_t phase, uint32_t factor) {
+    return (size + phase + factor - 1) / factor + (factor > 1 ? 1u : 0u);
+  };
+  // The reduced path holds two reduced scratch textures and the full-resolution result; the
+  // filter preflight budgets three full-resolution textures for a blur. Keep the reduction only
+  // while its scratch fits in two of them, which leaves inputs a few blocks across at full
+  // resolution.
   if (reduced.reduced() &&
-      2 * uint64_t{reducedExtent(input.width(), gridOrigin.x, reduced.factors[0])} *
-              reducedExtent(input.height(), gridOrigin.y, reduced.factors[1]) >
-          uint64_t{input.width()} * input.height()) {
+      2 *
+              uint64_t{reducedExtent(input.width(), blockPhase(gridOrigin.x, reduced.factors[0]),
+                                     reduced.factors[0])} *
+              reducedExtent(input.height(), blockPhase(gridOrigin.y, reduced.factors[1]),
+                            reduced.factors[1]) >
+          2 * uint64_t{input.width()} * input.height()) {
     reduced = ReducedBlurPlan{};
   }
   const uint32_t factorX = reduced.factors[0];
   const uint32_t factorY = reduced.factors[1];
-  const ResampleGrid grid{factorX, factorY, gridOrigin.x % factorX, gridOrigin.y % factorY};
-  const uint32_t width = reducedExtent(input.width(), gridOrigin.x, factorX);
-  const uint32_t height = reducedExtent(input.height(), gridOrigin.y, factorY);
+  const ResampleGrid grid{factorX, factorY, blockPhase(gridOrigin.x, factorX),
+                          blockPhase(gridOrigin.y, factorY)};
+  const uint32_t width = reducedExtent(input.width(), grid.phaseX, factorX);
+  const uint32_t height = reducedExtent(input.height(), grid.phaseY, factorY);
   FilterTexture current = input;
   std::array<FilterTexture, 2> scratch{};
   BlurDispatchPlan plan = CreateBlurDispatchPlan(factorX == 1 ? stdDeviationX : 0.0,
