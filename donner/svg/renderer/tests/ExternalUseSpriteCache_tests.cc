@@ -60,6 +60,12 @@ constexpr std::string_view kSheet = R"svg(
     </filter>
     <g id="blurred"><g filter="url(#wide)"><circle cx="16" cy="16" r="8" fill="#8040c0"/>
       <rect x="10" y="20" width="12" height="4" fill="#40c080"/></g></g>
+    <g id="inheritor" style="opacity: inherit"><rect width="20" height="20" fill="#e06020"/></g>
+    <symbol id="blursym" viewBox="0 0 16 16">
+      <g filter="url(#blur)"><circle cx="8" cy="8" r="4" fill="#2060e0"/></g>
+      <rect x="2" y="2" width="4" height="4" fill="#e0e020"/>
+    </symbol>
+    <g id="imaged"><image width="8" height="8" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></g>
     <g id="blended"><rect width="20" height="20" fill="#20c0c0" style="mix-blend-mode: multiply"/></g>
     <g id="text"><text x="2" y="20" font-size="12">Ab</text></g>
   </svg>)svg";
@@ -233,6 +239,10 @@ TEST(ExternalUseSpriteCacheTest, FractionalMotionStaysInItsBucket) {
   for (int frame = 0; frame < 3; ++frame) {
     (void)Draw(*renderer, *scene);
   }
+  ASSERT_EQ(Draw(*renderer, *scene).spriteHits, 1u);
+  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), RenderUncached(*scene),
+                                       "sprite-at-recorded-translation",
+                                       editor::tests::PixelmatchIdentityParams());
   scene->uses[0].setTransform(Transform2d::Translate(moved));
   ASSERT_EQ(Draw(*renderer, *scene).spriteHits, 1u);
   const RendererBitmap cached = renderer->takeSnapshot();
@@ -426,6 +436,124 @@ void ExpectNeverCached(std::string_view fragment, std::string_view useAttributes
     EXPECT_EQ(work.spriteRecords, 0u) << label;
   }
   ExpectMatchesUncached(*renderer, *scene, label);
+}
+
+TEST(ExternalUseSpriteCacheTest, ImageIsNotCached) {
+  REQUIRE_CACHING_BACKEND();
+  ExpectNeverCached("imaged", "", "sprite-image");
+}
+
+// `opacity: inherit` on the referenced root reads the `<use>` element's own opacity, which the
+// occurrence inputs leave out, so such a sprite is never cached.
+TEST(ExternalUseSpriteCacheTest, InheritOfANonInheritedPropertyIsNotCached) {
+  REQUIRE_CACHING_BACKEND();
+  std::optional<SpriteScene> scene = MakeScene(3, "inheritor", R"(opacity="0.5")");
+  ASSERT_TRUE(scene.has_value());
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  PlaceAll(*scene, 0, 1.0);
+  for (int frame = 0; frame < 3; ++frame) {
+    EXPECT_EQ(Draw(*renderer, *scene).spriteHits, 0u);
+  }
+  ExpectMatchesUncached(*renderer, *scene, "sprite-inherit-opacity");
+  scene->uses[1].setAttribute("opacity", "0.9");
+  (void)Draw(*renderer, *scene);
+  ExpectMatchesUncached(*renderer, *scene, "sprite-inherit-opacity-changed");
+}
+
+/// Draws \p host over the test sheet for a few frames with a caching renderer and requires the
+/// last frame to match an uncached render exactly; returns the sprite hits of the last frame.
+std::size_t ExpectHostMatchesUncached(std::string_view host, std::string_view label) {
+  std::optional<ExternalUseDocument> document =
+      MakeExternalUseDocument(host, std::string(kSheet));
+  EXPECT_TRUE(document.has_value());
+  if (!document) {
+    return 0;
+  }
+  SpriteScene scene{std::move(*document), {}};
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::size_t hits = 0;
+  for (int frame = 0; frame < 4; ++frame) {
+    hits = Draw(*renderer, scene).spriteHits;
+  }
+  ExpectMatchesUncached(*renderer, scene, label);
+  return hits;
+}
+
+// A size the `<use>` gets from CSS is part of what the occurrence renders: uses of one symbol
+// sized by attributes and by a stylesheet each match an uncached render.
+TEST(ExternalUseSpriteCacheTest, CssSizeOnTheUseMatchesUncached) {
+  REQUIRE_CACHING_BACKEND();
+  (void)ExpectHostMatchesUncached(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">
+        <style>.big { width: 48px; height: 48px }</style>
+        <use href="sprites.svg#symbol" width="32" height="32" transform="translate(10 10)"/>
+        <use class="big" href="sprites.svg#symbol" width="32" height="32"
+             transform="translate(60 10)"/>
+        <use href="sprites.svg#symbol" width="32" height="32" transform="translate(120 10)"/>
+        <use class="big" href="sprites.svg#symbol" width="32" height="32"
+             transform="translate(170 10)"/>
+      </svg>)svg",
+      "sprite-css-size");
+}
+
+// A size in viewport units resolves against the host's viewport, so resizing the host canvas
+// rasterizes again.
+TEST(ExternalUseSpriteCacheTest, ViewportUnitSizeFollowsTheHostViewport) {
+  REQUIRE_CACHING_BACKEND();
+  std::optional<SpriteScene> scene = MakeScene(3, "symbol", R"(width="10vw" height="10vw")");
+  ASSERT_TRUE(scene.has_value());
+  ExpectMutationRerasterizes(*scene, "sprite-vw-resize", [](SpriteScene& s) {
+    s.host.document.setCanvasSize(kHostWidth * 3 / 2, kHostHeight * 3 / 2);
+  });
+}
+
+// A clip around the `<use>` in the host applies to the cached sprite as it does to its content.
+TEST(ExternalUseSpriteCacheTest, HostClipAroundTheUseMatchesUncached) {
+  REQUIRE_CACHING_BACKEND();
+  EXPECT_GT(ExpectHostMatchesUncached(
+                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">
+        <clipPath id="hostclip"><circle cx="100" cy="40" r="60"/></clipPath>
+        <g clip-path="url(#hostclip)">
+          <use href="sprites.svg#sprite-0" transform="translate(40 20)"/>
+          <use href="sprites.svg#sprite-0" transform="translate(80 20)"/>
+          <use href="sprites.svg#sprite-0" transform="translate(120 20)"/>
+        </g>
+      </svg>)svg",
+                "sprite-host-clip"),
+            0u);
+}
+
+// Inside a host filter the occurrences draw uncached, through the host filter.
+TEST(ExternalUseSpriteCacheTest, HostFilterAroundTheUseDrawsUncached) {
+  REQUIRE_CACHING_BACKEND();
+  EXPECT_EQ(ExpectHostMatchesUncached(
+                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192">
+        <filter id="hostblur"><feGaussianBlur stdDeviation="1"/></filter>
+        <g filter="url(#hostblur)">
+          <use href="sprites.svg#sprite-0" transform="translate(40 20)"/>
+          <use href="sprites.svg#sprite-0" transform="translate(80 20)"/>
+          <use href="sprites.svg#sprite-0" transform="translate(120 20)"/>
+        </g>
+      </svg>)svg",
+                "sprite-host-filter"),
+            0u);
+}
+
+// A `<symbol>` whose viewBox scales its content, with a blurred child, moving by fractions of a
+// pixel: within the bucket quantization bound of an uncached render.
+TEST(ExternalUseSpriteCacheTest, ScaledSymbolWithBlurAtFractionalOffsets) {
+  REQUIRE_CACHING_BACKEND();
+  std::optional<SpriteScene> scene = MakeScene(3, "blursym", R"(width="32" height="32")");
+  ASSERT_TRUE(scene.has_value());
+  std::unique_ptr<RendererInterface> renderer = MakeCachingRenderer();
+  std::size_t hits = 0;
+  for (int frame = 0; frame < 8; ++frame) {
+    PlaceAll(*scene, frame, 1.37);
+    hits += Draw(*renderer, *scene).spriteHits;
+  }
+  EXPECT_GT(hits, 0u);
+  ExpectMatchesUncached(*renderer, *scene, "sprite-scaled-symbol-blur",
+                        editor::tests::ApprovedPixelToleranceParams(0.1f, 160));
 }
 
 TEST(ExternalUseSpriteCacheTest, BackdropBlendIsNotCached) {

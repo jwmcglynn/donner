@@ -1197,7 +1197,10 @@ donner_cc_test(
     # synchronization validation. Match the transitioned wrapper's bounded limit.
     size = "large",
     timeout = "long",
-    srcs = ["RendererGeode_tests.cc"],
+    srcs = [
+        "ExternalUseSpriteCacheGeode_tests.cc",
+        "RendererGeode_tests.cc",
+    ],
     # Geode pulls in Dawn; gate behind the same enable_geode flag the rest of
     # the geode/ targets use.
     target_compatible_with = select({
@@ -1205,6 +1208,7 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":external_use_sprite_scene",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
