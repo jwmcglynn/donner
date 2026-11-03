@@ -47,6 +47,19 @@ namespace donner::svg::compositor {
 
 namespace {
 
+/// Whether any entity still carries a `Style` dirty flag from a write the next prepare has not
+/// consumed yet.
+bool HasPendingStyleWrite(const Registry& registry) {
+  const auto dirtyView = registry.view<const components::DirtyFlagsComponent>();
+  for (const Entity entity : dirtyView) {
+    if ((dirtyView.get<const components::DirtyFlagsComponent>(entity).flags &
+         components::DirtyFlagsComponent::Style) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 class ScopedFrameResourceBudget {
 public:
   explicit ScopedFrameResourceBudget(RendererInterface& renderer) : renderer_(renderer) {
@@ -306,6 +319,12 @@ std::optional<CompositorController::PromoteResult> CompositorController::validat
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   // Structural and selector edits can invalidate cached subtree ranges and style handles.
   if (state && state->hasBeenBuilt && (state->needsFullRebuild || state->needsFullStyleRecompute)) {
+    return refusePromotion(entity, PromoteRefusalReason::None);
+  }
+  // A retained attribute write (for example `opacity`) restyles only the written subtree at the
+  // next prepare and sets neither flag above, so pending style-dirty entities mean the same thing:
+  // computed styles and instances are stale until the document is prepared again.
+  if (state && state->hasBeenBuilt && HasPendingStyleWrite(registry)) {
     return refusePromotion(entity, PromoteRefusalReason::None);
   }
   return std::nullopt;
