@@ -2365,6 +2365,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     counters.framesInFlight = framePacer.framesInFlight(backend);
   }
 
+  /// Recycle \ref frameArenas at the end of a frame. No encoder allocates from them any more and
+  /// their work is submitted; a frame whose submission or uploads failed starts the next one from
+  /// fresh buffers.
+  /// @param submitted Whether the frame's command buffers were submitted.
+  void recycleFrameArenasAfterSubmission(bool submitted) {
+    frameArenas.recycle(/*discardBuffers=*/!submitted || frameArenaWriteFailed);
+  }
+
   /// Apply the renderer-wide encoder configuration shared by every encoder
   /// this renderer constructs: arena buffer recycling and the antialias mode.
   void configureEncoder(geode::GeoEncoder& encoderToConfigure) {
@@ -6430,9 +6438,7 @@ void RendererGeode::endFrame() {
     impl_->frameGpuEncoders.clear();
     impl_->frameFinishedEncoders.clear();
     impl_->frameCommandBuffers.clear();
-    // No encoder allocates from the frame's arenas any more and their work is submitted; a frame
-    // whose submission or uploads failed starts the next one from fresh buffers.
-    impl_->frameArenas.recycle(/*discardBuffers=*/!submitted || impl_->frameArenaWriteFailed);
+    impl_->recycleFrameArenasAfterSubmission(submitted);
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
     impl_->frameImportedTextureViews.clear();

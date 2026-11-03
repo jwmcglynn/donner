@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <latch>
 #include <limits>
@@ -3021,10 +3022,18 @@ TEST_F(RendererGeodeTest, BindGroupCacheAgesWhileRenderersFramesOverlap) {
       << "Entries no open frame can name are released even though frames always overlap";
 }
 
+/// Restores a cap lowered on the shared device's caches when the test leaves, however it leaves.
+struct ScopedCacheCap {
+  std::function<void()> restore;
+  ~ScopedCacheCap() { restore(); }
+};
+
 TEST_F(RendererGeodeTest, BindGroupCacheCapNeverRetiresWhatAnOpenFrameNamed) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   geode::GeodeBindGroupCache& cache = sharedDevice()->bindGroupCache();
   cache.setMaximumEntriesForTesting(16);
+  const ScopedCacheCap restoreCap{
+      [&cache] { cache.setMaximumEntriesForTesting(geode::GeodeBindGroupCache::kMaximumEntries); }};
   RendererGeode first = createRenderer();
   RendererGeode second = createRenderer();
 
@@ -3055,7 +3064,6 @@ TEST_F(RendererGeodeTest, BindGroupCacheCapNeverRetiresWhatAnOpenFrameNamed) {
   }
   EXPECT_LE(cache.size(), 32u);
   EXPECT_LE(second.lastFrameTimings().counters.bindGroupCacheRetired, 32u);
-  cache.setMaximumEntriesForTesting(geode::GeodeBindGroupCache::kMaximumEntries);
 }
 
 TEST_F(RendererGeodeTest, SiblingIsolatedLayersShareOneTextureWithinAFrame) {
@@ -8448,13 +8456,15 @@ TEST_F(RendererGeodeTest, AFilterPassWhoseOwnLookupsReachTheCapKeepsItsEarlierLo
   const RendererBitmap expected = reference.takeSnapshot();
 
   sharedDevice()->filterEngine().setCachedObjectCapForTesting(1);
+  const ScopedCacheCap restoreCap{[] {
+    sharedDevice()->filterEngine().setCachedObjectCapForTesting(
+        geode::GeodeBindGroupCache::kMaximumEntries);
+  }};
   RendererGeode renderer = createRenderer();
   for (int frame = 0; frame < 3; ++frame) {
     renderer.draw(document);
     EXPECT_EQ(renderer.takeSnapshot().pixels, expected.pixels) << "Frame " << frame;
   }
-  sharedDevice()->filterEngine().setCachedObjectCapForTesting(
-      geode::GeodeBindGroupCache::kMaximumEntries);
 }
 
 TEST_F(RendererGeodeTest, AWarmFilterFrameWithANewBlurRadiusShowsTheNewBlur) {
