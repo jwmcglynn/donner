@@ -249,6 +249,18 @@ public:
         [&](const Entry& entry) { return predicate(entry.content, entry.placement); }));
   }
 
+  /// Bytes of the held results for which \p predicate holds on their content key and placement.
+  template <typename Predicate>
+  [[nodiscard]] std::uint64_t bytesIf(const Predicate& predicate) const {
+    std::uint64_t total = 0;
+    for (const Entry& entry : entries_) {
+      if (predicate(entry.content, entry.placement)) {
+        total += entry.bytes;
+      }
+    }
+    return total;
+  }
+
   /**
    * Evict the least recently used result for which \p predicate holds, unless it was used in
    * \p frame or the frame before, so a quota of one kind of result turns over without evicting

@@ -3480,28 +3480,17 @@ bool HasSheetAnimation(Registry& registry) {
          !registry.view<components::AnimatedValuesComponent>().empty();
 }
 
-/// The `x`, `y`, `width` and `height` an external `<use>` places and sizes its instance with, in
-/// pixels. Resolved exactly as the instance layout resolves them
-/// (`LayoutSystem::createShadowSizedElementComponent`): from the same properties, against the
-/// host viewport the `<use>` sits in and with the same font metrics, so percentages and viewport
-/// units follow the host viewport and the key changes whenever the layout would.
-std::array<std::optional<double>, 4> SpriteUseGeometry(Registry& hostRegistry, Entity hostEntity) {
-  std::array<std::optional<double>, 4> geometry = {0.0, 0.0, std::nullopt, std::nullopt};
-  const auto* sized = hostRegistry.try_get<components::SizedElementComponent>(hostEntity);
-  if (sized == nullptr) {
-    return geometry;
+/// The viewport size an external `<use>` gives its referenced \p root: the use's `width` and
+/// `height` as the instance layout resolves them (`LayoutSystem::resolveUseViewportSize`), when the
+/// root is a `<symbol>` or `<svg>`; nothing for any other root, which ignores them.
+std::array<std::optional<double>, 2> SpriteViewportSize(Registry& sheet, Entity root,
+                                                        Registry& hostRegistry, Entity hostEntity) {
+  const auto* type = sheet.try_get<components::ElementTypeComponent>(root);
+  if (type == nullptr ||
+      (type->type() != ElementType::Symbol && type->type() != ElementType::SVG)) {
+    return {};
   }
-  const Box2d viewBox =
-      components::LayoutSystem().getViewBox(EntityHandle(hostRegistry, hostEntity));
-  const FontMetrics fontMetrics;
-  const auto resolve = [&](const std::optional<Lengthd>& length,
-                           Lengthd::Extent extent) -> std::optional<double> {
-    return length ? std::optional(length->toPixels(viewBox, fontMetrics, extent)) : std::nullopt;
-  };
-  return {resolve(sized->properties.x.get(), Lengthd::Extent::X).value_or(0.0),
-          resolve(sized->properties.y.get(), Lengthd::Extent::Y).value_or(0.0),
-          resolve(sized->properties.width.get(), Lengthd::Extent::X),
-          resolve(sized->properties.height.get(), Lengthd::Extent::Y)};
+  return components::LayoutSystem().resolveUseViewportSize(EntityHandle(hostRegistry, hostEntity));
 }
 
 /// \p bounds grown by one device pixel under \p deviceFromUser, which covers the anti-aliased
@@ -3539,7 +3528,7 @@ namespace {
 /// The inputs an external `<use>` occurrence of \p root contributes, or nullopt when the
 /// occurrence may not be cached because it paints with a host paint server.
 std::optional<SpriteOccurrenceInputs> SpriteInputs(
-    Entity root, const components::RenderingInstanceComponent& instance,
+    Registry& sheet, Entity root, const components::RenderingInstanceComponent& instance,
     const components::ComputedStyleComponent& style, Registry& hostRegistry, Entity hostEntity) {
   if (root == entt::null || !style.properties || !IsPlainSpritePaint(instance.resolvedFill) ||
       !IsPlainSpritePaint(instance.resolvedStroke)) {
@@ -3551,7 +3540,7 @@ std::optional<SpriteOccurrenceInputs> SpriteInputs(
   inputs.resourceOpacities = style.resourceOpacities;
   inputs.fill = instance.resolvedFill;
   inputs.stroke = instance.resolvedStroke;
-  inputs.geometry = SpriteUseGeometry(hostRegistry, hostEntity);
+  inputs.viewportSize = SpriteViewportSize(sheet, root, hostRegistry, hostEntity);
   return inputs;
 }
 
@@ -3574,7 +3563,7 @@ RendererDriver::SpriteProbe RendererDriver::probeCachedSprite(
   }
   const Entity root = components::FindAttachedEntityById(sheet, RcString(fragment));
   std::optional<SpriteOccurrenceInputs> inputs =
-      SpriteInputs(root, instance, style, hostRegistry, hostEntity);
+      SpriteInputs(sheet, root, instance, style, hostRegistry, hostEntity);
   if (!inputs) {
     return probe;
   }

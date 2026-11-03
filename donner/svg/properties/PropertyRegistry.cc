@@ -3339,6 +3339,25 @@ size_t PropertyRegistry::numPropertiesSet() const {
   return result;
 }
 
+bool PropertyRegistry::inheritsNonInheritedProperty() const {
+  bool result = false;
+  const auto properties = allProperties();
+  forEachProperty<0, numProperties()>([&](auto i) {
+    const auto& property = std::get<i.value>(properties);
+    using PropertyType = std::remove_cvref_t<decltype(property)>;
+    if constexpr (PropertyType::kCascadeMode == PropertyCascade::None) {
+      result = result || property.state == PropertyState::Inherit;
+    }
+  });
+  return result ||
+         std::any_of(unparsedProperties.begin(), unparsedProperties.end(), [](const auto& entry) {
+           const parser::UnparsedProperty& unparsed = entry.second;
+           return parser::PropertyParseFnParams::Create(unparsed.declaration, unparsed.specificity,
+                                                        parser::PropertyParseBehavior::Default)
+                      .explicitState == PropertyState::Inherit;
+         });
+}
+
 std::size_t PropertyRegistry::complexPropertyBytes() const {
   std::size_t result = 0;
   if (const StrokeDasharray* dasharray = strokeDasharray.getStoredValue()) {

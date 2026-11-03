@@ -3067,27 +3067,47 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return buckets < kMaximumSpriteBucketsPerContent;
   }
 
-  /// Keep sprites within their quota before recording \p content: when it is a sprite and the
-  /// quota is full, evict the least recently used sprite no recent frame drew.
-  /// @return False when no room can be made.
-  bool makeRoomForSprite(const FilterResultContentKey& content) {
+  /// Most bytes held for sprites, as a share of the shared byte limit, so a full set of large
+  /// sprites leaves room for filter results.
+  [[nodiscard]] std::uint64_t spriteByteLimit() const {
+    return filterResultCache.byteLimit() / 4 * 3;
+  }
+
+  /**
+   * Keep sprites within their entry and byte quotas before recording \p bytes for \p content:
+   * when it is a sprite and a quota is full, evict the least recently used sprites no recent frame
+   * drew. Nothing is evicted unless the recording could then be inserted.
+   *
+   * @return False when the recording should be skipped.
+   */
+  bool makeRoomForSprite(const FilterResultContentKey& content, std::uint64_t bytes) {
     if (!content.sprite) {
       return true;
     }
     const auto isSprite = [](const FilterResultContentKey& held, const FilterResultPlacement&) {
       return held.sprite;
     };
-    if (filterResultCache.countIf(isSprite) < kMaximumSpriteEntries) {
+    const auto overQuota = [&] {
+      return filterResultCache.countIf(isSprite) >= kMaximumSpriteEntries ||
+             filterResultCache.bytesIf(isSprite) + bytes > spriteByteLimit();
+    };
+    if (!overQuota()) {
       return true;
     }
-    std::optional<FilterResultPayload> evicted =
-        filterResultCache.evictStale(isSprite, filterResultFrame);
-    if (!evicted) {
+    if (bytes > spriteByteLimit() || !filterResultCache.canInsert(bytes, filterResultFrame) ||
+        !surfaceBudget->canReserveBytes(bytes * 4, 1)) {
       return false;
     }
-    std::vector<FilterResultPayload> payloads;
-    payloads.push_back(std::move(*evicted));
-    retireFilterResults(std::move(payloads));
+    while (overQuota()) {
+      std::optional<FilterResultPayload> evicted =
+          filterResultCache.evictStale(isSprite, filterResultFrame);
+      if (!evicted) {
+        return false;
+      }
+      std::vector<FilterResultPayload> payloads;
+      payloads.push_back(std::move(*evicted));
+      retireFilterResults(std::move(payloads));
+    }
     return true;
   }
 
@@ -3235,7 +3255,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const gpu::Extent2d textureSize = extent;
     const std::uint64_t bytes = std::uint64_t{textureSize.width} * textureSize.height *
                                 gpu::TextureFormatBytesPerTexel(filteredDesc.format);
-    if (!makeRoomForSprite(frame.resultRecording->content)) {
+    if (!makeRoomForSprite(frame.resultRecording->content, bytes)) {
       return;
     }
     // Recording never takes from this frame's surface budget; it only requires that the budget

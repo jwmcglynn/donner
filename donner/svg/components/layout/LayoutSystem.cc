@@ -984,22 +984,20 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
 
   const Box2d parentViewBox = getViewBox(useEntity);
 
-  // Override the width/height only when the use element resolves a concrete size.
-  SizedElementProperties properties = targetSizedElement->properties;
-
-  if (parentSizedElement->properties.width.get()) {
-    properties.width = parentSizedElement->properties.width;
-  }
-  if (parentSizedElement->properties.height.get()) {
-    properties.height = parentSizedElement->properties.height;
-  }
+  // The use's width/height override the target's only when the use resolves a concrete size.
+  const SizedElementProperties& properties = targetSizedElement->properties;
+  const std::array<std::optional<double>, 2> useSize = resolveUseViewportSize(useEntity);
 
   Vector2d size = parentViewBox.size();
 
-  if (const std::optional<Lengthd> width = properties.width.get()) {
+  if (useSize[0]) {
+    size.x = *useSize[0];
+  } else if (const std::optional<Lengthd> width = properties.width.get()) {
     size.x = width->toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X);
   }
-  if (const std::optional<Lengthd> height = properties.height.get()) {
+  if (useSize[1]) {
+    size.y = *useSize[1];
+  } else if (const std::optional<Lengthd> height = properties.height.get()) {
     size.y = height->toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y);
   }
 
@@ -1013,6 +1011,22 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
   shadowSized.bounds = Box2d(origin, origin + size);
 
   return true;
+}
+
+std::array<std::optional<double>, 2> LayoutSystem::resolveUseViewportSize(EntityHandle useEntity) {
+  // TODO: Plumb FontMetrics, as in createShadowSizedElementComponent.
+  const FontMetrics fontMetrics;
+  const auto* sized = useEntity.try_get<SizedElementComponent>();
+  if (sized == nullptr) {
+    return {};
+  }
+  const Box2d viewBox = getViewBox(useEntity);
+  const auto resolve = [&](const std::optional<Lengthd>& length,
+                           Lengthd::Extent extent) -> std::optional<double> {
+    return length ? std::optional(length->toPixels(viewBox, fontMetrics, extent)) : std::nullopt;
+  };
+  return {resolve(sized->properties.width.get(), Lengthd::Extent::X),
+          resolve(sized->properties.height.get(), Lengthd::Extent::Y)};
 }
 
 }  // namespace donner::svg::components

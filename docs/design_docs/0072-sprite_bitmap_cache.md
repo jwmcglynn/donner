@@ -88,10 +88,12 @@ one index, one memory bound and one eviction policy:
 **Occurrence inputs.** The style an occurrence contributes is what the referenced root inherits
 from the `<use>`: the `<use>` element's computed style reduced to inherited properties, its
 resource opacities, its fill and stroke (none or a solid color; a paint server reference is not
-cached, since it names host content), and its `x`, `y`, `width` and `height` in pixels. Those are
-resolved exactly as the instance layout resolves them, from the same properties, against the host
-viewport the `<use>` sits in and with the same font metrics, so a percentage or a viewport unit
-follows the host viewport, and a size from a stylesheet is keyed precisely when layout uses it.
+cached, since it names host content), and, when it references a `<symbol>` or `<svg>`, the
+viewport size it gives it: its `width` and `height` in pixels, resolved by the same layout helper
+the instance layout uses (`LayoutSystem::resolveUseViewportSize`), against the host viewport, so
+a percentage or a viewport unit follows the host viewport. The `<use>` element's `x` and `y` are
+not inputs: they translate the `<use>` itself, which the draw transform carries, so moving a sprite
+by its `x` attribute keeps it cached like moving it by `transform` does.
 Each sheet keeps a table of recently seen
 inputs, at most 64, in its registry context; each distinct set gets a process-unique id. Because
 the inputs hold only inherited properties, the `<use>` element's own opacity, transform or blend
@@ -109,7 +111,8 @@ occurrence is cacheable when:
 
 - its styles are retained for the occurrence (the cached filter result rule: no paint server
   reference from the host, no style resource limit hit) and the sheet has no animation;
-- its root does not use `inherit` on a property that does not inherit;
+- its root does not use `inherit` on a property that does not inherit, whether a style property
+  or an element-specific one such as `transform` or `width`;
 - every element in the referenced subtree is one a cached filter layer may hold (shapes, groups,
   gradients, clip paths, filter primitives), or the referenced `<symbol>` or `<svg>`;
 - no element draws content from elsewhere: no mask, marker, pattern paint, text, image or nested
@@ -159,8 +162,10 @@ uncached render by a few levels at most (4 measured).
 
 Sprites and filter results share the index: at most 64 entries and the smaller of a quarter of
 the frame surface byte limit and 64 MiB native or 16 MiB WebAssembly. Sprites hold at most 48 of
-the entries: at the quota, a new sprite replaces the least recently used sprite that neither of
-the last two frames drew, or is not recorded, so filter results keep room. A sprite content keeps
+the entries and three quarters of the byte limit: at a quota, a new sprite replaces the least
+recently used sprites that neither of the last two frames drew, or is not recorded, so filter
+results keep room. Nothing is evicted for a sprite the index or the frame's surface budget would
+then refuse anyway. A sprite content keeps
 at most four quarter-pixel buckets per linear transform, so a sharp sprite moving by fractions of
 a pixel does not take sixteen entries; its other buckets draw uncached. `trimTexturePool` with
 `ToFloor` or `All` and the two-second idle decay drop sprites with the filter results.
@@ -188,8 +193,8 @@ backends):
 
 - counters: one rasterization across six frames of six moving occurrences, and every occurrence
   of a warm frame drawn from the cache with no path draw and no filter execution;
-- translation and the `<use>` element's opacity keep every occurrence cached, and match an
-  uncached render exactly;
+- translation, by `transform` or by the `x` and `y` attributes, and the `<use>` element's
+  opacity keep every occurrence cached, and match an uncached render exactly;
 - invalidation: a sheet geometry change, a filter primitive change, a gradient stop change, an
   inherited host style change, a `setHref` retarget, a scale change and a device scale change
   each rasterize again and match an uncached render exactly; `<symbol>` uses of two sizes keep

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <map>
 #include <memory>
 #include <optional>
@@ -251,6 +252,16 @@ public:
                                          EntityHandle useEntity, Entity symbolEntity,
                                          ShadowBranchType branchType,
                                          ParseWarningSink& warningSink);
+
+  /**
+   * The width and height a \ref xml_use gives a referenced \ref xml_symbol or \ref xml_svg, in
+   * pixels: its `width` and `height` resolved against the viewport the use sits in, as
+   * \ref createShadowSizedElementComponent resolves them. Each is unset where the use leaves it
+   * unset, so the target's own size applies.
+   *
+   * @param useEntity The \ref xml_use element.
+   */
+  std::array<std::optional<double>, 2> resolveUseViewportSize(EntityHandle useEntity);
 
   /**
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style

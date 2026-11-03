@@ -619,19 +619,10 @@ public:
   }
 
   /// Whether a property that does not inherit by default holds the `inherit` keyword, so its
-  /// computed value is read from the parent's.
-  [[nodiscard]] bool inheritsNonInheritedProperty() const {
-    bool result = false;
-    const auto properties = allProperties();
-    forEachProperty<0, numProperties()>([&](auto i) {
-      const auto& property = std::get<i.value>(properties);
-      using PropertyType = std::remove_cvref_t<decltype(property)>;
-      if constexpr (PropertyType::kCascadeMode == PropertyCascade::None) {
-        result = result || property.state == PropertyState::Inherit;
-      }
-    });
-    return result;
-  }
+  /// computed value is read from the parent's. Covers both the properties of this registry and the
+  /// element-specific \ref unparsedProperties, such as `transform` or `width`, none of which
+  /// inherit.
+  [[nodiscard]] bool inheritsNonInheritedProperty() const;
 
   /**
    * Resolve resource-color overlays and deferred diagnostics before computing inheritance.

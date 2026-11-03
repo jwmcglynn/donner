@@ -23,7 +23,7 @@ namespace donner::svg {
 /**
  * What an external `<use>` occurrence contributes to the rendering of the subtree it references:
  * the referenced root, the style the root inherits from the `<use>`, its fill and stroke (for
- * context paint), and the `x`, `y`, `width` and `height` the `<use>` places and sizes it with.
+ * context paint), and the viewport size the `<use>` gives a referenced `<symbol>` or `<svg>`.
  *
  * The inherited style holds only inherited properties, so a change to a property that does not
  * inherit, such as the `<use>` element's own `opacity` or `transform`, leaves the inputs equal.
@@ -34,13 +34,15 @@ struct SpriteOccurrenceInputs {
   std::optional<components::ComputedResourceOpacities> resourceOpacities;  ///< Resource opacities.
   components::ResolvedPaintServer fill;    ///< The `<use>` element's fill, none or a solid color.
   components::ResolvedPaintServer stroke;  ///< The `<use>` element's stroke, none or a solid color.
-  /// The `<use>` element's `x`, `y`, `width` and `height` in pixels, resolved the way layout
-  /// resolves them for the instance, against the host viewport; an unset size stays unset.
-  std::array<std::optional<double>, 4> geometry;
+  /// The `width` and `height` the `<use>` gives a referenced `<symbol>` or `<svg>`, in pixels,
+  /// resolved as the instance layout resolves them, against the host viewport; unset for other
+  /// targets and where the use sets none. The use's `x` and `y` are not inputs: they translate the
+  /// use itself, which the draw transform carries, so moving a use by `x` keeps its sprite.
+  std::array<std::optional<double>, 2> viewportSize;
 
   /// Whether \p other describes the same occurrence inputs.
   [[nodiscard]] bool matches(const SpriteOccurrenceInputs& other) const {
-    return root == other.root && geometry == other.geometry &&
+    return root == other.root && viewportSize == other.viewportSize &&
            resourceOpacities == other.resourceOpacities &&
            components::IsProvablySamePaint(fill, other.fill) &&
            components::IsProvablySamePaint(stroke, other.stroke) && inherited == other.inherited;
