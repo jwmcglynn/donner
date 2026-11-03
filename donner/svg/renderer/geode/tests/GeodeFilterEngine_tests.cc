@@ -856,6 +856,26 @@ TEST_F(GeodeFilterEngineTest, ReducedBlurStaysWithinPreflightAndSkipsTinyInputs)
   }
 }
 
+// Every allocation of a reduced blur that is refused stops the graph without another request. The
+// 64x64 source is large enough to reduce; the fixture's 4x4 one is not.
+TEST_F(GeodeFilterEngineTest, ReducedBlurAllocationRefusalStopsTheGraph) {
+  using namespace svg::components;
+  setSource(gpu::TextureDescriptor{
+      "blur source", {64, 64}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled});
+  FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  FilterNode node;
+  node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 20, .stdDeviationY = 20};
+  graph.nodes.push_back(node);
+  for (const auto& [label, occurrence] :
+       std::vector<std::pair<std::string_view, size_t>>{{"GaussianBlurReducedScratch", 1},
+                                                        {"GaussianBlurReducedScratch", 2},
+                                                        {"GaussianBlurReducedOutput", 1}}) {
+    SCOPED_TRACE(testing::Message() << label << " " << occurrence);
+    runGraph(graph, label, occurrence);
+  }
+}
+
 // Tiles at different block phases take one reduced texture size, so a tiled reduced blur reuses
 // its scratch across tiles and stays within the tiled plan's preflight.
 TEST_F(GeodeFilterEngineTest, TiledReducedBlurStaysWithinItsPlanPreflight) {
@@ -934,7 +954,6 @@ std::vector<AllocationRefusalCase> AllocationRefusalCases() {
   using namespace svg::components::filter_primitive;
   const GaussianBlur gaussian{.stdDeviationX = 1, .stdDeviationY = 1};
   const GaussianBlur boxBlur{.stdDeviationX = 3, .stdDeviationY = 3};
-  const GaussianBlur reducedBlur{.stdDeviationX = 20, .stdDeviationY = 20};
   const ColorMatrix matrix{.type = ColorMatrix::Type::Saturate, .values = {0.5}};
   const Morphology morphology{.radiusX = 1, .radiusY = 1};
   const ConvolveMatrix convolve{.orderX = 1, .orderY = 1, .kernelMatrix = {0.5}, .divisor = 1};
@@ -952,9 +971,6 @@ std::vector<AllocationRefusalCase> AllocationRefusalCases() {
       {"GaussianSecondScratch", gaussian, "GaussianBlurScratch", false, false, 2},
       {"BoxFirstScratch", boxBlur, "GaussianBlurScratch"},
       {"BoxSecondScratch", boxBlur, "GaussianBlurScratch", false, false, 2},
-      {"ReducedFirstScratch", reducedBlur, "GaussianBlurReducedScratch"},
-      {"ReducedSecondScratch", reducedBlur, "GaussianBlurReducedScratch", false, false, 2},
-      {"ReducedOutput", reducedBlur, "GaussianBlurReducedOutput"},
       {"Flood", Flood{}, "FilterFloodOutput"},
       {"Offset", Offset{.dx = 1}, "FilterOffsetOutput"},
       {"ColorMatrix", matrix, "FilterColorMatrixOutput"},

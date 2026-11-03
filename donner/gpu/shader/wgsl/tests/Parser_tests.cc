@@ -20,10 +20,10 @@ TEST(Parser, ParsesGaussianBlurIntoTheExpectedTypedArenas) {
 
   EXPECT_EQ(parsed.module.structCount, 1u);
   EXPECT_EQ(parsed.module.bindingCount, 3u);
-  EXPECT_EQ(parsed.module.symbolCount, 73u);
-  EXPECT_EQ(parsed.module.expressionCount, 713u);
-  EXPECT_EQ(parsed.module.statementCount, 111u);
-  EXPECT_EQ(parsed.module.functionCount, 5u);
+  EXPECT_EQ(parsed.module.symbolCount, 89u);
+  EXPECT_EQ(parsed.module.expressionCount, 765u);
+  EXPECT_EQ(parsed.module.statementCount, 123u);
+  EXPECT_EQ(parsed.module.functionCount, 13u);
   // The shader keeps at least half of every parser arena free.
   EXPECT_LE(parsed.module.symbolCount * 2, ModuleLimits::kMaxSymbols);
   EXPECT_LE(parsed.module.expressionCount * 2, ModuleLimits::kMaxExpressions);
