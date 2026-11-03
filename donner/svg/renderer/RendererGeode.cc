@@ -3059,10 +3059,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// so small sprites warm within a few frames.
   static constexpr int kMaximumSpriteCapturesPerFrame = 32;
   static constexpr std::uint64_t kSpriteCaptureBudgetShare = 8;
-  /// Most quarter-pixel buckets kept per sprite content and linear transform under
-  /// \ref SpriteSubpixelPlacement::Exact. A sharp sprite moving by fractions of a pixel would
-  /// otherwise fill the shared index with up to sixteen buckets.
-  static constexpr std::size_t kMaximumSpriteBucketsPerContent = 4;
   /// Most results held for sprites and for filter layers. Each kind has its own share of the
   /// shared index, so sprites never crowd out filter results or the reverse.
   static constexpr std::size_t kMaximumSpriteEntries =
@@ -3116,22 +3112,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Whether a missed sprite at \p placement is recorded now: it missed before at the same linear
-  /// transform (two-touch admission), it is not refused, the frame has capture budget left, and the
-  /// content does not already hold its share of buckets.
+  /// transform (two-touch admission), it is not refused, and the frame has capture budget left.
   bool admitSprite(const FilterResultContentKey& content, const FilterResultPlacement& placement) {
     const bool admitted = filterResultCache.admitMiss(content, placement.linear, filterResultFrame);
     if (!admitted || spriteCapturesThisFrame >= kMaximumSpriteCapturesPerFrame ||
         recordingRefused(content, placement.linear)) {
       return false;
     }
-    if (placement.fractionBucketX == FilterResultPlacement::kAnyFraction) {
-      return true;
-    }
-    const std::size_t buckets = filterResultCache.countIf(
-        [&](const FilterResultContentKey& held, const FilterResultPlacement& heldPlacement) {
-          return heldPlacement.linear == placement.linear && held.sameContent(content);
-        });
-    return buckets < kMaximumSpriteBucketsPerContent;
+    return true;
   }
 
   /// Most bytes held for sprites, as a share of the shared byte limit, so a full set of large
@@ -3149,12 +3137,37 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    *
    * @return False when the recording should be skipped.
    */
+  /// The share of the index results of \p content's kind hold; see \ref makeRoomInShare.
+  struct IndexShare {
+    std::size_t maximumEntries = 0;
+    std::uint64_t maximumBytes = 0;
+  };
+  [[nodiscard]] IndexShare shareFor(const FilterResultContentKey& content) const {
+    return content.sprite ? IndexShare{kMaximumSpriteEntries, spriteByteLimit()}
+                          : IndexShare{kMaximumFilterLayerEntries, filterResultCache.byteLimit()};
+  }
+
+  /// Whether \p bytes recorded for \p content would fit its kind's share once the results of that
+  /// kind no recent frame drew were evicted. Checked before a sprite is captured, so a full share
+  /// never costs a capture whose result would be dropped.
+  [[nodiscard]] bool shareCanHold(const FilterResultContentKey& content, std::uint64_t bytes) const {
+    const bool sprite = content.sprite;
+    const auto sameKind = [sprite](const FilterResultContentKey& held,
+                                   const FilterResultPlacement&) { return held.sprite == sprite; };
+    const IndexShare share = shareFor(content);
+    const auto [staleEntries, staleBytes] = filterResultCache.staleIf(sameKind, filterResultFrame);
+    return bytes <= share.maximumBytes &&
+           filterResultCache.countIf(sameKind) - staleEntries < share.maximumEntries &&
+           filterResultCache.bytesIf(sameKind) - staleBytes + bytes <= share.maximumBytes;
+  }
+
   bool makeRoomInShare(const FilterResultContentKey& content, std::uint64_t bytes) {
     const bool sprite = content.sprite;
     const auto sameKind = [sprite](const FilterResultContentKey& held,
                                    const FilterResultPlacement&) { return held.sprite == sprite; };
-    const std::size_t maximumEntries = sprite ? kMaximumSpriteEntries : kMaximumFilterLayerEntries;
-    const std::uint64_t maximumBytes = sprite ? spriteByteLimit() : filterResultCache.byteLimit();
+    const IndexShare share = shareFor(content);
+    const std::size_t maximumEntries = share.maximumEntries;
+    const std::uint64_t maximumBytes = share.maximumBytes;
     const auto overShare = [&] {
       return filterResultCache.countIf(sameKind) >= maximumEntries ||
              filterResultCache.bytesIf(sameKind) + bytes > maximumBytes;
@@ -3239,7 +3252,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * unchanged and records it. A capture the frame has no room for is not begun and leaves no state
    * behind: no rejected layer, no filter budget charge or rejection, no surface budget rejection.
    */
-  SpriteCapture beginSpriteCapture(const Box2d& bounds) {
+  SpriteCapture beginSpriteCapture(const Box2d& bounds, const FilterResultContentKey& content) {
     if (rejectedFilterDepth != 0 || !readyForFilterCapture()) {
       return SpriteCapture::NoRoomNow;
     }
@@ -3252,7 +3265,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const double width = surface->width;
     const double height = surface->height;
     const std::uint64_t bytes = surface->bytes;
-    if (!spriteCaptureFits(bytes)) {
+    if (!spriteCaptureFits(bytes) || !shareCanHold(content, bytes)) {
       return SpriteCapture::NoRoomNow;
     }
     GeodeFilterAdmission admission;
@@ -7587,7 +7600,7 @@ bool RendererGeode::pushSpriteRecording(const FilterResultContentKey& content, c
       impl_->spriteSubpixelPlacement == SpriteSubpixelPlacement::Resample
           ? Impl::spriteResampleBounds(bounds, impl_->deviceFromLocalTransform)
           : bounds;
-  switch (impl_->beginSpriteCapture(captureBounds)) {
+  switch (impl_->beginSpriteCapture(captureBounds, content)) {
     case Impl::SpriteCapture::Begun: break;
     case Impl::SpriteCapture::NoRoomNow: return false;
     case Impl::SpriteCapture::Impossible:

@@ -164,7 +164,8 @@ recording again for 30 frames.
 
 - `Exact`, the default: a sprite is kept per quarter-pixel bucket of its translation and drawn on
   the pixel grid, so sharp edges are never smeared; positions differ from an uncached render by
-  less than a quarter pixel. A sprite content keeps at most four buckets per linear transform.
+  less than a quarter pixel. A sprite content may fill all sixteen buckets of a linear transform,
+  so sprites at many fractional positions, still or moving, hit once each bucket has recorded.
   When everything the sprite paints is one filtered element (outside it only plain containers,
   and no clip or mask on it) whose filter result may be resampled under the cached filter result
   rules (a final blur of at least one device pixel, fed from the source through per-pixel
@@ -189,9 +190,12 @@ share: sprites hold at most 192 of the entries and three quarters of the byte li
 results at most 64 entries. When a share is full, a new result replaces the least recently used
 results of its own kind that neither of the last two frames drew, or is not recorded, so neither
 kind crowds out the other. Nothing is evicted for a result the index or the frame's surface budget
-would then refuse anyway. Under `Exact` placement a sprite content keeps at most four quarter-pixel
-buckets per linear transform, so a sharp sprite moving by fractions of a pixel does not take
-sixteen entries; its other buckets draw uncached. `trimTexturePool` with
+would then refuse anyway, and a sprite is not even captured when its share could not hold the
+result, so a full share never costs a capture whose result would be dropped. (An earlier cap of
+four buckets per sprite content kept a fractionally moving sprite from crowding out filter
+results in a single shared quota; with separate shares it only cost hits: on a game scene of 97
+background pieces at varied fractional positions it held a still frame to 22 hits.)
+`trimTexturePool` with
 `ToFloor` or `All` and the two-second idle decay drop sprites with the filter results.
 `setSpriteCacheEnabled(false)` stops caching sprites while filter results stay cached; disabling
 the filter result cache disables both.

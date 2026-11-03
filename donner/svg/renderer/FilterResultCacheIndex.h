@@ -261,6 +261,21 @@ public:
     return total;
   }
 
+  /// Number and bytes of the held results for which \p predicate holds that \ref evictStale may
+  /// evict in \p frame: used in neither \p frame nor the frame before.
+  template <typename Predicate>
+  [[nodiscard]] std::pair<std::size_t, std::uint64_t> staleIf(const Predicate& predicate,
+                                                              std::uint64_t frame) const {
+    std::pair<std::size_t, std::uint64_t> stale{0, 0};
+    for (const Entry& entry : entries_) {
+      if (predicate(entry.content, entry.placement) && entry.lastUsedFrame + 1 < frame) {
+        ++stale.first;
+        stale.second += entry.bytes;
+      }
+    }
+    return stale;
+  }
+
   /**
    * Evict the least recently used result for which \p predicate holds, unless it was used in
    * \p frame or the frame before, so a quota of one kind of result turns over without evicting
