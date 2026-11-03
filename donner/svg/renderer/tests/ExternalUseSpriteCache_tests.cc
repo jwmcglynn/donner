@@ -463,8 +463,7 @@ TEST(ExternalUseSpriteCacheTest, InheritOfANonInheritedPropertyIsNotCached) {
 /// Draws \p host over the test sheet for a few frames with a caching renderer and requires the
 /// last frame to match an uncached render exactly; returns the sprite hits of the last frame.
 std::size_t ExpectHostMatchesUncached(std::string_view host, std::string_view label) {
-  std::optional<ExternalUseDocument> document =
-      MakeExternalUseDocument(host, std::string(kSheet));
+  std::optional<ExternalUseDocument> document = MakeExternalUseDocument(host, std::string(kSheet));
   EXPECT_TRUE(document.has_value());
   if (!document) {
     return 0;

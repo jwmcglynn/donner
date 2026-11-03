@@ -244,10 +244,9 @@ public:
   /// Number of held results for which \p predicate holds on their content key and placement.
   template <typename Predicate>
   [[nodiscard]] std::size_t countIf(const Predicate& predicate) const {
-    return static_cast<std::size_t>(
-        std::count_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
-          return predicate(entry.content, entry.placement);
-        }));
+    return static_cast<std::size_t>(std::count_if(
+        entries_.begin(), entries_.end(),
+        [&](const Entry& entry) { return predicate(entry.content, entry.placement); }));
   }
 
   /**

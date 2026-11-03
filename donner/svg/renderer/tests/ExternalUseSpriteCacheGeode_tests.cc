@@ -36,8 +36,8 @@ constexpr std::string_view kThreeUses = R"svg(
   </svg>)svg";
 
 std::uint8_t AlphaAt(const RendererBitmap& bitmap, int x, int y) {
-  return bitmap.pixels[static_cast<std::size_t>(y) * bitmap.rowBytes +
-                       static_cast<std::size_t>(x) * 4 + 3];
+  return bitmap
+      .pixels[static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4 + 3];
 }
 
 // When the frame's surface budget cannot hold a sprite's capture, the occurrence is drawn without

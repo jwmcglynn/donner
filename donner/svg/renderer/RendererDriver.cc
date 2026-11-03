@@ -5327,10 +5327,9 @@ void RendererDriver::drawExternalUseInstance(SVGDocument& subDocument, std::stri
         PendingSpriteMeasure{sprite.entry, &subDocument, targetEntity, sprite.stamp};
   }
   // A capture the frame has no room for is not begun, and the occurrence draws as usual.
-  const bool recording =
-      sprite.record && renderer_.pushSpriteRecording(
-                           sprite.content, sprite.bounds,
-                           sprite.resampling ? &*sprite.resampling : nullptr);
+  const bool recording = sprite.record && renderer_.pushSpriteRecording(
+                                              sprite.content, sprite.bounds,
+                                              sprite.resampling ? &*sprite.resampling : nullptr);
   traverseSubDocument(subDocument.registry());
   pendingSpriteMeasure_.reset();
   if (recording) {

@@ -3060,9 +3060,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!admitted || spriteCapturesThisFrame >= kMaximumSpriteCapturesPerFrame) {
       return false;
     }
-    const std::size_t buckets =
-        filterResultCache.countIf([&](const FilterResultContentKey& held,
-                                      const FilterResultPlacement& heldPlacement) {
+    const std::size_t buckets = filterResultCache.countIf(
+        [&](const FilterResultContentKey& held, const FilterResultPlacement& heldPlacement) {
           return heldPlacement.linear == placement.linear && held.sameContent(content);
         });
     return buckets < kMaximumSpriteBucketsPerContent;
@@ -3112,8 +3111,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     const std::optional<GeodeFilterBuffer> buffer = MakeGeodeFilterBuffer(
         bounds,
-        ComputeRegionFilterInputBuffer(spriteCaptureGraph(bounds), bounds,
-                                       deviceFromLocalTransform, width, height),
+        ComputeRegionFilterInputBuffer(spriteCaptureGraph(bounds), bounds, deviceFromLocalTransform,
+                                       width, height),
         width, height);
     if (!buffer.has_value() ||
         !surfaceBudget->canReserveBytes(std::uint64_t{static_cast<std::uint32_t>(buffer->width)} *
