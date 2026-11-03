@@ -125,6 +125,14 @@ public:
   /// Current parse, cache, and rejection counters.
   const SecurityStats& securityStats() const { return securityStats_; }
 
+  /// \ref SubDocumentAdmission::fingerprint of \p document, or empty when unbound.
+  /// @param document A document this cache admitted.
+  std::vector<uint64_t> admissionFingerprint(const SVGDocumentHandle& document) const;
+
+  /// Number of times an already cached document was re-admitted to the resource family, which
+  /// walks its whole retained resource graph.
+  size_t cachedDocumentAdmissions() const { return cachedDocumentAdmissions_; }
+
 private:
   friend class SubDocumentAdmission;
   std::shared_ptr<SubDocumentAdmission> admission_;
@@ -152,6 +160,7 @@ private:
   SecurityStats securityStats_;
   size_t rootEntityCount_ = 0;
   size_t rootPayloadBytes_ = 0;
+  mutable size_t cachedDocumentAdmissions_ = 0;
 };
 
 }  // namespace donner::svg::components

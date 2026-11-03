@@ -34,7 +34,7 @@ void SVGUseElement::setX(Lengthd value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.x.set(
       value, css::Specificity::Override());
-  InvalidateUseInstance(handle_);
+  InvalidateUseGeometry(handle_);
 }
 
 void SVGUseElement::setY(Lengthd value) {
@@ -42,7 +42,7 @@ void SVGUseElement::setY(Lengthd value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.y.set(
       value, css::Specificity::Override());
-  InvalidateUseInstance(handle_);
+  InvalidateUseGeometry(handle_);
 }
 
 void SVGUseElement::setWidth(std::optional<Lengthd> value) {
@@ -50,7 +50,7 @@ void SVGUseElement::setWidth(std::optional<Lengthd> value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
-  InvalidateUseInstance(handle_);
+  InvalidateUseGeometry(handle_);
 }
 
 void SVGUseElement::setHeight(std::optional<Lengthd> value) {
@@ -58,7 +58,7 @@ void SVGUseElement::setHeight(std::optional<Lengthd> value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
-  InvalidateUseInstance(handle_);
+  InvalidateUseGeometry(handle_);
 }
 
 Lengthd SVGUseElement::x() const {

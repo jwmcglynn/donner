@@ -456,6 +456,7 @@ void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInt
   }
   registry_.clear<DeferredDecodedImageComponent>();
   externalFetchCache_.clear();
+  admittedExternalSvgs_.clear();
   if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
     cache->clearFailures();
   }
@@ -557,6 +558,25 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   SubDocumentCache::ParseCallback guardedParseCallback =
       GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
   return cache.getOrParse(boundedUrl, data, guardedParseCallback, warningSink);
+}
+
+std::optional<SVGDocumentHandle> ResourceManagerContext::loadAdmittedExternalSVG(
+    std::string_view url, ParseWarningSink& warningSink) {
+  const auto fingerprint = [this](const SVGDocumentHandle& document) {
+    const auto* cache = registry_.ctx().find<SubDocumentCache>();
+    return cache != nullptr ? cache->admissionFingerprint(document) : std::vector<uint64_t>();
+  };
+  if (const auto found = admittedExternalSvgs_.find(RcString(url));
+      found != admittedExternalSvgs_.end() && found->second.cacheGeneration == cacheGeneration_ &&
+      found->second.fingerprint == fingerprint(found->second.document)) {
+    return found->second.document;
+  }
+  std::optional<SVGDocumentHandle> document = loadExternalSVG(url, warningSink);
+  if (document) {
+    admittedExternalSvgs_.insert_or_assign(
+        RcString(url), AdmittedExternalSvg{*document, cacheGeneration_, fingerprint(*document)});
+  }
+  return document;
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {

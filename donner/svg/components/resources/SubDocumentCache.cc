@@ -53,7 +53,16 @@ DocumentFootprint MeasureDocument(const SVGDocumentHandle& document) {
 }  // namespace
 
 bool SubDocumentCache::acceptsCachedDocument(const SVGDocumentHandle& document) const {
-  return !familyBound_ || (admission_ && admission_->admit(document));
+  if (!familyBound_) {
+    return true;
+  }
+  ++cachedDocumentAdmissions_;
+  return admission_ && admission_->admit(document);
+}
+
+std::vector<uint64_t> SubDocumentCache::admissionFingerprint(
+    const SVGDocumentHandle& document) const {
+  return admission_ ? admission_->fingerprint(document) : std::vector<uint64_t>();
 }
 
 bool SubDocumentCache::bindFamily(Registry& registry) {

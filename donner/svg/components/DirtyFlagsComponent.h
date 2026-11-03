@@ -71,6 +71,25 @@ struct RenderTreeState {
   /// True if only the rendering instances must be rebuilt from the current computed components,
   /// for example after the context paint an external `<use>` supplies changes.
   bool needsInstanceRebuild = false;
+
+  /**
+   * When false, every dirty frame takes the full rebuild path (shadow-tree teardown and whole
+   * document recomputation) even if its dirty set qualifies for a retained update. Lets tests
+   * and diagnostics compare a retained update against the full rebuild of the same state.
+   */
+  bool retainedUpdatesEnabled = true;
+
+  /// Observed render-tree preparation work, for tests and diagnostics.
+  struct Counters {
+    uint64_t fullRebuilds = 0;         //!< Prepares that tore down and recomputed everything.
+    uint64_t retainedUpdates = 0;      //!< Prepares that kept the computed components.
+    uint64_t shadowTreeTeardowns = 0;  //!< Shadow-tree hosts torn down by full rebuilds.
+    /// External `<use>` instances re-attached in place, after a retarget or a geometry change.
+    uint64_t retargetedUses = 0;
+  };
+
+  /// Preparation counters for this document.
+  Counters counters;
 };
 
 }  // namespace donner::svg::components

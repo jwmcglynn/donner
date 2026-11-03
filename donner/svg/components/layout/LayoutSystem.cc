@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <string_view>
+#include <tuple>
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/ParseWarningSink.h"
@@ -458,11 +459,20 @@ Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entit
   } else if (entity.all_of<SizedElementComponent>() &&
              entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
     const SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     if (sizedElement.applyTranslationForUseElement) {
-      return Transform2d::Translate(entity.get<ComputedSizedElementComponent>().bounds.topLeft);
+      // A layout invalidation drops the computed size of a <use>; a query before the next render
+      // recomputes it, as the branch below does for other sized elements.
+      if (const auto* computed = entity.try_get<ComputedSizedElementComponent>()) {
+        return Transform2d::Translate(computed->bounds.topLeft);
+      }
+      const ComputedStyleComponent& computedStyle =
+          StyleSystem().computeStyle(entity, disabledSink);
+      return Transform2d::Translate(createComputedSizedElementComponentWithStyle(
+                                        entity, computedStyle, FontMetrics(), disabledSink)
+                                        .bounds.topLeft);
     }
 
-    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, disabledSink);
 
     const ComputedSizedElementComponent& computedSizedElement =
@@ -710,6 +720,17 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
       stack.push_back(ElementContext{child, currentViewBox});
     }
   }
+}
+
+void LayoutSystem::recomputeInvalidatedLayout(EntityHandle entity, ParseWarningSink& warningSink) {
+  const auto& style = entity.get<ComputedStyleComponent>();
+  if (entity.all_of<SizedElementComponent>()) {
+    createComputedSizedElementComponentWithStyle(entity, style, FontMetrics(), warningSink);
+  }
+  if (entity.all_of<TransformComponent>()) {
+    createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), warningSink);
+  }
+  std::ignore = getViewBox(entity);
 }
 
 SizedElementProperties LayoutSystem::resolveSizeProperties(

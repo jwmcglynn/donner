@@ -12,6 +12,7 @@
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -114,6 +115,27 @@ public:
                                                    ParseWarningSink& warningSink);
 
   /**
+   * Load an external SVG document like \ref loadExternalSVG, admitting each URL at most once per
+   * admission pass. A later request for an admitted URL reuses that admission while the loader
+   * and \ref SubDocumentCache::admissionFingerprint are unchanged: the document's size, the
+   * families of this document and of the admitted one, and their limits. A nested document of the
+   * admitted one that grew or changed families is only re-checked when the next pass starts. A full
+   * render-tree rebuild starts a new pass with \ref beginExternalSVGAdmissionPass. Only successful
+   * loads are reused; a failed one goes through \ref loadExternalSVG again, which applies its own
+   * negative cache. Admitted documents stay referenced here until the next pass starts.
+   *
+   * @param url URL of the external SVG to load.
+   * @param warningSink Sink to collect warnings.
+   * @return Parsed document handle, or `std::nullopt` on failure.
+   */
+  std::optional<SVGDocumentHandle> loadAdmittedExternalSVG(std::string_view url,
+                                                           ParseWarningSink& warningSink);
+
+  /// Start a new admission pass for \ref loadAdmittedExternalSVG: every URL is admitted again.
+  /// Call this at the start of each full render-tree rebuild.
+  void beginExternalSVGAdmissionPass() { admittedExternalSvgs_.clear(); }
+
+  /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.
    *
    * @param entity Entity to get the image size for.
@@ -213,6 +235,17 @@ private:
 
   /// Positive and negative external fetch cache, shared by images, fonts, and subdocuments.
   mutable std::unordered_map<std::string, CachedFetchResult> externalFetchCache_;
+
+  /// An external SVG document admitted in the current admission pass.
+  struct AdmittedExternalSvg {
+    SVGDocumentHandle document;    ///< The admitted document.
+    uint64_t cacheGeneration = 0;  ///< \ref cacheGeneration when it was admitted.
+    /// \ref SubDocumentCache::admissionFingerprint when it was admitted.
+    std::vector<uint64_t> fingerprint;
+  };
+
+  /// External SVG documents admitted in the current admission pass, keyed by URL.
+  std::unordered_map<RcString, AdmittedExternalSvg> admittedExternalSvgs_;
 
   /// External fetch resource-limit accounting.
   mutable FetchSecurityStats fetchSecurityStats_;

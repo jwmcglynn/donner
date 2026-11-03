@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -52,6 +53,17 @@ public:
   /// Admit a returned or cached document's bounded, acyclic retained graph.
   /// @param document Candidate. @param reservation Optional slots reserved before parsing.
   bool admit(const SVGDocumentHandle& document, Reservation* reservation = nullptr) const;
+
+  /**
+   * The inputs a re-admission of \p document would read, other than \p document's own nested
+   * documents: \p document's entity and payload size, the families of the owning document and of
+   * \p document (each by identity and limit revision), and both documents' membership revisions.
+   * While the fingerprint is unchanged, re-admitting \p document reaches the same verdict unless
+   * one of its nested documents grew or changed families.
+   *
+   * @param document A document this cache admitted.
+   */
+  std::vector<uint64_t> fingerprint(const SVGDocumentHandle& document) const;
 
   /// Inspect the ledger attached to an existing family without creating one.
   /// @param family Family whose admission counters are requested.
