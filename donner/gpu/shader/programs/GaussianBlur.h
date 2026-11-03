@@ -21,6 +21,10 @@ inline constexpr uint32_t kGaussianBlurKernelDownsample = 3;
 /// \ref GaussianBlurParams::boxLeft horizontally and \ref GaussianBlurParams::boxRight vertically,
 /// clamping at the input edge; mirrored as `kKernelUpsample`.
 inline constexpr uint32_t kGaussianBlurKernelUpsample = 4;
+/// \ref GaussianBlurParams::kernelType for a sampled quadratic B-spline, the limit shape of three
+/// equal box passes, whose full width is \ref GaussianBlurParams::stdDeviation (its variance is a
+/// quarter of the width squared); mirrored as `kKernelQuadraticSpline`.
+inline constexpr uint32_t kGaussianBlurKernelQuadraticSpline = 5;
 /// \ref GaussianBlurParams::edgeMode reading transparent black outside the input; mirrored as
 /// `kEdgeTransparent`.
 inline constexpr uint32_t kGaussianBlurEdgeTransparent = 0;
@@ -34,7 +38,7 @@ inline constexpr uint32_t kGaussianBlurEdgeWrap = 2;
  * Host layout for the `params` uniform resource of the Gaussian blur program.
  */
 struct alignas(8) GaussianBlurParams {
-  float stdDeviation = 0.0f;  //!< Gaussian standard deviation in pixels.
+  float stdDeviation = 0.0f;  //!< Gaussian standard deviation, or spline width, in pixels.
   uint32_t axis = 0;          //!< Zero for horizontal and one for vertical sampling.
   uint32_t edgeMode = 0;      //!< Transparent, duplicate, or wrap edge behavior.
   uint32_t kernelType = 0;    //!< Gaussian, box, or three-box cascade kernel selection.

@@ -33,9 +33,12 @@ TEST(GaussianBlurProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
   EXPECT_TRUE(shader.matchesMember("params", "clipMin", 24, 8, ShaderScalarType::I32, 2));
   EXPECT_TRUE(shader.matchesMember("params", "pad", 44, 4, ShaderScalarType::U32));
   EXPECT_NE(shader.wgsl.find("fn sampleEdge"), std::string_view::npos);
-  for (const auto& [name, value] : std::array<std::pair<std::string_view, uint32_t>, 4>{{
+  for (const auto& [name, value] : std::array<std::pair<std::string_view, uint32_t>, 7>{{
            {"kKernelBox", programs::kGaussianBlurKernelBox},
            {"kKernelBoxCascade", programs::kGaussianBlurKernelBoxCascade},
+           {"kKernelDownsample", programs::kGaussianBlurKernelDownsample},
+           {"kKernelUpsample", programs::kGaussianBlurKernelUpsample},
+           {"kKernelQuadraticSpline", programs::kGaussianBlurKernelQuadraticSpline},
            {"kEdgeTransparent", programs::kGaussianBlurEdgeTransparent},
            {"kEdgeDuplicate", programs::kGaussianBlurEdgeDuplicate},
        }}) {

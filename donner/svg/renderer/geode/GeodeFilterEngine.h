@@ -434,10 +434,11 @@ private:
   /// Two-pass separable Gaussian blur via compute shader.
   ///
   /// A blur whose device-space deviation along an axis is large runs that axis at reduced
-  /// resolution: the input is averaged down by a power of two, blurred there with a deviation
+  /// resolution: the input is averaged down by a power of two, blurred there with a kernel
   /// matching the full-resolution kernel's variance, and bilinearly enlarged into a
-  /// full-resolution result. The reduction keeps the reduced deviation at four texels or more, so
-  /// the result stays within a small fixed tolerance of the full-resolution blur.
+  /// full-resolution result. The reduced kernel is the quadratic spline three box passes converge
+  /// to, and the reduction keeps the reduced deviation at a few texels or more, so the result
+  /// stays within a small fixed tolerance of the full-resolution blur.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
   /// @param stdDeviationY Standard deviation in Y (pixels).
@@ -454,10 +455,13 @@ private:
   /// @param stdDeviation Standard deviation for this axis.
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
+  /// @param clip Optional output clip, in output texels.
+  /// @param kernelType `kGaussianBlurKernelGaussian`, or `kGaussianBlurKernelQuadraticSpline` with
+  ///   \p stdDeviation holding the spline width.
   /// @return Output texture for this pass.
   FilterTexture runBlurPass(FilterResourceArena& arena, FilterTexture input, FilterTexture output,
                             uint32_t width, uint32_t height, float stdDeviation, uint32_t axis,
-                            uint32_t edgeMode, const Box2d* clip = nullptr);
+                            uint32_t edgeMode, const Box2d* clip, uint32_t kernelType);
 
   /// One resampling dispatch of the blur program: a block-average downsample or a bilinear
   /// upsample by \p factorX horizontally and \p factorY vertically.

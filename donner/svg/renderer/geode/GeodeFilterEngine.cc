@@ -1532,18 +1532,18 @@ BoxBlurPlan computeBoxPasses(double sigma) {
 
 /// Smallest standard deviation, in reduced pixels, a reduced-resolution blur runs at. A blur is
 /// reduced by the largest power of two that keeps its deviation at or above this, so the reduced
-/// blur still spans at least this many texels and the bilinear enlargement interpolates a signal
-/// that is already smooth on the scale of one reduced texel.
+/// kernel still spans several texels and the bilinear enlargement interpolates a signal that is
+/// already smooth on the scale of one reduced texel.
 constexpr double kMinimumReducedBlurDeviation = 4.0;
 
 /// Largest per-axis reduction factor.
 constexpr uint32_t kMaximumReducedBlurFactor = 16;
 
-/// Per-axis reduction of one blur: how much to shrink each axis, and the deviation to blur the
-/// shrunken image with. A factor of one leaves that axis at full resolution.
+/// Per-axis reduction of one blur: how much to shrink each axis, and the width of the quadratic
+/// spline to blur the shrunken image with. A factor of one leaves that axis at full resolution.
 struct ReducedBlurPlan {
-  std::array<uint32_t, 2> factors{1, 1};       //!< Power-of-two reduction per axis.
-  std::array<double, 2> deviations{0.0, 0.0};  //!< Deviation in reduced pixels per reduced axis.
+  std::array<uint32_t, 2> factors{1, 1};   //!< Power-of-two reduction per axis.
+  std::array<double, 2> widths{0.0, 0.0};  //!< Spline width in reduced pixels per reduced axis.
 
   /// True when at least one axis is reduced.
   bool reduced() const { return factors[0] > 1 || factors[1] > 1; }
@@ -1575,14 +1575,19 @@ double FullResolutionBlurVariance(double deviation) {
   return variance;
 }
 
-/// Deviation, in reduced pixels, that makes the reduced pipeline's kernel match the variance of
-/// the full-resolution kernel along one axis reduced by \p factor. Averaging \p factor texels
-/// adds (factor^2 - 1) / 12 and bilinear enlargement adds (factor^2 - 1) / 6, so the reduced blur
-/// supplies the rest.
-double ReducedBlurDeviation(double deviation, uint32_t factor) {
+/// Width, in reduced pixels, of the quadratic spline that makes the reduced pipeline's kernel
+/// match the variance of the full-resolution kernel along one axis reduced by \p factor.
+///
+/// The full-resolution kernel is three box passes, so the reduced one is the shape three box
+/// passes converge to, a quadratic B-spline, rather than a Gaussian: at the same variance a
+/// Gaussian differs from three boxes by about one percent of full scale on an edge, while the
+/// spline stays within a fraction of that. Averaging \p factor texels adds (factor^2 - 1) / 12 to
+/// the variance and bilinear enlargement adds (factor^2 - 1) / 6, so the spline supplies the
+/// rest; a spline of width w has variance w^2 / 4.
+double ReducedBlurWidth(double deviation, uint32_t factor) {
   const double scale = factor;
   const double remaining = FullResolutionBlurVariance(deviation) - (scale * scale - 1.0) / 4.0;
-  return std::sqrt(std::max(remaining, 0.0)) / scale;
+  return 2.0 * std::sqrt(std::max(remaining, 0.0)) / scale;
 }
 
 /// Reduction for a blur of \p deviationX by \p deviationY device pixels. Wrapping edges are never
@@ -1600,20 +1605,20 @@ ReducedBlurPlan PlanReducedBlur(double deviationX, double deviationY, bool wrapE
     }
     plan.factors[axis] = ReducedBlurFactor(deviation);
     if (plan.factors[axis] > 1) {
-      plan.deviations[axis] = ReducedBlurDeviation(deviation, plan.factors[axis]);
+      plan.widths[axis] = ReducedBlurWidth(deviation, plan.factors[axis]);
     }
   }
   return plan;
 }
 
 /// Device pixels a reduced blur along one axis reads on either side of an output texel: the
-/// reduced Gaussian's taps plus the reduced texel each bilinear tap and block average spans.
+/// reduced spline's taps plus the reduced texel each bilinear tap and block average spans.
 double ReducedBlurSupport(double deviation) {
   const uint32_t factor = ReducedBlurFactor(deviation);
   if (factor == 1) {
     return 0.0;
   }
-  const double radius = std::min(std::ceil(3.0 * ReducedBlurDeviation(deviation, factor)), 127.0);
+  const double radius = std::min(std::ceil(1.5 * ReducedBlurWidth(deviation, factor)), 127.0);
   return (radius + 2.0) * factor;
 }
 
@@ -2312,10 +2317,13 @@ namespace {
 
 struct BlurDispatch {
   uint32_t axis = 0;
+  /// Gaussian deviation, or the spline width when \ref spline is set.
   float deviation = 0;
   std::optional<BoxPass> box;
   /// Nonzero for one pass that evaluates all three box passes of this window at once.
   int32_t cascadeWindow = 0;
+  /// True for a sampled quadratic spline of width \ref deviation.
+  bool spline = false;
 };
 
 struct BlurDispatchPlan {
@@ -2366,9 +2374,9 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
           ? PlanReducedBlur(stdDeviationX, stdDeviationY,
                             edgeMode == gpu::shader::programs::kGaussianBlurEdgeWrap)
           : ReducedBlurPlan{};
-  // A reduced axis is shrunk, blurred with a Gaussian matching the full-resolution kernel's
-  // variance, and enlarged again; an axis left at full resolution keeps its exact passes, run on
-  // the shrunken image of the other axis.
+  // A reduced axis is shrunk, blurred with a spline matching the full-resolution kernel's shape
+  // and variance, and enlarged again; an axis left at full resolution keeps its exact passes, run
+  // on the shrunken image of the other axis.
   const uint32_t factorX = reduced.factors[0];
   const uint32_t factorY = reduced.factors[1];
   const uint32_t width = (input.width() + factorX - 1) / factorX;
@@ -2385,9 +2393,9 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
       return {};
     }
     for (uint32_t axis = 0; axis < 2; ++axis) {
-      if (reduced.factors[axis] > 1 && reduced.deviations[axis] > 0.0) {
-        plan.passes[plan.count++] =
-            BlurDispatch{axis, static_cast<float>(reduced.deviations[axis]), std::nullopt};
+      if (reduced.factors[axis] > 1 && reduced.widths[axis] > 0.0) {
+        plan.passes[plan.count++] = BlurDispatch{
+            axis, static_cast<float>(reduced.widths[axis]), std::nullopt, 0, /*spline=*/true};
       }
     }
   }
@@ -2410,7 +2418,9 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
                          pass.axis, edgeMode, clip, gpu::shader::programs::kGaussianBlurKernelBox);
     } else {
       current = runBlurPass(arena, current, output, width, height, pass.deviation, pass.axis,
-                            edgeMode, clip);
+                            edgeMode, clip,
+                            pass.spline ? gpu::shader::programs::kGaussianBlurKernelQuadraticSpline
+                                        : gpu::shader::programs::kGaussianBlurKernelGaussian);
     }
     if (!current) {
       return {};
@@ -2463,7 +2473,7 @@ FilterTexture GeodeFilterEngine::runResamplePass(FilterResourceArena& arena, Fil
 FilterTexture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, FilterTexture input,
                                              FilterTexture output, uint32_t width, uint32_t height,
                                              float stdDeviation, uint32_t axis, uint32_t edgeMode,
-                                             const Box2d* clip) {
+                                             const Box2d* clip, uint32_t kernelType) {
   if (!input || !output) {
     return {};
   }
@@ -2472,7 +2482,7 @@ FilterTexture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, FilterT
   params.stdDeviation = stdDeviation;
   params.axis = axis;
   params.edgeMode = edgeMode;
-  params.kernelType = gpu::shader::programs::kGaussianBlurKernelGaussian;
+  params.kernelType = kernelType;
   params.boxLeft = 0;
   params.boxRight = 0;
   if (clip != nullptr) {

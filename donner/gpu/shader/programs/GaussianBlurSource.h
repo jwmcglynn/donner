@@ -25,6 +25,7 @@ const kKernelBox: u32 = 1u;
 const kKernelBoxCascade: u32 = 2u;
 const kKernelDownsample: u32 = 3u;
 const kKernelUpsample: u32 = 4u;
+const kKernelQuadraticSpline: u32 = 5u;
 const kEdgeTransparent: u32 = 0u;
 const kEdgeDuplicate: u32 = 1u;
 
@@ -149,13 +150,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(outputTexture, coord, applyClip(coord, textureLoad(inputTexture, coord, 0i)));
     return;
   }
-  let radius = min(i32(ceil((3f * params.stdDeviation))), 127i);
+  let spline = (params.kernelType == kKernelQuadraticSpline);
+  let radius = min(i32(ceil((select(3f, 1.5f, spline) * params.stdDeviation))), 127i);
   let inverseVariance = (1f / ((2f * params.stdDeviation) * params.stdDeviation));
   var sum: vec4<f32> = vec4<f32>(0f, 0f, 0f, 0f);
   var weightSum: f32 = 0f;
   for (var index: i32 = (-radius); (index <= radius); index = (index + 1i)) {
     let distance = f32(index);
-    let weight = exp((((-distance) * distance) * inverseVariance));
+    var weight: f32 = exp((((-distance) * distance) * inverseVariance));
+    if (spline) {
+      let t = (abs(distance) / params.stdDeviation);
+      let outer = select(0f, ((0.5f * (1.5f - t)) * (1.5f - t)), (t < 1.5f));
+      weight = select(outer, (0.75f - (t * t)), (t <= 0.5f));
+    }
     sum = (sum + (sampleEdge((coord + select(vec2<i32>(0i, index), vec2<i32>(index, 0i), (params.axis == 0u))), size) * weight));
     weightSum = (weightSum + weight);
   }
