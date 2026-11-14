@@ -1724,7 +1724,7 @@ TEST(PropertyRegistry, DisplayAnchorVisibilityOverflowAndPointerEventsErrors) {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("visibility: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid display value"));
+                ParseErrorIs("Invalid visibility value"));
   }
 
   {
@@ -1908,7 +1908,7 @@ TEST(PropertyRegistry, EmptyComponentDeclarationsReportPropertySpecificErrors) {
       {"alignment-baseline", "Invalid alignment-baseline value"},
       {"mix-blend-mode", "Invalid mix-blend-mode value"},
       {"writing-mode", "Invalid writing-mode value"},
-      {"visibility", "Invalid display value"},
+      {"visibility", "Invalid visibility value"},
       {"overflow", "Invalid overflow value"},
       {"fill-rule", "Invalid fill rule"},
       {"color-interpolation-filters", "Invalid color-interpolation-filters value"},
@@ -1938,7 +1938,7 @@ TEST(PropertyRegistry, NonIdentSingleTokenDeclarationsReportPropertySpecificErro
       {"alignment-baseline", "Invalid alignment-baseline value"},
       {"mix-blend-mode", "Invalid mix-blend-mode value"},
       {"writing-mode", "Invalid writing-mode value"},
-      {"visibility", "Invalid display value"},
+      {"visibility", "Invalid visibility value"},
       {"overflow", "Invalid overflow value"},
       {"fill-rule", "Invalid fill rule"},
       {"color-interpolation-filters", "Invalid color-interpolation-filters value"},
