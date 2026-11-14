@@ -2829,6 +2829,21 @@ TEST(EditorAppReorderTest, SendToBackKeepsChildInGroupReferencedByQuotedUrl) {
   EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("gB")));
 }
 
+TEST(EditorAppReorderTest, SendToBackKeepsChildInGroupReferencedByInlineStyle) {
+  // A real `url(#gB)` declaration in an inline style is a reference, so b1 stays inside gB.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="gA"><rect id="a1" width="10" height="10"/></g>
+         <g id="gB"><rect id="b1" width="10" height="10"/><rect id="b2" width="10" height="10"/></g>
+         <rect id="ref" width="10" height="10" style="fill: url(#gB)"/>
+       </svg>)svg"));
+  SelectById(app, "b1");
+  app.reorderSelectedElement(EditorApp::ZOrder::SendToBack);
+  app.flushFrame();
+  EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("gB")));
+}
+
 TEST(EditorAppReorderTest, SendToBackLiftsChildWhenGroupIdAppearsOnlyInInlineStyleText) {
   // `#gB` inside an inline-style string or comment is not a reference, so b1 may leave gB.
   EditorApp app;
@@ -3207,6 +3222,79 @@ TEST(EditorAppRenameTest, RenameLeavesInlineStyleCommentsUntouched) {
   EXPECT_THAT(AttrOf(app, "r", "style"),
               ::testing::Optional(
                   std::string("/* url(#grad) url('#grad') */ fill: url(#g2) /* url(#grad) */")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesInlineStyleHexColorUntouched) {
+  constexpr std::string_view kHexDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="abc" width="50" height="50"/>
+         <rect id="r" width="10" height="10" style="fill: #abc; stroke: url(#abc)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kHexDoc)));
+  SelectById(app, "abc");
+  EXPECT_TRUE(app.renameSelectedElement("box"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "style"),
+              ::testing::Optional(std::string("fill: #abc; stroke: url(#box)")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesInlineStyleStringWithEscapedQuoteUntouched) {
+  constexpr std::string_view kEscapedDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" width="10" height="10"
+               style="--a: &quot;x\&quot; url(#grad)&quot;; fill: url(#grad)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kEscapedDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "style"),
+              ::testing::Optional(std::string(R"css(--a: "x\" url(#grad)"; fill: url(#g2))css")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesUnterminatedInlineStyleStringUntouched) {
+  constexpr std::string_view kUnterminatedDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" width="10" height="10" style="--a: 'url(#grad)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kUnterminatedDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "style"), ::testing::Optional(std::string("--a: 'url(#grad)")));
+}
+
+// Only the unprefixed `style` attribute is a CSS declaration list; a prefixed `foo:style` is
+// foreign data and goes through the single-value matcher, which does not know CSS comments.
+TEST(EditorAppRenameTest, RenameTreatsPrefixedStyleAttributeAsSingleValue) {
+  constexpr std::string_view kPrefixedDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" xmlns:foo="https://example.com/foo"
+                 width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" width="10" height="10" foo:style="fill: url(#grad) /* url(#grad) */"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kPrefixedDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::optional<svg::SVGElement> rect = app.document().document().querySelector("#r");
+  ASSERT_THAT(rect, ::testing::Optional(::testing::_));
+  EXPECT_THAT(rect->getAttribute(xml::XMLQualifiedNameRef("foo", "style")),
+              ::testing::Optional(RcString("fill: url(#g2) /* url(#g2) */")));
 }
 
 TEST(EditorAppRenameTest, RenameLeavesStyleElementStringsAndCommentsUntouched) {
