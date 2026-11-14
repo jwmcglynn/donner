@@ -1875,9 +1875,16 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
                      .withReason("Minor char")},
+                // Upright glyphs take the font's vmtx vertical origin, 860 units below the cell
+                // top; the reference centers the hhea ascent/descent box instead (877.5 units).
+                // Both text backends differ by 215-219 px. With the reference's origin the diff
+                // is 77 px, inside the default 100 px every row allows, so the extra allowance
+                // covers only the origin model.
                 {"writing-mode=tb.svg",
-                 Params::Skip("Vertical path frames are implemented; upright CJK glyph origins "
-                              "still differ between the simple/full backends and the reference")},
+                 Params::WithThreshold(kDefaultThreshold, 250,
+                                       "Larger threshold due to reference disagreement: vmtx "
+                                       "upright origin vs hhea-centered cell, 0.0175em per glyph")
+                     .setCanvasSize(300, 300)},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

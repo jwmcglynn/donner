@@ -574,8 +574,9 @@ external fetch; its conflicting corpus image is also skipped. The
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and
 a resource loader that records requests.
 
-**Remaining impact:** 2 in `text/textPath/`: vertical layout on a path (`writing-mode=tb.svg`)
-and kerning across mixed children, which belong to the vertical and shaping workstreams.
+**Remaining impact:** 1 in `text/textPath/`: kerning across mixed children, which belongs to the
+shaping workstream. Vertical layout on a path (`writing-mode=tb.svg`) compares with a 250 px
+allowance for the reference's hhea-centered upright origin, 0.0175em from the font's vmtx origin.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
 filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) and the
 0.026em upright origin in `writing-mode/tb-and-punctuation.svg` are accepted differences
