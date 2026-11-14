@@ -1337,8 +1337,11 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/direction",
                 {
                     {"rtl-with-vertical-writing-mode.svg",
-                     Params::Skip("Not impl: direction property (BiDi text shaping)")},
-                    {"rtl.svg", Params::Skip("Not impl: direction property (BiDi text shaping)")},
+                     Params::UndefinedBehavior("rtl with vertical writing-mode (svgwg#618)")},
+                    {"rtl.svg",
+                     Params::Skip("Reference disagreement: the reference shapes Arabic with Noto "
+                                  "Sans Arabic, which the test fonts lack; Donner falls back to "
+                                  "Amiri. Order, anchoring and the Latin run match")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1926,7 +1929,10 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params::Skip("Not impl: unicode-bidi property (BiDi override)")},
+                     Params::Skip("Override order, script runs and Arabic joining match the "
+                                  "reference; Latin glyphs sit up to 1.5 px from the reference "
+                                  "individually (not kerning), leaving 122 px on the full tier")
+                         .onlyTextFull()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
