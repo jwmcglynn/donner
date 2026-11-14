@@ -20,7 +20,6 @@ void PrintTo(EditorCommand::Kind kind, std::ostream* os) {
     case EditorCommand::Kind::InsertElement: *os << "InsertElement"; return;
     case EditorCommand::Kind::ReplaceElements: *os << "ReplaceElements"; return;
     case EditorCommand::Kind::DeleteElement: *os << "DeleteElement"; return;
-    case EditorCommand::Kind::CutShapes: *os << "CutShapes"; return;
     case EditorCommand::Kind::PasteShapes: *os << "PasteShapes"; return;
     case EditorCommand::Kind::InsertText: *os << "InsertText"; return;
     case EditorCommand::Kind::SetTextContent: *os << "SetTextContent"; return;

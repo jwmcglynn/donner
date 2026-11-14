@@ -273,10 +273,10 @@ TEST(PreviewSourceCoherence, MatchesAfterEachCommittedOperation) {
     ExpectPreviewMatchesReloadedSource(async, "delete_dot");
   }
 
-  // NOTE ON COVERAGE: The shape-clipboard Paste/Cut path
+  // NOTE ON COVERAGE: The shape-clipboard Paste path
   // (`donner/editor/ShapeClipboardCommands.h` -> `PasteShapesCommand`) is NOT
   // driven here. Its commit mechanism is the structural-reparse path
-  // (`AsyncSVGDocument::applyOne` handles CutShapes/PasteShapes by reparsing
+  // (`AsyncSVGDocument::applyOne` handles PasteShapes by reparsing
   // `bytes` via `setDocumentMaybeStructural`). Driving the clipboard helper
   // itself requires selection-id plumbing that belongs to
   // `shape_clipboard_tests`.
