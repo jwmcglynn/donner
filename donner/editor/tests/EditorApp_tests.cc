@@ -2829,6 +2829,21 @@ TEST(EditorAppReorderTest, SendToBackKeepsChildInGroupReferencedByQuotedUrl) {
   EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("gB")));
 }
 
+TEST(EditorAppReorderTest, SendToBackLiftsChildWhenGroupIdAppearsOnlyInInlineStyleText) {
+  // `#gB` inside an inline-style string or comment is not a reference, so b1 may leave gB.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="gA"><rect id="a1" width="10" height="10"/></g>
+         <g id="gB"><rect id="b1" width="10" height="10"/><rect id="b2" width="10" height="10"/></g>
+         <rect id="ref" width="10" height="10" style="--note: 'url(#gB)'; /* url(#gB) */"/>
+       </svg>)svg"));
+  SelectById(app, "b1");
+  app.reorderSelectedElement(EditorApp::ZOrder::SendToBack);
+  app.flushFrame();
+  EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("<svg>")));
+}
+
 TEST(EditorAppReorderTest, TreeAwareArrangeIsNoOpAtDocumentExtremes) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(std::string(kNestedGroups)));
@@ -3151,6 +3166,69 @@ TEST(EditorAppRenameTest, RenameRepointsQuotedUrlReferences) {
                                     R"css(.a { fill: url("#g2") }
 .b { fill: url( '#g2' ) }
 .c { fill: url("#grad-a") })css")));
+}
+
+// CSS strings and comments are not references: only the real `url(...)` values repoint.
+TEST(EditorAppRenameTest, RenameLeavesInlineStyleStringContentsUntouched) {
+  constexpr std::string_view kStringDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" width="50" height="50" fill="url(#grad)"
+               style="--caption: &quot;url('#grad') url(#grad)&quot;; content: 'url(#grad)'; stroke: url('#grad')"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kStringDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "fill"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "style"),
+              ::testing::Optional(
+                  std::string("--caption: \"url('#grad') url(#grad)\"; content: 'url(#grad)'; "
+                              "stroke: url('#g2')")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesInlineStyleCommentsUntouched) {
+  constexpr std::string_view kCommentDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" width="50" height="50"
+               style="/* url(#grad) url('#grad') */ fill: url(#grad) /* url(#grad) */"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kCommentDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "style"),
+              ::testing::Optional(
+                  std::string("/* url(#grad) url('#grad') */ fill: url(#g2) /* url(#grad) */")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesStyleElementStringsAndCommentsUntouched) {
+  constexpr std::string_view kStyleDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>.a { --caption: "url('#grad') url(#grad)"; fill: url(#grad) }
+/* url(#grad) url('#grad') */
+.b { stroke: url('#grad') }</style>
+         <defs><linearGradient id="grad"/></defs>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kStyleDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(StyleTextOf(app),
+              ::testing::Optional(std::string(
+                  R"css(.a { --caption: "url('#grad') url(#grad)"; fill: url(#g2) }
+/* url(#grad) url('#grad') */
+.b { stroke: url('#g2') })css")));
 }
 
 TEST(EditorAppRenameTest, RenameRepointsOnlyExactUrlIdTokensWithIdCharSuffixes) {
