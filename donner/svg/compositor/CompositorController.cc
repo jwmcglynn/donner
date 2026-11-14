@@ -2964,7 +2964,8 @@ void CompositorController::refreshLayerMetadata() {
 }
 
 bool CompositorController::documentReadsFilterBackdrop(Registry& registry) {
-  return DocumentReadsFilterBackdrop(registry, document().svgElement().unsafeEntityHandle().entity());
+  return DocumentReadsFilterBackdrop(registry,
+                                     document().svgElement().unsafeEntityHandle().entity());
 }
 
 void CompositorController::resolveLayerAssignments(Registry& registry, ResolveOptions options) {

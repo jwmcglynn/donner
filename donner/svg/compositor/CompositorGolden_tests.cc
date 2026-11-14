@@ -1747,64 +1747,88 @@ std::string BackdropFilterDocument(std::string_view body) {
 
 /// Converts one RGBA8 pixel to premultiplied floats in [0, 1].
 std::array<float, 4> PremultipliedPixel(const RendererBitmap& bitmap, int x, int y) {
-  const uint8_t* px = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes +
-                      static_cast<size_t>(x) * 4u;
+  const uint8_t* px =
+      bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
   const float alpha = static_cast<float>(px[3]) / 255.0f;
   const float scale = bitmap.alphaType == AlphaType::Premultiplied ? 1.0f / 255.0f : alpha / 255.0f;
   return {px[0] * scale, px[1] * scale, px[2] * scale, alpha};
 }
 
-/// Lays the upload tiles over a transparent canvas in paint order, source-over at their canvas
-/// positions, as the editor presents them, and returns the largest channel difference from
-/// @p reference after unpremultiplying.
-int MaxDifferenceOfComposedTiles(const CompositorController& compositor,
-                                 const RendererBitmap& reference) {
-  const int width = reference.dimensions.x;
-  const int height = reference.dimensions.y;
-  std::vector<std::array<float, 4>> canvas(static_cast<size_t>(width) * height,
-                                           std::array<float, 4>{});
-  std::vector<CompositorTile> tiles = compositor.snapshotTilesForUpload();
-  std::ranges::sort(tiles, {}, &CompositorTile::paintOrderIndex);
-  for (const CompositorTile& tile : tiles) {
-    RendererBitmap bitmap = tile.bitmap;
-    if (bitmap.empty() && tile.textureSnapshot != nullptr) {
-      bitmap = tile.textureSnapshot->takeSnapshot();
-    }
-    if (bitmap.empty()) {
-      continue;
-    }
-    EXPECT_TRUE(tile.canvasFromBitmap.isTranslation());
-    const Vector2d origin = tile.canvasOffsetPx + tile.canvasFromBitmap.translation();
-    const int originX = static_cast<int>(std::lround(origin.x));
-    const int originY = static_cast<int>(std::lround(origin.y));
+/// Premultiplied float canvas the editor's tile presentation is reproduced on.
+class TileCanvas {
+public:
+  explicit TileCanvas(Vector2i size)
+      : size_(size), pixels_(static_cast<size_t>(size.x) * size.y, std::array<float, 4>{}) {}
+
+  /// Draws @p bitmap source-over with its top-left at @p origin.
+  void drawSourceOver(const RendererBitmap& bitmap, Vector2i origin) {
     for (int y = 0; y < bitmap.dimensions.y; ++y) {
       for (int x = 0; x < bitmap.dimensions.x; ++x) {
-        const int cx = originX + x;
-        const int cy = originY + y;
-        if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
-          continue;
-        }
-        const std::array<float, 4> src = PremultipliedPixel(bitmap, x, y);
-        std::array<float, 4>& dst = canvas[static_cast<size_t>(cy) * width + cx];
-        for (int c = 0; c < 4; ++c) {
-          dst[c] = src[c] + dst[c] * (1.0f - src[3]);
+        if (std::array<float, 4>* dst = at(origin.x + x, origin.y + y)) {
+          const std::array<float, 4> src = PremultipliedPixel(bitmap, x, y);
+          for (int c = 0; c < 4; ++c) {
+            (*dst)[c] = src[c] + (*dst)[c] * (1.0f - src[3]);
+          }
         }
       }
     }
   }
 
-  int maxDiff = 0;
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const std::array<float, 4> want = PremultipliedPixel(reference, x, y);
-      const std::array<float, 4>& got = canvas[static_cast<size_t>(y) * width + x];
-      for (int c = 0; c < 4; ++c) {
-        const int diff = static_cast<int>(std::lround(std::abs(want[c] - got[c]) * 255.0f));
-        maxDiff = std::max(maxDiff, diff);
+  /// Largest channel difference from @p reference, in 8-bit units.
+  [[nodiscard]] int maxDifference(const RendererBitmap& reference) {
+    int maxDiff = 0;
+    for (int y = 0; y < size_.y; ++y) {
+      for (int x = 0; x < size_.x; ++x) {
+        const std::array<float, 4> want = PremultipliedPixel(reference, x, y);
+        const std::array<float, 4>& got = *at(x, y);
+        for (int c = 0; c < 4; ++c) {
+          maxDiff =
+              std::max(maxDiff, static_cast<int>(std::lround(std::abs(want[c] - got[c]) * 255.0f)));
+        }
       }
     }
+    return maxDiff;
   }
-  return maxDiff;
+
+private:
+  std::array<float, 4>* at(int x, int y) {
+    if (x < 0 || y < 0 || x >= size_.x || y >= size_.y) {
+      return nullptr;
+    }
+    return &pixels_[static_cast<size_t>(y) * size_.x + x];
+  }
+
+  Vector2i size_;
+  std::vector<std::array<float, 4>> pixels_;
+};
+
+/// A tile's pixels, read back from its texture when it carries no CPU bitmap.
+RendererBitmap TilePixels(const CompositorTile& tile) {
+  if (tile.bitmap.empty() && tile.textureSnapshot != nullptr) {
+    return tile.textureSnapshot->takeSnapshot();
+  }
+  return tile.bitmap;
+}
+
+/// Lays the upload tiles over a transparent canvas in paint order, source-over at their canvas
+/// positions, as the editor presents them, and returns the largest channel difference from
+/// @p reference.
+int MaxDifferenceOfComposedTiles(const CompositorController& compositor,
+                                 const RendererBitmap& reference) {
+  TileCanvas canvas(reference.dimensions);
+  std::vector<CompositorTile> tiles = compositor.snapshotTilesForUpload();
+  std::ranges::sort(tiles, {}, &CompositorTile::paintOrderIndex);
+  for (const CompositorTile& tile : tiles) {
+    const RendererBitmap bitmap = TilePixels(tile);
+    if (bitmap.empty()) {
+      continue;
+    }
+    EXPECT_TRUE(tile.canvasFromBitmap.isTranslation());
+    const Vector2d origin = tile.canvasOffsetPx + tile.canvasFromBitmap.translation();
+    canvas.drawSourceOver(bitmap, Vector2i(static_cast<int>(std::lround(origin.x)),
+                                           static_cast<int>(std::lround(origin.y))));
+  }
+  return canvas.maxDifference(reference);
 }
 
 struct BackdropFilterCase {
