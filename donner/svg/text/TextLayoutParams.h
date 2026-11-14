@@ -8,6 +8,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -46,6 +47,14 @@ struct TextLayoutParams {
   /// percentages resolve against the own-area measure before layout; em computes in style.
   /// Does not affect text paths.
   double textIndentPx = 0.0;
+
+  // Later fields go last so positional initializers of the earlier fields stay valid.
+
+  /// `direction` of the `<text>` element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether the `<text>` element's own `unicode-bidi` overrides every character to `direction`
+  /// (`bidi-override` or `isolate-override`).
+  bool bidiOverride = false;
 };
 
 }  // namespace donner::svg

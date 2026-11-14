@@ -58,7 +58,7 @@ coalesce; everything else is emitted in queue order:
 | `SetTransform`                                                        | Collapses per target element to the most-recent transform (60 Hz drag → 1 apply) |
 | `SetAttribute`                                                        | Collapses per `(element, attributeName)` to the most-recent value                |
 | `ReplaceDocument`                                                     | Exclusive — drops every command queued before it (entities invalidated)          |
-| `CutShapes` / `PasteShapes`                                           | ReplaceDocument-like, exclusive, with `preserveUndoOnReparse`                    |
+| `PasteShapes`                                                         | ReplaceDocument-like, exclusive, with `preserveUndoOnReparse`                    |
 | All others (incl. `SetTextContent`, `InsertElement`, `DeleteElement`) | Not coalesced — passes through                                                   |
 
 Caution: the `EditorCommand.h` doc comment on `SetTextContent` claims it coalesces by element

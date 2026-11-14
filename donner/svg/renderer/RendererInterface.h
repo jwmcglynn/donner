@@ -27,6 +27,7 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/ColorInterpolation.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MaskType.h"
@@ -1105,6 +1106,13 @@ struct TextParams {
   std::shared_ptr<const PreparedTextDraw> preparedTextDraw;
   /// Computed CSS first-line start margin for a positive inline-size area; paths ignore it.
   double textIndentPx = 0.0;
+
+  // Later fields go last so positional initializers of the earlier fields stay valid.
+
+  /// CSS `direction` of this text element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether this text element's own `unicode-bidi` overrides every character to `direction`.
+  bool bidiOverride = false;
 };
 
 /**

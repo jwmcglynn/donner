@@ -1815,6 +1815,8 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
     params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
   }
   params.textAnchor = properties.textAnchor.get().value();
+  params.direction = properties.direction.get().value();
+  params.bidiOverride = OverridesBidi(properties.unicodeBidi.get().value());
   params.textDecoration = properties.textDecoration.get().value();
   params.writingMode = properties.writingMode.get().value();
 

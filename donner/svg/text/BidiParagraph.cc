@@ -4,6 +4,7 @@
 #include <SheenBidi/SBCodepoint.h>
 #include <SheenBidi/SBLine.h>
 #include <SheenBidi/SBParagraph.h>
+#include <SheenBidi/SBScriptLocator.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@ namespace {
 using Algorithm = std::unique_ptr<const _SBAlgorithm, decltype(&SBAlgorithmRelease)>;
 using Paragraph = std::unique_ptr<const _SBParagraph, decltype(&SBParagraphRelease)>;
 using Line = std::unique_ptr<const _SBLine, decltype(&SBLineRelease)>;
+using ScriptLocator = std::unique_ptr<_SBScriptLocator, decltype(&SBScriptLocatorRelease)>;
 
 char32_t ValidScalar(char32_t cp) {
   return cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? 0xfffd : cp;
@@ -59,6 +61,9 @@ bool AppendLineRuns(SBParagraphRef paragraph, uint32_t start, uint32_t end,
 struct BidiParagraph::State {
   std::vector<char32_t> codepoints;
   uint8_t base = 0;
+  /// Every scalar takes the explicit base level, as for `unicode-bidi: bidi-override` on the
+  /// paragraph's own block container, so SheenBidi never resolves the paragraph.
+  bool override = false;
   std::vector<uint8_t> levels;
   Algorithm algorithm{nullptr, SBAlgorithmRelease};
   std::vector<Paragraph> paragraphs;
@@ -87,6 +92,42 @@ struct BidiParagraph::State {
     return true;
   }
 
+  /// An override keeps every scalar at the base level, but one level run can then mix scripts.
+  /// Split it at script boundaries so each run shapes with its own script, for example so Arabic
+  /// keeps joining inside a right-to-left override of mixed Latin and Arabic text.
+  bool appendOverrideRuns(uint32_t start, uint32_t end, BidiResourceBudget& budget,
+                          std::vector<Run>& result) const {
+    ScriptLocator locator(SBScriptLocatorCreate(), SBScriptLocatorRelease);
+    if (!locator) {
+      budget.rejected = true;
+      return false;
+    }
+    const SBCodepointSequence line{SBStringEncodingUTF32, codepoints.data() + start, end - start};
+    SBScriptLocatorLoadCodepoints(locator.get(), &line);
+    const size_t first = result.size();
+    while (SBScriptLocatorMoveNext(locator.get())) {
+      const SBScriptAgent* agent = SBScriptLocatorGetAgent(locator.get());
+      const uint32_t expected = result.size() == first ? start : result.back().end;
+      if (agent->length == 0 || start + agent->offset != expected ||
+          agent->offset + agent->length > end - start ||
+          !budget.consume(budget.remaining.runs, 1)) {
+        budget.rejected = true;
+        return false;
+      }
+      result.push_back({static_cast<uint32_t>(start + agent->offset),
+                        static_cast<uint32_t>(start + agent->offset + agent->length), base});
+    }
+    if (result.size() == first || result.back().end != end) {
+      budget.rejected = true;
+      return false;
+    }
+    // Script runs arrive in logical order; a right-to-left line shows them right to left.
+    if (base % 2 != 0) {
+      std::reverse(result.begin() + static_cast<std::ptrdiff_t>(first), result.end());
+    }
+    return true;
+  }
+
   std::optional<size_t> appendParagraph(size_t offset, BidiResourceBudget& budget) {
     if (offset != 0 && !budget.consume(budget.remaining.paragraphs, 1)) {
       return std::nullopt;
@@ -111,7 +152,7 @@ struct BidiParagraph::State {
   }
 
   bool initialize(BidiResourceBudget& budget, bool forceAnalysis) {
-    levels.resize(codepoints.size(), 0);
+    levels.resize(codepoints.size(), override ? base : 0);
     const bool needsAnalysis =
         base != 0 || forceAnalysis ||
         std::any_of(codepoints.begin(), codepoints.end(), BidiParagraph::NeedsAnalysis);
@@ -121,7 +162,7 @@ struct BidiParagraph::State {
     if (!budget.consume(budget.remaining.paragraphs, 1)) {
       return false;
     }
-    if (!needsAnalysis) {
+    if (!needsAnalysis || override) {
       return true;
     }
     const SBCodepointSequence source{SBStringEncodingUTF32, codepoints.data(), codepoints.size()};
@@ -165,8 +206,9 @@ char32_t BidiParagraph::Mirror(char32_t cp) {
 
 std::optional<BidiParagraph> BidiParagraph::Analyze(std::vector<char32_t> codepoints,
                                                     BidiResourceBudget& budget, uint8_t base,
-                                                    bool forceAnalysis) {
-  if (base > 2 || !budget.consume(budget.remaining.codepoints, codepoints.size())) {
+                                                    bool forceAnalysis, bool override) {
+  if (base > 2 || (override && base == 2) ||
+      !budget.consume(budget.remaining.codepoints, codepoints.size())) {
     budget.rejected = true;
     return std::nullopt;
   }
@@ -174,6 +216,7 @@ std::optional<BidiParagraph> BidiParagraph::Analyze(std::vector<char32_t> codepo
   auto state = std::make_unique<State>();
   state->codepoints = std::move(codepoints);
   state->base = base;
+  state->override = override;
   if (!state->initialize(budget, forceAnalysis)) {
     return std::nullopt;
   }
@@ -185,6 +228,9 @@ uint8_t BidiParagraph::levelAt(uint32_t index) const {
 }
 
 uint8_t BidiParagraph::paragraphLevelAt(uint32_t index) const {
+  if (state_->override) {
+    return state_->base;
+  }
   const auto found = state_->paragraphAfter(index);
   return found == state_->paragraphs.begin() ? 0 : SBParagraphGetBaseLevel(std::prev(found)->get());
 }
@@ -199,10 +245,17 @@ std::optional<std::vector<BidiParagraph::Run>> BidiParagraph::visualRuns(
   if (start == end) {
     return result;
   }
+  if (state_->override) {
+    if (!state_->appendOverrideRuns(start, end, budget, result)) {
+      return std::nullopt;
+    }
+    return result;
+  }
   if (!state_->algorithm) {
     if (!budget.consume(budget.remaining.runs, 1)) {
       return std::nullopt;
     }
+    // Without reordering every scalar shares level zero on the left-to-right fast path.
     result.push_back({start, end, 0});
     return result;
   }

@@ -236,7 +236,7 @@ void ReadTextFormatState(const svg::PropertyRegistry& style, FormatBarState* sta
   const double fontSize =
       style.fontSize.get().value().toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
   state->hasFontSize = std::isfinite(fontSize);
-  state->fontSize = state->hasFontSize ? static_cast<float>(fontSize) : 0.0f;
+  state->fontSize = state->hasFontSize ? fontSize : 0.0;
 
   // 700 is the `bold` keyword; lighter weights do not light up the Bold toggle.
   state->bold = style.fontWeight.get().value() >= 700;
@@ -253,8 +253,8 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
     queued = app.setAttributeOnSelection("font-family", actions.fontFamily) || queued;
   }
   if (actions.setFontSize) {
-    queued = app.setAttributeOnSelection("font-size", donner::detail::FormatNumberForSVG(
-                                                          static_cast<double>(actions.fontSize))) ||
+    queued = app.setAttributeOnSelection("font-size",
+                                         donner::detail::FormatNumberForSVG(actions.fontSize)) ||
              queued;
   }
 
@@ -458,11 +458,11 @@ void TextFormatBarPresenter::renderFontSizeInput(const FormatBarState& state,
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::SameLine();
   if (!sizeControlActive_) {
-    sizeEditValue_ = state.hasFontSize ? state.fontSize : 0.0f;
+    sizeEditValue_ = state.hasFontSize ? state.fontSize : 0.0;
   }
   ImGui::SetNextItemWidth(128.0f);
-  ImGui::InputFloat("##format_bar_font_size", &sizeEditValue_, 0.0f, 0.0f, "%.0f",
-                    ImGuiInputTextFlags_AutoSelectAll);
+  ImGui::InputDouble("##format_bar_font_size", &sizeEditValue_, 0.0, 0.0, "%.0f",
+                     ImGuiInputTextFlags_AutoSelectAll);
   sizeControlActive_ = ImGui::IsItemActive();
   sizeFieldActivated = ImGui::IsItemActivated();
   const bool sizeEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
@@ -471,15 +471,14 @@ void TextFormatBarPresenter::renderFontSizeInput(const FormatBarState& state,
   const AttachedNumericStepperResult sizeSteps =
       RenderAttachedNumericStepper("format_bar_font_size_steps", sizeFieldMin, sizeFieldMax, theme);
   if (sizeEditCommitted) {
-    sizeEditValue_ =
-        std::isfinite(sizeEditValue_) ? std::clamp(sizeEditValue_, 1.0f, 512.0f) : 16.0f;
+    sizeEditValue_ = std::isfinite(sizeEditValue_) ? std::clamp(sizeEditValue_, 1.0, 512.0) : 16.0;
     actions.setFontSize = true;
     actions.fontSize = sizeEditValue_;
   }
   if (sizeSteps.increment || sizeSteps.decrement) {
-    const float currentSize =
-        std::isfinite(sizeEditValue_) && sizeEditValue_ >= 1.0f ? sizeEditValue_ : 16.0f;
-    sizeEditValue_ = std::clamp(currentSize + (sizeSteps.increment ? 1.0f : -1.0f), 1.0f, 512.0f);
+    const double currentSize =
+        std::isfinite(sizeEditValue_) && sizeEditValue_ >= 1.0 ? sizeEditValue_ : 16.0;
+    sizeEditValue_ = std::clamp(currentSize + (sizeSteps.increment ? 1.0 : -1.0), 1.0, 512.0);
     actions.setFontSize = true;
     actions.fontSize = sizeEditValue_;
   }
@@ -499,7 +498,7 @@ void TextFormatBarPresenter::renderFontSizePresetPopup(const FormatBarState& sta
     const int preset = kFormatBarFontSizePresets[index];
     const float previewSize = static_cast<float>(preset);
     const float rowHeight = std::max(30.0f, previewSize + 10.0f);
-    const bool selected = state.hasFontSize && static_cast<int>(state.fontSize + 0.5f) == preset;
+    const bool selected = state.hasFontSize && static_cast<int>(state.fontSize + 0.5) == preset;
     const bool chosen = ImGui::Selectable("##size_preset", selected, 0, ImVec2(0.0f, rowHeight));
     const ImVec2 rowMin = ImGui::GetItemRectMin();
     const ImVec2 rowMax = ImGui::GetItemRectMax();
