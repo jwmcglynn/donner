@@ -463,6 +463,22 @@ TEST_F(CssImportTest, BudgetRefusedImportsRetryWhenAnotherSheetIsRemoved) {
   EXPECT_THAT(fill(document), Optional(kGreen));
 }
 
+TEST_F(CssImportTest, CachedImportsSurviveAnExhaustedDocumentBudget) {
+  respond("theme.css", "#r { fill: green; }");
+  respond("huge.css", std::string(UrlLoader::kDefaultMaximumResourceSize + 1, ' '));
+  SVGDocument document = parse("<style id='s'>@import 'theme.css';</style>" + std::string(kRect));
+  prepare(document);
+  ASSERT_THAT(fill(document), Optional(kGreen));
+
+  // The oversized fetch latches the document's aggregate budget closed. The theme bytes were
+  // charged when first fetched, so reusing them from the cache must still succeed.
+  document.querySelector("#s")->cast<SVGStyleElement>().setContents(
+      "@import 'huge.css'; @import 'theme.css';");
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+  EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("not loaded")));
+}
+
 TEST_F(CssImportTest, ImportedFontSourcesResolveAgainstTheImportedStylesheet) {
   respond("styles/a.css", "@font-face { font-family: A; src: url(fonts/a.woff); }");
   respond("b.css", "@font-face { font-family: B; src: url(b.woff); }");

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -448,6 +449,22 @@ const char* ExternalImportRefusal(ProcessingMode mode, bool hasLoader) {
   return nullptr;
 }
 
+/// Whether \p url has a positive (already charged) entry in the shared external-fetch cache.
+bool HasCachedBytes(
+    const std::unordered_map<std::string, std::variant<std::vector<uint8_t>, ResourceLoaderError>>&
+        cache,
+    std::string_view url) {
+  const auto it = cache.find(std::string(url));
+  return it != cache.end() && std::holds_alternative<std::vector<uint8_t>>(it->second);
+}
+
+/// As for images, an external fetch refused for size latches the aggregate budget closed.
+void LatchAggregateOnOversizedFetch(UrlLoaderError error, bool external, size_t& remainingBytes) {
+  if (error == UrlLoaderError::ResourceTooLarge && external) {
+    remainingBytes = 0;
+  }
+}
+
 /// Charge \p bytes to the aggregate budget, latching it closed if they do not fit.
 bool ChargeAggregateBytes(size_t& remainingBytes, size_t bytes) {
   if (bytes > remainingBytes) {
@@ -658,9 +675,13 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
   // The shared cache applies only the fixed per-resource cap, so its outcome for a URL never
   // depends on this pass's remaining import allowance; that allowance is enforced afterwards.
+  // A stylesheet already admitted to the cache was charged by the fetch that admitted it, so its
+  // reuse is not refused when the remaining aggregate budget is now smaller (or latched closed).
+  size_t cacheHitAllowance = std::numeric_limits<size_t>::max();
   BudgetedCachingResourceLoader cachedLoader(
       guardedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
-      UrlLoader::kDefaultMaximumResourceSize, remainingResourceBytes_);
+      UrlLoader::kDefaultMaximumResourceSize,
+      HasCachedBytes(externalFetchCache_, url) ? cacheHitAllowance : remainingResourceBytes_);
   // Data URLs decode without any loader; only external URLs reach the application's loader.
   ResourceLoaderInterface& loader = external ? static_cast<ResourceLoaderInterface&>(cachedLoader)
                                              : static_cast<ResourceLoaderInterface&>(nullLoader);
@@ -668,10 +689,7 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
   UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize);
   auto result = urlLoader.fromUri(url);
   if (const auto* error = std::get_if<UrlLoaderError>(&result)) {
-    // As for images, a fetch refused for size latches the document's aggregate budget closed.
-    if (*error == UrlLoaderError::ResourceTooLarge && external) {
-      remainingResourceBytes_ = 0;
-    }
+    LatchAggregateOnOversizedFetch(*error, external, remainingResourceBytes_);
     return RcString("CSS @import was not loaded: " + std::string(ToString(*error)));
   }
 
