@@ -69,14 +69,14 @@ A second slice adds the typed inherited `direction` and non-inherited `unicode-b
 - The `<text>` element's own `bidi-override` or `isolate-override` gives every character the
   paragraph level, split into script runs so each shapes with its own script. Explicit bidi
   controls in the source are ignored under the override.
+- After a right-to-left chunk the current text position is the chunk's anchored left edge, so a
+  following chunk without an absolute `x`, for example after a `tspan` that sets only `y`,
+  continues to its left.
 - The paragraph level comes from the `<text>` element. A `tspan` with a different `direction`
   mirrors its own chunk's anchor but does not change the paragraph level.
 
 Known gaps of this slice:
 
-- The current text position still advances rightward. An `rtl` chunk that starts without an
-  absolute `x`, for example after a `tspan` that sets only `y`, continues to the right of the
-  previous chunk rather than to its left.
 - `unicode-bidi: plaintext` on the `<text>` element behaves as `normal`; it should detect the base
   direction from the first strong character.
 - `unicode-bidi` on a `tspan` (control injection, Milestone 3), right-to-left vertical text and

@@ -82,6 +82,7 @@ struct ChunkBoundary {
   TextAnchor textAnchor = TextAnchor::Start;  ///< Effective text-anchor for the chunk.
   bool absoluteX = false;                ///< This boundary applies an authored absolute x position.
   bool absoluteY = false;                ///< This boundary applies an authored absolute y position.
+  bool rightToLeft = false;  ///< The chunk's first span progresses right to left on its line.
   std::optional<double> anchorPosition;  ///< Explicit inline origin, independent of run storage.
   /// First visual glyph used to carry a y-only continuation through textLength adjustment.
   std::optional<std::pair<size_t, size_t>> visualFirstGlyph;

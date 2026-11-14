@@ -836,14 +836,16 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
   }
 }
 
-/// The anchor edge, in left-to-right inline terms, that \p anchor names for a chunk of
-/// \p direction. `start` and `end` name the logical edges, so an `rtl` chunk on a horizontal line
-/// starts at its right edge. Vertical lines and text on a path keep the authored anchor: their
-/// right-to-left layout is not implemented.
-TextAnchor PhysicalTextAnchor(TextAnchor anchor, Direction direction, WritingMode writingMode,
-                              bool onPath) {
-  if (direction != Direction::Rtl || isVertical(writingMode) || onPath ||
-      anchor == TextAnchor::Middle) {
+/// Whether a span progresses right to left on its line. Vertical lines and text on a path keep
+/// left-to-right progression: their right-to-left layout is not implemented.
+bool RightToLeftInline(Direction direction, WritingMode writingMode, bool onPath) {
+  return direction == Direction::Rtl && !isVertical(writingMode) && !onPath;
+}
+
+/// The anchor edge, in left-to-right inline terms, that \p anchor names. `start` and `end` name
+/// the logical edges, so a right-to-left chunk starts at its right edge.
+TextAnchor PhysicalTextAnchor(TextAnchor anchor, bool rightToLeft) {
+  if (!rightToLeft || anchor == TextAnchor::Middle) {
     return anchor;
   }
   return anchor == TextAnchor::Start ? TextAnchor::End : TextAnchor::Start;
@@ -885,9 +887,11 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       continue;
     }
 
-    span.textAnchor = PhysicalTextAnchor(
-        style->properties->textAnchor.get().value(), style->properties->direction.get().value(),
-        style->properties->writingMode.get().value(), span.pathSpline.has_value());
+    span.rightToLeftInline = RightToLeftInline(style->properties->direction.get().value(),
+                                               style->properties->writingMode.get().value(),
+                                               span.pathSpline.has_value());
+    span.textAnchor =
+        PhysicalTextAnchor(style->properties->textAnchor.get().value(), span.rightToLeftInline);
     span.textDecoration = style->properties->textDecoration.get().value();
     span.textOrientation = style->properties->textOrientation.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
@@ -2761,7 +2765,8 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
 }
 
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
-                     const AnchorExclusions& exclusions, double indent) {
+                     const AnchorExclusions& exclusions, double indent,
+                     std::optional<double>* anchoredStart = nullptr) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
@@ -2791,6 +2796,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   }
   ForEachAnchorGlyph(runs, range,
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
+  if (anchoredStart) {
+    *anchoredStart = bounds.minimum + shift;
+  }
   return true;
 }
 
@@ -2803,16 +2811,23 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
       const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
       if (begin < runs[ri].glyphs.size()) {
         chunk.textAnchor = text.spans[ri].textAnchor;
+        chunk.rightToLeft = text.spans[ri].rightToLeftInline;
         break;
       }
     }
   }
   std::vector<std::vector<bool>> rejected;
   bool indentPending = firstLineIndent != 0.0;
+  // After a right-to-left chunk the current text position is its anchored left edge, so a
+  // following chunk without an absolute x starts there instead of at the left-to-right pen.
+  std::optional<double> rightToLeftPenEnd;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
     const ChunkBoundary end =
         ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
-    const TextAnchorRange range{chunkBoundaries[ci], end};
+    TextAnchorRange range{chunkBoundaries[ci], end};
+    if (!vertical && rightToLeftPenEnd && !range.begin.absoluteX && !range.begin.anchorPosition) {
+      range.begin.anchorPosition = rightToLeftPenEnd;
+    }
     double indent = 0.0;
     if (indentPending) {
       ForEachAnchorGlyph(runs, range, [&](const TextGlyph&, size_t) {
@@ -2820,9 +2835,11 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
         indentPending = false;
       });
     }
-    if (!AnchorTextRange(runs, range, vertical, exclusions, indent)) {
+    std::optional<double> anchoredStart;
+    if (!AnchorTextRange(runs, range, vertical, exclusions, indent, &anchoredStart)) {
       MarkRejectedAnchorRange(runs, range, rejected);
     }
+    rightToLeftPenEnd = range.begin.rightToLeft ? anchoredStart : std::nullopt;
   }
   CompactRejectedAnchorGlyphs(runs, rejected);
 }

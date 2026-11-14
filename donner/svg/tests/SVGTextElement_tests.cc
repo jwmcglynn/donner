@@ -1106,6 +1106,32 @@ TEST(SVGTextElementPublicApiTests, RtlDirectionMirrorsStartAndEndAnchors) {
   EXPECT_THAT(firstCharacterX(R"(style="direction: rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
 }
 
+// A chunk that starts without an absolute x continues from the current text position. After a
+// right-to-left chunk that position is the chunk's left edge, so the next chunk ends there.
+TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
+  const auto layOut = [](std::string_view direction) {
+    return instantiateSubtree(std::string(R"-(<svg viewBox="0 0 300 60">
+      <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" )-") +
+                              std::string(direction) + R"-(>AB<tspan y="40">CD</tspan></text>
+    </svg>)-");
+  };
+
+  SVGDocument ltrDocument = layOut("");
+  const auto ltr = ltrDocument.querySelector("#t")->cast<SVGTextElement>();
+  EXPECT_THAT(ltr.getStartPositionOfChar(2).x,
+              testing::DoubleNear(ltr.getEndPositionOfChar(1).x, 1e-6))
+      << "left to right, CD starts where AB ends";
+
+  SVGDocument rtlDocument = layOut(R"(direction="rtl")");
+  const auto rtl = rtlDocument.querySelector("#t")->cast<SVGTextElement>();
+  EXPECT_THAT(rtl.getEndPositionOfChar(1).x, testing::DoubleNear(200.0, 1e-6))
+      << "AB ends at its anchor";
+  EXPECT_THAT(rtl.getEndPositionOfChar(3).x,
+              testing::DoubleNear(rtl.getStartPositionOfChar(0).x, 1e-6))
+      << "right to left, CD ends where AB starts";
+  EXPECT_THAT(rtl.getStartPositionOfChar(2).y, testing::DoubleNear(40.0, 1e-6));
+}
+
 // `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
 // the same override on an enclosing group leaves the text's normal reordering alone.
 TEST(SVGTextElementPublicApiTests, BidiOverrideAppliesOnlyToTheTextElementItself) {
