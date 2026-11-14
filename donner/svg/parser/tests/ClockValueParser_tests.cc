@@ -1,8 +1,16 @@
 #include "donner/svg/parser/ClockValueParser.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <string_view>
+
 namespace donner::svg::parser {
+
+using testing::DoubleEq;
+using testing::Eq;
+using testing::Optional;
 
 TEST(ClockValueParser, BareNumber) {
   auto result = ClockValueParser::Parse("2");
@@ -102,6 +110,43 @@ TEST(ClockValueParser, RejectsNonFiniteValues) {
   EXPECT_TRUE(ClockValueParser::Parse("nan").hasError());
   EXPECT_TRUE(ClockValueParser::Parse("1e999s").hasError());
   EXPECT_TRUE(ClockValueParser::Parse("1e308h").hasError());
+}
+
+namespace {
+
+/// Returns the parsed offset in seconds, or std::nullopt when the parse fails or is indefinite.
+std::optional<double> ParsedSeconds(std::string_view input) {
+  auto result = ClockValueParser::Parse(input);
+  if (result.hasError() || result.result().isIndefinite()) {
+    return std::nullopt;
+  }
+  return result.result().seconds();
+}
+
+}  // namespace
+
+TEST(ClockValueParser, RejectsFormsOutsideTheClockValueGrammar) {
+  for (const std::string_view input :
+       {"0x10s", "0x1p4", "--5s", "+-5s", "-+5s", "inf", "-infinity", "5.s", "\v5s", "\f5s",
+        "00:00:-5", "00:00: 5", "00:00:+5", "00:00:0x5", "00:00:1e1", "00:00:.5", "00:00:5.",
+        "01:-30", "00:-1:00"}) {
+    EXPECT_THAT(ParsedSeconds(input), Eq(std::nullopt)) << "input: \"" << input << "\"";
+  }
+}
+
+TEST(ClockValueParser, AcceptsWhitespaceBetweenSignAndValue) {
+  EXPECT_THAT(ParsedSeconds("- 5s"), Optional(DoubleEq(-5.0)));
+  EXPECT_THAT(ParsedSeconds("+\t2s"), Optional(DoubleEq(2.0)));
+  EXPECT_THAT(ParsedSeconds("- 01:00"), Optional(DoubleEq(-60.0)));
+}
+
+TEST(ClockValueParser, TrimsSurroundingXmlWhitespace) {
+  EXPECT_THAT(ParsedSeconds("\r\n 2s\t\r\n"), Optional(DoubleEq(2.0)));
+}
+
+TEST(ClockValueParser, AcceptsNumberTokenTimecounts) {
+  EXPECT_THAT(ParsedSeconds("1.5e1s"), Optional(DoubleEq(15.0)));
+  EXPECT_THAT(ParsedSeconds(".5s"), Optional(DoubleEq(0.5)));
 }
 
 }  // namespace donner::svg::parser
