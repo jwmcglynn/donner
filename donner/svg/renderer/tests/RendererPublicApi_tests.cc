@@ -1754,6 +1754,19 @@ TEST(RendererPublicApiTest, ExternalUseFrameWorkAdmissionStopsAtLimit) {
   EXPECT_THAT(work.reserveExternalInstanceWork(1), testing::IsTrue());
 }
 
+TEST(RendererPublicApiTest, ExternalUseMeasureWorkHasItsOwnAllowance) {
+  components::StyleResourceBudget work;
+  EXPECT_THAT(
+      work.reserveExternalMeasureWork(components::StyleResourceBudget::kMaximumRuleElementMatches),
+      testing::IsTrue());
+  EXPECT_THAT(work.reserveExternalMeasureWork(1), testing::IsFalse());
+  // A measurement refusal leaves drawing's allowance intact.
+  EXPECT_THAT(work.reserveExternalInstanceWork(1), testing::IsTrue());
+  work.reset();
+  EXPECT_THAT(work.externalMeasureWork(), testing::Eq(0u));
+  EXPECT_THAT(work.reserveExternalMeasureWork(1), testing::IsTrue());
+}
+
 // Small caller-supplied limits exercise actual traversal refusal without changing production
 // limits.
 std::shared_ptr<components::StyleResourceBudget> ExternalUseWorkBudget(std::size_t matches) {

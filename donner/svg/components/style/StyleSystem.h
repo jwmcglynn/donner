@@ -83,6 +83,7 @@ public:
   StyleResourceBudget(StyleResourceBudget&& other) noexcept
       : contextualAnimationWork_(std::move(other.contextualAnimationWork_)),
         externalInstanceWork_(other.externalInstanceWork_),
+        externalMeasureWork_(other.externalMeasureWork_),
         externalResourceWarning_(other.externalResourceWarning_),
         aggregateWork_(other.aggregateWork_),
         limits_(other.limits_),
@@ -98,6 +99,7 @@ public:
     other.complexPropertyBytes_ = 0;
     other.aggregateWork_ = nullptr;
     other.externalInstanceWork_ = 0;
+    other.externalMeasureWork_ = 0;
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
 
@@ -168,6 +170,25 @@ public:
   /// External-use instance work admitted in the current frame.
   [[nodiscard]] std::size_t externalInstanceWork() const { return externalInstanceWork_; }
 
+  /**
+   * Admit bounded entity work for laying out one external-use occurrence to measure its bounds
+   * for a host effect, against a frame allowance of its own. Measuring recurses into the
+   * occurrence's own external uses, so without an allowance a family of documents that each use
+   * the next several times would cost exponential work. A refusal leaves drawing unaffected.
+   * @param entities Entities the measured occurrence lays out.
+   * @return True when the work fits the remaining measurement allowance.
+   */
+  bool reserveExternalMeasureWork(std::size_t entities) {
+    if (entities > limits_.ruleElementMatches - externalMeasureWork_) {
+      return false;
+    }
+    externalMeasureWork_ += entities;
+    return true;
+  }
+
+  /// External-use measurement work admitted in the current frame.
+  [[nodiscard]] std::size_t externalMeasureWork() const { return externalMeasureWork_; }
+
   /// Return true once per frame when an unsupported inherited resource needs a diagnostic.
   bool reportExternalResourceWarning() { return !std::exchange(externalResourceWarning_, true); }
 
@@ -183,6 +204,7 @@ public:
     declarationByteWork_ = 0;
     rejected_ = false;
     externalInstanceWork_ = 0;
+    externalMeasureWork_ = 0;
     externalResourceWarning_ = false;
   }
 
@@ -320,6 +342,7 @@ private:
   std::unordered_set<const Registry*> activeRegistries_;
   std::shared_ptr<AnimationContextualWorkBudget> contextualAnimationWork_;
   std::size_t externalInstanceWork_ = 0;
+  std::size_t externalMeasureWork_ = 0;
   bool externalResourceWarning_ = false;
   StyleResourceBudget* aggregateWork_ = nullptr;
   Limits limits_;

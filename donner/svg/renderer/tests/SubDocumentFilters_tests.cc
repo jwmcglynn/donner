@@ -539,5 +539,39 @@ TEST(SubDocumentFiltersTest, FeImageExternalContentStaysOutOfOtherBoxes) {
   }
 }
 
+/// Measuring recurses into each occurrence's own external uses, so a family of documents that each
+/// use the next twice measures exponentially many occurrences. Measurement is charged to its own
+/// frame allowance, which stops it, and drawing still admits the same work as without the effect.
+TEST(SubDocumentFiltersTest, BranchingExternalUseMeasurementStaysWithinItsAllowance) {
+  constexpr int kDepth = 8;
+  Documents documents;
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  for (int level = 0; level < kDepth; ++level) {
+    const std::string next = "d" + std::to_string(level + 1) + ".svg#f";
+    documents["d" + std::to_string(level) + ".svg"] = head + "<defs><g id='f'><use href='" + next +
+                                                      "'/><use href='" + next +
+                                                      "' x='1'/></g></defs></svg>";
+  }
+  documents["d" + std::to_string(kDepth) + ".svg"] =
+      head + "<defs><g id='f'><rect width='1' height='1' fill='#2050d0'/></g></defs></svg>";
+  const auto host = [&](std::string_view open) {
+    return head +
+           "<defs><filter id='box'><feColorMatrix type='matrix' "
+           "values='0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0'/></filter></defs>" +
+           std::string(open) + "<use href='d0.svg#f'/></g></svg>";
+  };
+  components::StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 64;
+  SVGDocument plain = Parse(host("<g>"), documents);
+  const std::size_t drawingWork =
+      ExternalInstanceWork(plain, std::make_shared<components::StyleResourceBudget>(limits));
+
+  SVGDocument filtered = Parse(host("<g filter='url(#box)'>"), documents);
+  const auto work = std::make_shared<components::StyleResourceBudget>(limits);
+  EXPECT_THAT(ExternalInstanceWork(filtered, work), testing::Eq(drawingWork));
+  EXPECT_THAT(work->externalMeasureWork(),
+              testing::AllOf(Gt(0u), testing::Le(limits.ruleElementMatches)));
+}
+
 }  // namespace
 }  // namespace donner::svg
