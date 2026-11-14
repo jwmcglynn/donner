@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <variant>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -433,8 +434,7 @@ size_t TextSpanCodepointCount(const components::ComputedTextComponent::TextSpan&
 }
 
 std::string SerializeTextPositionLengths(std::span<const Lengthd> values) {
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   for (size_t index = 0; index < values.size(); ++index) {
     if (index != 0) {
       output << ' ';
@@ -445,8 +445,7 @@ std::string SerializeTextPositionLengths(std::span<const Lengthd> values) {
 }
 
 std::string SerializeTextPositionRotations(std::span<const double> values) {
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   for (size_t index = 0; index < values.size(); ++index) {
     if (index != 0) {
       output << ' ';

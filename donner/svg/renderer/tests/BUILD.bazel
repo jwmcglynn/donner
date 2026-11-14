@@ -181,6 +181,7 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":renderer_test_backend",
+        "//donner/base",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest",

@@ -252,6 +252,7 @@ donner_cc_test(
         ":font_catalog",
         ":font_catalog_types",
         ":font_manager",
+        "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/svg/core",
         "//donner/svg/text:text_backend_simple",

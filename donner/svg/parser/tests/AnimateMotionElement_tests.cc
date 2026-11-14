@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/components/animation/AnimateMotionComponent.h"
@@ -352,4 +353,16 @@ TEST(SVGAnimateMotionElement, SharedMotionWorkExhaustionRejectsTheWholeSample) {
 }
 
 }  // namespace
+
+// Motion transforms are serialized to text and parsed back, so the C++ global locale must not
+// change their formatting.
+TEST(SVGAnimateMotionElement, SerializedTransformIgnoresGlobalLocale) {
+  const ScopedCommaDecimalGlobalLocale commaDecimalLocale;
+  auto document = ParseMotion(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateMotion path="M0 0L2001 0" dur="2s"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(1000.5, 0)")));
+}
+
 }  // namespace donner::svg
