@@ -151,6 +151,16 @@ static bool isNumberStart(std::string_view remaining) {
   }
 }
 
+/// Length of the single whitespace code point that @p remaining starts with, with CR LF counted
+/// as one because the newline-normalizing preprocess step is skipped; 0 if it does not start with
+/// whitespace.
+static size_t leadingWhitespaceCodepointLength(std::string_view remaining) {
+  if (remaining.empty() || !isWhitespace(remaining[0])) {
+    return 0;
+  }
+  return remaining.starts_with("\r\n") ? 2 : 1;
+}
+
 /// Consume an escaped code point, per
 /// https://www.w3.org/TR/css-syntax-3/#consume-an-escaped-code-point
 ///
@@ -170,10 +180,8 @@ static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remain
       ++i;
     }
 
-    // If the next input codepoint is whitespace, consume it as well.
-    while (i < remaining.size() && isWhitespace(remaining[i])) {
-      ++i;
-    }
+    // If the next input code point is whitespace, consume it as well (exactly one).
+    i += leadingWhitespaceCodepointLength(remaining.substr(i));
 
     // If this number is zero, or is for a surrogate, or is greater than the maximum allowed code
     // point, return U+FFFD REPLACEMENT CHARACTER (�).

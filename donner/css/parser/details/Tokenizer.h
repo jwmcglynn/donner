@@ -63,7 +63,8 @@ public:
   /**
    * For the url token most recently returned by \ref next(), returns the `[start, end)` source
    * offsets of its value: the bytes after `url(` and any leading whitespace, up to trailing
-   * whitespace, `)` or the end of input. Escapes are included as written.
+   * whitespace, `)` or the end of input. Escapes are included as written. Only meaningful when the
+   * last token returned was a \ref Token::Url; otherwise it describes an earlier url token.
    */
   std::pair<size_t, size_t> urlValueRange() const { return urlValueRange_; }
 
