@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <clocale>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -193,6 +194,43 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
 
 // The format version decides how a replay opens the document, so it survives a rewrite: a
 // recording made before large documents opened fitted keeps replaying at 100%.
+/// Switches `LC_NUMERIC` to a comma-decimal locale for the lifetime of the object, if one is
+/// installed, and restores the previous locale afterwards.
+class ScopedCommaDecimalLocale {
+public:
+  ScopedCommaDecimalLocale() : previous_(std::setlocale(LC_NUMERIC, nullptr)) {
+    for (const char* name : {"de_DE.UTF-8", "de_DE.ISO8859-1", "fr_FR.UTF-8", "de_DE"}) {
+      if (std::setlocale(LC_NUMERIC, name) != nullptr) {
+        applied_ = true;
+        return;
+      }
+    }
+  }
+  ~ScopedCommaDecimalLocale() { std::setlocale(LC_NUMERIC, previous_.c_str()); }
+  ScopedCommaDecimalLocale(const ScopedCommaDecimalLocale&) = delete;
+  ScopedCommaDecimalLocale& operator=(const ScopedCommaDecimalLocale&) = delete;
+
+  /// Whether a comma-decimal locale is installed and now active.
+  bool applied() const { return applied_; }
+
+private:
+  std::string previous_;
+  bool applied_ = false;
+};
+
+// Numbers are read with the locale-independent parser, so a comma-decimal process locale does not
+// reject `1.5`.
+TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
+  const ScopedCommaDecimalLocale locale;
+  if (!locale.applied()) {
+    GTEST_SKIP() << "No comma-decimal locale is installed";
+  }
+  const auto parsed = ParseReproFile(R"({"v":3,"wnd":[100,100],"scale":1.5,"exp":0})"
+                                     "\n");
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_DOUBLE_EQ(parsed->metadata.displayScale, 1.5);
+}
+
 TEST(ReproFileTest, FormatVersionSurvivesReadAndWrite) {
   const auto older = ParseReproFile(StyleReplayWithEncodedValue("serif"));
   ASSERT_TRUE(older.has_value());

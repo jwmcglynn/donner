@@ -1163,6 +1163,15 @@ TEST(EditorAppTest, SetActiveStrokeWidthClampsNegativeValues) {
   EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(0.0));
 }
 
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextReadsTheLeadingNumber) {
+  EditorApp app;
+
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText("2.5px"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText("wide"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+}
+
 TEST(EditorAppTest, PathOperationAvailabilityReportsNoDocument) {
   EditorApp app;
 

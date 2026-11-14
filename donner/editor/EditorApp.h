@@ -476,6 +476,15 @@ public:
    */
   void setActiveStrokeWidth(double strokeWidth);
 
+  /**
+   * Set the active stroke width from the leading number of a CSS or attribute value such as
+   * `"2.5"` or `"3px"`, parsed independently of the process locale.
+   *
+   * @param value Stroke width text.
+   * @return True if \p value starts with a number and the width was set.
+   */
+  bool setActiveStrokeWidthFromText(std::string_view value);
+
   /// Drop every entry from the selection. Equivalent to
   /// `setSelection(std::nullopt)` but reads better at clear sites.
   void clearSelection() { setSelection(std::nullopt); }

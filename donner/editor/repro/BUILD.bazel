@@ -17,6 +17,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/base/parser",
         "//donner/editor:imgui_headers",
         "//donner/svg/parser",
         "//donner/svg/resources:sandboxed_file_resource_loader",

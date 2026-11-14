@@ -1,7 +1,6 @@
 #include "donner/editor/repro/ReproFile.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
@@ -15,6 +14,7 @@
 
 #include "donner/base/FileUtils.h"
 #include "donner/base/Utf8.h"
+#include "donner/base/parser/NumberParser.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -468,13 +468,13 @@ std::optional<double> ReadNumber(std::string_view& cursor, ReproParseBudget& bud
   if (!budget.chargeScan(i)) {
     return std::nullopt;
   }
-  const std::string token(cursor.substr(start, i - start));
-  char* endPtr = nullptr;
-  errno = 0;
-  const double value = std::strtod(token.c_str(), &endPtr);
-  if (endPtr != token.c_str() + token.size() || errno != 0 || !std::isfinite(value)) {
+  const std::string_view token = cursor.substr(start, i - start);
+  const auto parsed = parser::NumberParser::Parse(token);
+  if (!parsed.hasResult() || parsed.result().consumedChars != token.size() ||
+      !std::isfinite(parsed.result().number)) {
     return std::nullopt;
   }
+  const double value = parsed.result().number;
   cursor.remove_prefix(i);
   return value;
 }

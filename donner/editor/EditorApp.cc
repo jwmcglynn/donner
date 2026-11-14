@@ -12,6 +12,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
+#include "donner/base/parser/NumberParser.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -2074,6 +2075,15 @@ bool EditorApp::setStrokeWidthOnSelection(double strokeWidth) {
 
 void EditorApp::setActiveStrokeWidth(double strokeWidth) {
   activePaintStyle_.strokeWidth = Lengthd(std::max(0.0, strokeWidth));
+}
+
+bool EditorApp::setActiveStrokeWidthFromText(std::string_view value) {
+  const auto strokeWidth = parser::NumberParser::Parse(value);
+  if (!strokeWidth.hasResult()) {
+    return false;
+  }
+  setActiveStrokeWidth(strokeWidth.result().number);
+  return true;
 }
 
 PathOperationAvailability EditorApp::pathOperationAvailability(PathOperationKind operation) const {

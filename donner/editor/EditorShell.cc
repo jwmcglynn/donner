@@ -1964,11 +1964,7 @@ void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) 
       } else if (action.propertyName == "stroke") {
         app_.setActiveStroke(action.propertyValue);
       } else if (action.propertyName == "stroke-width") {
-        char* end = nullptr;
-        const double strokeWidth = std::strtod(action.propertyValue.c_str(), &end);
-        if (end != action.propertyValue.c_str()) {
-          app_.setActiveStrokeWidth(strokeWidth);
-        }
+        (void)app_.setActiveStrokeWidthFromText(action.propertyValue);
       }
       if (app_.setStylePropertyOnSelection(action.propertyName, action.propertyValue)) {
         flushQueuedMutationAndRefreshOverlay();
