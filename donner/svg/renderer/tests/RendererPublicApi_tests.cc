@@ -4447,7 +4447,7 @@ private:
   Response response_;
 };
 
-TEST(RendererPublicApiTest, UnsupportedCssImportsNeverRequestConfiguredResponses) {
+TEST(RendererPublicApiTest, HostileCssImportResponsesAreFetchedOnceAndBounded) {
   for (const auto response :
        {UnrequestedImportLoader::Response::Cyclic, UnrequestedImportLoader::Response::Deep,
         UnrequestedImportLoader::Response::Oversized}) {
@@ -4459,16 +4459,22 @@ TEST(RendererPublicApiTest, UnsupportedCssImportsNeverRequestConfiguredResponses
     auto result = parser::SVGParser::ParseSVG(
         "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
         "<style>@import url('https://example.test/style.css'); rect { fill: green; }</style>"
-        "<rect width='4' height='4'/></svg>",
+        "<rect width='4' height='4' fill='red'/></svg>",
         warnings, parser::SVGParser::Options(), std::move(settings));
     ASSERT_THAT(result.hasError(), testing::IsFalse());
     SVGDocument document = std::move(result.result());
+    // Parsing never fetches: imports load when the document is first prepared for rendering.
     EXPECT_EQ(*calls, 0u);
     RendererTinySkia renderer;
     renderer.draw(document);
     renderer.draw(document);
-    EXPECT_EQ(*calls, 0u);
-    EXPECT_THAT(warnings.warnings(), testing::SizeIs(1));
+    // A self-import is a cycle, imports nested in @media blocks are never requested, and an
+    // oversized response is rejected; each case makes exactly one request across both draws.
+    EXPECT_EQ(*calls, 1u);
+    EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
+    RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+    ASSERT_FALSE(snapshot.empty());
+    EXPECT_THAT(PixelAt(snapshot, 2, 2), test::Rgba(0, 128, 0, 255));
   }
 }
 
@@ -4489,7 +4495,8 @@ TEST(RendererPublicApiTest, SecureStaticDoesNotFetchSvgNamedGif) {
   EXPECT_THAT(*calls, testing::Eq(0u));
 }
 
-TEST(RendererPublicApiTest, UnsupportedCssImportKeepsFollowingLocalRules) {
+TEST(RendererPublicApiTest, UnloadedCssImportKeepsFollowingLocalRules) {
+  // No resource loader is configured, so the import is diagnosed and ignored.
   SVGDocument document = ParseDocument(
       "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
       "<style>@import 'hidden.css'; rect { fill: green; }</style>"
@@ -4503,7 +4510,40 @@ TEST(RendererPublicApiTest, UnsupportedCssImportKeepsFollowingLocalRules) {
   expected.draw(reference);
   editor::tests::CompareBitmapToBitmap(
       NormalizeSnapshot(actual.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
-      "unsupported_css_import_following_rule", editor::tests::PixelmatchIdentityParams());
+      "unloaded_css_import_following_rule", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ImportedCssRulesRenderBeforeLocalRules) {
+  class ThemeLoader final : public ResourceLoaderInterface {
+  public:
+    std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+        std::string_view url) override {
+      if (url != "theme.css") {
+        return ResourceLoaderError::NotFound;
+      }
+      constexpr std::string_view kCss = "rect { fill: red; stroke: green; } #r { fill: green; }";
+      return std::vector<uint8_t>(kCss.begin(), kCss.end());
+    }
+  };
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<ThemeLoader>();
+  ParseWarningSink warnings;
+  auto result = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<style>@import 'theme.css'; rect { stroke: blue; }</style>"
+      "<rect id='r' x='2' y='2' width='4' height='4' stroke-width='2'/></svg>",
+      warnings, parser::SVGParser::Options(), std::move(settings));
+  ASSERT_THAT(result.hasError(), testing::IsFalse());
+  SVGDocument reference = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<rect x='2' y='2' width='4' height='4' stroke-width='2' fill='green' stroke='blue'/></svg>");
+  Renderer actual;
+  actual.draw(result.result());
+  Renderer expected;
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(actual.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "imported_css_rules_cascade", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererPublicApiTest, UnknownSvgWrapperDoesNotPaintDescendants) {

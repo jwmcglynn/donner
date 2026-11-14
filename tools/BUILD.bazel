@@ -1082,6 +1082,26 @@ py_test(
     main = "check_design_doc_provenance.py",
 )
 
+py_test(
+    name = "check_design_doc_index_tests",
+    size = "small",
+    srcs = [
+        "check_design_doc_index.py",
+        "check_design_doc_index_tests.py",
+    ],
+)
+
+# The repository's design-document index and navigation, checked as the Lint workflow does. The
+# test runs from the runfiles root.
+py_test(
+    name = "design_doc_index_test",
+    size = "small",
+    srcs = ["check_design_doc_index.py"],
+    args = ["--root=."],
+    data = ["//:design_doc_index_inputs"],
+    main = "check_design_doc_index.py",
+)
+
 py_binary(
     name = "check_private_details",
     srcs = ["check_private_details.py"],

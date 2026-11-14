@@ -166,6 +166,17 @@ filegroup(
     visibility = ["//tools:__pkg__"],
 )
 
+# The inputs of //tools:design_doc_index_test: every design document, the index and the Doxygen
+# navigation page.
+filegroup(
+    name = "design_doc_index_inputs",
+    srcs = glob([
+        "docs/design_docs/**/*.md",
+        "docs/design_docs/navigation.dox",
+    ]),
+    visibility = ["//tools:__pkg__"],
+)
+
 # Logo SVGs, which are consumed by the renderer tests.
 filegroup(
     name = "logo_svgs",
