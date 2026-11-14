@@ -1932,8 +1932,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"bidi-override.svg",
                      Params::Skip("Override order, script runs and Arabic joining match the "
-                                  "reference; an unexplained sub-pixel offset of the centered "
-                                  "line leaves 122 px on the full tier")
+                                  "reference; Latin glyphs sit up to 1.5 px from the reference "
+                                  "individually (not kerning), leaving 122 px on the full tier")
                          .onlyTextFull()},
                 })),
             ValuesIn(ActiveComparisonModes())),
