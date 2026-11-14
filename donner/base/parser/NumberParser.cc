@@ -24,7 +24,8 @@ namespace {
  * If the exponent is extremely large, it falls back to std::pow(10.0, exp10) and
  * may produce small rounding differences or ±∞.
  *
- * @param mantissa up to 19 digits of integer (e.g. 79 for ".79")
+ * @param mantissa the significand digits as an integer (e.g. 79 for ".79"); digits are kept while
+ *   the value fits in uint64_t, so it holds up to 20 digits (any value up to 18446744073709551615)
  * @param exp10 decimal exponent, clamped to an `int`, so large values may produce inf or 0. (e.g.
  * -3 for ".79e-1")
  * @param negative whether the result should be negated

@@ -318,6 +318,10 @@ TEST(NumberParser, LongSignificandsKeepTheirMagnitude) {
       {"99999999999999999999.9", 1e20},
       {"18.500000000000000000e2", 1850.0},
       {"1.9999999999999999999e-3", 0.002},
+      // Leading zeros do not use mantissa capacity.
+      {"0000000000000000000000018.500000000000000000", 18.5},
+      {"-000.00000000000000000000001234567890123456789012", -1.234567890123456789012e-23},
+      {"00000000000000000000001.9999999999999999999e-3", 0.002},
   };
   for (const auto& testCase : kCases) {
     SCOPED_TRACE(testing::Message() << "Parsing: " << testCase.input);
@@ -325,6 +329,27 @@ TEST(NumberParser, LongSignificandsKeepTheirMagnitude) {
     ASSERT_THAT(maybeResult, NoParseError());
     EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(testCase.expected));
     EXPECT_EQ(maybeResult.result().consumedChars, testCase.input.size());
+  }
+}
+
+// Digits that do not fit in the mantissa are still consumed, so parsing resumes after the whole
+// number rather than inside it.
+TEST(NumberParser, DroppedDigitsAreConsumed) {
+  const struct {
+    std::string_view input;
+    double expected;
+    size_t consumedChars;
+  } kCases[] = {
+      {"123456789012345678901234567890px", 123456789012345678901234567890.0, 30},
+      {"18.500000000000000000000000000 20", 18.5, 30},
+      {"1.99999999999999999999999e2,", 200.0, 27},
+  };
+  for (const auto& testCase : kCases) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << testCase.input);
+    const auto maybeResult = NumberParser::Parse(testCase.input);
+    ASSERT_THAT(maybeResult, NoParseError());
+    EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(testCase.expected));
+    EXPECT_EQ(maybeResult.result().consumedChars, testCase.consumedChars);
   }
 }
 
