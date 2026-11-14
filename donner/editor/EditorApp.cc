@@ -988,9 +988,6 @@ std::optional<std::string> RewriteIdReferenceInAttribute(const xml::XMLQualified
 /// reference without changing the value.
 bool AttributeReferencesId(const xml::XMLQualifiedNameRef& name, std::string_view value,
                            std::string_view id) {
-  if (value.find('#') == std::string_view::npos) {
-    return false;  // Every reference form contains a '#'; skip the rewrite for the common case.
-  }
   return RewriteIdReferenceInAttribute(name, value, id, id).has_value();
 }
 
