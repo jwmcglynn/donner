@@ -88,7 +88,7 @@ public:
 
       // If we reach here, we expect an item (not a comma or whitespace)
       const size_t start = i;
-      while (i < length && !IsXmlWhitespace(value[i]) && value[i] != ',') {
+      while (i < length && !IsSeparatorWhitespace(value[i]) && value[i] != ',') {
         i++;
       }
 
@@ -124,13 +124,15 @@ public:
 
 private:
   /**
-   * Returns true for XML whitespace, which separates list items: space, tab, line feed and
-   * carriage return (https://www.w3.org/TR/xml/#NT-S).
+   * Returns true for the whitespace that separates list items. The text positioning attributes
+   * that use this parser have CSS value syntax in SVG 2, so this is CSS whitespace: space, tab,
+   * line feed, carriage return and form feed (https://www.w3.org/TR/css-syntax-3/#whitespace).
+   * Vertical tab is not whitespace.
    *
    * @param ch The character to classify.
    */
-  static constexpr bool IsXmlWhitespace(char ch) {
-    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+  static constexpr bool IsSeparatorWhitespace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f';
   }
 
   /**
@@ -140,7 +142,7 @@ private:
    * @param i Reference to the current index, will be updated.
    */
   static inline void SkipWhitespace(std::string_view value, size_t& i) {
-    while (i < value.size() && IsXmlWhitespace(value[i])) {
+    while (i < value.size() && IsSeparatorWhitespace(value[i])) {
       i++;
     }
   }
