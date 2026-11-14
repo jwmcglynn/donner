@@ -780,6 +780,54 @@ TEST_F(TextFormatBarPresenterInputTest, AttachedFontSizeStepsCommitOnePointChang
   EXPECT_EQ(down.fontSize, 15.0f);
 }
 
+// 12.3 and 12.7 have no exact binary form, so any detour through `float` shows up in the text.
+constexpr std::string_view kNonBinaryFontSizeSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <text id="t" font-size="12.3">Hi</text>
+       </svg>)";
+
+TEST_F(TextFormatBarPresenterInputTest, TypedFontSizeWritesShortestNumberText) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kNonBinaryFontSizeSvg)));
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#t");
+  ASSERT_THAT(text, testing::Optional(testing::_));
+  app.setSelection(*text);
+  FormatBarState state = MakeState();
+  ReadTextFormatState(*text, &state);
+
+  Frame(state);
+  Click(state, ImVec2(SizeDragLeft() + kSizeDragWidth * 0.5f, RowCenterY()));
+  ImGui::GetIO().AddInputCharactersUTF8("12.7");
+  Frame(state);
+  const FormatBarActions actions = Click(state, ImVec2(1000.0f, 300.0f));
+  ASSERT_THAT(actions.setFontSize, testing::IsTrue());
+  EXPECT_THAT(ApplyFormatBarActionsToSelection(actions, state,
+                                               /*routeTogglesToSelection=*/false, app),
+              testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(TextAttribute(app, "font-size"), testing::Optional(std::string("12.7")));
+}
+
+TEST_F(TextFormatBarPresenterInputTest, SteppedFontSizeWritesShortestNumberText) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kNonBinaryFontSizeSvg)));
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#t");
+  ASSERT_THAT(text, testing::Optional(testing::_));
+  app.setSelection(*text);
+  FormatBarState state = MakeState();
+  ReadTextFormatState(*text, &state);
+
+  Frame(state);
+  const float x = SizeStepperLeft() + kSizeStepperWidth * 0.5f;
+  const FormatBarActions up = Click(state, ImVec2(x, kBarY + kPadding + frameHeight_ * 0.25f));
+  ASSERT_THAT(up.setFontSize, testing::IsTrue());
+  EXPECT_THAT(ApplyFormatBarActionsToSelection(up, state,
+                                               /*routeTogglesToSelection=*/false, app),
+              testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(TextAttribute(app, "font-size"), testing::Optional(std::string("13.3")));
+}
+
 TEST_F(TextFormatBarPresenterInputTest, SizePresetMenuSelectsPreset) {
   FormatBarState state = MakeState();
   state.fontSize = 8.0f;  // Matches the first preset so its row shows selected.
