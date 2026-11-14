@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
@@ -1095,36 +1096,86 @@ int SubtreeLastDrawOrder(Registry& registry,
   return last != nullptr ? std::max(last->drawOrder, instance.drawOrder) : instance.drawOrder;
 }
 
+/// Calls @p visit with the mask, marker and pattern content drawn for @p instance. That content is
+/// instantiated once, under the first element that draws it, and shared by every later element
+/// that draws the same marker, mask or pattern.
+template <typename Visit>
+void ForEachDrawnContent(const components::RenderingInstanceComponent& instance, Visit&& visit) {
+  if (instance.mask.has_value() && instance.mask->subtreeInfo.has_value()) {
+    visit(*instance.mask->subtreeInfo);
+  }
+  for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
+    if (marker->has_value() && (*marker)->subtreeInfo.has_value()) {
+      visit(*(*marker)->subtreeInfo);
+    }
+  }
+  for (const auto* paint : {&instance.resolvedFill, &instance.resolvedStroke}) {
+    if (const auto* reference = std::get_if<components::PaintResolvedReference>(paint);
+        reference != nullptr && reference->subtreeInfo.has_value()) {
+      visit(*reference->subtreeInfo);
+    }
+  }
+}
+
 /// Draw order through which @p instance's output depends on rendered instances: its subtree and
 /// the mask, marker and pattern content drawn for it. That content can come after the subtree.
 int ContentLastDrawOrder(Registry& registry,
                          const components::RenderingInstanceComponent& instance) {
   int last = SubtreeLastDrawOrder(registry, instance);
-  const auto extend = [&](const std::optional<components::SubtreeInfo>& content) {
-    if (!content.has_value()) {
-      return;
-    }
+  const auto extend = [&](const components::SubtreeInfo& content) {
     if (const auto* contentLast =
-            registry.try_get<components::RenderingInstanceComponent>(content->lastRenderedEntity)) {
+            registry.try_get<components::RenderingInstanceComponent>(content.lastRenderedEntity)) {
       last = std::max(last, contentLast->drawOrder);
     }
   };
-  extend(instance.subtreeInfo);
-  if (instance.mask.has_value()) {
-    extend(instance.mask->subtreeInfo);
+  if (instance.subtreeInfo.has_value()) {
+    extend(*instance.subtreeInfo);
   }
-  for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
-    if (marker->has_value()) {
-      extend((*marker)->subtreeInfo);
-    }
-  }
-  for (const auto* paint : {&instance.resolvedFill, &instance.resolvedStroke}) {
-    if (const auto* reference = std::get_if<components::PaintResolvedReference>(paint)) {
-      extend(reference->subtreeInfo);
-    }
-  }
+  ForEachDrawnContent(instance, extend);
   return last;
 }
+
+/// Closed draw-order ranges, for finding the shared content that a visible element draws.
+class DrawOrderRanges {
+public:
+  /// Add the range of rendered instances in @p content, if both its ends are rendered.
+  void add(Registry& registry, const components::SubtreeInfo& content) {
+    const auto* first =
+        registry.try_get<components::RenderingInstanceComponent>(content.firstRenderedEntity);
+    const auto* last =
+        registry.try_get<components::RenderingInstanceComponent>(content.lastRenderedEntity);
+    if (first != nullptr && last != nullptr) {
+      ranges_.emplace_back(first->drawOrder, std::max(first->drawOrder, last->drawOrder));
+    }
+  }
+
+  /// Sort and merge the ranges; required before \ref contains and comparison.
+  void normalize() {
+    std::sort(ranges_.begin(), ranges_.end());
+    std::vector<std::pair<int, int>> merged;
+    for (const auto& range : ranges_) {
+      if (!merged.empty() && range.first <= merged.back().second) {
+        merged.back().second = std::max(merged.back().second, range.second);
+      } else {
+        merged.push_back(range);
+      }
+    }
+    ranges_ = std::move(merged);
+  }
+
+  /// Whether @p drawOrder lies in a range. The ranges must be normalized.
+  [[nodiscard]] bool contains(int drawOrder) const {
+    const auto it = std::upper_bound(
+        ranges_.begin(), ranges_.end(), drawOrder,
+        [](int order, const std::pair<int, int>& range) { return order < range.first; });
+    return it != ranges_.begin() && drawOrder <= std::prev(it)->second;
+  }
+
+  bool operator==(const DrawOrderRanges&) const = default;
+
+private:
+  std::vector<std::pair<int, int>> ranges_;
+};
 
 /// Whether @p instance paints nothing itself and contributes nothing through its subtree or its
 /// content: a zero `opacity` hides it and everything drawn for it, and a hidden leaf draws neither
@@ -1147,9 +1198,11 @@ bool IsInvisibleInstance(Registry& registry,
 ///
 /// Rendered but invisible content (anything drawn for a zero-opacity element, or for a hidden
 /// leaf) is left out, so its filters neither run nor spend the frame's filter budget; an
-/// unprepared filter hides its element, which was invisible anyway. Content shown elsewhere, such
-/// as a `<use>` copy, or a pattern tile, mask or marker of a visible element, is a separate
-/// instance under its referencing element and stays in.
+/// unprepared filter hides its element, which was invisible anyway. A `<use>` copy is a separate
+/// instance under its referencing element and stays in. Marker, mask and pattern content is shared
+/// by every element that draws it, so content that a visible element draws stays in even when it
+/// was instantiated under a hidden one; within it, only instances that are themselves invisible
+/// are left out.
 std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const Entity> entities) {
   std::vector<Entity> result;
   const bool anyFilter = std::any_of(entities.begin(), entities.end(), [&](Entity entity) {
@@ -1159,28 +1212,48 @@ std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const 
   if (!anyFilter) {
     return result;
   }
-  std::optional<int> hiddenThroughDrawOrder;
-  for (const Entity entity : entities) {
-    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
-    if (instance == nullptr) {
-      continue;
+  // Shared content that a visible element draws can make more content visible, including content
+  // it draws in turn, so repeat until the shared content drawn by visible elements stops growing.
+  // The hidden ranges are the same on every pass and the shown set only grows, so this ends.
+  DrawOrderRanges shownContent;
+  while (true) {
+    result.clear();
+    DrawOrderRanges reached;
+    std::optional<int> hiddenThroughDrawOrder;
+    for (const Entity entity : entities) {
+      const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+      if (instance == nullptr) {
+        continue;
+      }
+      if (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder) {
+        // Content drawn for hidden content is hidden too, and can end after the hidden subtree,
+        // unless a visible element also draws it.
+        hiddenThroughDrawOrder =
+            std::max(*hiddenThroughDrawOrder, ContentLastDrawOrder(registry, *instance));
+        if (!shownContent.contains(instance->drawOrder) ||
+            IsInvisibleInstance(registry, *instance)) {
+          continue;
+        }
+      } else {
+        hiddenThroughDrawOrder.reset();
+        if (IsInvisibleInstance(registry, *instance)) {
+          hiddenThroughDrawOrder = ContentLastDrawOrder(registry, *instance);
+          continue;
+        }
+      }
+      ForEachDrawnContent(*instance, [&](const components::SubtreeInfo& content) {
+        reached.add(registry, content);
+      });
+      if (instance->resolvedFilter.has_value()) {
+        result.push_back(entity);
+      }
     }
-    if (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder) {
-      // Content drawn for hidden content is hidden too, and can end after the hidden subtree.
-      hiddenThroughDrawOrder =
-          std::max(*hiddenThroughDrawOrder, ContentLastDrawOrder(registry, *instance));
-      continue;
+    reached.normalize();
+    if (reached == shownContent) {
+      return result;
     }
-    hiddenThroughDrawOrder.reset();
-    if (IsInvisibleInstance(registry, *instance)) {
-      hiddenThroughDrawOrder = ContentLastDrawOrder(registry, *instance);
-      continue;
-    }
-    if (instance->resolvedFilter.has_value()) {
-      result.push_back(entity);
-    }
+    shownContent = std::move(reached);
   }
-  return result;
 }
 
 void SamplePreparedImageDimension(components::FilterNode& node, std::size_t index,

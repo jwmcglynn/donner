@@ -1471,11 +1471,12 @@ private:
                : RejectionReason::None;
   }
 
-  /// The frame execution, work or memory limit a reservation exceeds, if any.
+  /// The frame execution, work or memory limit a reservation exceeds, if any. Refused attempts
+  /// count toward the execution limit along with admitted ones.
   RejectionReason frameLimitFailure(const Admission& admission,
                                     std::uint64_t retainedBeforeExecution,
                                     std::uint64_t captureBytes) const {
-    if (executions_ >= kMaximumExecutions) {
+    if (executions_ + refusedGraphs_ >= kMaximumExecutions) {
       return RejectionReason::ExecutionLimit;
     }
     if (workUnits_ > kMaximumFilterFrameWorkUnits ||
