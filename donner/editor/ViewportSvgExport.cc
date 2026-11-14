@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <locale>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -56,6 +57,8 @@ std::string FormatNumber(double value) {
     return "0";
   }
   std::ostringstream stream;
+  // Exported SVG must not follow the global C++ locale (comma decimals, digit grouping).
+  stream.imbue(std::locale::classic());
   stream.precision(6);
   stream << std::fixed << value;
   std::string text = stream.str();
@@ -80,6 +83,7 @@ std::string FormatDimension(double value) {
     return formatted;
   }
   std::ostringstream precise;
+  precise.imbue(std::locale::classic());
   precise.precision(std::numeric_limits<double>::max_digits10);
   precise << value;
   return precise.str();

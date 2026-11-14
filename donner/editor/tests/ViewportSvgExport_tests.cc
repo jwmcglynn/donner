@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <functional>
 #include <limits>
+#include <locale>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -124,6 +125,48 @@ TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   EXPECT_THAT(result.value, HasSubstr("viewBox=\"60 70 200 150\""));
   // Output dimensions follow the cropped portion of the original document.
   EXPECT_THAT(result.value, HasSubstr("<svg width=\"200\" height=\"150\""));
+}
+
+/// Comma decimal point and dot thousands grouping, as in many European locales; built from a
+/// facet so no installed locale is needed.
+class CommaDecimalNumpunct : public std::numpunct<char> {
+protected:
+  char do_decimal_point() const override { return ','; }
+  char do_thousands_sep() const override { return '.'; }
+  std::string do_grouping() const override { return "\3"; }
+};
+
+/// Installs a comma-decimal global C++ locale for the lifetime of the object.
+class ScopedCommaDecimalGlobalLocale {
+public:
+  ScopedCommaDecimalGlobalLocale()
+      : previous_(
+            std::locale::global(std::locale(std::locale::classic(), new CommaDecimalNumpunct))) {}
+  ~ScopedCommaDecimalGlobalLocale() { std::locale::global(previous_); }
+  ScopedCommaDecimalGlobalLocale(const ScopedCommaDecimalGlobalLocale&) = delete;
+  ScopedCommaDecimalGlobalLocale& operator=(const ScopedCommaDecimalGlobalLocale&) = delete;
+
+private:
+  std::locale previous_;
+};
+
+// Exported numbers use the classic locale whatever the global C++ locale is.
+TEST(ViewportSvgExportTest, ExportedNumbersIgnoreTheGlobalLocale) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1500.5\" height=\"400\" "
+      "viewBox=\"0 0 1500.5 400\"><rect width=\"1500.5\" height=\"400\"/></svg>");
+  const ViewportState viewport =
+      MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(0.0, 0.0),
+                   /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                   /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(2000.0, 500.0));
+
+  const ScopedCommaDecimalGlobalLocale locale;
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(2000, 500)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("1500.5"));
+  EXPECT_THAT(result.value, Not(HasSubstr("1500,5")));
+  EXPECT_THAT(result.value, Not(HasSubstr("1.500")));
 }
 
 TEST(ViewportSvgExportTest, FullyVisibleDocumentKeepsOriginalBoundsAndDimensions) {

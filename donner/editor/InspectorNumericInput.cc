@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <format>
 #include <string>
 #include <utility>
 
@@ -122,8 +123,10 @@ InspectorLengthEdit InputInspectorLength(const char* label, const Lengthd& curre
   const RcString zeroWithUnit = Lengthd(0.0, current.unit).toRcString();
   const std::string_view unit = std::string_view(zeroWithUnit).substr(1);
   std::array<char, 64> buffer{};
-  std::snprintf(buffer.data(), buffer.size(), "%.1f%.*s", current.value,
-                static_cast<int>(unit.size()), unit.data());
+  // std::format ignores the C locale, so the field text always uses a '.' decimal point and
+  // reads back through the locale-independent number parser.
+  const std::string initialText = std::format("{:.1f}{}", current.value, unit);
+  std::snprintf(buffer.data(), buffer.size(), "%s", initialText.c_str());
 
   InspectorLengthEdit edit;
   (void)ImGui::InputText(label, buffer.data(), buffer.size(), ImGuiInputTextFlags_AutoSelectAll);

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <locale>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -955,6 +956,8 @@ void SidebarPresenter::captureStrokeSnapshot(const EditorApp& app,
   inspector.strokeMiterlimit = static_cast<float>(stroke.strokeMiterlimit.get().value());
   if (const auto dasharray = stroke.strokeDasharray.get(); dasharray.has_value()) {
     std::ostringstream stream;
+    // This text is written back as `stroke-dasharray`, so it must not follow the global locale.
+    stream.imbue(std::locale::classic());
     stream << *dasharray;
     inspector.strokeDasharray = stream.str();
   }
