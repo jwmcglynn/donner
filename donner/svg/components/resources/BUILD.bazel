@@ -20,11 +20,13 @@ donner_cc_library(
     name = "resource_manager_context",
     srcs = [
         "ResourceManagerContext.cc",
+        "StylesheetImportLoader.cc",
         "SubDocumentAdmission.cc",
         "SubDocumentCache.cc",
     ],
     hdrs = [
         "ResourceManagerContext.h",
+        "StylesheetImportLoader.h",
         "SubDocumentAdmission.h",
         "SubDocumentCache.h",
     ],
@@ -35,6 +37,7 @@ donner_cc_library(
         ":components",
         "//donner/base/encoding:decompress",
         "//donner/css:core",
+        "//donner/css/parser",
         "//donner/svg:svg_document_handle",
         "//donner/svg/components:components_core",
         "//donner/svg/components/filter:components",

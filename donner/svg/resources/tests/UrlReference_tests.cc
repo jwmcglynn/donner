@@ -63,6 +63,13 @@ TEST(UrlReference, AbsoluteReferencesIgnoreTheBase) {
             "file:///etc/theme.css");
 }
 
+TEST(UrlReference, OpaqueReferencesAreKeptVerbatim) {
+  constexpr std::string_view dataUrl = "data:text/css,a/../b/./c?d#e";
+  EXPECT_EQ(Resolve("", dataUrl), dataUrl);
+  EXPECT_EQ(Resolve("styles/main.css", dataUrl), dataUrl);
+  EXPECT_EQ(Resolve("data:text/css,x", dataUrl), dataUrl);
+}
+
 TEST(UrlReference, RelativeReferencesAgainstOpaqueBasesAreUnresolvable) {
   EXPECT_EQ(Resolve("data:text/css,a{}", "theme.css"), std::nullopt);
   EXPECT_EQ(Resolve("data:text/css,a{}", "/theme.css"), std::nullopt);

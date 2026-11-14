@@ -55,7 +55,7 @@ void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& reg
                                 Entity entity, const StylesheetComponent& stylesheet) {
   const css::Stylesheet empty;
   resources.synchronizeStylesheetFontFaces(entity, HasSvgNamespace(registry, entity)
-                                                       ? stylesheet.stylesheet.fontFaces()
+                                                       ? stylesheet.cascadeFontFaces()
                                                        : empty.fontFaces());
 }
 
@@ -668,24 +668,38 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
                                        StyleResourceBudget& styleBudget,
                                        ParseWarningSink& warningSink) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
-    if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
-      continue;
-    }
-    for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
+  // Apply one sheet's rules; returns false once the style budget is exhausted.
+  const auto applyRules = [&](const css::Stylesheet& sheet, bool isUserAgentStylesheet) {
+    for (const css::SelectorRule& rule : sheet.rules()) {
       if (!styleBudget.reserveRuleElementMatch()) {
-        return;
+        return false;
       }
       auto match = MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
       if (!match) {
         continue;
       }
       css::Specificity specificity = match->specificity;
-      if (stylesheet.isUserAgentStylesheet) {
+      if (isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
       ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink);
+    }
+    return true;
+  };
+
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+    if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
+      continue;
+    }
+    // Imported rules precede the importing sheet's own rules in the cascade.
+    for (const css::Stylesheet& imported : stylesheet.importedStylesheets) {
+      if (!applyRules(imported, stylesheet.isUserAgentStylesheet)) {
+        return;
+      }
+    }
+    if (!applyRules(stylesheet.stylesheet, stylesheet.isUserAgentStylesheet)) {
+      return;
     }
   }
 }

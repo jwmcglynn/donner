@@ -2,6 +2,7 @@
 /// @file
 
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -128,6 +129,38 @@ struct StylesheetComponent {
   bool selectorsDependOnTextContent = false;
 
   /**
+   * Stylesheets loaded through `@import`, flattened in cascade order: each imported sheet follows
+   * the sheets it imports, and all of them precede \ref stylesheet's own rules. Populated by
+   * \ref ResourceManagerContext::loadStylesheetImports when the document is prepared for
+   * rendering, and cleared whenever \ref stylesheet is reparsed. Imported rules have no document
+   * source provenance, so source-mapped editor queries consider only \ref stylesheet.
+   */
+  std::vector<css::Stylesheet> importedStylesheets;
+
+  /// Font faces of \ref importedStylesheets followed by \ref stylesheet, populated only when
+  /// imports contributed any; see \ref cascadeFontFaces().
+  std::vector<css::FontFace> combinedFontFaces;
+
+  /// Resource-manager generation for which \ref importedStylesheets was resolved, or nullopt when
+  /// the imports of the current \ref stylesheet have not been resolved yet.
+  std::optional<std::uint64_t> importGeneration;
+
+  /// Font faces this stylesheet contributes to the document, including imported ones.
+  std::span<const css::FontFace> cascadeFontFaces() const UTILS_LIFETIME_BOUND {
+    return combinedFontFaces.empty() ? stylesheet.fontFaces()
+                                     : std::span<const css::FontFace>(combinedFontFaces);
+  }
+
+  /**
+   * Install the resolved imports of \ref stylesheet, updating the selector-dependency caches so
+   * that imported selectors also invalidate styles.
+   *
+   * @param imported Imported stylesheets in cascade order.
+   * @param generation Resource-manager generation the imports were resolved for.
+   */
+  void setImportedStylesheets(std::vector<css::Stylesheet>&& imported, std::uint64_t generation);
+
+  /**
    * Returns true if the \ref xml_style element has either no `type` attribute, or if it has been
    * manually set to "text/css".
    */
@@ -177,6 +210,10 @@ struct StylesheetComponent {
    */
   void parseStylesheet(const RcStringOrRef& str, StylesheetSourceMap sourceMap,
                        ParseWarningSink& warnings);
+
+private:
+  /// Recompute the selector-dependency caches from \ref stylesheet and \ref importedStylesheets.
+  void rebuildSelectorCaches();
 };
 
 }  // namespace donner::svg::components

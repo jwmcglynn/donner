@@ -1182,8 +1182,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/style",
                 {
-                    {"external-CSS.svg",
-                     Params::Skip("Not impl: CSS @import loading (diagnosed and ignored)")},
                     {"non-presentational-attribute.svg",
                      Params::DeprecatedInSVG2("<svg version=\"1.1\"> semantics (the version "
                                               "attribute is removed in SVG 2)")},

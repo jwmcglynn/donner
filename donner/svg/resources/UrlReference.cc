@@ -156,6 +156,10 @@ bool IsOpaque(const UrlComponents& url) {
 
 std::optional<std::string> ResolveUrlReference(std::string_view base, std::string_view reference) {
   const UrlComponents ref = SplitUrl(reference);
+  if (IsOpaque(ref)) {
+    // Opaque URLs such as `data:` have no path hierarchy; their contents are kept verbatim.
+    return std::string(reference);
+  }
   if (ref.scheme.has_value()) {
     return Recompose(ref.scheme, ref.authority, RemoveDotSegments(ref.path), ref.query,
                      ref.fragment);

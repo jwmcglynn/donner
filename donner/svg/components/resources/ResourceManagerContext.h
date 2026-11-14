@@ -18,6 +18,7 @@
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/core/ProcessingMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
+#include "donner/svg/resources/UrlLoader.h"
 
 namespace donner::svg::components {
 
@@ -114,6 +115,26 @@ public:
                                                    ParseWarningSink& warningSink);
 
   /**
+   * Resolve and load the `@import` rules of every author stylesheet in the document, storing the
+   * imported stylesheets on each \ref StylesheetComponent in cascade order.
+   *
+   * Imports are fetched only through the application's \ref ResourceLoaderInterface, sharing the
+   * external-fetch cache, fetch-attempt limit, and aggregate byte budget used by images, fonts,
+   * and external SVG documents; `data:` URLs are decoded without the loader. With no loader, or in
+   * secure processing modes, external imports are diagnosed and ignored without any fetch. One
+   * pass is additionally bounded by \ref StylesheetImportBudget for depth, import count, bytes,
+   * and parsed size. Stylesheets already resolved for the current \ref cacheGeneration are not
+   * reloaded.
+   *
+   * The resource loader runs during this call, so it must not be called while document write
+   * access is held.
+   *
+   * @param warningSink Sink to collect warnings, mapped to the importing `<style>` source.
+   * @return True if any stylesheet's imported rules were (re)loaded, so styles must be recomputed.
+   */
+  bool loadStylesheetImports(ParseWarningSink& warningSink);
+
+  /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.
    *
    * @param entity Entity to get the image size for.
@@ -158,6 +179,10 @@ private:
   uint64_t cacheGeneration_ = NextCacheGeneration();
 
   void onStylesheetDestroy(Registry& registry, Entity entity);
+
+  /// Fetch one resolved stylesheet import through the guarded, budgeted, caching loader.
+  std::variant<UrlLoader::Result, RcString> fetchStylesheetImport(std::string_view url,
+                                                                  size_t maximumBytes);
 
   /**
    * Get the \ref LoadedImageComponent for an entity. This will synchronously load the image if it
