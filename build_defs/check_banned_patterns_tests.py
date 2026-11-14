@@ -6,6 +6,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +20,17 @@ assert _CHECKER_SPEC is not None
 assert _CHECKER_SPEC.loader is not None
 check_banned_patterns = importlib.util.module_from_spec(_CHECKER_SPEC)
 _CHECKER_SPEC.loader.exec_module(check_banned_patterns)
+
+
+def _write_xml_scan_allowlist_files(root: Path) -> None:
+    """Create every allowlisted file with exactly its capped number of markup searches."""
+    for relative_path, cap in check_banned_patterns._XML_SCAN_ALLOWLIST.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(f'void Site{i}(std::string_view s) {{ s.rfind("</"); }}\n' for i in range(cap)),
+            encoding="utf-8",
+        )
 
 
 class CheckBannedPatternsTests(unittest.TestCase):
@@ -188,6 +200,38 @@ class CheckBannedPatternsTests(unittest.TestCase):
                     errors = check_banned_patterns.check_file(source_path)
                 self.assertEqual([description], [error[1] for error in errors])
                 self.assertIn(action, errors[0][2])
+
+    def _run_checker_requiring_allowlisted_files(self, missing: str | None):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_xml_scan_allowlist_files(root)
+            if missing:
+                (root / missing).unlink()
+            return subprocess.run(
+                [sys.executable, str(_CHECKER_PATH), "--require-allowlisted-files",
+                 "donner/editor/FocusView.cc"],
+                cwd=root, check=False, capture_output=True, text=True,
+            )
+
+    def test_markup_scan_allowlist_entries_must_name_existing_files(self):
+        present = self._run_checker_requiring_allowlisted_files(None)
+        self.assertEqual(0, present.returncode, present.stdout + present.stderr)
+
+        missing = "donner/editor/XmlAutocomplete.cc"
+        completed = self._run_checker_requiring_allowlisted_files(missing)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+        self.assertIn(f"{missing}: listed in _XML_SCAN_ALLOWLIST but does not exist",
+                      completed.stdout)
+
+    def test_lint_rejects_allowlist_entry_for_missing_file(self):
+        missing = "donner/editor/XmlAutocomplete.cc"
+        completed = self._run_lint_in_git_repo(
+            current_decision_points=10, provide_origin_main=True,
+            missing_allowlisted_file=missing,
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn(f"{missing}: listed in _XML_SCAN_ALLOWLIST but does not exist",
+                      completed.stdout)
 
     def test_markup_scan_suppression_must_name_an_exception(self):
         scan = 'auto pos = source.rfind("</", end);'
@@ -662,6 +706,7 @@ const char* text = "it's quoted";
         diverged_target: bool = False,
         unrelated_target: bool = False,
         python_growth: bool = False,
+        missing_allowlisted_file: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -712,6 +757,9 @@ const char* text = "it's quoted";
             subprocess.run(
                 ["git", "config", "user.name", "Lint Test"], cwd=repo, check=True
             )
+            _write_xml_scan_allowlist_files(repo)
+            if missing_allowlisted_file:
+                (repo / missing_allowlisted_file).unlink()
             write_source(10)
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(

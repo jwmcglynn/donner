@@ -737,6 +737,20 @@ def _stale_xml_scan_cap(hits: int, allowed: int) -> Tuple[int, str, str]:
     )
 
 
+def _missing_allowlisted_files() -> List[str]:
+    """Return _XML_SCAN_ALLOWLIST entries that name no file under the working directory."""
+    return [path for path in _XML_SCAN_ALLOWLIST if not (Path.cwd() / path).is_file()]
+
+
+def _report_missing_allowlisted_files() -> int:
+    missing = _missing_allowlisted_files()
+    for path in missing:
+        print(f"{path}: listed in _XML_SCAN_ALLOWLIST but does not exist")
+        print("    Remove the entry from build_defs/check_banned_patterns.py so its cap cannot be")
+        print("    reused by a new file at that path.")
+    return len(missing)
+
+
 def _rule_applies_to_path(rule: _Rule, posix_path: str) -> bool:
     applies = not rule.applicable_path_prefixes or any(
         prefix in posix_path for prefix in rule.applicable_path_prefixes
@@ -833,6 +847,11 @@ def main(argv: List[str]) -> int:
             "Requires --check-method-complexity."
         ),
     )
+    parser.add_argument(
+        "--require-allowlisted-files",
+        action="store_true",
+        help="Fail when a file named in an allowlist does not exist under the working directory.",
+    )
     args = parser.parse_args(argv[1:])
 
     inputs = [Path(p) for p in args.paths] if args.paths else [Path("donner"), Path("examples")]
@@ -841,7 +860,7 @@ def main(argv: List[str]) -> int:
         print("No source files found to check.", file=sys.stderr)
         return 0
 
-    total_errors = 0
+    total_errors = _report_missing_allowlisted_files() if args.require_allowlisted_files else 0
     for f in files:
         baseline = None
         if args.check_method_complexity and args.complexity_baseline_ref:
