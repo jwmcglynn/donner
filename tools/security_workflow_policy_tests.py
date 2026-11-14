@@ -2443,7 +2443,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('BAZEL_DIFF_TAG: "%s"' % BAZEL_DIFF_TAG, workflow)
         self.assertIn('BAZEL_DIFF_SHA256: "%s"' % BAZEL_DIFF_SHA256, workflow)
 
-        download = _step_body(workflow, "Download bazel-diff")
+        self.assertEqual(_step_body(workflow, "Download bazel-diff").split("\n\n", 1)[0].strip(),
+                         "shell: bash\n        run: tools/ci/fetch_bazel_diff.sh")
+        # //tools/ci:determine_targets_tests runs the script's download, check and retries.
+        download = _read("tools/ci/fetch_bazel_diff.sh")
         verification = "sha256sum --check --status"
         self.assertIn("$BAZEL_DIFF_SHA256", download)
         self.assertIn(verification, download)

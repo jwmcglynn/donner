@@ -12,6 +12,7 @@ that no longer matches a difference also fails, so the lists shrink as gaps clos
 """
 
 import copy
+import functools
 import hashlib
 import json
 from pathlib import Path
@@ -246,7 +247,7 @@ _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
      "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "5057c9deaeac7852"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "60a1b7a4e8d1b120"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "c2708d9566911b2f"),
 }
 
 SHARED_STEP_ALLOWLIST = {
@@ -1027,6 +1028,39 @@ def _bazel_profile(workflow, job, scenario):
     return steps, writes
 
 
+# GitHub's default environment variables that a script moved out of a workflow step reads in
+# place of the step's expressions. They render like the expressions they replaced.
+_DEFAULT_ENVIRONMENT_CONTEXTS = {"GITHUB_EVENT_NAME": "github.event_name",
+                                 "GITHUB_SHA": "github.sha"}
+
+
+@functools.cache
+def _workflow_logic_scripts():
+    """The scripts that hold workflow step logic, as the target selection lists them."""
+    function = _read("tools/ci/determine_targets.sh").split("is_workflow_logic() {\n", 1)[1]
+    function = function.split("\n  }\n", 1)[0]
+    return frozenset(path for arm in re.findall(r"^\s+([\w./|-]+)\)$", function, re.MULTILINE)
+                     for path in arm.split("|"))
+
+
+def _step_script(run):
+    """A step's script followed by each workflow logic script it runs.
+
+    The step is compared with the logic it moved into a script, so an edit there needs the same
+    review as an edit to the step, and the event routing it reads from the default environment
+    still renders per scenario.
+    """
+    script = run
+    for path in sorted(set(re.findall(r"(?<![\w/.-])tools/ci/[\w.-]+\.sh\b", run))
+                       & _workflow_logic_scripts()):
+        body = _read(path)
+        for variable, context in _DEFAULT_ENVIRONMENT_CONTEXTS.items():
+            body = re.sub(r"\$\{%s\}|\$%s\b" % (variable, variable),
+                          lambda _, context=context: "${{ %s }}" % context, body)
+        script += "\n# %s\n%s" % (path, body)
+    return script
+
+
 def _other_step_view(workflow, job, step, scenario):
     """What a non-Bazel step runs in a scenario: action, inputs, command, shell, variables read.
 
@@ -1034,7 +1068,7 @@ def _other_step_view(workflow, job, step, scenario):
     than another compares as different. Each variable the command or inputs read is recorded
     with its effective value, wherever it is set.
     """
-    script = render(str(step.get("run") or ""), scenario)
+    script = render(_step_script(str(step.get("run") or "")), scenario)
     environment = _step_environment(workflow, job, step, scenario)
     # Inputs that differ between events by policy, for the action that reads them, are not
     # compared (_POLICY_EVENT_INPUTS).

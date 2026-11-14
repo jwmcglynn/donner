@@ -344,6 +344,7 @@ py_test(
         "//tools:run-browser-ci.sh",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:bazel_watchdog.sh",
+        "//tools/ci:determine_targets.sh",
         "//tools/ci:editor_wasm_lane.sh",
     ],
     imports = ["."],
@@ -402,6 +403,7 @@ py_test(
         "//tools/ci:docs_lane.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:editor_wasm_stage.py",
+        "//tools/ci:fetch_bazel_diff.sh",
     ],
     deps = [
         ":bcr_preflight",
@@ -1021,8 +1023,10 @@ py_test(
         "//:.bazelrc",
         "//:github_action_definitions",
         "//tools/ci:coverage_contract.json",
+        "//tools/ci:determine_targets.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:editor_wasm_stage.py",
+        "//tools/ci:fetch_bazel_diff.sh",
     ],
     main = "ci_lane_parity_tests.py",
     deps = [

@@ -10,9 +10,11 @@ exports_files([
     "BUILD.bazel",
     "bazel_watchdog.sh",
     "coverage_contract.json",
+    "determine_targets.sh",
     "docs_lane.sh",
     "editor_wasm_lane.sh",
     "editor_wasm_stage.py",
+    "fetch_bazel_diff.sh",
     "github_rate_limit.py",
     "remote_macos_xcode.bzl",
     "test_with_exclusions.py",
@@ -377,6 +379,22 @@ py_test(
         "github_rate_limit.py",
         "//:.github/actions/pr-trust/action.yml",
         "//:.github/workflows/main.yml",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The CI workflow's target selection and its bazel-diff download.
+py_test(
+    name = "determine_targets_tests",
+    size = "small",
+    srcs = ["determine_targets_tests.py"],
+    data = [
+        "determine_targets.sh",
+        "fetch_bazel_diff.sh",
     ],
     deps = [
         "//tools:test_executable_fixtures",
