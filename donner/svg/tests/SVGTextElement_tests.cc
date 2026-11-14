@@ -1120,11 +1120,13 @@ TEST(SVGTextElementPublicApiTests, BidiOverrideAppliesOnlyToTheTextElementItself
 
   // Normal rtl reordering keeps the Latin word in order: `b` stays right of `a`.
   EXPECT_THAT(letterOrder(R"(direction="rtl")", ""), testing::Gt(0.0));
+#ifdef DONNER_TEXT_ENABLED
   // The override on the text element runs every letter right to left.
   EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="bidi-override")"),
               testing::Lt(0.0));
   EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="isolate-override")"),
               testing::Lt(0.0));
+#endif
   // On the group it does not reach the text.
   EXPECT_THAT(letterOrder(R"(direction="rtl" unicode-bidi="bidi-override")", ""), testing::Gt(0.0));
   // A left-to-right override leaves left-to-right text unchanged.

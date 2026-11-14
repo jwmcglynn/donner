@@ -1515,41 +1515,6 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
   }
 
   {
-    const std::pair<const char*, Direction> cases[] = {
-        {"ltr", Direction::Ltr},
-        {"rtl", Direction::Rtl},
-        {"RTL", Direction::Rtl},
-    };
-    for (const auto& [value, expected] : cases) {
-      PropertyRegistry registry;
-      registry.parseStyle(std::string("direction: ") + value);
-      EXPECT_THAT(registry.direction.get(), Optional(expected));
-    }
-    PropertyRegistry invalid;
-    invalid.parseStyle("direction: up");
-    EXPECT_THAT(invalid.direction.get(), Optional(Direction::Ltr)) << "invalid keeps the initial";
-  }
-
-  {
-    const std::pair<const char*, UnicodeBidi> cases[] = {
-        {"normal", UnicodeBidi::Normal},
-        {"embed", UnicodeBidi::Embed},
-        {"isolate", UnicodeBidi::Isolate},
-        {"bidi-override", UnicodeBidi::BidiOverride},
-        {"isolate-override", UnicodeBidi::IsolateOverride},
-        {"plaintext", UnicodeBidi::Plaintext},
-    };
-    for (const auto& [value, expected] : cases) {
-      PropertyRegistry registry;
-      registry.parseStyle(std::string("unicode-bidi: ") + value);
-      EXPECT_THAT(registry.unicodeBidi.get(), Optional(expected));
-    }
-    PropertyRegistry invalid;
-    invalid.parseStyle("unicode-bidi: override");
-    EXPECT_THAT(invalid.unicodeBidi.get(), Optional(UnicodeBidi::Normal));
-  }
-
-  {
     const std::pair<const char*, TextOrientation> cases[] = {
         {"auto", TextOrientation::Mixed},     {"0", TextOrientation::Upright},
         {"0deg", TextOrientation::Upright},   {"90", TextOrientation::Sideways},
@@ -3685,6 +3650,43 @@ TEST(PropertyRegistry, StyleSynthesisCascadesIndependentlyOfFontAndSmallCaps) {
 
 TEST(PropertyRegistry, StyleSynthesisIsNotAnSvgPresentationAttribute) {
   EXPECT_THAT(PropertyRegistry::isPresentationAttributeName("font-synthesis-style"), Eq(false));
+}
+
+TEST(PropertyRegistry, ParsesDirectionAndUnicodeBidi) {
+  {
+    const std::pair<const char*, Direction> cases[] = {
+        {"ltr", Direction::Ltr},
+        {"rtl", Direction::Rtl},
+        {"RTL", Direction::Rtl},
+    };
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("direction: ") + value);
+      EXPECT_THAT(registry.direction.get(), Optional(expected));
+    }
+    PropertyRegistry invalid;
+    invalid.parseStyle("direction: up");
+    EXPECT_THAT(invalid.direction.get(), Optional(Direction::Ltr)) << "invalid keeps the initial";
+  }
+
+  {
+    const std::pair<const char*, UnicodeBidi> cases[] = {
+        {"normal", UnicodeBidi::Normal},
+        {"embed", UnicodeBidi::Embed},
+        {"isolate", UnicodeBidi::Isolate},
+        {"bidi-override", UnicodeBidi::BidiOverride},
+        {"isolate-override", UnicodeBidi::IsolateOverride},
+        {"plaintext", UnicodeBidi::Plaintext},
+    };
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("unicode-bidi: ") + value);
+      EXPECT_THAT(registry.unicodeBidi.get(), Optional(expected));
+    }
+    PropertyRegistry invalid;
+    invalid.parseStyle("unicode-bidi: override");
+    EXPECT_THAT(invalid.unicodeBidi.get(), Optional(UnicodeBidi::Normal));
+  }
 }
 
 }  // namespace donner::svg
