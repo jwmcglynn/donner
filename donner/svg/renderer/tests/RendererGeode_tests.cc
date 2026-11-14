@@ -444,6 +444,59 @@ TEST_F(RendererGeodeTest, TiledBlurNearRasterEdgeMatchesBlurWithRoom) {
   }
 }
 
+// A tiled execution copies each tile of the backdrop alongside the source graphic, so it must read
+// the same BackgroundImage and BackgroundAlpha as one execution over the whole raster.
+TEST_F(RendererGeodeTest, TiledFilterReadsTheSameBackdropAsUntiled) {
+  using namespace components;
+  for (const FilterStandardInput input :
+       {FilterStandardInput::BackgroundImage, FilterStandardInput::BackgroundAlpha}) {
+    SCOPED_TRACE(static_cast<int>(input));
+    FilterGraph graph;
+    FilterNode offset;
+    offset.primitive = filter_primitive::Offset{.dx = 24, .dy = 8};
+    offset.inputs = {input};
+    graph.nodes.push_back(offset);
+    FilterNode blur;
+    blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 2, .stdDeviationY = 2};
+    graph.nodes.push_back(blur);
+    const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device) {
+      RendererGeode renderer(device);
+      RenderViewport viewport;
+      viewport.size = Vector2d(96, 96);
+      viewport.devicePixelRatio = 1.0;
+      renderer.beginFrame(viewport);
+      renderer.setPaint(solidFill(css::RGBA(46, 139, 87, 255)));
+      renderer.drawRect(Box2d({4, 4}, {44, 60}), StrokeParams{});
+      renderer.pushFilterLayer(graph, Box2d({0, 0}, {96, 96}));
+      renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+      renderer.drawRect(Box2d({70, 70}, {90, 90}), StrokeParams{});
+      renderer.popFilterLayer();
+      renderer.endFrame();
+      return renderer.takeSnapshot();
+    };
+
+    std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(tiledDevice, testing::NotNull());
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(48);
+    const RendererBitmap tiled = render(tiledDevice);
+    ASSERT_THAT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u));
+    const RendererBitmap whole = render(sharedDevice());
+    ASSERT_THAT(sharedDevice()->filterEngine().lastExecutionMemory().tileExecutions,
+                testing::Eq(1u));
+    ASSERT_FALSE(tiled.empty());
+    ASSERT_FALSE(whole.empty());
+    const auto alphaAt = [&whole](int x, int y) {
+      return whole.pixels[static_cast<std::size_t>(y) * whole.rowBytes +
+                          static_cast<std::size_t>(x) * 4u + 3u];
+    };
+    // The moved backdrop covers (48, 36); the filtered red square at (80, 80) is replaced.
+    EXPECT_THAT(alphaAt(48, 36), testing::Eq(255));
+    EXPECT_THAT(alphaAt(80, 80), testing::Eq(0));
+    editor::tests::CompareBitmapToBitmap(tiled, whole, "tiled_backdrop",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
   using namespace components;
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();

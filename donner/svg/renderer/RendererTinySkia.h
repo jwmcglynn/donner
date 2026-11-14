@@ -348,6 +348,8 @@ private:
     bool allocationRejected = false;
     std::optional<tiny_skia::Pixmap> fillPaintPixmap;
     std::optional<tiny_skia::Pixmap> strokePaintPixmap;
+    /// BackgroundImage input of a filter layer, in the layer's raster coordinates.
+    std::optional<tiny_skia::Pixmap> backdropPixmap;
     double opacity = 1.0;
     MixBlendMode blendMode = MixBlendMode::Normal;
     components::FilterGraph filterGraph;
@@ -391,6 +393,7 @@ private:
     int bufferOffsetY = 0;
     bool usesFillPaint = false;
     bool usesStrokePaint = false;
+    bool readsBackdrop = false;
     bool localRasterRequired = false;
     components::FilterExecutionBudget::Reservation reservation;
   };
@@ -428,6 +431,11 @@ private:
     explicit operator bool() const { return entry != nullptr; }
   };
 
+  /// Copies the backdrop a filter layer reads into a pixmap with the layer's raster layout.
+  /// @param filterGraph Graph whose \ref components::FilterGraph::backdropLayerSkip selects the
+  ///   backdrop target. @param admission Admitted raster layout of the filter layer.
+  [[nodiscard]] tiny_skia::Pixmap captureFilterBackdrop(const components::FilterGraph& filterGraph,
+                                                        const FilterAdmission& admission) const;
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
@@ -519,6 +527,9 @@ private:
   std::vector<SurfaceFrame> surfaceStack_;
   std::vector<bool> filterLayerStack_;
   std::size_t rejectedFilterDepth_ = 0;
+  /// Surface-stack depth beneath each open isolated, mask and filter layer, in push order. A
+  /// filter stage that reads the backdrop skips the filtered element's own layers through it.
+  std::vector<std::size_t> layerBackdropDepths_;
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget_ =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget_ = true;

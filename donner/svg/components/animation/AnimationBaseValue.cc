@@ -647,6 +647,8 @@ std::string FilterInputBaseValue(const std::optional<FilterInput>& input,
     case FilterStandardInput::SourceAlpha: return "SourceAlpha";
     case FilterStandardInput::FillPaint: return "FillPaint";
     case FilterStandardInput::StrokePaint: return "StrokePaint";
+    case FilterStandardInput::BackgroundImage: return "BackgroundImage";
+    case FilterStandardInput::BackgroundAlpha: return "BackgroundAlpha";
   }
   return {};
 }

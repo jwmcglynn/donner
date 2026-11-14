@@ -1283,8 +1283,14 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
       copiesViewport ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4 : 0;
   const uint64_t bufferPixels =
       static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
-  result.captureBytes =
-      bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes + viewportCopyBytes;
+  // A graph reading the backdrop keeps a backdrop copy with the capture's layout, and a tiled
+  // execution copies each tile of it.
+  const bool readsBackdrop = components::StandardInputUsage(filterGraph).readsBackdrop();
+  const uint64_t tilePixels = uint64_t{result.plan.tileWidth} * result.plan.tileHeight;
+  const uint64_t backdropBytes =
+      readsBackdrop ? bufferPixels * 4 + (result.plan.tiles > 1 ? tilePixels * 4 : 0) : 0;
+  result.captureBytes = bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes +
+                        viewportCopyBytes + backdropBytes;
   uint64_t graphWork = 0;
   result.costKnown = components::FilterGraphExecutionCost(
       filterGraph, result.bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, graphWork,
@@ -1294,7 +1300,7 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
     (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
     const bool tiled = result.bounds.executions > 1;
     result.surfaces = layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0) +
-                      (copiesViewport ? 1 : 0);
+                      (copiesViewport ? 1 : 0) + (readsBackdrop ? (tiled ? 2 : 1) : 0);
     result.surfaces +=
         std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
           return std::holds_alternative<components::filter_primitive::Image>(node.primitive);
@@ -2582,6 +2588,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     bool localRasterRequiredForBudget = false;
     int filterBufferOffsetX = 0;  // Input margin past the outer target's left edge.
     int filterBufferOffsetY = 0;  // Input margin past the outer target's top edge.
+    /// BackgroundImage input in the capture's texel layout, when the graph reads the backdrop.
+    gpu::Texture backdropTexture;
+    gpu::TextureDescriptor backdropDesc = {};
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
   };
@@ -2595,6 +2604,76 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<ClipStackEntry> clipStack;
   std::vector<FilterStackFrame> filterStack;
   std::size_t rejectedFilterDepth = 0;
+
+  /// The target beneath one open isolated, mask or filter layer, and the filter-stack depth at its
+  /// push. A filter stage that reads the backdrop skips the filtered element's own layers through
+  /// these records.
+  struct LayerBackdropRecord {
+    gpu::Texture target;          //!< Alias of the target the layer composites onto.
+    std::size_t filterDepth = 0;  //!< Filter frames open when the layer was pushed.
+  };
+  std::vector<LayerBackdropRecord> layerBackdropRecords;
+
+  void pushLayerBackdropRecord() {
+    layerBackdropRecords.push_back({aliasOf(target), filterStack.size()});
+  }
+
+  void popLayerBackdropRecord() {
+    if (!layerBackdropRecords.empty()) {
+      layerBackdropRecords.pop_back();
+    }
+  }
+
+  /// Records a clear of \p backdrop and a copy of the backdrop \p filterGraph reads into it, in
+  /// the texel layout of a capture admitted as \p admission. The newest record names the target
+  /// this filter layer composites onto. The outer target's draws must already be recorded.
+  void recordFilterBackdrop(const components::FilterGraph& filterGraph,
+                            const GeodeFilterAdmission& admission, const gpu::Texture& backdrop,
+                            const gpu::Extent2d& extent) {
+    auto clearEncoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline, backdrop, extent, *frameGpuEncoder);
+    configureEncoder(*clearEncoder);
+    clearEncoder->clear(css::RGBA(0, 0, 0, 0));
+    clearEncoder->finish();
+    retireFinishedEncoder(std::move(clearEncoder));
+    if (layerBackdropRecords.empty()) {
+      return;
+    }
+    const std::size_t newest = layerBackdropRecords.size() - 1;
+    const LayerBackdropRecord& record =
+        layerBackdropRecords[newest - std::min<std::size_t>(filterGraph.backdropLayerSkip, newest)];
+    if (!record.target.isValid() || !canCopyFrom(record.target)) {
+      return;  // An embedder target that refuses copies leaves the backdrop transparent.
+    }
+    const gpu::Result<gpu::TextureDescriptor> source =
+        device->runtimeDevice().textureDescriptor(record.target);
+    if (!source.hasResult()) {
+      return;
+    }
+    // Each filter capture above the backdrop moved its contents by its input margin; this
+    // capture's own margin moves them once more.
+    int64_t offsetX = admission.bufferOffsetX;
+    int64_t offsetY = admission.bufferOffsetY;
+    for (std::size_t index = record.filterDepth; index < filterStack.size(); ++index) {
+      offsetX += filterStack[index].filterBufferOffsetX;
+      offsetY += filterStack[index].filterBufferOffsetY;
+    }
+    // Capture texel (x, y) is backdrop texel (x - offsetX, y - offsetY).
+    const int64_t xBegin = std::max<int64_t>(0, offsetX);
+    const int64_t yBegin = std::max<int64_t>(0, offsetY);
+    const int64_t xEnd = std::min<int64_t>(extent.width, source.result().size.width + offsetX);
+    const int64_t yEnd = std::min<int64_t>(extent.height, source.result().size.height + offsetY);
+    if (xBegin >= xEnd || yBegin >= yEnd) {
+      return;
+    }
+    const gpu::Status copied = frameGpuEncoder->copyTextureToTexture(
+        record.target, backdrop,
+        gpu::Extent2d{static_cast<uint32_t>(xEnd - xBegin), static_cast<uint32_t>(yEnd - yBegin)},
+        gpu::Origin2d{static_cast<uint32_t>(xBegin - offsetX),
+                      static_cast<uint32_t>(yBegin - offsetY)},
+        gpu::Origin2d{static_cast<uint32_t>(xBegin), static_cast<uint32_t>(yBegin)});
+    UTILS_RELEASE_ASSERT_MSG(!copied.hasError(), "Failed to record the filter backdrop copy");
+  }
 
   /// How far right and down the active filter captures move what is drawn into them, in pixels.
   /// A capture with an input margin holds the content its region reaches above or left of its
@@ -2836,8 +2915,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!layerTexture.isValid()) {
       return false;
     }
+    const bool readsBackdrop = components::StandardInputUsage(filterGraph).readsBackdrop();
+    const gpu::TextureDescriptor backdropDesc{
+        "RendererGeodeFilterBackdrop", textureDesc.size, gpuTextureFormat(),
+        gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled |
+            gpu::TextureUsage::CopySrc | gpu::TextureUsage::CopyDst};
+    gpu::Texture backdropTexture = readsBackdrop ? acquireTexture(backdropDesc) : gpu::Texture();
+    if (readsBackdrop && !backdropTexture.isValid()) {
+      releaseTextureAtFrameEnd(std::move(layerTexture), textureDesc);
+      return false;
+    }
 
     encoder->finish();
+    if (readsBackdrop) {
+      recordFilterBackdrop(filterGraph, admission, backdropTexture, backdropDesc.size);
+    }
     FilterStackFrame frame;
     frame.savedEncoder = std::move(encoder);
     frame.savedTarget = aliasOf(target);
@@ -2852,6 +2944,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frame.localRasterRequiredForBudget = admission.localRasterRequired;
     frame.filterBufferOffsetX = admission.bufferOffsetX;
     frame.filterBufferOffsetY = admission.bufferOffsetY;
+    if (readsBackdrop) {
+      frame.backdropTexture = std::move(backdropTexture);
+      frame.backdropDesc = backdropDesc;
+    }
     frame.savedClipStack = std::move(clipStack);
     clipStack.clear();
 
@@ -3016,9 +3112,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
     } else {
-      filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
-                                       frame.filterRegion, bufferDeviceFromFilter, *this, nullptr,
-                                       frame.fullFilterPlan, this);
+      filtered = filterEngine->execute(
+          frame.filterGraph, frame.layerTexture, frame.layerDesc, frame.filterRegion,
+          bufferDeviceFromFilter, *this, nullptr, frame.fullFilterPlan, this,
+          frame.backdropTexture.isValid() ? &frame.backdropTexture : nullptr, &frame.backdropDesc);
     }
     if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
@@ -5356,6 +5453,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         retireFinishedEncoder(std::move(frame.savedEncoder));
       }
       releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      releaseTextureAtFrameEnd(std::move(frame.backdropTexture), frame.backdropDesc);
       releaseClipStackTexturesAtFrameEnd(frame.savedClipStack);
       filterExecutionBudget->release(frame.filterReservation);
     }
@@ -5380,6 +5478,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Recorded encoders remain alive through submission; an abandoned frame can discard them.
   void retireOpenFrameStacksAtBoundary(bool submitRecordedWork) {
     releaseClipStackTexturesAtFrameEnd(clipStack);
+    layerBackdropRecords.clear();
     if (layerStack.empty() && filterStack.empty() && maskStack.empty()) {
       return;
     }
@@ -5623,9 +5722,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseClipStackTextures(clipStack);
     for (FilterStackFrame& frame : filterStack) {
       releaseRuntimeTexture(frame.layerTexture);
+      releaseRuntimeTexture(frame.backdropTexture);
       releaseClipStackTextures(frame.savedClipStack);
     }
     filterStack.clear();
+    layerBackdropRecords.clear();
 
     for (PatternStackFrame& frame : patternStack) {
       releaseRuntimeTexture(frame.tileTexture);
@@ -6218,6 +6319,7 @@ void RendererGeode::popClip() {
 
 void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  impl_->pushLayerBackdropRecord();
 
   // All 16 `mix-blend-mode` values are implemented: the pushed
   // layer renders normally, and `popIsolatedLayer` switches to a
@@ -6277,6 +6379,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
 
 void RendererGeode::popIsolatedLayer() {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  impl_->popLayerBackdropRecord();
   if (impl_->layerStack.empty()) {
     return;
   }
@@ -6385,6 +6488,7 @@ void RendererGeode::popIsolatedLayer() {
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
                                     const std::optional<Box2d>& filterRegion) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  impl_->pushLayerBackdropRecord();
   if (impl_->rejectedFilterDepth != 0) {
     impl_->pushRejectedFilterFrame();
     return;
@@ -6422,11 +6526,21 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
 
 void RendererGeode::popFilterLayer() {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  impl_->popLayerBackdropRecord();
   if (impl_->filterStack.empty()) {
     return;
   }
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
+  // Every path below either records the backdrop's last read before returning or records none;
+  // the texture is released with the frame's other captures, or retained if the frame is lost.
+  struct BackdropRelease {
+    Impl& impl;
+    Impl::FilterStackFrame& frame;
+    ~BackdropRelease() {
+      impl.releaseTextureAtFrameEnd(std::move(frame.backdropTexture), frame.backdropDesc);
+    }
+  } backdropRelease{*impl_, frame};
   impl_->clipStack = std::move(frame.savedClipStack);
 
   if (frame.allocationRejected) {
@@ -6564,6 +6678,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
                              ColorInterpolation colorInterpolation) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  impl_->pushLayerBackdropRecord();
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     // Headless / degenerate - push a placeholder so popMask stays balanced.
@@ -6665,6 +6780,7 @@ void RendererGeode::transitionMaskToContent() {
 
 void RendererGeode::popMask() {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
+  impl_->popLayerBackdropRecord();
   if (impl_->maskStack.empty()) {
     return;
   }

@@ -372,6 +372,11 @@ public:
    * @param frameSink Collection point for the caller's open frame, or null when the execution
    *   submits on its own. When given, the caller must have closed its own recording into that
    *   frame before the call, so the source rendering this graph samples is ordered ahead of it.
+   * @param backdrop Optional BackgroundImage input with \p sourceGraphic's extent and texel
+   *   layout, which the filter region clips like the source. Without it BackgroundImage and
+   *   BackgroundAlpha read transparent black. Tiled execution copies from it, so it needs
+   *   `CopySrc` usage. The caller owns it for the call.
+   * @param backdropDesc Descriptor \p backdrop was allocated with; ignored without \p backdrop.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
   FilterExecutionResult execute(const svg::components::FilterGraph& graph,
@@ -381,7 +386,9 @@ public:
                                 FilterTextureAllocator& textureAllocator,
                                 svg::components::FilterExecutionBudget* executionBudget = nullptr,
                                 std::optional<FilterTilePlan> admittedPlan = std::nullopt,
-                                FrameCommandBufferSink* frameSink = nullptr);
+                                FrameCommandBufferSink* frameSink = nullptr,
+                                const gpu::Texture* backdrop = nullptr,
+                                const gpu::TextureDescriptor* backdropDesc = nullptr);
 
   /**
    * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.

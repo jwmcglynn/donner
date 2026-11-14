@@ -1525,6 +1525,7 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   clipMaskAllocationRejected_ = false;
   surfaceStack_.clear();
   filterLayerStack_.clear();
+  layerBackdropDepths_.clear();
   rejectedFilterDepth_ = 0;
   patternFillPaint_.reset();
   patternStrokePaint_.reset();
@@ -1554,6 +1555,7 @@ void RendererTinySkia::endFrame() {
 
   surfaceStack_.clear();
   filterLayerStack_.clear();
+  layerBackdropDepths_.clear();
   rejectedFilterDepth_ = 0;
   deviceFromLocalTransform_ = Transform2d();
   deviceFromLocalTransformStack_.clear();
@@ -1728,6 +1730,7 @@ RendererTinySkia::RetainedTarget RendererTinySkia::retainedTargetFor(
 }
 
 void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
+  layerBackdropDepths_.push_back(surfaceStack_.size());
   SurfaceFrame frame;
   frame.kind = SurfaceKind::IsolatedLayer;
   frame.opacity = opacity;
@@ -1762,6 +1765,9 @@ void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode)
 }
 
 void RendererTinySkia::popIsolatedLayer() {
+  if (!layerBackdropDepths_.empty()) {
+    layerBackdropDepths_.pop_back();
+  }
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::IsolatedLayer) {
     return;
   }
@@ -1840,8 +1846,10 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
   const components::FilterStandardInputUsage inputs = filterCaptureInputs(filterGraph);
   const bool usesFillPaint = inputs.fillPaint;
   const bool usesStrokePaint = inputs.strokePaint;
-  const std::uint64_t surfaceCount =
-      1u + static_cast<std::uint64_t>(usesFillPaint) + static_cast<std::uint64_t>(usesStrokePaint);
+  const bool readsBackdrop = inputs.readsBackdrop();
+  const std::uint64_t surfaceCount = 1u + static_cast<std::uint64_t>(usesFillPaint) +
+                                     static_cast<std::uint64_t>(usesStrokePaint) +
+                                     static_cast<std::uint64_t>(readsBackdrop);
 
   // Prefer a raster with the graph's input margin, but never let the margin turn an admissible
   // filter into a frame-wide rejection: fall back to the viewport layout when the larger raster
@@ -1871,9 +1879,10 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
   if (!reservation.has_value()) {
     return std::nullopt;
   }
-  return FilterAdmission{plan->buffer.width,       plan->buffer.height, plan->buffer.offsetX,
-                         plan->buffer.offsetY,     usesFillPaint,       usesStrokePaint,
-                         !plan->fullExecutionFits, *reservation};
+  return FilterAdmission{
+      plan->buffer.width, plan->buffer.height, plan->buffer.offsetX, plan->buffer.offsetY,
+      usesFillPaint,      usesStrokePaint,     readsBackdrop,        !plan->fullExecutionFits,
+      *reservation};
 }
 
 bool RendererTinySkia::initializeFilterSurface(SurfaceFrame& frame,
@@ -1897,9 +1906,57 @@ bool RendererTinySkia::initializeFilterSurface(SurfaceFrame& frame,
 }
 #endif  // DONNER_FILTERS_ENABLED
 
+tiny_skia::Pixmap RendererTinySkia::captureFilterBackdrop(
+    const components::FilterGraph& filterGraph, const FilterAdmission& admission) const {
+  tiny_skia::Pixmap backdrop = createTransparentPixmap(admission.width, admission.height);
+  // Skip the filtered element's own layers: its opacity group, masks and outer filter stages.
+  const std::size_t skip =
+      std::min<std::size_t>(filterGraph.backdropLayerSkip, layerBackdropDepths_.size());
+  const std::size_t depth =
+      skip == 0 ? surfaceStack_.size() : layerBackdropDepths_[layerBackdropDepths_.size() - skip];
+  const tiny_skia::Pixmap& source = depth == 0 ? frame_ : surfaceStack_[depth - 1].pixmap;
+  // Each filter layer above the backdrop moved its contents by its input margin; this layer's own
+  // margin moves them once more.
+  int offsetX = admission.bufferOffsetX;
+  int offsetY = admission.bufferOffsetY;
+  for (std::size_t index = depth; index < surfaceStack_.size(); ++index) {
+    if (surfaceStack_[index].kind == SurfaceKind::FilterLayer) {
+      offsetX += surfaceStack_[index].filterBufferOffsetX;
+      offsetY += surfaceStack_[index].filterBufferOffsetY;
+    }
+  }
+  if (backdrop.width() == 0 || backdrop.height() == 0 || source.width() == 0 ||
+      source.height() == 0) {
+    return backdrop;
+  }
+  // Raster pixel (x, y) is backdrop pixel (x - offsetX, y - offsetY); copy whole rows exactly.
+  const int sourceWidth = static_cast<int>(source.width());
+  const int sourceHeight = static_cast<int>(source.height());
+  const int width = static_cast<int>(backdrop.width());
+  const int height = static_cast<int>(backdrop.height());
+  const int xBegin = std::max(0, offsetX);
+  const int xEnd = std::min(width, sourceWidth + offsetX);
+  if (xBegin >= xEnd) {
+    return backdrop;
+  }
+  const auto from = source.data();
+  auto to = backdrop.data();
+  const auto rowBytes = static_cast<std::size_t>(xEnd - xBegin) * 4u;
+  for (int y = std::max(0, offsetY); y < std::min(height, sourceHeight + offsetY); ++y) {
+    const auto sourceOffset =
+        (static_cast<std::size_t>(y - offsetY) * sourceWidth + (xBegin - offsetX)) * 4u;
+    const auto destinationOffset = (static_cast<std::size_t>(y) * width + xBegin) * 4u;
+    std::memcpy(&to[destinationOffset], &from[sourceOffset], rowBytes);
+  }
+  return backdrop;
+}
+
 void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGraph,
                                        const std::optional<Box2d>& filterRegion) {
 #ifdef DONNER_FILTERS_ENABLED
+  // Recorded before this layer's frame exists, so it names the target the layer composites onto.
+  const std::size_t backdropDepthBeforePush = surfaceStack_.size();
+  layerBackdropDepths_.push_back(backdropDepthBeforePush);
   if (rejectedFilterDepth_ != 0) {
     filterLayerStack_.push_back(false);
     ++rejectedFilterDepth_;
@@ -1930,6 +1987,13 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
     filterLayerStack_.back() = false;
     ++rejectedFilterDepth_;
     return;
+  }
+  if (admission->readsBackdrop) {
+    // The backdrop is copied while the frame is not yet on the stack, so the copy sees only the
+    // targets beneath this layer.
+    layerBackdropDepths_.pop_back();
+    frame.backdropPixmap = captureFilterBackdrop(filterGraph, *admission);
+    layerBackdropDepths_.push_back(backdropDepthBeforePush);
   }
 
   // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
@@ -2059,7 +2123,8 @@ void RendererTinySkia::compositeDeviceFilter(SurfaceFrame& frame) {
   ApplyFilterGraphToPixmap(
       frame.pixmap, frame.filterGraph, bufferDeviceFromFilter, frame.filterRegion, true,
       frame.fillPaintPixmap.has_value() ? &*frame.fillPaintPixmap : nullptr,
-      frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
+      frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr, nullptr,
+      frame.backdropPixmap.has_value() ? &*frame.backdropPixmap : nullptr);
   ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, bufferDeviceFromFilter);
 
   tiny_skia::PixmapPaint paint =
@@ -2103,6 +2168,9 @@ void RendererTinySkia::propagateFilterPaintInputs(const SurfaceFrame& frame) {
 
 void RendererTinySkia::popFilterLayer() {
 #ifdef DONNER_FILTERS_ENABLED
+  if (!layerBackdropDepths_.empty()) {
+    layerBackdropDepths_.pop_back();
+  }
   if (filterLayerStack_.empty()) {
     return;
   }
@@ -2152,6 +2220,7 @@ void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType
 
 void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
                                 ColorInterpolation colorInterpolation) {
+  layerBackdropDepths_.push_back(surfaceStack_.size());
   SurfaceFrame frame;
   frame.kind = SurfaceKind::MaskCapture;
   frame.maskBounds = maskBounds;
@@ -2255,6 +2324,9 @@ void RendererTinySkia::restoreMaskClipAndApplyCoverage(SurfaceFrame& frame) {
 }
 
 void RendererTinySkia::popMask() {
+  if (!layerBackdropDepths_.empty()) {
+    layerBackdropDepths_.pop_back();
+  }
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::MaskContent) {
     return;
   }

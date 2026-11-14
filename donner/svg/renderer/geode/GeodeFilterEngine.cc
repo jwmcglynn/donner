@@ -1085,7 +1085,8 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 FilterTexture resolveInput(const svg::components::FilterInput& input,
                            const std::unordered_map<std::string, FilterTexture>& namedBuffers,
                            FilterTexture currentBuffer, FilterTexture sourceGraphic,
-                           const FilterTexture* sourceAlpha) {
+                           const FilterTexture* sourceAlpha, const FilterTexture* backdrop,
+                           const FilterTexture* backdropAlpha) {
   using namespace svg::components;
   if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
     auto it = namedBuffers.find(named->name.str());
@@ -1100,6 +1101,12 @@ FilterTexture resolveInput(const svg::components::FilterInput& input,
     }
     if (*stdIn == FilterStandardInput::SourceAlpha && sourceAlpha != nullptr) {
       return *sourceAlpha;
+    }
+    if (*stdIn == FilterStandardInput::BackgroundImage && backdrop != nullptr) {
+      return *backdrop;
+    }
+    if (*stdIn == FilterStandardInput::BackgroundAlpha && backdropAlpha != nullptr) {
+      return *backdropAlpha;
     }
     return sourceGraphic;
   }
@@ -1383,10 +1390,12 @@ struct FilterGraphExecution {
                        FilterTextureAllocator& textureAllocator,
                        svg::components::FilterExecutionBudget* executionBudget,
                        std::optional<FilterTilePlan> admittedPlan,
-                       FrameCommandBufferSink* frameSink)
+                       FrameCommandBufferSink* frameSink,
+                       std::optional<FilterTexture> backdropSource)
       : engine(engine),
         graph(graph),
         sourceGraphic(sourceGraphic),
+        backdropSource(backdropSource),
         executionBudget(executionBudget),
         admittedPlan(admittedPlan),
         arena(engine.device_, textureAllocator, *engine.resourceCache_,
@@ -1400,6 +1409,7 @@ struct FilterGraphExecution {
   FilterTexture run();
   FilterTexture runNodes();
   FilterTexture runTiled(const FilterTilePlan& plan);
+  bool prepareBackdrop();
   FilterTexture inputFor(const svg::components::FilterNode& node, size_t index) const;
   FilterTexture clip(FilterTexture input, const Box2d& region, bool transformed,
                      bool resolve = false);
@@ -1411,6 +1421,8 @@ struct FilterGraphExecution {
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
   FilterTexture sourceGraphic;
+  /// Unclipped BackgroundImage input for the current tile, when the caller supplied one.
+  std::optional<FilterTexture> backdropSource;
   Vector2d tileOrigin = Vector2d::Zero();
   svg::components::FilterExecutionBudget* executionBudget;
   std::optional<FilterTilePlan> admittedPlan;
@@ -1418,6 +1430,8 @@ struct FilterGraphExecution {
   FilterExecutionCoordinates coordinates;
   FilterTexture currentBuffer;
   std::optional<FilterTexture> sourceAlpha;
+  std::optional<FilterTexture> backdrop;       //!< BackgroundImage, clipped to the filter region.
+  std::optional<FilterTexture> backdropAlpha;  //!< BackgroundAlpha derived from \ref backdrop.
   std::unordered_map<std::string, FilterTexture> namedBuffers;
   std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
@@ -1788,7 +1802,8 @@ FilterExecutionResult GeodeFilterEngine::execute(
     const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
     const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
     svg::components::FilterExecutionBudget* executionBudget,
-    std::optional<FilterTilePlan> admittedPlan, FrameCommandBufferSink* frameSink) {
+    std::optional<FilterTilePlan> admittedPlan, FrameCommandBufferSink* frameSink,
+    const gpu::Texture* backdrop, const gpu::TextureDescriptor* backdropDesc) {
   // Loss is terminal for this runtime. Refuse before the graph can allocate textures or record
   // another chunk, which also bounds backing retained by an earlier uncertain execution.
   if (device_.isDeviceLost()) {
@@ -1797,8 +1812,16 @@ FilterExecutionResult GeodeFilterEngine::execute(
   // Borrowed for the call: the caller owns the source graphic and its descriptor, and both
   // outlive the execution.
   const FilterTexture source{&sourceGraphic, &sourceGraphicDesc};
+  // A backdrop that does not share the source's extent cannot be placed in its raster.
+  std::optional<FilterTexture> backdropSource;
+  if (backdrop != nullptr && backdropDesc != nullptr && backdrop->isValid() &&
+      backdropDesc->size.width == sourceGraphicDesc.size.width &&
+      backdropDesc->size.height == sourceGraphicDesc.size.height) {
+    backdropSource = FilterTexture{backdrop, backdropDesc};
+  }
   FilterGraphExecution execution(*this, graph, source, filterRegion, deviceFromFilter,
-                                 textureAllocator, executionBudget, admittedPlan, frameSink);
+                                 textureAllocator, executionBudget, admittedPlan, frameSink,
+                                 backdropSource);
   const FilterTexture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
@@ -1830,7 +1853,8 @@ FilterExecutionResult GeodeFilterEngine::execute(
 FilterTexture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
                                              size_t index) const {
   return resolveInput(svg::FilterInputOrDefault(node, index), namedBuffers, currentBuffer,
-                      sourceGraphic, sourceAlpha ? &*sourceAlpha : nullptr);
+                      sourceGraphic, sourceAlpha ? &*sourceAlpha : nullptr,
+                      backdrop ? &*backdrop : nullptr, backdropAlpha ? &*backdropAlpha : nullptr);
 }
 
 FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& region, bool transformed,
@@ -1868,6 +1892,11 @@ void FilterGraphExecution::retainLiveValues(size_t nodeIndex) {
   SmallVector<FilterTexture, 8> live{sourceGraphic, currentBuffer};
   if (sourceAlpha) {
     live.push_back(*sourceAlpha);
+  }
+  for (const auto* value : {&backdropSource, &backdrop, &backdropAlpha}) {
+    if (*value) {
+      live.push_back(**value);
+    }
   }
   for (const auto& [name, texture] : namedBuffers) {
     live.push_back(texture);
@@ -1939,6 +1968,18 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   if (!tileInput) {
     return {};
   }
+  const std::optional<FilterTexture> fullBackdrop = backdropSource;
+  FilterTexture tileBackdrop;
+  if (fullBackdrop) {
+    tileBackdrop =
+        arena.createRuntimeTexture({"FilterTileBackdrop",
+                                    {plan.tileWidth, plan.tileHeight},
+                                    fullBackdrop->format(),
+                                    gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    if (!tileBackdrop) {
+      return {};
+    }
+  }
   const uint32_t haloX = (plan.tileWidth - plan.coreWidth) / 2;
   const uint32_t haloY = (plan.tileHeight - plan.coreHeight) / 2;
   for (uint32_t y = 0; y < plan.height; y += plan.coreHeight) {
@@ -1949,9 +1990,17 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
                              {originX, originY}, {})) {
         return {};
       }
+      if (fullBackdrop &&
+          !arena.copyTexture(*fullBackdrop, tileBackdrop, {plan.tileWidth, plan.tileHeight},
+                             {originX, originY}, {})) {
+        return {};
+      }
       arena.resetLogicalValues();
       sourceGraphic = currentBuffer = tileInput;
       sourceAlpha.reset();
+      if (fullBackdrop) {
+        backdropSource = tileBackdrop;
+      }
       namedBuffers.clear();
       coordinates.namedSubregions.clear();
       coordinates.previousOutputSubregion = coordinates.filterRegion;
@@ -1968,6 +2017,30 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   return output;
 }
 
+/// Clips the current tile's backdrop to the filter region and derives its alpha, when the graph
+/// reads them. Without a supplied backdrop both inputs are transparent black.
+bool FilterGraphExecution::prepareBackdrop() {
+  using namespace svg::components;
+  backdrop.reset();
+  backdropAlpha.reset();
+  const bool readsAlpha = graphUsesStandardInput(graph, FilterStandardInput::BackgroundAlpha);
+  if (!readsAlpha && !graphUsesStandardInput(graph, FilterStandardInput::BackgroundImage)) {
+    return true;
+  }
+  backdrop = backdropSource ? clip(*backdropSource, coordinates.filterRegion, !axisAligned)
+                            : createTransparentIntermediateTexture(arena, sourceGraphic.width(),
+                                                                   sourceGraphic.height(),
+                                                                   "FilterTransparentBackdrop");
+  if (!*backdrop) {
+    return false;
+  }
+  if (readsAlpha) {
+    backdropAlpha = engine.applySourceAlpha(arena, *backdrop);
+    return static_cast<bool>(*backdropAlpha);
+  }
+  return true;
+}
+
 FilterTexture FilterGraphExecution::runNodes() {
   using namespace svg::components;
   ++executedTiles;
@@ -1976,6 +2049,9 @@ FilterTexture FilterGraphExecution::runNodes() {
     if (!*sourceAlpha) {
       return {};
     }
+  }
+  if (!prepareBackdrop()) {
+    return {};
   }
   findLastNamedUses();
   for (size_t index = 0; index < graph.nodes.size(); ++index) {

@@ -217,12 +217,12 @@ bool ParseXYWidthHeight(SVGParserContext& context, T element, const XMLQualified
 /**
  * Parse the `in` attribute value into a \ref FilterInput.
  *
- * Standard keywords: SourceGraphic, SourceAlpha, FillPaint, StrokePaint.
- * Any other non-empty string is treated as a named result reference.
+ * Standard keywords: SourceGraphic, SourceAlpha, FillPaint, StrokePaint, BackgroundImage and
+ * BackgroundAlpha. Any other non-empty string is treated as a named result reference.
  *
- * BackgroundImage and BackgroundAlpha are not supported: SVG 2 removed the enable-background
- * snapshot they read, and the Filter Effects isolation-group backdrop is not implemented. They are
- * parsed as named references (which won't resolve, producing transparent black).
+ * BackgroundImage and BackgroundAlpha read the Filter Effects backdrop, what the nearest isolation
+ * group painted beneath the element. The SVG 1.1 `enable-background` snapshot they once read was
+ * removed in SVG 2 and is not implemented.
  *
  * @param value Attribute value.
  * @return The parsed FilterInput.

@@ -524,9 +524,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
-                {"in=BackgroundAlpha.svg",
-                 Params::Skip("Not impl: Filter Effects BackgroundAlpha from the isolation-group "
-                              "backdrop")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

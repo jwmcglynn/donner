@@ -13,20 +13,22 @@ or `in="BackgroundAlpha"`.
 `BackgroundImage` and `BackgroundAlpha` input names, but defines them as the backdrop accumulated
 since the nearest isolation group instead of an `enable-background` snapshot.
 
-**Donner behavior:** `enable-background` is ignored, and the Filter Effects isolation-group backdrop
-is not implemented either. `BackgroundImage` and `BackgroundAlpha` are parsed as unresolved named
-references, producing transparent black (the SVG spec behavior for unresolved filter inputs). No
-warning is emitted.
+**Donner behavior:** `enable-background` is ignored. `BackgroundImage` and `BackgroundAlpha` read
+the Filter Effects backdrop: what the filtered element's nearest isolation group (an ancestor with
+`isolation: isolate`, opacity below 1, a non-normal `mix-blend-mode`, a mask or a filter, or else
+the canvas) painted before the element, clipped by the filter region. The element's own opacity,
+mask and further filter stages do not change its backdrop. A document that relied on an SVG 1.1
+`enable-background="new"` snapshot instead reads the isolation-group backdrop.
 
 **Modern alternative:** CSS compositing with the `mix-blend-mode` and `isolation` properties covers
-blending with backdrop content.
+blending with backdrop content, and `isolation: isolate` bounds what a backdrop filter input reads.
 
 **Affected resvg tests:** `filters/enable-background/*` (category default
 `Params::DeprecatedInSVG2`; four cases that already match the reference with SVG 2 semantics
 compare) and `filters/filter/in=BackgroundImage-with-enable-background` /
 `in=BackgroundAlpha-with-enable-background` (`Params::DeprecatedInSVG2`). These render without a
-pixel comparison. `filters/filter/in=BackgroundAlpha` uses the isolation-group backdrop, so it is a
-`Not impl:` skip rather than a removed feature; `filters/filter/in=BackgroundImage` compares.
+pixel comparison. `filters/filter/in=BackgroundAlpha` and `filters/filter/in=BackgroundImage` read
+the isolation-group backdrop and compare.
 
 ## SVG Fonts (&lt;font&gt;, &lt;glyph&gt;, &lt;missing-glyph&gt;, etc.)
 

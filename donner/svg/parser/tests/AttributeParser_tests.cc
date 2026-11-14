@@ -1316,8 +1316,9 @@ TEST(AttributeParserTest, ExperimentalFilterRemainingInputAndEnumBranches) {
   const auto& background =
       QueryComponent<components::FilterPrimitiveComponent>(document, "#background");
   ASSERT_TRUE(background.in.has_value());
-  ASSERT_TRUE(std::holds_alternative<components::FilterInput::Named>(background.in->value));
-  EXPECT_EQ(std::get<components::FilterInput::Named>(background.in->value).name, "BackgroundImage");
+  ASSERT_TRUE(std::holds_alternative<components::FilterStandardInput>(background.in->value));
+  EXPECT_EQ(std::get<components::FilterStandardInput>(background.in->value),
+            components::FilterStandardInput::BackgroundImage);
   EXPECT_THAT(background.result, testing::Optional(RcString("bg")));
 
   const auto& displacement =
