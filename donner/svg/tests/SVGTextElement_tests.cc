@@ -1115,11 +1115,11 @@ TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
     double aStart, bEnd, cStart, dEnd;
   };
   const auto layOut = [](std::string_view textAttributes, std::string_view tspanAttributes) {
-    SVGDocument document = instantiateSubtree(
-        std::string(R"-(<svg viewBox="0 0 300 60">
+    SVGDocument document =
+        instantiateSubtree(std::string(R"-(<svg viewBox="0 0 300 60">
       <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" )-") +
-        std::string(textAttributes) + R"-(>AB<tspan y="40" )-" + std::string(tspanAttributes) +
-        R"-(>CD</tspan></text></svg>)-");
+                           std::string(textAttributes) + R"-(>AB<tspan y="40" )-" +
+                           std::string(tspanAttributes) + R"-(>CD</tspan></text></svg>)-");
     const auto text = document.querySelector("#t")->cast<SVGTextElement>();
     return Layout{text.getStartPositionOfChar(0).x, text.getEndPositionOfChar(1).x,
                   text.getStartPositionOfChar(2).x, text.getEndPositionOfChar(3).x};
