@@ -423,6 +423,46 @@ TEST_F(CssImportTest, ImportsRefusedByThePassBudgetStillChargeTheDocumentBudget)
   EXPECT_THAT(fill(document), Optional(kRed));
 }
 
+TEST_F(CssImportTest, BudgetRefusedImportsRetryWhenAnotherSheetDropsItsImports) {
+  std::string bigStyle = "<style id='big'>";
+  for (std::size_t i = 0; i < StylesheetImportBudget::kMaximumImports; ++i) {
+    respond("s" + std::to_string(i) + ".css", "circle { fill: blue; }");
+    bigStyle += "@import 's" + std::to_string(i) + ".css';";
+  }
+  respond("late.css", "#r { fill: green; }");
+  SVGDocument document =
+      parse("<style>@import 'late.css';</style>" + bigStyle + "</style>" + std::string(kRect));
+  prepare(document);
+  // Together the sheets exceed the document budget. Stylesheets load in registry order, which
+  // places the big sheet first here; the late import is the one refused.
+  ASSERT_THAT(fill(document), Optional(kRed));
+  EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("count exceeds")));
+
+  // Dropping the first sheet's imports frees the budget; the result must not depend on history.
+  document.querySelector("#big")->cast<SVGStyleElement>().setContents("circle {}");
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+}
+
+TEST_F(CssImportTest, BudgetRefusedImportsRetryWhenAnotherSheetIsRemoved) {
+  std::string bigStyle = "<style id='big'>";
+  for (std::size_t i = 0; i < StylesheetImportBudget::kMaximumImports; ++i) {
+    respond("s" + std::to_string(i) + ".css", "circle { fill: blue; }");
+    bigStyle += "@import 's" + std::to_string(i) + ".css';";
+  }
+  respond("late.css", "#r { fill: green; }");
+  SVGDocument document =
+      parse("<style>@import 'late.css';</style>" + bigStyle + "</style>" + std::string(kRect));
+  prepare(document);
+  // Together the sheets exceed the document budget. Stylesheets load in registry order, which
+  // places the big sheet first here; the late import is the one refused.
+  ASSERT_THAT(fill(document), Optional(kRed));
+
+  document.querySelector("#big")->remove();
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+}
+
 TEST_F(CssImportTest, ImportedFontSourcesResolveAgainstTheImportedStylesheet) {
   respond("styles/a.css", "@font-face { font-family: A; src: url(fonts/a.woff); }");
   respond("b.css", "@font-face { font-family: B; src: url(b.woff); }");

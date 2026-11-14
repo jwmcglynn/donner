@@ -227,6 +227,9 @@ private:
   };
   std::unordered_map<Entity, StylesheetFontFaceRegistration> stylesheetFontFaceRegistrations_;
   size_t stylesheetFontFaceCount_ = 0;
+
+  /// Set when a stylesheet is destroyed, so the next import pass redistributes the import budget.
+  bool importRootsChanged_ = false;
   bool stylesheetFontFaceLimitRejected_ = false;
 
   /// Processing mode for this document.

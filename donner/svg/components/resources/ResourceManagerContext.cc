@@ -430,10 +430,11 @@ void LoadFontFaces(std::vector<css::FontFace>& fontFaces, std::span<const size_t
 }
 
 /// Whether \p stylesheet is an applied author stylesheet that declares imports.
-bool IsImportingStylesheet(const Registry& registry, Entity entity,
+/// Whether \p stylesheet is an applied author stylesheet, which may declare imports.
+bool IsAuthorCssStylesheet(const Registry& registry, Entity entity,
                            const StylesheetComponent& stylesheet) {
   return !stylesheet.isUserAgentStylesheet && stylesheet.isCssType() &&
-         !stylesheet.stylesheet.imports().empty() && HasSvgNamespace(registry, entity);
+         HasSvgNamespace(registry, entity);
 }
 
 /// Why an external stylesheet import may not be fetched at all, or nullptr if it may.
@@ -481,6 +482,7 @@ ResourceManagerContext::ResourceManagerContext(Registry& registry,
 
 void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
   stylesheetFontFaceRegistrations_.erase(entity);
+  importRootsChanged_ = true;
 }
 
 uint64_t ResourceManagerContext::NextCacheGeneration() {
@@ -600,15 +602,19 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
 }
 
 bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink) {
+  // Any author stylesheet that was reparsed (gaining or losing imports) or removed since the last
+  // pass can change how the shared budget divides among the remaining importing sheets.
   auto view = registry_.view<StylesheetComponent>();
-  const bool pending = std::any_of(view.begin(), view.end(), [&](Entity entity) {
-    const auto& stylesheet = view.get<StylesheetComponent>(entity);
-    return IsImportingStylesheet(registry_, entity, stylesheet) &&
-           stylesheet.importGeneration != cacheGeneration_;
-  });
+  const bool pending =
+      importRootsChanged_ || std::any_of(view.begin(), view.end(), [&](Entity entity) {
+        const auto& stylesheet = view.get<StylesheetComponent>(entity);
+        return IsAuthorCssStylesheet(registry_, entity, stylesheet) &&
+               stylesheet.importGeneration != cacheGeneration_;
+      });
   if (!pending) {
     return false;
   }
+  importRootsChanged_ = false;
 
   // Reload every importing stylesheet in one pass so the document-wide import budget does not
   // depend on edit history. Repeated URLs are answered by the shared external-fetch cache.
@@ -616,11 +622,17 @@ bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink
   const StylesheetImportFetch fetch = [this](std::string_view url, size_t maximumBytes) {
     return fetchStylesheetImport(url, maximumBytes);
   };
+  bool reloaded = false;
   for (const Entity entity : view) {
     auto& stylesheet = view.get<StylesheetComponent>(entity);
-    if (!IsImportingStylesheet(registry_, entity, stylesheet)) {
+    if (!IsAuthorCssStylesheet(registry_, entity, stylesheet)) {
       continue;
     }
+    if (stylesheet.stylesheet.imports().empty()) {
+      stylesheet.importGeneration = cacheGeneration_;
+      continue;
+    }
+    reloaded = true;
     ParseWarningSink warnings =
         warningSink.isEnabled() ? ParseWarningSink() : ParseWarningSink::Disabled();
     std::vector<css::Stylesheet> imported =
@@ -629,7 +641,7 @@ bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink
     warningSink.merge(std::move(warnings));
     stylesheet.setImportedStylesheets(std::move(imported), cacheGeneration_);
   }
-  return true;
+  return reloaded;
 }
 
 std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStylesheetImport(
