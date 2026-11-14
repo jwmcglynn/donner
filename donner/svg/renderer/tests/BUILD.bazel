@@ -1359,6 +1359,28 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "css_import_tests",
+    srcs = [
+        "CssImport_tests.cc",
+    ],
+    # The tiny, text_full and geode wrappers run under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/resources:resource_loader_interface",
+        "//donner/svg/resources:url_loader",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resvg_test_suite_impl",
     size = "large",
     srcs = [

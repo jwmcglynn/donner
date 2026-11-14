@@ -3660,8 +3660,9 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
 
   if (resourceManager->fontFaces().empty()) {
     for (auto view = registry_.view<components::StylesheetComponent>(); auto entity : view) {
-      resourceManager->synchronizeStylesheetFontFaces(
-          entity, view.get<components::StylesheetComponent>(entity).stylesheet.fontFaces());
+      const auto& stylesheet = view.get<components::StylesheetComponent>(entity);
+      resourceManager->synchronizeStylesheetFontFaces(entity, stylesheet.cascadeFontFaces(),
+                                                      stylesheet.fontFaceRevision);
     }
   }
   resourceManager->loadResources(outWarnings);
