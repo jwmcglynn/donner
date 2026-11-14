@@ -15,11 +15,11 @@
 # the repository's pinned clang-format (tools/format/clang_format.sh) including required braces,
 # no `long long`, no `std::aligned_storage`,
 # no user-defined literal operators, no hidden Unicode whitespace or typographic
-# punctuation, and no new or worsened supported out-of-line method definition
-# above the local decision-point complexity limit.
+# punctuation, no new hand-rolled XML markup scanning in non-test C++, and no new or worsened
+# supported out-of-line method definition above the local decision-point complexity limit.
 #
 # Usage:
-#   tools/lint.sh                 # lint project C++ (excluding third_party/)
+#   tools/lint.sh                 # lint donner/, examples/ and tools/ C++
 #   tools/lint.sh path [path...]  # lint specific files or directories
 
 set -euo pipefail
@@ -39,7 +39,8 @@ readonly kExcludedBasenames=(
 
 collect_sources() {
   local root="$1"
-  local find_args=("${root}" -type f \( -name '*.cc' -o -name '*.h' \))
+  local find_args=("${root}" -type f \( -name '*.cc' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \
+    -o -name '*.mm' \))
   local excluded
   for excluded in "${kExcludedBasenames[@]}"; do
     find_args+=(! -name "${excluded}")
@@ -50,7 +51,7 @@ collect_sources() {
 lint_explicit_roots=$#
 roots=("$@")
 if [[ ${#roots[@]} -eq 0 ]]; then
-  roots=(donner examples)
+  roots=(donner examples tools)
 fi
 
 sources=()

@@ -92,6 +92,119 @@ class CheckBannedPatternsTests(unittest.TestCase):
             "donner/svg/compositor/CompositorControllerRasterize.cc",
         ))
 
+    _XML_SCAN = "hand-rolled XML markup scan"
+
+    def test_blocks_markup_literal_searches_in_production_code(self):
+        for statement in (
+            'auto pos = source.rfind("</svg>");',
+            'auto pos = source.find("</", start);',
+            'bool comment = text.starts_with("<!--");',
+            'bool cdata = text.starts_with("<![CDATA[");',
+            'bool pi = text.starts_with("<?");',
+            'bool root = svg.find("<svg") != npos;',
+            "auto end = source.find('>', start);",
+            "auto open = source.rfind('<', idPos);",
+            'bool group = source.compare(scan, 2, "<g") == 0;',
+            'bool ref = value.compare(i, 5, "url(#") == 0;',
+            'auto end = text.find("-->");',
+            'bool close = StringUtils::EndsWith(text, "/>");',
+            "auto it = std::find(begin, end, '>');",
+            "auto open = text.find(L'<');",
+            'auto pos = text.find(std::string_view("</"));',
+            'auto pos = text.find(std::string_view{"</"}, start);',
+            'auto pos = text.find(RcString("<svg"), start);',
+            'bool open = text.starts_with("<");',
+        ):
+            with self.subTest(statement=statement):
+                descriptions = self._descriptions_at_path(
+                    f"void Scan() {{ {statement} }}\n", "donner/editor/NewScanner.cc"
+                )
+                self.assertEqual([self._XML_SCAN], descriptions)
+
+    def test_allows_non_markup_searches_emission_and_comments(self):
+        for statement in (
+            "auto pos = name.find(':');",
+            'auto pos = text.find("->");',
+            "bool ok = text.ends_with(')');",
+            'std::string tag = "</" + name + ">";',
+            'out << "<svg" << attrs << ">";',
+            '// source.rfind("</svg>") would be wrong here.',
+            "/* text.find('>') */",
+            'const char* hint = "use find(\\"<svg\\") carefully";',
+            "int million = 1'000'000; auto pos = name.find(':');",
+            'const char* doc = R"(text.find("<svg"))";',
+            'bool le = op.compare("<=") == 0;',
+            'auto shift = text.find("<<");',
+            'auto angle = text.find_first_of("<>");',
+            'auto pos = text.find(Wrap("</"));',
+        ):
+            with self.subTest(statement=statement):
+                self.assertEqual([], self._descriptions_at_path(
+                    f"void Scan() {{ {statement} }}\n", "donner/editor/NewScanner.cc"
+                ))
+
+    def test_markup_scan_exempts_tests_and_the_scanners_themselves(self):
+        scan = 'void Scan() { auto pos = source.rfind("</svg>"); }\n'
+        for path in (
+            "donner/editor/tests/Scanner_tests.cc",
+            "donner/base/xml/tests/XMLHelpers.h",
+            "donner/editor/Scanner_fuzzer.cc",
+            "tools/svg_suite/vdiff/Csv_tests.cpp",
+            "donner/base/xml/XMLParser.cc",
+            "donner/base/xml/XMLTokenizer.h",
+            "donner/css/parser/details/Tokenizer.cc",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual([], self._descriptions_at_path(scan, path))
+
+    def test_markup_scan_allowlist_caps_preexisting_sites(self):
+        path = "donner/editor/StrokeMarkerPrefabs.cc"
+        self.assertEqual(1, check_banned_patterns._XML_SCAN_ALLOWLIST[path])
+        one_site = 'bool Ref(std::string_view r) { return r.starts_with("url(#"); }\n'
+        self.assertEqual([], self._descriptions_at_path(one_site, path))
+
+        two_sites = one_site + 'bool Close(std::string_view r) { return r.find("</") == 0; }\n'
+        self.assertEqual(
+            [f"{self._XML_SCAN} (2 sites, allowlist cap 1)"] * 2,
+            self._descriptions_at_path(two_sites, path),
+        )
+
+    def test_markup_scan_allowlist_rejects_a_stale_cap(self):
+        one_site = 'bool Ref(std::string_view r) { return r.starts_with("url(#"); }\n'
+        cases = (
+            ("donner/editor/StrokeMarkerPrefabs.cc", "void Unused() {}\n",
+             "stale hand-rolled XML markup scan allowlist cap (0 sites, allowlist cap 1)",
+             "remove this file's entry"),
+            ("donner/editor/DocumentSyncController.cc", one_site,
+             "stale hand-rolled XML markup scan allowlist cap (1 sites, allowlist cap 2)",
+             "lower this file's cap to 1"),
+        )
+        for path, source, description, action in cases:
+            with self.subTest(path=path):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    source_path = Path(temp_dir) / path
+                    source_path.parent.mkdir(parents=True)
+                    source_path.write_text(source, encoding="utf-8")
+                    errors = check_banned_patterns.check_file(source_path)
+                self.assertEqual([description], [error[1] for error in errors])
+                self.assertIn(action, errors[0][2])
+
+    def test_markup_scan_suppression_must_name_an_exception(self):
+        scan = 'auto pos = source.rfind("</", end);'
+        named = "// NOLINT(banned_patterns: xml-scan dirty-range-fallback)"
+        self.assertEqual([], self._descriptions_at_path(
+            f"void Scan() {{\n  {scan}  {named}\n}}\n", "donner/editor/NewScanner.cc"
+        ))
+        for marker in (
+            "// NOLINT(banned_patterns)",
+            "// NOLINT(banned_patterns: xml-scan)",
+            "// NOLINT(banned_patterns: xml-scan convenient)",
+        ):
+            with self.subTest(marker=marker):
+                self.assertEqual([self._XML_SCAN], self._descriptions_at_path(
+                    f"void Scan() {{\n  {scan}  {marker}\n}}\n", "donner/editor/NewScanner.cc"
+                ))
+
     def test_blocks_typographic_hyphens_and_dashes_in_comments_and_strings(self):
         descriptions = self._descriptions_for(
             '// A comment with a non-breaking hyphen: \u2011\n'
