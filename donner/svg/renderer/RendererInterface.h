@@ -1080,10 +1080,6 @@ struct TextParams {
   Box2d viewBox;
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
-  /// CSS `direction` of this text element, the base direction of its bidi paragraphs.
-  Direction direction = Direction::Ltr;
-  /// Whether this text element's own `unicode-bidi` overrides every character to `direction`.
-  bool bidiOverride = false;
   TextDecoration textDecoration = TextDecoration::None;
   /// CSS `writing-mode` for this text element. Controls horizontal vs vertical text flow.
   WritingMode writingMode = WritingMode::HorizontalTb;
@@ -1110,6 +1106,13 @@ struct TextParams {
   std::shared_ptr<const PreparedTextDraw> preparedTextDraw;
   /// Computed CSS first-line start margin for a positive inline-size area; paths ignore it.
   double textIndentPx = 0.0;
+
+  // Later fields go last so positional initializers of the earlier fields stay valid.
+
+  /// CSS `direction` of this text element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether this text element's own `unicode-bidi` overrides every character to `direction`.
+  bool bidiOverride = false;
 };
 
 /**

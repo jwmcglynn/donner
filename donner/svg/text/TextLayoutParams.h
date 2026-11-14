@@ -29,11 +29,6 @@ struct TextLayoutParams {
   Box2d viewBox;
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
-  /// `direction` of the `<text>` element, the base direction of its bidi paragraphs.
-  Direction direction = Direction::Ltr;
-  /// Whether the `<text>` element's own `unicode-bidi` overrides every character to `direction`
-  /// (`bidi-override` or `isolate-override`).
-  bool bidiOverride = false;
   WritingMode writingMode = WritingMode::HorizontalTb;
   FontKerning fontKerning = FontKerning::Auto;
   std::optional<double> fontSizeAdjust;
@@ -52,6 +47,14 @@ struct TextLayoutParams {
   /// percentages resolve against the own-area measure before layout; em computes in style.
   /// Does not affect text paths.
   double textIndentPx = 0.0;
+
+  // Later fields go last so positional initializers of the earlier fields stay valid.
+
+  /// `direction` of the `<text>` element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether the `<text>` element's own `unicode-bidi` overrides every character to `direction`
+  /// (`bidi-override` or `isolate-override`).
+  bool bidiOverride = false;
 };
 
 }  // namespace donner::svg
