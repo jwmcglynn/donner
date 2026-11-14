@@ -12,6 +12,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/svg/DonnerController.h"
@@ -1169,6 +1170,19 @@ TEST(EditorAppTest, SetActiveStrokeWidthFromTextReadsTheLeadingNumber) {
   EXPECT_TRUE(app.setActiveStrokeWidthFromText("2.5px"));
   EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
   EXPECT_FALSE(app.setActiveStrokeWidthFromText("wide"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+}
+
+// Replayed stroke widths read with the locale-independent parser, so a comma-decimal C locale does
+// not truncate "2.5" to 2.
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextIgnoresACommaDecimalCLocale) {
+  const ScopedCommaDecimalNumericLocale locale;
+  if (!locale.applied()) {
+    GTEST_SKIP() << "No comma-decimal locale is installed";
+  }
+  EditorApp app;
+
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText("2.5"));
   EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
 }
 

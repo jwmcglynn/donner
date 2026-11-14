@@ -8,10 +8,12 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/FileUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/parser/NumberParser.h"
@@ -1426,15 +1428,19 @@ std::optional<ReproSvgFile> ReadReproSvgFile(const std::filesystem::path& rnrPat
 bool WriteReproFile(const std::filesystem::path& path, const ReproFile& file) {
   const auto tmp = path.string() + ".tmp";
   {
+    // Lines are formatted in the classic locale so a global C++ locale cannot change the decimal
+    // point or group digits; six significant digits is the format's existing precision.
+    std::ostringstream lines = MakeClassicNumberStream(6);
+    WriteMetadataLine(lines, file.metadata);
+    for (const auto& frame : file.frames) {
+      WriteFrameLine(lines, frame);
+    }
     std::ofstream os(tmp, std::ios::binary);
     if (!os) {
       std::fprintf(stderr, "ReproFile: failed to open %s for write\n", tmp.c_str());
       return false;
     }
-    WriteMetadataLine(os, file.metadata);
-    for (const auto& frame : file.frames) {
-      WriteFrameLine(os, frame);
-    }
+    os << lines.view();
     if (!os) {
       std::fprintf(stderr, "ReproFile: failed to write to %s\n", tmp.c_str());
       return false;

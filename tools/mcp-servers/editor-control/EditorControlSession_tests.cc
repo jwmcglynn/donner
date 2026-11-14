@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -2662,6 +2663,23 @@ TEST(EditorControlSessionTest, PointerGestureDragReportsSourceWithItsWriteback) 
   EXPECT_THAT(ElementStartTag(afterGesture.value("text", ""), "free"),
               ::testing::HasSubstr("transform=\"translate(20"))
       << afterGesture.dump(2);
+}
+
+// Content hashes are plain hex digits whatever the global C++ locale is; a grouping locale would
+// otherwise put separators between them.
+TEST(EditorControlSessionInternalTest, ContentHashesIgnoreTheGlobalLocale) {
+  svg::RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(1, 1);
+  bitmap.pixels = {1, 2, 3, 4};
+  bitmap.rowBytes = 4;
+  const std::optional<std::string> expectedBitmapHash = BitmapContentHash(bitmap);
+  ASSERT_TRUE(expectedBitmapHash.has_value());
+  EXPECT_THAT(*expectedBitmapHash, ::testing::MatchesRegex("0x[0-9a-f]{16}"));
+
+  const ScopedCommaDecimalGlobalLocale locale;
+  // FNV-1a 64 of the empty string is its offset basis.
+  EXPECT_EQ(ReproContentHash(""), "fnv1a64:cbf29ce484222325");
+  EXPECT_EQ(BitmapContentHash(bitmap), expectedBitmapHash);
 }
 
 }  // namespace

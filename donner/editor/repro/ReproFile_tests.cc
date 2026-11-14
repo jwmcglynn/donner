@@ -3,7 +3,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <clocale>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -12,6 +11,8 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
+#include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproRecorder.h"
@@ -192,36 +193,10 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   std::filesystem::remove(path, ec);
 }
 
-// The format version decides how a replay opens the document, so it survives a rewrite: a
-// recording made before large documents opened fitted keeps replaying at 100%.
-/// Switches `LC_NUMERIC` to a comma-decimal locale for the lifetime of the object, if one is
-/// installed, and restores the previous locale afterwards.
-class ScopedCommaDecimalLocale {
-public:
-  ScopedCommaDecimalLocale() : previous_(std::setlocale(LC_NUMERIC, nullptr)) {
-    for (const char* name : {"de_DE.UTF-8", "de_DE.ISO8859-1", "fr_FR.UTF-8", "de_DE"}) {
-      if (std::setlocale(LC_NUMERIC, name) != nullptr) {
-        applied_ = true;
-        return;
-      }
-    }
-  }
-  ~ScopedCommaDecimalLocale() { std::setlocale(LC_NUMERIC, previous_.c_str()); }
-  ScopedCommaDecimalLocale(const ScopedCommaDecimalLocale&) = delete;
-  ScopedCommaDecimalLocale& operator=(const ScopedCommaDecimalLocale&) = delete;
-
-  /// Whether a comma-decimal locale is installed and now active.
-  bool applied() const { return applied_; }
-
-private:
-  std::string previous_;
-  bool applied_ = false;
-};
-
 // Numbers are read with the locale-independent parser, so a comma-decimal process locale does not
 // reject `1.5`.
 TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
-  const ScopedCommaDecimalLocale locale;
+  const ScopedCommaDecimalNumericLocale locale;
   if (!locale.applied()) {
     GTEST_SKIP() << "No comma-decimal locale is installed";
   }
@@ -231,6 +206,53 @@ TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
   EXPECT_DOUBLE_EQ(parsed->metadata.displayScale, 1.5);
 }
 
+// Numbers are written in the classic locale, so a global C++ locale with a decimal comma and
+// grouped thousands does not change what a written file reads back as.
+TEST(ReproFileTest, RoundTripsNumbersUnderACommaDecimalGlobalLocale) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.frames.front().index = 1234;
+  const auto path = TempFile("comma_decimal_global_locale");
+  {
+    const ScopedCommaDecimalGlobalLocale locale;
+    ASSERT_TRUE(WriteReproFile(path, file));
+  }
+
+  const auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->metadata.windowWidth, 1600);
+  EXPECT_DOUBLE_EQ(loaded->metadata.displayScale, 2.0);
+  ASSERT_EQ(loaded->frames.size(), 1u);
+  EXPECT_EQ(loaded->frames.front().index, 1234);
+  EXPECT_DOUBLE_EQ(loaded->frames.front().deltaMs, 16.667);
+  EXPECT_DOUBLE_EQ(loaded->frames.front().mouseX, 123.25);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+// The recorded content hash is plain hex digits under a grouping global locale.
+TEST(ReproFileTest, ReproRecorderContentHashIgnoresTheGlobalLocale) {
+  const auto path = TempFile("recorder_hash_global_locale");
+  {
+    const ScopedCommaDecimalGlobalLocale locale;
+    ReproRecorderOptions options;
+    options.outputPath = path;
+    options.svgSource = "a";
+    ReproRecorder recorder(std::move(options));
+    ASSERT_TRUE(recorder.flush());
+  }
+
+  const auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  // The published FNV-1a 64 test vector for "a".
+  EXPECT_EQ(loaded->metadata.svgContentHash, "fnv1a64:af63dc4c8601ec8c");
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+// The format version decides how a replay opens the document, so it survives a rewrite: a
+// recording made before large documents opened fitted keeps replaying at 100%.
 TEST(ReproFileTest, FormatVersionSurvivesReadAndWrite) {
   const auto older = ParseReproFile(StyleReplayWithEncodedValue("serif"));
   ASSERT_TRUE(older.has_value());

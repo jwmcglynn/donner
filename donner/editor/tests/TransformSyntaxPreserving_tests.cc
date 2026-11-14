@@ -3,7 +3,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <clocale>
 #include <limits>
 #include <optional>
 #include <string>
@@ -11,6 +10,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
+#include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/svg/parser/TransformParser.h"
 
 namespace donner::editor {
@@ -43,34 +43,10 @@ std::string Reserialize(std::string_view author, const Transform2d& target) {
   return result.has_value() ? std::string(std::string_view(*result)) : std::string();
 }
 
-/// Switches `LC_NUMERIC` to a comma-decimal locale for the lifetime of the object, if one is
-/// installed, and restores the previous locale afterwards.
-class ScopedCommaDecimalLocale {
-public:
-  ScopedCommaDecimalLocale() : previous_(std::setlocale(LC_NUMERIC, nullptr)) {
-    for (const char* name : {"de_DE.UTF-8", "de_DE.ISO8859-1", "fr_FR.UTF-8", "de_DE"}) {
-      if (std::setlocale(LC_NUMERIC, name) != nullptr) {
-        applied_ = true;
-        return;
-      }
-    }
-  }
-  ~ScopedCommaDecimalLocale() { std::setlocale(LC_NUMERIC, previous_.c_str()); }
-  ScopedCommaDecimalLocale(const ScopedCommaDecimalLocale&) = delete;
-  ScopedCommaDecimalLocale& operator=(const ScopedCommaDecimalLocale&) = delete;
-
-  /// Whether a comma-decimal locale is installed and now active.
-  bool applied() const { return applied_; }
-
-private:
-  std::string previous_;
-  bool applied_ = false;
-};
-
 // Numbers are read with the locale-independent parser, so a comma-decimal process locale does not
 // truncate `1.5` to `1`.
 TEST(TransformSyntaxPreserving, ReadsDecimalNumbersInACommaDecimalLocale) {
-  const ScopedCommaDecimalLocale locale;
+  const ScopedCommaDecimalNumericLocale locale;
   if (!locale.applied()) {
     GTEST_SKIP() << "No comma-decimal locale is installed";
   }

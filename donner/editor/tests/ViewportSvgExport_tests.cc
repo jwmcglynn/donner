@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <functional>
 #include <limits>
-#include <locale>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -17,6 +16,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -126,29 +126,6 @@ TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   // Output dimensions follow the cropped portion of the original document.
   EXPECT_THAT(result.value, HasSubstr("<svg width=\"200\" height=\"150\""));
 }
-
-/// Comma decimal point and dot thousands grouping, as in many European locales; built from a
-/// facet so no installed locale is needed.
-class CommaDecimalNumpunct : public std::numpunct<char> {
-protected:
-  char do_decimal_point() const override { return ','; }
-  char do_thousands_sep() const override { return '.'; }
-  std::string do_grouping() const override { return "\3"; }
-};
-
-/// Installs a comma-decimal global C++ locale for the lifetime of the object.
-class ScopedCommaDecimalGlobalLocale {
-public:
-  ScopedCommaDecimalGlobalLocale()
-      : previous_(
-            std::locale::global(std::locale(std::locale::classic(), new CommaDecimalNumpunct))) {}
-  ~ScopedCommaDecimalGlobalLocale() { std::locale::global(previous_); }
-  ScopedCommaDecimalGlobalLocale(const ScopedCommaDecimalGlobalLocale&) = delete;
-  ScopedCommaDecimalGlobalLocale& operator=(const ScopedCommaDecimalGlobalLocale&) = delete;
-
-private:
-  std::locale previous_;
-};
 
 // Exported numbers use the classic locale whatever the global C++ locale is.
 TEST(ViewportSvgExportTest, ExportedNumbersIgnoreTheGlobalLocale) {

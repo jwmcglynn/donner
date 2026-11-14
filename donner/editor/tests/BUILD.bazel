@@ -1603,6 +1603,7 @@ donner_cc_test(
     deps = [
         ":bitmap_golden_compare",
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:overlay_renderer",
         "//donner/editor:viewport_state",
         "//donner/editor:viewport_svg_export",
@@ -1807,6 +1808,7 @@ donner_cc_test(
     ],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:canvas_scrollbars",
         "//donner/editor:dialog_presenter",
         "//donner/editor:drag_coalesce",
