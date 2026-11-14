@@ -33,6 +33,55 @@ TEST(BidiParagraphTest, DefaultSvgBaseIsExplicitLeftToRight) {
   EXPECT_THAT(paragraph->levelAt(5), testing::Eq(0));
 }
 
+TEST(BidiParagraphTest, RightToLeftBaseMovesTrailingNeutralsToTheLineStart) {
+  BidiResourceBudget budget;
+  // An rtl paragraph keeps the left-to-right word in order and sends the final period, a
+  // neutral resolved to the base direction, to the visual start of the line.
+  auto paragraph = BidiParagraph::Analyze({'a', 'b', '.'}, budget, /*base=*/1);
+  ASSERT_THAT(paragraph.has_value(), IsTrue());
+  const auto runs = paragraph->visualRuns(0, 3, budget);
+  ASSERT_THAT(runs.has_value(), IsTrue());
+  EXPECT_THAT(VisualOrder(*runs), ElementsAre(2u, 0u, 1u));
+  EXPECT_THAT(paragraph->levelAt(0), testing::Eq(2));
+  EXPECT_THAT(paragraph->levelAt(2), testing::Eq(1));
+  EXPECT_THAT(paragraph->paragraphLevelAt(0), testing::Eq(1));
+}
+
+TEST(BidiParagraphTest, OverrideGivesEveryScalarTheBaseLevel) {
+  const std::u32string_view source = U"ab مر.";
+  {
+    BidiResourceBudget budget;
+    auto paragraph = BidiParagraph::Analyze({source.begin(), source.end()}, budget, /*base=*/1,
+                                            /*forceAnalysis=*/false, /*override=*/true);
+    ASSERT_THAT(paragraph.has_value(), IsTrue());
+    const auto runs = paragraph->visualRuns(0, source.size(), budget);
+    ASSERT_THAT(runs.has_value(), IsTrue());
+    // Every character, Latin included, runs right to left in reverse source order.
+    EXPECT_THAT(VisualOrder(*runs), ElementsAre(5u, 4u, 3u, 2u, 1u, 0u));
+    for (uint32_t index = 0; index < source.size(); ++index) {
+      EXPECT_THAT(paragraph->levelAt(index), testing::Eq(1));
+      EXPECT_THAT(paragraph->paragraphLevelAt(index), testing::Eq(1));
+    }
+  }
+  {
+    BidiResourceBudget budget;
+    auto paragraph = BidiParagraph::Analyze({source.begin(), source.end()}, budget, /*base=*/0,
+                                            /*forceAnalysis=*/false, /*override=*/true);
+    ASSERT_THAT(paragraph.has_value(), IsTrue());
+    const auto runs = paragraph->visualRuns(0, source.size(), budget);
+    ASSERT_THAT(runs.has_value(), IsTrue());
+    // A left-to-right override keeps even the Arabic letters in source order.
+    EXPECT_THAT(VisualOrder(*runs), ElementsAre(0u, 1u, 2u, 3u, 4u, 5u));
+    EXPECT_THAT(paragraph->levelAt(3), testing::Eq(0));
+  }
+  BidiResourceBudget budget;
+  EXPECT_THAT(BidiParagraph::Analyze({source.begin(), source.end()}, budget, /*base=*/2,
+                                     /*forceAnalysis=*/false, /*override=*/true)
+                  .has_value(),
+              testing::IsFalse())
+      << "an override needs an explicit direction";
+}
+
 TEST(BidiParagraphTest, BaseZeroSeparatorsKeepUniformLevelsWithoutForcingAnalysis) {
   for (char32_t cp : {U'\n', U'\r', U'\u2029'}) {
     EXPECT_THAT(BidiParagraph::NeedsAnalysis(cp), testing::IsFalse());

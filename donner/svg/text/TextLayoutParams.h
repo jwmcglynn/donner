@@ -8,6 +8,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -28,6 +29,11 @@ struct TextLayoutParams {
   Box2d viewBox;
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
+  /// `direction` of the `<text>` element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether the `<text>` element's own `unicode-bidi` overrides every character to `direction`
+  /// (`bidi-override` or `isolate-override`).
+  bool bidiOverride = false;
   WritingMode writingMode = WritingMode::HorizontalTb;
   FontKerning fontKerning = FontKerning::Auto;
   std::optional<double> fontSizeAdjust;

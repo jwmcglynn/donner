@@ -1087,7 +1087,9 @@ std::vector<uint32_t> VisualClusters(const std::vector<TextRun>& runs) {
 
 /// Lays out normal horizontal text through either font backend with the same paragraph inputs.
 std::vector<TextRun> LayOutNormalBidi(Registry& registry, FontManager& fonts,
-                                      std::string_view source, bool full) {
+                                      std::string_view source, bool full,
+                                      Direction direction = Direction::Ltr,
+                                      bool bidiOverride = false) {
   std::unique_ptr<TextBackend> backend;
   if (full) {
     backend = std::make_unique<TextBackendFull>(fonts, registry);
@@ -1099,6 +1101,8 @@ std::vector<TextRun> LayOutNormalBidi(Registry& registry, FontManager& fonts,
   text.spans.push_back(MakeSpan(std::string(source)));
   auto params = MakeTextParams(32.0);
   params.fontFamilies = {RcString("Bidi Font")};
+  params.direction = direction;
+  params.bidiOverride = bidiOverride;
   return engine.layout(text, params);
 }
 
@@ -1127,6 +1131,40 @@ TEST(TextEngineTest, BidiNormalArabicFirstDoesNotReverseTheLatinRunOrFinalPunctu
     // SVG's default paragraph direction stays left to right even when Arabic appears first.
     const auto runs = LayOutNormalBidi(registry, fonts, "مر ab.", full);
     EXPECT_THAT(VisualClusters(runs), ElementsAre(2u, 0u, 4u, 5u, 6u, 7u));
+  }
+}
+
+TEST(TextEngineTest, BidiRtlParagraphSendsTrailingPunctuationToTheLineStart) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+
+  for (const bool full : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "full=" << full);
+    // Without Arabic, a left-to-right paragraph would keep source order; `direction: rtl` makes
+    // the period a right-to-left neutral at the visual start.
+    EXPECT_THAT(VisualClusters(LayOutNormalBidi(registry, fonts, "ab.", full)),
+                ElementsAre(0u, 1u, 2u));
+    EXPECT_THAT(VisualClusters(LayOutNormalBidi(registry, fonts, "ab.", full, Direction::Rtl)),
+                ElementsAre(2u, 0u, 1u));
+    // Arabic first: the rtl paragraph places it rightmost, after the Latin word.
+    EXPECT_THAT(VisualClusters(LayOutNormalBidi(registry, fonts, "مر ab.", full, Direction::Rtl)),
+                ElementsAre(7u, 5u, 6u, 4u, 2u, 0u));
+  }
+}
+
+TEST(TextEngineTest, BidiOverrideReversesEveryCharacterOfAnRtlParagraph) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(static_cast<bool>(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Bidi Font")),
+              testing::IsTrue());
+
+  for (const bool full : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "full=" << full);
+    const auto runs = LayOutNormalBidi(registry, fonts, "ab مر.", full, Direction::Rtl,
+                                       /*bidiOverride=*/true);
+    EXPECT_THAT(VisualClusters(runs), ElementsAre(7u, 5u, 3u, 2u, 1u, 0u));
   }
 }
 

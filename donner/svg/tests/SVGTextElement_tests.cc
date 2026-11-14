@@ -1078,6 +1078,34 @@ TEST(SVGTextElementPublicApiTests, TextAnchorEndShiftsStartPosition) {
   EXPECT_NEAR(startX - endX, textLen, 1.0);
 }
 
+// `start` and `end` name logical edges: an rtl chunk starts at its right edge, so its default
+// anchor places the text where an ltr `end` anchor does, and its `end` where an ltr `start` does.
+TEST(SVGTextElementPublicApiTests, RtlDirectionMirrorsStartAndEndAnchors) {
+  const auto firstCharacterX = [](std::string_view attributes) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 40">
+      <g )-") +
+        std::string(attributes) + R"-(><text id="t" x="100" y="20" font-family="fallback-font"
+        font-size="12px">ABC</text></g>
+    </svg>)-");
+    return document.querySelector("#t")->cast<SVGTextElement>().getStartPositionOfChar(0).x;
+  };
+
+  const double ltrStart = firstCharacterX(R"(text-anchor="start")");
+  const double ltrMiddle = firstCharacterX(R"(text-anchor="middle")");
+  const double ltrEnd = firstCharacterX(R"(text-anchor="end")");
+  ASSERT_THAT(ltrStart - ltrEnd, testing::Gt(10.0)) << "the anchors must be distinguishable";
+
+  // Both properties inherit from the group into the text.
+  EXPECT_THAT(firstCharacterX(R"(direction="rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
+  EXPECT_THAT(firstCharacterX(R"(direction="rtl" text-anchor="end")"),
+              testing::DoubleNear(ltrStart, 1e-6));
+  EXPECT_THAT(firstCharacterX(R"(direction="rtl" text-anchor="middle")"),
+              testing::DoubleNear(ltrMiddle, 1e-6));
+  // The CSS declaration matches the presentation attribute.
+  EXPECT_THAT(firstCharacterX(R"(style="direction: rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
+}
+
 // ── Multiple tspan positioning tests ────────────────────────────────────────
 
 TEST(SVGTextElementPublicApiTests, MultipleTSpanPerCharacterPositioning) {

@@ -53,9 +53,12 @@ public:
   /// @param budget Cumulative admission shared by the caller's layout.
   /// @param base Paragraph base direction; normal SVG uses 0.
   /// @param forceAnalysis Whether to bypass the equivalent all-left-to-right fast path.
+  /// @param override Whether every scalar takes the explicit base level without reordering by
+  ///   bidi type, as `unicode-bidi: bidi-override` on the paragraph's block container. Requires
+  ///   base 0 or 1.
   static std::optional<BidiParagraph> Analyze(std::vector<char32_t> codepoints,
                                               BidiResourceBudget& budget, uint8_t base = 0,
-                                              bool forceAnalysis = false);
+                                              bool forceAnalysis = false, bool override = false);
   ~BidiParagraph();
   BidiParagraph(BidiParagraph&&) noexcept;
   BidiParagraph& operator=(BidiParagraph&&) noexcept;

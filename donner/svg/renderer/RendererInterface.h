@@ -27,6 +27,7 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/ColorInterpolation.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MaskType.h"
@@ -1079,6 +1080,10 @@ struct TextParams {
   Box2d viewBox;
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
+  /// CSS `direction` of this text element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether this text element's own `unicode-bidi` overrides every character to `direction`.
+  bool bidiOverride = false;
   TextDecoration textDecoration = TextDecoration::None;
   /// CSS `writing-mode` for this text element. Controls horizontal vs vertical text flow.
   WritingMode writingMode = WritingMode::HorizontalTb;

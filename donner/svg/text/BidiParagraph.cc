@@ -59,6 +59,9 @@ bool AppendLineRuns(SBParagraphRef paragraph, uint32_t start, uint32_t end,
 struct BidiParagraph::State {
   std::vector<char32_t> codepoints;
   uint8_t base = 0;
+  /// Every scalar takes the explicit base level, as for `unicode-bidi: bidi-override` on the
+  /// paragraph's own block container, so SheenBidi never resolves the paragraph.
+  bool override = false;
   std::vector<uint8_t> levels;
   Algorithm algorithm{nullptr, SBAlgorithmRelease};
   std::vector<Paragraph> paragraphs;
@@ -111,7 +114,7 @@ struct BidiParagraph::State {
   }
 
   bool initialize(BidiResourceBudget& budget, bool forceAnalysis) {
-    levels.resize(codepoints.size(), 0);
+    levels.resize(codepoints.size(), override ? base : 0);
     const bool needsAnalysis =
         base != 0 || forceAnalysis ||
         std::any_of(codepoints.begin(), codepoints.end(), BidiParagraph::NeedsAnalysis);
@@ -121,7 +124,7 @@ struct BidiParagraph::State {
     if (!budget.consume(budget.remaining.paragraphs, 1)) {
       return false;
     }
-    if (!needsAnalysis) {
+    if (!needsAnalysis || override) {
       return true;
     }
     const SBCodepointSequence source{SBStringEncodingUTF32, codepoints.data(), codepoints.size()};
@@ -165,8 +168,9 @@ char32_t BidiParagraph::Mirror(char32_t cp) {
 
 std::optional<BidiParagraph> BidiParagraph::Analyze(std::vector<char32_t> codepoints,
                                                     BidiResourceBudget& budget, uint8_t base,
-                                                    bool forceAnalysis) {
-  if (base > 2 || !budget.consume(budget.remaining.codepoints, codepoints.size())) {
+                                                    bool forceAnalysis, bool override) {
+  if (base > 2 || (override && base == 2) ||
+      !budget.consume(budget.remaining.codepoints, codepoints.size())) {
     budget.rejected = true;
     return std::nullopt;
   }
@@ -174,6 +178,7 @@ std::optional<BidiParagraph> BidiParagraph::Analyze(std::vector<char32_t> codepo
   auto state = std::make_unique<State>();
   state->codepoints = std::move(codepoints);
   state->base = base;
+  state->override = override;
   if (!state->initialize(budget, forceAnalysis)) {
     return std::nullopt;
   }
@@ -185,6 +190,9 @@ uint8_t BidiParagraph::levelAt(uint32_t index) const {
 }
 
 uint8_t BidiParagraph::paragraphLevelAt(uint32_t index) const {
+  if (state_->override) {
+    return state_->base;
+  }
   const auto found = state_->paragraphAfter(index);
   return found == state_->paragraphs.begin() ? 0 : SBParagraphGetBaseLevel(std::prev(found)->get());
 }
@@ -203,7 +211,9 @@ std::optional<std::vector<BidiParagraph::Run>> BidiParagraph::visualRuns(
     if (!budget.consume(budget.remaining.runs, 1)) {
       return std::nullopt;
     }
-    result.push_back({start, end, 0});
+    // Without SheenBidi every scalar shares one level: zero on the left-to-right fast path, the
+    // explicit base under an override.
+    result.push_back({start, end, state_->override ? state_->base : uint8_t{0}});
     return result;
   }
   if (!state_->appendLines(start, end, budget, result)) {

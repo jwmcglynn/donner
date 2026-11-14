@@ -389,6 +389,8 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
   params.textAnchor = properties.textAnchor.get().value();
+  params.direction = properties.direction.get().value();
+  params.bidiOverride = OverridesBidi(properties.unicodeBidi.get().value());
   params.writingMode = properties.writingMode.get().value();
   params.fontKerning = properties.fontKerning.get().value();
   params.fontSizeAdjust = properties.fontSizeAdjust.get().value();
@@ -834,6 +836,19 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
   }
 }
 
+/// The anchor edge, in left-to-right inline terms, that \p anchor names for a chunk of
+/// \p direction. `start` and `end` name the logical edges, so an `rtl` chunk on a horizontal line
+/// starts at its right edge. Vertical lines and text on a path keep the authored anchor: their
+/// right-to-left layout is not implemented.
+TextAnchor PhysicalTextAnchor(TextAnchor anchor, Direction direction, WritingMode writingMode,
+                              bool onPath) {
+  if (direction != Direction::Rtl || isVertical(writingMode) || onPath ||
+      anchor == TextAnchor::Middle) {
+    return anchor;
+  }
+  return anchor == TextAnchor::Start ? TextAnchor::End : TextAnchor::Start;
+}
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
                                 const Box2d& viewBox, const FontMetrics& fontMetrics,
                                 const TextStyleContext* styleContext = nullptr) {
@@ -870,7 +885,9 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       continue;
     }
 
-    span.textAnchor = style->properties->textAnchor.get().value();
+    span.textAnchor = PhysicalTextAnchor(
+        style->properties->textAnchor.get().value(), style->properties->direction.get().value(),
+        style->properties->writingMode.get().value(), span.pathSpline.has_value());
     span.textDecoration = style->properties->textDecoration.get().value();
     span.textOrientation = style->properties->textOrientation.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
@@ -4240,6 +4257,14 @@ public:
     if (!input) {
       return reject();
     }
+    // A right-to-left base or an override reorders even text whose characters are all
+    // left-to-right, so it always needs the paragraph plan. Vertical lines keep a left-to-right
+    // base: their right-to-left layout is not implemented.
+    if (!isVertical(params.writingMode)) {
+      paragraphBase_ = params.direction == Direction::Rtl ? 1 : 0;
+      paragraphOverride_ = params.bidiOverride;
+    }
+    enabled |= paragraphBase_ != 0 || paragraphOverride_;
     if (!enabled) {
       return true;
     }
@@ -4335,6 +4360,10 @@ public:
   BidiResourceBudget budget;
   TextBackend::ShapingContext::WorkBudget work{0, 0};
   bool enabled = false;
+  /// Explicit base level of every paragraph: 1 for an `rtl` horizontal `<text>`.
+  uint8_t paragraphBase_ = 0;
+  /// Whether the `<text>` element overrides every character to the base level.
+  bool paragraphOverride_ = false;
   std::string source;
   std::vector<Span> spans;
   std::vector<Character> characters;
@@ -4433,7 +4462,8 @@ private:
     for (size_t index = paragraph.first; index < paragraph.end; ++index) {
       codepoints.push_back(characters[index].codepoint);
     }
-    auto resolved = BidiParagraph::Analyze(std::move(codepoints), budget);
+    auto resolved = BidiParagraph::Analyze(std::move(codepoints), budget, paragraphBase_,
+                                           /*forceAnalysis=*/false, paragraphOverride_);
     if (!resolved) {
       return false;
     }
