@@ -900,7 +900,7 @@ ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> com
   }
 
   ParseDiagnostic err;
-  err.reason = "Invalid display value";
+  err.reason = "Invalid visibility value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
