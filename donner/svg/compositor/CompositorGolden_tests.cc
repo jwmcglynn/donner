@@ -8,6 +8,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1713,6 +1716,114 @@ TEST_F(CompositorGoldenTest, BlendModeGroupStillComposesDirectly) {
   EXPECT_GT(compositor.lastRenderFrameStats().immediateRasterizeMs, 0.0);
   EXPECT_TRUE(result.isExact()) << result;
 }
+
+// A filter that reads BackgroundImage sees what was painted before the element, back to its
+// nearest isolating ancestor. A layer rasterized against transparency has no such backdrop, so
+// every way the compositor can place a backdrop-reading filter must still match the full render.
+constexpr std::string_view kBackdropFilterDefs = R"svg(
+  <defs>
+    <filter id="backdrop" x="0" y="0" width="1" height="1">
+      <feOffset in="BackgroundImage" dx="30" dy="10"/>
+    </filter>
+  </defs>
+  <rect width="200" height="100" fill="white"/>
+  <rect x="10" y="10" width="90" height="60" fill="orange"/>
+  <rect x="120" y="20" width="40" height="60" fill="seagreen"/>
+)svg";
+
+std::string BackdropFilterDocument(std::string_view body) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">)svg") +
+         std::string(kBackdropFilterDefs) + std::string(body) + "</svg>";
+}
+
+struct BackdropFilterCase {
+  const char* name;
+  const char* body;
+  bool promoteTarget;
+};
+
+class CompositorBackdropFilterTest
+    : public CompositorGoldenTest,
+      public ::testing::WithParamInterface<std::tuple<BackdropFilterCase, MandatoryHintScope>> {};
+
+TEST_P(CompositorBackdropFilterTest, MatchesTheFullRender) {
+  const auto& [testCase, scope] = GetParam();
+  SVGDocument document = parseDocument(BackdropFilterDocument(testCase.body));
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorConfig config;
+  config.mandatoryHintScope = scope;
+  CompositorController compositor(document, renderer_, config);
+  DualPathVerifier verifier(compositor, renderer_);
+  if (testCase.promoteTarget) {
+    // Prepare the document so the promotion request sees the resolved filter, as the editor does.
+    ASSERT_TRUE(verifier.renderAndVerify(viewport_).isWithinTolerance(1));
+    EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()).code,
+              CompositorController::PromoteResult::OwningTilesRequired);
+  }
+
+  const auto first = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(first.isWithinTolerance(1)) << first;
+  EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
+  // The second frame composes from whatever the first one cached.
+  const auto second = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(second.isWithinTolerance(1)) << second;
+
+  // Moving the target, as a drag does, must keep reading the backdrop beneath its new position.
+  target->setAttribute("transform", "translate(17 -6)");
+  const auto moved = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(moved.isWithinTolerance(1)) << moved;
+}
+
+// Pointing a promoted element at a backdrop-reading filter drops every layer.
+TEST_F(CompositorGoldenTest, SwitchingToABackdropFilterDropsLayers) {
+  SVGDocument document = parseDocument(BackdropFilterDocument(
+      R"svg(<filter id="plain" x="0" y="0" width="1" height="1">
+          <feOffset dx="30" dy="10"/>
+        </filter>
+        <rect id="target" x="40" y="20" width="100" height="60" fill="navy"
+          filter="url(#plain)"/>)svg"));
+  CompositorController compositor(document, renderer_);
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto before = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(before.isWithinTolerance(1)) << before;
+  ASSERT_EQ(compositor.snapshotState().layerCount, 1u);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  target->setAttribute("filter", "url(#backdrop)");
+  const auto after = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(after.isWithinTolerance(1)) << after;
+  EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
+  const auto again = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(again.isWithinTolerance(1)) << again;
+}
+
+constexpr BackdropFilterCase kBackdropFilterCases[] = {
+    {"FilteredElement", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        filter="url(#backdrop)"/>)svg",
+     false},
+    {"PromotedFilteredElement", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        filter="url(#backdrop)"/>)svg",
+     true},
+    {"InsideClippedGroup", R"svg(<clipPath id="clip"><rect width="200" height="100"/></clipPath>
+        <g id="target" clip-path="url(#clip)"><rect x="40" y="20" width="100" height="60"
+        filter="url(#backdrop)"/></g>)svg",
+     false},
+    {"InsidePromotedGroup", R"svg(<g id="target"><rect x="40" y="20" width="100" height="60"
+        filter="url(#backdrop)"/></g>)svg",
+     true},
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    BackdropFilters, CompositorBackdropFilterTest,
+    ::testing::Combine(::testing::ValuesIn(kBackdropFilterCases),
+                       ::testing::Values(MandatoryHintScope::All, MandatoryHintScope::FilterOnly)),
+    [](const auto& info) {
+      return std::string(std::get<0>(info.param).name) +
+             (std::get<1>(info.param) == MandatoryHintScope::All ? "_AllHints" : "_FilterOnly");
+    });
 
 // Changing the group's opacity re-rasterizes the layer: the opacity is baked
 // into the cached bitmap, so a stale bitmap would keep composing the old

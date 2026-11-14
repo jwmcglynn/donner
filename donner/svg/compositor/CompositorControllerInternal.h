@@ -91,6 +91,10 @@ bool IsCheapDirectGeometry(const StaticSpanCostEstimate& cost);
 double EstimateStaticSpanRasterizeMs(int estimatedDrawOps, int estimatedPathVerbs,
                                      bool usesAreaCostlyPaint, double coveredAreaPixels);
 bool ShouldDirectComposeLayer(const CompositorLayer& layer);
+
+/// True when some rendered element's filter reads `BackgroundImage` or `BackgroundAlpha`. Such a
+/// filter needs everything painted before it, which no cached layer or tile can supply.
+bool DocumentReadsFilterBackdrop(Registry& registry);
 double ImmediateStaticSpanBudgetMs();
 double ImmediateStaticSpanBudgetChargeMs(double measuredRasterizeMs);
 

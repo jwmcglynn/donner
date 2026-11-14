@@ -18,6 +18,8 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -538,6 +540,23 @@ bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
   return layer.isImmediate() ||
          (layer.fallbackReasons() & (FallbackReason::ExternalPaint | FallbackReason::BlendMode)) !=
              FallbackReason::None;
+}
+
+bool DocumentReadsFilterBackdrop(Registry& registry) {
+  // Only a `url()` reference can name BackgroundImage; CSS filter functions never read it.
+  auto view = registry.view<components::RenderingInstanceComponent>();
+  return std::any_of(view.begin(), view.end(), [&](Entity entity) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    if (!instance.resolvedFilter.has_value()) {
+      return false;
+    }
+    const auto* reference = std::get_if<ResolvedReference>(&*instance.resolvedFilter);
+    if (reference == nullptr || !reference->valid()) {
+      return false;
+    }
+    const auto* filter = reference->handle.try_get<components::ComputedFilterComponent>();
+    return filter != nullptr && components::StandardInputUsage(filter->filterGraph).readsBackdrop();
+  });
 }
 
 double ImmediateStaticSpanBudgetMs() {
