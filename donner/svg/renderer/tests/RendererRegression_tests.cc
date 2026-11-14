@@ -3534,6 +3534,44 @@ TEST_F(RendererRegressionTests, SkewedBlurReadsContentBeyondTheCanvas) {
   }
 }
 
+/// Renders a skewed band filtered by \p primitives, whose filter region ends at x 60, while the
+/// band itself ends at \p bandRight. The skew sends the filter through the transformed
+/// local-raster path.
+RendererBitmap RenderSkewedBandInNarrowFilterRegion(std::string_view primitives, int bandRight) {
+  const std::string markup =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="20" y="20" width="40" height="60">)svg" +
+      std::string(primitives) + R"svg(</filter>
+      <g transform="skewX(20) translate(-10)" filter="url(#f)">
+        <rect x="20" y="20" width=")svg" +
+      std::to_string(bandRight - 20) + R"svg(" height="60" fill="lime"/>
+      </g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, Vector2i(120, 100));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// The filter region bounds SourceGraphic, so content past its edge must not reach the blur, even
+// when a skew leaves the region a parallelogram on the canvas (resvg
+// filters/filter/transform-on-shape-with-filter-region).
+//
+// Oracle: a band ending just past the region edge and a band running 80 units past it cover the
+// region identically, so once SourceGraphic is cropped to the region both render the same pixels.
+// The short band still extends 4 units past the edge, which keeps its own anti-aliased edge out of
+// the samples taken inside the region. Without the crop, the long band feeds solid content into
+// the blur and the region's right edge stays opaque instead of fading. The offset variant pulls
+// content from past the edge back into the region, which the crop must also prevent.
+TEST_F(RendererRegressionTests, SkewedBlurCropsSourceToFilterRegion) {
+  for (std::string_view primitives :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="4"/>)svg"),
+        std::string_view(R"svg(<feGaussianBlur stdDeviation="4"/><feOffset dx="-6"/>)svg")}) {
+    SCOPED_TRACE(primitives);
+    const RendererBitmap shortBand = RenderSkewedBandInNarrowFilterRegion(primitives, 64);
+    const RendererBitmap longBand = RenderSkewedBandInNarrowFilterRegion(primitives, 140);
+    ExpectVisibleBitmap(shortBand, "skewed_blur_region_crop_visible");
+    editor::tests::CompareBitmapToBitmap(longBand, shortBand, "skewed_blur_region_crop",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 // Both executors round each feOffset to whole pixels, so eight offsets of 0.6 move content 8
 // pixels, not 4.8. The capture must reach that far: a square just past the left edge lands at the
 // left edge, matching the same square drawn there without a filter.

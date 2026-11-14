@@ -2919,6 +2919,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (std::exchange(failNextTransformedResampleArenaWriteForTesting, false)) {
       resampleEncoder->injectNextArenaWriteFailureForTesting();
     }
+    const Transform2d localDeviceFromFilter =
+        Transform2d::Scale(geometry->scaleX, geometry->scaleY);
+    const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
+                                  Vector2d(geometry->blurPadding + frame.filterRegion.width(),
+                                           geometry->blurPadding + frame.filterRegion.height()));
+    // The filter region bounds SourceGraphic, so the capture beyond it must not reach the padding
+    // the blur reads. The region is axis-aligned in this local space even when the device
+    // transform skews or rotates it; round outward like the CPU executor's source crop.
+    const Box2d localRegionPixels = localDeviceFromFilter.transformBox(localFilterRegion);
+    const auto regionX0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.x));
+    const auto regionY0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.y));
+    resampleEncoder->setScissorRect(
+        regionX0, regionY0,
+        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.x)) - regionX0,
+        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.y)) - regionY0);
     resampleEncoder->setTransform(localFromDevice);
     // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
     // past the viewport's top-left corner.
@@ -2932,11 +2947,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     resampleEncoder->finish();
     retireFinishedEncoder(std::move(resampleEncoder));
 
-    const Transform2d localDeviceFromFilter =
-        Transform2d::Scale(geometry->scaleX, geometry->scaleY);
-    const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
-                                  Vector2d(geometry->blurPadding + frame.filterRegion.width(),
-                                           geometry->blurPadding + frame.filterRegion.height()));
     if (!suspendFrameForFilter()) {
       if (!frameArenaWriteFailed) {
         device->markDeviceLost("frame commands could not be submitted before filter execution");
