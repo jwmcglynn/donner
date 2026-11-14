@@ -2813,6 +2813,22 @@ TEST(EditorAppReorderTest, SendToBackLiftsNestedLeafToDocumentBack) {
   EXPECT_EQ(ParentIdOf(app, "b1"), std::optional<std::string>("<svg>"));
 }
 
+TEST(EditorAppReorderTest, SendToBackKeepsChildInGroupReferencedByQuotedUrl) {
+  // A quoted `url('#gB')` reference makes gB's child list observable elsewhere, so b1 must stay
+  // inside gB instead of being lifted to the root.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="gA"><rect id="a1" width="10" height="10"/></g>
+         <g id="gB"><rect id="b1" width="10" height="10"/><rect id="b2" width="10" height="10"/></g>
+         <rect id="ref" width="10" height="10" data-ref="url('#gB')"/>
+       </svg>)svg"));
+  SelectById(app, "b1");
+  app.reorderSelectedElement(EditorApp::ZOrder::SendToBack);
+  app.flushFrame();
+  EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("gB")));
+}
+
 TEST(EditorAppReorderTest, TreeAwareArrangeIsNoOpAtDocumentExtremes) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(std::string(kNestedGroups)));
@@ -2886,13 +2902,14 @@ TEST(EditorAppRenameTest, RenameRepointsHrefReference) {
   EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
 }
 
-TEST(EditorAppRenameTest, RenameLeavesPrefixedHrefReferenceUntouched) {
+TEST(EditorAppRenameTest, RenameRepointsXlinkHrefAndKeepsItsPrefix) {
   constexpr std::string_view kXlinkDoc =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg"
                  xmlns:xlink="http://www.w3.org/1999/xlink"
                  width="100" height="100">
          <rect id="r" x="0" y="0" width="50" height="50"/>
-         <use id="u" href="#r" xlink:href="#r"/>
+         <use id="legacy" xlink:href="#r"/>
+         <use id="both" href="#r" xlink:href="#r"/>
        </svg>)svg";
 
   EditorApp app;
@@ -2901,10 +2918,120 @@ TEST(EditorAppRenameTest, RenameLeavesPrefixedHrefReferenceUntouched) {
   EXPECT_TRUE(app.renameSelectedElement("rect2"));
   ASSERT_TRUE(app.flushFrame());
 
+  const xml::XMLQualifiedNameRef xlinkHref("xlink", "href");
+  const std::optional<svg::SVGElement> legacy = app.document().document().querySelector("#legacy");
+  ASSERT_THAT(legacy, ::testing::Optional(::testing::_));
+  EXPECT_THAT(legacy->getAttribute(xlinkHref), ::testing::Optional(RcString("#rect2")));
+  EXPECT_THAT(legacy->getAttribute("href"), ::testing::Eq(std::nullopt))
+      << "the rewrite must not add an unprefixed href";
+
+  const std::optional<svg::SVGElement> both = app.document().document().querySelector("#both");
+  ASSERT_THAT(both, ::testing::Optional(::testing::_));
+  EXPECT_THAT(both->getAttribute("href"), ::testing::Optional(RcString("#rect2")));
+  EXPECT_THAT(both->getAttribute(xlinkHref), ::testing::Optional(RcString("#rect2")));
+
+  const std::string_view source = app.document().document().source();
+  EXPECT_THAT(std::string(source),
+              ::testing::HasSubstr(R"(<use id="legacy" xlink:href="#rect2"/>)"));
+  EXPECT_THAT(std::string(source),
+              ::testing::HasSubstr(R"(<use id="both" href="#rect2" xlink:href="#rect2"/>)"));
+}
+
+TEST(EditorAppRenameTest, RenameUndoRedoRestoresXlinkHrefSource) {
+  constexpr std::string_view kXlinkDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+                 xmlns:xlink="http://www.w3.org/1999/xlink"
+                 width="100" height="100">
+         <rect id="r" x="0" y="0" width="50" height="50"/>
+         <use id="legacy" xlink:href="#r"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kXlinkDoc)));
+  SelectById(app, "r");
+  EXPECT_TRUE(app.renameSelectedElement("rect2"));
+  ASSERT_TRUE(app.flushFrame());
+  const std::string renamed(app.document().document().source());
+  ASSERT_THAT(renamed, ::testing::HasSubstr(R"(<use id="legacy" xlink:href="#rect2"/>)"));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(std::string(app.document().document().source()), ::testing::Eq(kXlinkDoc));
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(std::string(app.document().document().source()), ::testing::Eq(renamed));
+}
+
+// Only `href` (with or without a prefix) holds a bare `#id` reference. Elsewhere a whole value of
+// `#abc` is a hex color or foreign data, even when an element has the id `abc`.
+TEST(EditorAppRenameTest, RenameRepointsWholeValueIdOnlyInHrefAttributes) {
+  constexpr std::string_view kHashValuesDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+                 xmlns:xlink="http://www.w3.org/1999/xlink"
+                 xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+                 width="100" height="100">
+         <rect id="abc" x="0" y="0" width="50" height="50"/>
+         <rect id="swatch" width="10" height="10" fill="#abc" inkscape:label="#abc"
+               data-note="#abc"/>
+         <use id="u" href="#abc" xlink:href="#abc"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kHashValuesDoc)));
+  SelectById(app, "abc");
+  EXPECT_TRUE(app.renameSelectedElement("box"));
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::optional<svg::SVGElement> swatch = app.document().document().querySelector("#swatch");
+  ASSERT_THAT(swatch, ::testing::Optional(::testing::_));
+  EXPECT_THAT(swatch->getAttribute("fill"), ::testing::Optional(RcString("#abc")));
+  EXPECT_THAT(swatch->getAttribute(xml::XMLQualifiedNameRef("inkscape", "label")),
+              ::testing::Optional(RcString("#abc")));
+  EXPECT_THAT(swatch->getAttribute("data-note"), ::testing::Optional(RcString("#abc")));
+
   const std::optional<svg::SVGElement> use = app.document().document().querySelector("#u");
-  ASSERT_TRUE(use.has_value());
-  EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
-  EXPECT_EQ(use->getAttribute(xml::XMLQualifiedNameRef("xlink", "href")), "#r");
+  ASSERT_THAT(use, ::testing::Optional(::testing::_));
+  EXPECT_THAT(use->getAttribute("href"), ::testing::Optional(RcString("#box")));
+  EXPECT_THAT(use->getAttribute(xml::XMLQualifiedNameRef("xlink", "href")),
+              ::testing::Optional(RcString("#box")));
+}
+
+TEST(EditorAppRenameTest, RenameLeavesExternalDocumentReferencesUntouched) {
+  constexpr std::string_view kExternalDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r" x="0" y="0" width="50" height="50"/>
+         <use id="u" href="other.svg#r"/>
+         <rect id="f" width="10" height="10" fill="url(other.svg#r)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kExternalDoc)));
+  SelectById(app, "r");
+  EXPECT_TRUE(app.renameSelectedElement("rect2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "u", "href"), ::testing::Optional(std::string("other.svg#r")));
+  EXPECT_THAT(AttrOf(app, "f", "fill"), ::testing::Optional(std::string("url(other.svg#r)")));
+}
+
+TEST(EditorAppRenameTest, RenameRepointsFallbackAndRepeatedUrlReferences) {
+  constexpr std::string_view kRepeatedDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" x="0" y="0" width="50" height="50" fill="url(#grad) red"
+               data-refs="url(#grad) url('#grad')"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kRepeatedDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "fill"), ::testing::Optional(std::string("url(#g2) red")));
+  EXPECT_THAT(AttrOf(app, "r", "data-refs"),
+              ::testing::Optional(std::string("url(#g2) url('#g2')")));
 }
 
 // `#grad` appears both as a standalone id selector (must repoint) and as the
@@ -2994,6 +3121,36 @@ TEST(EditorAppRenameTest, RenameLeavesEscapedQuotedCssAndUnclosedCommentsUntouch
 .badge { content: "#target \"literal\""; clip-path: url(#renamed); marker: url(#targeted) }
 @supports (display: grid) { #renamed { opacity: 0.5 } }
 /* #target unfinished comment)css")));
+}
+
+TEST(EditorAppRenameTest, RenameRepointsQuotedUrlReferences) {
+  constexpr std::string_view kQuotedDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>.a { fill: url("#grad") }
+.b { fill: url( '#grad' ) }
+.c { fill: url("#grad-a") }</style>
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" x="0" y="0" width="50" height="50" fill="url('#grad')"
+               stroke="url( &quot;#grad&quot; )" style='stroke:url("#grad")'
+               data-refs="url('#grad-a') url('#grad&quot;) url(&quot;#grad')"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kQuotedDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "fill"), ::testing::Optional(std::string("url('#g2')")));
+  EXPECT_THAT(AttrOf(app, "r", "stroke"), ::testing::Optional(std::string("url( \"#g2\" )")));
+  EXPECT_THAT(AttrOf(app, "r", "style"), ::testing::Optional(std::string("stroke:url(\"#g2\")")));
+  // Longer ids and mismatched quotes are not references to `grad`.
+  EXPECT_THAT(AttrOf(app, "r", "data-refs"),
+              ::testing::Optional(std::string("url('#grad-a') url('#grad\") url(\"#grad')")));
+  EXPECT_THAT(StyleTextOf(app), ::testing::Optional(std::string(
+                                    R"css(.a { fill: url("#g2") }
+.b { fill: url( '#g2' ) }
+.c { fill: url("#grad-a") })css")));
 }
 
 TEST(EditorAppRenameTest, RenameRepointsOnlyExactUrlIdTokensWithIdCharSuffixes) {
