@@ -2844,6 +2844,21 @@ TEST(EditorAppReorderTest, SendToBackKeepsChildInGroupReferencedByInlineStyle) {
   EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("gB")));
 }
 
+TEST(EditorAppReorderTest, SendToBackKeepsChildInGroupReferencedByEscapedUrl) {
+  // `url(\23 gB)` is `url(#gB)` with the `#` escaped; it still references gB.
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="gA"><rect id="a1" width="10" height="10"/></g>
+         <g id="gB"><rect id="b1" width="10" height="10"/><rect id="b2" width="10" height="10"/></g>
+         <rect id="ref" width="10" height="10" data-ref="url(\23 gB)"/>
+       </svg>)svg"));
+  SelectById(app, "b1");
+  app.reorderSelectedElement(EditorApp::ZOrder::SendToBack);
+  app.flushFrame();
+  EXPECT_THAT(ParentIdOf(app, "b1"), ::testing::Optional(std::string("gB")));
+}
+
 TEST(EditorAppReorderTest, SendToBackLiftsChildWhenGroupIdAppearsOnlyInInlineStyleText) {
   // `#gB` inside an inline-style string or comment is not a reference, so b1 may leave gB.
   EditorApp app;
@@ -3336,16 +3351,163 @@ TEST(EditorAppRenameTest, RenameRecognizesUrlReferencesByCssTokens) {
   EXPECT_TRUE(app.renameSelectedElement("g2"));
   ASSERT_TRUE(app.flushFrame());
 
-  EXPECT_THAT(AttrOf(app, "r", "fill"), ::testing::Optional(std::string("url(#g2)")));
-  EXPECT_THAT(AttrOf(app, "r", "stroke"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "fill"), ::testing::Optional(std::string("URL(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "stroke"), ::testing::Optional(std::string("url(  #g2  )")));
   EXPECT_THAT(AttrOf(app, "r", "data-prefixed"), ::testing::Optional(std::string("xurl(#grad)")));
   EXPECT_THAT(AttrOf(app, "r", "data-escaped-quote"),
               ::testing::Optional(std::string("\\'url(#grad)")));
   EXPECT_THAT(AttrOf(app, "r", "data-escaped-id"), ::testing::Optional(std::string("url(#g2)")));
   EXPECT_THAT(AttrOf(app, "r", "data-bad"), ::testing::Optional(std::string("url(#grad x)")));
-  EXPECT_THAT(AttrOf(app, "r", "data-open"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "data-open"), ::testing::Optional(std::string("url(#g2")));
   EXPECT_THAT(AttrOf(app, "r", "style"),
               ::testing::Optional(std::string("fill: URL('#g2'); stroke: xurl(#grad)")));
+}
+
+/// Outcome of \ref RenameAndRead.
+struct RenameResult {
+  bool renamed = false;
+  std::optional<std::string> style;
+  std::optional<std::string> dataX;
+};
+
+/// Loads @p svg, renames `#oldId` to @p newId and returns the `<style>` text and the `data-x`
+/// attribute of `#r` for byte-exact checks.
+RenameResult RenameAndRead(std::string_view svg, std::string_view oldId, std::string_view newId) {
+  EditorApp app;
+  RenameResult result;
+  if (!app.loadFromString(std::string(svg))) {
+    return result;
+  }
+  SelectById(app, oldId);
+  result.renamed = app.renameSelectedElement(newId);
+  (void)app.flushFrame();
+  result.style = StyleTextOf(app);
+  result.dataX = AttrOf(app, "r", "data-x");
+  return result;
+}
+
+TEST(EditorAppRenameTest, RenameKeepsBytesAroundUrlValues) {
+  const std::string svg =
+      std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>.a { fill: url(&#10;#grad&#10;) } .b { fill: u\72l(#grad) }</style>
+         <linearGradient id="grad"/>
+         <rect id="r" width="10" height="10" data-x=")svg") +
+      "\xC3\xA9 url(#grad)\"/>\n</svg>";
+
+  const RenameResult result = RenameAndRead(svg, "grad", "g2");
+  EXPECT_THAT(result.renamed, ::testing::IsTrue());
+  EXPECT_THAT(result.style, ::testing::Optional(
+                                std::string(".a { fill: url(\n#g2\n) } .b { fill: u\\72l(#g2) }")));
+  EXPECT_THAT(result.dataX, ::testing::Optional(std::string("\xC3\xA9 url(#g2)")));
+}
+
+// XML cannot carry a form feed, so the form-feed case is covered by the tokenizer tests.
+TEST(EditorAppRenameTest, RenameKeepsCrLfAndTabBeforeAReference) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <linearGradient id="grad"/>
+         <rect id="r" width="10" height="10"/>
+       </svg>)svg"));
+  SelectById(app, "r");
+  ASSERT_TRUE(app.setAttributeOnSelection("data-x", "a\r\n\turl(#grad)"));
+  ASSERT_TRUE(app.flushFrame());
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "data-x"), ::testing::Optional(std::string("a\r\n\turl(#g2)")));
+}
+
+TEST(EditorAppRenameTest, RenameRepointsEscapedIdSelector) {
+  const RenameResult result = RenameAndRead(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#\61 bc { fill: red }</style>
+         <rect id="abc" width="10" height="10"/>
+       </svg>)svg",
+      "abc", "box");
+  EXPECT_THAT(result.style, ::testing::Optional(std::string("#box { fill: red }")));
+}
+
+TEST(EditorAppRenameTest, RenameExaminesDeclarationsInsideNonGroupAtRules) {
+  const RenameResult result = RenameAndRead(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>@font-face { font-family: f; src: url(#abc); color: #abc }
+@media screen { .a { fill: url(#abc) } #abc { fill: red } }
+@supports (fill: #abc) { #abc { fill: blue } }</style>
+         <rect id="abc" width="10" height="10"/>
+       </svg>)svg",
+      "abc", "z");
+  EXPECT_THAT(result.style, ::testing::Optional(std::string(
+                                R"css(@font-face { font-family: f; src: url(#z); color: #abc }
+@media screen { .a { fill: url(#z) } #z { fill: red } }
+@supports (fill: #abc) { #z { fill: blue } })css")));
+}
+
+constexpr std::string_view kEscapingDoc =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#grad { fill: red } .a { fill: url(#grad) } .b { fill: url("#grad") } .c { fill: url('#grad') }</style>
+         <linearGradient id="grad"/>
+       </svg>)svg";
+
+TEST(EditorAppRenameTest, RenameEscapesNewIdThatNeedsCssEscaping) {
+  const RenameResult dotted = RenameAndRead(kEscapingDoc, "grad", "a.b");
+  EXPECT_THAT(
+      dotted.style,
+      ::testing::Optional(std::string(
+          R"css(#a\.b { fill: red } .a { fill: url(#a.b) } .b { fill: url("#a.b") } .c { fill: url('#a.b') })css")));
+
+  const RenameResult digit = RenameAndRead(kEscapingDoc, "grad", "1a b");
+  EXPECT_THAT(
+      digit.style,
+      ::testing::Optional(std::string(
+          R"css(#\31 a\ b { fill: red } .a { fill: url(#1a\20 b) } .b { fill: url("#1a b") } .c { fill: url('#1a b') })css")));
+
+  const RenameResult quoted = RenameAndRead(kEscapingDoc, "grad", R"(x)y"z\w)");
+  EXPECT_THAT(
+      quoted.style,
+      ::testing::Optional(std::string(
+          R"css(#x\)y\"z\\w { fill: red } .a { fill: url(#x\29 y\22 z\5c w) } .b { fill: url("#x)y\"z\\w") } .c { fill: url('#x)y"z\\w') })css")));
+}
+
+TEST(EditorAppRenameTest, RenameCollisionCheckUsesTheIdNotASelector) {
+  constexpr std::string_view kCollisionDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="a"><rect id="b" width="10" height="10"/></g>
+         <rect id="1a" width="10" height="10"/>
+         <rect id="r" width="10" height="10"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kCollisionDoc)));
+  SelectById(app, "r");
+  EXPECT_FALSE(app.renameSelectedElement("1a")) << "an element already has the id 1a";
+  EXPECT_TRUE(app.renameSelectedElement("a b")) << "no element has the id `a b`";
+}
+
+TEST(EditorAppRenameTest, RenameUndoRestoresUrlAndStyleTextBytes) {
+  constexpr std::string_view kUndoDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#grad { fill: red } .a { fill: URL(  '#grad'  ) }</style>
+         <linearGradient id="grad"/>
+         <rect id="r" width="10" height="10" fill="url(  #grad )"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kUndoDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g.2"));
+  ASSERT_TRUE(app.flushFrame());
+  const std::string renamed(app.document().document().source());
+  EXPECT_THAT(renamed, ::testing::HasSubstr(R"(#g\.2 { fill: red } .a { fill: URL(  '#g.2'  ) })"));
+  EXPECT_THAT(renamed, ::testing::HasSubstr(R"svg(fill="url(  #g.2 )")svg"));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(std::string(app.document().document().source()), ::testing::Eq(kUndoDoc));
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(std::string(app.document().document().source()), ::testing::Eq(renamed));
 }
 
 TEST(EditorAppRenameTest, RenameRepointsIdSelectorFollowedByPseudoClass) {
