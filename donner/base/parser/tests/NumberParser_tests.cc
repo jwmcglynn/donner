@@ -4,6 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <random>
+#include <string>
 #include <string_view>
 
 #include "donner/base/MathUtils.h"
@@ -350,6 +355,75 @@ TEST(NumberParser, DroppedDigitsAreConsumed) {
     ASSERT_THAT(maybeResult, NoParseError());
     EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(testCase.expected));
     EXPECT_EQ(maybeResult.result().consumedChars, testCase.consumedChars);
+  }
+}
+
+/// Returns the distance between two doubles in units in the last place, counting across zero.
+int64_t UlpDistance(double lhs, double rhs) {
+  const auto ordered = [](double value) {
+    int64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits < 0 ? std::numeric_limits<int64_t>::min() - bits : bits;
+  };
+  const int64_t distance = ordered(lhs) - ordered(rhs);
+  return distance < 0 ? -distance : distance;
+}
+
+/// Matches a parse result within two ULPs of the C library's correctly rounded `strtod`.
+MATCHER_P(NearStrtodOf, input, "is within two ULPs of strtod(\"" + std::string(input) + "\")") {
+  const double oracle = std::strtod(std::string(input).c_str(), nullptr);
+  const int64_t distance = UlpDistance(arg, oracle);
+  *result_listener << "strtod gives " << testing::PrintToString(oracle) << ", " << distance
+                   << " ULPs away";
+  return distance <= 2;
+}
+
+// Exponents that put 10^exponent below the normal range must not lose the value: before, these
+// parsed to 0 or were off by millions of ULPs, including DBL_MIN itself.
+TEST(NumberParser, TinyExponentsMatchStrtod) {
+  for (const std::string_view input : {
+           "2.2250738585072014e-308",  // DBL_MIN
+           "2.2250738585072011e-308",
+           "4.4501477170144023e-308",
+           "1.2345678901234567e-300",
+           "1.23456789e-315",
+           "6.631236846766476e-316",
+           "3.4e-317",
+           "7.0e-323",
+           "9.8813129168249309e-324",
+           "4.9406564584124654e-324",  // Smallest subnormal.
+           "5e-324",
+           "2.4703282292062328e-324",  // Just above half the smallest subnormal.
+           "2.4703282292062327e-324",  // Just below it, so zero.
+           "123456789012345678e-330",
+           "18446744073709551615e-340",
+           "18446744073709551615e-343",
+           "18446744073709551615e-344",
+           "-1.2345678901234567e-310",
+       }) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    const auto maybeResult = NumberParser::Parse(input);
+    ASSERT_THAT(maybeResult, NoParseError());
+    EXPECT_THAT(maybeResult.result().number, NearStrtodOf(input));
+    EXPECT_EQ(maybeResult.result().consumedChars, input.size());
+  }
+}
+
+// A deterministic sample of long significands with exponents down to the subnormal range.
+TEST(NumberParser, TinyExponentSweepMatchesStrtod) {
+  std::mt19937_64 random(20261114);
+  for (int i = 0; i < 2000; ++i) {
+    std::string input = std::to_string(1 + random() % 9);
+    const int digits = 17 + static_cast<int>(random() % 3);
+    for (int digit = 1; digit < digits; ++digit) {
+      input += static_cast<char>('0' + random() % 10);
+    }
+    input += "e" + std::to_string(-345 + static_cast<int>(random() % 60));
+
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    const auto maybeResult = NumberParser::Parse(input);
+    ASSERT_THAT(maybeResult, NoParseError());
+    ASSERT_THAT(maybeResult.result().number, NearStrtodOf(input));
   }
 }
 

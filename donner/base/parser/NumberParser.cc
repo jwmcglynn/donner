@@ -14,6 +14,38 @@ namespace donner::parser {
 
 namespace {
 
+/// Table of exact powers of 10 up to 22. Values are exactly representable in a double.
+constexpr double kExactPowersOf10[] = {
+    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+};
+constexpr int kMaxExactExp = 22;  ///< Do exact multiply/divide if |exp10| <= 22.
+
+/**
+ * Divides \p value, a converted mantissa below 2^64, by 10^\p divisorExponent.
+ *
+ * Multiplying by 10^-divisorExponent instead would lose the value below 1e-307, where that factor
+ * is subnormal or zero before the product is formed. Every divisor here is a normal double, so only
+ * the last division rounds into the subnormal range.
+ *
+ * @param value The value to divide.
+ * @param divisorExponent Decimal exponent of the divisor, greater than \ref kMaxExactExp.
+ */
+double DivideByPowerOf10(double value, int divisorExponent) {
+  // A value below 2^64 divided by 10^400 is far below half the smallest subnormal.
+  constexpr int kZeroAboveExponent = 400;
+  constexpr int kMaxNormalPowerOf10 = 308;
+  if (divisorExponent > kZeroAboveExponent) {
+    return 0.0;
+  }
+  while (divisorExponent > kMaxNormalPowerOf10) {
+    const int step = std::min(divisorExponent - kMaxNormalPowerOf10, kMaxExactExp);
+    value /= kExactPowersOf10[step];
+    divisorExponent -= step;
+  }
+  return value / std::pow(10.0, static_cast<double>(divisorExponent));
+}
+
 /**
  * Converts a parsed mantissa (64-bit) and decimal exponent into a double with minimal drift.
  *
@@ -32,13 +64,6 @@ namespace {
  * @return the double or ±∞ if out of representable range
  */
 double ConvertMantissaAndExponent(uint64_t mantissa, int exp10, bool negative) {
-  // Table of exact powers of 10 up to 22. Values are exactly representable in a double.
-  constexpr double kExactPowersOf10[] = {
-      1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
-      1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
-  };
-  constexpr int kMaxExactExp = 22;  // Do exact multiply/divide if |exp10| <= 22
-
   // If no digits, return ±0.0
   if (mantissa == 0) {
     return negative ? -0.0 : 0.0;
@@ -54,8 +79,10 @@ double ConvertMantissaAndExponent(uint64_t mantissa, int exp10, bool negative) {
     d *= kExactPowersOf10[exp10];
   } else if (exp10 < 0 && -exp10 <= kMaxExactExp) {
     d /= kExactPowersOf10[-exp10];
+  } else if (exp10 < 0) {
+    d = DivideByPowerOf10(d, -exp10);
   } else {
-    // Large exponent => do standard pow. This should overflow to ±∞ if exp10 is huge.
+    // Large exponent => do standard pow. This should overflow to infinity if exp10 is huge.
     d *= std::pow(10.0, static_cast<double>(exp10));
   }
 
