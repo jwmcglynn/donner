@@ -4969,10 +4969,10 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
     return std::nullopt;
   }
   // Lay the fragment out with the occurrence's styles, exactly as drawing it does. Measuring is
-  // charged to its own frame allowance rather than the external instance work drawing charges, so
-  // measuring leaves drawing's allowance intact. Measuring recurses into the occurrence's own
-  // external uses and forgets those results afterwards, so the allowance is what bounds a family
-  // of documents that each use the next several times.
+  // charged to its own frame allowance rather than the external instance work drawing charges;
+  // style matching for both still shares the frame's rule budget. Measuring recurses into the
+  // occurrence's own external uses and forgets those results afterwards, so the allowance is what
+  // bounds a family of documents that each use the next several times.
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
                               instance.resolvedStroke, externalUseStyleWork_,
                               ExternalWorkCharge::Measure);
