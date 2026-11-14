@@ -2765,21 +2765,38 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
   return !glyph.visualOrder || (vertical ? glyph.yAdvance : glyph.xAdvance) != 0;
 }
 
-/// The current text position after a right-to-left chunk, before anchoring: the chunk's pen runs
-/// leftward from its origin, so it ends one chunk width left of it. `unshiftedEnd` is the far edge
-/// of the chunk as laid out left to right; the gap between it and the next chunk's recorded origin,
-/// less that chunk's authored shift, is trailing spacing, which a leftward pen places on the left.
-struct RightToLeftContinuation {
+/// The current text position a chunk leaves for the next chunk without an absolute x.
+///
+/// Layout records every chunk origin as a left-to-right pen. A right-to-left chunk's pen instead
+/// runs leftward from its origin, so its actual pen end is one chunk width left of that origin;
+/// anchoring applies afterwards and does not move it. `recordedEnd` is the chunk's far edge as laid
+/// out left to right: the gap from it to the next recorded origin, less that chunk's authored
+/// shift, is trailing spacing, which a leftward pen places on the left. After a left-to-right
+/// chunk the next origin keeps its recorded offset, moved by `correction`, the distance between
+/// actual and recorded origins accumulated since the last absolute x.
+struct PenContinuation {
+  bool rightToLeft = false;
   double penEnd = 0.0;
-  double unshiftedEnd = 0.0;
+  double recordedEnd = 0.0;
+  double correction = 0.0;
+
+  /// The actual origin of a following chunk recorded at \p recorded with authored shift
+  /// \p authored.
+  double originFor(double recorded, double authored) const {
+    if (!rightToLeft) {
+      return recorded + correction;
+    }
+    const double spacing = recorded - authored - recordedEnd;
+    return penEnd - spacing + authored;
+  }
 };
 
-/// Anchors one chunk. \p continuation, when set, rebases the chunk's origin onto the preceding
-/// right-to-left chunk; on success \p next receives the continuation this chunk leaves behind.
+/// Anchors one chunk. \p continuation, when set, moves the chunk's origin to the current text
+/// position the previous chunk left; on success \p next receives the position this chunk leaves.
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
                      const AnchorExclusions& exclusions, double indent,
-                     const std::optional<RightToLeftContinuation>& continuation = std::nullopt,
-                     std::optional<RightToLeftContinuation>* next = nullptr) {
+                     const std::optional<PenContinuation>& continuation = std::nullopt,
+                     std::optional<PenContinuation>* next = nullptr) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
@@ -2796,10 +2813,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   if (range.begin.anchorPosition) {
     bounds.initial = *range.begin.anchorPosition;
   }
+  const double recorded = bounds.initial;
   if (continuation) {
-    const double authored = range.begin.authoredShift;
-    const double spacing = bounds.initial - authored - continuation->unshiftedEnd;
-    bounds.initial = continuation->penEnd - spacing + authored;
+    bounds.initial = continuation->originFor(recorded, range.begin.authoredShift);
   }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
@@ -2816,8 +2832,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
   if (next) {
     // Anchoring applies last and never moves the current text position.
-    *next =
-        RightToLeftContinuation{bounds.initial - (bounds.maximum - bounds.minimum), bounds.maximum};
+    *next = PenContinuation{range.begin.rightToLeft,
+                            bounds.initial - (bounds.maximum - bounds.minimum), bounds.maximum,
+                            bounds.initial - recorded};
   }
   return true;
 }
@@ -2859,21 +2876,21 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
   ResolveChunkStyles(runs, chunkBoundaries, text);
   std::vector<std::vector<bool>> rejected;
   double pendingIndent = firstLineIndent;
-  // After a right-to-left chunk the current text position is its anchored left edge, so a
-  // following chunk without an absolute x continues from there.
-  std::optional<RightToLeftContinuation> continuation;
+  // A chunk without an absolute x continues from the current text position the previous chunk
+  // left, which differs from the recorded left-to-right pen once a right-to-left chunk ran.
+  std::optional<PenContinuation> continuation;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
     const ChunkBoundary end =
         ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
     const TextAnchorRange range{chunkBoundaries[ci], end};
     const double indent = TakeFirstLineIndent(runs, range, pendingIndent);
     const bool continues = !vertical && !range.begin.absoluteX;
-    std::optional<RightToLeftContinuation> next;
+    std::optional<PenContinuation> next;
     if (!AnchorTextRange(runs, range, vertical, exclusions, indent,
                          continues ? continuation : std::nullopt, &next)) {
       MarkRejectedAnchorRange(runs, range, rejected);
     }
-    continuation = range.begin.rightToLeft ? next : std::nullopt;
+    continuation = next;
   }
   CompactRejectedAnchorGlyphs(runs, rejected);
 }

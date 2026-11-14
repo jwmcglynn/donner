@@ -1151,6 +1151,20 @@ TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
   ASSERT_THAT(gap, testing::Gt(1.0)) << "letter-spacing must leave a visible gap";
   EXPECT_THAT(rtlSpaced.aStart - rtlSpaced.dEnd, testing::DoubleNear(gap, 1e-6));
 
+  // Later left-to-right chunks keep continuing from the corrected position: EF follows CD.
+  {
+    SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 80">
+      <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" direction="rtl">AB<tspan
+        direction="ltr" y="40">CD</tspan><tspan direction="ltr" y="60">EF</tspan></text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    EXPECT_THAT(text.getStartPositionOfChar(2).x,
+                testing::DoubleNear(text.getStartPositionOfChar(0).x, 1e-6))
+        << "an ltr chunk after AB starts at AB's pen end, its left edge";
+    EXPECT_THAT(text.getStartPositionOfChar(4).x,
+                testing::DoubleNear(text.getEndPositionOfChar(3).x, 1e-6))
+        << "EF continues where CD ends";
+  }
+
   // dx is a physical shift: it moves CD right even in an rtl paragraph.
   const Layout shifted = layOut(R"(direction="rtl")", R"(dx="5")");
   EXPECT_THAT(shifted.dEnd, testing::DoubleNear(start.dEnd + 5.0, 1e-6));
