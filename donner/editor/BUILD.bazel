@@ -1378,6 +1378,7 @@ donner_cc_library(
         ":requires_text_true_and_text_full_true",
         ":undo_timeline",
         "//donner/base",
+        "//donner/base/xml",
         "//donner/css/parser",
         "//donner/svg",
     ],

@@ -3470,6 +3470,73 @@ TEST(EditorAppRenameTest, RenameEscapesNewIdThatNeedsCssEscaping) {
           R"css(#x\)y\"z\\w { fill: red } .a { fill: url(#x\29 y\22 z\5c w) } .b { fill: url("#x)y\"z\\w") } .c { fill: url('#x)y"z\\w') })css")));
 }
 
+// A hex escape consumes exactly one following space, so a serialized single-digit id keeps the
+// descendant combinator after it, and renaming back restores the original text.
+TEST(EditorAppRenameTest, RenameToDigitIdKeepsCombinatorsAndRoundTrips) {
+  constexpr std::string_view kStyle = "#abc .x { fill: red } #abc\n.y { fill: blue }";
+  for (const std::string_view digitId : {"7", "-7"}) {
+    SCOPED_TRACE(digitId);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><style>" +
+        std::string(kStyle) + "</style><rect id=\"abc\" width=\"10\" height=\"10\"/></svg>"));
+    SelectById(app, "abc");
+    ASSERT_TRUE(app.renameSelectedElement(digitId));
+    ASSERT_TRUE(app.flushFrame());
+    const std::string escaped = "#" + std::string(digitId == "7" ? "\\37 " : "-\\37 ");
+    EXPECT_THAT(StyleTextOf(app), ::testing::Optional(escaped + " .x { fill: red } " + escaped +
+                                                      "\n.y { fill: blue }"));
+
+    SelectById(app, digitId);
+    ASSERT_TRUE(app.renameSelectedElement("abc"));
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_THAT(StyleTextOf(app), ::testing::Optional(std::string(kStyle)));
+  }
+}
+
+TEST(EditorAppRenameTest, RenameKeepsWhitespaceAfterEscapesInTheOldId) {
+  const RenameResult result = RenameAndRead(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#ab\63  .x { fill: red }</style>
+         <rect id="abc" width="10" height="10"/>
+         <rect id="r" width="10" height="10" data-x="url(#ab\63  ) red"/>
+       </svg>)svg",
+      "abc", "z");
+  EXPECT_THAT(result.style, ::testing::Optional(std::string("#z .x { fill: red }")));
+  EXPECT_THAT(result.dataX, ::testing::Optional(std::string("url(#z ) red")));
+}
+
+TEST(EditorAppRenameTest, RenameRewritesHashesInScopePrelude) {
+  const RenameResult result = RenameAndRead(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>@scope (#abc) { .x { fill: red } } @supports (fill: #abc) { .y { fill: blue } }</style>
+         <rect id="abc" width="10" height="10"/>
+       </svg>)svg",
+      "abc", "z");
+  EXPECT_THAT(
+      result.style,
+      ::testing::Optional(std::string(
+          "@scope (#z) { .x { fill: red } } @supports (fill: #abc) { .y { fill: blue } }")));
+}
+
+TEST(EditorAppRenameTest, RenameRejectsIdsThatCannotBeWrittenAsXml) {
+  constexpr std::string_view kRejectDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#grad { fill: red }</style>
+         <linearGradient id="grad"/>
+         <rect id="r" width="10" height="10" fill="url(#grad)"/>
+       </svg>)svg";
+  for (const std::string_view badId : {"a\001b", "a\377b"}) {
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(std::string(kRejectDoc)));
+    const std::string before(app.document().document().source());
+    SelectById(app, "grad");
+    EXPECT_FALSE(app.renameSelectedElement(badId));
+    (void)app.flushFrame();
+    EXPECT_THAT(std::string(app.document().document().source()), ::testing::Eq(before));
+  }
+}
+
 TEST(EditorAppRenameTest, RenameCollisionCheckUsesTheIdNotASelector) {
   constexpr std::string_view kCollisionDoc =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">

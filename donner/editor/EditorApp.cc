@@ -13,6 +13,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
+#include "donner/base/xml/XMLEscape.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/Serialize.h"
@@ -780,6 +781,12 @@ public:
   }
 
 private:
+  /// Whether hash tokens in the current prelude are selectors: a qualified rule's prelude or
+  /// `@scope (...)`.
+  bool preludeHoldsSelectors() const {
+    return !preludeIsAtRule_ || preludeAtRuleName_.equalsLowercase("scope");
+  }
+
   /// Whether the scan is in selector/prelude position rather than inside declarations.
   bool inSelectorPosition() const {
     return kind_ == CssTextKind::Stylesheet &&
@@ -804,8 +811,9 @@ private:
 
   void visitReferenceCandidate(const css::Token& token, std::size_t start, std::size_t end) {
     if (inSelectorPosition()) {
-      // A hash in an at-rule prelude (`@supports (fill: #abc)`) is a value, not a selector.
-      if (!preludeIsAtRule_ && token.is<css::Token::Hash>() &&
+      // A hash in an at-rule prelude (`@supports (fill: #abc)`) is a value, not a selector,
+      // except in `@scope`, whose prelude is a selector list.
+      if (preludeHoldsSelectors() && token.is<css::Token::Hash>() &&
           token.get<css::Token::Hash>().name == oldId_) {
         replace(start + 1, end, css::SerializeIdentifier(newId_));
       }
@@ -1770,6 +1778,11 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
   const std::string oldId(element.id().str());
   const std::string newIdStr(newId);
   if (newIdStr.empty() || newIdStr == oldId) {
+    return false;
+  }
+  // Refuse an id the XML writer cannot store (C0 controls, invalid UTF-8) before any reference
+  // is rewritten, so a rename is never partial.
+  if (!xml::EscapeAttributeValue(newIdStr).has_value()) {
     return false;
   }
 
