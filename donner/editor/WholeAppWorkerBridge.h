@@ -266,11 +266,13 @@ void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset, bo
 void WakeForPendingReadback();
 void MarkReadbackCaptureStarted(int requestId);
 void PublishReadbackFailure(int requestId);
+/// Publish one diagnostic readback as a single `__donnerWgpuReadbackStats` object, carousel
+/// thumbnail probes included, so a page read never sees a request without its thumbnails.
+/// \p thumbnailValues holds \p thumbnailCount records of seven ints each.
 void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
                           int renderMaxChannel, int layerSamples, int layerColored,
                           int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
-                          int requestId);
-void PublishCarouselThumbnailStats(const int* values, int count);
+                          int requestId, const int* thumbnailValues, int thumbnailCount);
 
 }  // namespace donner::editor::whole_app_worker
 

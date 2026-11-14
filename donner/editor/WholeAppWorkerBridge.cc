@@ -454,11 +454,20 @@ void PublishReadbackFailure(int requestId) {
 void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
                           int renderMaxChannel, int layerSamples, int layerColored,
                           int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
-                          int requestId) {
+                          int requestId, const int* thumbnailValues, int thumbnailCount) {
   BrowserMirror& mirror = Mirror();
   if (requestId > 0 && requestId > LoadRelaxed(mirror.readbackCompletedId)) {
     StoreRelaxed(mirror.readbackCompletedId, requestId);
   }
+  // The async proxy reads the thumbnail buffer after this function returns; copy into a static so
+  // the caller's stack buffer is never read post-return. Capture is serial (one diagnostic per
+  // explicit request), so one slot suffices.
+  constexpr int kThumbnailStride = 7;
+  constexpr int kMaxThumbnails = 64;
+  static int thumbnailBuffer[kMaxThumbnails * kThumbnailStride];
+  const int thumbnails = std::clamp(thumbnailCount, 0, kMaxThumbnails);
+  std::copy(thumbnailValues, thumbnailValues + static_cast<size_t>(thumbnails) * kThumbnailStride,
+            thumbnailBuffer);
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -468,6 +477,19 @@ void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBla
           window['__donnerWgpuReadbackCaptureCompletions'] =
               Number(window['__donnerWgpuReadbackCaptureCompletions'] || 0) + 1;
         }
+        const base = $10 >> 2;
+        const carouselThumbnails = Array.from({ length : $11 }, (unused, index) => {
+          const offset = base + index * 7;
+          return ({
+            'samples' : HEAP32[offset + 0],
+            'coloredPixels' : HEAP32[offset + 1],
+            'nonBlackPixels' : HEAP32[offset + 2],
+            'maxChannel' : HEAP32[offset + 3],
+            'fingerprint' : HEAP32[offset + 4] >>> 0,
+            'backgroundPixels' : HEAP32[offset + 5],
+            'glyphPixels' : HEAP32[offset + 6],
+          });
+        });
         const previous = window['__donnerWgpuReadbackStats'];
         window['__donnerWgpuReadbackStats'] = ({
           'frame' : previous ? previous['frame'] + 1 : 1,
@@ -485,46 +507,12 @@ void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBla
             'maxChannel' : $7,
           }),
           'selectionChromePixels' : $8,
+          'carouselThumbnails' : carouselThumbnails,
         });
       },
       renderSamples, renderColored, renderNonBlack, renderMaxChannel, layerSamples, layerColored,
-      layerNonBlack, layerMaxChannel, selectionChromePixels, requestId);
-  // clang-format on
-}
-
-void PublishCarouselThumbnailStats(const int* values, int count) {
-  // The async proxy reads the buffer after this function returns; copy into a
-  // static so the caller's stack buffer is never read post-return. Capture is
-  // serial (one diagnostic per explicit request), so one slot suffices.
-  constexpr int kStride = 7;
-  constexpr int kMaxThumbnails = 64;
-  static int buffer[kMaxThumbnails * kStride];
-  const int clamped = count > kMaxThumbnails ? kMaxThumbnails : count;
-  std::copy(values, values + static_cast<size_t>(clamped) * kStride, buffer);
-  // clang-format off
-  MAIN_THREAD_ASYNC_EM_ASM(
-      {
-        const stride = 7;
-        const base = $0 >> 2;
-        const thumbnails = ([]);
-        for (let index = 0; index < $1; ++index) {
-          const offset = base + index * stride;
-          thumbnails.push(({
-            'samples' : HEAP32[offset + 0],
-            'coloredPixels' : HEAP32[offset + 1],
-            'nonBlackPixels' : HEAP32[offset + 2],
-            'maxChannel' : HEAP32[offset + 3],
-            'fingerprint' : HEAP32[offset + 4] >>> 0,
-            'backgroundPixels' : HEAP32[offset + 5],
-            'glyphPixels' : HEAP32[offset + 6],
-          }));
-        }
-        const stats = window['__donnerWgpuReadbackStats'];
-        if (stats) {
-          stats['carouselThumbnails'] = thumbnails;
-        }
-      },
-      buffer, clamped);
+      layerNonBlack, layerMaxChannel, selectionChromePixels, requestId, thumbnailBuffer,
+      thumbnails);
   // clang-format on
 }
 

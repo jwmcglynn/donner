@@ -816,6 +816,43 @@ test("welcome picker does not render a hidden document", async ({ page }) => {
   expect(fatalMessages).toEqual([]);
 });
 
+interface ReadbackStatsPublication {
+  request: number;
+  thumbnails: number | null;
+}
+
+// Records each `__donnerWgpuReadbackStats` object the editor assigns from now on, as it is
+// assigned: its request and how many carousel thumbnails it carries.
+async function recordReadbackStatsPublications(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const scope = window as Window & {
+      __donnerReadbackStatsPublications?: ReadbackStatsPublication[];
+    };
+    const published: ReadbackStatsPublication[] = [];
+    let current = window.__donnerWgpuReadbackStats;
+    scope.__donnerReadbackStatsPublications = published;
+    Object.defineProperty(window, "__donnerWgpuReadbackStats", {
+      configurable: true,
+      get: () => current,
+      set: (value) => {
+        const thumbnails = value?.carouselThumbnails;
+        published.push({
+          request: value?.request ?? 0,
+          thumbnails: Array.isArray(thumbnails) ? thumbnails.length : null,
+        });
+        current = value;
+      },
+    });
+  });
+}
+
+async function readReadbackStatsPublications(page: Page): Promise<ReadbackStatsPublication[]> {
+  return page.evaluate(() =>
+    (window as Window & { __donnerReadbackStatsPublications?: ReadbackStatsPublication[] })
+      .__donnerReadbackStatsPublications ?? []
+  );
+}
+
 test("welcome picker paints before asynchronously rendering real SVG thumbnails", async ({ page }) => {
   test.skip(
     kHostedMacosQuarantine,
@@ -889,6 +926,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   let geodeThumbnailStats: WgpuCarouselThumbnailStats[] | undefined;
   if (kBackend === "geode") {
+    await recordReadbackStatsPublications(page);
     const requestId = await requestWgpuDiagnostic(page);
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
@@ -900,6 +938,13 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     geodeThumbnailStats = await page.evaluate(
       () => window.__donnerWgpuReadbackStats?.carouselThumbnails,
     );
+    // A page read can land between any two main-thread tasks, so every readback object published
+    // for this request must already carry its thumbnails when it is assigned.
+    const published = (await readReadbackStatsPublications(page))
+      .filter((publication) => publication.request >= requestId);
+    expect(published.length).toBeGreaterThan(0);
+    expect(published, "a readback was published without its carousel thumbnails")
+      .toEqual(published.map((publication) => ({ request: publication.request, thumbnails: 4 })));
   }
 
   const settled = await page.evaluate(() => ({
