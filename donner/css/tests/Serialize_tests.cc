@@ -39,6 +39,27 @@ TEST(Serialize, IdentifierRoundTripsThroughTheTokenizer) {
   }
 }
 
+TEST(Serialize, IdentifierEdgeCases) {
+  EXPECT_THAT(SerializeIdentifier(std::string_view("a\0b", 3)), testing::Eq("a\357\277\275b"));
+  EXPECT_THAT(SerializeIdentifier("\x01 b"), testing::Eq("\\1 \\ b"));
+  EXPECT_THAT(SerializeIdentifier("a\\"), testing::Eq("a\\\\"));
+  EXPECT_THAT(SerializeIdentifier("7"), testing::Eq("\\37 "));
+  // Bytes 0x80 and above, valid or not, are copied unchanged.
+  EXPECT_THAT(SerializeIdentifier("a\377b"), testing::Eq("a\377b"));
+  EXPECT_THAT(SerializeIdentifier("\xF0\x9F\x98\x80"), testing::Eq("\xF0\x9F\x98\x80"));
+}
+
+TEST(Serialize, IdentifierFollowedByWhitespaceKeepsTheCombinator) {
+  for (const std::string_view id : {"7", "-7", "\x01 b", "a\\", "\xF0\x9F\x98\x80"}) {
+    SCOPED_TRACE(id);
+    Tokenizer tokenizer("#" + SerializeIdentifier(id) + " .x");
+    const Token hash = tokenizer.next();
+    ASSERT_THAT(hash.is<Token::Hash>(), testing::IsTrue()) << hash;
+    EXPECT_THAT(hash.get<Token::Hash>().name, testing::Eq(RcString(id)));
+    EXPECT_THAT(tokenizer.next().is<Token::Whitespace>(), testing::IsTrue());
+  }
+}
+
 TEST(Serialize, StringContentsEscapeOnlyTheDelimiterBackslashAndControls) {
   EXPECT_THAT(SerializeStringContents("he\"llo", '"'), testing::Eq("he\\\"llo"));
   EXPECT_THAT(SerializeStringContents("he\"llo", '\''), testing::Eq("he\"llo"));
