@@ -2832,9 +2832,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
   if (next) {
     // Anchoring applies last and never moves the current text position.
-    *next = PenContinuation{range.begin.rightToLeft,
-                            bounds.initial - (bounds.maximum - bounds.minimum), bounds.maximum,
-                            bounds.initial - recorded};
+    *next =
+        PenContinuation{range.begin.rightToLeft, bounds.initial - (bounds.maximum - bounds.minimum),
+                        bounds.maximum, bounds.initial - recorded};
   }
   return true;
 }
