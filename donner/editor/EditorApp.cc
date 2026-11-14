@@ -15,6 +15,7 @@
 #include "donner/base/PathOps.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
+#include "donner/css/Serialize.h"
 #include "donner/css/parser/details/Tokenizer.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/LockState.h"
@@ -733,6 +734,16 @@ bool IsHrefAttribute(const xml::XMLQualifiedNameRef& name) {
   return name.name.str() == "href";
 }
 
+/// Whether the block of the at-rule named @p name holds rules (conditional group rules and
+/// keyframes) rather than declarations (for example `@font-face` or `@page`).
+bool AtRuleHoldsRules(const RcString& name) {
+  constexpr std::array<std::string_view, 10> kRuleHoldingAtRules = {
+      "media",         "supports", "layer",          "container", "document",
+      "-moz-document", "scope",    "starting-style", "keyframes", "-webkit-keyframes"};
+  return std::ranges::any_of(kRuleHoldingAtRules,
+                             [&](std::string_view rule) { return name.equalsLowercase(rule); });
+}
+
 /// What a piece of CSS text is: a whole stylesheet (a `<style>` element's text) or a value or
 /// declaration list (an attribute value, including an inline `style`).
 enum class CssTextKind : std::uint8_t { Stylesheet, DeclarationList };
@@ -758,6 +769,7 @@ public:
     css::parser::details::Tokenizer tokenizer(text_);
     for (css::Token token = tokenizer.next(); !token.is<css::Token::EofToken>();
          token = tokenizer.next()) {
+      urlValueRange_ = tokenizer.urlValueRange();
       visit(token, token.offset().offset.value_or(text_.size()), tokenizer.endOffset());
     }
     if (!changed_) {
@@ -792,13 +804,16 @@ private:
 
   void visitReferenceCandidate(const css::Token& token, std::size_t start, std::size_t end) {
     if (inSelectorPosition()) {
-      if (token.is<css::Token::Hash>() && token.get<css::Token::Hash>().name == oldId_) {
-        replace(start, end, "#" + std::string(newId_));
+      // A hash in an at-rule prelude (`@supports (fill: #abc)`) is a value, not a selector.
+      if (!preludeIsAtRule_ && token.is<css::Token::Hash>() &&
+          token.get<css::Token::Hash>().name == oldId_) {
+        replace(start + 1, end, css::SerializeIdentifier(newId_));
       }
       return;
     }
     if (token.is<css::Token::Url>() && token.get<css::Token::Url>().value == oldUrl_) {
-      replace(start, end, "url(#" + std::string(newId_) + ")");
+      replace(urlValueRange_.first, urlValueRange_.second,
+              css::SerializeUrlTokenValue("#" + std::string(newId_)));
     } else if (token.is<css::Token::Function>() &&
                token.get<css::Token::Function>().name.equalsLowercase("url")) {
       urlFunction_ = UrlFunctionState::ExpectString;
@@ -816,9 +831,10 @@ private:
       return true;
     }
     if (state == UrlFunctionState::ExpectClose && token.is<css::Token::CloseParenthesis>()) {
+      // The string token spans its opening and closing quote; only the contents change.
       const char quote = text_[urlString_.first];
-      replace(urlString_.first, urlString_.second,
-              std::string(1, quote) + "#" + std::string(newId_) + std::string(1, quote));
+      replace(urlString_.first + 1, urlString_.second - 1,
+              css::SerializeStringContents("#" + std::string(newId_), quote));
       return true;
     }
     return false;
@@ -826,8 +842,9 @@ private:
 
   void visitBlockPunctuation(const css::Token& token) {
     if (token.is<css::Token::CurlyBracket>()) {
-      // An at-rule's `{` opens a rule-holding block; a qualified rule's opens declarations.
-      blockHoldsRules_.push_back(inSelectorPosition() && preludeIsAtRule_);
+      // Conditional group rules and @keyframes hold rules; every other block holds declarations.
+      blockHoldsRules_.push_back(inSelectorPosition() && preludeIsAtRule_ &&
+                                 AtRuleHoldsRules(preludeAtRuleName_));
     } else if (token.is<css::Token::CloseCurlyBracket>() && !blockHoldsRules_.empty()) {
       blockHoldsRules_.pop_back();
     }
@@ -839,6 +856,7 @@ private:
     if (!preludeSeenToken_) {
       preludeSeenToken_ = true;
       preludeIsAtRule_ = token.is<css::Token::AtKeyword>();
+      preludeAtRuleName_ = preludeIsAtRule_ ? token.get<css::Token::AtKeyword>().value : RcString();
     }
   }
 
@@ -863,10 +881,13 @@ private:
   bool changed_ = false;
   UrlFunctionState urlFunction_ = UrlFunctionState::None;
   std::pair<std::size_t, std::size_t> urlString_;
+  /// Value range of the url token being visited, from the tokenizer.
+  std::pair<std::size_t, std::size_t> urlValueRange_;
   /// Open blocks: `true` = holds nested rules (an at-rule body such as `@media { ... }`), so hash
   /// tokens inside it are back in selector position; `false` = a declaration block.
   std::vector<bool> blockHoldsRules_;
   bool preludeIsAtRule_ = false;
+  RcString preludeAtRuleName_;
   bool preludeSeenToken_ = false;
 };
 
@@ -934,8 +955,10 @@ bool AnyElementReferencesId(const svg::SVGElement& root, std::span<const RcStrin
   for (const svg::SVGElement& element : all) {
     for (const xml::XMLQualifiedNameRef& attrName : element.attributes()) {
       const std::optional<RcString> value = element.getAttribute(attrName);
-      if (!value.has_value() || value->str().find('#') == std::string_view::npos) {
-        continue;  // One scan per value decides it for every id.
+      // Every reference contains a '#', possibly escaped (`url(\23 a)`); one check per value
+      // decides it for every id.
+      if (!value.has_value() || value->str().find_first_of("#\\") == std::string_view::npos) {
+        continue;
       }
 
       for (const RcString& id : ids) {
@@ -1753,7 +1776,8 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
   svg::SVGDocument& doc = document_.document();
   // Reject a collision with a DIFFERENT element (renaming to your own id is the
   // no-op above; an empty oldId means nothing references it yet, which is fine).
-  if (const std::optional<svg::SVGElement> existing = doc.querySelector("#" + newIdStr);
+  if (const std::optional<svg::SVGElement> existing =
+          doc.querySelector("#" + css::SerializeIdentifier(newIdStr));
       existing.has_value() && *existing != element) {
     return false;
   }
