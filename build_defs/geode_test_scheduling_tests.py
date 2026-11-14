@@ -76,7 +76,7 @@ class GeodeTestSchedulingTest(unittest.TestCase):
             remote_job,
         )
         test_step = remote_job.split('      - name: Test\n', 1)[1].split('\n      - ', 1)[0]
-        self.assertEqual(2, test_step.count('if [[ -z "${'))
+        self.assertEqual(2, test_step.count('=~ ^[[:space:]]*$ ]]; then'))
 
     def test_remote_target_mapping_blocks_propagate_failure_and_empty_output(self):
         remote_job = self.main_workflow.split("  linux-self-hosted:\n", 1)[1]
