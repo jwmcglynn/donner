@@ -53,6 +53,24 @@ MATCHER(VerticalRunRecordNear, "same glyph, source byte, advance, offsets and cl
       actual, result_listener);
 }
 
+/// Matches a byte span holding exactly the bytes of `expected`, a loaded font file. The bytes are
+/// compared as one range: `testing::ElementsAreArray` builds and runs one matcher per byte, which
+/// costs seconds per comparison on these 0.5 MB and 1.75 MB fonts in sanitizer builds.
+MATCHER_P(HasFontFileBytes, expected, "has exactly the loaded font file bytes") {
+  const std::span<const uint8_t> actual(arg);
+  const std::span<const uint8_t> wanted(*expected);
+  if (actual.size() != wanted.size()) {
+    *result_listener << "has " << actual.size() << " bytes, expected " << wanted.size();
+    return false;
+  }
+  const auto difference = std::mismatch(actual.begin(), actual.end(), wanted.begin());
+  if (difference.first != actual.end()) {
+    *result_listener << "first differs at byte " << (difference.first - actual.begin());
+    return false;
+  }
+  return true;
+}
+
 const components::ComputedTextGeometryComponent* TextGeometry(SVGDocument& document) {
   const auto text = document.querySelector("#text");
   EXPECT_THAT(text, testing::Optional(testing::_));
@@ -183,10 +201,10 @@ protected:
     addFonts(fonts_);
     amiriFont_ = fonts_.findFont("Mixed Amiri");
     ASSERT_THAT(amiriFont_, testing::Not(testing::Eq(FontHandle())));
-    ASSERT_THAT(fonts_.fontData(amiriFont_), testing::ElementsAreArray(*amiri_));
+    ASSERT_THAT(fonts_.fontData(amiriFont_), HasFontFileBytes(amiri_));
     const FontHandle mplusFont = fonts_.findFont("Mixed Mplus");
     ASSERT_THAT(mplusFont, testing::Not(testing::Eq(FontHandle())));
-    ASSERT_THAT(fonts_.fontData(mplusFont), testing::ElementsAreArray(*mplus_));
+    ASSERT_THAT(fonts_.fontData(mplusFont), HasFontFileBytes(mplus_));
     TextBackend::ShapingContext::WorkBudget work{4096, 64};
     TextBackend::ShapingContext context;
     context.byteLength = std::string_view("本").size();
@@ -297,7 +315,7 @@ protected:
           const int sourceByte = static_cast<int>(glyph.cluster) + offset;
           if (sourceByte >= 0 && sourceByte < static_cast<int>(kArabic.size())) {
             const auto& fonts = document.registry().ctx().get<FontManager>();
-            EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), testing::ElementsAreArray(*amiri_));
+            EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), HasFontFileBytes(amiri_));
             selected.emplace_back(glyph, static_cast<uint32_t>(sourceByte));
           }
         }
@@ -355,7 +373,7 @@ protected:
         if (glyph.cluster == 0) {
           cjk.push_back(glyph.glyphIndex);
           EXPECT_THAT(glyph.yAdvance, testing::DoubleEq(cjkAdvance_));
-          EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), testing::ElementsAreArray(*mplus_));
+          EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), HasFontFileBytes(mplus_));
         }
       }
     }
@@ -392,7 +410,7 @@ protected:
   void prepareJaOracle(JaKerningOracle& oracle) {
     const FontHandle font = fonts_.findFont("Mixed Mplus");
     ASSERT_THAT(font, testing::Not(testing::Eq(FontHandle())));
-    ASSERT_THAT(fonts_.fontData(font), testing::ElementsAreArray(*mplus_));
+    ASSERT_THAT(fonts_.fontData(font), HasFontFileBytes(mplus_));
     ASSERT_NO_FATAL_FAILURE(expectMplusJaGpos(font));
     oracle.normal = backend_.shapeRun(font, 20, "Ja", 0, 2, false, FontVariant::Normal, false);
     oracle.none =
@@ -438,7 +456,7 @@ protected:
       for (const auto& glyph : run.glyphs) {
         if (glyph.glyphIndex == 4868 || glyph.glyphIndex == 4977 || glyph.glyphIndex == 43 ||
             glyph.glyphIndex == 66) {
-          EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), testing::ElementsAreArray(*mplus_));
+          EXPECT_THAT(fonts.fontData(GlyphFont(run, glyph)), HasFontFileBytes(mplus_));
         }
       }
     }
@@ -962,7 +980,7 @@ TEST_F(MixedVerticalTextConvergence, HeterogeneousJoinedGroupKeepsNativeUprightM
     for (const auto& placed : run.glyphs) {
       if (placed.glyphIndex == native.glyphIndex) {
         ++occurrences;
-        EXPECT_THAT(fonts.fontData(GlyphFont(run, placed)), testing::ElementsAreArray(*mplus_));
+        EXPECT_THAT(fonts.fontData(GlyphFont(run, placed)), HasFontFileBytes(mplus_));
       }
     }
   }
