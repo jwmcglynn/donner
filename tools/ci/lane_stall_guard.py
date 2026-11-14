@@ -54,6 +54,8 @@ TOOL_TIMEOUT_SECONDS = 20
 TOOL_REAP_SECONDS = 5
 # Time a stopped lane gets to exit after SIGTERM before every process left gets SIGKILL.
 TERMINATION_GRACE_SECONDS = 10
+# Bound on reaping the lane after SIGKILL, which takes effect at once on any process that can exit.
+KILL_REAP_SECONDS = 10
 # Process rows printed to the log; the full table is written to the diagnostics directory.
 MAX_LOGGED_ROWS = 80
 # Executable names whose open descriptors are recorded even when they no longer carry the run's
@@ -328,16 +330,17 @@ def signal_lane(root_pid: int, tag: str, signum: int, clock: Clock,
     return targets
 
 
-def stop_lane(child: subprocess.Popen, tag: str, clock: Clock) -> None:
+def stop_lane(child: subprocess.Popen, tag: str, clock: Clock,
+              grace_seconds: float = TERMINATION_GRACE_SECONDS) -> None:
     """SIGTERM to the lane, then SIGKILL to anything left after the grace, from a new snapshot."""
     signalled = signal_lane(child.pid, tag, signal.SIGTERM, clock, [])
     try:
-        child.wait(timeout=TERMINATION_GRACE_SECONDS)
+        child.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
         pass
     signal_lane(child.pid, tag, signal.SIGKILL, clock, signalled)
     try:
-        child.wait(timeout=TERMINATION_GRACE_SECONDS)
+        child.wait(timeout=KILL_REAP_SECONDS)
     except subprocess.TimeoutExpired:
         log("lane stall guard: the lane did not exit after SIGKILL")
 
@@ -352,7 +355,7 @@ def run_stall_path(arguments: argparse.Namespace, child: subprocess.Popen, tag: 
     except Exception as error:  # Recording is best effort; stopping the lane is not.
         log(f"lane stall guard: recording diagnostics failed: {type(error).__name__}: {error}")
     finally:
-        stop_lane(child, tag, clock)
+        stop_lane(child, tag, clock, arguments.termination_grace_seconds)
     return STALL_EXIT_CODE
 
 
@@ -360,6 +363,10 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--deadline-seconds", type=float, required=True)
     parser.add_argument("--diagnostics-dir", type=Path, required=True)
+    # How long a stopped lane gets to exit after SIGTERM. Not for lanes; a test sets it so a lane
+    # that ignores SIGTERM is not held for the production grace on every passing run.
+    parser.add_argument("--termination-grace-seconds", type=float,
+                        default=TERMINATION_GRACE_SECONDS, help=argparse.SUPPRESS)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     if arguments.command[:1] == ["--"]:
@@ -368,6 +375,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         parser.error("a command is required after --")
     if arguments.deadline_seconds <= 0:
         parser.error("--deadline-seconds must be positive")
+    if arguments.termination_grace_seconds < 0:
+        parser.error("--termination-grace-seconds must not be negative")
     return arguments
 
 

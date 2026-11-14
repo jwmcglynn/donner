@@ -141,6 +141,14 @@ class ParsingTest(unittest.TestCase):
         self.assertEqual(lane_stall_guard.signal_targets(members, 10, guard_seconds=100.0),
                          [11, 12, 13])
 
+    def test_lanes_get_the_production_termination_grace_unless_a_test_sets_it(self):
+        self.assertEqual(lane_stall_guard.TERMINATION_GRACE_SECONDS, 10)
+        common = ["--deadline-seconds", "1", "--diagnostics-dir", "d", "--", "true"]
+        self.assertEqual(
+            lane_stall_guard.parse_arguments(common).termination_grace_seconds, 10)
+        self.assertEqual(lane_stall_guard.parse_arguments(
+            ["--termination-grace-seconds", "0", *common]).termination_grace_seconds, 0)
+
     def test_signal_ends_map_to_shell_statuses(self):
         self.assertEqual(lane_stall_guard.exit_status(3), 3)
         self.assertEqual(lane_stall_guard.exit_status(-signal.SIGTERM), 128 + signal.SIGTERM)
@@ -240,18 +248,20 @@ class GuardTest(unittest.TestCase):
         self.lane = self.work / "hung_lane.py"
         self.lane.write_text(HUNG_LANE, encoding="utf-8")
 
-    def guard_command(self, command, diagnostics=None):
+    def guard_command(self, command, diagnostics=None, grace_seconds=None):
+        grace = [] if grace_seconds is None else [
+            "--termination-grace-seconds", str(grace_seconds)]
         return [sys.executable, str(self.guard), "--deadline-seconds", str(LIFETIME_SECONDS),
-                "--diagnostics-dir", str(diagnostics or self.diagnostics), "--", *command]
+                "--diagnostics-dir", str(diagnostics or self.diagnostics), *grace, "--", *command]
 
-    def start_hung_lane(self, mode, diagnostics=None):
+    def start_hung_lane(self, mode, diagnostics=None, grace_seconds=None):
         """Starts the guard on a hung lane; returns the guard, the pipe and the reported pids."""
         read_fd, write_fd = os.pipe()
         self.addCleanup(os.close, read_fd)
         try:
             guard = subprocess.Popen(
                 self.guard_command([sys.executable, str(self.lane), str(write_fd),
-                                    str(LIFETIME_SECONDS), mode], diagnostics),
+                                    str(LIFETIME_SECONDS), mode], diagnostics, grace_seconds),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, pass_fds=(write_fd,))
         finally:
             os.close(write_fd)
@@ -317,7 +327,9 @@ class GuardTest(unittest.TestCase):
         self.assertNotIn("::error::", output)
 
     def test_a_second_interrupt_stops_a_lane_that_ignores_the_first(self):
-        guard, read_fd, _ = self.start_hung_lane("stubborn")
+        # The lane ignores SIGTERM, so only SIGKILL ends it; no grace, which would hold every
+        # passing run for the production termination grace.
+        guard, read_fd, _ = self.start_hung_lane("stubborn", grace_seconds=0)
         guard.send_signal(signal.SIGTERM)
         seen = read_output_until(guard, b"forwarded SIGTERM to the lane")
         guard.send_signal(signal.SIGTERM)
