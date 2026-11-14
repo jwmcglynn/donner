@@ -190,6 +190,43 @@ class GuardStateTest(unittest.TestCase):
                          [mock.call(RunningChild.pid, signal.SIGINT)] * 2)
 
 
+class FakeLane:
+    """A lane that outlives the SIGTERM grace and exits after SIGKILL."""
+    pid = 2 ** 22
+
+    def __init__(self):
+        self.waits = 0
+
+    def wait(self, timeout=None):
+        self.waits += 1
+        if self.waits == 1:
+            raise subprocess.TimeoutExpired("lane", timeout)
+        return -signal.SIGKILL
+
+
+class StopLaneTest(unittest.TestCase):
+    def test_the_guard_clock_counts_time_the_monotonic_clock_missed(self):
+        clock = lane_stall_guard.Clock(monotonic=100.0, wall=1000.0)
+        self.assertEqual(clock.elapsed(monotonic=110.0, wall=1600.0), 600.0)  # Host slept.
+        self.assertEqual(clock.elapsed(monotonic=110.0, wall=1005.0), 10.0)  # Wall clock set back.
+
+    def test_a_failed_snapshot_before_sigkill_still_kills_the_lane(self):
+        lane = FakeLane()
+        members = [{"pid": lane.pid, "elapsed": "00:30"}, {"pid": 7, "elapsed": "00:20"}]
+        snapshots = [("table", members, members), RuntimeError("ps failed")]
+        with mock.patch.object(lane_stall_guard, "lane_members", side_effect=snapshots), \
+                mock.patch.object(lane_stall_guard.os, "killpg") as killpg, \
+                mock.patch.object(lane_stall_guard.os, "kill") as kill, \
+                mock.patch.object(lane_stall_guard, "log") as log:
+            lane_stall_guard.stop_lane(lane, "tag", lane_stall_guard.Clock(monotonic=0, wall=0))
+        self.assertEqual(killpg.call_args_list, [mock.call(lane.pid, signal.SIGTERM),
+                                                 mock.call(lane.pid, signal.SIGKILL)])
+        self.assertEqual(kill.call_args_list, [mock.call(7, signal.SIGTERM),
+                                               mock.call(7, signal.SIGKILL)])
+        self.assertIn("process snapshot failed (RuntimeError: ps failed)",
+                      log.call_args_list[0].args[0])
+
+
 class GuardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -24,13 +24,13 @@ the deadline. Once the lane has exited, the guard ends itself with the signal it
 caller sees an interrupted run rather than a lane result.
 
 Apart from the lane's own process group, a process is signalled only when its elapsed time shows
-it started no more than START_SLACK_SECONDS before the guard did. That guarantees no older process
-is signalled individually; it does not rule out a newer process that reused a lane member's pid
-between the snapshot and the signal. The guard's own output never stops it: once its reader is
-gone, output is discarded and the lane is still recorded and stopped. A process that
-replaces its environment drops the tag and is stopped only while it is in the lane's process
-tree; a guard nested in another guard's lane stops only its own lane, and the outer guard reaches
-the inner lane through the outer tag that the inner lane inherits.
+it started no more than START_SLACK_SECONDS before the guard did, as measured by Clock. That
+guarantees no older process is signalled individually; it does not rule out a newer process that
+reused a lane member's pid between the snapshot and the signal. The guard's own output never
+stops it: once its reader is gone, output is discarded and the lane is still recorded and
+stopped. A process that replaces its environment drops the tag and is stopped only while it is in
+the lane's process tree; a guard nested in another guard's lane stops only its own lane, and the
+outer guard reaches the inner lane through the outer tag that the inner lane inherits.
 """
 
 from __future__ import annotations
@@ -282,32 +282,60 @@ def signal_targets(members: list[dict], root_pid: int, guard_seconds: float) -> 
             if row["pid"] != root_pid and started_since_guard(row, guard_seconds)]
 
 
-def signal_lane(root_pid: int, tag: str, signum: int, started: float) -> None:
+class Clock:
+    """How long the guard has been running.
+
+    The larger of the monotonic and wall-clock deltas: on macOS the monotonic clock stops while
+    the host sleeps, but `ps` elapsed times keep counting, so a host that slept mid-lane would
+    otherwise make every lane process look older than the guard.
+    """
+
+    def __init__(self, monotonic: float | None = None, wall: float | None = None):
+        self.monotonic = time.monotonic() if monotonic is None else monotonic
+        self.wall = time.time() if wall is None else wall
+
+    def elapsed(self, monotonic: float | None = None, wall: float | None = None) -> float:
+        monotonic = time.monotonic() if monotonic is None else monotonic
+        wall = time.time() if wall is None else wall
+        return max(monotonic - self.monotonic, wall - self.wall)
+
+
+def signal_lane(root_pid: int, tag: str, signum: int, clock: Clock,
+                previous: list[int]) -> list[int]:
     """Sends `signum` to the lane's group and to each member of a fresh snapshot.
 
     The root is the guard's unreaped child, so neither its pid nor its group can be reused yet.
-    Other pids come from a snapshot taken here, never from an earlier one.
+    Other pids come from a snapshot taken here. If that snapshot fails, the group has still been
+    signalled and the members of `previous`, the last snapshot that worked, are signalled
+    instead. Returns the pids it signalled one by one.
     """
     try:
         os.killpg(root_pid, signum)
     except (ProcessLookupError, PermissionError):
         pass
-    _, _, members = lane_members(root_pid, tag)
-    for pid in signal_targets(members, root_pid, time.monotonic() - started):
+    try:
+        _, _, members = lane_members(root_pid, tag)
+        targets = signal_targets(members, root_pid, clock.elapsed())
+    except Exception as error:  # Snapshot failures must not skip the signals below.
+        log(f"lane stall guard: process snapshot failed ({type(error).__name__}: {error}); "
+            f"signalling {len(previous)} processes from the previous snapshot")
+        targets = previous
+    for pid in targets:
         try:
             os.kill(pid, signum)
         except (ProcessLookupError, PermissionError):
             pass
+    return targets
 
 
-def stop_lane(child: subprocess.Popen, tag: str, started: float) -> None:
+def stop_lane(child: subprocess.Popen, tag: str, clock: Clock) -> None:
     """SIGTERM to the lane, then SIGKILL to anything left after the grace, from a new snapshot."""
-    signal_lane(child.pid, tag, signal.SIGTERM, started)
+    signalled = signal_lane(child.pid, tag, signal.SIGTERM, clock, [])
     try:
         child.wait(timeout=TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         pass
-    signal_lane(child.pid, tag, signal.SIGKILL, started)
+    signal_lane(child.pid, tag, signal.SIGKILL, clock, signalled)
     try:
         child.wait(timeout=TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
@@ -315,16 +343,16 @@ def stop_lane(child: subprocess.Popen, tag: str, started: float) -> None:
 
 
 def run_stall_path(arguments: argparse.Namespace, child: subprocess.Popen, tag: str,
-                   started: float) -> int:
+                   clock: Clock) -> int:
     try:
         log(f"::error::lane stall guard: the lane is still running after "
-            f"{time.monotonic() - started:.0f} s (deadline {arguments.deadline_seconds:g} s); "
+            f"{clock.elapsed():.0f} s (deadline {arguments.deadline_seconds:g} s); "
             f"recording its processes in {arguments.diagnostics_dir} and stopping it")
-        record_diagnostics(arguments.diagnostics_dir, child.pid, tag, time.monotonic() - started)
+        record_diagnostics(arguments.diagnostics_dir, child.pid, tag, clock.elapsed())
     except Exception as error:  # Recording is best effort; stopping the lane is not.
         log(f"lane stall guard: recording diagnostics failed: {type(error).__name__}: {error}")
     finally:
-        stop_lane(child, tag, started)
+        stop_lane(child, tag, clock)
     return STALL_EXIT_CODE
 
 
@@ -391,7 +419,7 @@ class Guard:
 
     def run(self, arguments: argparse.Namespace) -> int:
         tag = uuid.uuid4().hex
-        started = time.monotonic()
+        clock = Clock()
         child = None
         try:
             # Descriptors the caller passed down reach the lane unchanged, as without the guard.
@@ -412,7 +440,7 @@ class Guard:
             self.waiting = False
             if child.poll() is not None:  # The lane ended as the request arrived.
                 return exit_status(child.returncode)
-            return run_stall_path(arguments, child, tag, started)
+            return run_stall_path(arguments, child, tag, clock)
 
 
 def main(argv: list[str]) -> int:
