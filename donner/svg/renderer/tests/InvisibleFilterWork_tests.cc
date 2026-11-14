@@ -210,6 +210,28 @@ TEST(InvisibleFilterWorkTest, ReferencedContentStaysFiltered) {
            "<rect x='80' y='0' width='40' height='120' fill='#20a020' mask='url(#reveal)'/></svg>");
   EXPECT_THAT(PixelAt(masked.bitmap, 100, 30), test::Rgba(Lt(80), Gt(120), Lt(80), 255));
   EXPECT_THAT(PixelAt(masked.bitmap, 100, 100), test::Rgba(255, 255, 255, 255));
+
+  // Marker, pattern and mask content is instantiated once and shared by every element that draws
+  // it, so a hidden element that draws it first must not take the filters away from a visible
+  // element that draws the same content later.
+  const Case shared[] = {
+      {"<g opacity='0'><path id='line' d='M 20 100 L 60 100' stroke='#000000' "
+       "marker-start='url(#dot)'/></g><use href='#line'/>",
+       18, 97},
+      {"<g opacity='0'><rect width='32' height='32' fill='url(#tile)'/></g>"
+       "<rect x='40' y='0' width='32' height='32' fill='url(#tile)'/>",
+       48, 8},
+  };
+  for (const Case& c : shared) {
+    SCOPED_TRACE(c.body.substr(0, 60));
+    const Frame frame = Draw(head + c.body + "</svg>");
+    EXPECT_THAT(PixelAt(frame.bitmap, c.x, c.y), test::Rgba(Gt(180), Lt(80), Lt(80), 255));
+  }
+  const Frame sharedMask =
+      Draw(head +
+           "<g opacity='0'><rect width='8' height='8' fill='#20a020' mask='url(#reveal)'/></g>"
+           "<rect x='80' y='0' width='40' height='120' fill='#20a020' mask='url(#reveal)'/></svg>");
+  EXPECT_THAT(PixelAt(sharedMask.bitmap, 100, 30), test::Rgba(Lt(80), Gt(120), Lt(80), 255));
 }
 
 /// A filter can paint without any source paint, so a shape with transparent fill and no stroke

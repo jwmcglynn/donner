@@ -802,6 +802,34 @@ TEST(FilterGraphExecutorTest, RefusedAttemptsLatchTheFrameAtTheExecutionCap) {
       << "a latched frame refuses without counting further attempts";
 }
 
+TEST(FilterGraphExecutorTest, AdmissionsAfterRefusalsStopAtTheExecutionCap) {
+  components::FilterGraph invalidGraph;
+  invalidGraph.nodes.resize(components::kMaximumFilterGraphNodes + 1u);
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 1.0,
+      .stdDeviationY = 1.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  // Refusals that leave the frame open still use up attempts, so admissions after them stop once
+  // admitted and refused attempts together reach the cap.
+  constexpr std::uint64_t kCap = components::FilterExecutionBudget::kMaximumExecutions;
+  components::FilterExecutionBudget budget;
+  for (std::uint64_t i = 0; i + 1 < kCap; ++i) {
+    ASSERT_FALSE(budget.consume(invalidGraph, 1, components::FilterMemoryModel::GpuAllNodes));
+  }
+  ASSERT_FALSE(budget.rejected());
+  EXPECT_TRUE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_EQ(budget.executions() + budget.refusedGraphs(), kCap);
+  EXPECT_FALSE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::ExecutionLimit);
+  EXPECT_EQ(budget.executions(), 1u);
+}
+
 TEST(FilterGraphExecutorTest, ReservesCaptureMemoryBeforeAllocationAndLatchesRejection) {
   components::FilterGraph graph;
   components::FilterNode blur;
