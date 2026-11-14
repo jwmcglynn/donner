@@ -1038,9 +1038,9 @@ TEST_F(RendererRegressionTests, FilterConvolveAnimatedOrderOverridesLimitRejecti
       "convolve_animated_order_ended", editor::tests::PixelmatchIdentityParams());
 }
 
-/// Filters that move the backdrop 32 units right. `pass` leaves its input unchanged, and `margin`
-/// moves the backdrop through a region that reaches past the canvas's top-left corner, so the
-/// filter raster carries an input margin.
+/// Filters that move the backdrop 32 units right. `pass` and `widePass` leave their input
+/// unchanged, and `margin` moves the backdrop; `margin` and `widePass` have regions that reach past
+/// the canvas's top-left corner, so their filter rasters carry an input margin.
 constexpr std::string_view kBackdropFilters = R"svg(
   <filter id="bgAlpha" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
     <feOffset in="BackgroundAlpha" dx="32"/>
@@ -1053,6 +1053,9 @@ constexpr std::string_view kBackdropFilters = R"svg(
   </filter>
   <filter id="margin" filterUnits="userSpaceOnUse" x="-32" y="-32" width="128" height="128">
     <feOffset in="BackgroundImage" dx="32"/>
+  </filter>
+  <filter id="widePass" filterUnits="userSpaceOnUse" x="-32" y="-32" width="128" height="128">
+    <feOffset dx="-8"/><feOffset dx="8"/>
   </filter>)svg";
 
 /// Renders \p body after \ref kBackdropFilters on a 64x64 canvas with the configured backend.
@@ -1171,6 +1174,23 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageIgnoresElementOwnLayers) {
             filter="url(#pass)"/>
     </g>)svg"),
                                        "background_image_own_layers",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // An outer stage with an input margin moves its capture's contents; the inner stage's backdrop
+  // must be placed past that margin as well as its own.
+  const RendererBitmap wrapped = RenderBackdropCase(R"svg(
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#bgImage) url(#widePass)"/>
+    </g>)svg");
+  ExpectVisibleBitmap(wrapped, "background_outer_margin_stage_visible");
+  editor::tests::CompareBitmapToBitmap(wrapped, RenderBackdropCase(R"svg(
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen"
+            filter="url(#pass) url(#widePass)"/>
+    </g>)svg"),
+                                       "background_image_outer_margin_stage",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
