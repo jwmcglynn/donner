@@ -74,7 +74,12 @@ if [[ ${#sources[@]} -eq 0 ]]; then
   exit 1
 fi
 
-python3 "${kChecker}" "${sources[@]}"
+# A whole-tree run also rejects allowlist entries for files that no longer exist.
+if [[ ${lint_explicit_roots} -eq 0 ]]; then
+  python3 "${kChecker}" --require-allowlisted-files "${sources[@]}"
+else
+  python3 "${kChecker}" "${sources[@]}"
+fi
 
 # The pinned clang-format (//tools/format:clang_format) is the repository's formatting baseline;
 # `bazel test //...` checks the files Bazel targets list with the same binary. This full-tree
