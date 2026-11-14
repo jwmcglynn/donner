@@ -21,11 +21,14 @@ on:
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
       - "build_defs/**"
+      - "config/**"
       - "donner/**"
       - "donner_icon.svg"
       - "third_party/**"
       - "tools/http/**"
+      - "tools/render_notice.py"
       - "tools/run-browser-ci.sh"
+      - "tools/svg_suite/**"
   pull_request:
     paths:
       - "tools/ci/**"
@@ -40,11 +43,14 @@ on:
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
       - "build_defs/**"
+      - "config/**"
       - "donner/**"
       - "donner_icon.svg"
       - "third_party/**"
       - "tools/http/**"
+      - "tools/render_notice.py"
       - "tools/run-browser-ci.sh"
+      - "tools/svg_suite/**"
   schedule:
     - cron: "18 7 * * *"
   workflow_dispatch:

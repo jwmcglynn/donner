@@ -54,11 +54,13 @@ bazel run --config=editor-wasm //donner/editor/wasm:serve_http -- \
 This command starts a manual preview only; it is not browser-test validation. Use the Bazel-owned
 test targets below for validation in the designated test venue.
 
-Run browser coverage through the current Bazel-owned targets
-`//donner/editor/wasm/tests:chromium_remote_smoke` and
-`//donner/editor/wasm/tests:browser_presentation_regression_test`, using the prescribed test venue
-and strategy. Confirm the names in `donner/editor/wasm/tests/BUILD.bazel` before running them; this
-skill does not authorize local browser execution.
+The Chromium cases of the editor browser specs (`smoke.spec.ts`,
+`browser-presentation-regression.spec.ts`, `boot-presentation.spec.ts` and the rest of the default
+discovery in `donner/editor/wasm/tests/playwright.config.js`) run in the Editor WASM workflow's
+chromium-default lane, `tools/run-browser-ci.sh`. Other browsers and archive-pinned lanes are
+Bazel-owned targets in `donner/editor/wasm/tests/BUILD.bazel`; confirm the names there before
+running them, using the prescribed test venue and strategy. This skill does not authorize local
+browser execution.
 
 Use the repository's Bazel targets as the source of truth for dependency installation, serving,
 artifact verification, and lane selection. Do not invoke removed helper scripts or recreate their

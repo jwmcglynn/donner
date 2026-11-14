@@ -514,9 +514,6 @@ test_suite(
     name = "browser_gpu_comparison",
     tags = ["manual"],
     tests = [
-        "//donner/editor/wasm/tests:browser_presentation_regression_test",
-        "//donner/editor/wasm/tests:catalog_font_loading_test",
-        "//donner/editor/wasm/tests:chromium_remote_smoke",
         "//donner/editor/wasm/tests:standalone_geode_browser_renderer_test",
     ],
 )

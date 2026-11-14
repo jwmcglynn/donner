@@ -157,8 +157,10 @@ application thread owns the textures and canvas and uses the desktop compositor 
 directly into the acquired backbuffer. No per-tile browser objects, ImageBitmaps or pixel bytes
 cross workers, and presentation adds no intermediate framebuffer copy.
 
-`//donner/editor/wasm/tests:boot_presentation_test` checks actual browser readback calls and
-compositor/handoff/final-capture accounting for an ordinary document. The worker's published
+`donner/editor/wasm/tests/boot-presentation.spec.ts` and `browser-backend-selection.spec.ts`, run
+by the Editor WASM workflow's chromium-default lane (`tools/run-browser-ci.sh`), check actual
+browser readback calls and compositor/handoff/final-capture accounting for an
+ordinary document. The worker's published
 bitmap/texture payload counts distinguish GPU resources from CPU tiles. CPU-authored images and
 font atlases remain legitimate uploads; bounded screenshot/export captures remain explicit reads.
 The existing sample/font-preview lane still produces CPU thumbnail bitmaps. This separate path
@@ -529,7 +531,8 @@ operations; the first refusal stops replay before submission. A ten-second dispa
 terminates the module instead of returning borrowed memory to a queued callback. Descriptor
 assembly, shared identity bookkeeping and mapped storage remain on callers.
 
-`//donner/editor/wasm/tests:browser_presentation_regression_test` exercises delayed owner pulses,
+`donner/editor/wasm/tests/browser-presentation-regression.spec.ts`, run by the Editor WASM
+workflow's chromium-default lane, exercises delayed owner pulses,
 actual inline/pulse/futex dispatch counts, and coalesced animation-frame admission. The native
 `//donner/gpu/browser:browser_tests` target covers detached FIFO order, reentrant enqueue and
 callbacks that reclaim their borrowed task storage.

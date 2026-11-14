@@ -49,224 +49,23 @@ eslint_bin.eslint_test(
     tags = ["lint"],
 )
 
-playwright_bin.playwright_test(
-    name = "chromium_remote_smoke",
-    size = "large",
-    args = [
-        "test",
-        "$(rootpath :smoke.spec.ts)",
-        "--config=$(rootpath :playwright.bazel.config.js)",
-        "--grep=production.Geode.wasm.presents.visible.editor.pixels|carousel.loads|browser.paste.callback",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "browser-diagnostic-policy.js",
-        "animation-pulse-observation.mjs",
-        "basic-shapes-capture-gate.ts",
-        "browser-runtime-diagnostics.ts",
-        "browser-stall-diagnostics.mjs",
-        "browser-stall-diagnostics.ts",
-        "canvas-capture-fault.ts",
-        "canvas-color-stats.ts",
-        "canvas-quiescent-capture.mjs",
-        "carousel-samples.mjs",
-        "chromium-launch-env.cjs",
-        "completed-result-handoff.mjs",
-        "event-presentation-delay.mjs",
-        "failure-canvas-evidence.ts",
-        "flat-capture-retake.mjs",
-        "gesture-streams.ts",
-        "gpu-session-console.ts",
-        "package.json",
-        "package-identity.mjs",
-        "pipeline-compile-readiness.mjs",
-        "playwright.bazel.config.js",
-        "playwright.config.js",
-        "quarantine-report.mjs",
-        "remote-webserver.mjs",
-        "sample-thumbnail-quiescence.mjs",
-        "sample-thumbnail-settle.ts",
-        "smoke.spec.ts",
-        "startup-phases.mjs",
-        "surface-frame-probe.ts",
-        "surface-probe-requests.mjs",
-        "test-timing.cjs",
-        "test-timing.ts",
-        ":node_modules/@playwright/test",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:chromium",
-    ],
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
-        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
-    },
-    # macOS-only: the selected smoke test asserts on presented WebGPU canvas
-    # pixels, and headless Chromium on Linux cannot present a WebGPU
-    # OffscreenCanvas swapchain with the SwiftShader WebGPU adapter. The GPU
-    # service finds no SharedImageBackingFactory for the swapchain allocation
-    # (usage WebgpuSwapChainTexture|DisplayRead|...), fails the first present,
-    # and destroys the device, after which every WebGPU call rejects with "A
-    # valid external Instance reference no longer exists". A browser-only
-    # probe (worker + transferred OffscreenCanvas + clear + present) fails the
-    # same way with no Donner code involved, on both Chromium 147 and 151 and
-    # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
-    # this is an environment capability boundary, not a flag or timing gap.
-    # macOS headless Chromium presents through the real GPU and passes.
-    tags = ["launches-browser"],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
-
-# The browser presentation regressions, reachable from Bazel.
+# The Chromium cases of smoke.spec.ts, browser-presentation-regression.spec.ts,
+# browser-surface-recovery.spec.ts, boot-presentation.spec.ts and
+# browser-backend-selection.spec.ts run in the Editor WASM workflow's chromium-default lane
+# (tools/run-browser-ci.sh) on every pull request and main push that can change them. The Bazel
+# lanes below cover what that lane does not: other browsers, archive-pinned browsers, headed
+# composited sampling and separately served packages.
 #
-# This lane exists because the invariants it pins - among them the zoom storm
-# that must never uncover the editor background under the presented document -
-# were only ever reachable through the repository's own browser lane, so a
-# failure there could be answered with a rerun instead of a diagnosis. Like the
-# smoke lane it asserts on presented WebGPU canvas pixels, so it carries the
-# same platform boundary for the same reason documented above.
-playwright_bin.playwright_test(
-    name = "browser_presentation_regression_test",
-    size = "large",
-    args = [
-        "test",
-        "$(rootpath :browser-presentation-regression.spec.ts)",
-        "$(rootpath :browser-surface-recovery.spec.ts)",
-        "--config=$(rootpath :playwright.bazel.config.js)",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "basic-shapes-capture-gate.ts",
-        "browser-bitmap-comparator.ts",
-        "browser-presentation-regression.spec.ts",
-        "browser-runtime-diagnostics.ts",
-        "browser-stall-diagnostics.mjs",
-        "browser-stall-diagnostics.ts",
-        "browser-surface-recovery.spec.ts",
-        "canvas-capture-fault.ts",
-        "canvas-color-stats.ts",
-        "canvas-quiescent-capture.mjs",
-        "chromium-launch-env.cjs",
-        "failure-canvas-evidence.ts",
-        "flat-capture-retake.mjs",
-        "gesture-streams.ts",
-        "gpu-session-console.ts",
-        "overlay-bitmap-compare.ts",
-        "package.json",
-        "playwright.bazel.config.js",
-        "playwright.compatibility.config.js",
-        "playwright.config.js",
-        "playwright.webkit.bazel.config.js",
-        "png-crop.ts",
-        "png-crop-core.mjs",
-        "quarantine-report.mjs",
-        "remote-webserver.mjs",
-        "sample-thumbnail-quiescence.mjs",
-        "sample-thumbnail-settle.ts",
-        "startup-phases.mjs",
-        "surface-frame-probe.ts",
-        "surface-probe-requests.mjs",
-        "test-timing.cjs",
-        "test-timing.ts",
-        ":node_modules/@playwright/test",
-        ":node_modules/pngjs",
-        "//donner/editor/tests:standalone_geode_browser_png_compare",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:chromium",
-        "@playwright//:webkit",
-    ] + glob(["browser-presentation-regression.spec.ts-snapshots/*.png"]),
-    env = {
-        "CI": "1",
-        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
-        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
-        "NODE_OPTIONS": "",
-        "DONNER_WEBKIT_EXECUTABLE": "$(rootpath @playwright//:webkit)/pw_run.sh",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
-    },
-    tags = ["launches-browser"],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
-
-# This presentation gate shares the macOS WebGPU capability requirement of the smoke lane.
-playwright_bin.playwright_test(
-    name = "catalog_font_loading_test",
-    size = "large",
-    args = [
-        "test",
-        "$(rootpath :smoke.spec.ts)",
-        "--config=$(rootpath :playwright.bazel.config.js)",
-        "--grep=catalog.font.loading|welcome.picker.paints.before|WGPU.diagnostics.do.not.block|required.resource.failure.stays.readable.and.prevents.application.startup|code-only.updates.transfer.no.unchanged.essential.resource.bodies",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "browser-diagnostic-policy.js",
-        "animation-pulse-observation.mjs",
-        "basic-shapes-capture-gate.ts",
-        "browser-runtime-diagnostics.ts",
-        "browser-stall-diagnostics.mjs",
-        "browser-stall-diagnostics.ts",
-        "canvas-capture-fault.ts",
-        "canvas-color-stats.ts",
-        "canvas-quiescent-capture.mjs",
-        "carousel-samples.mjs",
-        "chromium-launch-env.cjs",
-        "completed-result-handoff.mjs",
-        "event-presentation-delay.mjs",
-        "failure-canvas-evidence.ts",
-        "flat-capture-retake.mjs",
-        "gesture-streams.ts",
-        "gpu-session-console.ts",
-        "package.json",
-        "package-identity.mjs",
-        "pipeline-compile-readiness.mjs",
-        "playwright.bazel.config.js",
-        "playwright.config.js",
-        "quarantine-report.mjs",
-        "remote-webserver.mjs",
-        "sample-thumbnail-quiescence.mjs",
-        "sample-thumbnail-settle.ts",
-        "smoke.spec.ts",
-        "startup-phases.mjs",
-        "surface-frame-probe.ts",
-        "surface-probe-requests.mjs",
-        "test-timing.cjs",
-        "test-timing.ts",
-        ":node_modules/@playwright/test",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:chromium",
-    ],
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
-    },
-    tags = [
-        "launches-browser",
-        "no-local",
-    ],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
+# Every editor browser lane here is macOS-only: they assert on presented WebGPU canvas pixels,
+# and headless Chromium on Linux cannot present a WebGPU OffscreenCanvas swapchain with the
+# SwiftShader WebGPU adapter. The GPU service finds no SharedImageBackingFactory for the
+# swapchain allocation (usage WebgpuSwapChainTexture|DisplayRead|...), fails the first present,
+# and destroys the device, after which every WebGPU call rejects with "A valid external Instance
+# reference no longer exists". A browser-only probe (worker + transferred OffscreenCanvas +
+# clear + present) fails the same way with no Donner code involved, on both Chromium 147 and
+# 151 and with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so this is an
+# environment capability boundary, not a flag or timing gap. macOS Chromium presents through the
+# GPU and passes.
 
 playwright_bin.playwright_test(
     name = "_browser_responsiveness_perf_driver",
@@ -396,51 +195,6 @@ js_test(
     ],
     entry_point = "browser-watchdog.spec.mjs",
     node_options = ["--test"],
-)
-
-playwright_bin.playwright_test(
-    name = "boot_presentation_test",
-    size = "large",
-    timeout = "moderate",
-    args = [
-        "test",
-        "$(rootpath :boot-presentation.spec.ts)",
-        "$(rootpath :browser-backend-selection.spec.ts)",
-        "--config=$(rootpath :playwright.boot-presentation.bazel.config.js)",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "boot-presentation.spec.ts",
-        "browser-backend-selection.spec.ts",
-        "browser-gpu-residency.ts",
-        "canvas-color-stats.ts",
-        "canvas-pointer.ts",
-        "chromium-launch-env.cjs",
-        "flat-capture-retake.mjs",
-        "package.json",
-        "playwright.bazel.config.js",
-        "playwright.boot-presentation.bazel.config.js",
-        "playwright.config.js",
-        "remote-webserver.mjs",
-        "sample-thumbnail-settle.ts",
-        "test-timing.cjs",
-        ":node_modules/@playwright/test",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:chromium",
-    ],
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
-    },
-    tags = ["launches-browser"],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
 )
 
 playwright_bin.playwright_test(
@@ -756,10 +510,8 @@ js_test(
     data = [
         "chromium-launch-env.cjs",
         "playwright.bazel.config.js",
-        "playwright.boot-presentation.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
-        "playwright.webkit.bazel.config.js",
         "test-timing.cjs",
     ],
     entry_point = "playwright-bazel-config.spec.mjs",
