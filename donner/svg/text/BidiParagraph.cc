@@ -107,7 +107,9 @@ struct BidiParagraph::State {
     const size_t first = result.size();
     while (SBScriptLocatorMoveNext(locator.get())) {
       const SBScriptAgent* agent = SBScriptLocatorGetAgent(locator.get());
-      if (agent->length == 0 || agent->offset + agent->length > end - start ||
+      const uint32_t expected = result.size() == first ? start : result.back().end;
+      if (agent->length == 0 || start + agent->offset != expected ||
+          agent->offset + agent->length > end - start ||
           !budget.consume(budget.remaining.runs, 1)) {
         budget.rejected = true;
         return false;

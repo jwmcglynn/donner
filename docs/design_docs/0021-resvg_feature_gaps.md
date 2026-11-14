@@ -585,6 +585,12 @@ residual. These belong to the vertical, shaping, and effects workstreams respect
 `text/letter-spacing/mixed-scripts`, `text/textLength` Arabic. Needs the BiDi
 algorithm + RTL shaping (`text-full`). Group as one workstream.
 
+**Current status:** normal horizontal BiDi, `direction`, and a `bidi-override` on the `<text>`
+element itself are implemented ([0069](0069-bidi_text_layout.md)). `text/unicode-bidi/bidi-override`
+compares on the full tier. `text/direction/rtl` orders and anchors correctly but stays skipped: its
+reference shapes Arabic with Noto Sans Arabic, which the test fonts lack.
+`text/direction/rtl-with-vertical-writing-mode` is undefined behavior (svgwg#618).
+
 ### F12: `transform-origin` on paint-servers / `<image>` / text
 
 **Resolved by #868.** All `structure/transform-origin/` cases, including

@@ -1106,6 +1106,31 @@ TEST(SVGTextElementPublicApiTests, RtlDirectionMirrorsStartAndEndAnchors) {
   EXPECT_THAT(firstCharacterX(R"(style="direction: rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
 }
 
+// `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
+// the same override on an enclosing group leaves the text's normal reordering alone.
+TEST(SVGTextElementPublicApiTests, BidiOverrideAppliesOnlyToTheTextElementItself) {
+  const auto letterOrder = [](std::string_view groupAttributes, std::string_view textAttributes) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 40"><g )-") + std::string(groupAttributes) +
+        R"-(><text id="t" x="100" y="20" font-family="fallback-font" font-size="12px" )-" +
+        std::string(textAttributes) + R"-(>ab</text></g></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    return text.getStartPositionOfChar(1).x - text.getStartPositionOfChar(0).x;
+  };
+
+  // Normal rtl reordering keeps the Latin word in order: `b` stays right of `a`.
+  EXPECT_THAT(letterOrder(R"(direction="rtl")", ""), testing::Gt(0.0));
+  // The override on the text element runs every letter right to left.
+  EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="bidi-override")"),
+              testing::Lt(0.0));
+  EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="isolate-override")"),
+              testing::Lt(0.0));
+  // On the group it does not reach the text.
+  EXPECT_THAT(letterOrder(R"(direction="rtl" unicode-bidi="bidi-override")", ""), testing::Gt(0.0));
+  // A left-to-right override leaves left-to-right text unchanged.
+  EXPECT_THAT(letterOrder("", R"(unicode-bidi="bidi-override")"), testing::Gt(0.0));
+}
+
 // ── Multiple tspan positioning tests ────────────────────────────────────────
 
 TEST(SVGTextElementPublicApiTests, MultipleTSpanPerCharacterPositioning) {
