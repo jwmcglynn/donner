@@ -3150,7 +3150,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (std::holds_alternative<PaintServer::None>(server)) {
       return std::nullopt;
     }
-    const css::RGBA currentColor = paint.currentColor.rgba();
+    const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
     if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
       return solid->color.resolve(currentColor, opacity);
@@ -5145,7 +5145,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (ref == nullptr) {
       return false;
     }
-    const css::RGBA currentColor = paint.currentColor.rgba();
+    const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
     const Box2d geometryBounds = geometryPath.bounds();
     bool stopsTruncated = false;
@@ -5227,7 +5227,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
 
-    const css::RGBA currentColor = paint.currentColor.rgba();
+    const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
 
     // Solid color: straight through the flat fill pipeline.
@@ -7059,7 +7059,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     geode::GeoEncoder::ScenePaint scenePaint;
     if (solidFill) {
       const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
-      scenePaint.color = solid.color.resolve(impl_->paint.currentColor.rgba(),
+      scenePaint.color = solid.color.resolve(impl_->paint.currentColor,
                                              static_cast<float>(impl_->paint.fillOpacity));
     } else {
       scenePaint.linearGradient = batchLinear.has_value() ? &*batchLinear : nullptr;
@@ -7179,8 +7179,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       path.canDeferGeometry() && !impl_->patternStrokePaint.has_value()) {
     const auto& solidStroke = std::get<PaintServer::Solid>(strokeServer);
     geode::GeoEncoder::ScenePaint strokePaint;
-    strokePaint.color = solidStroke.color.resolve(impl_->paint.currentColor.rgba(),
-                                                  static_cast<float>(effectiveOpacity));
+    strokePaint.color =
+        solidStroke.color.resolve(impl_->paint.currentColor, static_cast<float>(effectiveOpacity));
     if (impl_->tryAppendOrStartBatch(path.sourceEntity.registry(), path.sourceEntity.entity(),
                                      strokedOutline, strokePaint, strokeDerived.fillRule,
                                      strokeDerived.encoded, residentStroke,
@@ -7346,7 +7346,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     defaultFill = css::RGBA(0, 0, 0, 0);
   }
 
-  const css::RGBA currentColor = impl_->paint.currentColor.rgba();
+  const css::RGBA currentColor = impl_->paint.currentColor;
 
   // The element-level fill is already scaled by the top-level
   // `setPaint` call, but per-span fill overrides need their own

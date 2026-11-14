@@ -949,6 +949,19 @@ bool UseHostSpaceStroke(const components::RenderingInstanceComponent& instance,
          paint.strokeParams.strokeWidth > 0.0;
 }
 
+/**
+ * Returns the computed `color` property as RGBA, the value that `currentColor` paints with.
+ *
+ * The computed value may still hold a non-RGBA form such as `hsl()`, so it is converted here once
+ * and renderers only ever see RGBA. `currentcolor` on `color` itself computes to the inherited
+ * value during cascade; it falls back to the initial value, black, if it ever reaches this point.
+ *
+ * @param properties Computed properties of the element being painted.
+ */
+css::RGBA ResolvedCurrentColor(const PropertyRegistry& properties) {
+  return properties.color.get().value().resolve(css::RGBA::RGB(0, 0, 0), /*opacity=*/1.0f);
+}
+
 PaintParams toPaintParams(Registry& registry,
                           const components::RenderingInstanceComponent& instance,
                           const components::ComputedStyleComponent& style) {
@@ -960,7 +973,7 @@ PaintParams toPaintParams(Registry& registry,
   paint.fillOpacity = properties.fillOpacity.get().value();
   paint.stroke = instance.resolvedStroke;
   paint.strokeOpacity = properties.strokeOpacity.get().value();
-  paint.currentColor = properties.color.get().value();
+  paint.currentColor = ResolvedCurrentColor(properties);
   paint.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
 
   paint.strokeParams =
@@ -1758,7 +1771,7 @@ std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style) {
   const auto& properties = style.properties.value();
-  const css::RGBA currentColor = properties.color.get().value().rgba();
+  const css::RGBA currentColor = ResolvedCurrentColor(properties);
   const float fillOpacity = NarrowToFloat(properties.fillOpacity.get().value());
 
   const auto resolveSolid = [&](const PaintServer::Solid& solid) {
@@ -1783,7 +1796,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
                         const components::TextComponent* textComp, EntityHandle textRootHandle) {
   TextParams params;
   const auto& properties = style.properties.value();
-  const css::RGBA currentColor = properties.color.get().value().rgba();
+  const css::RGBA currentColor = ResolvedCurrentColor(properties);
 
   params.fillColor = resolveFillColor(instance, style);
 
@@ -3298,7 +3311,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
 
     std::optional<std::vector<components::FilterGraph>> stages = resolveFilterStages(
         registry, instance->resolvedFilter.value(), *instance,
-        style.properties->color.get().value().rgba(), filterViewBox, filterFontMetrics);
+        ResolvedCurrentColor(*style.properties), filterViewBox, filterFontMetrics);
     if (!stages) {
       continue;
     }

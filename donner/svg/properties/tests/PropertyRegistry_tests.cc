@@ -231,6 +231,20 @@ TEST(Property, InheritFromCoversStateAndSpecificityBranches) {
   }
 }
 
+TEST(Property, InheritFromUnresolvedInheritParentUsesInitialValue) {
+  using InheritingProperty = Property<int, PropertyCascade::Inherit>;
+
+  // A root element's `inherit` has no ancestor to resolve against and keeps the Inherit state.
+  InheritingProperty rootParent("integer", []() -> std::optional<int> { return 7; });
+  rootParent.set(PropertyState::Inherit, Specificity::FromABC(0, 1, 0));
+
+  // Distinct initial values show the child takes the value the parent reports, not its own.
+  InheritingProperty child("integer", []() -> std::optional<int> { return 5; });
+  const InheritingProperty inherited = child.inheritFrom(rootParent);
+  EXPECT_EQ(inherited.get(), 7);
+  EXPECT_EQ(inherited.state, PropertyState::Set);
+}
+
 TEST(Property, NonInheritingPropertyOnlyInheritsExplicitInheritState) {
   Property<int> parent("integer");
   parent.set(10, Specificity::FromABC(0, 2, 0));
