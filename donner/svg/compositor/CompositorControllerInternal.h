@@ -92,9 +92,10 @@ double EstimateStaticSpanRasterizeMs(int estimatedDrawOps, int estimatedPathVerb
                                      bool usesAreaCostlyPaint, double coveredAreaPixels);
 bool ShouldDirectComposeLayer(const CompositorLayer& layer);
 
-/// True when some rendered element's filter reads `BackgroundImage` or `BackgroundAlpha`. Such a
-/// filter needs everything painted before it, which no cached layer or tile can supply.
-bool DocumentReadsFilterBackdrop(Registry& registry);
+/// True when some computed `<filter>` under @p rootEntity reads `BackgroundImage` or
+/// `BackgroundAlpha`. Such a filter needs everything painted before it, which no cached layer or
+/// tile can supply.
+bool DocumentReadsFilterBackdrop(Registry& registry, Entity rootEntity);
 double ImmediateStaticSpanBudgetMs();
 double ImmediateStaticSpanBudgetChargeMs(double measuredRasterizeMs);
 

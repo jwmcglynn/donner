@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -1718,16 +1719,24 @@ TEST_F(CompositorGoldenTest, BlendModeGroupStillComposesDirectly) {
 }
 
 // A filter that reads BackgroundImage sees what was painted before the element, back to its
-// nearest isolating ancestor. A layer rasterized against transparency has no such backdrop, so
-// every way the compositor can place a backdrop-reading filter must still match the full render.
+// nearest isolating ancestor. A layer rasterizes against transparency and the editor composes tiles
+// source-over, so every way the compositor can place a backdrop reader must still present the full
+// render, both in its main frame and in the tiles the editor uploads.
 constexpr std::string_view kBackdropFilterDefs = R"svg(
   <defs>
     <filter id="backdrop" x="0" y="0" width="1" height="1">
       <feOffset in="BackgroundImage" dx="30" dy="10"/>
     </filter>
+    <filter id="backdropAlpha" x="0" y="0" width="1" height="1">
+      <feFlood flood-color="purple"/>
+      <feComposite in2="BackgroundAlpha" operator="in"/>
+    </filter>
+    <filter id="plain" x="-0.2" y="-0.2" width="1.4" height="1.4">
+      <feOffset dx="5" dy="5"/>
+    </filter>
   </defs>
   <rect width="200" height="100" fill="white"/>
-  <rect x="10" y="10" width="90" height="60" fill="orange"/>
+  <rect id="source" x="10" y="10" width="90" height="60" fill="orange" fill-opacity="0.7"/>
   <rect x="120" y="20" width="40" height="60" fill="seagreen"/>
 )svg";
 
@@ -1736,17 +1745,97 @@ std::string BackdropFilterDocument(std::string_view body) {
          std::string(kBackdropFilterDefs) + std::string(body) + "</svg>";
 }
 
+/// Converts one RGBA8 pixel to premultiplied floats in [0, 1].
+std::array<float, 4> PremultipliedPixel(const RendererBitmap& bitmap, int x, int y) {
+  const uint8_t* px = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes +
+                      static_cast<size_t>(x) * 4u;
+  const float alpha = static_cast<float>(px[3]) / 255.0f;
+  const float scale = bitmap.alphaType == AlphaType::Premultiplied ? 1.0f / 255.0f : alpha / 255.0f;
+  return {px[0] * scale, px[1] * scale, px[2] * scale, alpha};
+}
+
+/// Lays the upload tiles over a transparent canvas in paint order, source-over at their canvas
+/// positions, as the editor presents them, and returns the largest channel difference from
+/// @p reference after unpremultiplying.
+int MaxDifferenceOfComposedTiles(const CompositorController& compositor,
+                                 const RendererBitmap& reference) {
+  const int width = reference.dimensions.x;
+  const int height = reference.dimensions.y;
+  std::vector<std::array<float, 4>> canvas(static_cast<size_t>(width) * height,
+                                           std::array<float, 4>{});
+  std::vector<CompositorTile> tiles = compositor.snapshotTilesForUpload();
+  std::ranges::sort(tiles, {}, &CompositorTile::paintOrderIndex);
+  for (const CompositorTile& tile : tiles) {
+    RendererBitmap bitmap = tile.bitmap;
+    if (bitmap.empty() && tile.textureSnapshot != nullptr) {
+      bitmap = tile.textureSnapshot->takeSnapshot();
+    }
+    if (bitmap.empty()) {
+      continue;
+    }
+    EXPECT_TRUE(tile.canvasFromBitmap.isTranslation());
+    const Vector2d origin = tile.canvasOffsetPx + tile.canvasFromBitmap.translation();
+    const int originX = static_cast<int>(std::lround(origin.x));
+    const int originY = static_cast<int>(std::lround(origin.y));
+    for (int y = 0; y < bitmap.dimensions.y; ++y) {
+      for (int x = 0; x < bitmap.dimensions.x; ++x) {
+        const int cx = originX + x;
+        const int cy = originY + y;
+        if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
+          continue;
+        }
+        const std::array<float, 4> src = PremultipliedPixel(bitmap, x, y);
+        std::array<float, 4>& dst = canvas[static_cast<size_t>(cy) * width + cx];
+        for (int c = 0; c < 4; ++c) {
+          dst[c] = src[c] + dst[c] * (1.0f - src[3]);
+        }
+      }
+    }
+  }
+
+  int maxDiff = 0;
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const std::array<float, 4> want = PremultipliedPixel(reference, x, y);
+      const std::array<float, 4>& got = canvas[static_cast<size_t>(y) * width + x];
+      for (int c = 0; c < 4; ++c) {
+        const int diff = static_cast<int>(std::lround(std::abs(want[c] - got[c]) * 255.0f));
+        maxDiff = std::max(maxDiff, diff);
+      }
+    }
+  }
+  return maxDiff;
+}
+
 struct BackdropFilterCase {
   const char* name;
   const char* body;
   bool promoteTarget;
+  /// Element translated after the first frames, as a drag does.
+  const char* movedId;
 };
 
 class CompositorBackdropFilterTest
     : public CompositorGoldenTest,
-      public ::testing::WithParamInterface<std::tuple<BackdropFilterCase, MandatoryHintScope>> {};
+      public ::testing::WithParamInterface<std::tuple<BackdropFilterCase, MandatoryHintScope>> {
+protected:
+  /// Checks the main frame and the editor's composed upload tiles against a full render.
+  void expectPresentsTheFullRender(CompositorController& compositor, SVGDocument& document,
+                                   const char* when) {
+    DualPathVerifier verifier(compositor, renderer_);
+    const auto frame = verifier.renderAndVerify(viewport_);
+    EXPECT_TRUE(frame.isWithinTolerance(1)) << when << ": " << frame;
+    EXPECT_EQ(compositor.snapshotState().layerCount, 0u) << when;
+    ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation()) << when;
 
-TEST_P(CompositorBackdropFilterTest, MatchesTheFullRender) {
+    svg::Renderer referenceRenderer;
+    referenceRenderer.draw(document);
+    const RendererBitmap reference = referenceRenderer.takeSnapshot();
+    EXPECT_LE(MaxDifferenceOfComposedTiles(compositor, reference), 2) << when;
+  }
+};
+
+TEST_P(CompositorBackdropFilterTest, PresentsTheFullRender) {
   const auto& [testCase, scope] = GetParam();
   SVGDocument document = parseDocument(BackdropFilterDocument(testCase.body));
   auto target = document.querySelector("#target");
@@ -1754,66 +1843,54 @@ TEST_P(CompositorBackdropFilterTest, MatchesTheFullRender) {
 
   CompositorConfig config;
   config.mandatoryHintScope = scope;
+  // The editor warms its tiles on the first frame; the tile comparison needs them.
+  config.deferFirstFrameWarmup = false;
   CompositorController compositor(document, renderer_, config);
-  DualPathVerifier verifier(compositor, renderer_);
   if (testCase.promoteTarget) {
     // Prepare the document so the promotion request sees the resolved filter, as the editor does.
-    ASSERT_TRUE(verifier.renderAndVerify(viewport_).isWithinTolerance(1));
+    compositor.renderFrame(viewport_);
     EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()).code,
               CompositorController::PromoteResult::OwningTilesRequired);
   }
 
-  const auto first = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(first.isWithinTolerance(1)) << first;
-  EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
-  // The second frame composes from whatever the first one cached.
-  const auto second = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(second.isWithinTolerance(1)) << second;
+  expectPresentsTheFullRender(compositor, document, "first frame");
+  expectPresentsTheFullRender(compositor, document, "cached frame");
 
-  // Moving the target, as a drag does, must keep reading the backdrop beneath its new position.
-  target->setAttribute("transform", "translate(17 -6)");
-  const auto moved = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(moved.isWithinTolerance(1)) << moved;
-}
-
-// Pointing a promoted element at a backdrop-reading filter drops every layer.
-TEST_F(CompositorGoldenTest, SwitchingToABackdropFilterDropsLayers) {
-  SVGDocument document = parseDocument(BackdropFilterDocument(
-      R"svg(<filter id="plain" x="0" y="0" width="1" height="1">
-          <feOffset dx="30" dy="10"/>
-        </filter>
-        <rect id="target" x="40" y="20" width="100" height="60" fill="navy"
-          filter="url(#plain)"/>)svg"));
-  CompositorController compositor(document, renderer_);
-  DualPathVerifier verifier(compositor, renderer_);
-  const auto before = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(before.isWithinTolerance(1)) << before;
-  ASSERT_EQ(compositor.snapshotState().layerCount, 1u);
-
-  auto target = document.querySelector("#target");
-  ASSERT_TRUE(target.has_value());
-  target->setAttribute("filter", "url(#backdrop)");
-  const auto after = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(after.isWithinTolerance(1)) << after;
-  EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
-  const auto again = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(again.isWithinTolerance(1)) << again;
+  auto moved = document.querySelector(testCase.movedId);
+  ASSERT_TRUE(moved.has_value());
+  moved->setAttribute("transform", "translate(17 -6)");
+  expectPresentsTheFullRender(compositor, document, "after a move");
 }
 
 constexpr BackdropFilterCase kBackdropFilterCases[] = {
     {"FilteredElement", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
         filter="url(#backdrop)"/>)svg",
-     false},
+     false, "#target"},
     {"PromotedFilteredElement", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
         filter="url(#backdrop)"/>)svg",
-     true},
+     true, "#target"},
+    {"BackdropSourceMoves", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        filter="url(#backdrop)"/>)svg",
+     false, "#source"},
+    {"BackgroundAlpha", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        filter="url(#backdropAlpha)"/>)svg",
+     false, "#target"},
+    {"FilterListBackdropFirst", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        filter="url(#backdrop) url(#plain)"/>)svg",
+     false, "#target"},
+    {"FilterListBackdropLast", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        fill="navy" filter="url(#plain) url(#backdropAlpha)"/>)svg",
+     false, "#target"},
+    {"FilterListWithFunction", R"svg(<rect id="target" x="40" y="20" width="100" height="60"
+        filter="url(#backdrop) blur(1px)"/>)svg",
+     false, "#target"},
     {"InsideClippedGroup", R"svg(<clipPath id="clip"><rect width="200" height="100"/></clipPath>
         <g id="target" clip-path="url(#clip)"><rect x="40" y="20" width="100" height="60"
         filter="url(#backdrop)"/></g>)svg",
-     false},
+     false, "#target"},
     {"InsidePromotedGroup", R"svg(<g id="target"><rect x="40" y="20" width="100" height="60"
         filter="url(#backdrop)"/></g>)svg",
-     true},
+     true, "#target"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1824,6 +1901,46 @@ INSTANTIATE_TEST_SUITE_P(
       return std::string(std::get<0>(info.param).name) +
              (std::get<1>(info.param) == MandatoryHintScope::All ? "_AllHints" : "_FilterOnly");
     });
+
+// Removing the document's backdrop-reading filter brings layers back, and adding it again drops
+// them.
+TEST_F(CompositorGoldenTest, BackdropFilterPresenceControlsLayers) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <filter id="plain" x="-0.2" y="-0.2" width="1.4" height="1.4">
+        <feOffset dx="5" dy="5"/>
+      </filter>
+      <filter id="backdrop" x="0" y="0" width="1" height="1">
+        <feOffset in="BackgroundImage" dx="30" dy="10"/>
+      </filter>
+      <rect width="200" height="100" fill="white"/>
+      <rect x="10" y="10" width="90" height="60" fill="orange"/>
+      <rect id="target" x="40" y="20" width="100" height="60" fill="navy"
+          filter="url(#backdrop)"/>
+    </svg>
+  )svg");
+  CompositorController compositor(document, renderer_);
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto reading = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(reading.isWithinTolerance(1)) << reading;
+  EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
+
+  auto target = document.querySelector("#target");
+  auto backdrop = document.querySelector("#backdrop");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(backdrop.has_value());
+  target->setAttribute("filter", "url(#plain)");
+  backdrop->remove();
+  const auto removed = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(removed.isWithinTolerance(1)) << removed;
+  EXPECT_EQ(compositor.snapshotState().layerCount, 1u);
+
+  document.svgElement().appendChild(*backdrop);
+  target->setAttribute("filter", "url(#backdrop)");
+  const auto readded = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(readded.isWithinTolerance(1)) << readded;
+  EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
+}
 
 // Changing the group's opacity re-rasterizes the layer: the opacity is baked
 // into the cached bitmap, so a stale bitmap would keep composing the old

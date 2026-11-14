@@ -542,20 +542,17 @@ bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
              FallbackReason::None;
 }
 
-bool DocumentReadsFilterBackdrop(Registry& registry) {
-  // Only a `url()` reference can name BackgroundImage; CSS filter functions never read it.
-  auto view = registry.view<components::RenderingInstanceComponent>();
+bool DocumentReadsFilterBackdrop(Registry& registry, Entity rootEntity) {
+  // Scan the document's computed <filter> graphs rather than the elements that reference them:
+  // there are few, and every way an element names a filter (a sole url(), a list of url() and
+  // filter functions) resolves to one of them. A defined but unused reader in the document is
+  // counted too, which only costs the layer cache; a detached one is not. CSS filter functions
+  // never read the backdrop.
+  auto view = registry.view<components::ComputedFilterComponent>();
   return std::any_of(view.begin(), view.end(), [&](Entity entity) {
-    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
-    if (!instance.resolvedFilter.has_value()) {
-      return false;
-    }
-    const auto* reference = std::get_if<ResolvedReference>(&*instance.resolvedFilter);
-    if (reference == nullptr || !reference->valid()) {
-      return false;
-    }
-    const auto* filter = reference->handle.try_get<components::ComputedFilterComponent>();
-    return filter != nullptr && components::StandardInputUsage(filter->filterGraph).readsBackdrop();
+    const auto& filter = view.get<components::ComputedFilterComponent>(entity);
+    return components::StandardInputUsage(filter.filterGraph).readsBackdrop() &&
+           IsEntityInLiveTree(registry, entity, rootEntity);
   });
 }
 
