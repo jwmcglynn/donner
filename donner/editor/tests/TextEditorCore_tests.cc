@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
+
 namespace donner::editor {
 
 void PrintTo(const Coordinates& coords, std::ostream* os) {
@@ -701,6 +703,25 @@ TEST_F(TextEditorCoreTests, FindWordStartTreatsUtf8ContinuationBytesAsWordCharac
   editor_.setColorizerEnabled(false);
 
   EXPECT_EQ(editor_.findWordStart(Coordinates(0, 1)), Coordinates(0, 0));
+}
+
+// Word classification is ASCII-only and treats every byte of a multi-byte UTF-8 character as a
+// word byte, so a word is never split inside a character and the result does not depend on the
+// process locale.
+TEST_F(TextEditorCoreTests, GetWordAtKeepsMultiByteCharactersInsideTheWordInEveryLocale) {
+  ForEachCtypeLocaleForTesting([this] {
+    editor_.setText("caf\xC3\xA9 x");
+    editor_.setColorizerEnabled(false);
+    EXPECT_THAT(editor_.getWordAt(Coordinates(0, 1)), Eq("caf\xC3\xA9"));
+    EXPECT_THAT(editor_.getWordAt(Coordinates(0, 3)), Eq("caf\xC3\xA9"));
+  });
+}
+
+TEST_F(TextEditorCoreTests, FindNextWordStopsAtMultiByteWordsInEveryLocale) {
+  ForEachCtypeLocaleForTesting([this] {
+    editor_.setText("a \xC3\xA9 b");
+    EXPECT_EQ(editor_.findNextWord(Coordinates(0, 0)), Coordinates(0, 2));
+  });
 }
 
 TEST_F(TextEditorCoreTests, SelectWordUnderCursorSelectsWholeWord) {

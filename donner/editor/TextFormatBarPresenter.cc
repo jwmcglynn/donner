@@ -1,7 +1,6 @@
 #include "donner/editor/TextFormatBarPresenter.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -126,9 +125,9 @@ bool ContainsCaseInsensitive(std::string_view haystack, std::string_view needle)
   if (needle.empty()) {
     return true;
   }
-  const auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
-  auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
-                        [&](char a, char b) { return lower(a) == lower(b); });
+  auto it = std::search(
+      haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+      [](char a, char b) { return StringUtils::ToLowerAscii(a) == StringUtils::ToLowerAscii(b); });
   return it != haystack.end();
 }
 

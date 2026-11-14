@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -605,18 +604,35 @@ enum class WordClass : std::uint8_t {
 };
 
 WordClass ClassifyChar(char c) {
-  // UTF-8 continuation bytes are treated as part of the current run
-  // so multi-byte characters don't fragment word boundaries.
-  if ((c & 0xC0) == 0x80) {
+  // Every byte of a multi-byte UTF-8 character is a word byte, so a character never splits a
+  // word; classification is ASCII-only and does not depend on the process locale.
+  if (static_cast<unsigned char>(c) >= 0x80) {
     return WordClass::Alphanum;
   }
-  if (c <= 32 && std::isspace(static_cast<unsigned char>(c))) {
+  if (StringUtils::IsAsciiWhitespace(c)) {
     return WordClass::Whitespace;
   }
-  if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+  if (StringUtils::IsAsciiAlnum(c) || c == '_') {
     return WordClass::Alphanum;
   }
   return WordClass::Punctuation;
+}
+
+/// True for a typed character that requests autocomplete: an ASCII letter or underscore.
+/// @param character Typed code point.
+bool IsAutocompleteTriggerCharacter(char32_t character) {
+  if (character > 127) {
+    return false;
+  }
+  const char lowered = StringUtils::ToLowerAscii(static_cast<char>(character));
+  return (lowered >= 'a' && lowered <= 'z') || character == '_';
+}
+
+/// True for bytes that start a word for \ref TextEditorCore::findNextWord: ASCII letters and
+/// digits, and every byte of a multi-byte UTF-8 character.
+/// @param c Byte to classify.
+bool IsNextWordByte(char c) {
+  return static_cast<unsigned char>(c) >= 0x80 || StringUtils::IsAsciiAlnum(c);
 }
 
 /// True for bytes that keyboard word movement treats as part of a word: ASCII letters, digits and
@@ -625,7 +641,7 @@ WordClass ClassifyChar(char c) {
 /// @param c Byte to classify.
 bool IsWordMovementByte(char c) {
   const auto byte = static_cast<unsigned char>(c);
-  return byte >= 0x80 || std::isalnum(byte) || c == '_';
+  return byte >= 0x80 || StringUtils::IsAsciiAlnum(c) || c == '_';
 }
 
 }  // namespace
@@ -696,7 +712,7 @@ Coordinates TextEditorCore::findNextWord(const Coordinates& from) const {
   if (current.line < text_.getTotalLines()) {
     const Line& line = text_.getLineGlyphs(current.line);
     if (charIndex < static_cast<int>(line.size())) {
-      isWord = std::isalnum(line[charIndex].character);
+      isWord = IsNextWordByte(line[charIndex].character);
       skip = isWord;
     }
   }
@@ -710,7 +726,7 @@ Coordinates TextEditorCore::findNextWord(const Coordinates& from) const {
 
     const Line& line = text_.getLineGlyphs(current.line);
     if (charIndex < static_cast<int>(line.size())) {
-      isWord = std::isalnum(line[charIndex].character);
+      isWord = IsNextWordByte(line[charIndex].character);
 
       if (isWord && !skip) {
         return Coordinates(current.line, text_.getCharacterColumn(current.line, charIndex));
@@ -748,7 +764,8 @@ bool TextEditorCore::isOnWordBoundary(const Coordinates& at) const {
     return line[charIndex].colorIndex != line[charIndex - 1].colorIndex;
   }
 
-  return std::isspace(line[charIndex].character) != std::isspace(line[charIndex - 1].character);
+  return StringUtils::IsAsciiWhitespace(line[charIndex].character) !=
+         StringUtils::IsAsciiWhitespace(line[charIndex - 1].character);
 }
 
 RcString TextEditorCore::getWordUnderCursor() const {
@@ -1086,7 +1103,7 @@ void TextEditorCore::enterCharacter(char32_t character, bool shift) {
   }
 
   // Update autocomplete
-  if (activeAutocomplete_ && character <= 127 && (std::isalpha(character) || character == '_')) {
+  if (activeAutocomplete_ && IsAutocompleteTriggerCharacter(character)) {
     requestAutocomplete();
   }
 

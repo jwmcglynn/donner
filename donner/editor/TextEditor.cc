@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -16,6 +15,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/EditorSymbolGlyphs.h"
@@ -1635,9 +1635,8 @@ ImVec2 NormalizeVec(const ImVec2& value) {
 }
 
 bool IsReferenceSourceChar(char value) {
-  const unsigned char ch = static_cast<unsigned char>(value);
-  return std::isalnum(ch) != 0 || value == '_' || value == '-' || value == '#' || value == '.' ||
-         value == ':' || value == '%';
+  return StringUtils::IsAsciiAlnum(value) || value == '_' || value == '-' || value == '#' ||
+         value == '.' || value == ':' || value == '%';
 }
 
 enum class EditBoundaryBias {
@@ -2213,7 +2212,7 @@ bool TextEditor::referenceAttributeHasAssignment(int lineIndex, int quoteIndex,
       return false;
     }
     const char ch = line[index].character;
-    if (!std::isspace(static_cast<unsigned char>(ch))) {
+    if (!StringUtils::IsAsciiWhitespace(ch)) {
       return ch == '=';
     }
   }
@@ -3916,10 +3915,7 @@ bool isValidAutocompleteWord(std::string_view word) {
 }
 
 std::string toLowercase(std::string_view str) {
-  std::string result(str);
-  std::transform(result.begin(), result.end(), result.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return result;
+  return StringUtils::ToLowerAscii(str);
 }
 
 }  // namespace

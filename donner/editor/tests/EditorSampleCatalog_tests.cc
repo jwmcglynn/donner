@@ -1,7 +1,6 @@
 #include "donner/editor/EditorSampleCatalog.h"
 
 #include <array>
-#include <cctype>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -9,6 +8,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -29,7 +29,7 @@ TEST(EditorSampleCatalog, HasStableUniqueAsciiIdsInDisplayOrder) {
     EXPECT_TRUE(ids.insert(samples[i].id).second);
     for (const unsigned char character : samples[i].id) {
       EXPECT_LT(character, 0x80u);
-      EXPECT_TRUE(std::isalnum(character) || character == '-')
+      EXPECT_TRUE(StringUtils::IsAsciiAlnum(static_cast<char>(character)) || character == '-')
           << "non-stable ID character in " << samples[i].id;
     }
   }

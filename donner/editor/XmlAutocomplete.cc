@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <string>
 #include <vector>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/svg/SVGElementNames.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -43,8 +43,7 @@ bool StartsWithInsensitive(std::string_view value, std::string_view prefix) {
   }
 
   return std::equal(prefix.begin(), prefix.end(), value.begin(), [](char a, char b) {
-    return std::tolower(static_cast<unsigned char>(a)) ==
-           std::tolower(static_cast<unsigned char>(b));
+    return StringUtils::ToLowerAscii(a) == StringUtils::ToLowerAscii(b);
   });
 }
 

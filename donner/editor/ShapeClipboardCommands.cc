@@ -1,12 +1,12 @@
 #include "donner/editor/ShapeClipboardCommands.h"
 
-#include <cctype>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorParseOptions.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -62,8 +62,7 @@ void collectIds(const svg::SVGElement& element, std::unordered_set<std::string>&
 
 /// Whether \p c can appear in an SVG id / fragment identifier token.
 bool isIdChar(char c) {
-  return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_' || c == '.' ||
-         c == ':';
+  return StringUtils::IsAsciiAlnum(c) || c == '-' || c == '_' || c == '.' || c == ':';
 }
 
 /// Whether the byte before \p pos in \p text is a token boundary (start of
