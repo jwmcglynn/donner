@@ -165,13 +165,9 @@ TEST(SVGParser, CssImportWarningUsesDocumentSourceOffset) {
   EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
   ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
   EXPECT_THAT(warnings.warnings()[0].severity, testing::Eq(DiagnosticSeverity::Warning));
-  EXPECT_THAT(warnings.warnings()[0].reason,
-              testing::Eq(kIgnoredMediaImport));
+  EXPECT_THAT(warnings.warnings()[0].reason, testing::Eq(kIgnoredMediaImport));
   EXPECT_THAT(warnings.warnings()[0].range.start.offset, testing::Eq(source.find("@import")));
-  EXPECT_THAT(
-      warnings.warnings()[0],
-      ParseWarningIs(
-          2, 1, testing::Eq(kIgnoredMediaImport)));
+  EXPECT_THAT(warnings.warnings()[0], ParseWarningIs(2, 1, testing::Eq(kIgnoredMediaImport)));
 }
 
 TEST(SVGParser, CssImportWarningsMapTextCdataAndSplitKeywords) {
@@ -200,9 +196,8 @@ TEST(SVGParser, CssImportSourceOffsetCountsUtf8Bytes) {
   EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
   ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
   EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(source.find("@import")));
-  EXPECT_THAT(
-      warnings.warnings().front(),
-      ParseWarningIs(1, source.find("@import"), testing::HasSubstr("media conditions")));
+  EXPECT_THAT(warnings.warnings().front(),
+              ParseWarningIs(1, source.find("@import"), testing::HasSubstr("media conditions")));
 }
 
 TEST(SVGParser, SourceLessCssImportWarningKeepsCssLocalOffset) {
@@ -226,7 +221,8 @@ TEST(SVGParser, CssImportAfterUnmappedChunkBoundaryKeepsCssLocalOffset) {
   // CDATA chunk is mapped. The import starts exactly where that mapped chunk ends, which is not
   // the end of the stylesheet, so it must not be mapped to the end of the CDATA content.
   const std::string source =
-      "<svg xmlns='http://www.w3.org/2000/svg'><style><![CDATA[/*x*/]]>@import 'hidden.css' screen; "
+      "<svg xmlns='http://www.w3.org/2000/svg'><style><![CDATA[/*x*/]]>@import 'hidden.css' "
+      "screen; "
       "/* &amp; */</style><rect/></svg>";
   ParseWarningSink warnings;
   EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());

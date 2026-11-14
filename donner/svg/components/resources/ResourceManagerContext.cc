@@ -12,8 +12,8 @@
 #include "donner/base/Utils.h"
 #include "donner/base/encoding/Decompress.h"
 #include "donner/css/FontFace.h"
-#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -627,9 +627,11 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
   NullResourceLoader nullLoader;
   WriteAccessGuardedResourceLoader guardedLoader(
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
-  BudgetedCachingResourceLoader cachedLoader(guardedLoader, externalFetchCache_,
-                                             fetchSecurityStats_, remainingResourceFetchAttempts_,
-                                             limit, remainingResourceBytes_);
+  // The shared cache applies only the fixed per-resource cap, so its outcome for a URL never
+  // depends on this pass's remaining import allowance; that allowance is enforced afterwards.
+  BudgetedCachingResourceLoader cachedLoader(
+      guardedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
+      UrlLoader::kDefaultMaximumResourceSize, remainingResourceBytes_);
   // Data URLs decode without any loader; only external URLs reach the application's loader.
   ResourceLoaderInterface& loader = external ? static_cast<ResourceLoaderInterface&>(cachedLoader)
                                              : static_cast<ResourceLoaderInterface&>(nullLoader);
@@ -672,12 +674,13 @@ void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFac
 }
 
 void ResourceManagerContext::synchronizeStylesheetFontFaces(
-    Entity stylesheetEntity, std::span<const css::FontFace> fontFaces) {
+    Entity stylesheetEntity, std::span<const css::FontFace> fontFaces, std::uint64_t revision) {
   auto& registration = stylesheetFontFaceRegistrations_[stylesheetEntity];
-  if (registration.data == fontFaces.data() && registration.size == fontFaces.size()) {
+  if (registration.data == fontFaces.data() && registration.size == fontFaces.size() &&
+      registration.revision == revision) {
     return;
   }
-  registration = {.data = fontFaces.data(), .size = fontFaces.size()};
+  registration = {.data = fontFaces.data(), .size = fontFaces.size(), .revision = revision};
 
   for (const css::FontFace& fontFace : fontFaces) {
     std::string identity = css::FontFaceIdentityKey(fontFace);

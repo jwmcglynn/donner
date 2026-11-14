@@ -653,20 +653,34 @@ const char* IgnoredImportReason(ImportPreludeKind kind) {
 }
 
 /**
- * Whether a retained at-rule ends the leading section in which `@import` is valid. `@charset` is
- * consumed before rule parsing, `@layer` statements (without a block) may precede imports, and
- * unknown at-rules are invalid and therefore dropped without effect.
+ * Whether an at-rule ends the leading section in which `@import` is valid. `@charset` is consumed
+ * before rule parsing, `@layer` statements (without a block) may precede imports, and unknown or
+ * malformed at-rules are invalid and therefore dropped without effect.
  */
 bool AtRuleEndsImportSection(const AtRule& atRule) {
-  if (atRule.name.equalsLowercase("layer")) {
-    return atRule.block.has_value();
+  if (atRule.name.equalsLowercase("namespace")) {
+    return !atRule.block.has_value();
   }
-  constexpr std::array<std::string_view, 14> kKnownAtRules = {
-      "media",         "supports",           "font-face",          "namespace",
-      "keyframes",     "page",               "counter-style",      "property",
-      "container",     "font-feature-values", "font-palette-values", "scope",
-      "starting-style", "view-transition"};
-  return std::any_of(kKnownAtRules.begin(), kKnownAtRules.end(),
+  // The remaining known at-rules are valid only with a block; `@layer` without one is a
+  // statement that may precede imports.
+  if (!atRule.block.has_value()) {
+    return false;
+  }
+  constexpr std::array<std::string_view, 14> kBlockAtRules = {"media",
+                                                              "supports",
+                                                              "font-face",
+                                                              "layer",
+                                                              "keyframes",
+                                                              "page",
+                                                              "counter-style",
+                                                              "property",
+                                                              "container",
+                                                              "font-feature-values",
+                                                              "font-palette-values",
+                                                              "scope",
+                                                              "starting-style",
+                                                              "view-transition"};
+  return std::any_of(kBlockAtRules.begin(), kBlockAtRules.end(),
                      [&](std::string_view name) { return atRule.name.equalsLowercase(name); });
 }
 
@@ -694,8 +708,8 @@ void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
     warningSink.add([&] { return ParseDiagnostic::Warning(reason, atRule.sourceOffset); });
     return;
   }
-  state.imports.push_back(ImportRule{.url = std::move(parsed.url),
-                                     .sourceOffset = atRule.sourceOffset});
+  state.imports.push_back(
+      ImportRule{.url = std::move(parsed.url), .sourceOffset = atRule.sourceOffset});
 }
 
 void HandleAtRule(AtRule& atRule, StylesheetParseState& state, ParseWarningSink& warningSink) {

@@ -54,9 +54,9 @@ double ComputedRootFontSize(const Registry& registry) {
 void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& registry,
                                 Entity entity, const StylesheetComponent& stylesheet) {
   const css::Stylesheet empty;
-  resources.synchronizeStylesheetFontFaces(entity, HasSvgNamespace(registry, entity)
-                                                       ? stylesheet.cascadeFontFaces()
-                                                       : empty.fontFaces());
+  resources.synchronizeStylesheetFontFaces(
+      entity, HasSvgNamespace(registry, entity) ? stylesheet.cascadeFontFaces() : empty.fontFaces(),
+      stylesheet.fontFaceRevision);
 }
 
 bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
@@ -1078,6 +1078,11 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
     auto [stylesheet] = view.get(stylesheetEntity);
     SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
   }
+}
+
+void StyleSystem::discardComputedStyles(Registry& registry) {
+  GetStyleResourceBudget(registry).releaseAll();
+  registry.clear<ComputedStyleComponent>();
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,

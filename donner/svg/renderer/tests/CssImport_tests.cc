@@ -16,10 +16,12 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/resources/StylesheetImportLoader.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -28,6 +30,7 @@
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/resources/UrlLoader.h"
 
+using testing::Contains;
 using testing::ElementsAre;
 using testing::Field;
 using testing::HasSubstr;
@@ -107,6 +110,19 @@ protected:
       reasons.emplace_back(std::string_view(warning.reason));
     }
     return reasons;
+  }
+
+  static const components::StylesheetComponent& importingStylesheet(SVGDocument& document) {
+    for (auto view = document.registry().view<components::StylesheetComponent>();
+         const Entity entity : view) {
+      const auto& stylesheet = view.get<components::StylesheetComponent>(entity);
+      if (!stylesheet.stylesheet.imports().empty()) {
+        return stylesheet;
+      }
+    }
+    ADD_FAILURE() << "No importing stylesheet";
+    static const components::StylesheetComponent kEmpty;
+    return kEmpty;
   }
 
   void respond(std::string url, std::string css) {
@@ -255,11 +271,10 @@ TEST_F(CssImportTest, ParsedSizeIsBoundedAcrossImportedStylesheets) {
   for (std::size_t i = 0; i < 3000; ++i) {
     manyRules += "a{}";
   }
-  respond("a.css", manyRules);
-  respond("b.css", manyRules + "rect { fill: red; }");
-  SVGDocument document = parse("<style>@import 'a.css'; @import 'b.css'; rect { fill: green; }"
-                               "</style>" +
-                               std::string(kRect));
+  respond("a.css", manyRules + "#r { fill: green; }");
+  respond("b.css", manyRules + "#r { fill: blue; }");
+  SVGDocument document =
+      parse("<style>@import 'a.css'; @import 'b.css';</style>" + std::string(kRect));
   prepare(document);
   EXPECT_THAT(fill(document), Optional(kGreen));
   EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("parsed size exceeds")));
@@ -277,15 +292,15 @@ TEST_F(CssImportTest, MissingLoaderIsDiagnosedWithoutFetching) {
 TEST_F(CssImportTest, SecureModesNeverFetchExternalImports) {
   for (const ProcessingMode mode : {ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
     respond("theme.css", "rect { fill: red; }");
-    SVGDocument document = parse(
-        "<style>@import 'theme.css'; rect { fill: green; }</style>" + std::string(kRect), true,
-        mode);
+    SVGDocument document =
+        parse("<style>@import 'theme.css'; rect { fill: green; }</style>" + std::string(kRect),
+              true, mode);
     prepare(document);
     EXPECT_THAT(state_->requests, IsEmpty());
     EXPECT_THAT(fill(document), Optional(kGreen));
   }
-  EXPECT_THAT(warningReasons(),
-              ElementsAre(HasSubstr("secure processing mode"), HasSubstr("secure processing mode")));
+  EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("secure processing mode"),
+                                            HasSubstr("secure processing mode")));
 }
 
 TEST_F(CssImportTest, DataUrlImportsLoadWithoutTheLoader) {
@@ -310,10 +325,10 @@ TEST_F(CssImportTest, RelativeImportsInsideDataUrlsAreUnresolvable) {
 
 TEST_F(CssImportTest, NonCssTargetsAreRejected) {
   respond("image.png", "#r { fill: green; }");
-  SVGDocument document =
-      parse("<style>@import 'image.png'; @import url('data:image/svg+xml,%23r%7Bfill:green%7D');"
-            "</style>" +
-            std::string(kRect));
+  SVGDocument document = parse(
+      "<style>@import 'image.png'; @import url('data:image/svg+xml,%23r%7Bfill:green%7D');"
+      "</style>" +
+      std::string(kRect));
   prepare(document);
   EXPECT_THAT(fill(document), Optional(kRed));
   EXPECT_THAT(warningReasons(),
@@ -321,9 +336,9 @@ TEST_F(CssImportTest, NonCssTargetsAreRejected) {
 }
 
 TEST_F(CssImportTest, FailedFetchesKeepLocalRulesAndDoNotEchoTargets) {
-  SVGDocument document = parse(
-      "<style>@import 'https://example.test/private.css'; rect { fill: green; }</style>" +
-      std::string(kRect));
+  SVGDocument document =
+      parse("<style>@import 'https://example.test/private.css'; rect { fill: green; }</style>" +
+            std::string(kRect));
   prepare(document);
   EXPECT_THAT(state_->requests, ElementsAre("https://example.test/private.css"));
   EXPECT_THAT(fill(document), Optional(kGreen));
@@ -341,15 +356,67 @@ TEST_F(CssImportTest, WarningsPointAtTheImportInDocumentSource) {
             prefix.size() + kStyle.find("@import"));
 }
 
-TEST_F(CssImportTest, RepeatedPreparationDoesNotRefetch) {
+TEST_F(CssImportTest, RepeatedPreparationDoesNotReloadImports) {
   respond("theme.css", "rect { fill: green; }");
   SVGDocument document = parse("<style>@import 'theme.css';</style>" + std::string(kRect));
   prepare(document);
+  const auto& stylesheet = importingStylesheet(document);
+  const css::Stylesheet* loaded = stylesheet.importedStylesheets.data();
+  ASSERT_NE(loaded, nullptr);
+
   document.querySelector("#r")->setAttribute("stroke", "blue");
   prepare(document);
   prepare(document);
+  // A reload would replace the imported storage even though the fetch cache hides the request.
+  EXPECT_EQ(importingStylesheet(document).importedStylesheets.data(), loaded);
   EXPECT_THAT(state_->requests, ElementsAre("theme.css"));
   EXPECT_THAT(fill(document), Optional(kGreen));
+}
+
+TEST_F(CssImportTest, StylesComputedBeforeTheFirstRenderIncludeImports) {
+  respond("theme.css", "#r { fill: green; }");
+  SVGDocument document = parse("<style>@import 'theme.css';</style>" + std::string(kRect));
+  EXPECT_THAT(fill(document), Optional(kRed));
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+}
+
+TEST_F(CssImportTest, ImportRejectedByOnePassBudgetLoadsInALaterPass) {
+  const std::size_t large = StylesheetImportBudget::kMaximumBytes * 3 / 4;
+  respond("a.css", "rect { fill: red; }" + std::string(large, ' '));
+  respond("b.css", "#r { fill: green; }" + std::string(large / 2, ' '));
+  SVGDocument document =
+      parse("<style id='s'>@import 'a.css'; @import 'b.css';</style>" + std::string(kRect));
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kRed));
+  EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("not loaded")));
+
+  // The refusal depended only on that pass's remaining allowance; it must not be cached.
+  document.querySelector("#s")->cast<SVGStyleElement>().setContents("@import 'b.css';");
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+}
+
+TEST_F(CssImportTest, ImportedFontSourcesResolveAgainstTheImportedStylesheet) {
+  respond("styles/a.css", "@font-face { font-family: A; src: url(fonts/a.woff); }");
+  respond("b.css", "@font-face { font-family: B; src: url(b.woff); }");
+  SVGDocument document =
+      parse("<style id='s'>@import 'styles/a.css';</style>" + std::string(kRect));
+  prepare(document);
+  EXPECT_THAT(state_->requests, Contains("styles/fonts/a.woff"));
+
+  // A replacement with the same number of font faces must still register the new face.
+  document.querySelector("#s")->cast<SVGStyleElement>().setContents("@import 'b.css';");
+  prepare(document);
+  EXPECT_THAT(state_->requests, Contains("b.woff"));
+}
+
+TEST_F(CssImportTest, ImportOfTheDocumentDirectoryIsIgnored) {
+  SVGDocument document = parse("<style>@import '.'; @import 'a/..';</style>" + std::string(kRect));
+  prepare(document);
+  EXPECT_THAT(state_->requests, IsEmpty());
+  EXPECT_THAT(warningReasons(),
+              ElementsAre(HasSubstr("document itself"), HasSubstr("document itself")));
 }
 
 TEST_F(CssImportTest, ImportedAttributeSelectorsInvalidateStyles) {

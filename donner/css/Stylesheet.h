@@ -134,6 +134,12 @@ public:
   std::span<const FontFace> fontFaces() const UTILS_LIFETIME_BOUND { return fontFaces_; }
 
   /**
+   * Get mutable access to the `@font-face` rules, for example to resolve their relative source
+   * URLs against the URL a stylesheet was loaded from.
+   */
+  std::span<FontFace> mutableFontFaces() UTILS_LIFETIME_BOUND { return fontFaces_; }
+
+  /**
    * Get the unconditional `@import` rules of this stylesheet, in source order. Imported rules
    * precede this stylesheet's own \ref rules in the cascade.
    */

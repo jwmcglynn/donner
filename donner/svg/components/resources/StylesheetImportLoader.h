@@ -44,9 +44,8 @@ struct StylesheetImportBudget {
  * The callback receives the maximum number of bytes this import may still use, so oversized
  * responses can be rejected before they are retained.
  */
-using StylesheetImportFetch =
-    std::function<std::variant<UrlLoader::Result, RcString>(std::string_view url,
-                                                            std::size_t maximumBytes)>;
+using StylesheetImportFetch = std::function<std::variant<UrlLoader::Result, RcString>(
+    std::string_view url, std::size_t maximumBytes)>;
 
 /**
  * Load the `@import` rules of \p stylesheet and, recursively, of the stylesheets they import.
@@ -55,7 +54,8 @@ using StylesheetImportFetch =
  * normalization; nested imports resolve against the URL of the stylesheet that contains them, as
  * CSS specifies. Imports that would recurse into a stylesheet already being loaded on the current
  * path (a cycle), exceed \ref StylesheetImportBudget, cannot be resolved, fail to load, are not
- * UTF-8, or have a non-CSS data URL type are skipped with a warning. Warnings are reported at the
+ * UTF-8, or have a non-CSS data URL type are skipped with a warning. Relative `@font-face` source
+ * URLs in an imported sheet are resolved against that sheet's URL. Warnings are reported at the
  * offset of the top-level import that led to them, in \p stylesheet's local CSS coordinates, and
  * never include URLs. Diagnostics from parsing imported text are not reported, since their offsets
  * refer to another resource.

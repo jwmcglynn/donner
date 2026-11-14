@@ -141,6 +141,10 @@ struct StylesheetComponent {
   /// imports contributed any; see \ref cascadeFontFaces().
   std::vector<css::FontFace> combinedFontFaces;
 
+  /// Incremented whenever \ref cascadeFontFaces may have changed, so font registration notices
+  /// new contents even if their storage address and size are reused.
+  std::uint64_t fontFaceRevision = 0;
+
   /// Resource-manager generation for which \ref importedStylesheets was resolved, or nullopt when
   /// the imports of the current \ref stylesheet have not been resolved yet.
   std::optional<std::uint64_t> importGeneration;

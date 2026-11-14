@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
@@ -155,9 +156,17 @@ public:
    */
   void addFontFaces(std::span<const css::FontFace> fontFaces);
 
-  /** Register a stylesheet's font faces once for its current parsed storage. */
+  /**
+   * Register a stylesheet's font faces once for its current parsed storage.
+   *
+   * @param stylesheetEntity Entity owning the stylesheet.
+   * @param fontFaces Font faces the stylesheet contributes.
+   * @param revision Content revision of \p fontFaces; a change re-registers even when the storage
+   *   address and size are reused.
+   */
   void synchronizeStylesheetFontFaces(Entity stylesheetEntity,
-                                      std::span<const css::FontFace> fontFaces);
+                                      std::span<const css::FontFace> fontFaces,
+                                      std::uint64_t revision = 0);
 
   /**
    * Get all registered `@font-face` declarations.
@@ -214,6 +223,7 @@ private:
   struct StylesheetFontFaceRegistration {
     const css::FontFace* data = nullptr;
     size_t size = 0;
+    std::uint64_t revision = 0;
   };
   std::unordered_map<Entity, StylesheetFontFaceRegistration> stylesheetFontFaceRegistrations_;
   size_t stylesheetFontFaceCount_ = 0;

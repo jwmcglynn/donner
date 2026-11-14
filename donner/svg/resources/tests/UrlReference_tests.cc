@@ -86,6 +86,9 @@ TEST(UrlReference, NormalizationNeverChangesHowTheResultParses) {
   EXPECT_EQ(Resolve("", "./a:b.css"), "./a:b.css");
   EXPECT_EQ(Resolve("x/main.css", "../a:b.css"), "./a:b.css");
   EXPECT_EQ(Resolve("", "/.//host/x.css"), "/.//host/x.css");
+  // A relative path keeps a leading empty segment relative instead of becoming root-absolute.
+  EXPECT_EQ(Resolve("", ".//x.css"), ".//x.css");
+  EXPECT_EQ(Resolve("", "a/..//b"), ".//b");
   EXPECT_EQ(Resolve("https://example.test/a/b.css", "/.//x.css"), "https://example.test//x.css");
 }
 

@@ -110,6 +110,7 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
   importedStylesheets.clear();
   combinedFontFaces.clear();
   importGeneration.reset();
+  ++fontFaceRevision;
 
   // Every path that loads or mutates a stylesheet ends here, so recomputing the cache alongside
   // the parse keeps it from going stale.
@@ -120,6 +121,7 @@ void StylesheetComponent::setImportedStylesheets(std::vector<css::Stylesheet>&& 
                                                  std::uint64_t generation) {
   importedStylesheets = std::move(imported);
   importGeneration = generation;
+  ++fontFaceRevision;
 
   combinedFontFaces.clear();
   for (const css::Stylesheet& sheet : importedStylesheets) {

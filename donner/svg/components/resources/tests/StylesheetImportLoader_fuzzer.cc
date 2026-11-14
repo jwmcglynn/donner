@@ -34,8 +34,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const css::Stylesheet root = css::parser::StylesheetParser::Parse(chunks.front(), parseWarnings);
 
   size_t fetches = 0;
-  const StylesheetImportFetch fetch = [&](std::string_view url, size_t maximumBytes)
-      -> std::variant<UrlLoader::Result, RcString> {
+  const StylesheetImportFetch fetch =
+      [&](std::string_view url, size_t maximumBytes) -> std::variant<UrlLoader::Result, RcString> {
     if (url.empty() || maximumBytes > StylesheetImportBudget::kMaximumBytes) {
       std::abort();
     }
@@ -54,7 +54,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   StylesheetImportBudget budget;
   ParseWarningSink warnings;
-  const std::vector<css::Stylesheet> imported = LoadStylesheetImports(root, fetch, budget, warnings);
+  const std::vector<css::Stylesheet> imported =
+      LoadStylesheetImports(root, fetch, budget, warnings);
   if (fetches > StylesheetImportBudget::kMaximumImports ||
       imported.size() > StylesheetImportBudget::kMaximumImports ||
       budget.remainingImports > StylesheetImportBudget::kMaximumImports ||

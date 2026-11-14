@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "donner/base/ParseDiagnostic.h"
@@ -15,6 +16,28 @@ namespace donner::svg::components {
 namespace {
 
 constexpr std::string_view kUtf8Bom = "\xEF\xBB\xBF";
+
+/**
+ * Resolve the relative `url()` sources of an imported sheet's font faces against the sheet's own
+ * URL, as CSS specifies. Sources that cannot be resolved are dropped rather than being resolved
+ * against the document by mistake.
+ */
+void RebaseFontFaceSources(css::Stylesheet& sheet, std::string_view sheetUrl) {
+  for (css::FontFace& fontFace : sheet.mutableFontFaces()) {
+    std::erase_if(fontFace.sources, [&](css::FontFaceSource& source) {
+      if (source.kind != css::FontFaceSource::Kind::Url) {
+        return false;
+      }
+      std::optional<std::string> resolved =
+          ResolveUrlReference(sheetUrl, std::get<RcString>(source.payload));
+      if (!resolved.has_value() || resolved->empty()) {
+        return true;
+      }
+      source.payload = RcString(*resolved);
+      return false;
+    });
+  }
+}
 
 /// Depth-first loader for one root stylesheet; see \ref LoadStylesheetImports.
 class ImportLoader {
@@ -55,8 +78,8 @@ private:
 
   /// Validate fetched bytes and charge them to the byte budget; return the CSS text on success.
   std::optional<std::string_view> admitText(const UrlLoader::Result& loaded, FileOffset offset) {
-    if (!loaded.mimeType.empty() &&
-        !StringUtils::EqualsLowercase(std::string_view(loaded.mimeType), std::string_view("text/css"))) {
+    if (!loaded.mimeType.empty() && !StringUtils::EqualsLowercase(std::string_view(loaded.mimeType),
+                                                                  std::string_view("text/css"))) {
       warn("CSS @import target is not a text/css resource; the import is ignored", offset);
       return std::nullopt;
     }
@@ -101,6 +124,11 @@ private:
            offset);
       return;
     }
+    if (resolved->empty()) {
+      // A reference such as "." names the document or base directory, never a stylesheet.
+      warn("CSS @import target resolves to the document itself; the import is ignored", offset);
+      return;
+    }
     if (const char* failure = admissionFailure(*resolved, depth)) {
       warn(failure, offset);
       return;
@@ -124,6 +152,7 @@ private:
       return;
     }
 
+    RebaseFontFaceSources(sheet, *resolved);
     path_.push_back(*resolved);
     for (const css::ImportRule& nested : sheet.imports()) {
       loadImport(nested.url, path_.back(), offset, depth + 1);

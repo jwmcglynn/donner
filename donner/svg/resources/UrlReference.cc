@@ -103,7 +103,8 @@ std::string RemoveDotSegments(std::string_view path) {
     rest.remove_prefix(slash + 1);
   }
 
-  std::string result = absolute ? "/" : "";
+  // A relative path whose first remaining segment is empty must not become root-absolute.
+  std::string result = absolute ? "/" : (!segments.empty() && segments.front().empty() ? "./" : "");
   for (std::size_t i = 0; i < segments.size(); ++i) {
     if (i != 0) {
       result += '/';

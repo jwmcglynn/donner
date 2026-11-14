@@ -440,6 +440,16 @@ public:
    */
   void invalidateComputed(EntityHandle handle);
 
+  /**
+   * Discard every cached computed style and its retained style budget, for changes that affect
+   * selector matching across the whole document, such as reloaded stylesheet imports. Unlike
+   * \ref RenderTreeState::needsFullStyleRecompute, this also covers styles computed by queries
+   * before the render tree was first built.
+   *
+   * @param registry Registry containing the document.
+   */
+  static void discardComputedStyles(Registry& registry);
+
   /// Inherit fallback values from an external-use computed parent without transferring specificity.
   /// Resolved ordinary host paint, retained only during the guarded occurrence.
   static ResolvedPaintServer externalHostPaint(Registry& registry, bool stroke);
