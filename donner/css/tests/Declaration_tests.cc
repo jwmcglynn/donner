@@ -6,6 +6,7 @@
 #include <optional>
 #include <sstream>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/css/CSS.h"
 
 namespace donner::css {
@@ -437,6 +438,16 @@ TEST(MergeStyleDeclarations, EmptyInputs) {
 
   auto existing = parse("fill: red");
   EXPECT_EQ(mergeStyleDeclarations(existing, {}), "fill: red");
+}
+
+// Property names are matched with ASCII-only case folding, so names that differ in a byte above
+// 0x7F stay distinct in every locale.
+TEST(MergeStyleDeclarations, MatchesNamesWithAsciiCaseFoldingInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    auto existing = parse("\xC3\x89: 1; Fill: red");
+    auto updates = parse("\xE3\x89: 2; fill: blue");
+    EXPECT_EQ(mergeStyleDeclarations(existing, updates), "\xC3\x89: 1; \xE3\x89: 2; fill: blue");
+  });
 }
 
 TEST(MergeStyleDeclarations, AddsNewProperty) {

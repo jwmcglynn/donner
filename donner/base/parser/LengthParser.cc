@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/parser/details/ParserBase.h"
 
 namespace donner::parser {
@@ -40,9 +41,8 @@ std::optional<Lengthd::Unit> parseUnit(std::string_view suffix, size_t* charsCon
   const size_t kMaxLength = 4;
 
   // Comparisons are case-insensitive, convert token to lowercase.
-  std::string token = std::string(suffix.substr(0, std::min(suffix.size(), kMaxLength)));
-  std::transform(token.begin(), token.end(), token.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+  const std::string token =
+      StringUtils::ToLowerAscii(suffix.substr(0, std::min(suffix.size(), kMaxLength)));
 
   for (const auto& unit : kSuffixMap) {
     if (token.starts_with(unit.suffix)) {

@@ -20,6 +20,11 @@ namespace details {
 template <typename T>
 concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
 
+/// Maps ASCII `A`-`Z` to `a`-`z` and returns every other byte unchanged, whatever the C locale.
+constexpr char AsciiToLower(char ch) {
+  return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
+}
+
 }  // namespace details
 
 /**
@@ -44,9 +49,10 @@ enum class StringComparison : uint8_t {
  * `std::char_traits`.
  */
 struct CaseInsensitiveCharTraits : public std::char_traits<char> {
-  /// Convert an unsigned-byte character to its lowercase comparison value.
-  /// @param ch Character to lowercase using the current C locale.
-  static int lower(char ch) { return std::tolower(static_cast<unsigned char>(ch)); }
+  /// Convert a character to its lowercase comparison value, folding only ASCII letters so the
+  /// result does not depend on the process C locale.
+  /// @param ch Character to lowercase.
+  static int lower(char ch) { return static_cast<unsigned char>(details::AsciiToLower(ch)); }
 
   /**
    * Compare two characters for equality.
@@ -145,8 +151,7 @@ public:
     const char* lhsData = lhs.data();
     const char* rhsData = lowercaseRhs.data();
     for (size_t i = 0; i < lowercaseRhs.size(); ++i) {
-      if (std::tolower(static_cast<unsigned char>(lhsData[i])) !=
-          static_cast<unsigned char>(rhsData[i])) {
+      if (details::AsciiToLower(lhsData[i]) != rhsData[i]) {
         return false;
       }
     }
@@ -373,11 +378,28 @@ public:
   static std::string ToLowerAscii(const T& str) {
     std::string result(str.data(), str.size());
     for (char& ch : result) {
-      if (ch >= 'A' && ch <= 'Z') {
-        ch = static_cast<char>(ch - 'A' + 'a');
-      }
+      ch = details::AsciiToLower(ch);
     }
     return result;
+  }
+
+  /**
+   * Returns \p ch with ASCII `A`-`Z` mapped to `a`-`z`; every other byte is returned unchanged,
+   * whatever the process C locale.
+   *
+   * @param ch The character to lowercase.
+   */
+  static constexpr char ToLowerAscii(char ch) { return details::AsciiToLower(ch); }
+
+  /**
+   * Returns true for the bytes `std::isspace` accepts in the "C" locale: space, tab, line feed,
+   * vertical tab, form feed and carriage return. Unlike `std::isspace`, bytes above 0x7F are never
+   * whitespace, whatever the process locale.
+   *
+   * @param ch The character to classify.
+   */
+  static constexpr bool IsAsciiWhitespace(char ch) {
+    return ch == ' ' || (ch >= '\t' && ch <= '\r');
   }
 
   /**

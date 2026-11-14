@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -19,6 +18,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 
@@ -81,25 +81,7 @@ uint8_t clampAlpha(uint8_t alpha) {
 }
 
 bool containsIgnoreCase(std::string_view haystack, std::string_view needle) {
-  if (needle.empty() || haystack.size() < needle.size()) {
-    return false;
-  }
-
-  const std::string lowerHaystack = [&]() {
-    std::string lower(haystack);
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    return lower;
-  }();
-
-  const std::string lowerNeedle = [&]() {
-    std::string lower(needle);
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    return lower;
-  }();
-
-  return lowerHaystack.find(lowerNeedle) != std::string::npos;
+  return !needle.empty() && StringUtils::Contains<StringComparison::IgnoreCase>(haystack, needle);
 }
 
 void writeTrueColor(std::ostream& output, int selector, const css::RGBA& color) {

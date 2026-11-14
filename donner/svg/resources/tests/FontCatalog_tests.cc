@@ -5,11 +5,11 @@
 
 #include <algorithm>
 #include <cctype>
-#include <clocale>
 #include <memory>
 #include <ranges>
 #include <string>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/resources/FontManager.h"
@@ -57,26 +57,6 @@ private:
   std::vector<std::string> families_;
   FontSource source_;
   uint8_t marker_;
-};
-
-/// Switches the process C locale's character classification for the lifetime of the object.
-class ScopedCtypeLocale {
-public:
-  explicit ScopedCtypeLocale(const char* name) : previous_(std::setlocale(LC_CTYPE, nullptr)) {
-    applied_ = std::setlocale(LC_CTYPE, name) != nullptr;
-  }
-
-  ~ScopedCtypeLocale() { std::setlocale(LC_CTYPE, previous_.c_str()); }
-
-  ScopedCtypeLocale(const ScopedCtypeLocale&) = delete;
-  ScopedCtypeLocale& operator=(const ScopedCtypeLocale&) = delete;
-
-  /// Whether the requested locale is installed and now active.
-  bool applied() const { return applied_; }
-
-private:
-  std::string previous_;
-  bool applied_ = false;
 };
 
 std::vector<std::string> familyNames(const std::vector<FontFamilyInfo>& infos) {
@@ -236,11 +216,9 @@ TEST(FontCatalogTest, FamilyDedupFoldsOnlyAsciiCase) {
       0x01));
   FontCatalog catalog(std::move(providers));
 
-  for (const char* locale : {"C", "en_US.UTF-8", "en_US.ISO8859-1", "en_US.ISO-8859-1"}) {
-    ScopedCtypeLocale scopedLocale(locale);
-    EXPECT_THAT(familyNames(catalog.families()), ElementsAre("INTER", "\xC3\xA9", "\xE3\xA9"))
-        << "LC_CTYPE=" << locale << (scopedLocale.applied() ? "" : " (not installed)");
-  }
+  ForEachCtypeLocaleForTesting([&] {
+    EXPECT_THAT(familyNames(catalog.families()), ElementsAre("INTER", "\xC3\xA9", "\xE3\xA9"));
+  });
 }
 
 TEST(FontCatalogTest, FamiliesBySourceFilters) {
