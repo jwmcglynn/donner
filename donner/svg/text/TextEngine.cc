@@ -4257,14 +4257,7 @@ public:
     if (!input) {
       return reject();
     }
-    // A right-to-left base or an override reorders even text whose characters are all
-    // left-to-right, so it always needs the paragraph plan. Vertical lines keep a left-to-right
-    // base: their right-to-left layout is not implemented.
-    if (!isVertical(params.writingMode)) {
-      paragraphBase_ = params.direction == Direction::Rtl ? 1 : 0;
-      paragraphOverride_ = params.bidiOverride;
-    }
-    enabled |= paragraphBase_ != 0 || paragraphOverride_;
+    resolveParagraphDirection(params);
     if (!enabled) {
       return true;
     }
@@ -4301,6 +4294,19 @@ public:
     enabled = false;
     return true;
 #endif
+  }
+
+  /// Takes the paragraph level and override from the `<text>` element. A right-to-left base or an
+  /// override reorders even text whose characters are all left-to-right, so either one needs the
+  /// paragraph plan. Vertical lines keep a left-to-right base: their right-to-left layout is not
+  /// implemented.
+  void resolveParagraphDirection(const TextLayoutParams& params) {
+    if (isVertical(params.writingMode)) {
+      return;
+    }
+    paragraphBase_ = params.direction == Direction::Rtl ? 1 : 0;
+    paragraphOverride_ = params.bidiOverride;
+    enabled |= paragraphBase_ != 0 || paragraphOverride_;
   }
 
   /// The returned view aliases immutable storage alive through this invocation.
