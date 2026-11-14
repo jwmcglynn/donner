@@ -31,6 +31,16 @@ TEST(Tokenizer, Whitespace) {
   EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" \t\f\r\n"), 0));
 }
 
+TEST(Tokenizer, EndOffsetCoversOnlyTheReturnedToken) {
+  Tokenizer tokenizer("url(#a)/* note */ x");
+  EXPECT_THAT(tokenizer.next(), Token(Token::Url("#a"), 0));
+  EXPECT_THAT(tokenizer.endOffset(), testing::Eq(7u));
+  EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" "), 17));
+  EXPECT_THAT(tokenizer.endOffset(), testing::Eq(18u));
+  EXPECT_THAT(tokenizer.next(), Token(Token::Ident("x"), 18));
+  EXPECT_THAT(tokenizer.endOffset(), testing::Eq(19u));
+}
+
 TEST(Tokenizer, Comment) {
   {
     Tokenizer tokenizer("/**/");

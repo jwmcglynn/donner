@@ -52,6 +52,13 @@ public:
    */
   bool isEOF() const;
 
+  /**
+   * Returns the offset just past the token most recently returned by \ref next(), before any
+   * comment that follows it, so `[token.offset(), endOffset())` is exactly that token's source
+   * text.
+   */
+  size_t endOffset() const { return currentOffset(); }
+
 private:
   /// Get the current offset in the input string.
   size_t currentOffset() const;
