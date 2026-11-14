@@ -1056,16 +1056,13 @@ constexpr std::string_view kBackdropFilters = R"svg(
   </filter>)svg";
 
 /// Renders \p body after \ref kBackdropFilters on a 64x64 canvas with the configured backend.
+///
+/// Oracles draw the expected copy explicitly and keep the case's isolation group. Inside a group
+/// the copy goes through `pass`, so a filter result composites over the group's earlier content
+/// the same way in the case and its oracle.
 RendererBitmap RenderBackdropCase(std::string_view body) {
   SVGDocument document =
       instantiateSubtree(std::string(kBackdropFilters) + std::string(body), {}, Vector2i(64, 64));
-  return RenderDocumentWithBackend(document, ActiveRendererBackend());
-}
-
-/// Renders \p body without filters, the oracle for \ref RenderBackdropCase. Oracles keep the
-/// case's isolation group, so content outside the filter result is composited the same way.
-RendererBitmap RenderBackdropOracle(std::string_view body) {
-  SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
@@ -1080,11 +1077,11 @@ TEST_F(RendererRegressionTests, FilterBackgroundAlphaReadsIsolationGroupBackdrop
       <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#bgAlpha)"/>
     </g>)svg");
   ExpectVisibleBitmap(actual, "background_alpha_visible");
-  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropCase(R"svg(
     <rect x="4" y="40" width="12" height="12" fill="blue"/>
     <g style="isolation:isolate">
       <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-      <rect x="36" y="4" width="16" height="16" fill="black"/>
+      <rect x="36" y="4" width="16" height="16" fill="black" filter="url(#pass)"/>
     </g>)svg"),
                                        "background_alpha_isolation_group",
                                        editor::tests::PixelmatchIdentityParams());
@@ -1124,11 +1121,11 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageReadsIsolationGroupBackdrop
       <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#bgImage)"/>
     </g>)svg");
   ExpectVisibleBitmap(actual, "background_image_visible");
-  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropCase(R"svg(
     <rect x="4" y="40" width="12" height="12" fill="blue"/>
     <g style="isolation:isolate">
       <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-      <rect x="36" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen" filter="url(#pass)"/>
     </g>)svg"),
                                        "background_image_isolation_group",
                                        editor::tests::PixelmatchIdentityParams());
@@ -1145,7 +1142,7 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageWithoutIsolationReadsEarlie
     </g>
     <rect x="4" y="24" width="8" height="8" fill="orange"/>)svg");
   ExpectVisibleBitmap(actual, "background_root_visible");
-  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropCase(R"svg(
     <rect x="4" y="40" width="12" height="12" fill="blue"/>
     <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
     <rect x="36" y="40" width="12" height="12" fill="blue"/>
@@ -1165,10 +1162,11 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageIgnoresElementOwnLayers) {
             filter="url(#bgImage) url(#pass)"/>
     </g>)svg");
   ExpectVisibleBitmap(actual, "background_own_layers_visible");
-  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropCase(R"svg(
     <g style="isolation:isolate">
       <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-      <rect x="36" y="4" width="16" height="16" fill="seagreen" opacity="0.5"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen" opacity="0.5"
+            filter="url(#pass)"/>
     </g>)svg"),
                                        "background_image_own_layers",
                                        editor::tests::PixelmatchIdentityParams());
@@ -1183,10 +1181,10 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageWithInputMarginKeepsBackdro
       <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#margin)"/>
     </g>)svg");
   ExpectVisibleBitmap(actual, "background_margin_visible");
-  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropCase(R"svg(
     <g style="isolation:isolate">
       <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-      <rect x="36" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen" filter="url(#pass)"/>
     </g>)svg"),
                                        "background_image_input_margin",
                                        editor::tests::PixelmatchIdentityParams());
