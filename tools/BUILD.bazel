@@ -1133,6 +1133,7 @@ py_test(
     size = "small",
     srcs = ["ci_workflow_targets_tests.py"],
     data = [
+        "//:.bazelrc",
         "//:github_action_definitions",
         "//donner/gpu/metal/tests:BUILD.bazel",
         "//tools/ci:BUILD.bazel",

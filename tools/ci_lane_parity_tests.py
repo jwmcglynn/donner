@@ -270,8 +270,8 @@ INVOCATION_ALLOWLIST = {
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted-vm"))},
     **{("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only", flag):
-       "Scheduling budget for two concurrent VM jobs; it changes no action key."
-       for flag in ("--jobs=6", "--local_resources=cpu=6", "--local_resources=memory=6144")},
+       "VM runner scheduling budget (--config=macos-vm); it changes no action key."
+       for flag in _config_flags("macos-vm")},
     **{("main.yml", "macos", "macos-self-hosted", step, "flag-pr-only",
         "--//build_defs:metal_shader_validation=off"):
        "The VM uses API validation. The independent native Metal job retains shader validation; "
