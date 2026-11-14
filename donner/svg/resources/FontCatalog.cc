@@ -16,14 +16,6 @@ namespace donner::svg {
 
 namespace {
 
-/// Lowercase copy for case-insensitive dedup keys.
-std::string toLower(std::string_view value) {
-  std::string out(value);
-  std::transform(out.begin(), out.end(), out.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return out;
-}
-
 /// Editor-only generic family with consistent upright, bold, and italic metrics.
 class GenericSansProvider final : public FontFamilyProvider {
 public:
@@ -91,7 +83,7 @@ std::vector<FontFamilyInfo> FontCatalog::families() const {
                                                             std::string_view("sans-serif"))) {
         continue;
       }
-      if (seen.insert(toLower(info.family)).second) {
+      if (seen.insert(StringUtils::ToLowerAscii(info.family)).second) {
         result.push_back(std::move(info));
       }
     }

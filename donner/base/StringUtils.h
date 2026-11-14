@@ -355,6 +355,32 @@ public:
   }
 
   /**
+   * Returns a copy of \p str with ASCII `A`-`Z` mapped to `a`-`z` and every other byte unchanged.
+   *
+   * Unlike `std::tolower`, the result does not depend on the process C locale, so it is safe for
+   * lookup keys that must compare equal across locales and for UTF-8 text.
+   *
+   * ```
+   * std::string result = StringUtils::ToLowerAscii("Noto SANS");
+   * // result is "noto sans"
+   * ```
+   *
+   * @param str The string to lowercase.
+   * @tparam T The type of the string, must be \c StringLike (have `size()` and `data()` methods).
+   * @return The ASCII-lowercased copy.
+   */
+  template <StringLike T>
+  static std::string ToLowerAscii(const T& str) {
+    std::string result(str.data(), str.size());
+    for (char& ch : result) {
+      if (ch >= 'A' && ch <= 'Z') {
+        ch = static_cast<char>(ch - 'A' + 'a');
+      }
+    }
+    return result;
+  }
+
+  /**
    * Trims leading and trailing whitespace from a string, returning a view of the trimmed string.
    *
    * The returned view aliases \p str, so \p str must outlive it.
