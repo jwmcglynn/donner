@@ -1375,7 +1375,7 @@ bool SidebarPresenter::applyStrokeWidth(EditorApp& liveApp, Lengthd width) {
   beginStrokeScalarEdit(liveApp, StrokeScalarField::Width);
   if (width.unit == LengthUnit::None || width.unit == LengthUnit::Px) {
     width.value = std::min(width.value, 200.0);
-    liveApp.setActiveStrokeWidth(static_cast<float>(width.value));
+    liveApp.setActiveStrokeWidth(width.value);
   }
   const bool changed = liveApp.setStylePropertyOnSelection("stroke-width", width.toRcString());
   strokeScalarEdit_->changed |= changed;
