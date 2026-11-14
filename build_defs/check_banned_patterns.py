@@ -739,9 +739,13 @@ def _stale_xml_scan_cap(hits: int, allowed: int) -> Tuple[int, str, str]:
 
 
 def _names_existing_file(root: Path, path: str) -> bool:
-    """Return true if `path` names a file under `root`, with its exact on-disk spelling."""
-    candidate = root / path
-    return candidate.is_file() and candidate.name in os.listdir(candidate.parent)
+    """Return true if `path` names a file under `root`, with every component spelled as on disk."""
+    directory = root
+    for component in path.split("/"):
+        if not directory.is_dir() or component not in os.listdir(directory):
+            return False
+        directory = directory / component
+    return directory.is_file()
 
 
 def _listed_path_problem(root: Path, path: str) -> str | None:

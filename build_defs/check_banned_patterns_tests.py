@@ -243,7 +243,9 @@ class CheckBannedPatternsTests(unittest.TestCase):
             root = Path(temp_dir)
             _write_xml_scan_allowlist_files(root)
             (root / "donner/editor/lowercase.cc").write_text("", encoding="utf-8")
-            exempt = exempt_paths or check_banned_patterns._XML_SCAN_EXEMPT_PATHS
+            exempt = exempt_paths
+            if exempt is None:
+                exempt = check_banned_patterns._XML_SCAN_EXEMPT_PATHS
             module = check_banned_patterns
             with mock.patch.dict(module._XML_SCAN_ALLOWLIST, allowlist, clear=True), \
                  mock.patch.object(module, "_XML_SCAN_EXEMPT_PATHS", exempt):
@@ -258,6 +260,10 @@ class CheckBannedPatternsTests(unittest.TestCase):
             "donner/editor/../editor/FocusView.cc": (
                 2, "is not a normalized repository-relative path"),
             "donner/editor/LowerCase.cc": (
+                2, "does not exist; remove the entry or move it to the new path"),
+            "donner/Editor/FocusView.cc": (
+                2, "does not exist; remove the entry or move it to the new path"),
+            "Donner/editor/FocusView.cc": (
                 2, "does not exist; remove the entry or move it to the new path"),
         }
         for path, (cap, problem) in cases.items():
