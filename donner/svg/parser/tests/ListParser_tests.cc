@@ -73,11 +73,12 @@ TEST(ListParser, SeparatorsDoNotDependOnLocale) {
       [] { EXPECT_THAT(ParseToList("a\xA0z c"), ElementsAre("a\xA0z", "c")); });
 }
 
-// Items are separated by XML whitespace (space, tab, line feed, carriage return) and commas;
-// vertical tab and form feed are part of an item.
-TEST(ListParser, VerticalTabAndFormFeedDoNotSeparate) {
+// Items are separated by CSS whitespace (space, tab, line feed, carriage return, form feed) and
+// commas, as in the SVG 2 value syntax of the text positioning attributes; a vertical tab is part
+// of an item.
+TEST(ListParser, VerticalTabDoesNotSeparate) {
   EXPECT_THAT(ParseToList("a\vb c"), ElementsAre("a\vb", "c"));
-  EXPECT_THAT(ParseToList("a\fb\rc"), ElementsAre("a\fb", "c"));
+  EXPECT_THAT(ParseToList("a\fb\rc"), ElementsAre("a", "b", "c"));
 }
 
 TEST(ListParser, SpaceSeparated) {
