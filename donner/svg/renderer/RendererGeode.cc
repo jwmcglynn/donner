@@ -1254,6 +1254,27 @@ struct GeodeFilterPlan {
 };
 
 /// Plan a filter layer over \p buffer without reserving anything.
+/// Backdrop textures a filter capture keeps for BackgroundImage and BackgroundAlpha.
+struct GeodeBackdropCapture {
+  uint64_t bytes = 0;     ///< RGBA8 bytes of the backdrop copy and any tile buffer for it.
+  uint64_t surfaces = 0;  ///< Surfaces those textures occupy.
+};
+
+/// Plans the backdrop copy with the capture's layout, and the tile buffer a tiled execution
+/// copies each tile of it into, when \p filterGraph reads the backdrop.
+GeodeBackdropCapture PlanGeodeBackdropCapture(const components::FilterGraph& filterGraph,
+                                              const geode::FilterTilePlan& plan) {
+  if (!components::StandardInputUsage(filterGraph).readsBackdrop()) {
+    return {};
+  }
+  GeodeBackdropCapture capture{uint64_t{plan.width} * plan.height * 4, 1};
+  if (plan.tiles > 1) {
+    capture.bytes += plan.pixels() * 4;
+    ++capture.surfaces;
+  }
+  return capture;
+}
+
 GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
                                 const std::optional<Box2d>& filterRegion,
                                 const Transform2d& deviceFromFilter,
@@ -1283,14 +1304,9 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
       copiesViewport ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4 : 0;
   const uint64_t bufferPixels =
       static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
-  // A graph reading the backdrop keeps a backdrop copy with the capture's layout, and a tiled
-  // execution copies each tile of it.
-  const bool readsBackdrop = components::StandardInputUsage(filterGraph).readsBackdrop();
-  const uint64_t tilePixels = uint64_t{result.plan.tileWidth} * result.plan.tileHeight;
-  const uint64_t backdropBytes =
-      readsBackdrop ? bufferPixels * 4 + (result.plan.tiles > 1 ? tilePixels * 4 : 0) : 0;
+  const GeodeBackdropCapture backdrop = PlanGeodeBackdropCapture(filterGraph, result.plan);
   result.captureBytes = bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes +
-                        viewportCopyBytes + backdropBytes;
+                        viewportCopyBytes + backdrop.bytes;
   uint64_t graphWork = 0;
   result.costKnown = components::FilterGraphExecutionCost(
       filterGraph, result.bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, graphWork,
@@ -1300,7 +1316,7 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
     (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
     const bool tiled = result.bounds.executions > 1;
     result.surfaces = layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0) +
-                      (copiesViewport ? 1 : 0) + (readsBackdrop ? (tiled ? 2 : 1) : 0);
+                      (copiesViewport ? 1 : 0) + backdrop.surfaces;
     result.surfaces +=
         std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
           return std::holds_alternative<components::filter_primitive::Image>(node.primitive);

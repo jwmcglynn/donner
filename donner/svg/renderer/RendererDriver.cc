@@ -2678,7 +2678,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(entity, (hasIsolatedLayer ? 1u : 0u) + static_cast<std::uint32_t>(maskDepth));
+    pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
+                                 static_cast<std::uint32_t>(maskDepth));
 
     if (const auto* fillRef =
             std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
@@ -3379,7 +3380,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(entity, (hasIsolatedLayer ? 1u : 0u) + static_cast<std::uint32_t>(maskDepth));
+    pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
+                                 static_cast<std::uint32_t>(maskDepth));
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =
@@ -3617,7 +3619,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(entity, (hasIsolatedLayer ? 1u : 0u) + static_cast<std::uint32_t>(maskDepth));
+    pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
+                                 static_cast<std::uint32_t>(maskDepth));
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =

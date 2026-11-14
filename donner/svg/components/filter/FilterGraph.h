@@ -779,6 +779,21 @@ inline std::uint64_t GpuFilterParameterAllocationBound(std::uint64_t requested) 
   return requested * 2 + kGpuFilterParameterBlockBytes;
 }
 
+/// Float textures the backdrop inputs of \p graph may hold: BackgroundImage and the
+/// BackgroundAlpha derived from it, each possibly in both color representations.
+inline std::uint64_t GpuBackdropFloatTextures(const FilterGraph& graph) {
+  bool image = false;
+  bool alpha = false;
+  for (const FilterNode& node : graph.nodes) {
+    for (const FilterInput& input : node.inputs) {
+      const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+      image |= standard && *standard == FilterStandardInput::BackgroundImage;
+      alpha |= standard && *standard == FilterStandardInput::BackgroundAlpha;
+    }
+  }
+  return 2 * static_cast<std::uint64_t>(image || alpha) + 2 * static_cast<std::uint64_t>(alpha);
+}
+
 /// Derives a byte-format-aware bound without allocating or changing the CPU filter model.
 /// @param graph Ordered filter graph. @param result Receives the resource layout on success.
 inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkingSet& result) {
@@ -790,16 +805,12 @@ inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkin
   std::array<std::size_t, kMaximumFilterGraphNodes> nextDefinition{};
   nextDefinition.fill(graph.nodes.size());
   bool sourceAlpha = false;
-  bool backdrop = false;
-  bool backdropAlpha = false;
+  const std::uint64_t backdropTextures = GpuBackdropFloatTextures(graph);
   for (std::size_t producer = 0; producer < graph.nodes.size(); ++producer) {
     const auto& name = graph.nodes[producer].result;
     for (const FilterInput& input : graph.nodes[producer].inputs) {
       const auto* standard = std::get_if<FilterStandardInput>(&input.value);
       sourceAlpha |= standard && *standard == FilterStandardInput::SourceAlpha;
-      backdrop |= standard && (*standard == FilterStandardInput::BackgroundImage ||
-                               *standard == FilterStandardInput::BackgroundAlpha);
-      backdropAlpha |= standard && *standard == FilterStandardInput::BackgroundAlpha;
     }
     if (!name) {
       continue;
@@ -842,9 +853,8 @@ inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkin
     // retained logical values may need both color representations. The previous output can also
     // be unnamed.
     result.floatTextures =
-        std::max(result.floatTextures, 1 + (sourceAlpha ? 2u : 0u) + (backdrop ? 2u : 0u) +
-                                           (backdropAlpha ? 2u : 0u) + namedValues * 2 +
-                                           (index ? 2u : 0u) + scratch);
+        std::max(result.floatTextures, 1 + (sourceAlpha ? 2u : 0u) + backdropTextures +
+                                           namedValues * 2 + (index ? 2u : 0u) + scratch);
     result.runtimeUniformBytes += 8192;
     const bool rawUniform = std::holds_alternative<fp::GaussianBlur>(node.primitive) ||
                             std::holds_alternative<fp::Blend>(node.primitive) ||
