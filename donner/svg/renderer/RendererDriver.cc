@@ -4545,6 +4545,19 @@ void InvalidateExternalUseDerivedState(Registry& registry) {
   components::InvalidateFontResourcePreparation(registry);
 }
 
+/// Which frame allowance an external-use occurrence's layout work is charged to.
+enum class ExternalWorkCharge : std::uint8_t {
+  Draw,     ///< Drawing the occurrence, against the external instance allowance.
+  Measure,  ///< Measuring it for a host effect, against the separate measurement allowance.
+};
+
+/// Charge @p entities of layout work for one occurrence to the allowance @p charge names.
+bool ReserveExternalWork(components::StyleResourceBudget& work, ExternalWorkCharge charge,
+                         std::size_t entities) {
+  return charge == ExternalWorkCharge::Draw ? work.reserveExternalInstanceWork(entities)
+                                            : work.reserveExternalMeasureWork(entities);
+}
+
 class ExternalUseStyleScope {
 public:
   ExternalUseStyleScope(Registry& child, Entity root, Registry& host,
@@ -4552,13 +4565,13 @@ public:
                         const components::ResolvedPaintServer& fill,
                         const components::ResolvedPaintServer& stroke,
                         std::shared_ptr<components::StyleResourceBudget> work,
-                        bool chargeInstanceWork = true)
+                        ExternalWorkCharge charge = ExternalWorkCharge::Draw)
       : registry_(child),
         hostLease_(
             EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
     if (!style.properties || child.ctx().contains<components::ExternalUseStyleContext>() ||
-        (chargeInstanceWork && !work->reserveExternalInstanceWork(
-                                   child.storage<donner::components::TreeComponent>().size()))) {
+        !ReserveExternalWork(*work, charge,
+                             child.storage<donner::components::TreeComponent>().size())) {
       return;
     }
     const auto* context = child.ctx().find<components::DocumentResourceFamilyContext>();
@@ -4955,12 +4968,14 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
   if (root == entt::null || !style.properties) {
     return std::nullopt;
   }
-  // Lay the fragment out with the occurrence's styles, exactly as drawing it does. Measuring is not
-  // charged to the frame's external instance work: each occurrence is measured at most once per
-  // frame, and drawing it charges that work.
+  // Lay the fragment out with the occurrence's styles, exactly as drawing it does. Measuring is
+  // charged to its own frame allowance rather than the external instance work drawing charges, so
+  // measuring leaves drawing's allowance intact. Measuring recurses into the occurrence's own
+  // external uses and forgets those results afterwards, so the allowance is what bounds a family
+  // of documents that each use the next several times.
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
                               instance.resolvedStroke, externalUseStyleWork_,
-                              /*chargeInstanceWork=*/false);
+                              ExternalWorkCharge::Measure);
   if (!scope.installed()) {
     return std::nullopt;
   }
