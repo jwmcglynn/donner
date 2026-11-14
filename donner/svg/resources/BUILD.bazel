@@ -296,6 +296,13 @@ donner_cc_test(
 )
 
 donner_cc_fuzzer(
+    name = "url_reference_fuzzer",
+    srcs = ["tests/UrlReference_fuzzer.cc"],
+    corpus = "tests/url_reference_corpus",
+    deps = [":url_loader"],
+)
+
+donner_cc_fuzzer(
     name = "url_loader_structured_fuzzer",
     srcs = ["tests/UrlLoader_structured_fuzzer.cc"],
     corpus = "tests/url_loader_structured_corpus",

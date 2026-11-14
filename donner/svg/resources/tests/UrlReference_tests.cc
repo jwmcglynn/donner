@@ -81,6 +81,14 @@ TEST(UrlReference, DotSegmentsCannotEscapeAnAbsoluteRoot) {
   EXPECT_EQ(Resolve("https://example.test/main.css", "../../x.css"), "https://example.test/x.css");
 }
 
+TEST(UrlReference, NormalizationNeverChangesHowTheResultParses) {
+  // Removing "./" must not turn a path segment into a scheme, nor "/." into an authority.
+  EXPECT_EQ(Resolve("", "./a:b.css"), "./a:b.css");
+  EXPECT_EQ(Resolve("x/main.css", "../a:b.css"), "./a:b.css");
+  EXPECT_EQ(Resolve("", "/.//host/x.css"), "/.//host/x.css");
+  EXPECT_EQ(Resolve("https://example.test/a/b.css", "/.//x.css"), "https://example.test//x.css");
+}
+
 TEST(UrlReference, TrailingDotSegmentsKeepADirectory) {
   EXPECT_EQ(Resolve("a/b/main.css", "."), "a/b/");
   EXPECT_EQ(Resolve("a/b/main.css", ".."), "a/");

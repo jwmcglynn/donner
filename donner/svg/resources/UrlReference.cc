@@ -1,5 +1,6 @@
 #include "donner/svg/resources/UrlReference.h"
 
+#include <algorithm>
 #include <cctype>
 #include <vector>
 
@@ -127,10 +128,30 @@ std::string MergePaths(const UrlComponents& base, std::string_view referencePath
   return std::string(base.path.substr(0, lastSlash + 1)) + std::string(referencePath);
 }
 
+/**
+ * Keep a normalized path from changing how the recomposed URL parses (RFC 3986 section 4.2 and
+ * 5.2.4): without an authority, a path starting with `//` would read as an authority, and without
+ * a scheme, a first segment containing `:` would read as a scheme.
+ */
+std::string DisambiguatePath(std::string path, bool hasScheme, bool hasAuthority) {
+  if (!hasAuthority && path.starts_with("//")) {
+    return "/." + path;
+  }
+  if (!hasScheme && !hasAuthority && !path.starts_with('/')) {
+    const std::size_t firstSegmentEnd = path.find('/');
+    if (path.substr(0, firstSegmentEnd).find(':') != std::string::npos) {
+      return "./" + path;
+    }
+  }
+  return path;
+}
+
 std::string Recompose(std::optional<std::string_view> scheme,
-                      std::optional<std::string_view> authority, std::string_view path,
+                      std::optional<std::string_view> authority, std::string_view normalizedPath,
                       std::optional<std::string_view> query,
                       std::optional<std::string_view> fragment) {
+  const std::string path =
+      DisambiguatePath(std::string(normalizedPath), scheme.has_value(), authority.has_value());
   std::string result;
   if (scheme.has_value()) {
     result.append(*scheme).append(":");
