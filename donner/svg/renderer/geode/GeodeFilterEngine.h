@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string_view>
 #include <type_traits>
 
@@ -500,18 +501,14 @@ private:
                            const svg::components::filter_primitive::Flood& primitive);
 
   /// Alpha-over composite of N input textures via sequential compute dispatches.
-  /// @param node The feMerge filter node (inputs resolve to merge children).
-  /// @param namedBuffers Named intermediate textures.
-  /// @param currentBuffer The "previous" output buffer.
-  /// @param sourceGraphic The original source-graphic texture.
+  /// @param inputs The resolved merge children, bottom first; empty yields transparent black.
+  /// @param width Output width. @param height Output height.
   /// @param linearRGB If true, composite in linearRGB: convert each input
   ///   sRGB→linear before the alpha-over passes and convert the result
   ///   linear→sRGB (matches tiny-skia's `color-interpolation-filters` handling).
   /// @return The composited texture.
-  FilterTexture applyMerge(FilterResourceArena& arena, const svg::components::FilterNode& node,
-                           const std::unordered_map<std::string, FilterTexture>& namedBuffers,
-                           FilterTexture currentBuffer, FilterTexture sourceGraphic,
-                           const FilterTexture* sourceAlpha, bool linearRGB);
+  FilterTexture applyMerge(FilterResourceArena& arena, std::span<const FilterTexture> inputs,
+                           uint32_t width, uint32_t height, bool linearRGB);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.

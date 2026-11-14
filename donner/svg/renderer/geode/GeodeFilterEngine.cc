@@ -2168,9 +2168,15 @@ FilterTexture FilterNodeExecution::apply(const fp::Flood& primitive) {
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Merge&) {
-  return engine.applyMerge(arena, node, execution.namedBuffers, execution.currentBuffer,
-                           execution.sourceGraphic,
-                           execution.sourceAlpha ? &*execution.sourceAlpha : nullptr, linearRgb);
+  // feMerge reads every child, so each resolves like any other primitive input. The graph bounds
+  // the child count before execution.
+  SmallVector<FilterTexture, 8> inputs;
+  for (size_t index = 0; index < node.inputs.size(); ++index) {
+    inputs.push_back(execution.inputFor(node, index));
+  }
+  return engine.applyMerge(arena, std::span<const FilterTexture>(inputs.data(), inputs.size()),
+                           execution.currentBuffer.width(), execution.currentBuffer.height(),
+                           linearRgb);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Composite& primitive) {
@@ -2584,14 +2590,10 @@ FilterTexture GeodeFilterEngine::applyFlood(
   return output;
 }
 
-FilterTexture GeodeFilterEngine::applyMerge(
-    FilterResourceArena& arena, const svg::components::FilterNode& node,
-    const std::unordered_map<std::string, FilterTexture>& namedBuffers, FilterTexture currentBuffer,
-    FilterTexture sourceGraphic, const FilterTexture* sourceAlpha, bool linearRGB) {
-  const uint32_t width = currentBuffer.width();
-  const uint32_t height = currentBuffer.height();
-
-  if (node.inputs.empty()) {
+FilterTexture GeodeFilterEngine::applyMerge(FilterResourceArena& arena,
+                                            std::span<const FilterTexture> inputs, uint32_t width,
+                                            uint32_t height, bool linearRGB) {
+  if (inputs.empty()) {
     svg::components::filter_primitive::Flood transparent;
     transparent.floodColor = css::Color(css::RGBA(0, 0, 0, 0));
     transparent.floodOpacity = 0.0;
@@ -2603,17 +2605,15 @@ FilterTexture GeodeFilterEngine::applyMerge(
   };
 
   // Resolve first input as the initial accumulator.
-  FilterTexture accumulator = inWorkingSpace(
-      resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
+  FilterTexture accumulator = inWorkingSpace(inputs[0]);
 
   if (!accumulator) {
     return {};
   }
 
   // Alpha-over composite each subsequent input on top.
-  for (size_t i = 1; i < node.inputs.size(); ++i) {
-    FilterTexture src = inWorkingSpace(
-        resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
+  for (size_t i = 1; i < inputs.size(); ++i) {
+    FilterTexture src = inWorkingSpace(inputs[i]);
     accumulator = runMergePass(arena, src, accumulator, width, height);
     if (!accumulator) {
       return {};
