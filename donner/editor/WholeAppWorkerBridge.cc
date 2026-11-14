@@ -459,15 +459,20 @@ void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBla
   if (requestId > 0 && requestId > LoadRelaxed(mirror.readbackCompletedId)) {
     StoreRelaxed(mirror.readbackCompletedId, requestId);
   }
-  // The async proxy reads the thumbnail buffer after this function returns; copy into a static so
-  // the caller's stack buffer is never read post-return. Capture is serial (one diagnostic per
-  // explicit request), so one slot suffices.
+  // The async proxy reads the thumbnails after this function returns, so each publication gets its
+  // own heap copy, which the main-thread body frees once it has decoded it. A later publication can
+  // therefore never overwrite one that is still queued.
   constexpr int kThumbnailStride = 7;
   constexpr int kMaxThumbnails = 64;
-  static int thumbnailBuffer[kMaxThumbnails * kThumbnailStride];
-  const int thumbnails = std::clamp(thumbnailCount, 0, kMaxThumbnails);
-  std::copy(thumbnailValues, thumbnailValues + static_cast<size_t>(thumbnails) * kThumbnailStride,
-            thumbnailBuffer);
+  int thumbnails = std::clamp(thumbnailCount, 0, kMaxThumbnails);
+  const std::size_t thumbnailValueCount = static_cast<std::size_t>(thumbnails) * kThumbnailStride;
+  int* thumbnailBuffer =
+      static_cast<int*>(std::malloc(std::max<std::size_t>(1, thumbnailValueCount) * sizeof(int)));
+  if (thumbnailBuffer == nullptr) {
+    thumbnails = 0;  // Still publish the readback; only its thumbnails are lost.
+  } else {
+    std::copy(thumbnailValues, thumbnailValues + thumbnailValueCount, thumbnailBuffer);
+  }
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -490,6 +495,7 @@ void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBla
             'glyphPixels' : HEAP32[offset + 6],
           });
         });
+        _free($10);
         const previous = window['__donnerWgpuReadbackStats'];
         window['__donnerWgpuReadbackStats'] = ({
           'frame' : previous ? previous['frame'] + 1 : 1,
