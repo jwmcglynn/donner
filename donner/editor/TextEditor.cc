@@ -3629,6 +3629,19 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
 
 }  // namespace
 
+void TextEditor::scrollRequestedCursorIntoView() {
+  if (!scrollToCursor_) {
+    return;
+  }
+  if (scrollSelectionIntoView_ && hasSelection()) {
+    scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
+    scrollSelectionIntoView_ = false;
+  } else {
+    ensureCursorVisible();
+  }
+  scrollToCursor_ = false;
+}
+
 void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, float scrollX,
                                float scrollY, const ImVec2& contentSize) {
   // Function declaration tooltip
@@ -3669,16 +3682,7 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
                                   : text_.getTotalLines() - foldedLines_;
   ImGui::Dummy(ImVec2(0.0f, visualLineCount * charAdvance_.y));
 
-  // Handle cursor visibility
-  if (scrollToCursor_) {
-    if (scrollSelectionIntoView_ && hasSelection()) {
-      scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
-      scrollSelectionIntoView_ = false;
-    } else {
-      ensureCursorVisible();
-    }
-    scrollToCursor_ = false;
-  }
+  scrollRequestedCursorIntoView();
 
   // Find/Replace dialog background
   if (findOpened_) {

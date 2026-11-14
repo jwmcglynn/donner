@@ -1788,6 +1788,9 @@ private:
   void renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, float scrollX, float scrollY,
                      const ImVec2& contentSize);
 
+  /// Scroll the cursor, or the requested selection, into view if a render requested it.
+  void scrollRequestedCursorIntoView();
+
   /**
    * Process all input events.
    */
