@@ -236,8 +236,11 @@ class RecordValidationTest(unittest.TestCase):
 
     @staticmethod
     def fixture_run(run_id, workflow):
+        # A release's BCR Preflight is dispatched on main; the other evidence runs are pushes.
+        event = ("workflow_dispatch" if workflow == candidate.ARTIFACT_WORKFLOWS["source"]
+                 else "push")
         return {"id": run_id, "run_attempt": 1, "path": workflow,
-                "head_sha": COMMIT, "head_branch": "main", "event": "push",
+                "head_sha": COMMIT, "head_branch": "main", "event": event,
                 "status": "completed", "conclusion": "success",
                 "repository": {"full_name": candidate.REPOSITORY, "id": 1}}
 
@@ -808,17 +811,22 @@ class AssemblyAndReleaseTest(unittest.TestCase):
 
     def test_preflight_dispatched_on_main_qualifies_a_candidate(self):
         # Pushes to main do not run the BCR preflight: a release dispatches it on main for the
-        # exact commit (docs/release_candidate.md). A pull request run, a run on another branch
-        # or one of another commit never qualifies.
+        # exact commit (docs/release_candidate.md), and registry publication accepts only that
+        # run. A nightly, push or pull request run, or one of another branch or commit, never
+        # qualifies at assembly either.
         preflight = candidate.ARTIFACT_WORKFLOWS["source"]
         run_id, attempt = self.RUNS["preflight"]
         run = self.fixture_run(run_id, attempt, preflight)
         self.assertEqual("workflow_dispatch", run["event"])
         candidate._verify_run(run, run_id, attempt, self.commit, preflight)
-        for change in ({"event": "pull_request"}, {"head_branch": "feature"},
-                       {"head_sha": "f" * 40}):
+        for change in ({"event": "pull_request"}, {"event": "schedule"}, {"event": "push"},
+                       {"head_branch": "feature"}, {"head_sha": "f" * 40}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 candidate._verify_run(run | change, run_id, attempt, self.commit, preflight)
+        # Other evidence workflows keep their own events; a push run of CI still qualifies.
+        ci = candidate.EVIDENCE_WORKFLOWS["ci"]
+        candidate._verify_run(self.fixture_run(201, 1, ci) | {"event": "push"}, 201, 1,
+                              self.commit, ci)
 
     def test_documentation_workflow_split_preserves_exact_run_binding(self):
         for path in candidate.pages_artifact.SOURCE_WORKFLOWS:
