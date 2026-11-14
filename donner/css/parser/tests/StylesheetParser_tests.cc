@@ -7,7 +7,9 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/parser/RuleParser.h"
@@ -17,6 +19,7 @@
 using testing::_;
 using testing::AllOf;
 using testing::ElementsAre;
+using testing::ElementsAreArray;
 using testing::Eq;
 using testing::Field;
 using testing::IsEmpty;
@@ -88,17 +91,6 @@ TEST(StylesheetParser, Empty) {
   EXPECT_THAT(StylesheetParser::Parse("", disabled).rules(), ElementsAre());
 }
 
-TEST(StylesheetParser, ImportIsUnsupportedButFollowingRulesRemain) {
-  constexpr std::string_view kCss = "  @import 'hidden.css'; rect { fill: green; }";
-  ParseWarningSink warnings;
-  const Stylesheet sheet = StylesheetParser::Parse(kCss, warnings);
-  EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
-  EXPECT_THAT(warnings.warnings(),
-              ElementsAre(ParseDiagnostic::Warning(
-                  "CSS @import is unsupported; imported stylesheets are not loaded",
-                  FileOffset::Offset(2))));
-}
-
 TEST(StylesheetParser, ConditionalRulesWarnAndPreserveFollowingRules) {
   for (const std::string_view keyword : {"media", "supports"}) {
     SCOPED_TRACE(keyword);
@@ -161,10 +153,35 @@ TEST(StylesheetParser, ConditionalRulesCanUseDisabledWarningSink) {
   EXPECT_THAT(warnings.warnings(), IsEmpty());
 }
 
-TEST(StylesheetParser, ImportKeywordIsDecodedAndCaseInsensitive) {
-  const std::array<std::string_view, 5> imports = {
-      R"(@import "hidden.css";)", R"(@import url("hidden.css");)", R"(@ImPoRt url(hidden.css);)",
-      R"(@\69mport "hidden.css";)", R"(@\000069 mport url(hidden.css);)"};
+auto ImportIs(std::string_view url, std::size_t offset) {
+  return AllOf(Field("url", &ImportRule::url, Eq(RcString(url))),
+               Field("sourceOffset", &ImportRule::sourceOffset, Eq(FileOffset::Offset(offset))));
+}
+
+auto WarningReasonsAre(std::vector<std::string> reasons) {
+  std::vector<testing::Matcher<ParseDiagnostic>> matchers;
+  for (std::string& reason : reasons) {
+    matchers.push_back(Field("reason", &ParseDiagnostic::reason, Eq(RcString(reason))));
+  }
+  return ElementsAreArray(matchers);
+}
+
+constexpr std::string_view kImportNotFirst =
+    "CSS @import must precede all other rules; this import is ignored";
+constexpr std::string_view kImportInvalid =
+    "CSS @import requires a single non-empty URL or string; this import is ignored";
+constexpr std::string_view kImportMedia =
+    "CSS @import media conditions other than 'all' are unsupported; this import is ignored";
+constexpr std::string_view kImportSupports =
+    "CSS @import supports() conditions are unsupported; this import is ignored";
+constexpr std::string_view kImportLayer =
+    "CSS @import cascade layers are unsupported; this import is ignored";
+
+TEST(StylesheetParser, ImportFormsAreRetainedBeforeFollowingRules) {
+  const std::array<std::string_view, 6> imports = {
+      R"(@import "theme.css";)",       R"(@import url("theme.css");)",
+      R"(@ImPoRt url(theme.css);)",    R"(@\69mport "theme.css";)",
+      R"(@\000069 mport url(theme.css);)", R"(@import url( 'theme.css' ) ;)"};
   for (const std::string_view import : imports) {
     SCOPED_TRACE(import);
     const std::string source = "  " + std::string(import) + " rect { fill: green; }";
@@ -172,62 +189,151 @@ TEST(StylesheetParser, ImportKeywordIsDecodedAndCaseInsensitive) {
     const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
     EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
     EXPECT_THAT(sheet.fontFaces(), IsEmpty());
-    EXPECT_THAT(warnings.warnings(),
-                ElementsAre(ParseDiagnostic::Warning(
-                    "CSS @import is unsupported; imported stylesheets are not loaded",
-                    FileOffset::Offset(2))));
+    EXPECT_THAT(sheet.imports(), ElementsAre(ImportIs("theme.css", 2)));
+    EXPECT_THAT(warnings.warnings(), IsEmpty());
   }
 }
 
-TEST(StylesheetParser, ImportAtEofIsDiagnosedWithoutInventingSemicolonRecovery) {
+TEST(StylesheetParser, ImportAtEofWithoutSemicolonIsRetained) {
   ParseWarningSink warnings;
-  const Stylesheet sheet = StylesheetParser::Parse("@import 'hidden.css'", warnings);
+  const Stylesheet sheet = StylesheetParser::Parse("\n  @import \"../green.css\"\n", warnings);
   EXPECT_THAT(sheet.rules(), IsEmpty());
-  EXPECT_THAT(warnings.warnings(),
-              ElementsAre(ParseDiagnostic::Warning(
-                  "CSS @import is unsupported; imported stylesheets are not loaded",
-                  FileOffset::Offset(0))));
+  EXPECT_THAT(sheet.imports(), ElementsAre(ImportIs("../green.css", 3)));
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
 }
 
 TEST(StylesheetParser, ImportOffsetIncludesRemovedCharsetPrefix) {
   constexpr std::string_view source =
-      "@charset \"UTF-8\";  @import 'hidden.css'; rect { fill: green; }";
+      "@charset \"UTF-8\";  @import 'theme.css'; rect { fill: green; }";
   ParseWarningSink warnings;
   const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
   EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
-  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
-  EXPECT_THAT(warnings.warnings().front().range.start.offset, Eq(source.find("@import")));
+  EXPECT_THAT(sheet.imports(), ElementsAre(ImportIs("theme.css", source.find("@import"))));
 }
 
-TEST(StylesheetParser, ImportWarningsAreCappedWithoutEchoingTargetsOrDroppingLocalRules) {
-  std::string source;
+TEST(StylesheetParser, MultipleImportsKeepSourceOrder) {
+  ParseWarningSink warnings;
+  const Stylesheet sheet =
+      StylesheetParser::Parse("@import 'a.css'; @import url(b.css); @import \"c.css\";", warnings);
+  EXPECT_THAT(sheet.imports(),
+              ElementsAre(ImportIs("a.css", 0), ImportIs("b.css", 17), ImportIs("c.css", 37)));
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST(StylesheetParser, ImportAfterAnotherRuleIsIgnored) {
+  const std::array<std::string_view, 4> leadingRules = {
+      "rect { fill: green; }",
+      "@font-face { font-family: Local; src: local(Local); }",
+      "@media all { rect { fill: red; } }",
+      "@layer base { rect { fill: red; } }",
+  };
+  for (const std::string_view leading : leadingRules) {
+    SCOPED_TRACE(leading);
+    const std::string source = std::string(leading) + " @import 'late.css';";
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+    EXPECT_THAT(sheet.imports(), IsEmpty());
+    ASSERT_FALSE(warnings.warnings().empty());
+    EXPECT_EQ(warnings.warnings().back().reason, RcString(kImportNotFirst));
+    EXPECT_THAT(warnings.warnings().back().range.start, Eq(FileOffset::Offset(leading.size() + 1)));
+  }
+}
+
+TEST(StylesheetParser, ImportMayFollowLayerStatementsUnknownAndInvalidRules) {
+  // CSS Cascade 5: @import must precede all *valid* rules other than @charset and @layer
+  // statements. Unknown at-rules and style rules that fail to parse are dropped and do not count.
+  constexpr std::string_view source =
+      "@layer base, theme; @unknown-rule foo; a,,b { fill: red; } @import 'a.css';";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  EXPECT_THAT(sheet.rules(), IsEmpty());
+  EXPECT_THAT(sheet.imports(), ElementsAre(ImportIs("a.css", source.find("@import"))));
+}
+
+TEST(StylesheetParser, ImportMediaAllIsUnconditional) {
+  for (const std::string_view source :
+       {"@import 'a.css' all;", "@import url(a.css) ALL ;", "@import 'a.css'   all"}) {
+    SCOPED_TRACE(source);
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+    EXPECT_THAT(sheet.imports(), ElementsAre(ImportIs("a.css", 0)));
+    EXPECT_THAT(warnings.warnings(), IsEmpty());
+  }
+}
+
+TEST(StylesheetParser, ConditionalImportsAreDiagnosedAndIgnored) {
+  const std::array<std::pair<std::string_view, std::string_view>, 7> cases = {{
+      {"@import 'a.css' screen;", kImportMedia},
+      {"@import 'a.css' all, print;", kImportMedia},
+      {"@import 'a.css' (min-width: 10px);", kImportMedia},
+      {"@import 'a.css' supports(display: grid);", kImportSupports},
+      {"@import 'a.css' layer;", kImportLayer},
+      {"@import 'a.css' layer(base);", kImportLayer},
+      {"@import 'a.css' LAYER(base) supports(display: grid) screen;", kImportLayer},
+  }};
+  for (const auto& [source, reason] : cases) {
+    SCOPED_TRACE(source);
+    const std::string css = std::string(source) + " @import 'b.css'; rect { fill: green; }";
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(css, warnings);
+    // A conditional import is still an import: a later unconditional import stays valid.
+    EXPECT_THAT(sheet.imports(), ElementsAre(ImportIs("b.css", source.size() + 1)));
+    EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+    EXPECT_THAT(warnings.warnings(),
+                ElementsAre(ParseDiagnostic::Warning(RcString(reason), FileOffset::Offset(0))));
+  }
+}
+
+TEST(StylesheetParser, MalformedImportsAreDiagnosedAndIgnored) {
+  for (const std::string_view source :
+       {"@import;", "@import ;", "@import 12;", "@import theme;", "@import '';", "@import url();",
+        "@import 'a.css' {}", "@import 'a.css' 'b.css';", "@import attr(x);"}) {
+    SCOPED_TRACE(source);
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+    EXPECT_THAT(sheet.imports(), IsEmpty());
+    EXPECT_THAT(warnings.warnings(), ElementsAre(ParseDiagnostic::Warning(
+                                         RcString(kImportInvalid), FileOffset::Offset(0))));
+  }
+}
+
+TEST(StylesheetParser, ImportWarningsDoNotEchoTargets) {
+  ParseWarningSink warnings;
+  std::ignore = StylesheetParser::Parse(
+      "rect {} @import 'https://example.test/private-target.css'; "
+      "@import 'https://example.test/private-target.css' screen;",
+      warnings);
+  EXPECT_THAT(warnings.warnings(), WarningReasonsAre({std::string(kImportNotFirst),
+                                                      std::string(kImportNotFirst)}));
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    EXPECT_THAT(std::string_view(warning.reason), testing::Not(testing::HasSubstr("example.test")));
+  }
+}
+
+TEST(StylesheetParser, IgnoredImportWarningsAreCappedWithoutDroppingLocalRules) {
+  std::string source = "rect { fill: green; }";
   for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
     source += "@import 'https://example.test/private-target.css';";
   }
-  source += "rect { fill: green; }";
   ParseWarningSink warnings;
   const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
   EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+  EXPECT_THAT(sheet.imports(), IsEmpty());
   EXPECT_THAT(sheet.securityStats().rejected, testing::IsFalse());
   EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
   EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
   EXPECT_LE(warnings.warningBytes(), ParseWarningSink::kMaximumWarningBytes);
-  EXPECT_THAT(warnings.warnings(),
-              testing::Each(testing::Field(
-                  &ParseDiagnostic::reason,
-                  Eq("CSS @import is unsupported; imported stylesheets are not loaded"))));
 }
 
-TEST(StylesheetParser, DroppedImportsStillConsumeTheRuleAdmissionBudget) {
+TEST(StylesheetParser, ImportsConsumeTheRuleAdmissionBudget) {
   std::string source;
   for (std::size_t i = 0; i <= RuleParser::kMaximumRules; ++i) {
-    source += "@import 'hidden.css';";
+    source += "@import 'a.css';";
   }
   ParseWarningSink warnings;
   const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
   EXPECT_THAT(sheet.securityStats().rejected, testing::IsTrue());
-  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
-  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_LE(sheet.imports().size(), RuleParser::kMaximumRules);
 }
 
 TEST(StylesheetParser, WithRules) {

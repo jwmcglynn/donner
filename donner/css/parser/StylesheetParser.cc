@@ -1,10 +1,15 @@
 #include "donner/css/parser/StylesheetParser.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <span>
+#include <vector>
 
 #include "donner/base/StringUtils.h"
+#include "donner/base/Utils.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/parser/DataUrlParser.h"
 #include "donner/css/FontFace.h"
@@ -513,9 +518,7 @@ std::optional<FontFace> ParseFontFaceRule(AtRule& atRule,
 
 bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) {
   const char* reason;
-  if (atRule.name.equalsLowercase("import")) {
-    reason = "CSS @import is unsupported; imported stylesheets are not loaded";
-  } else if (atRule.name.equalsLowercase("media")) {
+  if (atRule.name.equalsLowercase("media")) {
     reason = "CSS @media is unsupported; conditional rules are ignored";
   } else if (atRule.name.equalsLowercase("supports")) {
     reason = "CSS @supports is unsupported; conditional rules are ignored";
@@ -526,45 +529,220 @@ bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) 
   return true;
 }
 
+/// How an `@import` prelude is interpreted; see \ref ParseImportPrelude.
+enum class ImportPreludeKind : std::uint8_t {
+  Unconditional,  ///< Applies unconditionally and is retained.
+  Invalid,        ///< Malformed; dropped.
+  Layer,          ///< Valid but imports into a cascade layer, which is unsupported.
+  Supports,       ///< Valid but conditional on `supports()`, which is unsupported.
+  Media,          ///< Valid but conditional on a media query list other than `all`.
+};
+
+struct ParsedImportPrelude {
+  ImportPreludeKind kind = ImportPreludeKind::Invalid;
+  RcString url;
+};
+
+bool IsWhitespaceComponent(const ComponentValue& value) {
+  return value.isToken<Token::Whitespace>();
+}
+
+/// The URL of an `@import` target: a `<string>`, an unquoted `url()` token, or `url(<string>)`.
+std::optional<RcString> ImportTargetUrl(const ComponentValue& value) {
+  if (const auto* string = value.tryGetToken<Token::String>()) {
+    return string->value;
+  }
+  if (const auto* url = value.tryGetToken<Token::Url>()) {
+    return url->value;
+  }
+  const auto* function = std::get_if<Function>(&value.value);
+  if (function == nullptr || !function->name.equalsLowercase("url")) {
+    return std::nullopt;
+  }
+  std::optional<RcString> result;
+  for (const ComponentValue& argument : function->values) {
+    if (IsWhitespaceComponent(argument)) {
+      continue;
+    }
+    const auto* string = argument.tryGetToken<Token::String>();
+    if (string == nullptr || result.has_value()) {
+      return std::nullopt;
+    }
+    result = string->value;
+  }
+  return result;
+}
+
+bool IsNamedComponent(const ComponentValue& value, std::string_view name) {
+  if (const auto* ident = value.tryGetToken<Token::Ident>()) {
+    return ident->value.equalsLowercase(name);
+  }
+  const auto* function = std::get_if<Function>(&value.value);
+  return function != nullptr && function->name.equalsLowercase(name);
+}
+
+bool IsFunctionNamed(const ComponentValue& value, std::string_view name) {
+  const auto* function = std::get_if<Function>(&value.value);
+  return function != nullptr && function->name.equalsLowercase(name);
+}
+
+/// Classify the import conditions following the URL, per the CSS Cascade 5 `@import` grammar:
+/// `[ layer | layer(<name>) ]? [ supports(...) ]? <media-query-list>?`.
+ImportPreludeKind ClassifyImportConditions(std::span<const ComponentValue> conditions) {
+  std::vector<const ComponentValue*> significant;
+  for (const ComponentValue& value : conditions) {
+    if (!IsWhitespaceComponent(value)) {
+      significant.push_back(&value);
+    }
+  }
+  if (significant.empty()) {
+    return ImportPreludeKind::Unconditional;
+  }
+  if (IsNamedComponent(*significant.front(), "layer")) {
+    return ImportPreludeKind::Layer;
+  }
+  if (IsFunctionNamed(*significant.front(), "supports")) {
+    return ImportPreludeKind::Supports;
+  }
+  for (const ComponentValue* value : significant) {
+    if (value->isToken<Token::String>() || value->isToken<Token::Url>()) {
+      return ImportPreludeKind::Invalid;
+    }
+  }
+  if (significant.size() == 1 && IsNamedComponent(*significant.front(), "all") &&
+      significant.front()->isToken<Token::Ident>()) {
+    return ImportPreludeKind::Unconditional;
+  }
+  return ImportPreludeKind::Media;
+}
+
+ParsedImportPrelude ParseImportPrelude(const AtRule& atRule) {
+  if (atRule.block.has_value()) {
+    return {};
+  }
+  const std::span<const ComponentValue> prelude = atRule.prelude;
+  std::size_t index = 0;
+  while (index < prelude.size() && IsWhitespaceComponent(prelude[index])) {
+    ++index;
+  }
+  if (index == prelude.size()) {
+    return {};
+  }
+  std::optional<RcString> url = ImportTargetUrl(prelude[index]);
+  if (!url.has_value() || url->empty()) {
+    return {};
+  }
+  return ParsedImportPrelude{.kind = ClassifyImportConditions(prelude.subspan(index + 1)),
+                             .url = std::move(*url)};
+}
+
+const char* IgnoredImportReason(ImportPreludeKind kind) {
+  switch (kind) {
+    case ImportPreludeKind::Unconditional: return nullptr;
+    case ImportPreludeKind::Invalid:
+      return "CSS @import requires a single non-empty URL or string; this import is ignored";
+    case ImportPreludeKind::Layer:
+      return "CSS @import cascade layers are unsupported; this import is ignored";
+    case ImportPreludeKind::Supports:
+      return "CSS @import supports() conditions are unsupported; this import is ignored";
+    case ImportPreludeKind::Media:
+      return "CSS @import media conditions other than 'all' are unsupported; this import is "
+             "ignored";
+  }
+  UTILS_UNREACHABLE();
+}
+
+/**
+ * Whether a retained at-rule ends the leading section in which `@import` is valid. `@charset` is
+ * consumed before rule parsing, `@layer` statements (without a block) may precede imports, and
+ * unknown at-rules are invalid and therefore dropped without effect.
+ */
+bool AtRuleEndsImportSection(const AtRule& atRule) {
+  if (atRule.name.equalsLowercase("layer")) {
+    return atRule.block.has_value();
+  }
+  constexpr std::array<std::string_view, 14> kKnownAtRules = {
+      "media",         "supports",           "font-face",          "namespace",
+      "keyframes",     "page",               "counter-style",      "property",
+      "container",     "font-feature-values", "font-palette-values", "scope",
+      "starting-style", "view-transition"};
+  return std::any_of(kKnownAtRules.begin(), kKnownAtRules.end(),
+                     [&](std::string_view name) { return atRule.name.equalsLowercase(name); });
+}
+
+/// Mutable state threaded through the rule loop of \ref StylesheetParser::Parse.
+struct StylesheetParseState {
+  std::vector<SelectorRule> selectorRules;
+  std::vector<FontFace> fontFaces;
+  std::vector<ImportRule> imports;
+  Stylesheet::SecurityStats securityStats;
+  /// True until a rule that must follow every `@import` has been retained.
+  bool importsAllowed = true;
+};
+
+void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
+                      ParseWarningSink& warningSink) {
+  if (!state.importsAllowed) {
+    warningSink.add([&] {
+      return ParseDiagnostic::Warning(
+          "CSS @import must precede all other rules; this import is ignored", atRule.sourceOffset);
+    });
+    return;
+  }
+  ParsedImportPrelude parsed = ParseImportPrelude(atRule);
+  if (const char* reason = IgnoredImportReason(parsed.kind)) {
+    warningSink.add([&] { return ParseDiagnostic::Warning(reason, atRule.sourceOffset); });
+    return;
+  }
+  state.imports.push_back(ImportRule{.url = std::move(parsed.url),
+                                     .sourceOffset = atRule.sourceOffset});
+}
+
+void HandleAtRule(AtRule& atRule, StylesheetParseState& state, ParseWarningSink& warningSink) {
+  if (atRule.name.equalsLowercase("import")) {
+    HandleImportRule(atRule, state, warningSink);
+    return;
+  }
+  if (AtRuleEndsImportSection(atRule)) {
+    state.importsAllowed = false;
+  }
+  if (WarnUnsupportedAtRule(atRule, warningSink)) {
+    return;
+  }
+  if (auto fontFace = ParseFontFaceRule(atRule, state.securityStats)) {
+    state.fontFaces.push_back(std::move(*fontFace));
+    ++state.securityStats.rules;
+  }
+}
+
 }  // namespace
 
 Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
   RuleParser::SecurityStats ruleStats;
   std::vector<Rule> rules = RuleParser::ParseStylesheet(str, &ruleStats);
 
-  Stylesheet::SecurityStats securityStats;
-  securityStats.rejected = ruleStats.rejected;
-  securityStats.componentValues = ruleStats.componentValues;
+  StylesheetParseState state;
+  state.securityStats.rejected = ruleStats.rejected;
+  state.securityStats.componentValues = ruleStats.componentValues;
 
-  std::vector<SelectorRule> selectorRules;
-  std::vector<FontFace> fontFaces;
   for (auto&& rule : rules) {
     if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
       if (auto selectorRule =
-              ParseQualifiedSelectorRule(str, *qualifiedRule, warningSink, securityStats)) {
-        selectorRules.push_back(std::move(*selectorRule));
-        ++securityStats.rules;
+              ParseQualifiedSelectorRule(str, *qualifiedRule, warningSink, state.securityStats)) {
+        state.selectorRules.push_back(std::move(*selectorRule));
+        ++state.securityStats.rules;
+        state.importsAllowed = false;
       }
-      if (securityStats.rejected) {
-        break;
-      }
-      continue;
+    } else if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
+      HandleAtRule(*atRule, state, warningSink);
     }
-    if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
-      if (WarnUnsupportedAtRule(*atRule, warningSink)) {
-        continue;
-      }
-      if (auto fontFace = ParseFontFaceRule(*atRule, securityStats)) {
-        fontFaces.push_back(std::move(*fontFace));
-        ++securityStats.rules;
-      }
-      if (securityStats.rejected) {
-        break;
-      }
+    if (state.securityStats.rejected) {
+      break;
     }
   }
 
-  return Stylesheet(std::move(selectorRules), std::move(fontFaces), securityStats);
+  return Stylesheet(std::move(state.selectorRules), std::move(state.fontFaces),
+                    std::move(state.imports), state.securityStats);
 }
 
 }  // namespace donner::css::parser
