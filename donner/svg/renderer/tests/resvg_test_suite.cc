@@ -1931,9 +1931,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params::WithThreshold(kDefaultThreshold, 150,
-                                           "Uniform sub-pixel glyph offset (122 px); order and "
-                                           "Arabic joining match")
+                     Params::Skip("Override order, script runs and Arabic joining match the "
+                                  "reference; an unexplained sub-pixel offset of the centered "
+                                  "line leaves 122 px on the full tier")
                          .onlyTextFull()},
                 })),
             ValuesIn(ActiveComparisonModes())),

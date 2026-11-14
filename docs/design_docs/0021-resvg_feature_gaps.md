@@ -587,7 +587,7 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 **Current status:** normal horizontal BiDi, `direction`, and a `bidi-override` on the `<text>`
 element itself are implemented ([0069](0069-bidi_text_layout.md)). `text/unicode-bidi/bidi-override`
-compares on the full tier. `text/direction/rtl` orders and anchors correctly but stays skipped: its
+matches in order and joining but stays skipped for an unexplained 122-pixel sub-pixel offset. `text/direction/rtl` orders and anchors correctly but stays skipped: its
 reference shapes Arabic with Noto Sans Arabic, which the test fonts lack.
 `text/direction/rtl-with-vertical-writing-mode` is undefined behavior (svgwg#618).
 
