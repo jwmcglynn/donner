@@ -353,7 +353,7 @@ py_library(
 
 py_test(
     name = "lane_stall_guard_tests",
-    size = "small",
+    size = "medium",
     srcs = ["lane_stall_guard_tests.py"],
     data = ["lane_stall_guard.py"],
     deps = [
