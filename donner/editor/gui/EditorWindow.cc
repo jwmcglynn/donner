@@ -2545,8 +2545,7 @@ bool EditorWindow::observePresentationCompletion() {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerPresentationQueueStats'];
-        const carried = Object.assign(
-            {'timeoutSerial' : 0, 'timeoutAgeMs' : 0, 'completionConfirmations' : 0}, previous);
+        const carried = previous ?? {};
         window['__donnerPresentationQueueStats'] = ({
           'completedSerial' : $0,
           'submittedSerial' : $1,
@@ -2564,9 +2563,9 @@ bool EditorWindow::observePresentationCompletion() {
           'inputRepresented' : Boolean($9), 'viewportZoom' : $10,
           'completedAtMs' : previous &&
               Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
-          'timeoutSerial' : carried['timeoutSerial'],
-          'timeoutAgeMs' : carried['timeoutAgeMs'],
-          'completionConfirmations' : carried['completionConfirmations'],
+          'timeoutSerial' : carried['timeoutSerial'] ?? 0,
+          'timeoutAgeMs' : carried['timeoutAgeMs'] ?? 0,
+          'completionConfirmations' : carried['completionConfirmations'] ?? 0,
         });
         // Bounded admission timeline for failure diagnostics: time, admission, frames in flight,
         // device completed serial, submitted serial, oldest pending serial.

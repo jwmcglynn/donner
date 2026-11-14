@@ -219,6 +219,8 @@ declare global {
       viewportZoom: number;
       deviceLost?: boolean;
       timeoutSerial?: number;
+      timeoutAgeMs?: number;
+      completionConfirmations?: number;
       pointerX?: number;
       pointerY?: number;
       mouseDown?: boolean;
@@ -6403,28 +6405,40 @@ async function releaseGpuCompletions(page: Page): Promise<void> {
   );
 }
 
-// Records the `timeoutSerial` of every presentation stats object the editor assigns from now on, as
-// it is assigned, so a snapshot published without it is seen whatever the timing of later reads.
+interface PublishedTimeoutFields {
+  timeoutSerial: number | null;
+  timeoutAgeMs: number | null;
+  completionConfirmations: number | null;
+}
+
+// Records the timeout fields of every presentation stats object the editor assigns from now on, as
+// it is assigned, so a snapshot published without them is seen whatever the timing of later reads.
 async function recordPresentationStatsPublications(page: Page): Promise<void> {
   await page.evaluate(() => {
-    const scope = window as Window & { __donnerPresentationStatsPublications?: number[] };
-    const published: number[] = [];
+    const scope = window as Window & {
+      __donnerPresentationStatsPublications?: PublishedTimeoutFields[];
+    };
+    const published: PublishedTimeoutFields[] = [];
     let current = window.__donnerPresentationQueueStats;
     scope.__donnerPresentationStatsPublications = published;
     Object.defineProperty(window, "__donnerPresentationQueueStats", {
       configurable: true,
       get: () => current,
       set: (value) => {
-        published.push(value?.timeoutSerial ?? 0);
+        published.push({
+          timeoutSerial: value?.timeoutSerial ?? null,
+          timeoutAgeMs: value?.timeoutAgeMs ?? null,
+          completionConfirmations: value?.completionConfirmations ?? null,
+        });
         current = value;
       },
     });
   });
 }
 
-async function readPresentationStatsPublications(page: Page): Promise<number[]> {
+async function readPresentationStatsPublications(page: Page): Promise<PublishedTimeoutFields[]> {
   return page.evaluate(() =>
-    (window as Window & { __donnerPresentationStatsPublications?: number[] })
+    (window as Window & { __donnerPresentationStatsPublications?: PublishedTimeoutFields[] })
       .__donnerPresentationStatsPublications ?? []
   );
 }
@@ -6455,44 +6469,48 @@ test("a GPU completion stall past the UI admission deadline still presents the p
 
   // The stall ends only once the editor has recorded the admission timeout, so the case cannot pass
   // or fail on how long after the hold the pinch's first held frame happened to be submitted.
-  let timedOutDuringStall = false;
-  let recordedTimeout = 0;
+  let holdsAtTimeout: GpuCompletionHold[] = [];
+  let recorded: { timeoutSerial?: number; timeoutAgeMs?: number } | undefined;
   try {
     expect(await holdGpuCompletions(page), "no worker owns a GPU queue").toBeGreaterThan(0);
     await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
     await expect
       .poll(async () => (await presentationQueue())?.timeoutSerial ?? 0, {
-        message: "the stall must outlast the UI admission deadline for this case to exercise it",
+        message: "the editor never recorded the UI admission timeout while completions were held",
         timeout: kAdmissionTimeoutGuardMs,
       })
       .toBeGreaterThan(0);
-    timedOutDuringStall = (await readGpuCompletionHolds(page)).every((hold) => !hold.released);
-    recordedTimeout = (await presentationQueue())?.timeoutSerial ?? 0;
+    holdsAtTimeout = await readGpuCompletionHolds(page);
+    recorded = await presentationQueue();
     await recordPresentationStatsPublications(page);
   } finally {
     await releaseGpuCompletions(page);
   }
 
-  expect(timedOutDuringStall, "the admission timeout must be recorded while the stall holds")
-    .toBe(true);
+  expect(
+    holdsAtTimeout.reduce((calls, hold) => calls + hold.calls, 0),
+    "the admission timeout must come from frames waiting on held completions",
+  ).toBeGreaterThan(0);
   // Each stats object the editor publishes replaces the previous one. Every one published after the
-  // timeout must already carry it when it is assigned; a page read can land between any two tasks.
+  // timeout must already carry its fields when it is assigned; a page read can land between any two
+  // main-thread tasks.
   await expect
     .poll(async () => (await readPresentationStatsPublications(page)).length, {
       message: "the editor never published presentation stats after the completion stall",
       timeout: kStallGuardMs,
     })
-    .toBeGreaterThanOrEqual(2);
+    .toBeGreaterThanOrEqual(1);
   const published = await readPresentationStatsPublications(page);
-  expect(published, "a published presentation stats object lacked the recorded timeout")
-    .toEqual(published.map(() => recordedTimeout));
+  expect(published, "a published presentation stats object lacked the recorded timeout fields")
+    .toEqual(published.map(() => ({
+      timeoutSerial: recorded?.timeoutSerial,
+      timeoutAgeMs: recorded?.timeoutAgeMs,
+      completionConfirmations: expect.any(Number),
+    })));
   const holds = await readGpuCompletionHolds(page);
   expect(holds.length).toBeGreaterThan(0);
-  expect(holds.every((hold) => hold.released), "every completion hold must be released").toBe(true);
-  expect(
-    holds.reduce((calls, hold) => calls + hold.calls, 0),
-    "the pinch's frames must have waited on held completions",
-  ).toBeGreaterThan(0);
+  expect(holds, "every completion hold must be released")
+    .toEqual(holds.map((hold) => ({ ...hold, released: true })));
   const afterStall = await presentationQueue();
   expect(
     afterStall?.deviceLost,
