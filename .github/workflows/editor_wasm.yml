@@ -228,8 +228,12 @@ jobs:
       # script serves a private copy of the package, verifies the served
       # editor.wasm hash, runs every lane (no fail-fast, so one run reports the
       # whole matrix), and exits nonzero if any lane failed. Only the scheduled
-      # run adds the report-only lane for the cases quarantined by #1634.
+      # run adds the report-only lane for the cases quarantined by #1634. The
+      # step timeout is a backstop above the script's per-lane stall guards: a
+      # step that reaches it fails rather than being cancelled, so the evidence
+      # uploads below still run.
       - name: Serve Geode package and run browser suites
+        timeout-minutes: 120
         env:
           DONNER_WASM_PACKAGE_DIR: ${{ runner.temp }}/editor-wasm-package-geode
           DONNER_BROWSER_QUARANTINE_REPORT_LANE: ${{ github.event_name == 'schedule' && '1' || '0' }}

@@ -33,6 +33,9 @@
 #   * The served bytes are a copy of the built package in a temp directory, not
 #     bazel-bin. A later bazel invocation can repoint bazel-bin mid-run and
 #     silently serve stale bytes; copying makes that impossible.
+#   * Each lane runs under tools/ci/lane_stall_guard.py. A lane that is still
+#     running after the guard's deadline is recorded and stopped with exit
+#     status 124, and the remaining lanes still run.
 #
 # Usage:
 #   tools/run-browser-ci.sh [extra bazel flags...]
@@ -329,6 +332,20 @@ archive_lane_results() {
 # exact command a human would type, and browser-matrix.spec.mjs matches them
 # literally.
 
+# Each lane runs under a wall-clock stall guard. A passing lane takes minutes; a browser that
+# stops answering can otherwise hold Playwright's teardown open until the job's own limit kills
+# the job without evidence. The guard records the lane's processes and open files into the
+# lane's archive directory, stops the lane with exit status 124, and the next lane still runs.
+readonly kLaneStallGuardSeconds=2400
+readonly kLaneStallGuard="${repo_root}/tools/ci/lane_stall_guard.py"
+
+guarded() {
+  local name="$1"
+  shift
+  python3 "${kLaneStallGuard}" --deadline-seconds "${kLaneStallGuardSeconds}" \
+    --diagnostics-dir "${kFailureArchiveDir}/${name}/stall-guard" -- "$@"
+}
+
 lane_names=()
 lane_codes=()
 overall_status=0
@@ -344,7 +361,7 @@ run_lane() {
   printf '%s\n' "  \$ $*"
 
   local code=0
-  "$@" || code=$?
+  guarded "${name}" "$@" || code=$?
 
   archive_lane_results "${name}"
   echo "LANE ${name} exit code: ${code}"
@@ -399,7 +416,7 @@ if [[ "${DONNER_BROWSER_QUARANTINE_REPORT_LANE:-}" == "1" ]]; then
   report_lane_code=0
   DONNER_BROWSER_QUARANTINE_REPORT=report \
     DONNER_QUARANTINE_REPORT_JSON="${kQuarantineReportDir}/quarantine-report.json" \
-    bash donner/editor/wasm/tests/run_tests.sh --headed \
+    guarded "${kQuarantineReportLane}" bash donner/editor/wasm/tests/run_tests.sh --headed \
     --config=playwright.quarantine-report.config.js || report_lane_code=$?
   archive_lane_results "${kQuarantineReportLane}" \
     || echo "warning: could not archive the ${kQuarantineReportLane} results"
