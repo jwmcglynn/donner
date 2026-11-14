@@ -6,98 +6,35 @@ env:
   ASPECT_TOOLS_TELEMETRY: "-all"
 
 on:
-  push:
-    branches: [main]
-  # A pull request runs the preflight only when it changes something the preflight consumes:
-  # the module and its build configuration (MODULE.bazel, .bazel* files, .bzl macros,
-  # build_defs, config, third-party BUILD files, patches and licenses), the BUILD files of the
-  # packages a consumer's libraries reach (donner/base, css, gpu and svg, apart from tests,
-  # benchmarks, the Wasm bindings and the command-line tool), the archive's own rules
-  # (.gitattributes, LICENSE, NOTICE), the BCR templates and example consumer, the release and
-  # packaging inputs that select the full matrix (tools/bcr_preflight.py RELEASE_PATHS), and
-  # the scripts its steps run. A change to sources or tests alone is built and tested by CI on
-  # the same pull request, and the preflight still runs on every push to main, so a
-  # consumer-only regression surfaces there the same day. Order matters: the negative
-  # patterns drop only paths matched by the build-graph patterns above them.
-  # tools/security_workflow_policy_tests.py checks that every RELEASE_PATHS input and every
-  # tool a step runs starts the preflight, and that a source-only change does not.
+  # A pull request runs the preflight only when it changes the registry entry or the preflight
+  # itself: the BCR templates (.bcr), the export rules that shape the source archive
+  # (.gitattributes), the example consumer module, which no other workflow builds, the
+  # preflight's own tools (tools/bcr_*) and the preflight and publication workflows. Every other
+  # input, MODULE.bazel and the rest of the build graph included, is built and tested by CI on
+  # the pull request. What only this workflow checks (registry admission, resolving the archive
+  # from a consumer module, the release CLI and native editor builds and their NOTICE coverage)
+  # runs nightly on main, so a regression there surfaces within a day, and a release needs a
+  # successful run on its exact commit (docs/release_candidate.md). Main pushes do not run it.
+  # tools/security_workflow_policy_tests.py checks that the preflight's own tools and the
+  # registry inputs start it and that general build-graph, packaging and source changes do not.
   pull_request:
     paths:
-      - .bazelignore
-      - .bazelrc
-      - .bazelversion
       - .bcr/**
       - .gitattributes
       - .github/workflows/bcr_preflight.yml
       - .github/workflows/publish_bcr.yml
-      - .github/workflows/release.yml
-      - "**/*.bzl"
-      - donner/base/**/BUILD.bazel
-      - donner/css/**/BUILD.bazel
-      - donner/gpu/**/BUILD.bazel
-      - donner/svg/**/BUILD.bazel
-      - third_party/**/BUILD*
-      - third_party/*.BUILD
-      - third_party/*.patch
-      - third_party/bazel/**
-      - third_party/licenses/**
-      - third_party/patches/**
-      - "!**/tests/**"
-      - "!**/*_tests/**"
-      - "!**/benchmarks/**"
-      - "!**/testdata/**"
-      - "!donner/svg/renderer/wasm/**"
-      - "!donner/svg/tool/**"
-      - "!third_party/resvg-test-suite/**"
-      - BUILD.bazel
-      - LICENSE
-      - MODULE.bazel
-      - MODULE.bazel.lock
-      - NOTICE
-      - build_defs/**
-      - config/**
-      - donner/base/PackagedResource*
-      - donner/editor/BUILD.bazel
-      - donner/editor/art/**
-      - donner/editor/write_build_info.sh
-      - third_party/fira-code/**
-      - third_party/google_fonts/**
-      - third_party/public-sans/**
-      - third_party/roboto/**
       - examples/bazel_consumer/**
-      - examples/BUILD.bazel
-      - examples/svg_to_png.cc
-      - examples/svg_text_interaction.cc
-      - examples/svg_viewer.cc
-      - examples/geode_embed.cc
-      - examples/native_resource_delivery_tests.py
-      - examples/native_no_text_resource_delivery_tests.py
-      - tools/BUILD.bazel
       - tools/bcr_*
-      - tools/ci/BUILD.bazel
-      - tools/ci/free_hosted_macos_disk.sh
-      - tools/ci/github_rate_limit.py
-      - tools/ci/release_*
-      - tools/ci_check_runner_disk.sh
-      - tools/ci_macos_xcode.txt
-      - tools/ci_select_macos_xcode.sh
-      - tools/default_notice*
-      - tools/editor_build_info_tests.py
-      - tools/macos_editor_test_bundle*
-      - tools/native_delivery.py
-      - tools/notice*
-      - tools/release_*
-      - tools/render_notice*
-  # The full matrix qualifies a release candidate: run it nightly and on
-  # request. Pushes to main run the slim check (see the prepare job).
+  # Every run is the full matrix, which qualifies a release candidate: nightly, on request, and
+  # for a pull request above.
   schedule:
     # After the other nightly workflows (latest: Coverage at 08:15 UTC).
     - cron: "35 8 * * *"
   workflow_dispatch:
 
 # A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
-# Only opened, synchronize and reopened events share the per-PR group. Every other run (push,
-# schedule, dispatch, or a call from an edit) has a group of its own and is never cancelled.
+# Only opened, synchronize and reopened events share the per-PR group. Every other run
+# (schedule, dispatch, or a call from an edit) has a group of its own and is never cancelled.
 # tools/ci_concurrency_policy_tests.py owns this exact setting.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') && format('ci-{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('ci-{0}-{1}', github.workflow, github.run_id) }}
@@ -116,26 +53,12 @@ jobs:
       source_commit: ${{ steps.archive.outputs.source_commit }}
       source_artifact: donner-bcr-source-${{ steps.archive.outputs.producer_run_attempt }}
       entry_artifact: donner-bcr-entry-${{ steps.archive.outputs.producer_run_attempt }}
-      full_matrix: ${{ steps.scope.outputs.full_matrix }}
     steps:
       - uses: actions/checkout@v7
         with:
           path: donner
           fetch-depth: 0
           persist-credentials: false
-
-      # Two scopes. The full matrix (Ubuntu and macOS consumers on Bazel 7 and
-      # 8, both CLI builds, attestation and qualification) is what qualifies a
-      # release candidate; it runs on schedule, on manual dispatch, and for a
-      # pull request that changes release or packaging inputs. Pushes to main
-      # and every other pull request run the slim check: this archive, the
-      # registry admission check and one Ubuntu consumer on the newest Bazel,
-      # so archive and basic consumer breakage still shows at once. A diff
-      # that cannot be listed selects the full matrix. tools/bcr_preflight.py
-      # lists the release and packaging inputs.
-      - name: Select the preflight scope
-        id: scope
-        run: python3 -B -m tools.bcr_preflight scope
 
       - name: Prepare committed source archive
         id: archive
@@ -210,11 +133,6 @@ jobs:
       matrix:
         os: [ubuntu-24.04, xcode-27]
         bazel: ['7.x', '8.x']
-        # The slim check keeps only the Ubuntu consumer on the newest Bazel;
-        # the full matrix excludes nothing.
-        exclude:
-          - os: ${{ needs.prepare.outputs.full_matrix == 'true' && 'none' || 'xcode-27' }}
-          - bazel: ${{ needs.prepare.outputs.full_matrix == 'true' && 'none' || '7.x' }}
     runs-on: ${{ matrix.os }}
     env:
       USE_BAZEL_VERSION: ${{ matrix.bazel }}
@@ -248,7 +166,6 @@ jobs:
 
   cli-linux:
     needs: prepare
-    if: ${{ needs.prepare.outputs.full_matrix == 'true' }}
     runs-on: ubuntu-24.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
@@ -276,7 +193,6 @@ jobs:
 
   cli-macos:
     needs: prepare
-    if: ${{ needs.prepare.outputs.full_matrix == 'true' }}
     runs-on: xcode-27
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
@@ -317,7 +233,7 @@ jobs:
           compression-level: 0
 
   attest-artifacts:
-    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.full_matrix == 'true'
+    if: github.ref == 'refs/heads/main'
     needs: [prepare, cli-linux, cli-macos]
     runs-on: ubuntu-24.04
     permissions:
@@ -373,7 +289,6 @@ jobs:
 
   qualify:
     needs: [prepare, consumer, cli-linux, cli-macos]
-    if: ${{ needs.prepare.outputs.full_matrix == 'true' }}
     runs-on: ubuntu-24.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
