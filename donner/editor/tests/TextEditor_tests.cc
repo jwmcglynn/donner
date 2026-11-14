@@ -4270,9 +4270,15 @@ TEST_F(TextEditorTests, FocusReferenceSourceUnderlineCoversNonAsciiIds) {
 
   const auto underline = FocusReferenceSourceUnderlineDirect(SourcePoint{.line = 0, .column = 10});
 
-  ASSERT_TRUE(underline.has_value());
-  EXPECT_FLOAT_EQ(underline->start.x, ScreenPointAtCoordinates(Coordinates(0, 10)).x);
-  EXPECT_FLOAT_EQ(underline->end.x, ScreenPointAtCoordinates(Coordinates(0, 15)).x);
+  using Underline = decltype(underline)::value_type;
+  EXPECT_THAT(underline,
+              testing::Optional(AllOf(
+                  Field("start", &Underline::start,
+                        Field("x", &ImVec2::x,
+                              testing::FloatEq(ScreenPointAtCoordinates(Coordinates(0, 10)).x))),
+                  Field("end", &Underline::end,
+                        Field("x", &ImVec2::x,
+                              testing::FloatEq(ScreenPointAtCoordinates(Coordinates(0, 15)).x))))));
 }
 
 TEST_F(TextEditorTests, FocusReferenceSourceUnderlineSanitizesExtremeColumns) {

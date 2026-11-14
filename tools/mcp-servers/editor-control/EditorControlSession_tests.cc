@@ -2673,8 +2673,7 @@ TEST(EditorControlSessionInternalTest, ContentHashesIgnoreTheGlobalLocale) {
   bitmap.pixels = {1, 2, 3, 4};
   bitmap.rowBytes = 4;
   const std::optional<std::string> expectedBitmapHash = BitmapContentHash(bitmap);
-  ASSERT_TRUE(expectedBitmapHash.has_value());
-  EXPECT_THAT(*expectedBitmapHash, ::testing::MatchesRegex("0x[0-9a-f]{16}"));
+  ASSERT_THAT(expectedBitmapHash, ::testing::Optional(::testing::MatchesRegex("0x[0-9a-f]{16}")));
 
   const ScopedCommaDecimalGlobalLocale locale;
   // FNV-1a 64 of the empty string is its offset basis.

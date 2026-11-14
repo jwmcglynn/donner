@@ -21,8 +21,11 @@ namespace donner::editor {
 
 namespace {
 
+using ::testing::AllOf;
 using ::testing::ElementsAre;
+using ::testing::Field;
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::Not;
 
 /// Parse \p svg into a source-backed SVGDocument, asserting success.
@@ -45,6 +48,14 @@ std::vector<svg::SVGElement> Select(svg::SVGDocument& document,
     }
   }
   return selection;
+}
+
+/// Matches a paste that succeeded, with no error, and whose merged source matches \p sourceMatcher.
+template <typename SourceMatcher>
+auto PasteSucceededWithSource(SourceMatcher sourceMatcher) {
+  return AllOf(Field("error", &PreparePasteResult::error, IsEmpty()),
+               Field("ok", &PreparePasteResult::ok, true),
+               Field("mergedSource", &PreparePasteResult::mergedSource, sourceMatcher));
 }
 
 constexpr std::string_view kTwoRects =
@@ -426,11 +437,9 @@ TEST(ShapeClipboardCommands, PasteRepairsReferencesToNonAsciiIds) {
                         R"svg()"/>)svg";
   payload.sourceElementIds = {"shape"};
 
-  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
-  ASSERT_TRUE(result.ok) << result.error;
-
-  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"" + id + "_pasted\""));
-  EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#" + id + "_pasted)\""));
+  EXPECT_THAT(preparePaste(document, payload, PastePlacement::EndOfRootOffset),
+              PasteSucceededWithSource(AllOf(HasSubstr("id=\"" + id + "_pasted\""),
+                                             HasSubstr("fill=\"url(#" + id + "_pasted)\""))));
 }
 
 TEST(ShapeClipboardCommands, PasteIdRepairSkipsAlreadyTakenGeneratedIds) {

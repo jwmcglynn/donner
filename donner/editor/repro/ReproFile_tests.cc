@@ -202,8 +202,9 @@ TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
   }
   const auto parsed = ParseReproFile(R"({"v":3,"wnd":[100,100],"scale":1.5,"exp":0})"
                                      "\n");
-  ASSERT_TRUE(parsed.has_value());
-  EXPECT_DOUBLE_EQ(parsed->metadata.displayScale, 1.5);
+  EXPECT_THAT(parsed,
+              Optional(Field("metadata", &ReproFile::metadata,
+                             Field("displayScale", &ReproMetadata::displayScale, DoubleEq(1.5)))));
 }
 
 // Numbers are written in the classic locale, so a global C++ locale with a decimal comma and
@@ -217,14 +218,16 @@ TEST(ReproFileTest, RoundTripsNumbersUnderACommaDecimalGlobalLocale) {
     ASSERT_TRUE(WriteReproFile(path, file));
   }
 
-  const auto loaded = ReadReproFile(path);
-  ASSERT_TRUE(loaded.has_value());
-  EXPECT_EQ(loaded->metadata.windowWidth, 1600);
-  EXPECT_DOUBLE_EQ(loaded->metadata.displayScale, 2.0);
-  ASSERT_EQ(loaded->frames.size(), 1u);
-  EXPECT_EQ(loaded->frames.front().index, 1234);
-  EXPECT_DOUBLE_EQ(loaded->frames.front().deltaMs, 16.667);
-  EXPECT_DOUBLE_EQ(loaded->frames.front().mouseX, 123.25);
+  EXPECT_THAT(
+      ReadReproFile(path),
+      Optional(AllOf(
+          Field("metadata", &ReproFile::metadata,
+                AllOf(Field("windowWidth", &ReproMetadata::windowWidth, Eq(1600)),
+                      Field("displayScale", &ReproMetadata::displayScale, DoubleEq(2.0)))),
+          Field("frames", &ReproFile::frames,
+                ElementsAre(AllOf(Field("index", &ReproFrame::index, Eq(1234)),
+                                  Field("deltaMs", &ReproFrame::deltaMs, DoubleEq(16.667)),
+                                  Field("mouseX", &ReproFrame::mouseX, DoubleEq(123.25))))))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -242,10 +245,11 @@ TEST(ReproFileTest, ReproRecorderContentHashIgnoresTheGlobalLocale) {
     ASSERT_TRUE(recorder.flush());
   }
 
-  const auto loaded = ReadReproFile(path);
-  ASSERT_TRUE(loaded.has_value());
   // The published FNV-1a 64 test vector for "a".
-  EXPECT_EQ(loaded->metadata.svgContentHash, "fnv1a64:af63dc4c8601ec8c");
+  EXPECT_THAT(ReadReproFile(path),
+              Optional(Field("metadata", &ReproFile::metadata,
+                             Field("svgContentHash", &ReproMetadata::svgContentHash,
+                                   Eq("fnv1a64:af63dc4c8601ec8c")))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

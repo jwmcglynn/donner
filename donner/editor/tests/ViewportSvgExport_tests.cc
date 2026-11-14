@@ -30,6 +30,8 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::Field;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
@@ -140,10 +142,13 @@ TEST(ViewportSvgExportTest, ExportedNumbersIgnoreTheGlobalLocale) {
   const ScopedCommaDecimalGlobalLocale locale;
   const Result<std::string, std::string> result = ExportViewportAsSvg(
       doc, viewport, Recti(Vector2i(0, 0), Vector2i(2000, 500)), ViewportExportOptions{});
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("1500.5"));
-  EXPECT_THAT(result.value, Not(HasSubstr("1500,5")));
-  EXPECT_THAT(result.value, Not(HasSubstr("1.500")));
+  using ExportResult = Result<std::string, std::string>;
+  EXPECT_THAT(
+      result,
+      AllOf(Field("error", &ExportResult::error, IsEmpty()),
+            Field("isOk", &ExportResult::isOk, true),
+            Field("value", &ExportResult::value,
+                  AllOf(HasSubstr("1500.5"), Not(HasSubstr("1500,5")), Not(HasSubstr("1.500"))))));
 }
 
 TEST(ViewportSvgExportTest, FullyVisibleDocumentKeepsOriginalBoundsAndDimensions) {
