@@ -516,8 +516,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"in=FillPaint.svg", Params::UndefinedBehavior("in=FillPaint")},
                 {"in=StrokePaint.svg", Params::UndefinedBehavior("in=StrokePaint")},
                 {"on-the-root-svg.svg", Params::UndefinedBehavior("Filter on the root `svg`")},
-                {"transform-on-shape-with-filter-region.svg",
-                 Params::Skip("Bug: We don't blur the right edge")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-1.svg",
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-2.svg",

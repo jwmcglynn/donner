@@ -1999,8 +1999,11 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
   const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
                                 Vector2d(geometry->blurPadding + frame.filterRegion->width(),
                                          geometry->blurPadding + frame.filterRegion->height()));
+  // The padded local raster holds source content beyond the filter region. The filter region
+  // bounds SourceGraphic, so crop it before the blur reads that padding. In this local space the
+  // region is axis-aligned even when the device transform skews or rotates it.
   ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localFromFilter, localFilterRegion,
-                           false);
+                           /*clipSourceToFilterRegion=*/true);
   ClipFilterOutputToRegion(localPixmap, localFilterRegion, localFromFilter);
 
   const Transform2d deviceFromLocal =
