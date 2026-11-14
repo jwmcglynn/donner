@@ -15,6 +15,7 @@
 #include "donner/base/PathOps.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
+#include "donner/css/parser/details/Tokenizer.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/TextPatch.h"
@@ -726,134 +727,44 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
   }
 }
 
-/// Characters allowed in an SVG id (matches the clipboard id scanner).
-bool IsIdChar(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
-         c == '_' || c == ':' || c == '.';
-}
-
-/// Offset of the first non-whitespace byte of @p value at or after @p offset.
-std::size_t SkipAsciiWhitespace(std::string_view value, std::size_t offset) {
-  while (offset < value.size() && std::isspace(static_cast<unsigned char>(value[offset]))) {
-    ++offset;
-  }
-  return offset;
-}
-
-/// The quote character at @p offset in @p value, or `'\0'` if it is not a quote.
-char QuoteAt(std::string_view value, std::size_t offset) {
-  if (offset >= value.size()) {
-    return '\0';
-  }
-  const char c = value[offset];
-  return c == '"' || c == '\'' ? c : '\0';
-}
-
-/// Byte range of the id inside a `url(#id)`, `url( '#id' )` or `url("#id")` reference to @p id
-/// that starts at @p offset in @p value, if one starts there.
-std::optional<std::pair<std::size_t, std::size_t>> UrlIdReferenceAt(std::string_view value,
-                                                                    std::size_t offset,
-                                                                    std::string_view id) {
-  if (value.compare(offset, 4, "url(") != 0) {
-    return std::nullopt;
-  }
-  std::size_t start = SkipAsciiWhitespace(value, offset + 4);
-  const char quote = QuoteAt(value, start);
-  if (quote != '\0') {
-    ++start;
-  }
-  if (value.compare(start, 1, "#") != 0 || value.compare(start + 1, id.size(), id) != 0) {
-    return std::nullopt;
-  }
-  const std::size_t end = start + 1 + id.size();
-  // An unquoted id ends at the first non-id character; a quoted one at its closing quote.
-  const bool idEnds =
-      quote == '\0' ? end >= value.size() || !IsIdChar(value[end]) : QuoteAt(value, end) == quote;
-  if (!idEnds) {
-    return std::nullopt;
-  }
-  return std::make_pair(start + 1, end);
-}
-
 /// Whether an attribute's value can be a bare `#id` reference: only `href`, with or without a
 /// namespace prefix. Elsewhere a whole value such as `#abc` is a color or foreign data.
 bool IsHrefAttribute(const xml::XMLQualifiedNameRef& name) {
   return name.name.str() == "href";
 }
 
-/// If @p value references @p oldId via `url(#oldId)` (optionally with whitespace
-/// inside the parentheses and a single- or double-quoted URL) or, when @p isHref, a
-/// whole-value `#oldId`, return the value with every such reference repointed to
-/// @p newId; otherwise return `std::nullopt` (no reference, no change).
-std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std::string_view oldId,
-                                                     std::string_view newId, bool isHref) {
-  // Whole-value local reference, e.g. href="#oldId".
-  if (isHref && value.size() == oldId.size() + 1u && value.front() == '#' &&
-      value.substr(1) == oldId) {
-    return "#" + std::string(newId);
-  }
-
-  // url(#oldId) occurrences anywhere in the value (covers presentation
-  // attributes and inline `style="fill:url(#oldId)"`).
-  std::string out;
-  bool changed = false;
-  std::size_t i = 0;
-  while (i < value.size()) {
-    if (const auto idRange = UrlIdReferenceAt(value, i, oldId)) {
-      out.append(value.substr(i, idRange->first - i)).append(newId);
-      i = idRange->second;
-      changed = true;
-      continue;
-    }
-    out.push_back(value[i]);
-    ++i;
-  }
-  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
-}
-
-/// Whether @p text ends with `url(`, ignoring trailing whitespace.
-bool EndsWithUrlOpen(std::string_view text) {
-  std::size_t back = text.size();
-  while (back > 0 && std::isspace(static_cast<unsigned char>(text[back - 1]))) {
-    --back;
-  }
-  return back >= 4 && text.compare(back - 4, 4, "url(") == 0;
-}
-
-/// Whether @p quoted, a complete quoted CSS string directly following @p precedingText, is the
-/// URL of a `url("#id")` reference to @p id.
-bool IsQuotedUrlIdReference(std::string_view precedingText, std::string_view quoted,
-                            std::string_view id) {
-  return quoted.size() == id.size() + 3u && quoted.back() == quoted.front() && quoted[1] == '#' &&
-         quoted.substr(2, id.size()) == id && EndsWithUrlOpen(precedingText);
-}
-
-/// What a piece of CSS text is: a whole stylesheet (a `<style>` element's text) or a
-/// declaration list (an inline `style` attribute value).
+/// What a piece of CSS text is: a whole stylesheet (a `<style>` element's text) or a value or
+/// declaration list (an attribute value, including an inline `style`).
 enum class CssTextKind : std::uint8_t { Stylesheet, DeclarationList };
 
-/// Rewrites `#oldId` to `#newId` in CSS text wherever a `#token` can reference an element: id
-/// selectors (stylesheet selector preludes, including inside conditional group rules like
-/// `@media`) and `url(#id)` / `url("#id")` references in declaration values. A `#token` elsewhere
-/// in a declaration value is a hex color literal (an id like `abc` is also a valid color), and
-/// comments and other quoted strings are copied verbatim. A match requires the exact token: `#` +
-/// the old id + a non-id-character boundary, so `#oldIdSuffix` never matches.
+/// Rewrites references to an element id in CSS text, locating them with the CSS tokenizer: id
+/// selectors (hash tokens in stylesheet selector position, including inside conditional group
+/// rules like `@media`), `url(#id)` url tokens, and `url("#id")` functions with one string
+/// argument. The tokenizer decides case-insensitive `url`, escapes, strings, comments and bad urls;
+/// hash tokens in declarations are colors and are left alone. Only the located token spans are
+/// replaced, so the rest of the text is preserved byte for byte.
 class CssIdReferenceRewriter {
 public:
   /// @param text CSS text to rewrite.
   /// @param oldId Id whose references are repointed.
   /// @param newId Replacement id.
-  /// @param kind Whether @p text is a stylesheet or a declaration list.
+  /// @param kind Whether @p text is a stylesheet or a value / declaration list.
   CssIdReferenceRewriter(std::string_view text, std::string_view oldId, std::string_view newId,
                          CssTextKind kind)
-      : text_(text), oldId_(oldId), newId_(newId), kind_(kind) {}
+      : text_(text), oldUrl_("#" + std::string(oldId)), oldId_(oldId), newId_(newId), kind_(kind) {}
 
-  /// Returns the rewritten text if anything changed, otherwise `std::nullopt`.
+  /// Returns the rewritten text if any reference was found, otherwise `std::nullopt`.
   std::optional<std::string> run() {
-    while (i_ < text_.size()) {
-      step();
+    css::parser::details::Tokenizer tokenizer(text_);
+    for (css::Token token = tokenizer.next(); !token.is<css::Token::EofToken>();
+         token = tokenizer.next()) {
+      visit(token, token.offset().offset.value_or(text_.size()), tokenizer.endOffset());
     }
-    return changed_ ? std::optional<std::string>(std::move(out_)) : std::nullopt;
+    if (!changed_) {
+      return std::nullopt;
+    }
+    out_.append(text_.substr(copiedUpTo_));
+    return std::move(out_);
   }
 
 private:
@@ -863,125 +774,114 @@ private:
            (blockHoldsRules_.empty() || blockHoldsRules_.back());
   }
 
-  void step() {
-    const char c = text_[i_];
-    if (c == '/' && text_.compare(i_, 2, "/*") == 0) {
-      copyComment();
+  void visit(const css::Token& token, std::size_t start, std::size_t end) {
+    if (token.is<css::Token::Whitespace>()) {
       return;
     }
-    if (c == '"' || c == '\'') {
-      copyString(c);
+    if (continuesUrlFunction(token, start, end)) {
       return;
     }
-    if (c == '{' || c == '}' || c == ';') {
-      copyPunctuation(c);
+    if (token.is<css::Token::CurlyBracket>() || token.is<css::Token::CloseCurlyBracket>() ||
+        token.is<css::Token::Semicolon>()) {
+      visitBlockPunctuation(token);
       return;
     }
-    notePreludeStart(c);
-    if (c == '#' && rewriteIdToken()) {
-      return;
-    }
-    out_.push_back(c);
-    ++i_;
+    notePreludeStart(token);
+    visitReferenceCandidate(token, start, end);
   }
 
-  void copyComment() {
-    const std::size_t end = text_.find("*/", i_ + 2);
-    const std::size_t stop = end == std::string_view::npos ? text_.size() : end + 2;
-    out_.append(text_.substr(i_, stop - i_));
-    i_ = stop;
+  void visitReferenceCandidate(const css::Token& token, std::size_t start, std::size_t end) {
+    if (inSelectorPosition()) {
+      if (token.is<css::Token::Hash>() && token.get<css::Token::Hash>().name == oldId_) {
+        replace(start, end, "#" + std::string(newId_));
+      }
+      return;
+    }
+    if (token.is<css::Token::Url>() && token.get<css::Token::Url>().value == oldUrl_) {
+      replace(start, end, "url(#" + std::string(newId_) + ")");
+    } else if (token.is<css::Token::Function>() &&
+               token.get<css::Token::Function>().name.equalsLowercase("url")) {
+      urlFunction_ = UrlFunctionState::ExpectString;
+    }
   }
 
-  /// Copies a quoted string (backslash escapes respected), repointing it only when it is the URL
-  /// of a declaration's `url("#oldId")` reference.
-  void copyString(char quote) {
-    std::size_t end = i_ + 1;
-    while (end < text_.size() && text_[end] != quote) {
-      end += (text_[end] == '\\' && end + 1 < text_.size()) ? 2 : 1;
+  /// Advances a `url(` function token's argument match; returns true if @p token was consumed.
+  bool continuesUrlFunction(const css::Token& token, std::size_t start, std::size_t end) {
+    const UrlFunctionState state = std::exchange(urlFunction_, UrlFunctionState::None);
+    if (state == UrlFunctionState::ExpectString && token.is<css::Token::String>()) {
+      if (token.get<css::Token::String>().value == oldUrl_) {
+        urlString_ = std::make_pair(start, end);
+        urlFunction_ = UrlFunctionState::ExpectClose;
+      }
+      return true;
     }
-    const std::size_t stop = std::min(end + 1, text_.size());
-    if (!inSelectorPosition() &&
-        IsQuotedUrlIdReference(out_, text_.substr(i_, stop - i_), oldId_)) {
-      out_.push_back(quote);
-      out_.push_back('#');
-      out_.append(newId_);
-      out_.push_back(quote);
-      changed_ = true;
-    } else {
-      out_.append(text_.substr(i_, stop - i_));
+    if (state == UrlFunctionState::ExpectClose && token.is<css::Token::CloseParenthesis>()) {
+      const char quote = text_[urlString_.first];
+      replace(urlString_.first, urlString_.second,
+              std::string(1, quote) + "#" + std::string(newId_) + std::string(1, quote));
+      return true;
     }
-    i_ = stop;
+    return false;
   }
 
-  void copyPunctuation(char c) {
-    if (c == '{') {
+  void visitBlockPunctuation(const css::Token& token) {
+    if (token.is<css::Token::CurlyBracket>()) {
       // An at-rule's `{` opens a rule-holding block; a qualified rule's opens declarations.
       blockHoldsRules_.push_back(inSelectorPosition() && preludeIsAtRule_);
-    } else if (c == '}' && !blockHoldsRules_.empty()) {
+    } else if (token.is<css::Token::CloseCurlyBracket>() && !blockHoldsRules_.empty()) {
       blockHoldsRules_.pop_back();
     }
     preludeIsAtRule_ = false;
-    preludeSeenNonSpace_ = false;
-    out_.push_back(c);
-    ++i_;
+    preludeSeenToken_ = false;
   }
 
-  void notePreludeStart(char c) {
-    if (!preludeSeenNonSpace_ && !std::isspace(static_cast<unsigned char>(c))) {
-      preludeSeenNonSpace_ = true;
-      preludeIsAtRule_ = c == '@';
+  void notePreludeStart(const css::Token& token) {
+    if (!preludeSeenToken_) {
+      preludeSeenToken_ = true;
+      preludeIsAtRule_ = token.is<css::Token::AtKeyword>();
     }
   }
 
-  /// Repoints the `#oldId` token at the cursor if it is an id selector or a `url(#oldId)`.
-  bool rewriteIdToken() {
-    if (text_.compare(i_ + 1, oldId_.size(), oldId_) != 0) {
-      return false;
-    }
-    const std::size_t after = i_ + 1 + oldId_.size();
-    if (after < text_.size() && IsIdChar(text_[after])) {
-      return false;
-    }
-    if (!inSelectorPosition() && !EndsWithUrlOpen(out_)) {
-      return false;
-    }
-    out_.push_back('#');
-    out_.append(newId_);
-    i_ = after;
+  /// Copies the text up to @p start, then @p replacement in place of `[start, end)`.
+  void replace(std::size_t start, std::size_t end, const std::string& replacement) {
+    out_.append(text_.substr(copiedUpTo_, start - copiedUpTo_));
+    out_.append(replacement);
+    copiedUpTo_ = end;
     changed_ = true;
-    return true;
   }
+
+  /// Progress through a `url(` function token looking for a single `"#oldId"` string argument.
+  enum class UrlFunctionState : std::uint8_t { None, ExpectString, ExpectClose };
 
   std::string_view text_;
+  std::string oldUrl_;
   std::string_view oldId_;
   std::string_view newId_;
   CssTextKind kind_;
   std::string out_;
-  std::size_t i_ = 0;
+  std::size_t copiedUpTo_ = 0;
   bool changed_ = false;
-  /// Open blocks: `true` = holds nested rules (an at-rule body such as `@media { ... }`), so
-  /// `#token`s inside it are back in selector position; `false` = a declaration block.
+  UrlFunctionState urlFunction_ = UrlFunctionState::None;
+  std::pair<std::size_t, std::size_t> urlString_;
+  /// Open blocks: `true` = holds nested rules (an at-rule body such as `@media { ... }`), so hash
+  /// tokens inside it are back in selector position; `false` = a declaration block.
   std::vector<bool> blockHoldsRules_;
   bool preludeIsAtRule_ = false;
-  bool preludeSeenNonSpace_ = false;
+  bool preludeSeenToken_ = false;
 };
 
-/// Whether an attribute holds a CSS declaration list rather than a single value.
-bool IsInlineStyleAttribute(const xml::XMLQualifiedNameRef& name) {
-  return name.namespacePrefix.empty() && name.name.str() == "style";
-}
-
-/// Repoints references to @p oldId in the value of attribute @p name: an inline `style` is a
-/// declaration list (comments and strings are not references); any other attribute is one value.
+/// Repoints references to @p oldId in the value of attribute @p name. The value is read as CSS, so
+/// strings and comments are not references; an `href` value of exactly `#oldId` also counts.
 /// Returns the rewritten value if anything changed, otherwise `std::nullopt`.
 std::optional<std::string> RewriteIdReferenceInAttribute(const xml::XMLQualifiedNameRef& name,
                                                          std::string_view value,
                                                          std::string_view oldId,
                                                          std::string_view newId) {
-  if (IsInlineStyleAttribute(name)) {
-    return CssIdReferenceRewriter(value, oldId, newId, CssTextKind::DeclarationList).run();
+  if (IsHrefAttribute(name) && value.size() == oldId.size() + 1u && value.front() == '#' &&
+      value.substr(1) == oldId) {
+    return "#" + std::string(newId);
   }
-  return RewriteIdReferenceInValue(value, oldId, newId, IsHrefAttribute(name));
+  return CssIdReferenceRewriter(value, oldId, newId, CssTextKind::DeclarationList).run();
 }
 
 /// Whether the value of attribute @p name references @p id. Rewriting the id to itself reports the

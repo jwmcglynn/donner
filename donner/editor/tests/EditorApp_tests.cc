@@ -3275,9 +3275,8 @@ TEST(EditorAppRenameTest, RenameLeavesUnterminatedInlineStyleStringUntouched) {
   EXPECT_THAT(AttrOf(app, "r", "style"), ::testing::Optional(std::string("--a: 'url(#grad)")));
 }
 
-// Only the unprefixed `style` attribute is a CSS declaration list; a prefixed `foo:style` is
-// foreign data and goes through the single-value matcher, which does not know CSS comments.
-TEST(EditorAppRenameTest, RenameTreatsPrefixedStyleAttributeAsSingleValue) {
+// Every attribute value is read as CSS tokens, so a prefixed `foo:style` skips comments too.
+TEST(EditorAppRenameTest, RenameReadsPrefixedStyleAttributeAsCssTokens) {
   constexpr std::string_view kPrefixedDoc =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" xmlns:foo="https://example.com/foo"
                  width="100" height="100">
@@ -3294,7 +3293,7 @@ TEST(EditorAppRenameTest, RenameTreatsPrefixedStyleAttributeAsSingleValue) {
   const std::optional<svg::SVGElement> rect = app.document().document().querySelector("#r");
   ASSERT_THAT(rect, ::testing::Optional(::testing::_));
   EXPECT_THAT(rect->getAttribute(xml::XMLQualifiedNameRef("foo", "style")),
-              ::testing::Optional(RcString("fill: url(#g2) /* url(#g2) */")));
+              ::testing::Optional(RcString("fill: url(#g2) /* url(#grad) */")));
 }
 
 TEST(EditorAppRenameTest, RenameLeavesStyleElementStringsAndCommentsUntouched) {
