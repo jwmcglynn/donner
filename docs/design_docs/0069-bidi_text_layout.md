@@ -69,9 +69,12 @@ A second slice adds the typed inherited `direction` and non-inherited `unicode-b
 - The `<text>` element's own `bidi-override` or `isolate-override` gives every character the
   paragraph level, split into script runs so each shapes with its own script. Explicit bidi
   controls in the source are ignored under the override.
-- After a right-to-left chunk the current text position is the chunk's anchored left edge, so a
-  following chunk without an absolute `x`, for example after a `tspan` that sets only `y`,
-  continues to its left.
+- A right-to-left chunk's pen runs leftward from its origin, so the current text position after
+  it is one chunk width left of that origin; anchoring applies afterwards and does not move it. A
+  following unwrapped chunk without an absolute `x`, for example after a `tspan` that sets only
+  `y`, continues from there, with trailing spacing on the left and `dx` kept as a physical shift.
+  The continuation follows the direction of the previous chunk's first span, not the paragraph.
+  Wrapped text lays out its own lines and does not use it.
 - The paragraph level comes from the `<text>` element. A `tspan` with a different `direction`
   mirrors its own chunk's anchor but does not change the paragraph level.
 

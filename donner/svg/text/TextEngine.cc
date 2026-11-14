@@ -2765,11 +2765,12 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
   return !glyph.visualOrder || (vertical ? glyph.yAdvance : glyph.xAdvance) != 0;
 }
 
-/// The current text position after a right-to-left chunk: its anchored left edge, and the
-/// left-to-right pen end recorded before anchoring. A following chunk without an absolute x moves
-/// its origin by the difference between the two, which keeps any authored dx.
+/// The current text position after a right-to-left chunk, before anchoring: the chunk's pen runs
+/// leftward from its origin, so it ends one chunk width left of it. `unshiftedEnd` is the far edge
+/// of the chunk as laid out left to right; the gap between it and the next chunk's recorded origin,
+/// less that chunk's authored shift, is trailing spacing, which a leftward pen places on the left.
 struct RightToLeftContinuation {
-  double anchoredStart = 0.0;
+  double penEnd = 0.0;
   double unshiftedEnd = 0.0;
 };
 
@@ -2796,7 +2797,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
     bounds.initial = *range.begin.anchorPosition;
   }
   if (continuation) {
-    bounds.initial = continuation->anchoredStart + (bounds.initial - continuation->unshiftedEnd);
+    const double authored = range.begin.authoredShift;
+    const double spacing = bounds.initial - authored - continuation->unshiftedEnd;
+    bounds.initial = continuation->penEnd - spacing + authored;
   }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
@@ -2812,7 +2815,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   ForEachAnchorGlyph(runs, range,
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
   if (next) {
-    *next = RightToLeftContinuation{bounds.minimum + shift, bounds.maximum};
+    // Anchoring applies last and never moves the current text position.
+    *next = RightToLeftContinuation{bounds.initial - (bounds.maximum - bounds.minimum),
+                                    bounds.maximum};
   }
   return true;
 }
@@ -6527,6 +6532,7 @@ private:
       state.initialInlineDisplacement = spanStartInlineDisplacement(state);
       consumeSpanStartPositions(state);
       chunkBoundaries_.push_back({runs_.size(), 0, span.textAnchor, absoluteX, absoluteY});
+      chunkBoundaries_.back().authoredShift = state.initialInlineDisplacement;
     }
   }
 
@@ -7586,6 +7592,7 @@ private:
     });
     const auto& firstVisual = bidiPlacements_[order.front()];
     chunkBoundaries_.back().visualFirstGlyph = std::pair(firstVisual.run, firstVisual.glyph);
+    chunkBoundaries_.back().authoredShift = vertical ? initial.dy : initial.dx;
   }
 
   double bidiCrossSpanKern(const BidiPlacement& item, std::optional<size_t> previous) const {
@@ -7752,6 +7759,7 @@ private:
           {item.run, item.glyph, span.textAnchor, x.has_value(), y.has_value(),
            isVertical(params_.writingMode) ? pen.y + source.dy : pen.x + source.dx});
       chunkBoundaries_.back().visualFirstGlyph = std::pair(item.run, item.glyph);
+      chunkBoundaries_.back().authoredShift = isVertical(params_.writingMode) ? source.dy : source.dx;
     }
     return {x.has_value(), y.has_value()};
   }

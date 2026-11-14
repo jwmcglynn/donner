@@ -85,9 +85,11 @@ struct ChunkBoundary {
   std::optional<double> anchorPosition;  ///< Explicit inline origin, independent of run storage.
   /// First visual glyph used to carry a y-only continuation through textLength adjustment.
   std::optional<std::pair<size_t, size_t>> visualFirstGlyph;
-  /// The chunk's first span progresses right to left on its line. Last, so positional
-  /// initializers of the earlier fields stay valid.
+  // Fields below stay last, so positional initializers of the earlier fields stay valid.
+  /// The chunk's first span progresses right to left on its line.
   bool rightToLeft = false;
+  /// Authored inline shift (`dx` in horizontal text) included in the chunk's origin.
+  double authoredShift = 0.0;
 };
 
 /// An authored inline displacement consumed by one positioned glyph group.

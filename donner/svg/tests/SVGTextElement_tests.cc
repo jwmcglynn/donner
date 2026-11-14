@@ -1106,30 +1106,55 @@ TEST(SVGTextElementPublicApiTests, RtlDirectionMirrorsStartAndEndAnchors) {
   EXPECT_THAT(firstCharacterX(R"(style="direction: rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
 }
 
-// A chunk that starts without an absolute x continues from the current text position. After a
-// right-to-left chunk that position is the chunk's left edge, so the next chunk ends there.
+// A chunk that starts without an absolute x continues from the current text position. A
+// right-to-left pen runs leftward from the chunk origin, so it ends one chunk width left of it;
+// anchoring applies afterwards and does not move that position. Trailing spacing lands on the
+// leftward side, while `dx` stays a physical shift.
 TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
-  const auto layOut = [](std::string_view direction) {
-    return instantiateSubtree(std::string(R"-(<svg viewBox="0 0 300 60">
-      <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" )-") +
-                              std::string(direction) + R"-(>AB<tspan y="40">CD</tspan></text>
-    </svg>)-");
+  struct Layout {
+    double aStart, bEnd, cStart, dEnd;
   };
+  const auto layOut = [](std::string_view textAttributes, std::string_view tspanAttributes) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 60">
+      <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" )-") +
+        std::string(textAttributes) + R"-(>AB<tspan y="40" )-" + std::string(tspanAttributes) +
+        R"-(>CD</tspan></text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    return Layout{text.getStartPositionOfChar(0).x, text.getEndPositionOfChar(1).x,
+                  text.getStartPositionOfChar(2).x, text.getEndPositionOfChar(3).x};
+  };
+  const Layout ltr = layOut("", "");
+  const double widthAB = ltr.bEnd - ltr.aStart;
+  const double widthCD = ltr.dEnd - ltr.cStart;
+  EXPECT_THAT(ltr.cStart, testing::DoubleNear(ltr.bEnd, 1e-6)) << "ltr: CD starts where AB ends";
 
-  SVGDocument ltrDocument = layOut("");
-  const auto ltr = ltrDocument.querySelector("#t")->cast<SVGTextElement>();
-  EXPECT_THAT(ltr.getStartPositionOfChar(2).x,
-              testing::DoubleNear(ltr.getEndPositionOfChar(1).x, 1e-6))
-      << "left to right, CD starts where AB ends";
+  // start: AB ends at 200, so the pen ends at its left edge and CD ends there.
+  const Layout start = layOut(R"(direction="rtl")", "");
+  EXPECT_THAT(start.bEnd, testing::DoubleNear(200.0, 1e-6));
+  EXPECT_THAT(start.dEnd, testing::DoubleNear(200.0 - widthAB, 1e-6));
+  EXPECT_THAT(start.cStart, testing::Lt(start.aStart)) << "CD is left of AB";
 
-  SVGDocument rtlDocument = layOut(R"(direction="rtl")");
-  const auto rtl = rtlDocument.querySelector("#t")->cast<SVGTextElement>();
-  EXPECT_THAT(rtl.getEndPositionOfChar(1).x, testing::DoubleNear(200.0, 1e-6))
-      << "AB ends at its anchor";
-  EXPECT_THAT(rtl.getEndPositionOfChar(3).x,
-              testing::DoubleNear(rtl.getStartPositionOfChar(0).x, 1e-6))
-      << "right to left, CD ends where AB starts";
-  EXPECT_THAT(rtl.getStartPositionOfChar(2).y, testing::DoubleNear(40.0, 1e-6));
+  // middle: the pen still ends one AB width left of 200, and CD centers there.
+  const Layout middle = layOut(R"(direction="rtl" text-anchor="middle")", "");
+  EXPECT_THAT((middle.cStart + middle.dEnd) / 2.0, testing::DoubleNear(200.0 - widthAB, 1e-6));
+
+  // end: AB starts at 200; CD starts at the pen end, one AB width left of 200.
+  const Layout endAnchor = layOut(R"(direction="rtl" text-anchor="end")", "");
+  EXPECT_THAT(endAnchor.aStart, testing::DoubleNear(200.0, 1e-6));
+  EXPECT_THAT(endAnchor.cStart, testing::DoubleNear(200.0 - widthAB, 1e-6));
+
+  // Trailing letter-spacing separates CD from AB on the left, by the gap ltr leaves on the right.
+  const Layout ltrSpaced = layOut(R"(letter-spacing="3")", "");
+  const Layout rtlSpaced = layOut(R"(direction="rtl" letter-spacing="3")", "");
+  const double gap = ltrSpaced.cStart - ltrSpaced.bEnd;
+  ASSERT_THAT(gap, testing::Gt(1.0)) << "letter-spacing must leave a visible gap";
+  EXPECT_THAT(rtlSpaced.aStart - rtlSpaced.dEnd, testing::DoubleNear(gap, 1e-6));
+
+  // dx is a physical shift: it moves CD right even in an rtl paragraph.
+  const Layout shifted = layOut(R"(direction="rtl")", R"(dx="5")");
+  EXPECT_THAT(shifted.dEnd, testing::DoubleNear(start.dEnd + 5.0, 1e-6));
+  EXPECT_THAT(shifted.dEnd - shifted.cStart, testing::DoubleNear(widthCD, 1e-6));
 }
 
 // `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
