@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -737,18 +738,47 @@ def _stale_xml_scan_cap(hits: int, allowed: int) -> Tuple[int, str, str]:
     )
 
 
-def _missing_allowlisted_files() -> List[str]:
-    """Return _XML_SCAN_ALLOWLIST entries that name no file under the working directory."""
-    return [path for path in _XML_SCAN_ALLOWLIST if not (Path.cwd() / path).is_file()]
+def _names_existing_file(root: Path, path: str) -> bool:
+    """Return true if `path` names a file under `root`, with its exact on-disk spelling."""
+    candidate = root / path
+    return candidate.is_file() and candidate.name in os.listdir(candidate.parent)
 
 
-def _report_missing_allowlisted_files() -> int:
-    missing = _missing_allowlisted_files()
-    for path in missing:
-        print(f"{path}: listed in _XML_SCAN_ALLOWLIST but does not exist")
-        print("    Remove the entry from build_defs/check_banned_patterns.py so its cap cannot be")
-        print("    reused by a new file at that path.")
-    return len(missing)
+def _listed_path_problem(root: Path, path: str) -> str | None:
+    if "\\" in path or path.startswith("/") or path != posixpath.normpath(path):
+        return "is not a normalized repository-relative path; write it as `dir/File.cc`"
+    if not _names_existing_file(root, path):
+        return "does not exist; remove the entry or move it to the new path"
+    return None
+
+
+def _invalid_xml_scan_list_entries(root: Path) -> List[str]:
+    """Describe allowlist and exemption entries that cannot match a file under `root`."""
+    problems = [
+        f"{path}: _XML_SCAN_ALLOWLIST cap {cap}; remove the entry, a cap must be positive"
+        for path, cap in _XML_SCAN_ALLOWLIST.items()
+        if cap <= 0
+    ]
+    for name, paths in (
+        ("_XML_SCAN_ALLOWLIST", _XML_SCAN_ALLOWLIST),
+        ("_XML_SCAN_EXEMPT_PATHS", _XML_SCAN_EXEMPT_PATHS),
+    ):
+        problems.extend(
+            f"{path}: listed in {name} but {problem}"
+            for path in paths
+            if (problem := _listed_path_problem(root, path))
+        )
+    return problems
+
+
+def _report_invalid_xml_scan_list_entries() -> int:
+    problems = _invalid_xml_scan_list_entries(Path.cwd())
+    for problem in problems:
+        print(problem)
+    if problems:
+        print("    Fix the entry in build_defs/check_banned_patterns.py so no cap or exemption is")
+        print("    left for a path that no file occupies.")
+    return len(problems)
 
 
 def _rule_applies_to_path(rule: _Rule, posix_path: str) -> bool:
@@ -850,7 +880,10 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "--require-allowlisted-files",
         action="store_true",
-        help="Fail when a file named in an allowlist does not exist under the working directory.",
+        help=(
+            "Fail when an XML markup scan allowlist or exemption entry is malformed or names no "
+            "file under the working directory."
+        ),
     )
     args = parser.parse_args(argv[1:])
 
@@ -860,7 +893,7 @@ def main(argv: List[str]) -> int:
         print("No source files found to check.", file=sys.stderr)
         return 0
 
-    total_errors = _report_missing_allowlisted_files() if args.require_allowlisted_files else 0
+    total_errors = _report_invalid_xml_scan_list_entries() if args.require_allowlisted_files else 0
     for f in files:
         baseline = None
         if args.check_method_complexity and args.complexity_baseline_ref:
