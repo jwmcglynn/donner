@@ -143,6 +143,7 @@ donner_cc_library(
         "tests/ParseResultTestUtils.h",
         "tests/RunfileGate.h",
         "tests/Runfiles.h",
+        "tests/ScopedCtypeLocale.h",
         "tests/ScopedEnvironmentVariable.h",
         "tests/TestTempDir.h",
     ],

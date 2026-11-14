@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cassert>   // For assert
-#include <cctype>    // For isspace
 #include <concepts>  // For std::invocable
 #include <optional>
 #include <string_view>
 
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/StringUtils.h"
 
 namespace donner::svg::parser {
 
@@ -89,7 +89,7 @@ public:
 
       // If we reach here, we expect an item (not a comma or whitespace)
       const size_t start = i;
-      while (i < length && !std::isspace(static_cast<unsigned char>(value[i])) && value[i] != ',') {
+      while (i < length && !StringUtils::IsAsciiWhitespace(value[i]) && value[i] != ',') {
         i++;
       }
 
@@ -131,7 +131,7 @@ private:
    * @param i Reference to the current index, will be updated.
    */
   static inline void SkipWhitespace(std::string_view value, size_t& i) {
-    while (i < value.size() && std::isspace(static_cast<unsigned char>(value[i]))) {
+    while (i < value.size() && StringUtils::IsAsciiWhitespace(value[i])) {
       i++;
     }
   }

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
+
 namespace donner::svg::parser {
 
 using testing::ElementsAre;
@@ -62,6 +64,15 @@ TEST(ListParser, CommaSeparated) {
   EXPECT_THAT(ParseToList("  item1  ,  item2  "), ElementsAre("item1", "item2"));
   EXPECT_THAT(ParseToList("0.0, 0.0"), ElementsAre("0.0", "0.0"));
   EXPECT_THAT(ParseToList("1,2,3"), ElementsAre("1", "2", "3"));
+}
+
+// Only XML whitespace and commas separate items; a no-break space byte (0xA0) or a byte that a
+// locale classifies as space is part of the item.
+TEST(ListParser, SeparatorsDoNotDependOnLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    EXPECT_THAT(ParseToList("a\xA0z c"), ElementsAre("a\xA0z", "c"));
+    EXPECT_THAT(ParseToList("a\x85z"), ElementsAre("a\x85z"));
+  });
 }
 
 TEST(ListParser, SpaceSeparated) {

@@ -1,7 +1,6 @@
 #include "donner/css/parser/StylesheetParser.h"
 
 #include <array>
-#include <cctype>
 #include <cmath>
 
 #include "donner/base/StringUtils.h"
@@ -16,10 +15,6 @@ namespace donner::css::parser {
 
 namespace {
 
-bool IsAsciiSpace(char ch) {
-  return std::isspace(static_cast<unsigned char>(ch)) != 0;
-}
-
 std::optional<std::size_t> ComponentSourceOffset(const ComponentValue& component) {
   if (const Token* token = std::get_if<Token>(&component.value)) {
     return token->offset().offset;
@@ -33,14 +28,14 @@ std::optional<std::size_t> ComponentSourceOffset(const ComponentValue& component
 }
 
 std::size_t TrimStart(std::string_view str, std::size_t start, std::size_t end) {
-  while (start < end && IsAsciiSpace(str[start])) {
+  while (start < end && StringUtils::IsAsciiWhitespace(str[start])) {
     ++start;
   }
   return start;
 }
 
 std::size_t TrimEnd(std::string_view str, std::size_t start, std::size_t end) {
-  while (end > start && IsAsciiSpace(str[end - 1])) {
+  while (end > start && StringUtils::IsAsciiWhitespace(str[end - 1])) {
     --end;
   }
   return end;

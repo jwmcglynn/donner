@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/RcString.h"
+#include "donner/base/tests/ScopedCtypeLocale.h"
 
 using namespace std::string_view_literals;
 using testing::ElementsAre;
@@ -281,6 +282,19 @@ TEST(StringUtils, ToLowerAscii) {
   EXPECT_EQ(StringUtils::ToLowerAscii(RcString("@[`{")), "@[`{");
   const std::string capitalEAcuteUtf8 = "\xC3\x89";
   EXPECT_EQ(StringUtils::ToLowerAscii(capitalEAcuteUtf8 + "COLE"), capitalEAcuteUtf8 + "cole");
+}
+
+// Case-insensitive comparisons fold only ASCII letters, so their result does not depend on the
+// process locale; in a Latin-1 locale `tolower(0xC3)` is 0xE3.
+TEST(StringUtils, IgnoreCaseFoldsOnlyAsciiInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    EXPECT_FALSE(StringUtils::Equals<StringComparison::IgnoreCase>("\xC3\x89"sv, "\xE3\x89"sv));
+    EXPECT_TRUE(StringUtils::Equals<StringComparison::IgnoreCase>("Noto SANS"sv, "noto sans"sv));
+    EXPECT_FALSE(StringUtils::EqualsLowercase("\xC3"sv, "\xE3"sv));
+    EXPECT_TRUE(StringUtils::EqualsLowercase("SANS"sv, "sans"sv));
+    EXPECT_FALSE(StringUtils::Contains<StringComparison::IgnoreCase>("a\xC3z"sv, "\xE3"sv));
+    EXPECT_EQ(StringUtils::Find<StringComparison::IgnoreCase>("a\xC3\xE3"sv, "\xE3"sv), 2u);
+  });
 }
 
 TEST(StringUtils, ToLowerAsciiChangesOnlyUppercaseAsciiBytes) {
