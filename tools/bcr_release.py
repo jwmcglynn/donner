@@ -149,7 +149,10 @@ def verify_published_source(commit: str, tag: str, release: dict, run_id: str,
 
 
 def check_preflight_attempt(receipt: dict, commit: str, run_id: str, attempt: str) -> None:
-    """Require the archive's qualifying preflight to be the named successful attempt on main."""
+    """Require the archive's qualifying preflight to be the named successful attempt on main.
+
+    Only a preflight dispatched on main qualifies a release; pushes to main do not run it.
+    """
     verified = (receipt.get("verified_run_id", ""), receipt.get("verified_run_attempt", ""))
     if any(not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value)
            for value in verified):
@@ -157,7 +160,7 @@ def check_preflight_attempt(receipt: dict, commit: str, run_id: str, attempt: st
     if verified != (run_id, attempt):
         raise ValueError("source provenance names another preflight attempt than the record")
     run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
-    check_run(run, commit, PREFLIGHT_PATH, {"push", "workflow_dispatch"})
+    check_run(run, commit, PREFLIGHT_PATH, {"workflow_dispatch"})
     if run.get("head_branch") != "main":
         raise ValueError("source preflight must have run on main")
     if run.get("id") != int(run_id) or run["run_attempt"] != int(attempt):

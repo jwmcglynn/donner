@@ -806,6 +806,20 @@ class AssemblyAndReleaseTest(unittest.TestCase):
                 "issue_url": f"https://api.github.com/repos/{candidate.REPOSITORY}/issues/1422",
                 "body": f"# {kind} review\r\n\r\nReviewed {self.commit}: no open findings.\r\n"}
 
+    def test_preflight_dispatched_on_main_qualifies_a_candidate(self):
+        # Pushes to main do not run the BCR preflight: a release dispatches it on main for the
+        # exact commit (docs/release_candidate.md). A pull request run, a run on another branch
+        # or one of another commit never qualifies.
+        preflight = candidate.ARTIFACT_WORKFLOWS["source"]
+        run_id, attempt = self.RUNS["preflight"]
+        run = self.fixture_run(run_id, attempt, preflight)
+        self.assertEqual("workflow_dispatch", run["event"])
+        candidate._verify_run(run, run_id, attempt, self.commit, preflight)
+        for change in ({"event": "pull_request"}, {"head_branch": "feature"},
+                       {"head_sha": "f" * 40}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                candidate._verify_run(run | change, run_id, attempt, self.commit, preflight)
+
     def test_documentation_workflow_split_preserves_exact_run_binding(self):
         for path in candidate.pages_artifact.SOURCE_WORKFLOWS:
             run = self.fixture_run(103, 1, candidate.ARTIFACT_WORKFLOWS["docs"])
