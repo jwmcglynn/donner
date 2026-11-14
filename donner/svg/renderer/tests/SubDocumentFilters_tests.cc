@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGUseElement.h"
@@ -530,13 +531,11 @@ TEST(SubDocumentFiltersTest, FeImageExternalContentStaysOutOfOtherBoxes) {
     const RendererBitmap actual = Draw(externalRenderer, external);
     // Compare the left half, where the early group draws. The feImage paste on the right does not
     // yet draw external content from a fragment in <defs>.
-    int mismatches = 0;
-    for (int y = 0; y < 32; ++y) {
-      for (int x = 0; x < 16; ++x) {
-        mismatches += PixelAt(actual, x, y) != PixelAt(expected, x, y) ? 1 : 0;
-      }
-    }
-    EXPECT_EQ(mismatches, 0);
+    const auto leftHalf = [](const RendererBitmap& bitmap) {
+      return editor::tests::CropBitmap(bitmap, Vector2i(0, 0), Vector2i(16, 32));
+    };
+    ExpectSameBitmap(leftHalf(actual), leftHalf(expected),
+                     "feimage_external_left_half_frame_" + std::to_string(frame));
   }
 }
 
