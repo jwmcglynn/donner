@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/Utils.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
@@ -492,9 +493,10 @@ protected:
                 testing::DoubleNear(oracle.glyphs[0].xAdvance + oracle.glyphs[1].xAdvance, 1e-6));
   }
 
-  /// Views of the loaded font files, so per-glyph byte checks compare without copying them.
-  std::span<const uint8_t> amiriBytes() const { return *amiri_; }
-  std::span<const uint8_t> mplusBytes() const { return *mplus_; }
+  /// Non-owning views of the font files loaded in SetUp, so per-glyph byte checks compare without
+  /// copying them. Each view borrows the fixture's buffer and stays valid while the fixture lives.
+  std::span<const uint8_t> amiriBytes() const UTILS_LIFETIME_BOUND { return *amiri_; }
+  std::span<const uint8_t> mplusBytes() const UTILS_LIFETIME_BOUND { return *mplus_; }
 
   Registry registry_;
   FontManager fonts_;
