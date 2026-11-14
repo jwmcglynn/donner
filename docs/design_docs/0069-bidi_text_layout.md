@@ -59,8 +59,14 @@ scaling profile cannot represent arbitrary overlapping child extents and logical
 negative positioning, spacing parents and ordinary nested scaling remain in the new path.
 
 Wrapped text, preserved line layout, vertical writing and textPath retain their existing placement.
-Typed `direction` and `unicode-bidi` cascade support, visual caret movement and the remaining
-milestones below are separate work. The simple tier gains ordering and mirroring, not Arabic
+
+A second slice adds the typed inherited `direction` and non-inherited `unicode-bidi` properties. A
+horizontal `<text>` element's `direction` sets the explicit level of each of its paragraphs, and
+`start`/`end` anchors name the logical edges, so an `rtl` chunk on a horizontal line anchors at its
+right edge. The `<text>` element's own `bidi-override` or `isolate-override` gives every character
+that level, split into script runs so each shapes with its own script. `unicode-bidi` on a `tspan`
+(control injection, Milestone 3), right-to-left vertical text and textPath, direction-aware `dx`
+and `textLength` carry, and visual caret movement remain separate work. The simple tier gains ordering and mirroring, not Arabic
 joining. The three normal mixed-script resvg cases are the initial convergence target; this slice
 does not complete the full design or tracking issue. Existing package and module limits remain
 unchanged and must be checked on the actual configured products.
