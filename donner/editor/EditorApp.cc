@@ -731,13 +731,64 @@ bool IsIdChar(char c) {
          c == '_' || c == ':' || c == '.';
 }
 
-/// If @p value references @p oldId via `url(#oldId)` or a whole-value `#oldId`
-/// (an `href` target), return the value with every such reference repointed to
+/// Offset of the first non-whitespace byte of @p value at or after @p offset.
+std::size_t SkipAsciiWhitespace(std::string_view value, std::size_t offset) {
+  while (offset < value.size() && std::isspace(static_cast<unsigned char>(value[offset]))) {
+    ++offset;
+  }
+  return offset;
+}
+
+/// The quote character at @p offset in @p value, or `'\0'` if it is not a quote.
+char QuoteAt(std::string_view value, std::size_t offset) {
+  if (offset >= value.size()) {
+    return '\0';
+  }
+  const char c = value[offset];
+  return c == '"' || c == '\'' ? c : '\0';
+}
+
+/// Byte range of the id inside a `url(#id)`, `url( '#id' )` or `url("#id")` reference to @p id
+/// that starts at @p offset in @p value, if one starts there.
+std::optional<std::pair<std::size_t, std::size_t>> UrlIdReferenceAt(std::string_view value,
+                                                                    std::size_t offset,
+                                                                    std::string_view id) {
+  if (value.compare(offset, 4, "url(") != 0) {
+    return std::nullopt;
+  }
+  std::size_t start = SkipAsciiWhitespace(value, offset + 4);
+  const char quote = QuoteAt(value, start);
+  if (quote != '\0') {
+    ++start;
+  }
+  if (value.compare(start, 1, "#") != 0 || value.compare(start + 1, id.size(), id) != 0) {
+    return std::nullopt;
+  }
+  const std::size_t end = start + 1 + id.size();
+  // An unquoted id ends at the first non-id character; a quoted one at its closing quote.
+  const bool idEnds =
+      quote == '\0' ? end >= value.size() || !IsIdChar(value[end]) : QuoteAt(value, end) == quote;
+  if (!idEnds) {
+    return std::nullopt;
+  }
+  return std::make_pair(start + 1, end);
+}
+
+/// Whether an attribute's value can be a bare `#id` reference: only `href`, with or without a
+/// namespace prefix. Elsewhere a whole value such as `#abc` is a color or foreign data.
+bool IsHrefAttribute(const xml::XMLQualifiedNameRef& name) {
+  return name.name.str() == "href";
+}
+
+/// If @p value references @p oldId via `url(#oldId)` (optionally with whitespace
+/// inside the parentheses and a single- or double-quoted URL) or, when @p isHref, a
+/// whole-value `#oldId`, return the value with every such reference repointed to
 /// @p newId; otherwise return `std::nullopt` (no reference, no change).
 std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std::string_view oldId,
-                                                     std::string_view newId) {
+                                                     std::string_view newId, bool isHref) {
   // Whole-value local reference, e.g. href="#oldId".
-  if (value.size() == oldId.size() + 1u && value.front() == '#' && value.substr(1) == oldId) {
+  if (isHref && value.size() == oldId.size() + 1u && value.front() == '#' &&
+      value.substr(1) == oldId) {
     return "#" + std::string(newId);
   }
 
@@ -747,18 +798,11 @@ std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std
   bool changed = false;
   std::size_t i = 0;
   while (i < value.size()) {
-    if (value.compare(i, 5, "url(#") == 0) {
-      const std::size_t start = i + 5;
-      std::size_t end = start;
-      while (end < value.size() && IsIdChar(value[end])) {
-        ++end;
-      }
-      if (value.substr(start, end - start) == oldId) {
-        out.append("url(#").append(newId);
-        i = end;
-        changed = true;
-        continue;
-      }
+    if (const auto idRange = UrlIdReferenceAt(value, i, oldId)) {
+      out.append(value.substr(i, idRange->first - i)).append(newId);
+      i = idRange->second;
+      changed = true;
+      continue;
     }
     out.push_back(value[i]);
     ++i;
@@ -766,23 +810,40 @@ std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std
   return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
 }
 
-/// Whether @p value points at @p id, as a `url(#id)` occurrence or a whole-value `#id` href
-/// target. Rewriting the id to itself reports the reference without changing the value.
-bool ValueReferencesId(std::string_view value, std::string_view id) {
+/// Whether @p value points at @p id, as a `url(#id)` occurrence or, when @p isHref, a whole-value
+/// `#id`. Rewriting the id to itself reports the reference without changing the value.
+bool ValueReferencesId(std::string_view value, std::string_view id, bool isHref) {
   if (value.find('#') == std::string_view::npos) {
     return false;  // Both reference forms contain a '#'; skip the rewrite for the common case.
   }
 
-  return RewriteIdReferenceInValue(value, id, id).has_value();
+  return RewriteIdReferenceInValue(value, id, id, isHref).has_value();
+}
+
+/// Whether @p text ends with `url(`, ignoring trailing whitespace.
+bool EndsWithUrlOpen(std::string_view text) {
+  std::size_t back = text.size();
+  while (back > 0 && std::isspace(static_cast<unsigned char>(text[back - 1]))) {
+    --back;
+  }
+  return back >= 4 && text.compare(back - 4, 4, "url(") == 0;
+}
+
+/// Whether @p quoted, a complete quoted CSS string directly following @p precedingText, is the
+/// URL of a `url("#id")` reference to @p id.
+bool IsQuotedUrlIdReference(std::string_view precedingText, std::string_view quoted,
+                            std::string_view id) {
+  return quoted.size() == id.size() + 3u && quoted.back() == quoted.front() && quoted[1] == '#' &&
+         quoted.substr(2, id.size()) == id && EndsWithUrlOpen(precedingText);
 }
 
 /// Rewrite `#oldId` CSS id tokens to `#newId` inside a `<style>` element's
 /// text content, in the positions where a `#token` can actually reference the
 /// element: id selectors (selector preludes, including inside conditional
-/// group rules like `@media`) and `url(#id)` references inside declaration
-/// values. A `#token` elsewhere in a declaration value is a hex color literal
-/// (an id like `abc` is also a valid color), so it is left untouched, as are
-/// comments and quoted strings. A match requires the exact token: `#` +
+/// group rules like `@media`) and `url(#id)` / `url("#id")` references inside
+/// declaration values. A `#token` elsewhere in a declaration value is a hex color
+/// literal (an id like `abc` is also a valid color), so it is left untouched, as
+/// are comments and other quoted strings. A match requires the exact token: `#` +
 /// @p oldId + a non-id-character boundary, so `#oldIdSuffix` never matches.
 /// Returns the rewritten text if anything changed, otherwise `std::nullopt`.
 std::optional<std::string> RewriteIdSelectorInStyle(std::string_view value, std::string_view oldId,
@@ -813,13 +874,23 @@ std::optional<std::string> RewriteIdSelectorInStyle(std::string_view value, std:
       i = stop;
       continue;
     }
-    // Quoted strings copy through verbatim (backslash escapes respected).
+    // Quoted strings copy through verbatim (backslash escapes respected), except
+    // a declaration's quoted `url("#oldId")` reference, which repoints.
     if (c == '"' || c == '\'') {
       std::size_t end = i + 1;
       while (end < value.size() && value[end] != c) {
         end += (value[end] == '\\' && end + 1 < value.size()) ? 2 : 1;
       }
       const std::size_t stop = std::min(end + 1, value.size());
+      if (!inSelectorPosition() && IsQuotedUrlIdReference(out, value.substr(i, stop - i), oldId)) {
+        out.push_back(c);
+        out.push_back('#');
+        out.append(newId);
+        out.push_back(c);
+        i = stop;
+        changed = true;
+        continue;
+      }
       out.append(value.substr(i, stop - i));
       i = stop;
       continue;
@@ -858,14 +929,7 @@ std::optional<std::string> RewriteIdSelectorInStyle(std::string_view value, std:
       const bool tokenBoundary = after >= value.size() || !IsIdChar(value[after]);
       // Inside a declaration block, only a `url(#id)` functional reference
       // repoints; a bare `#token` there is a color literal.
-      bool isUrlReference = false;
-      if (!inSelectorPosition()) {
-        std::size_t back = out.size();
-        while (back > 0 && std::isspace(static_cast<unsigned char>(out[back - 1]))) {
-          --back;
-        }
-        isUrlReference = back >= 4 && out.compare(back - 4, 4, "url(") == 0;
-      }
+      const bool isUrlReference = !inSelectorPosition() && EndsWithUrlOpen(out);
       if (tokenBoundary && (inSelectorPosition() || isUrlReference)) {
         out.push_back('#');
         out.append(newId);
@@ -928,7 +992,7 @@ bool AnyElementReferencesId(const svg::SVGElement& root, std::span<const RcStrin
       }
 
       for (const RcString& id : ids) {
-        if (ValueReferencesId(value->str(), id.str())) {
+        if (ValueReferencesId(value->str(), id.str(), IsHrefAttribute(attrName))) {
           return true;
         }
       }
@@ -1752,6 +1816,7 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
   // meaningful when the element already had an id for things to reference.
   struct PendingAttr {
     svg::SVGElement element;
+    std::string namespacePrefix;
     std::string name;
     std::string value;
   };
@@ -1766,23 +1831,16 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
     CollectElements(doc.svgElement(), all);
     for (const svg::SVGElement& candidate : all) {
       for (const xml::XMLQualifiedNameRef& attrName : candidate.attributes()) {
-        // We round-trip the rewritten attribute through SetAttributeCommand,
-        // which only carries an unprefixed local name. The references we care
-        // about (url(#...) in presentation/style attributes, SVG2 `href`) are all
-        // in the default namespace; skip prefixed attributes (e.g. legacy
-        // `xlink:href`) rather than risk dropping their prefix.
-        if (!attrName.namespacePrefix.empty()) {
-          continue;
-        }
         const std::optional<RcString> attrValue = candidate.getAttribute(attrName);
         if (!attrValue.has_value()) {
           continue;
         }
-        if (std::optional<std::string> rewritten =
-                RewriteIdReferenceInValue(attrValue->str(), oldId, newIdStr);
+        if (std::optional<std::string> rewritten = RewriteIdReferenceInValue(
+                attrValue->str(), oldId, newIdStr, IsHrefAttribute(attrName));
             rewritten.has_value()) {
           referenceUpdates.push_back(PendingAttr{
               .element = candidate,
+              .namespacePrefix = std::string(attrName.namespacePrefix.str()),
               .name = std::string(attrName.name.str()),
               .value = std::move(*rewritten),
           });
@@ -1817,8 +1875,9 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
 
   applyMutation(EditorCommand::SetAttributeCommand(element, "id", newIdStr));
   for (PendingAttr& update : referenceUpdates) {
-    applyMutation(EditorCommand::SetAttributeCommand(update.element, std::move(update.name),
-                                                     std::move(update.value)));
+    applyMutation(EditorCommand::SetPrefixedAttributeCommand(
+        update.element, std::move(update.namespacePrefix), std::move(update.name),
+        std::move(update.value)));
   }
   for (PendingStyle& update : styleUpdates) {
     applyMutation(EditorCommand::SetTextContentCommand(update.element, std::move(update.text)));
