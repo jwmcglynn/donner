@@ -337,7 +337,11 @@
     deferRefresh(asset, bytes) {
       if (!this.locks || !this.storage || this.closed || this.persistenceDisabled) return;
       if (this.deferredRefreshes.some((entry) => entry.asset.id === asset.id)) return;
-      if (bytes.byteLength > maximumCacheBytes - this.deferredRefreshBytes) return;
+      // Deferred and queued payloads share one budget, as they did when hits queued directly.
+      if (
+        bytes.byteLength
+          > maximumCacheBytes - this.persistenceQueueBytes - this.deferredRefreshBytes
+      ) return;
       this.deferredRefreshes.push({ asset, bytes });
       this.deferredRefreshBytes += bytes.byteLength;
     }
@@ -347,8 +351,21 @@
       if (
         !this.locks || !this.storage || this.closed || this.persistenceDisabled
       ) return;
+      if (!refresh) {
+        // A full write supersedes a pending stamp refresh and must not be dropped in its favor:
+        // the refresh would find a peer-evicted entry gone and leave the asset uncached.
+        const deferred = this.deferredRefreshes.findIndex((entry) => entry.asset.id === asset.id);
+        if (deferred !== -1) {
+          this.deferredRefreshBytes -= this.deferredRefreshes[deferred].bytes.byteLength;
+          this.deferredRefreshes.splice(deferred, 1);
+        }
+      }
       if (this.cacheWritePending) {
-        if (this.persistenceQueue.some((entry) => entry.asset.id === asset.id)) return;
+        const queued = this.persistenceQueue.find((entry) => entry.asset.id === asset.id);
+        if (queued) {
+          if (!refresh) queued.refresh = false;
+          return;
+        }
         if (bytes.byteLength > maximumCacheBytes - this.persistenceQueueBytes) return;
         this.persistenceQueue.push({ asset, bytes, refresh });
         this.persistenceQueueBytes += bytes.byteLength;

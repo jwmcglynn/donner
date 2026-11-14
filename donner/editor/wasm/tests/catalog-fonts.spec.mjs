@@ -450,7 +450,6 @@ function countingCache() {
 }
 
 async function warmStart(t, { assetCount, storedAt, startedAt }) {
-  let clock = storedAt;
   const fixtures = Array.from({ length: assetCount }, (_, index) => fixture(index + 1));
   const cache = countingCache();
   const prefix = "https://editor.example/.donner-asset-cache/v1/";
@@ -464,8 +463,9 @@ async function warmStart(t, { assetCount, storedAt, startedAt }) {
       },
     });
   }
-  clock = startedAt;
+  const clock = startedAt;
   const results = [];
+  const putsDuringStartup = [];
   const all = deferred();
   let fetches = 0;
   const broker = new Broker({
@@ -484,7 +484,6 @@ async function warmStart(t, { assetCount, storedAt, startedAt }) {
       if (results.length === assetCount) all.resolve();
     },
   });
-  const putsDuringStartup = [];
   t.after(() => broker.close());
   fixtures.forEach(({ asset }, index) => broker.request(asset.id, index + 1));
   await all.promise;
@@ -564,6 +563,81 @@ test("a stamp refresh over a mis-declared entry reserves its size through a rete
   assert.equal(cache.counts.keys, 1, "an entry whose size may change takes the bounded path");
   assert.equal(cache.counts.put, 1);
   assert.equal(cache.stored.get(key).headers["content-length"], String(asset.encodedBytes));
+});
+
+test("a future LRU stamp is treated as stale and corrected", async (t) => {
+  const { cache, prefix, fixtures } =
+    await warmStart(t, { assetCount: 2, storedAt: 5000, startedAt: 1000 });
+  assert.equal(cache.counts.keys, 0);
+  assert.equal(cache.counts.put, 2);
+  for (const { asset } of fixtures) {
+    assert.equal(cache.stored.get(prefix + asset.id).headers["x-donner-used"], "1000");
+  }
+});
+
+test("closing with stamp refreshes still deferred issues no cache write", async (t) => {
+  const { bytes, asset } = fixture();
+  const cache = countingCache();
+  const { broker } = setup(t, {
+    storage: { open: async () => cache },
+    lockManager: { request: async (name, options, callback) => callback({ name }) },
+  });
+  broker.deferRefresh(asset, bytes);
+  assert.equal(broker.deferredRefreshes.length, 1);
+  broker.close();
+  assert.equal(broker.deferredRefreshes.length, 0);
+  broker.pump();
+  await broker.cacheWork;
+  assert.equal(cache.counts.put, 0);
+  assert.equal(cache.counts.match, 0);
+});
+
+test("a full write supersedes a pending stamp refresh for the same identity", async (t) => {
+  const { bytes, asset } = fixture();
+  const cache = countingCache();
+  const key = "https://editor.example/.donner-asset-cache/v1/" + asset.id;
+  const held = deferred();
+  let calls = 0;
+  const { broker } = setup(t, {
+    storage: { open: async () => cache },
+    lockManager: {
+      request: async (name, options, callback) => {
+        // Hold the first write so later persistence queues behind it.
+        if (++calls === 1) await held.promise;
+        return callback({ name });
+      },
+    },
+  });
+  const other = fixture(2);
+  broker.persist(other.asset, other.bytes);
+  // A deferred refresh is superseded outright by a full write of the same identity.
+  broker.deferRefresh(asset, bytes);
+  broker.persist(asset, bytes);
+  assert.equal(broker.deferredRefreshes.length, 0);
+  assert.equal(broker.persistenceQueue.length, 1);
+  // A queued refresh is upgraded rather than allowed to drop the full write.
+  broker.persistenceQueue[0].refresh = true;
+  broker.persist(asset, bytes);
+  assert.equal(broker.persistenceQueue.length, 1);
+  assert.equal(broker.persistenceQueue[0].refresh, false);
+  held.resolve();
+  while (broker.cacheWritePending) await broker.cacheWork;
+  // The entry was never stored, so only a full write can cache it.
+  assert.equal(cache.stored.has(key), true);
+});
+
+test("a stamp refresh without the cross-tab lock is dropped quietly", async (t) => {
+  const { bytes, asset } = fixture();
+  const cache = countingCache();
+  const { broker } = setup(t, {
+    storage: { open: async () => cache },
+    lockManager: { request: async (name, options, callback) => callback(null) },
+  });
+  broker.persist(asset, bytes, { refresh: true });
+  await broker.cacheWork;
+  assert.equal(cache.counts.match, 0);
+  assert.equal(cache.counts.put, 0);
+  assert.equal(broker.cacheWritePending, false);
 });
 
 test("cache writes require cross-tab locking and never gate font delivery", async (t) => {
