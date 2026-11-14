@@ -20,6 +20,9 @@ constexpr double kExactPowersOf10[] = {
     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
 };
 constexpr int kMaxExactExp = 22;  ///< Do exact multiply/divide if |exp10| <= 22.
+/// 10^-307 is the smallest power of ten that is a normal double; below it, pow(10, exp10) is
+/// subnormal or zero, so the parser divides by 10^-exp10 instead of multiplying.
+constexpr int kMinNormalPowerOf10Exponent = 307;
 
 /**
  * Divides \p value, a converted mantissa below 2^64, by 10^\p divisorExponent.
@@ -29,7 +32,8 @@ constexpr int kMaxExactExp = 22;  ///< Do exact multiply/divide if |exp10| <= 22
  * the last division rounds into the subnormal range.
  *
  * @param value The value to divide.
- * @param divisorExponent Decimal exponent of the divisor, greater than \ref kMaxExactExp.
+ * @param divisorExponent Decimal exponent of the divisor, greater than
+ *   \ref kMinNormalPowerOf10Exponent.
  */
 double DivideByPowerOf10(double value, int divisorExponent) {
   // A value below 2^64 divided by 10^400 is far below half the smallest subnormal.
@@ -79,7 +83,7 @@ double ConvertMantissaAndExponent(uint64_t mantissa, int exp10, bool negative) {
     d *= kExactPowersOf10[exp10];
   } else if (exp10 < 0 && -exp10 <= kMaxExactExp) {
     d /= kExactPowersOf10[-exp10];
-  } else if (exp10 < 0) {
+  } else if (exp10 < -kMinNormalPowerOf10Exponent) {
     d = DivideByPowerOf10(d, -exp10);
   } else {
     // Large exponent => do standard pow. This should overflow to infinity if exp10 is huge.
