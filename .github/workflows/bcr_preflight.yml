@@ -7,20 +7,23 @@ env:
 
 on:
   # A pull request runs the preflight only when it changes the registry entry or the preflight
-  # itself: the BCR templates (.bcr), the export rules that shape the source archive
-  # (.gitattributes), the example consumer module, which no other workflow builds, the
-  # preflight's own tools (tools/bcr_*) and the preflight and publication workflows. Every other
-  # input, MODULE.bazel and the rest of the build graph included, is built and tested by CI on
-  # the pull request. What only this workflow checks (registry admission, resolving the archive
-  # from a consumer module, the release CLI and native editor builds and their NOTICE coverage)
-  # runs nightly on main, so a regression there surfaces within a day, and a release needs a
-  # successful run on its exact commit (docs/release_candidate.md). Main pushes do not run it.
+  # itself: the BCR templates (.bcr), the module file the entry copies (MODULE.bazel), whose
+  # registry admission and consumer resolution on both supported Bazel majors only this
+  # workflow checks, the export rules that shape the source archive (.gitattributes), the
+  # example consumer module, which no other workflow builds, the preflight's own tools
+  # (tools/bcr_*) and the preflight and publication workflows. Every other input, including the
+  # rest of the build graph, is built and tested by CI on the pull request. What only this
+  # workflow checks of those (the release CLI and native editor builds in the release
+  # configuration and their NOTICE coverage) runs nightly on main, so a regression there
+  # surfaces within a day, and a release needs a successful run dispatched on main for its
+  # exact commit (docs/release_candidate.md). Main pushes do not run it.
   # tools/security_workflow_policy_tests.py checks that the preflight's own tools and the
   # registry inputs start it and that general build-graph, packaging and source changes do not.
   pull_request:
     paths:
       - .bcr/**
       - .gitattributes
+      - MODULE.bazel
       - .github/workflows/bcr_preflight.yml
       - .github/workflows/publish_bcr.yml
       - examples/bazel_consumer/**

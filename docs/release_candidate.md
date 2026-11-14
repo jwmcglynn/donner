@@ -140,8 +140,9 @@ while `main` points at the candidate commit. It runs only in this repository and
 `main`. Its inputs name everything the record binds; nothing is selected implicitly:
 
 - `candidate_commit`: the full candidate commit. Assembly fails if the dispatched commit differs.
-- `preflight_run`, `editor_run`, `docs_run`: `RUN_ID/ATTEMPT` of the successful BCR Preflight,
-  Editor WASM and docs build (a `main` push) attempts whose artifacts the record binds.
+- `preflight_run`, `editor_run`, `docs_run`: `RUN_ID/ATTEMPT` of the successful BCR Preflight
+  (dispatched on `main`), Editor WASM and docs build (a `main` push) attempts whose artifacts the
+  record binds.
 - `ci_run`, `coverage_run`, `fuzz_run`, `sanitizers_run`: `RUN_ID/ATTEMPT` of the qualifying
   evidence runs.
 - `security_review_comment`, `supply_chain_review_comment`: the IDs of issue comments in this
@@ -273,9 +274,10 @@ optimized with Geode, full text and Tracy disabled, first resolving and then bui
 bundled libraries and resources. Its Noto alias is limited to exactly the three reviewed font
 file labels; adding another payload to that component fails coverage until explicitly reviewed. Its compiler probe is built with the same configuration.
 Every preflight run is the full matrix. Pushes to main do not run it; it runs nightly, on
-manual dispatch, and for a pull request that changes the registry templates, the example
-consumer, the preflight's own tools or its workflows. A release dispatches it on `main` for the
-candidate commit.
+manual dispatch, and for a pull request that changes the registry templates, `MODULE.bazel`,
+`.gitattributes`, the example consumer, the preflight's own tools or its workflows. A release
+dispatches it on `main` for the candidate commit: assembly and registry publication accept only
+a dispatched run, never the nightly one.
 
 That attempt retains `donner-editor_darwin_arm64.zip`, its checksum and provenance, the generated
 Bazel lockfile and third-party NOTICE. The ZIP contains `Donner SVG Editor.app`, the source `LICENSE` and

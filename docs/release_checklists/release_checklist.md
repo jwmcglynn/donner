@@ -104,8 +104,8 @@ concern; the tag never moves retroactively.
       the preflight build attestations for the source archive, binaries, and lockfiles; rerun all
       jobs after a failed preflight.
       Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a manual dispatch on `main`
-      supplies the preflight evidence while it still points to the exact commit; the release
-      tooling accepts only such a dispatched run. Pushes to main do not run the preflight.
+      supplies the preflight evidence while it still points to the exact commit; candidate
+      assembly and registry publication accept only such a dispatched run. Pushes to main do not run the preflight.
 - [ ] **Candidate record assembled**. While `main` still points at the exact final commit,
       dispatch `Assemble release candidate` on `main` with that commit, the BCR Preflight, Editor
       WASM, docs build, CI, coverage, fuzz and sanitizer run IDs and attempts, and the issue

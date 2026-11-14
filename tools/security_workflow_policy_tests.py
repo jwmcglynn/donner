@@ -2733,16 +2733,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path in sorted(own) + [
                 "tools/bcr_release.py", "tools/bcr_preflight_tests.py", ".bcr/presubmit.yml",
                 ".bcr/metadata.template.json", ".bcr/nested/source.template.json",
-                ".gitattributes", "examples/bazel_consumer/MODULE.bazel",
+                ".gitattributes", "MODULE.bazel", "examples/bazel_consumer/MODULE.bazel",
                 "examples/bazel_consumer/main.cc", ".github/workflows/bcr_preflight.yml",
                 ".github/workflows/publish_bcr.yml"]:
             self.assertTrue(matches(path), f"{path} does not start the preflight")
 
-        # The build graph, packaging and release inputs, and sources and tests, are built and
-        # tested by CI on the pull request. What only the preflight checks of them runs nightly
+        # The rest of the build graph, packaging and release inputs, and sources and tests, are
+        # built and tested by CI on the pull request. What only the preflight checks of them runs nightly
         # and before a release, so none of them starts it on a pull request.
         general = [
-            "MODULE.bazel", "MODULE.bazel.lock", ".bazelrc", ".bazelversion", ".bazelignore",
+            "MODULE.bazel.lock", "donner/MODULE.bazel", "MODULE.bazel.orig", ".bazelrc", ".bazelversion", ".bazelignore",
             "BUILD.bazel", "LICENSE", "NOTICE", "config/BUILD.bazel", "build_defs/x.bzl",
             "x/y/z.bzl", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
             "build_defs/packaged_resources.bzl", "build_defs/macos_app_bundle.bzl",
@@ -2763,7 +2763,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "donner/svg/tests/BUILD.bazel", "donner/editor/tests/BUILD.bazel",
             "tools/ci/gatekeeper.py", "donner/svg/renderer/wasm/BUILD.bazel",
             "third_party/tiny-skia-cpp/a.cc", "docs/building.md", "docs/release_candidate.md"]
-        for path in sorted(shared) + general + list(release_macos_editor.INPUTS):
+        # MODULE.bazel is also a native provenance input; it starts the preflight as the module
+        # file the registry entry copies, checked above.
+        provenance = [path for path in release_macos_editor.INPUTS if path != "MODULE.bazel"]
+        self.assertIn("MODULE.bazel", release_macos_editor.INPUTS)
+        for path in sorted(shared) + general + provenance:
             self.assertFalse(matches(path), f"{path} starts the preflight")
 
     def test_bcr_preflight_has_no_publication_credentials(self):
@@ -2853,13 +2857,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_native_editor_packaging_inputs_are_qualified_by_every_full_run(self):
         # The native editor's provenance inputs are general build inputs: a change to one does
-        # not start the preflight on a pull request, and every preflight run, nightly included,
-        # builds and packages the editor from them in the macOS CLI job, which no run skips.
+        # not start the preflight on a pull request (MODULE.bazel does, as a registry input),
+        # and every preflight run, nightly included, builds and packages the editor from them in
+        # the macOS CLI job, which no run skips.
         workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         matches = _bcr_pull_request_trigger(workflow)
         for path in (*release_macos_editor.INPUTS, "LICENSE", "tools/release_macos_editor.py",
                      "tools/ci_macos_xcode.txt"):
-            self.assertFalse(matches(path), path)
+            self.assertEqual(path == "MODULE.bazel", matches(path), path)
         jobs = _jobs(workflow)
         self.assertEqual("", _job_key(jobs["cli-macos"], "if"))
         native = [command.argv for command in bcr_preflight.cli_plan(

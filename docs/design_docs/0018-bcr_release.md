@@ -54,11 +54,11 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 2. Set the same version in `MODULE.bazel` and `examples/bazel_consumer/MODULE.bazel`. Review any
    compatibility-level change against all supported Bazel versions, including older resolvers.
 3. Require a full `BCR Preflight` run on that exact commit. Pushes to main do not run the
-   preflight, and a pull request runs it only when it changes the registry templates, the
-   example consumer, the preflight's own tools or its workflows. Every run is the full matrix;
-   it runs nightly on `main` and on manual dispatch. The release tooling currently accepts only
-   a dispatched run, so while main still points to the intended commit, dispatch the workflow
-   on `main`. A branch or tag dispatch cannot attest or supply release
+   preflight, and a pull request runs it only when it changes the registry templates,
+   `MODULE.bazel`, `.gitattributes`, the example consumer, the preflight's own tools or its
+   workflows. Every run is the full matrix; it runs nightly on `main` and on manual dispatch.
+   Both candidate assembly and registry publication accept only a run dispatched on `main`, so
+   while main still points to the intended commit, dispatch the workflow on `main`. A branch or tag dispatch cannot attest or supply release
    artifacts. An empty source commit is unnecessary.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
