@@ -450,6 +450,14 @@ TEST(MergeStyleDeclarations, MatchesNamesWithAsciiCaseFoldingInEveryLocale) {
   });
 }
 
+// Custom property names are case-sensitive, so `--Foo` and `--foo` are different properties, while
+// standard property names still match case-insensitively.
+TEST(MergeStyleDeclarations, CustomPropertyNamesAreCaseSensitive) {
+  auto existing = parse("--Foo: 1; COLOR: red");
+  auto updates = parse("--foo: 2; color: blue");
+  EXPECT_EQ(mergeStyleDeclarations(existing, updates), "--Foo: 1; --foo: 2; color: blue");
+}
+
 TEST(MergeStyleDeclarations, AddsNewProperty) {
   auto existing = parse("fill: red; opacity: 0.8");
   auto updates = parse("visibility: hidden");

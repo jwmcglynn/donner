@@ -6,7 +6,6 @@
 #include <string_view>
 
 #include "donner/base/ParseDiagnostic.h"
-#include "donner/base/StringUtils.h"
 
 namespace donner::svg::parser {
 
@@ -89,7 +88,7 @@ public:
 
       // If we reach here, we expect an item (not a comma or whitespace)
       const size_t start = i;
-      while (i < length && !StringUtils::IsAsciiWhitespace(value[i]) && value[i] != ',') {
+      while (i < length && !IsXmlWhitespace(value[i]) && value[i] != ',') {
         i++;
       }
 
@@ -125,13 +124,23 @@ public:
 
 private:
   /**
+   * Returns true for XML whitespace, which separates list items: space, tab, line feed and
+   * carriage return (https://www.w3.org/TR/xml/#NT-S).
+   *
+   * @param ch The character to classify.
+   */
+  static constexpr bool IsXmlWhitespace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+  }
+
+  /**
    * Skips whitespace characters in a string_view starting from a given index.
    *
    * @param value The string view to process.
    * @param i Reference to the current index, will be updated.
    */
   static inline void SkipWhitespace(std::string_view value, size_t& i) {
-    while (i < value.size() && StringUtils::IsAsciiWhitespace(value[i])) {
+    while (i < value.size() && IsXmlWhitespace(value[i])) {
       i++;
     }
   }

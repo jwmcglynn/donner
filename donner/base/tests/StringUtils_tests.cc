@@ -51,6 +51,14 @@ TEST(CaseInsensitiveCharTraits, Compare) {
   EXPECT_EQ(CaseInsensitiveCharTraits::compare("xyz", "abc", 3), 1);
 }
 
+// compare() orders bytes the same way lt() does, as unsigned values, including bytes above 0x7F.
+TEST(CaseInsensitiveCharTraits, CompareOrdersHighBytesLikeLt) {
+  EXPECT_TRUE(CaseInsensitiveCharTraits::lt('a', '\x80'));
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("a", "\x80", 1), -1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("\xFF", "Z", 1), 1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("\x80", "\x80", 1), 0);
+}
+
 TEST(CaseInsensitiveCharTraits, Find) {
   const char* kStr = "aBc";
 
