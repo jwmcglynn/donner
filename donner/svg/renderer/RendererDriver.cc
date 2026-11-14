@@ -1203,56 +1203,76 @@ bool IsInvisibleInstance(Registry& registry,
 /// by every element that draws it, so content that a visible element draws stays in even when it
 /// was instantiated under a hidden one; within it, only instances that are themselves invisible
 /// are left out.
+/// Filtered instances that reach the frame in one pass over @p entities, and the shared content
+/// those reaching instances draw.
+struct VisibilityPass {
+  std::vector<Entity> filtered;  ///< Filtered instances that reach the frame, in draw order.
+  DrawOrderRanges reached;       ///< Shared content drawn by instances that reach the frame.
+};
+
+/// Whether @p instance, at a draw order inside a hidden element's range, still reaches the frame:
+/// only when a visible element also draws it as shared content and it is not invisible itself.
+bool ReachesFrameFromHiddenRange(Registry& registry,
+                                 const components::RenderingInstanceComponent& instance,
+                                 const DrawOrderRanges& shownContent) {
+  return shownContent.contains(instance.drawOrder) && !IsInvisibleInstance(registry, instance);
+}
+
+/// One pass of \ref VisibleFilteredEntities, keeping content in @p shownContent even when it was
+/// instantiated under a hidden element.
+VisibilityPass ScanVisibleInstances(Registry& registry, std::span<const Entity> entities,
+                                    const DrawOrderRanges& shownContent) {
+  VisibilityPass pass;
+  std::optional<int> hiddenThroughDrawOrder;
+  for (const Entity entity : entities) {
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance == nullptr) {
+      continue;
+    }
+    if (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder) {
+      // Content drawn for hidden content is hidden too, and can end after the hidden subtree,
+      // unless a visible element also draws it.
+      hiddenThroughDrawOrder =
+          std::max(*hiddenThroughDrawOrder, ContentLastDrawOrder(registry, *instance));
+      if (!ReachesFrameFromHiddenRange(registry, *instance, shownContent)) {
+        continue;
+      }
+    } else {
+      hiddenThroughDrawOrder.reset();
+      if (IsInvisibleInstance(registry, *instance)) {
+        hiddenThroughDrawOrder = ContentLastDrawOrder(registry, *instance);
+        continue;
+      }
+    }
+    ForEachDrawnContent(*instance, [&](const components::SubtreeInfo& content) {
+      pass.reached.add(registry, content);
+    });
+    if (instance->resolvedFilter.has_value()) {
+      pass.filtered.push_back(entity);
+    }
+  }
+  pass.reached.normalize();
+  return pass;
+}
+
 std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const Entity> entities) {
-  std::vector<Entity> result;
   const bool anyFilter = std::any_of(entities.begin(), entities.end(), [&](Entity entity) {
     const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
     return instance != nullptr && instance->resolvedFilter.has_value();
   });
   if (!anyFilter) {
-    return result;
+    return {};
   }
   // Shared content that a visible element draws can make more content visible, including content
   // it draws in turn, so repeat until the shared content drawn by visible elements stops growing.
   // The hidden ranges are the same on every pass and the shown set only grows, so this ends.
   DrawOrderRanges shownContent;
   while (true) {
-    result.clear();
-    DrawOrderRanges reached;
-    std::optional<int> hiddenThroughDrawOrder;
-    for (const Entity entity : entities) {
-      const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
-      if (instance == nullptr) {
-        continue;
-      }
-      if (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder) {
-        // Content drawn for hidden content is hidden too, and can end after the hidden subtree,
-        // unless a visible element also draws it.
-        hiddenThroughDrawOrder =
-            std::max(*hiddenThroughDrawOrder, ContentLastDrawOrder(registry, *instance));
-        if (!shownContent.contains(instance->drawOrder) ||
-            IsInvisibleInstance(registry, *instance)) {
-          continue;
-        }
-      } else {
-        hiddenThroughDrawOrder.reset();
-        if (IsInvisibleInstance(registry, *instance)) {
-          hiddenThroughDrawOrder = ContentLastDrawOrder(registry, *instance);
-          continue;
-        }
-      }
-      ForEachDrawnContent(*instance, [&](const components::SubtreeInfo& content) {
-        reached.add(registry, content);
-      });
-      if (instance->resolvedFilter.has_value()) {
-        result.push_back(entity);
-      }
+    VisibilityPass pass = ScanVisibleInstances(registry, entities, shownContent);
+    if (pass.reached == shownContent) {
+      return std::move(pass.filtered);
     }
-    reached.normalize();
-    if (reached == shownContent) {
-      return result;
-    }
-    shownContent = std::move(reached);
+    shownContent = std::move(pass.reached);
   }
 }
 
