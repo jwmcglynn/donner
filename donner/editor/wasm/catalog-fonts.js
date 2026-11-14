@@ -164,6 +164,9 @@
       this.persistenceQueueBytes = 0;
       this.cachePersistence = null;
       this.persistenceDisabled = false;
+      // Identities whose cache read missed its deadline and fell back to the network. Bounded by
+      // the compiled asset count; it lets tests tell intended degradation from a cache miss.
+      this.cacheReadTimeouts = new Set();
     }
 
     request(id, token, priority = 0) {
@@ -299,6 +302,7 @@
       let timer;
       const timeout = new Promise((resolve) => {
         timer = this.timers.setTimeout(() => {
+          this.cacheReadTimeouts.add(asset.id);
           controller.abort();
           resolve(null);
         }, 250);

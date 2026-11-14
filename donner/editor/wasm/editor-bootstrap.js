@@ -393,6 +393,8 @@ if (window.__donnerCanStartWasm) {
     });
     const resourceSession = { active: true };
     window.__donnerPackagedResourceSession = resourceSession;
+    window.__donnerPackagedResourceCacheTimeouts = () =>
+      Array.from(packagedResources.broker.cacheReadTimeouts);
     window.__donnerClosePackagedResources = () => {
       resourceSession.active = false;
       packagedResources.close();

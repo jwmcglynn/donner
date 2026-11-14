@@ -320,6 +320,7 @@ test("warm offline cache is reverified; tampering is evicted before network reco
     assert.deepEqual((await done).bytes, bytes);
     assert.equal(fetches, tampered ? 1 : 0);
     assert.equal(deleted.length, tampered ? 1 : 0);
+    assert.deepEqual([...broker.cacheReadTimeouts], [], "a rejected body is a miss, not a timeout");
   }
 });
 
@@ -335,7 +336,7 @@ test("storage denial leaves the verified network path usable", async (t) => {
   assert.equal((await done).bytes.byteLength, asset.encodedBytes);
 });
 
-test("a stalled cache cannot stall a network load", async (t) => {
+test("a stalled cache cannot stall a network load and records the timed-out read", async (t) => {
   const delayed = [];
   const timers = {
     setTimeout(callback, ms) {
@@ -353,7 +354,9 @@ test("a stalled cache cannot stall a network load", async (t) => {
   });
   broker.request(asset.id, 1);
   assert.equal(calls.length, 0);
+  assert.deepEqual([...broker.cacheReadTimeouts], []);
   delayed.find((timer) => timer.ms === 250).callback();
+  assert.deepEqual([...broker.cacheReadTimeouts], [asset.id]);
   assert.equal((await done).bytes.byteLength, asset.encodedBytes);
   assert.equal(calls.length, 1);
 });
