@@ -586,6 +586,20 @@ bool IsFunctionNamed(const ComponentValue& value, std::string_view name) {
   return function != nullptr && function->name.equalsLowercase(name);
 }
 
+/// Classify an `@import` media query list: `all` is unconditional, and a second URL is invalid.
+ImportPreludeKind ClassifyImportMediaList(std::span<const ComponentValue* const> mediaList) {
+  for (const ComponentValue* value : mediaList) {
+    if (value->isToken<Token::String>() || value->isToken<Token::Url>()) {
+      return ImportPreludeKind::Invalid;
+    }
+  }
+  if (mediaList.size() == 1 && mediaList.front()->isToken<Token::Ident>() &&
+      IsNamedComponent(*mediaList.front(), "all")) {
+    return ImportPreludeKind::Unconditional;
+  }
+  return ImportPreludeKind::Media;
+}
+
 /// Classify the import conditions following the URL, per the CSS Cascade 5 `@import` grammar:
 /// `[ layer | layer(<name>) ]? [ supports(...) ]? <media-query-list>?`.
 ImportPreludeKind ClassifyImportConditions(std::span<const ComponentValue> conditions) {
@@ -604,16 +618,7 @@ ImportPreludeKind ClassifyImportConditions(std::span<const ComponentValue> condi
   if (IsFunctionNamed(*significant.front(), "supports")) {
     return ImportPreludeKind::Supports;
   }
-  for (const ComponentValue* value : significant) {
-    if (value->isToken<Token::String>() || value->isToken<Token::Url>()) {
-      return ImportPreludeKind::Invalid;
-    }
-  }
-  if (significant.size() == 1 && IsNamedComponent(*significant.front(), "all") &&
-      significant.front()->isToken<Token::Ident>()) {
-    return ImportPreludeKind::Unconditional;
-  }
-  return ImportPreludeKind::Media;
+  return ClassifyImportMediaList(significant);
 }
 
 ParsedImportPrelude ParseImportPrelude(const AtRule& atRule) {

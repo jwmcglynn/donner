@@ -436,6 +436,27 @@ bool IsImportingStylesheet(const Registry& registry, Entity entity,
          !stylesheet.stylesheet.imports().empty() && HasSvgNamespace(registry, entity);
 }
 
+/// Why an external stylesheet import may not be fetched at all, or nullptr if it may.
+const char* ExternalImportRefusal(ProcessingMode mode, bool hasLoader) {
+  if (mode == ProcessingMode::SecureStatic || mode == ProcessingMode::SecureAnimated) {
+    return "CSS @import was not loaded: external resources are disabled in secure processing mode";
+  }
+  if (!hasLoader) {
+    return "CSS @import was not loaded: no ResourceLoader provided";
+  }
+  return nullptr;
+}
+
+/// Charge \p bytes to the aggregate budget, latching it closed if they do not fit.
+bool ChargeAggregateBytes(size_t& remainingBytes, size_t bytes) {
+  if (bytes > remainingBytes) {
+    remainingBytes = 0;
+    return false;
+  }
+  remainingBytes -= bytes;
+  return true;
+}
+
 /// Map import diagnostics from local CSS offsets to the document source of the `<style>` element.
 void MapImportWarnings(ParseWarningSink& warnings, const StylesheetSourceMap& sourceMap) {
   warnings.mapSourceRanges([&](const SourceRange& range) {
@@ -614,13 +635,10 @@ bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink
 std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStylesheetImport(
     std::string_view url, size_t maximumBytes) {
   const bool external = NeedsExternalLoader(url);
-  if (external && (processingMode_ == ProcessingMode::SecureStatic ||
-                   processingMode_ == ProcessingMode::SecureAnimated)) {
-    return RcString(
-        "CSS @import was not loaded: external resources are disabled in secure processing mode");
-  }
-  if (external && !loader_) {
-    return RcString("CSS @import was not loaded: no ResourceLoader provided");
+  if (external) {
+    if (const char* refusal = ExternalImportRefusal(processingMode_, loader_ != nullptr)) {
+      return RcString(refusal);
+    }
   }
 
   NullResourceLoader nullLoader;
@@ -649,20 +667,14 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
   // before any pass-specific check, even if this pass then refuses the bytes. Cache hits were
   // charged by the fetch that admitted them, and data URLs are part of the document text.
   auto& loaded = std::get<UrlLoader::Result>(result);
-  const auto tooLarge = [this] {
+  const bool newFetch = fetchSecurityStats_.attempts != attemptsBefore;
+  // The pass allowance is also enforced by the import loader; checking it here keeps an oversized
+  // result from being handed back at all.
+  if ((newFetch && !ChargeAggregateBytes(remainingResourceBytes_, loaded.data.size())) ||
+      loaded.data.size() > maximumBytes) {
     fetchSecurityStats_.rejected = true;
     return RcString("CSS @import was not loaded: " +
                     std::string(ToString(UrlLoaderError::ResourceTooLarge)));
-  };
-  if (fetchSecurityStats_.attempts != attemptsBefore) {
-    if (loaded.data.size() > remainingResourceBytes_) {
-      remainingResourceBytes_ = 0;
-      return tooLarge();
-    }
-    remainingResourceBytes_ -= loaded.data.size();
-  }
-  if (loaded.data.size() > maximumBytes) {
-    return tooLarge();
   }
   return std::move(loaded);
 }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <span>
 #include <vector>
 
 namespace donner::svg {
@@ -69,40 +70,32 @@ UrlComponents SplitUrl(std::string_view url) {
 }
 
 /**
- * Remove `.` and `..` segments (RFC 3986 section 5.2.4). For an absolute path, `..` cannot rise
- * above the root. For a relative path, unmatched `..` segments are kept so the path stays relative
- * to the same (unknown) base.
+ * Apply one path segment to the output stack of \ref RemoveDotSegments.
+ *
+ * @return True if the output must end with a `/` should this be the final segment.
  */
-std::string RemoveDotSegments(std::string_view path) {
-  const bool absolute = path.starts_with('/');
-  std::vector<std::string_view> segments;
-  bool trailingDirectory = false;
-  std::string_view rest = absolute ? path.substr(1) : path;
-  while (true) {
-    const std::size_t slash = rest.find('/');
-    const std::string_view segment = rest.substr(0, slash);
-    const bool last = slash == std::string_view::npos;
-    trailingDirectory = false;
-    if (segment == ".") {
-      trailingDirectory = true;
-    } else if (segment == "..") {
-      if (!segments.empty() && segments.back() != "..") {
-        segments.pop_back();
-      } else if (!absolute) {
-        segments.push_back(segment);
-      }
-      trailingDirectory = true;
-    } else if (!last || !segment.empty()) {
-      segments.push_back(segment);
-    } else {
-      trailingDirectory = !segments.empty();
-    }
-    if (last) {
-      break;
-    }
-    rest.remove_prefix(slash + 1);
+bool ApplyPathSegment(std::vector<std::string_view>& segments, std::string_view segment, bool last,
+                      bool absolute) {
+  if (segment == ".") {
+    return true;
   }
+  if (segment == "..") {
+    if (!segments.empty() && segments.back() != "..") {
+      segments.pop_back();
+    } else if (!absolute) {
+      segments.push_back(segment);
+    }
+    return true;
+  }
+  if (!last || !segment.empty()) {
+    segments.push_back(segment);
+    return false;
+  }
+  return !segments.empty();
+}
 
+std::string JoinPathSegments(std::span<const std::string_view> segments, bool absolute,
+                             bool trailingDirectory) {
   // A relative path whose first remaining segment is empty must not become root-absolute.
   std::string result = absolute ? "/" : (!segments.empty() && segments.front().empty() ? "./" : "");
   for (std::size_t i = 0; i < segments.size(); ++i) {
@@ -115,6 +108,28 @@ std::string RemoveDotSegments(std::string_view path) {
     result += '/';
   }
   return result;
+}
+
+/**
+ * Remove `.` and `..` segments (RFC 3986 section 5.2.4). For an absolute path, `..` cannot rise
+ * above the root. For a relative path, unmatched `..` segments are kept so the path stays relative
+ * to the same (unknown) base.
+ */
+std::string RemoveDotSegments(std::string_view path) {
+  const bool absolute = path.starts_with('/');
+  std::vector<std::string_view> segments;
+  bool trailingDirectory = false;
+  std::string_view rest = absolute ? path.substr(1) : path;
+  while (true) {
+    const std::size_t slash = rest.find('/');
+    const bool last = slash == std::string_view::npos;
+    trailingDirectory = ApplyPathSegment(segments, rest.substr(0, slash), last, absolute);
+    if (last) {
+      break;
+    }
+    rest.remove_prefix(slash + 1);
+  }
+  return JoinPathSegments(segments, absolute, trailingDirectory);
 }
 
 /// Merge a relative-path reference with the base path (RFC 3986 section 5.2.3).
