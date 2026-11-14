@@ -3910,12 +3910,7 @@ struct AutocompleteEntry {
 };
 
 bool isValidAutocompleteWord(std::string_view word) {
-  return std::any_of(word.begin(), word.end(),
-                     [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); });
-}
-
-std::string toLowercase(std::string_view str) {
-  return StringUtils::ToLowerAscii(str);
+  return std::any_of(word.begin(), word.end(), StringUtils::IsAsciiAlpha);
 }
 
 }  // namespace
@@ -3976,14 +3971,14 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
   autocompleteIndex_ = 0;
   autocompleteSwitched_ = false;
 
-  const std::string searchWord = toLowercase(autocompleteWord_);
+  const std::string searchWord = StringUtils::ToLowerAscii(autocompleteWord_);
   std::vector<AutocompleteEntry> matches;
 
   // Build matches for non-member completions
   if (autocompleteObject_.empty()) {
     // Match against stored entries
     for (size_t i = 0; i < autocompleteSearchTerms_.size(); i++) {
-      const std::string lowerEntry = toLowercase(autocompleteSearchTerms_[i]);
+      const std::string lowerEntry = StringUtils::ToLowerAscii(autocompleteSearchTerms_[i]);
       if (size_t loc = lowerEntry.find(searchWord); loc != std::string::npos) {
         matches.emplace_back(autocompleteEntries_[i].first, autocompleteEntries_[i].second,
                              static_cast<int>(loc));
@@ -3992,7 +3987,7 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
 
     // Match against language keywords
     for (const auto& keyword : languageDefinition_.keywords) {
-      const std::string lowerKeyword = toLowercase(keyword);
+      const std::string lowerKeyword = StringUtils::ToLowerAscii(keyword);
       if (size_t loc = lowerKeyword.find(searchWord); loc != std::string::npos) {
         matches.emplace_back(keyword, keyword, static_cast<int>(loc));
       }
@@ -4000,7 +3995,7 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
 
     // Match against language identifiers
     for (const auto& [identifier, _] : languageDefinition_.identifiers) {
-      const std::string lowerIdentifier = toLowercase(identifier);
+      const std::string lowerIdentifier = StringUtils::ToLowerAscii(identifier);
       if (size_t loc = lowerIdentifier.find(searchWord); loc != std::string::npos) {
         matches.emplace_back(identifier, identifier, static_cast<int>(loc));
       }

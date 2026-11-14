@@ -70,6 +70,7 @@ editor_cc_binary(
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         ":editor_control_session",
+        "//donner/base",
         "//donner/base:packaged_resource",
         "@nlohmann_json//:json",
     ],

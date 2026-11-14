@@ -10,6 +10,7 @@
 
 #include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/svg/parser/TransformParser.h"
 
@@ -41,18 +42,6 @@ struct Fn {
   bool usesComma = false;  ///< Whether the author separated args with commas.
 };
 
-bool IsSpace(char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
-bool IsAlpha(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-bool IsDigit(char c) {
-  return c >= '0' && c <= '9';
-}
-
 /// Parses \p token as one number with the locale-independent number parser, requiring the whole
 /// token to be consumed.
 std::optional<double> ParseWholeNumber(std::string_view token) {
@@ -71,7 +60,7 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
   std::size_t i = 0;
   const std::size_t n = s.size();
   auto skipSpace = [&] {
-    while (i < n && IsSpace(s[i])) {
+    while (i < n && StringUtils::IsAsciiWhitespace(s[i])) {
       ++i;
     }
   };
@@ -79,7 +68,7 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
   skipSpace();
   while (i < n) {
     const std::size_t nameStart = i;
-    while (i < n && IsAlpha(s[i])) {
+    while (i < n && StringUtils::IsAsciiAlpha(s[i])) {
       ++i;
     }
     if (i == nameStart) {
@@ -100,7 +89,7 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
       if (i < n && (s[i] == '+' || s[i] == '-')) {
         ++i;
       }
-      while (i < n && (IsDigit(s[i]) || s[i] == '.')) {
+      while (i < n && (StringUtils::IsAsciiDigit(s[i]) || s[i] == '.')) {
         ++i;
       }
       if (i < n && (s[i] == 'e' || s[i] == 'E')) {
@@ -108,7 +97,7 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
         if (i < n && (s[i] == '+' || s[i] == '-')) {
           ++i;
         }
-        while (i < n && IsDigit(s[i])) {
+        while (i < n && StringUtils::IsAsciiDigit(s[i])) {
           ++i;
         }
       }
@@ -125,7 +114,7 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
 
       // Consume separators (commas and/or whitespace) between arguments.
       bool sawComma = false;
-      while (i < n && (IsSpace(s[i]) || s[i] == ',')) {
+      while (i < n && (StringUtils::IsAsciiWhitespace(s[i]) || s[i] == ',')) {
         if (s[i] == ',') {
           if (sawComma) {
             return std::nullopt;  // two commas in a row

@@ -21,7 +21,9 @@ bool IsCssPropertyNameChar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
 }
 
-bool IsAsciiWhitespace(char c) {
+/// XML whitespace (the `S` production): space, tab, line feed and carriage return. Unlike
+/// StringUtils::IsAsciiWhitespace, vertical tab and form feed are not whitespace.
+bool IsXmlWhitespace(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -173,7 +175,7 @@ XmlAutocompleteContext MakeStylePropertyContext(std::string_view source, std::si
     }
   }
 
-  while (segmentStart < cursorOffset && IsAsciiWhitespace(source[segmentStart])) {
+  while (segmentStart < cursorOffset && IsXmlWhitespace(source[segmentStart])) {
     ++segmentStart;
   }
 

@@ -414,9 +414,24 @@ public:
    *
    * @param ch The character to classify.
    */
-  static constexpr bool IsAsciiAlnum(char ch) {
-    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+  static constexpr bool IsAsciiAlnum(char ch) { return IsAsciiDigit(ch) || IsAsciiAlpha(ch); }
+
+  /**
+   * Returns true for ASCII letters (`A`-`Z`, `a`-`z`), the bytes `std::isalpha` accepts in the "C"
+   * locale. Bytes above 0x7F are never letters, whatever the process locale.
+   *
+   * @param ch The character to classify.
+   */
+  static constexpr bool IsAsciiAlpha(char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
   }
+
+  /**
+   * Returns true for ASCII digits (`0`-`9`), the bytes `std::isdigit` accepts.
+   *
+   * @param ch The character to classify.
+   */
+  static constexpr bool IsAsciiDigit(char ch) { return ch >= '0' && ch <= '9'; }
 
   /**
    * Trims leading and trailing whitespace from a string, returning a view of the trimmed string.
