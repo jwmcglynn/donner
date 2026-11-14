@@ -1038,6 +1038,126 @@ TEST_F(RendererRegressionTests, FilterConvolveAnimatedOrderOverridesLimitRejecti
       "convolve_animated_order_ended", editor::tests::PixelmatchIdentityParams());
 }
 
+/// Filters that move the backdrop 32 units right. `pass` leaves its input unchanged, and `margin`
+/// moves the backdrop through a region that reaches past the canvas's top-left corner, so the
+/// filter raster carries an input margin.
+constexpr std::string_view kBackdropFilters = R"svg(
+  <filter id="bgAlpha" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <feOffset in="BackgroundAlpha" dx="32"/>
+  </filter>
+  <filter id="bgImage" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <feOffset in="BackgroundImage" dx="32"/>
+  </filter>
+  <filter id="pass" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <feOffset dx="0"/>
+  </filter>
+  <filter id="margin" filterUnits="userSpaceOnUse" x="-32" y="-32" width="128" height="128">
+    <feOffset in="BackgroundImage" dx="32"/>
+  </filter>)svg";
+
+/// Renders \p body after \ref kBackdropFilters on a 64x64 canvas with the configured backend.
+RendererBitmap RenderBackdropCase(std::string_view body) {
+  SVGDocument document =
+      instantiateSubtree(std::string(kBackdropFilters) + std::string(body), {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders \p body without filters, the oracle for \ref RenderBackdropCase.
+RendererBitmap RenderBackdropOracle(std::string_view body) {
+  SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// BackgroundAlpha is the alpha of what the enclosing isolation group painted before the filtered
+// element. The blue square painted outside the group is not part of that backdrop, and the
+// filtered element's own red square is replaced by the filter result.
+TEST_F(RendererRegressionTests, FilterBackgroundAlphaReadsIsolationGroupBackdrop) {
+  const RendererBitmap actual = RenderBackdropCase(R"svg(
+    <rect x="4" y="40" width="12" height="12" fill="blue"/>
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#bgAlpha)"/>
+    </g>)svg");
+  ExpectVisibleBitmap(actual, "background_alpha_visible");
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+    <rect x="4" y="40" width="12" height="12" fill="blue"/>
+    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+    <rect x="36" y="4" width="16" height="16" fill="black"/>)svg"),
+                                       "background_alpha_isolation_group",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// BackgroundImage is the same backdrop with its colors.
+TEST_F(RendererRegressionTests, FilterBackgroundImageReadsIsolationGroupBackdrop) {
+  const RendererBitmap actual = RenderBackdropCase(R"svg(
+    <rect x="4" y="40" width="12" height="12" fill="blue"/>
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#bgImage)"/>
+    </g>)svg");
+  ExpectVisibleBitmap(actual, "background_image_visible");
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+    <rect x="4" y="40" width="12" height="12" fill="blue"/>
+    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+    <rect x="36" y="4" width="16" height="16" fill="seagreen"/>)svg"),
+                                       "background_image_isolation_group",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Without an isolating ancestor the backdrop is everything the root group painted before the
+// filtered element, and nothing painted after it.
+TEST_F(RendererRegressionTests, FilterBackgroundImageWithoutIsolationReadsEarlierRootContent) {
+  const RendererBitmap actual = RenderBackdropCase(R"svg(
+    <rect x="4" y="40" width="12" height="12" fill="blue"/>
+    <g>
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#bgImage)"/>
+    </g>
+    <rect x="4" y="24" width="8" height="8" fill="orange"/>)svg");
+  ExpectVisibleBitmap(actual, "background_root_visible");
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+    <rect x="4" y="40" width="12" height="12" fill="blue"/>
+    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+    <rect x="36" y="40" width="12" height="12" fill="blue"/>
+    <rect x="36" y="4" width="16" height="16" fill="seagreen"/>
+    <rect x="4" y="24" width="8" height="8" fill="orange"/>)svg"),
+                                       "background_image_root_group",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// The filtered element's own opacity group and later filter stages wrap the filter, but the
+// backdrop is still the one beneath the element: neither of them starts a new, empty backdrop.
+TEST_F(RendererRegressionTests, FilterBackgroundImageIgnoresElementOwnLayers) {
+  const RendererBitmap actual = RenderBackdropCase(R"svg(
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="24" y="44" width="8" height="8" fill="red" opacity="0.5"
+            filter="url(#bgImage) url(#pass)"/>
+    </g>)svg");
+  ExpectVisibleBitmap(actual, "background_own_layers_visible");
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+    <rect x="36" y="4" width="16" height="16" fill="seagreen" opacity="0.5"/>)svg"),
+                                       "background_image_own_layers",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A filter region past the canvas's top-left corner gives the filter raster an input margin; the
+// backdrop must be placed in that raster at the same offset as the source graphic.
+TEST_F(RendererRegressionTests, FilterBackgroundImageWithInputMarginKeepsBackdropAligned) {
+  const RendererBitmap actual = RenderBackdropCase(R"svg(
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="24" y="44" width="8" height="8" fill="red" filter="url(#margin)"/>
+    </g>)svg");
+  ExpectVisibleBitmap(actual, "background_margin_visible");
+  editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
+    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+    <rect x="36" y="4" width="16" height="16" fill="seagreen"/>)svg"),
+                                       "background_image_input_margin",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
