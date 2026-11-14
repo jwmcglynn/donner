@@ -31,11 +31,11 @@ std::optional<std::string> TextAttribute(EditorApp& app, std::string_view name) 
 }
 
 /// Matches every font field the format bar shows, naming the mismatched field.
-auto FormatStateIs(std::string_view family, float size, bool bold, bool italic, bool underline) {
+auto FormatStateIs(std::string_view family, double size, bool bold, bool italic, bool underline) {
   return testing::AllOf(
       testing::Field("fontFamily", &FormatBarState::fontFamily, testing::StrEq(family)),
       testing::Field("hasFontSize", &FormatBarState::hasFontSize, testing::IsTrue()),
-      testing::Field("fontSize", &FormatBarState::fontSize, testing::FloatEq(size)),
+      testing::Field("fontSize", &FormatBarState::fontSize, testing::DoubleEq(size)),
       testing::Field("bold", &FormatBarState::bold, testing::Eq(bold)),
       testing::Field("italic", &FormatBarState::italic, testing::Eq(italic)),
       testing::Field("underline", &FormatBarState::underline, testing::Eq(underline)));
@@ -201,7 +201,7 @@ TEST(TextFormatBarPresenterActionsTest, ReadsKeywordFontSizeAsComputedPixels) {
   ReadTextFormatState(*text, &state);
 
   // The `large` keyword resolves to 1.2 times the 12px `medium` size.
-  EXPECT_THAT(state, FormatStateIs("serif", 14.4f, /*bold=*/false, /*italic=*/false,
+  EXPECT_THAT(state, FormatStateIs("serif", 14.4, /*bold=*/false, /*italic=*/false,
                                    /*underline=*/false));
 }
 
