@@ -2764,9 +2764,20 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
   return !glyph.visualOrder || (vertical ? glyph.yAdvance : glyph.xAdvance) != 0;
 }
 
+/// The current text position after a right-to-left chunk: its anchored left edge, and the
+/// left-to-right pen end recorded before anchoring. A following chunk without an absolute x moves
+/// its origin by the difference between the two, which keeps any authored dx.
+struct RightToLeftContinuation {
+  double anchoredStart = 0.0;
+  double unshiftedEnd = 0.0;
+};
+
+/// Anchors one chunk. \p continuation, when set, rebases the chunk's origin onto the preceding
+/// right-to-left chunk; on success \p next receives the continuation this chunk leaves behind.
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
                      const AnchorExclusions& exclusions, double indent,
-                     std::optional<double>* anchoredStart = nullptr) {
+                     const std::optional<RightToLeftContinuation>& continuation = std::nullopt,
+                     std::optional<RightToLeftContinuation>* next = nullptr) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
@@ -2783,6 +2794,9 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   if (range.begin.anchorPosition) {
     bounds.initial = *range.begin.anchorPosition;
   }
+  if (continuation) {
+    bounds.initial = continuation->anchoredStart + (bounds.initial - continuation->unshiftedEnd);
+  }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
   finite &= std::isfinite(shift);
@@ -2796,16 +2810,16 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   }
   ForEachAnchorGlyph(runs, range,
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
-  if (anchoredStart) {
-    *anchoredStart = bounds.minimum + shift;
+  if (next) {
+    *next = RightToLeftContinuation{bounds.minimum + shift, bounds.maximum};
   }
   return true;
 }
 
-/// Retain original chunk indices until all groups are validated, then compact each run once.
-void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
-                     const components::ComputedTextComponent& text, bool vertical,
-                     const AnchorExclusions& exclusions, double firstLineIndent) {
+/// Gives each chunk the anchor and inline direction of the span holding its first glyph.
+void ResolveChunkStyles(const std::vector<TextRun>& runs,
+                        std::vector<ChunkBoundary>& chunkBoundaries,
+                        const components::ComputedTextComponent& text) {
   for (auto& chunk : chunkBoundaries) {
     for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
       const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
@@ -2816,30 +2830,44 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
       }
     }
   }
+}
+
+/// Returns the first-line indent for the first chunk with glyphs, and zero for every other.
+double TakeFirstLineIndent(std::vector<TextRun>& runs, const TextAnchorRange& range,
+                           double& pendingIndent) {
+  if (pendingIndent == 0.0) {
+    return 0.0;
+  }
+  bool hasGlyph = false;
+  ForEachAnchorGlyph(runs, range, [&](const TextGlyph&, size_t) { hasGlyph = true; });
+  if (!hasGlyph) {
+    return 0.0;
+  }
+  return std::exchange(pendingIndent, 0.0);
+}
+
+/// Retain original chunk indices until all groups are validated, then compact each run once.
+void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
+                     const components::ComputedTextComponent& text, bool vertical,
+                     const AnchorExclusions& exclusions, double firstLineIndent) {
+  ResolveChunkStyles(runs, chunkBoundaries, text);
   std::vector<std::vector<bool>> rejected;
-  bool indentPending = firstLineIndent != 0.0;
+  double pendingIndent = firstLineIndent;
   // After a right-to-left chunk the current text position is its anchored left edge, so a
-  // following chunk without an absolute x starts there instead of at the left-to-right pen.
-  std::optional<double> rightToLeftPenEnd;
+  // following chunk without an absolute x continues from there.
+  std::optional<RightToLeftContinuation> continuation;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
     const ChunkBoundary end =
         ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
-    TextAnchorRange range{chunkBoundaries[ci], end};
-    if (!vertical && rightToLeftPenEnd && !range.begin.absoluteX && !range.begin.anchorPosition) {
-      range.begin.anchorPosition = rightToLeftPenEnd;
-    }
-    double indent = 0.0;
-    if (indentPending) {
-      ForEachAnchorGlyph(runs, range, [&](const TextGlyph&, size_t) {
-        indent = firstLineIndent;
-        indentPending = false;
-      });
-    }
-    std::optional<double> anchoredStart;
-    if (!AnchorTextRange(runs, range, vertical, exclusions, indent, &anchoredStart)) {
+    const TextAnchorRange range{chunkBoundaries[ci], end};
+    const double indent = TakeFirstLineIndent(runs, range, pendingIndent);
+    const bool continues = !vertical && !range.begin.absoluteX;
+    std::optional<RightToLeftContinuation> next;
+    if (!AnchorTextRange(runs, range, vertical, exclusions, indent,
+                         continues ? continuation : std::nullopt, &next)) {
       MarkRejectedAnchorRange(runs, range, rejected);
     }
-    rightToLeftPenEnd = range.begin.rightToLeft ? anchoredStart : std::nullopt;
+    continuation = range.begin.rightToLeft ? next : std::nullopt;
   }
   CompactRejectedAnchorGlyphs(runs, rejected);
 }
