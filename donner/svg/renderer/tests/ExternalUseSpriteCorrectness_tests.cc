@@ -318,8 +318,8 @@ TEST(ExternalUseRetentionTest, OutOfDrawComputedStyleObservesHostStyle) {
   renderer.draw(host->document);
   SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
   const PropertyRegistry& style = resource.querySelector("#a")->getComputedStyle();
-  EXPECT_EQ(style.fill.get().value(),
-            PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)))))
+  EXPECT_THAT(style.fill.get().value(),
+              testing::Eq(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF))))))
       << "target document's own computed style leaks the host occurrence";
 }
 
@@ -559,8 +559,8 @@ TEST(ExternalUseRetentionTest, LayoutAndGeometryReadsAfterDrawUseDocumentStyle) 
   ASSERT_FALSE(standalone.hasError());
   const SVGRectElement own = standalone.result().querySelector("#r")->cast<SVGRectElement>();
 
-  EXPECT_EQ(afterDraw.elementFromWorld(), own.elementFromWorld());
-  EXPECT_EQ(afterDraw.transform(), own.transform());
+  EXPECT_THAT(afterDraw.elementFromWorld(), testing::Eq(own.elementFromWorld()));
+  EXPECT_THAT(afterDraw.transform(), testing::Eq(own.transform()));
   EXPECT_THAT(afterDraw.worldBounds(), testing::Eq(own.worldBounds()));
   EXPECT_THAT(afterDraw.computedWidth(), testing::Eq(own.computedWidth()));
 }
@@ -613,7 +613,8 @@ TEST(ExternalUseRetentionTest, StopColorAfterDrawUsesDocumentStyle) {
   renderer.draw(host->document);
   SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
   const css::Color color = resource.querySelector("#s")->cast<SVGStopElement>().computedStopColor();
-  EXPECT_EQ(color, css::Color(css::RGBA(0, 0, 0, 0xFF))) << "stop color reflects the host color";
+  EXPECT_THAT(color, testing::Eq(css::Color(css::RGBA(0, 0, 0, 0xFF))))
+      << "stop color reflects the host color";
 }
 
 TEST(ExternalUseRetentionTest, SymbolAtTwoSizesWithOnePaintKeepsEachViewport) {
