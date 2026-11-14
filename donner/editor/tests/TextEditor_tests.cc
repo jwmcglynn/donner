@@ -545,7 +545,6 @@ protected:
     return editor.visualLines_[visualIndex].hiddenRange;
   }
 
-  [[nodiscard]] bool HorizontalScrollEnabled() const { return editor.horizontalScroll_; }
   [[nodiscard]] bool HighlightLineEnabled() const { return editor.highlightLine_; }
   [[nodiscard]] bool SidebarVisible() const { return editor.sidebar_; }
   [[nodiscard]] bool FoldEnabled() const { return editor.foldEnabled_; }
@@ -3039,7 +3038,6 @@ TEST_F(TextEditorTests, RenderBuildsWrappedVisualRowsForLongXmlLine) {
   EXPECT_EQ(VisualLineIndentColumns(continuationIndex), 8);
   EXPECT_FALSE(editor.isImGuiChildIgnored());
   EXPECT_TRUE(editor.wordWrapEnabled());
-  EXPECT_FALSE(HorizontalScrollEnabled());
   EXPECT_FLOAT_EQ(LastScrollX(), 0.0f);
 }
 
@@ -3059,7 +3057,6 @@ TEST_F(TextEditorTests, InlineSettingsSetExpectedEditorState) {
 
   EXPECT_TRUE(AutoIndentOnPasteEnabled());
   EXPECT_FALSE(HighlightLineEnabled());
-  EXPECT_FALSE(HorizontalScrollEnabled());
   EXPECT_FALSE(FunctionDeclarationTooltipEnabled());
   EXPECT_TRUE(ScrollbarMarkersEnabled());
   EXPECT_FALSE(SidebarVisible());

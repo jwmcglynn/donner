@@ -464,7 +464,6 @@ void TextEditor::autocompleteSelect() {
   insertText(entry.second, true);
 
   autocompleteOpened_ = false;
-  autocompleteObject_.clear();
 }
 
 void TextEditor::autocompleteNavigate(bool up) {
@@ -688,7 +687,6 @@ void TextEditor::handleMouseInputs() {
 
   if (click && tryNavigateToFocusReferenceRopeAt(ImGui::GetMousePos())) {
     autocompleteOpened_ = false;
-    autocompleteObject_.clear();
     lastClick_ = -1.0f;
     return;
   }
@@ -742,7 +740,6 @@ void TextEditor::handleMouseInputs() {
 
     // Normal click in text area
     autocompleteOpened_ = false;
-    autocompleteObject_.clear();
 
     const auto clickCoords = screenPosToCoordinates(mousePos);
 
@@ -1134,7 +1131,6 @@ void TextEditor::renderInternal(std::string_view title) {
   contentRegionMax_ = contentSize;
   scrollViewportHeight_ = std::max(0.0f, contentSize.y - contentRegionMin.y);
   auto* drawList = ImGui::GetWindowDrawList();
-  float longestLine = textStart_;
   tickSourceFlashes();
 
   if (scrollToTop_) {
@@ -1143,10 +1139,9 @@ void TextEditor::renderInternal(std::string_view title) {
   }
 
   const ImVec2 cursorScreenPos = uiCursorPos_ = ImGui::GetCursorScreenPos();
-  if (!horizontalScroll_) {
-    ImGui::SetScrollX(0.0f);
-  }
-  const float scrollX = lastScrollX_ = horizontalScroll_ ? ImGui::GetScrollX() : 0.0f;
+  // The text view never scrolls horizontally; long lines wrap or are clipped.
+  ImGui::SetScrollX(0.0f);
+  const float scrollX = lastScrollX_ = 0.0f;
   const float scrollY = lastScroll_ = ImGui::GetScrollY();
 
   // Calculate visible lines
@@ -1171,7 +1166,7 @@ void TextEditor::renderInternal(std::string_view title) {
           lineStartPos.x + textStart_ + visualLines_[visualIndex].indentColumns * charAdvance_.x,
           lineStartPos.y};
       renderVisualLine(visualLines_[visualIndex], visualIndex, lineStartPos, textPos, contentSize,
-                       drawList, longestLine);
+                       drawList);
     }
   } else {
     while (lineNo <= visibleLineMax) {
@@ -1179,7 +1174,7 @@ void TextEditor::renderInternal(std::string_view title) {
                                 cursorScreenPos.y + (lineNo - foldedLines_) * charAdvance_.y};
       const ImVec2 textPos{lineStartPos.x + textStart_, lineStartPos.y};
 
-      renderLine(lineNo, lineStartPos, textPos, contentSize, scrollX, drawList, longestLine);
+      renderLine(lineNo, lineStartPos, textPos, contentSize, scrollX, drawList);
       lineNo++;
     }
   }
@@ -1188,7 +1183,7 @@ void TextEditor::renderInternal(std::string_view title) {
   renderSourceStyleDecorationChips(drawList);
   hitTestSourceStyleDecorationChips();
   renderSourceStyleDecorationTooltip();
-  renderExtraUI(drawList, cursorScreenPos, scrollX, scrollY, longestLine, contentSize);
+  renderExtraUI(drawList, cursorScreenPos, scrollX, scrollY, contentSize);
   handleScrolling();
 }
 void TextEditor::handleScrolling() {
@@ -1336,16 +1331,12 @@ void TextEditor::updateFoldedLines(int currentLine, int totalLines) {
 }
 
 void TextEditor::renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& textStart,
-                            const ImVec2& contentSize, float scrollX, ImDrawList* drawList,
-                            float& longestLine) {
+                            const ImVec2& contentSize, float scrollX, ImDrawList* drawList) {
   if (lineNo >= text_.getTotalLines()) {
     return;
   }
 
   const Line& line = text_.getLineGlyphs(lineNo);
-  longestLine = std::max(
-      textStart_ + getTextDistanceToLineStart(Coordinates(lineNo, text_.getLineMaxColumn(lineNo))),
-      longestLine);
 
   // Current line highlight
   if (state_.cursorPosition.line == lineNo) {
@@ -1374,10 +1365,9 @@ void TextEditor::renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& t
 
 void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIndex,
                                   const ImVec2& lineStart, const ImVec2& textStart,
-                                  const ImVec2& contentSize, ImDrawList* drawList,
-                                  float& longestLine) {
+                                  const ImVec2& contentSize, ImDrawList* drawList) {
   if (visualLine.focusHiddenPlaceholder) {
-    renderFocusHiddenPlaceholder(visualLine, lineStart, contentSize, drawList, longestLine);
+    renderFocusHiddenPlaceholder(visualLine, lineStart, contentSize, drawList);
     return;
   }
 
@@ -1386,9 +1376,6 @@ void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIn
   }
 
   const Line& line = text_.getLineGlyphs(visualLine.lineNo);
-  const int visualColumns =
-      visualLine.indentColumns + std::max(0, visualLine.endColumn - visualLine.startColumn);
-  longestLine = std::max(textStart_ + visualColumns * charAdvance_.x, longestLine);
 
   renderLineBackground(visualLine, lineStart, contentSize, drawList);
 
@@ -1411,8 +1398,7 @@ void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIn
 }
 
 void TextEditor::renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
-                                              const ImVec2& contentSize, ImDrawList* drawList,
-                                              float& longestLine) {
+                                              const ImVec2& contentSize, ImDrawList* drawList) {
   const ImVec2 rowStart{lineStart.x + ImGui::GetScrollX(), lineStart.y};
   const ImVec2 rowEnd{lineStart.x + contentSize.x + 2.0f * ImGui::GetScrollX(),
                       lineStart.y + charAdvance_.y};
@@ -1431,7 +1417,6 @@ void TextEditor::renderFocusHiddenPlaceholder(const VisualLine& visualLine, cons
   const ImU32 color = palette_[static_cast<int>(ColorIndex::Comment)];
   const ImVec2 textPos{lineStart.x + textStart_, lineStart.y};
   drawList->AddText(textPos, color, "...");
-  longestLine = std::max(longestLine, textStart_ + 3.0f * charAdvance_.x);
 
   (void)visualLine;
 }
@@ -3645,7 +3630,7 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
 }  // namespace
 
 void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, float scrollX,
-                               float scrollY, float longest, const ImVec2& contentSize) {
+                               float scrollY, const ImVec2& contentSize) {
   // Function declaration tooltip
   if (functionDeclarationTooltip_) {
     const ImVec2 tooltipPos = coordinatesToScreenPos(functionDeclarationCoord_);
@@ -3675,7 +3660,6 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
     ImGui::SetWindowFocus();
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
       autocompleteOpened_ = false;
-      autocompleteObject_.clear();
     }
   }
 
@@ -3683,8 +3667,7 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
   const int visualLineCount = (wordWrapEnabled_ || focusPartitionActive_)
                                   ? static_cast<int>(visualLines_.size())
                                   : text_.getTotalLines() - foldedLines_;
-  const float dummyWidth = horizontalScroll_ ? longest + 100.0f * uiScale_ : 0.0f;
-  ImGui::Dummy(ImVec2(dummyWidth, visualLineCount * charAdvance_.y));
+  ImGui::Dummy(ImVec2(0.0f, visualLineCount * charAdvance_.y));
 
   // Handle cursor visibility
   if (scrollToCursor_) {
@@ -3925,31 +3908,28 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
   const std::string searchWord = toLowercase(autocompleteWord_);
   std::vector<AutocompleteEntry> matches;
 
-  // Build matches for non-member completions
-  if (autocompleteObject_.empty()) {
-    // Match against stored entries
-    for (size_t i = 0; i < autocompleteSearchTerms_.size(); i++) {
-      const std::string lowerEntry = toLowercase(autocompleteSearchTerms_[i]);
-      if (size_t loc = lowerEntry.find(searchWord); loc != std::string::npos) {
-        matches.emplace_back(autocompleteEntries_[i].first, autocompleteEntries_[i].second,
-                             static_cast<int>(loc));
-      }
+  // Match against stored entries
+  for (size_t i = 0; i < autocompleteSearchTerms_.size(); i++) {
+    const std::string lowerEntry = toLowercase(autocompleteSearchTerms_[i]);
+    if (size_t loc = lowerEntry.find(searchWord); loc != std::string::npos) {
+      matches.emplace_back(autocompleteEntries_[i].first, autocompleteEntries_[i].second,
+                           static_cast<int>(loc));
     }
+  }
 
-    // Match against language keywords
-    for (const auto& keyword : languageDefinition_.keywords) {
-      const std::string lowerKeyword = toLowercase(keyword);
-      if (size_t loc = lowerKeyword.find(searchWord); loc != std::string::npos) {
-        matches.emplace_back(keyword, keyword, static_cast<int>(loc));
-      }
+  // Match against language keywords
+  for (const auto& keyword : languageDefinition_.keywords) {
+    const std::string lowerKeyword = toLowercase(keyword);
+    if (size_t loc = lowerKeyword.find(searchWord); loc != std::string::npos) {
+      matches.emplace_back(keyword, keyword, static_cast<int>(loc));
     }
+  }
 
-    // Match against language identifiers
-    for (const auto& [identifier, _] : languageDefinition_.identifiers) {
-      const std::string lowerIdentifier = toLowercase(identifier);
-      if (size_t loc = lowerIdentifier.find(searchWord); loc != std::string::npos) {
-        matches.emplace_back(identifier, identifier, static_cast<int>(loc));
-      }
+  // Match against language identifiers
+  for (const auto& [identifier, _] : languageDefinition_.identifiers) {
+    const std::string lowerIdentifier = toLowercase(identifier);
+    if (size_t loc = lowerIdentifier.find(searchWord); loc != std::string::npos) {
+      matches.emplace_back(identifier, identifier, static_cast<int>(loc));
     }
   }
 
@@ -4166,10 +4146,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 
   if (!ignoreImGuiChild_) {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav;
-    if (horizontalScroll_) {
-      flags |= ImGuiWindowFlags_AlwaysHorizontalScrollbar;
-    }
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav;
     ImGui::BeginChild(title.data(), size, showBorder, flags);
   }
 

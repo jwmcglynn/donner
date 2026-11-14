@@ -1311,7 +1311,6 @@ private:
   int autocompleteIndex_;                       //!< Selected suggestion index
   bool autocompleteOpened_ = false;             //!< Autocomplete popup is open
   bool autocompleteSwitched_;                   //!< Allow enter to select
-  std::string autocompleteObject_;              //!< Object for member completion
   Coordinates autocompletePosition_;            //!< Position of completion
   AutocompleteProvider autocompleteProvider_;   //!< Syntax-aware autocomplete source
   bool autocompleteReplacementActive_ = false;  //!< Provider supplied an explicit replace range
@@ -1508,7 +1507,6 @@ private:
   // `scrollbarMarkers_`, and `changedLines_` all moved into
   // `TextEditorCore`. The reference aliases below preserve the short
   // names used by the render / input-handling code.
-  bool horizontalScroll_ = false;                   //!< Enable horizontal scrolling
   bool wordWrapEnabled_ = true;                     //!< Enable source-pane soft wrapping
   bool showLineNumbers_ = true;                     //!< Show line numbers
   bool highlightLine_ = true;                       //!< Highlight current line
@@ -1719,17 +1717,13 @@ private:
    * @param contentSize Available content size
    * @param scrollX Current horizontal scroll position
    * @param drawList ImGui draw list for rendering
-   * @param longestLine Updated with line length if longer than current value
    */
   void renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& textStart,
-                  const ImVec2& contentSize, float scrollX, ImDrawList* drawList,
-                  float& longestLine);
+                  const ImVec2& contentSize, float scrollX, ImDrawList* drawList);
   void renderVisualLine(const VisualLine& visualLine, int visualLineIndex, const ImVec2& lineStart,
-                        const ImVec2& textStart, const ImVec2& contentSize, ImDrawList* drawList,
-                        float& longestLine);
+                        const ImVec2& textStart, const ImVec2& contentSize, ImDrawList* drawList);
   void renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
-                                    const ImVec2& contentSize, ImDrawList* drawList,
-                                    float& longestLine);
+                                    const ImVec2& contentSize, ImDrawList* drawList);
 
   // TODO: Doc comments
   void renderErrorTooltip(int line, const std::string& message);
@@ -1792,7 +1786,7 @@ private:
    * Render additional UI elements like autocomplete and function tooltips.
    */
   void renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, float scrollX, float scrollY,
-                     float longest, const ImVec2& contentSize);
+                     const ImVec2& contentSize);
 
   /**
    * Process all input events.
