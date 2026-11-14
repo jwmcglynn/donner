@@ -2539,10 +2539,14 @@ bool EditorWindow::observePresentationCompletion() {
   const bool deviceLost = wgpuState_->framebufferGeodeDevice->isDeviceLost();
   observePresentationDeviceLoss(device);
   const auto frame = presentationSubmissions_.completed();
+  // The replacement object carries the timeout fields forward and the next call refreshes them, so
+  // a page read between the two main-thread tasks never sees a snapshot without them.
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerPresentationQueueStats'];
+        const carried = Object.assign(
+            {'timeoutSerial' : 0, 'timeoutAgeMs' : 0, 'completionConfirmations' : 0}, previous);
         window['__donnerPresentationQueueStats'] = ({
           'completedSerial' : $0,
           'submittedSerial' : $1,
@@ -2560,6 +2564,9 @@ bool EditorWindow::observePresentationCompletion() {
           'inputRepresented' : Boolean($9), 'viewportZoom' : $10,
           'completedAtMs' : previous &&
               Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
+          'timeoutSerial' : carried['timeoutSerial'],
+          'timeoutAgeMs' : carried['timeoutAgeMs'],
+          'completionConfirmations' : carried['completionConfirmations'],
         });
         // Bounded admission timeline for failure diagnostics: time, admission, frames in flight,
         // device completed serial, submitted serial, oldest pending serial.

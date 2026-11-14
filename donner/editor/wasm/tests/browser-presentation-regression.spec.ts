@@ -6311,11 +6311,13 @@ test("browser trackpad pinch matches the desktop zoom identity", async ({ page }
   }
 });
 
-// Longer than the editor's UI admission deadline
-// (`PresentationSubmissionQueue::kCompletionDeadline`, 5 s), its 250 ms completion recheck and the
-// 5.5 s presentation progress window that ends in the frame performing that recheck, with ample
-// room for the pinch's first held submission to start late.
-const kGpuCompletionStallMs = 15_000;
+// Stall guard for the editor to record the UI admission timeout once completions are held: the
+// deadline (`PresentationSubmissionQueue::kCompletionDeadline`, 5 s), its 250 ms completion recheck
+// and the 5.5 s presentation progress window that ends in the frame performing that recheck, with
+// ample room for the pinch's first held submission to start late. The hold itself lasts until the
+// timeout is recorded, however late that is; this bound only turns a missing timeout into a
+// failure.
+const kAdmissionTimeoutGuardMs = 15_000 + kStallGuardMs;
 
 interface GpuCompletionHold {
   installed: boolean;
@@ -6323,18 +6325,15 @@ interface GpuCompletionHold {
   released: boolean;
 }
 
-// Holds every GPU queue completion in every editor worker for `holdMs`, as a browser whose GPU
-// process stops answering does: the work may finish, but no completion callback reaches the
-// editor until the hold ends. Every worker releases at the same wall-clock time, and a worker
-// reached after that time installs nothing.
-async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
-  const releaseAtMs = Date.now() + holdMs;
+// Holds every GPU queue completion in every editor worker until \ref releaseGpuCompletions, as a
+// browser whose GPU process stops answering does: the work may finish, but no completion callback
+// reaches the editor until the hold ends.
+async function holdGpuCompletions(page: Page): Promise<number> {
   const installed = await Promise.all(
     page.workers().map((worker) =>
       boundFailureDiagnostic(
-        worker.evaluate((releaseAtMs) => {
-          const holdMs = releaseAtMs - Date.now();
-          if (typeof GPUQueue === "undefined" || holdMs <= 0) {
+        worker.evaluate(() => {
+          if (typeof GPUQueue === "undefined") {
             return false;
           }
           const scope = globalThis as typeof globalThis & {
@@ -6365,12 +6364,11 @@ async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
             }
             release();
           };
-          setTimeout(restore, holdMs);
           scope.__donnerGpuCompletionHold = state;
           scope.__donnerReleaseGpuCompletions = restore;
           GPUQueue.prototype.onSubmittedWorkDone = held;
           return true;
-        }, releaseAtMs),
+        }),
         kStallGuardMs,
       )
     ),
@@ -6405,6 +6403,32 @@ async function releaseGpuCompletions(page: Page): Promise<void> {
   );
 }
 
+// Records the `timeoutSerial` of every presentation stats object the editor assigns from now on, as
+// it is assigned, so a snapshot published without it is seen whatever the timing of later reads.
+async function recordPresentationStatsPublications(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const scope = window as Window & { __donnerPresentationStatsPublications?: number[] };
+    const published: number[] = [];
+    let current = window.__donnerPresentationQueueStats;
+    scope.__donnerPresentationStatsPublications = published;
+    Object.defineProperty(window, "__donnerPresentationQueueStats", {
+      configurable: true,
+      get: () => current,
+      set: (value) => {
+        published.push(value?.timeoutSerial ?? 0);
+        current = value;
+      },
+    });
+  });
+}
+
+async function readPresentationStatsPublications(page: Page): Promise<number[]> {
+  return page.evaluate(() =>
+    (window as Window & { __donnerPresentationStatsPublications?: number[] })
+      .__donnerPresentationStatsPublications ?? []
+  );
+}
+
 test("a GPU completion stall past the UI admission deadline still presents the pinch", async ({ page }) => {
   // Hosted macOS CI once had the browser's GPU completions stop for about 20 s just after the
   // editor started. The overdue UI frame reached the admission deadline, the editor declared its
@@ -6429,33 +6453,47 @@ test("a GPU completion stall past the UI admission deadline still presents the p
     .toBe(0);
   expect((await presentationQueue())?.timeoutSerial ?? 0).toBe(0);
 
+  // The stall ends only once the editor has recorded the admission timeout, so the case cannot pass
+  // or fail on how long after the hold the pinch's first held frame happened to be submitted.
+  let timedOutDuringStall = false;
+  let recordedTimeout = 0;
   try {
-    expect(await holdGpuCompletions(page, kGpuCompletionStallMs), "no worker owns a GPU queue")
-      .toBeGreaterThan(0);
+    expect(await holdGpuCompletions(page), "no worker owns a GPU queue").toBeGreaterThan(0);
     await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
     await expect
-      .poll(async () => {
-        const holds = await readGpuCompletionHolds(page);
-        return holds.length > 0 && holds.every((hold) => hold.released);
-      }, {
-        message: "the completion stall must end on its own timer",
-        timeout: kGpuCompletionStallMs + kStallGuardMs,
+      .poll(async () => (await presentationQueue())?.timeoutSerial ?? 0, {
+        message: "the stall must outlast the UI admission deadline for this case to exercise it",
+        timeout: kAdmissionTimeoutGuardMs,
       })
-      .toBe(true);
+      .toBeGreaterThan(0);
+    timedOutDuringStall = (await readGpuCompletionHolds(page)).every((hold) => !hold.released);
+    recordedTimeout = (await presentationQueue())?.timeoutSerial ?? 0;
+    await recordPresentationStatsPublications(page);
   } finally {
     await releaseGpuCompletions(page);
   }
 
+  expect(timedOutDuringStall, "the admission timeout must be recorded while the stall holds")
+    .toBe(true);
+  // Each stats object the editor publishes replaces the previous one. Every one published after the
+  // timeout must already carry it when it is assigned; a page read can land between any two tasks.
+  await expect
+    .poll(async () => (await readPresentationStatsPublications(page)).length, {
+      message: "the editor never published presentation stats after the completion stall",
+      timeout: kStallGuardMs,
+    })
+    .toBeGreaterThanOrEqual(2);
+  const published = await readPresentationStatsPublications(page);
+  expect(published, "a published presentation stats object lacked the recorded timeout")
+    .toEqual(published.map(() => recordedTimeout));
   const holds = await readGpuCompletionHolds(page);
+  expect(holds.length).toBeGreaterThan(0);
+  expect(holds.every((hold) => hold.released), "every completion hold must be released").toBe(true);
   expect(
     holds.reduce((calls, hold) => calls + hold.calls, 0),
     "the pinch's frames must have waited on held completions",
   ).toBeGreaterThan(0);
   const afterStall = await presentationQueue();
-  expect(
-    afterStall?.timeoutSerial ?? 0,
-    "the stall must outlast the UI admission deadline for this case to exercise it",
-  ).toBeGreaterThan(0);
   expect(
     afterStall?.deviceLost,
     "an overdue UI frame declared the presentation device lost, so nothing presents again",
