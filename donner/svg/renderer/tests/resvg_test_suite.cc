@@ -1750,7 +1750,9 @@ INSTANTIATE_TEST_SUITE_P(
                      0.89f, kDefaultMismatchedPixels,
                      "Checkerboard exposes background convention; measured minimal")},
                 {"closed-path.svg", Params::WithThreshold(0.1f, 400, "Minor AA diffs")},
-                {"complex.svg", Params::Skip("Deferred: vertical + circular path")},
+                {"complex.svg",
+                 Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "
+                                           "on a circular path")},
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
@@ -1846,7 +1848,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // glyphs). The unfiltered comparisons pass because pixelmatch excludes
                 // anti-aliased edge pixels, while a Gaussian blur spreads the missing coverage
                 // into the glyph interiors, where it is counted.
-                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
+                {"with-filter.svg",
+                 Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
+                              "5% lighter than the reference's, which only a blur makes visible "
+                              "away from the glyph edges")},
                 {"with-invalid-path-and-xlink-href.svg",
                  Params::Skip("Reference disagrees with the corpus: after invalid `path` is "
                               "ignored, relative `xlink:href=\"path1\"` names an external "
@@ -1917,7 +1922,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // Same cause as text/textPath/with-filter.svg: the span filter applies, but
                 // Donner's glyph coverage is about 5% lighter than the reference's, which only
                 // a blur makes visible away from the glyph edges.
-                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
+                {"with-filter.svg",
+                 Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
+                              "5% lighter than the reference's, which only a blur makes visible "
+                              "away from the glyph edges")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1968,9 +1976,9 @@ INSTANTIATE_TEST_SUITE_P(
                      .onlyTextFull()},
                 {"mixed-languages-with-tb.svg", Params().setCanvasSize(300, 300).onlyTextFull()},
                 {"tb-and-punctuation.svg",
-                 Params::Skip("#1172: punctuation forms and spacing match; upright glyphs sit "
-                              "0.026em lower (vhea ascender origin vs resvg centering on "
-                              "hhea ascent/descent), 371 px")
+                 Params::Skip("Accepted difference (2026-11-13): punctuation forms and spacing "
+                              "match; upright glyphs sit 0.026em lower (vhea ascender origin vs "
+                              "resvg centering on hhea ascent/descent), 371 px")
                      .setCanvasSize(300, 300)
                      .onlyTextFull()},
                 {"tb-rl.svg", Params().setCanvasSize(300, 300)},
