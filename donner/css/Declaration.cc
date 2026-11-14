@@ -1,6 +1,5 @@
 #include "donner/css/Declaration.h"
 
-#include <algorithm>
 #include <unordered_map>
 
 #include "donner/base/StringUtils.h"

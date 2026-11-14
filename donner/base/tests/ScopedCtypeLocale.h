@@ -6,6 +6,7 @@
 #include <array>
 #include <clocale>
 #include <string>
+#include <string_view>
 
 namespace donner {
 
@@ -42,24 +43,41 @@ private:
   bool applied_ = false;
 };
 
-/// Locales to run locale-independence checks under. Only those installed on the host take effect.
+/// Locales to run locale-independence checks under; the non-C ones are used where installed.
 inline constexpr std::array<const char*, 4> kCtypeLocalesForTesting = {
     "C", "en_US.UTF-8", "en_US.ISO8859-1", "en_US.ISO-8859-1"};
 
 /**
- * Runs \p check once under each of \ref kCtypeLocalesForTesting, with a gtest trace naming the
- * locale and whether it is installed. The red result only shows on hosts with a locale whose
- * `tolower` or `isspace` treats bytes above 0x7F as letters or spaces, such as macOS.
+ * Runs \p check once under each installed locale of \ref kCtypeLocalesForTesting, with a gtest
+ * trace naming the locale. Locales that are not installed are listed in the test's
+ * `ctype_locales_not_installed` property. If no locale other than "C" is installed, the test is
+ * marked skipped after the C-locale check, since locale independence was not exercised.
+ *
+ * A check only fails on hosts with a locale whose `tolower` or `isspace` treats bytes above 0x7F as
+ * letters or spaces, such as macOS; glibc UTF-8 locales leave those bytes alone.
  *
  * @param check Callable that makes the assertions.
  */
 template <typename Fn>
 void ForEachCtypeLocaleForTesting(const Fn& check) {
+  std::string notInstalled;
+  bool ranNonClassicLocale = false;
   for (const char* locale : kCtypeLocalesForTesting) {
     const ScopedCtypeLocale scopedLocale(locale);
-    SCOPED_TRACE(testing::Message()
-                 << "LC_CTYPE=" << locale << (scopedLocale.applied() ? "" : " (not installed)"));
+    if (!scopedLocale.applied()) {
+      notInstalled += notInstalled.empty() ? locale : std::string(", ") + locale;
+      continue;
+    }
+    ranNonClassicLocale |= std::string_view(locale) != "C";
+    SCOPED_TRACE(testing::Message() << "LC_CTYPE=" << locale);
     check();
+  }
+  if (!notInstalled.empty()) {
+    testing::Test::RecordProperty("ctype_locales_not_installed", notInstalled);
+  }
+  if (!ranNonClassicLocale) {
+    GTEST_SKIP() << "No locale other than C is installed (missing: " << notInstalled
+                 << "), so locale independence was not exercised";
   }
 }
 

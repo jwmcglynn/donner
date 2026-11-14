@@ -340,7 +340,8 @@ public:
   }
 
   /**
-   * Split at ASCII whitespace: space, tab, line feed, form feed and carriage return.
+   * Split at ASCII whitespace: space, tab, line feed, form feed and carriage return (not vertical
+   * tab, which \ref IsAsciiWhitespace includes).
    * Empty tokens are omitted and the returned views alias the input.
    * @param str String to split, which must outlive the returned views.
    * @return Non-empty whitespace-separated tokens.
@@ -396,6 +397,10 @@ public:
    * vertical tab, form feed and carriage return. Unlike `std::isspace`, bytes above 0x7F are never
    * whitespace, whatever the process locale.
    *
+   * This set includes vertical tab, unlike the WHATWG ASCII whitespace that \ref
+   * SplitAsciiWhitespace splits on. Grammars with their own whitespace set, such as CSS or XML,
+   * need their own check.
+   *
    * @param ch The character to classify.
    */
   static constexpr bool IsAsciiWhitespace(char ch) {
@@ -418,16 +423,14 @@ public:
    */
   template <StringLike T>
   static std::string_view TrimWhitespace(const T& str) {
-    constexpr const char* kWhitespaceChars = " \t\n\r\f\v";
-
-    const std::string_view strView(str.data(), str.size());
-    const size_t start = strView.find_first_not_of(kWhitespaceChars);
-    if (start == std::string_view::npos) {
-      return {};  // String is all whitespace.
+    std::string_view strView(str.data(), str.size());
+    while (!strView.empty() && IsAsciiWhitespace(strView.front())) {
+      strView.remove_prefix(1);
     }
-
-    const size_t end = strView.find_last_not_of(kWhitespaceChars);
-    return strView.substr(start, end - start + 1);
+    while (!strView.empty() && IsAsciiWhitespace(strView.back())) {
+      strView.remove_suffix(1);
+    }
+    return strView;
   }
 
 private:
