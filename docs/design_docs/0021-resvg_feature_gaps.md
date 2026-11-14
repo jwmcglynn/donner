@@ -60,9 +60,9 @@ bugs and missing features, reference disagreements where Donner follows the spec
 harness or background mismatches, and API policy differences are `Params::Skip` with a bug number
 or reason; skipped cases do not render at all. A UB marker reference does not by itself make a
 case undefined behavior: a `Not impl:` or `Deferred:` feature on a marker reference stays a skip.
-A case that passes the default comparison compares. The parity report counts 90 render-only cases
-(51 undefined behavior: 50 on the UB marker reference plus the allowlisted case; 39 deprecated in
-SVG 2), 77 skipped cases and 1512 compared cases.
+A case that passes the default comparison compares. The parity report counts 91 render-only cases
+(52 undefined behavior: 51 on the UB marker reference plus the allowlisted case; 39 deprecated in
+SVG 2), 37 skipped cases and 1551 compared cases.
 
 ## Current totals
 
@@ -124,7 +124,7 @@ bottom for completeness.
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
-| F10 | Remaining `textPath` vertical, kerning, and filter cases                |                              4 | Feature                                                                                                                                                                                             |
+| F10 | Remaining `textPath` vertical and kerning cases                         |                              2 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
 | B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
@@ -574,9 +574,12 @@ external fetch; its conflicting corpus image is also skipped. The
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and
 a resource loader that records requests.
 
-**Remaining impact:** 4 in `text/textPath/`: vertical/circular layout (`complex.svg` and
-`writing-mode=tb.svg`), kerning across mixed children, and the known filtered-glyph coverage
-residual. These belong to the vertical, shaping, and effects workstreams respectively.
+**Remaining impact:** 2 in `text/textPath/`: vertical layout on a path (`writing-mode=tb.svg`)
+and kerning across mixed children, which belong to the vertical and shaping workstreams.
+`complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
+filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) and the
+0.026em upright origin in `writing-mode/tb-and-punctuation.svg` are accepted differences
+(2026-11-13).
 
 ### F11: BiDi / RTL text shaping
 
@@ -638,7 +641,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. They stay skipped because upright CJK sits 0.026em lower than the reference, and the underline case also lacks bidi runs and its vertical underline. |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. They stay skipped because upright CJK sits 0.026em lower than the reference, and the underline case also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
 
 ---
 
@@ -755,7 +758,7 @@ historical reference.
 | masking/clip                                                              |     1 | `Params::DeprecatedInSVG2`: the CSS `clip` property is deprecated by CSS Masking in favor of `clip-path`.                                                                                                                                                                         |
 | text/dominant-baseline `reset-size`, `use-script`                         |     2 | `Params::DeprecatedInSVG2`: SVG 1.1 values removed in SVG 2; UB marker references.                                                                                                                                                                                                |
 | paint-servers/radialGradient                                              |     1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                                                                                                    |
-| Other `Params::UndefinedBehavior` cases                                   |    51 | Undefined or implementation-defined behavior: 50 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`; we verify no-crash only.                                                                                                                               |
+| Other `Params::UndefinedBehavior` cases                                   |    52 | Undefined or implementation-defined behavior: 51 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`; we verify no-crash only.                                                                                                                               |
 
 ---
 
