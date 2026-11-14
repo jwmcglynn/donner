@@ -3319,6 +3319,53 @@ TEST(EditorAppRenameTest, RenameLeavesStyleElementStringsAndCommentsUntouched) {
 .b { stroke: url('#g2') })css")));
 }
 
+// Reference recognition follows the CSS tokenizer: `url(` is case-insensitive, must be a whole
+// function name, and a bad or escaped url is decided by CSS syntax rather than by characters.
+TEST(EditorAppRenameTest, RenameRecognizesUrlReferencesByCssTokens) {
+  constexpr std::string_view kTokenDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"/></defs>
+         <rect id="r" width="10" height="10" fill="URL(#grad)" stroke="url(  #grad  )"
+               data-prefixed="xurl(#grad)" data-escaped-quote="\'url(#grad)"
+               data-escaped-id="url(#gr\61 d)" data-bad="url(#grad x)" data-open="url(#grad"
+               style="fill: URL('#grad'); stroke: xurl(#grad)"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kTokenDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(AttrOf(app, "r", "fill"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "stroke"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "data-prefixed"), ::testing::Optional(std::string("xurl(#grad)")));
+  EXPECT_THAT(AttrOf(app, "r", "data-escaped-quote"),
+              ::testing::Optional(std::string("\\'url(#grad)")));
+  EXPECT_THAT(AttrOf(app, "r", "data-escaped-id"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "data-bad"), ::testing::Optional(std::string("url(#grad x)")));
+  EXPECT_THAT(AttrOf(app, "r", "data-open"), ::testing::Optional(std::string("url(#g2)")));
+  EXPECT_THAT(AttrOf(app, "r", "style"),
+              ::testing::Optional(std::string("fill: URL('#g2'); stroke: xurl(#grad)")));
+}
+
+TEST(EditorAppRenameTest, RenameRepointsIdSelectorFollowedByPseudoClass) {
+  constexpr std::string_view kPseudoDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#grad:hover { fill: red } #grad.x { fill: blue }</style>
+         <rect id="grad" width="10" height="10"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kPseudoDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(StyleTextOf(app),
+              ::testing::Optional(std::string("#g2:hover { fill: red } #g2.x { fill: blue }")));
+}
+
 TEST(EditorAppRenameTest, RenameRepointsOnlyExactUrlIdTokensWithIdCharSuffixes) {
   constexpr std::string_view kBoundaryDoc =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
