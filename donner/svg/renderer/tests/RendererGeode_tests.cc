@@ -5094,6 +5094,32 @@ TEST_F(RendererGeodeTest, FilterSpecularLightingExponentBelowOneIsTransparent) {
       << "specularExponent<1 must produce transparent output everywhere";
 }
 
+// A lighting primitive without a light-source child has no light, so it produces transparent
+// black, as feDiffuseLighting does on Geode and both primitives do on tiny-skia.
+TEST_F(RendererGeodeTest, FilterSpecularLightingWithoutLightSourceIsTransparent) {
+  components::FilterGraph graph;
+  components::FilterNode specularNode;
+  components::filter_primitive::SpecularLighting specular;
+  specular.surfaceScale = 1.0;
+  specular.specularConstant = 1.0;
+  specular.specularExponent = 1.0;
+  specular.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
+  ASSERT_FALSE(specular.light.has_value());
+
+  specularNode.primitive = specular;
+  specularNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(specularNode);
+
+  const RendererBitmap actual = renderFlatSourceThroughFilter(graph, Transform2d());
+  ASSERT_FALSE(actual.empty());
+
+  const size_t width = static_cast<size_t>(kViewportSize);
+  const RendererBitmap expected{Vector2i(kViewportSize, kViewportSize),
+                                std::vector<uint8_t>(width * width * 4), width * 4};
+  editor::tests::CompareBitmapToBitmap(actual, expected, "specular_lighting_without_light_source",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererGeodeTest, FilterInvalidConvolveMatrixClearsReusedTexture) {
   auto renderGraph = [&](RendererGeode& renderer, const components::FilterGraph& filterGraph) {
     beginFrame(renderer);
