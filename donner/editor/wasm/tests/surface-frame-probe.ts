@@ -640,26 +640,33 @@ export async function selfCheckSurfaceFrameProbe(
 /**
  * Run \ref selfCheckSurfaceFrameProbe in the editor's canvas owner with one more canvas frame
  * written inside its window, the way the editor's live frame loop can write one. Only the owner is
- * asked, so a parked worker that never answers cannot hold the call; the stall guard bounds the
- * owner. The answer includes the number of concurrent frames written, so a caller can tell an
- * answer that saw the extra frame from one that never had it.
+ * asked, so a parked worker that never answers cannot hold the call. Finding the owner, arming it
+ * and the self-check share one \p budgetMs; give it a stall guard below the case's own timeout, so
+ * a slow owner fails with this function's message. The answer includes the number of concurrent
+ * frames written, so a caller can tell an answer that saw the extra frame from one that never had
+ * it.
  */
 export async function selfCheckSurfaceFrameProbeWithConcurrentFrame(
   page: Page,
+  budgetMs: number,
 ): Promise<SelfCheckAnswer | null> {
-  const owner = await findProbedCanvasApplicationWorker(page);
-  if (owner === null) {
-    return "no probed canvas owner";
-  }
+  const deadline = Date.now() + budgetMs;
+  const remainingMs = () => Math.max(1, deadline - Date.now());
+  const found: { owner: Worker | null } = { owner: null };
+  await expect.poll(async () => (found.owner = await findProbedCanvasApplicationWorker(page)), {
+    message: "no probed canvas owner answered within the self-check budget",
+    timeout: remainingMs(),
+  }).not.toBeNull();
+  const owner = found.owner!;
   const [armed] = await evaluateInWorkers([owner], () => {
     (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeSelfCheckConcurrentFrame = true;
     return true;
-  }, kStallGuardMs);
+  }, remainingMs());
   if (armed !== true) {
-    return "the canvas owner did not arm the concurrent frame";
+    return "the canvas owner did not arm the concurrent frame within the self-check budget";
   }
-  const [answer] = await evaluateInWorkers([owner], selfCheckInWorker, kStallGuardMs);
-  return answer;
+  const [answer] = await evaluateInWorkers([owner], selfCheckInWorker, remainingMs());
+  return answer ?? "the canvas owner did not answer the self-check within its budget";
 }
 
 // Control only the completion signal already returned to the app, for browser regressions that
