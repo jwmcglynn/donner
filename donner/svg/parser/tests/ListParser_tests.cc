@@ -73,6 +73,13 @@ TEST(ListParser, SeparatorsDoNotDependOnLocale) {
       [] { EXPECT_THAT(ParseToList("a\xA0z c"), ElementsAre("a\xA0z", "c")); });
 }
 
+// Items are separated by XML whitespace (space, tab, line feed, carriage return) and commas;
+// vertical tab and form feed are part of an item.
+TEST(ListParser, VerticalTabAndFormFeedDoNotSeparate) {
+  EXPECT_THAT(ParseToList("a\vb c"), ElementsAre("a\vb", "c"));
+  EXPECT_THAT(ParseToList("a\fb\rc"), ElementsAre("a\fb", "c"));
+}
+
 TEST(ListParser, SpaceSeparated) {
   EXPECT_THAT(ParseToList("item1 item2"), ElementsAre("item1", "item2"));
   EXPECT_THAT(ParseToList("item1  item2"), ElementsAre("item1", "item2"));

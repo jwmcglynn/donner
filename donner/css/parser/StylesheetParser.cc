@@ -27,15 +27,22 @@ std::optional<std::size_t> ComponentSourceOffset(const ComponentValue& component
   return std::nullopt;
 }
 
+/// CSS whitespace: space, tab and newline, where carriage return and form feed are newlines after
+/// input preprocessing (https://www.w3.org/TR/css-syntax-3/#whitespace). Vertical tab is not
+/// whitespace.
+bool IsCssWhitespace(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f';
+}
+
 std::size_t TrimStart(std::string_view str, std::size_t start, std::size_t end) {
-  while (start < end && StringUtils::IsAsciiWhitespace(str[start])) {
+  while (start < end && IsCssWhitespace(str[start])) {
     ++start;
   }
   return start;
 }
 
 std::size_t TrimEnd(std::string_view str, std::size_t start, std::size_t end) {
-  while (end > start && StringUtils::IsAsciiWhitespace(str[end - 1])) {
+  while (end > start && IsCssWhitespace(str[end - 1])) {
     --end;
   }
   return end;

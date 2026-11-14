@@ -931,7 +931,8 @@ private:
             foundStr[0] = maybeDelim.value();
           } else {
             std::stringstream ss;
-            ss << std::hex << "0x" << maybeDelim.value();
+            ss << std::hex << std::setw(2) << std::setfill('0')
+               << static_cast<int>(static_cast<unsigned char>(maybeDelim.value()));
             foundStr = std::string("<non-printable: 0x") + ss.str() + ">";
           }
 
