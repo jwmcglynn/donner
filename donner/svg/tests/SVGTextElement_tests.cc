@@ -1082,10 +1082,10 @@ TEST(SVGTextElementPublicApiTests, TextAnchorEndShiftsStartPosition) {
 // anchor places the text where an ltr `end` anchor does, and its `end` where an ltr `start` does.
 TEST(SVGTextElementPublicApiTests, RtlDirectionMirrorsStartAndEndAnchors) {
   const auto firstCharacterX = [](std::string_view attributes) {
-    SVGDocument document = instantiateSubtree(
-        std::string(R"-(<svg viewBox="0 0 300 40">
-      <g )-") +
-        std::string(attributes) + R"-(><text id="t" x="100" y="20" font-family="fallback-font"
+    SVGDocument document =
+        instantiateSubtree(std::string(R"-(<svg viewBox="0 0 300 40">
+      <g )-") + std::string(attributes) +
+                           R"-(><text id="t" x="100" y="20" font-family="fallback-font"
         font-size="12px">ABC</text></g>
     </svg>)-");
     return document.querySelector("#t")->cast<SVGTextElement>().getStartPositionOfChar(0).x;

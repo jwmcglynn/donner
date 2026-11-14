@@ -18,6 +18,7 @@
 #include "donner/svg/core/ColorInterpolation.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/Cursor.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FontKerning.h"
@@ -35,13 +36,12 @@
 #include "donner/svg/core/PaintOrder.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
-#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/TextTransform.h"
-#include "donner/svg/core/UnicodeBidi.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/UnicodeBidi.h"
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WhiteSpace.h"
@@ -570,10 +570,10 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
         fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, textTransform,
-        overflowWrap, whiteSpace, direction, unicodeBidi, textAnchor, textDecoration, textDecorationStyle,
-        textDecorationColor, textDecorationThickness, dominantBaseline, writingMode,
-        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
-        mixBlendMode, isolation, imageRendering, paintOrder, textIndent);
+        overflowWrap, whiteSpace, direction, unicodeBidi, textAnchor, textDecoration,
+        textDecorationStyle, textDecorationColor, textDecorationThickness, dominantBaseline,
+        writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift,
+        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder, textIndent);
   }
 
   /**
