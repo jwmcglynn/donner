@@ -3,7 +3,6 @@
 #include <gtest/gtest-spi.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -14,11 +13,13 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
 #include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/StylesheetComponent.h"
@@ -192,10 +193,7 @@ bool isEnabledFromEnv(const char* name, bool defaultValue) {
     return defaultValue;
   }
 
-  std::string lower(value);
-  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char character) {
-    return static_cast<char>(std::tolower(character));
-  });
+  const std::string lower = StringUtils::ToLowerAscii(std::string_view(value));
 
   if (lower == "0" || lower == "false" || lower == "off") {
     return false;
@@ -238,10 +236,7 @@ TerminalPixelMode pixelModeFromEnv() {
     return TerminalPixelMode::kQuarterPixel;
   }
 
-  std::string lower(mode);
-  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char character) {
-    return static_cast<char>(std::tolower(character));
-  });
+  const std::string lower = StringUtils::ToLowerAscii(std::string_view(mode));
 
   if (lower == "half") {
     return TerminalPixelMode::kHalfPixel;
@@ -633,7 +628,9 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
 
   // Sanitize the test name, notably replacing '-' with '_'.
   std::transform(name.begin(), name.end(), name.begin(), [](char c) {
-    if (!isalnum(c)) {
+    const bool asciiAlnum =
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    if (!asciiAlnum) {
       return '_';
     } else {
       return c;

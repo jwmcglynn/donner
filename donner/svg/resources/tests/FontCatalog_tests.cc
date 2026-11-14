@@ -9,6 +9,7 @@
 #include <ranges>
 #include <string>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
@@ -349,11 +350,10 @@ TEST(SystemFontProviderTest, FamilyLookupMatchesPresentAbsentAndCaseVariants) {
 
   // Layout folds family names when it indexes them, so the provider has to agree on casing.
   std::string upper = present;
-  std::transform(upper.begin(), upper.end(), upper.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-  std::string lower = present;
-  std::transform(lower.begin(), lower.end(), lower.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(upper.begin(), upper.end(), upper.begin(), [](char c) {
+    return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c;
+  });
+  const std::string lower = StringUtils::ToLowerAscii(present);
   EXPECT_TRUE(provider.hasFamily(upper));
   EXPECT_TRUE(provider.hasFamily(lower));
 
