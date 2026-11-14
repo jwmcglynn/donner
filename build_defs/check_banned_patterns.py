@@ -632,7 +632,6 @@ _XML_SCAN_ALLOWLIST: Dict[str, int] = {
     "donner/base/xml/XMLDocument.cc": 1,
     "donner/benchmarks/StructuredEditingPerfBench.cpp": 1,
     "donner/editor/DocumentSyncController.cc": 2,
-    "donner/editor/EditorApp.cc": 1,
     "donner/editor/FocusView.cc": 2,
     "donner/editor/FontPreviewCache.cc": 3,
     "donner/editor/ShapeClipboardCommands.cc": 7,
