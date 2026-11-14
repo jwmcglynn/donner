@@ -1906,48 +1906,52 @@ bool RendererTinySkia::initializeFilterSurface(SurfaceFrame& frame,
 }
 #endif  // DONNER_FILTERS_ENABLED
 
+namespace {
+
+/// Copies \p source into \p destination so that destination pixel (x, y) is source pixel
+/// (x - offset.x, y - offset.y), in whole rows; pixels outside \p source keep their contents.
+void CopyPixmapAtOffset(const tiny_skia::Pixmap& source, tiny_skia::Pixmap& destination,
+                        Vector2i offset) {
+  const int width = static_cast<int>(destination.width());
+  const int xBegin = std::max(0, offset.x);
+  const int xEnd = std::min(width, static_cast<int>(source.width()) + offset.x);
+  const int yEnd = std::min(static_cast<int>(destination.height()),
+                            static_cast<int>(source.height()) + offset.y);
+  const auto from = source.data();
+  auto to = destination.data();
+  for (int y = std::max(0, offset.y); y < yEnd && xBegin < xEnd; ++y) {
+    const auto sourceOffset =
+        (static_cast<std::size_t>(y - offset.y) * source.width() + (xBegin - offset.x)) * 4u;
+    const auto destinationOffset = (static_cast<std::size_t>(y) * width + xBegin) * 4u;
+    std::memcpy(&to[destinationOffset], &from[sourceOffset],
+                static_cast<std::size_t>(xEnd - xBegin) * 4u);
+  }
+}
+
+}  // namespace
+
 tiny_skia::Pixmap RendererTinySkia::captureFilterBackdrop(
     const components::FilterGraph& filterGraph, const FilterAdmission& admission) const {
   tiny_skia::Pixmap backdrop = createTransparentPixmap(admission.width, admission.height);
   // Skip the filtered element's own layers: its opacity group, masks and outer filter stages.
+  // Records never name a depth above the current stack; the clamp keeps an unbalanced caller
+  // of the push/pop API from indexing past it.
   const std::size_t skip =
       std::min<std::size_t>(filterGraph.backdropLayerSkip, layerBackdropDepths_.size());
-  const std::size_t depth =
-      skip == 0 ? surfaceStack_.size() : layerBackdropDepths_[layerBackdropDepths_.size() - skip];
+  const std::size_t depth = std::min(
+      surfaceStack_.size(),
+      skip == 0 ? surfaceStack_.size() : layerBackdropDepths_[layerBackdropDepths_.size() - skip]);
   const tiny_skia::Pixmap& source = depth == 0 ? frame_ : surfaceStack_[depth - 1].pixmap;
   // Each filter layer above the backdrop moved its contents by its input margin; this layer's own
   // margin moves them once more.
-  int offsetX = admission.bufferOffsetX;
-  int offsetY = admission.bufferOffsetY;
+  Vector2i offset(admission.bufferOffsetX, admission.bufferOffsetY);
   for (std::size_t index = depth; index < surfaceStack_.size(); ++index) {
     if (surfaceStack_[index].kind == SurfaceKind::FilterLayer) {
-      offsetX += surfaceStack_[index].filterBufferOffsetX;
-      offsetY += surfaceStack_[index].filterBufferOffsetY;
+      offset += Vector2i(surfaceStack_[index].filterBufferOffsetX,
+                         surfaceStack_[index].filterBufferOffsetY);
     }
   }
-  if (backdrop.width() == 0 || backdrop.height() == 0 || source.width() == 0 ||
-      source.height() == 0) {
-    return backdrop;
-  }
-  // Raster pixel (x, y) is backdrop pixel (x - offsetX, y - offsetY); copy whole rows exactly.
-  const int sourceWidth = static_cast<int>(source.width());
-  const int sourceHeight = static_cast<int>(source.height());
-  const int width = static_cast<int>(backdrop.width());
-  const int height = static_cast<int>(backdrop.height());
-  const int xBegin = std::max(0, offsetX);
-  const int xEnd = std::min(width, sourceWidth + offsetX);
-  if (xBegin >= xEnd) {
-    return backdrop;
-  }
-  const auto from = source.data();
-  auto to = backdrop.data();
-  const auto rowBytes = static_cast<std::size_t>(xEnd - xBegin) * 4u;
-  for (int y = std::max(0, offsetY); y < std::min(height, sourceHeight + offsetY); ++y) {
-    const auto sourceOffset =
-        (static_cast<std::size_t>(y - offsetY) * sourceWidth + (xBegin - offsetX)) * 4u;
-    const auto destinationOffset = (static_cast<std::size_t>(y) * width + xBegin) * 4u;
-    std::memcpy(&to[destinationOffset], &from[sourceOffset], rowBytes);
-  }
+  CopyPixmapAtOffset(source, backdrop, offset);
   return backdrop;
 }
 

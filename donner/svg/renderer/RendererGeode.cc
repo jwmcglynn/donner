@@ -6548,8 +6548,8 @@ void RendererGeode::popFilterLayer() {
   }
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
-  // Every path below either records the backdrop's last read before returning or records none;
-  // the texture is released with the frame's other captures, or retained if the frame is lost.
+  // Every path below either records the backdrop's last read before returning or records none.
+  // The texture returns to the pool at frame end, or is retained when the frame is abandoned.
   struct BackdropRelease {
     Impl& impl;
     Impl::FilterStackFrame& frame;
