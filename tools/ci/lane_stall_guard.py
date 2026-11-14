@@ -23,7 +23,11 @@ still running starts the stall path, so a lane that ignores the first cannot hol
 the deadline. Once the lane has exited, the guard ends itself with the signal it received, so the
 caller sees an interrupted run rather than a lane result.
 
-Only processes that started after the guard did are ever signalled individually. A process that
+Apart from the lane's own process group, a process is signalled only when its elapsed time shows
+it started no more than START_SLACK_SECONDS before the guard did. That guarantees no older process
+is signalled individually; it does not rule out a newer process that reused a lane member's pid
+between the snapshot and the signal. The guard's own output never stops it: once its reader is
+gone, output is discarded and the lane is still recorded and stopped. A process that
 replaces its environment drops the tag and is stopped only while it is in the lane's process
 tree; a guard nested in another guard's lane stops only its own lane, and the outer guard reaches
 the inner lane through the outer tag that the inner lane inherits.
@@ -59,19 +63,31 @@ DETACHED_HELPER_NAMES = ("crashpad",)
 PS_COLUMNS = "pid=,ppid=,pgid=,stat=,etime=,rss=,lstart=,comm="
 # `lstart` prints five words in the C locale, for example `Sat Nov 14 07:31:57 2026`.
 _LSTART_WORDS = 5
-_LSTART_FORMAT = "%a %b %d %H:%M:%S %Y"
+# `ps` elapsed times are whole seconds; this covers their truncation and the snapshot's duration.
+START_SLACK_SECONDS = 2
 
 
 class StallRequested(Exception):
     """A stall request arrived while the guard waited for the lane: run the stall path now."""
 
 
-def parse_start_time(lstart: str) -> int | None:
-    """Seconds since the epoch of a `ps` local start time, or None when it cannot be read."""
+def _discard_stdout() -> None:
+    """Points standard output at the null device once its reader is gone, so later output and
+    the interpreter's final flush cannot fail."""
     try:
-        return int(time.mktime(time.strptime(lstart, _LSTART_FORMAT)))
-    except (ValueError, OverflowError):
-        return None
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    except OSError:
+        pass
+
+
+def log(message: str) -> None:
+    """Prints one line of the guard's own output. A missing reader never stops the guard."""
+    try:
+        print(message, flush=True)
+    except OSError:
+        _discard_stdout()
 
 
 def exit_status(returncode: int) -> int:
@@ -103,7 +119,6 @@ def parse_process_table(text: str) -> list[dict]:
             "ppid": int(fields[1]),
             "pgid": int(fields[2]),
             "elapsed": fields[4],
-            "started": parse_start_time(" ".join(fields[6:6 + _LSTART_WORDS])),
             "command": fields[6 + _LSTART_WORDS],
             "line": line.strip(),
         })
@@ -180,10 +195,28 @@ def _proc_tagged_pids(marker: str) -> set[int]:
             if entry.name.isdigit() and marker.encode() in _environment_of(entry)}
 
 
+def _read_through_pipe(command: list[str]) -> str:
+    """A bounded command's standard output, read through a pipe so it never reaches a file."""
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return ""
+    try:
+        output, _ = process.communicate(timeout=TOOL_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            output, _ = process.communicate(timeout=TOOL_REAP_SECONDS)
+        except subprocess.TimeoutExpired:
+            return ""
+    return output.decode(errors="replace")
+
+
 def _ps_tagged_pids(marker: str) -> set[int]:
-    """Tagged processes from `ps -E`, which appends each environment to the command."""
+    """Tagged processes from `ps -E`, which appends each environment to the command. Environment
+    text can hold secrets, so it is read through a pipe and never written anywhere."""
     rows = (line.split() for line in
-            run_tool(["ps", "-A", "-ww", "-E", "-o", "pid=,command="]).splitlines())
+            _read_through_pipe(["ps", "-A", "-ww", "-E", "-o", "pid=,command="]).splitlines())
     return {int(fields[0]) for fields in rows
             if fields and fields[0].isdigit() and marker in fields[1:]}
 
@@ -228,23 +261,28 @@ def record_diagnostics(directory: Path, root_pid: int, tag: str, lane_seconds: f
     open_files = run_tool(["lsof", "-b", "-w", "-nP", "-p", pids]) if pids \
         else "no lane processes\n"
     (directory / "open-files.txt").write_text(open_files, encoding="utf-8")
-    print("lane stall guard: lane processes (pid ppid pgid stat elapsed rss started command):",
-          flush=True)
+    log("lane stall guard: lane processes (pid ppid pgid stat elapsed rss started command):")
     for row in watched[:MAX_LOGGED_ROWS]:
-        print(f"  {row['line']}", flush=True)
+        log(f"  {row['line']}")
     if len(watched) > MAX_LOGGED_ROWS:
-        print(f"  ... {len(watched) - MAX_LOGGED_ROWS} more in lane-processes.txt", flush=True)
+        log(f"  ... {len(watched) - MAX_LOGGED_ROWS} more in lane-processes.txt")
 
 
-def signal_targets(members: list[dict], root_pid: int, not_before: int) -> list[int]:
-    """The members to signal one by one: not the root, and only those that started at or after
-    `not_before`, so a pid reused by an older process is never signalled. A member whose start
-    time cannot be read is not signalled."""
-    return [row["pid"] for row in members if row["pid"] != root_pid
-            and row["started"] is not None and row["started"] >= not_before]
+def started_since_guard(row: dict, guard_seconds: float) -> bool:
+    """Whether a process's elapsed time is at most the guard's, within START_SLACK_SECONDS."""
+    elapsed = parse_elapsed_seconds(row["elapsed"])
+    return elapsed is not None and elapsed <= guard_seconds + START_SLACK_SECONDS
 
 
-def signal_lane(root_pid: int, tag: str, signum: int, not_before: int) -> None:
+def signal_targets(members: list[dict], root_pid: int, guard_seconds: float) -> list[int]:
+    """The members to signal one by one: not the root, and only those that started no more than
+    START_SLACK_SECONDS before the guard, which has been running for `guard_seconds`. A member
+    whose elapsed time cannot be read is not signalled."""
+    return [row["pid"] for row in members
+            if row["pid"] != root_pid and started_since_guard(row, guard_seconds)]
+
+
+def signal_lane(root_pid: int, tag: str, signum: int, started: float) -> None:
     """Sends `signum` to the lane's group and to each member of a fresh snapshot.
 
     The root is the guard's unreaped child, so neither its pid nor its group can be reused yet.
@@ -255,39 +293,38 @@ def signal_lane(root_pid: int, tag: str, signum: int, not_before: int) -> None:
     except (ProcessLookupError, PermissionError):
         pass
     _, _, members = lane_members(root_pid, tag)
-    for pid in signal_targets(members, root_pid, not_before):
+    for pid in signal_targets(members, root_pid, time.monotonic() - started):
         try:
             os.kill(pid, signum)
         except (ProcessLookupError, PermissionError):
             pass
 
 
-def stop_lane(child: subprocess.Popen, tag: str, not_before: int) -> None:
+def stop_lane(child: subprocess.Popen, tag: str, started: float) -> None:
     """SIGTERM to the lane, then SIGKILL to anything left after the grace, from a new snapshot."""
-    signal_lane(child.pid, tag, signal.SIGTERM, not_before)
+    signal_lane(child.pid, tag, signal.SIGTERM, started)
     try:
         child.wait(timeout=TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         pass
-    signal_lane(child.pid, tag, signal.SIGKILL, not_before)
+    signal_lane(child.pid, tag, signal.SIGKILL, started)
     try:
         child.wait(timeout=TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
-        print("lane stall guard: the lane did not exit after SIGKILL", flush=True)
+        log("lane stall guard: the lane did not exit after SIGKILL")
 
 
 def run_stall_path(arguments: argparse.Namespace, child: subprocess.Popen, tag: str,
-                   started: float, not_before: int) -> int:
-    print(f"::error::lane stall guard: the lane is still running after "
-          f"{time.monotonic() - started:.0f} s (deadline {arguments.deadline_seconds:g} s); "
-          f"recording its processes in {arguments.diagnostics_dir} and stopping it", flush=True)
+                   started: float) -> int:
     try:
+        log(f"::error::lane stall guard: the lane is still running after "
+            f"{time.monotonic() - started:.0f} s (deadline {arguments.deadline_seconds:g} s); "
+            f"recording its processes in {arguments.diagnostics_dir} and stopping it")
         record_diagnostics(arguments.diagnostics_dir, child.pid, tag, time.monotonic() - started)
     except Exception as error:  # Recording is best effort; stopping the lane is not.
-        print(f"lane stall guard: recording diagnostics failed: {type(error).__name__}: {error}",
-              flush=True)
+        log(f"lane stall guard: recording diagnostics failed: {type(error).__name__}: {error}")
     finally:
-        stop_lane(child, tag, not_before)
+        stop_lane(child, tag, started)
     return STALL_EXIT_CODE
 
 
@@ -338,9 +375,12 @@ class Guard:
             os.killpg(self.child.pid, signum)
         except (ProcessLookupError, PermissionError):
             return
-        os.write(sys.stdout.fileno(),
-                 f"lane stall guard: forwarded {signal.Signals(signum).name} to the lane\n"
-                 .encode())
+        try:
+            os.write(sys.stdout.fileno(),
+                     f"lane stall guard: forwarded {signal.Signals(signum).name} to the lane\n"
+                     .encode())
+        except OSError:
+            pass  # The reader is gone; the lane was still signalled.
 
     def forward(self, signum, _frame) -> None:
         self.signal = signum
@@ -352,7 +392,6 @@ class Guard:
     def run(self, arguments: argparse.Namespace) -> int:
         tag = uuid.uuid4().hex
         started = time.monotonic()
-        not_before = int(time.time())
         child = None
         try:
             # Descriptors the caller passed down reach the lane unchanged, as without the guard.
@@ -362,17 +401,18 @@ class Guard:
             if self.signal is not None:
                 self.deliver(self.signal)
             self.waiting = True
-            if self.stall:
+            try:
+                if self.stall:
+                    raise StallRequested()
+                returncode = child.wait(timeout=arguments.deadline_seconds)
+            finally:
                 self.waiting = False
-                raise StallRequested()
-            returncode = child.wait(timeout=arguments.deadline_seconds)
-            self.waiting = False
             return exit_status(returncode)
         except (subprocess.TimeoutExpired, StallRequested):
             self.waiting = False
             if child.poll() is not None:  # The lane ended as the request arrived.
                 return exit_status(child.returncode)
-            return run_stall_path(arguments, child, tag, started, not_before)
+            return run_stall_path(arguments, child, tag, started)
 
 
 def main(argv: list[str]) -> int:

@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import unittest
 from unittest import mock
 
@@ -128,22 +127,19 @@ class ParsingTest(unittest.TestCase):
             [row["pid"] for row in lane_stall_guard.detached_helpers(rows, lane_seconds=300)],
             [13])
 
-    def test_start_times_are_read_in_the_c_locale_format(self):
-        self.assertEqual(lane_stall_guard.parse_start_time("Sat Nov 14 07:31:57 2026"),
-                         int(time.mktime((2026, 11, 14, 7, 31, 57, 0, 0, -1))))
-        self.assertEqual(lane_stall_guard.parse_start_time("Wed Nov 4 07:31:57 2026"),
-                         int(time.mktime((2026, 11, 4, 7, 31, 57, 0, 0, -1))))
-        self.assertIsNone(lane_stall_guard.parse_start_time("Sam Nov 14 07:31:57 2026"))
-
     def test_only_processes_started_since_the_guard_are_signalled(self):
+        slack = lane_stall_guard.START_SLACK_SECONDS
         members = [
-            {"pid": 10, "started": 1000},  # The root: signalled through its group only.
-            {"pid": 11, "started": 1000},
-            {"pid": 12, "started": 1001},
-            {"pid": 13, "started": 999},  # A reused pid: an older process.
-            {"pid": 14, "started": None},  # An unreadable start time.
+            {"pid": 10, "elapsed": "01:40"},  # The root: signalled through its group only.
+            {"pid": 11, "elapsed": "01:40"},
+            {"pid": 12, "elapsed": "00:05"},
+            {"pid": 13, "elapsed": f"01:{40 + slack:02d}"},  # Within the slack.
+            {"pid": 14, "elapsed": f"01:{41 + slack:02d}"},  # Older than the guard: a reused pid.
+            {"pid": 15, "elapsed": "1-00:00:00"},
+            {"pid": 16, "elapsed": "unreadable"},
         ]
-        self.assertEqual(lane_stall_guard.signal_targets(members, 10, not_before=1000), [11, 12])
+        self.assertEqual(lane_stall_guard.signal_targets(members, 10, guard_seconds=100.0),
+                         [11, 12, 13])
 
     def test_signal_ends_map_to_shell_statuses(self):
         self.assertEqual(lane_stall_guard.exit_status(3), 3)
@@ -292,6 +288,23 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(read_until_closed(read_fd), b"")
         self.assertEqual(status, -signal.SIGTERM, output)
         self.assertIn("::error::lane stall guard: the lane is still running", output)
+
+    def test_a_stall_without_an_output_reader_still_records_and_stops_the_lane(self):
+        guard, read_fd, _ = self.start_hung_lane("alone")
+        guard.stdout.close()  # The reader is gone, as when a `tee` in front dies first.
+        guard.send_signal(signal.SIGUSR1)
+        status = guard.wait(timeout=test_timing.STALL_GUARD_SECONDS)
+        self.assertEqual(read_until_closed(read_fd), b"")
+        self.assertEqual(status, lane_stall_guard.STALL_EXIT_CODE)
+        self.assertTrue((self.diagnostics / "lane-processes.txt").is_file())
+
+    def test_an_interrupt_without_an_output_reader_still_stops_the_lane(self):
+        guard, read_fd, _ = self.start_hung_lane("alone")
+        guard.stdout.close()
+        guard.send_signal(signal.SIGTERM)
+        status = guard.wait(timeout=test_timing.STALL_GUARD_SECONDS)
+        self.assertEqual(read_until_closed(read_fd), b"")
+        self.assertEqual(status, -signal.SIGTERM)
 
     def test_a_stall_request_from_the_lane_itself_is_honoured(self):
         guard, read_fd, _ = self.start_hung_lane("request")
