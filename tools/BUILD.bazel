@@ -342,6 +342,7 @@ py_test(
         "//tools:coverage.sh",
         "//tools:run-browser-ci.sh",
         "//tools/ci:BUILD.bazel",
+        "//tools/ci:bazel_watchdog.sh",
         "//tools/ci:editor_wasm_lane.sh",
     ],
     imports = ["."],
