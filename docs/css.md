@@ -62,6 +62,10 @@ resolution.
 - Imported text must be valid UTF-8, and a target whose type is known to be something other than
   `text/css` (for example an image extension) is rejected.
 
+Imports load when the document is prepared for rendering, so a computed-style query made before
+the first render does not yet include imported rules; the first render discards such styles and
+recomputes them with the imports in place.
+
 Warnings are reported at the top-level import that led to them, mapped to document source when the
 `<style>` text has source provenance. Diagnostics from parsing imported text are not reported,
 since their offsets refer to another resource. Rules loaded through `@import` have no document

@@ -397,6 +397,32 @@ TEST_F(CssImportTest, ImportRejectedByOnePassBudgetLoadsInALaterPass) {
   EXPECT_THAT(fill(document), Optional(kGreen));
 }
 
+TEST_F(CssImportTest, ImportsRefusedByThePassBudgetStillChargeTheDocumentBudget) {
+  // Each response fits the per-resource cap but not one pass's import allowance. The bytes stay in
+  // the shared fetch cache, so they must still drain the document's aggregate resource budget,
+  // which then stops further requests from reaching the loader.
+  const std::string oversized =
+      "rect { fill: red; }" + std::string(StylesheetImportBudget::kMaximumBytes, ' ');
+  constexpr std::size_t kImports = 40;
+  std::string style = "<style>";
+  for (std::size_t i = 0; i < kImports; ++i) {
+    respond("big" + std::to_string(i) + ".css", oversized);
+    style += "@import 'big" + std::to_string(i) + ".css';";
+  }
+  SVGDocument document = parse(style + "</style>" + std::string(kRect));
+  prepare(document);
+
+  const std::size_t aggregate =
+      components::ResourceManagerContext::kDefaultMaximumAggregateResourceSize;
+  EXPECT_LE(state_->requests.size(), aggregate / oversized.size() + 1);
+  EXPECT_TRUE(document.registry()
+                  .ctx()
+                  .get<components::ResourceManagerContext>()
+                  .fetchSecurityStats()
+                  .rejected);
+  EXPECT_THAT(fill(document), Optional(kRed));
+}
+
 TEST_F(CssImportTest, ImportedFontSourcesResolveAgainstTheImportedStylesheet) {
   respond("styles/a.css", "@font-face { font-family: A; src: url(fonts/a.woff); }");
   respond("b.css", "@font-face { font-family: B; src: url(b.woff); }");

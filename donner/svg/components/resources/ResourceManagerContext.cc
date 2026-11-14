@@ -623,7 +623,6 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
     return RcString("CSS @import was not loaded: no ResourceLoader provided");
   }
 
-  const size_t limit = std::min(UrlLoader::kDefaultMaximumResourceSize, maximumBytes);
   NullResourceLoader nullLoader;
   WriteAccessGuardedResourceLoader guardedLoader(
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
@@ -636,23 +635,34 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
   ResourceLoaderInterface& loader = external ? static_cast<ResourceLoaderInterface&>(cachedLoader)
                                              : static_cast<ResourceLoaderInterface&>(nullLoader);
   const size_t attemptsBefore = fetchSecurityStats_.attempts;
-  UrlLoader urlLoader(loader, limit);
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize);
   auto result = urlLoader.fromUri(url);
   if (const auto* error = std::get_if<UrlLoaderError>(&result)) {
+    // As for images, a fetch refused for size latches the document's aggregate budget closed.
+    if (*error == UrlLoaderError::ResourceTooLarge && external) {
+      remainingResourceBytes_ = 0;
+    }
     return RcString("CSS @import was not loaded: " + std::string(ToString(*error)));
   }
 
-  // Charge newly fetched bytes against the document's aggregate resource budget. Cache hits were
-  // charged when first fetched, and data URLs are part of the document text itself.
+  // A new fetch is now resident in the shared cache, so charge the document's aggregate budget
+  // before any pass-specific check, even if this pass then refuses the bytes. Cache hits were
+  // charged by the fetch that admitted them, and data URLs are part of the document text.
   auto& loaded = std::get<UrlLoader::Result>(result);
+  const auto tooLarge = [this] {
+    fetchSecurityStats_.rejected = true;
+    return RcString("CSS @import was not loaded: " +
+                    std::string(ToString(UrlLoaderError::ResourceTooLarge)));
+  };
   if (fetchSecurityStats_.attempts != attemptsBefore) {
     if (loaded.data.size() > remainingResourceBytes_) {
       remainingResourceBytes_ = 0;
-      fetchSecurityStats_.rejected = true;
-      return RcString("CSS @import was not loaded: " +
-                      std::string(ToString(UrlLoaderError::ResourceTooLarge)));
+      return tooLarge();
     }
     remainingResourceBytes_ -= loaded.data.size();
+  }
+  if (loaded.data.size() > maximumBytes) {
+    return tooLarge();
   }
   return std::move(loaded);
 }
