@@ -52,7 +52,9 @@ resolution.
   absent) media type decode without the loader.
 - Top-level import URLs are passed to the loader as document-relative URLs, after dot-segment
   normalization. Imports inside an imported sheet resolve against that sheet's URL, as CSS
-  specifies; a relative import inside a `data:` sheet cannot be resolved and is ignored.
+  specifies; a relative import inside a `data:` sheet cannot be resolved and is ignored. Relative
+  `@font-face` source URLs in an imported sheet also resolve against that sheet's URL. An import
+  that resolves to the document itself (such as `@import "."`) is ignored.
 - One document-wide pass is bounded to a nesting depth of 16, 64 import loads (counting repeats of
   one URL), 2 MiB of imported CSS text, and one stylesheet's worth of parsed rules and component
   values across all imported sheets. Imports that would re-enter a stylesheet already being loaded
