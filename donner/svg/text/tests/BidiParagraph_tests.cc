@@ -58,6 +58,11 @@ TEST(BidiParagraphTest, OverrideGivesEveryScalarTheBaseLevel) {
     ASSERT_THAT(runs.has_value(), IsTrue());
     // Every character, Latin included, runs right to left in reverse source order.
     EXPECT_THAT(VisualOrder(*runs), ElementsAre(5u, 4u, 3u, 2u, 1u, 0u));
+    // Script runs stay separate so each shapes with its own script: Arabic, then Latin.
+    ASSERT_THAT(runs->size(), testing::Eq(2u));
+    EXPECT_THAT((*runs)[0].start, testing::Eq(3u));
+    EXPECT_THAT((*runs)[0].end, testing::Eq(6u));
+    EXPECT_THAT((*runs)[1].start, testing::Eq(0u));
     for (uint32_t index = 0; index < source.size(); ++index) {
       EXPECT_THAT(paragraph->levelAt(index), testing::Eq(1));
       EXPECT_THAT(paragraph->paragraphLevelAt(index), testing::Eq(1));

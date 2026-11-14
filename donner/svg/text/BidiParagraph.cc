@@ -4,6 +4,7 @@
 #include <SheenBidi/SBCodepoint.h>
 #include <SheenBidi/SBLine.h>
 #include <SheenBidi/SBParagraph.h>
+#include <SheenBidi/SBScriptLocator.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@ namespace {
 using Algorithm = std::unique_ptr<const _SBAlgorithm, decltype(&SBAlgorithmRelease)>;
 using Paragraph = std::unique_ptr<const _SBParagraph, decltype(&SBParagraphRelease)>;
 using Line = std::unique_ptr<const _SBLine, decltype(&SBLineRelease)>;
+using ScriptLocator = std::unique_ptr<_SBScriptLocator, decltype(&SBScriptLocatorRelease)>;
 
 char32_t ValidScalar(char32_t cp) {
   return cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? 0xfffd : cp;
@@ -86,6 +88,40 @@ struct BidiParagraph::State {
       if (!AppendLineRuns(it->get(), start, end, budget, result)) {
         return false;
       }
+    }
+    return true;
+  }
+
+  /// An override keeps every scalar at the base level, but one level run can then mix scripts.
+  /// Split it at script boundaries so each run shapes with its own script, for example so Arabic
+  /// keeps joining inside a right-to-left override of mixed Latin and Arabic text.
+  bool appendOverrideRuns(uint32_t start, uint32_t end, BidiResourceBudget& budget,
+                          std::vector<Run>& result) const {
+    ScriptLocator locator(SBScriptLocatorCreate(), SBScriptLocatorRelease);
+    if (!locator) {
+      budget.rejected = true;
+      return false;
+    }
+    const SBCodepointSequence line{SBStringEncodingUTF32, codepoints.data() + start, end - start};
+    SBScriptLocatorLoadCodepoints(locator.get(), &line);
+    const size_t first = result.size();
+    while (SBScriptLocatorMoveNext(locator.get())) {
+      const SBScriptAgent* agent = SBScriptLocatorGetAgent(locator.get());
+      if (agent->length == 0 || agent->offset + agent->length > end - start ||
+          !budget.consume(budget.remaining.runs, 1)) {
+        budget.rejected = true;
+        return false;
+      }
+      result.push_back({static_cast<uint32_t>(start + agent->offset),
+                        static_cast<uint32_t>(start + agent->offset + agent->length), base});
+    }
+    if (result.size() == first || result.back().end != end) {
+      budget.rejected = true;
+      return false;
+    }
+    // Script runs arrive in logical order; a right-to-left line shows them right to left.
+    if (base % 2 != 0) {
+      std::reverse(result.begin() + static_cast<std::ptrdiff_t>(first), result.end());
     }
     return true;
   }
@@ -207,13 +243,18 @@ std::optional<std::vector<BidiParagraph::Run>> BidiParagraph::visualRuns(
   if (start == end) {
     return result;
   }
+  if (state_->override) {
+    if (!state_->appendOverrideRuns(start, end, budget, result)) {
+      return std::nullopt;
+    }
+    return result;
+  }
   if (!state_->algorithm) {
     if (!budget.consume(budget.remaining.runs, 1)) {
       return std::nullopt;
     }
-    // Without SheenBidi every scalar shares one level: zero on the left-to-right fast path, the
-    // explicit base under an override.
-    result.push_back({start, end, state_->override ? state_->base : uint8_t{0}});
+    // Without reordering every scalar shares level zero on the left-to-right fast path.
+    result.push_back({start, end, 0});
     return result;
   }
   if (!state_->appendLines(start, end, budget, result)) {
