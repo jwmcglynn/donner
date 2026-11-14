@@ -71,18 +71,16 @@ double ConvertMantissaAndExponent(uint64_t mantissa, int exp10, bool negative) {
  * Holds the result of parsing digits from a string.
  */
 struct ParseDigitsResult {
-  uint64_t value = 0;         ///< Parsed numeric value.
-  size_t valueNumDigits = 0;  ///< The total number of digits contributing to the value (base 10).
-  size_t consumedChars = 0;   ///< The number of characters consumed from the input.
-  bool saturated = false;     ///< Further digits exceeded the stored magnitude.
+  uint64_t value = 0;        ///< Parsed numeric value.
+  size_t consumedChars = 0;  ///< The number of characters consumed from the input.
+  bool saturated = false;    ///< Further digits exceeded the stored magnitude.
 };
 
 /**
  * Helper to parse multiple digits. Saturates if it overflows 64-bit.
  *
  * @param str The string to parse.
- * @return Result structure containing the parsed value, number of (base 10) digits in the value,
- * and number of characters consumed.
+ * @return Result structure containing the parsed value and number of characters consumed.
  */
 ParseDigitsResult ParseDigitsSaturating(std::string_view str) {
   ParseDigitsResult result;
@@ -114,7 +112,6 @@ ParseDigitsResult ParseDigitsSaturating(std::string_view str) {
       saturated = true;
     } else {
       result.value = nextVal;
-      ++result.valueNumDigits;
     }
 
     ++result.consumedChars;
@@ -122,6 +119,47 @@ ParseDigitsResult ParseDigitsSaturating(std::string_view str) {
 
   result.saturated = saturated;
   return result;
+}
+
+/**
+ * Decimal significand digits gathered into a 64-bit mantissa. Once a digit does not fit, it and
+ * every later digit are dropped: a dropped integer digit multiplies the value by ten, and a dropped
+ * fraction digit only loses precision, so the magnitude is preserved.
+ */
+struct Significand {
+  uint64_t mantissa = 0;            ///< The digits kept so far.
+  bool full = false;                ///< A digit did not fit, so later digits are dropped.
+  size_t droppedIntegerDigits = 0;  ///< Integer digits past capacity, each a factor of ten.
+  size_t keptFractionDigits = 0;    ///< Fraction digits in the mantissa, each a factor of 1/10.
+};
+
+/**
+ * Appends the run of decimal digits at the start of \p str to \p significand.
+ *
+ * @param str The string to parse.
+ * @param fraction Whether the digits follow the decimal point.
+ * @param significand The significand to extend.
+ * @return The number of characters consumed.
+ */
+size_t AppendDigits(std::string_view str, bool fraction, Significand& significand) {
+  static constexpr uint64_t kMax = std::numeric_limits<uint64_t>::max();
+  size_t consumed = 0;
+  while (consumed < str.size() && std::isdigit(static_cast<unsigned char>(str[consumed]))) {
+    const uint64_t digit = static_cast<uint64_t>(str[consumed] - '0');
+    if (!significand.full && significand.mantissa <= (kMax - digit) / 10ULL) {
+      significand.mantissa = significand.mantissa * 10ULL + digit;
+      if (fraction) {
+        ++significand.keptFractionDigits;
+      }
+    } else {
+      significand.full = true;
+      if (!fraction) {
+        ++significand.droppedIntegerDigits;
+      }
+    }
+    ++consumed;
+  }
+  return consumed;
 }
 
 /// Combines decimal scales before clamping, retaining cancellation for long integer inputs.
@@ -223,31 +261,25 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
   size_t totalConsumed = signChars;
 
   // Digits before decimal
-  const ParseDigitsResult digitsResult = ParseDigitsSaturating(str);
-  str.remove_prefix(digitsResult.consumedChars);
-  totalConsumed += digitsResult.consumedChars;
+  Significand significand;
+  const size_t integerChars = AppendDigits(str, /*fraction=*/false, significand);
+  str.remove_prefix(integerChars);
+  totalConsumed += integerChars;
 
-  uint64_t intPart = digitsResult.value;
-  bool anyDigits = (digitsResult.consumedChars > 0);
+  bool anyDigits = (integerChars > 0);
 
   // Fraction part, starting with a '.'
-  uint64_t fracPart = 0;
-  size_t fracDigits = 0;
-
   if (!str.empty() && str.front() == '.') {
     // Only consume '.' if there's at least 1 digit after it
     if (str.size() > 1 && std::isdigit(static_cast<unsigned char>(str[1]))) {
       str.remove_prefix(1);
       totalConsumed++;
 
-      const ParseDigitsResult fracResult = ParseDigitsSaturating(str);
-      str.remove_prefix(fracResult.consumedChars);
-      totalConsumed += fracResult.consumedChars;
-      fracDigits = fracResult.valueNumDigits;
+      const size_t fractionChars = AppendDigits(str, /*fraction=*/true, significand);
+      str.remove_prefix(fractionChars);
+      totalConsumed += fractionChars;
 
-      fracPart = fracResult.value;
-
-      assert(fracResult.consumedChars > 0 && "Fraction parse should consume at least 1 digit");
+      assert(fractionChars > 0 && "Fraction parse should consume at least 1 digit");
       anyDigits = true;
     } else {
       // Partial parse => don't consume '.'
@@ -304,42 +336,12 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     // else "1e" => partial parse => ignore
   }
 
-  // Combine integer + fraction
-  // e.g. 12.34 => intPart=1234, fracDigits=2 => exponentVal-=2
-  // e.g. 0.79  => intPart=79,   fracDigits=2 => exponentVal-=2
-  // e.g. 59.6078... => parse large fraction
-  for (size_t i = 0; i < fracDigits; i++) {
-    if (intPart < std::numeric_limits<uint64_t>::max() / 10ULL) {
-      intPart = intPart * 10ULL;
-    } else {
-      // Truncate fracPart to the used digits
-      const size_t truncateFrac = fracDigits - i;
-      for (size_t j = 0; j < truncateFrac; j++) {
-        fracPart /= 10ULL;
-      }
-
-      fracDigits = i;
-      break;
-    }
-  }
-
-  uint64_t mantissa = intPart;
-  if (mantissa < std::numeric_limits<uint64_t>::max()) {
-    // If we didn't already saturate, we can safely add
-    // If `intPart` was max, adding `fracPart` won't matter (already saturate)
-    if (mantissa + fracPart < mantissa) {
-      mantissa = std::numeric_limits<uint64_t>::max();
-    } else {
-      mantissa += fracPart;
-    }
-  }
-
   const int exponentVal =
       AdjustExponent(exponentMagnitude, exponentNegative, exponentOverflow,
-                     digitsResult.consumedChars - digitsResult.valueNumDigits, fracDigits);
+                     significand.droppedIntegerDigits, significand.keptFractionDigits);
 
   // Do the final double computation
-  const double finalVal = ConvertMantissaAndExponent(mantissa, exponentVal, negative);
+  const double finalVal = ConvertMantissaAndExponent(significand.mantissa, exponentVal, negative);
 
   assert(!std::isnan(finalVal) && "Final value should not be NaN");
 

@@ -149,4 +149,10 @@ TEST(ClockValueParser, AcceptsNumberTokenTimecounts) {
   EXPECT_THAT(ParsedSeconds(".5s"), Optional(DoubleEq(0.5)));
 }
 
+TEST(ClockValueParser, LongFractionsKeepTheirMagnitude) {
+  EXPECT_THAT(ParsedSeconds("1.9999999999999999999s"), Optional(DoubleEq(2.0)));
+  EXPECT_THAT(ParsedSeconds("18.500000000000000000s"), Optional(DoubleEq(18.5)));
+  EXPECT_THAT(ParsedSeconds("00:00:18.500000000000000000"), Optional(DoubleEq(18.5)));
+}
+
 }  // namespace donner::svg::parser
