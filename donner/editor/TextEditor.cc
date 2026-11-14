@@ -1634,9 +1634,12 @@ ImVec2 NormalizeVec(const ImVec2& value) {
   return length > 0.001f ? MulVec(value, 1.0f / length) : ImVec2(0.0f, 0.0f);
 }
 
+/// Whether \p value can sit inside a reference token. Bytes of a non-ASCII character are token
+/// bytes, so an id such as `caf\u00e9` underlines whole.
 bool IsReferenceSourceChar(char value) {
-  return StringUtils::IsAsciiAlnum(value) || value == '_' || value == '-' || value == '#' ||
-         value == '.' || value == ':' || value == '%';
+  return StringUtils::IsAsciiAlnum(value) || static_cast<unsigned char>(value) >= 0x80 ||
+         value == '_' || value == '-' || value == '#' || value == '.' || value == ':' ||
+         value == '%';
 }
 
 enum class EditBoundaryBias {

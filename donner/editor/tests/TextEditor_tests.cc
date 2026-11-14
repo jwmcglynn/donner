@@ -4262,6 +4262,19 @@ TEST_F(TextEditorTests, FocusReferenceSourceUnderlineHandlesDelimitersAndInvalid
   EXPECT_GT(underline->end.x, underline->start.x);
 }
 
+TEST_F(TextEditorTests, FocusReferenceSourceUnderlineCoversNonAsciiIds) {
+  // "caf\303\251" is "cafe" with an acute accent: one column per character, two bytes for the
+  // accented one.
+  editor.setText("fill=\"url(#caf\303\251)\";\n");
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+
+  const auto underline = FocusReferenceSourceUnderlineDirect(SourcePoint{.line = 0, .column = 10});
+
+  ASSERT_TRUE(underline.has_value());
+  EXPECT_FLOAT_EQ(underline->start.x, ScreenPointAtCoordinates(Coordinates(0, 10)).x);
+  EXPECT_FLOAT_EQ(underline->end.x, ScreenPointAtCoordinates(Coordinates(0, 15)).x);
+}
+
 TEST_F(TextEditorTests, FocusReferenceSourceUnderlineSanitizesExtremeColumns) {
   editor.setText("fill=\"url(#grad)\";\n");
   RenderEditorFrame(ImVec2(420.0f, 120.0f));
