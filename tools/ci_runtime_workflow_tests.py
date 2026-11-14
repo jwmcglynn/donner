@@ -40,6 +40,8 @@ RENDERER_PAYLOAD_CEILINGS = {
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
+# How a step rejects a target list that is empty or only whitespace, applied to a variable name.
+EMPTY_SELECTION_GUARD = 'if [[ "$%s" =~ ^[[:space:]]*$ ]]; then'
 # Each Editor WASM build step that runs Bazel or stages an artifact, in workflow order, with the one
 # command it runs. The commands themselves are pinned by //tools/ci:editor_wasm_lane_tests and
 # //tools/ci:editor_wasm_stage_tests.
@@ -1436,7 +1438,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 "empty test selection" % name,
             )
             self.assertIn(
-                'if [[ -z "${TARGETS// /}" ]]; then',
+                EMPTY_SELECTION_GUARD % "TARGETS",
                 body,
                 "step %r tests the derived target set without rejecting an "
                 "empty target list" % name,
@@ -1448,6 +1450,38 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "match is stale and this test is no longer checking anything"
             % (covered,),
         )
+
+    def test_target_lists_avoid_pattern_substitution(self):
+        """Target lists reach tens of thousands of characters on large selections.
+
+        `${var//pattern/replacement}` is superlinear in the value's length on the
+        system bash of macOS runners (3.2): under a UTF-8 locale its cost grows
+        roughly as length^2.8, 18 s on a 27k character list and minutes on the
+        largest, paid before Bazel starts. The empty-selection guard uses a regex
+        match instead, which takes milliseconds on the same lists.
+        """
+        workflows = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
+        paths = sorted(workflows.glob("*.y*ml"))
+        self.assertIn("main.yml", [path.name for path in paths])
+        for path in paths:
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                with self.subTest(file=path.name, line=number):
+                    self.assertNotRegex(line, r"\$\{\w*(?:TARGETS|targets)\w*//",
+                                        "pattern substitution on a target list")
+
+    def test_empty_selection_guard_rejects_only_whitespace(self):
+        script = "TARGETS=$1\n%s echo empty; else echo nonempty; fi" % (
+            EMPTY_SELECTION_GUARD % "TARGETS")
+        cases = {"": "empty", "   ": "empty", " \t ": "empty", "\n\n": "empty",
+                 " \n ": "empty", "//...": "nonempty", "  //a:b  //c:d  ": "nonempty",
+                 "//a:b\n//c:d": "nonempty", "\n//a:b\n": "nonempty"}
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", script,
+                     "guard", value],
+                    capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout.strip(), expected)
 
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.

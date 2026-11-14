@@ -635,6 +635,17 @@ build:hosted-macos --jobs=3
 build:hosted-macos --local_resources=cpu=3
 build:hosted-macos --local_resources=memory=4802
 
+# The self-hosted macOS VM CI job (`macos-self-hosted`) bounds locally executed actions to 6 CPUs
+# and 6144 MiB. --jobs is deliberately higher: it caps every action in flight, and an action holds
+# its job slot through its remote cache lookup and input downloads, before it asks for local CPU
+# and memory. With --jobs equal to the CPU budget, a mostly cached build waits on cache round
+# trips six at a time. Local actions, tests included (--local_test_jobs defaults to following
+# --local_resources), still wait for the CPU and memory budget, so the higher --jobs runs no more
+# local work at once. They change no action key.
+build:macos-vm --jobs=32
+build:macos-vm --local_resources=cpu=6
+build:macos-vm --local_resources=memory=6144
+
 # Browser cases quarantined on main's hosted macOS job only (#1691, #1702): their GPU work can miss
 # its budget on that runner. Only the jobs that reproduce that job's test environment pass it;
 # every other lane and local runs keep running them.
