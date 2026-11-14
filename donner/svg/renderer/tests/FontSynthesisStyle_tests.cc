@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
@@ -153,7 +154,7 @@ TEST_F(FontSynthesisStyleTest, NoneSuppressesProviderObliqueWithoutChangingFaceO
   EXPECT_THAT(disabled.font, Eq(automatic.font));
   EXPECT_THAT(disabled.advance, Eq(automatic.advance));
   EXPECT_THAT(disabled.outline.points(), ElementsAreArray(regular.outline.points()));
-  EXPECT_THAT(fonts().fontData(disabled.font), ElementsAreArray(provider_.regular));
+  EXPECT_THAT(fonts().fontData(disabled.font), BytesEqual(provider_.regular));
 }
 
 TEST_F(FontSynthesisStyleTest, ObliqueOnlyDistinguishesItalicFromObliqueRequests) {
@@ -187,7 +188,7 @@ TEST_F(FontSynthesisStyleTest, NativeItalicFaceIsNeverDisabledOrReplaced) {
   const auto automatic = observe("auto");
   const auto disabled = observe("none");
   const auto italicOnly = observe("only-italic");
-  EXPECT_THAT(fonts().fontData(automatic.font), ElementsAreArray(provider_.italic));
+  EXPECT_THAT(fonts().fontData(automatic.font), BytesEqual(provider_.italic));
   ASSERT_THAT(automatic.outline.points(), Not(IsEmpty()));
   EXPECT_THAT(automatic.outline.points(), Not(ElementsAreArray(regular.outline.points())));
   EXPECT_THAT(disabled.outline.points(), ElementsAreArray(automatic.outline.points()));
@@ -248,7 +249,7 @@ TEST_F(FontSynthesisStyleTest, ProviderFallbackCarriesTheRequestAndGlyphPolicy) 
   const FontHandle fallback =
       GlyphFont(automatic.runs.front(), automatic.runs.front().glyphs.front());
   EXPECT_THAT(fallback, Not(Eq(automatic.runs.front().font)));
-  EXPECT_THAT(fonts().fontData(fallback), ElementsAreArray(provider_.regular));
+  EXPECT_THAT(fonts().fontData(fallback), BytesEqual(provider_.regular));
   EXPECT_THAT(GlyphFont(disabled.runs.front(), disabled.runs.front().glyphs.front()), Eq(fallback));
   EXPECT_THAT(disabled.glyphs.front().path.points(),
               ElementsAreArray(regular.glyphs.front().path.points()));
