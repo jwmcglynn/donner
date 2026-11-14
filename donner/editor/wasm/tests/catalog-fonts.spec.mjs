@@ -615,8 +615,12 @@ test("a full write supersedes a pending stamp refresh for the same identity", as
   broker.persist(asset, bytes);
   assert.equal(broker.deferredRefreshes.length, 0);
   assert.equal(broker.persistenceQueue.length, 1);
-  // A queued refresh is upgraded rather than allowed to drop the full write.
-  broker.persistenceQueue[0].refresh = true;
+  // A refresh flushed into the queue behind a held write is upgraded, not left to drop the write.
+  broker.persistenceQueue = [];
+  broker.persistenceQueueBytes = 0;
+  broker.deferRefresh(asset, bytes);
+  broker.pump();
+  assert.deepEqual(broker.persistenceQueue.map((entry) => entry.refresh), [true]);
   broker.persist(asset, bytes);
   assert.equal(broker.persistenceQueue.length, 1);
   assert.equal(broker.persistenceQueue[0].refresh, false);
@@ -624,6 +628,24 @@ test("a full write supersedes a pending stamp refresh for the same identity", as
   while (broker.cacheWritePending) await broker.cacheWork;
   // The entry was never stored, so only a full write can cache it.
   assert.equal(cache.stored.has(key), true);
+});
+
+test("full writes evict deferred stamp refreshes rather than exceed the shared budget", async (t) => {
+  const { broker } = setup(t, {
+    storage: { open: async () => countingCache() },
+    lockManager: { request: async () => new Promise(() => {}) },
+  });
+  const megabytes = (count) => new Uint8Array(count * 1024 * 1024);
+  const refreshed = fixture(2);
+  broker.deferRefresh(refreshed.asset, megabytes(12));
+  assert.equal(broker.deferredRefreshBytes, 12 * 1024 * 1024);
+  const first = fixture(3);
+  const second = fixture(4);
+  broker.persist(first.asset, megabytes(1)); // Starts and holds the only write.
+  broker.persist(second.asset, megabytes(8));
+  assert.equal(broker.persistenceQueueBytes, 8 * 1024 * 1024);
+  assert.equal(broker.deferredRefreshes.length, 0, "the refresh yields to the full write");
+  assert.equal(broker.deferredRefreshBytes, 0);
 });
 
 test("a stamp refresh without the cross-tab lock is dropped quietly", async (t) => {

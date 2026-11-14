@@ -359,6 +359,14 @@
           this.deferredRefreshBytes -= this.deferredRefreshes[deferred].bytes.byteLength;
           this.deferredRefreshes.splice(deferred, 1);
         }
+        // Full writes outrank stamp refreshes for the shared payload budget.
+        while (
+          this.deferredRefreshes.length
+          && bytes.byteLength
+            > maximumCacheBytes - this.persistenceQueueBytes - this.deferredRefreshBytes
+        ) {
+          this.deferredRefreshBytes -= this.deferredRefreshes.pop().bytes.byteLength;
+        }
       }
       if (this.cacheWritePending) {
         const queued = this.persistenceQueue.find((entry) => entry.asset.id === asset.id);
