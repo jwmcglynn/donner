@@ -75,6 +75,16 @@ type ProbeGlobal = typeof globalThis & {
   __donnerSurfaceFrameProbeGpuDelay?: CanvasGpuDelayState;
   /** Waits until the GPU has run every canvas write, with none submitted meanwhile. */
   __donnerSurfaceFrameProbeSettle?: () => Promise<CanvasSettleResult>;
+  /**
+   * Test-only fault injection: while armed, the self-check writes one more canvas frame, inside
+   * that frame's own acquiring task, between the end of the self-check frame's task and its late
+   * write, as the editor's live frame loop can. Counts the frames it wrote.
+   */
+  __donnerSurfaceFrameProbeSelfCheckConcurrentFrame?: { frames: number };
+  /** The probe's record of one canvas frame: its ordinal and its writes inside its own task. */
+  __donnerSurfaceFrameProbeFrameOf?: (
+    texture: GPUTexture,
+  ) => { frame: number; submitsBeforeTaskEnd: number } | null;
 };
 
 /** One wait for the GPU to finish the canvas writes submitted so far. */
@@ -158,6 +168,12 @@ function installInWorker(): boolean {
   };
   scope.__donnerSurfaceFrameProbeNextTask = () =>
     new Promise<void>((resolve) => afterThisTask(resolve));
+  scope.__donnerSurfaceFrameProbeFrameOf = (texture: GPUTexture) => {
+    const record = frames.get(texture);
+    return record === undefined
+      ? null
+      : { frame: record.frame, submitsBeforeTaskEnd: record.submitsBeforeTaskEnd };
+  };
 
   const getCurrentTexture = GPUCanvasContext.prototype.getCurrentTexture;
   GPUCanvasContext.prototype.getCurrentTexture = function(this: GPUCanvasContext) {
@@ -448,15 +464,22 @@ function installInWorker(): boolean {
   return true;
 }
 
+/** What a self-check reports: its frame's late and in-task writes, or why it could not run. */
+type SelfCheckAnswer = { late: number; inTask: number } | string;
+
 // Runs inside a worker that already has the probe installed. Writes a scratch
 // canvas frame in the task that acquired it, again from a microtask of that
 // same task, and once more after that task has ended; reads it once late as
 // well. Only the third write is the ordering the probe exists to report.
-async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | string> {
+// The worker's own frame loop keeps running across the self-check's task
+// boundary, so only the scratch frame's own writes are counted: the worker-wide
+// counters would also count any editor frame that lands in that window.
+async function selfCheckInWorker(): Promise<SelfCheckAnswer> {
   const scope = globalThis as ProbeGlobal;
   const state = scope.__donnerSurfaceFrameProbe;
   const nextTask = scope.__donnerSurfaceFrameProbeNextTask;
-  if (!state?.installed || nextTask === undefined) {
+  const frameOf = scope.__donnerSurfaceFrameProbeFrameOf;
+  if (!state?.installed || nextTask === undefined || frameOf === undefined) {
     return "probe not installed";
   }
   const adapter = await navigator.gpu?.requestAdapter();
@@ -474,8 +497,6 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
     format: navigator.gpu.getPreferredCanvasFormat(),
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
-  const lateBefore = state.lateSubmits.length;
-  const inTaskBefore = state.inTaskSubmits;
   const clear = (texture: GPUTexture) => {
     const encoder = device.createCommandEncoder();
     encoder.beginRenderPass({
@@ -489,17 +510,33 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
     encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, [16, 16]);
     device.queue.submit([encoder.finish()]);
   };
+  // Queued before the self-check's own next task, so its frame lands between the two: after the
+  // self-check frame's task has ended and before that frame's late write.
+  const writeConcurrentFrame = (concurrent: { frames: number }) =>
+    nextTask().then(() => {
+      const other = new OffscreenCanvas(16, 16).getContext("webgpu") as GPUCanvasContext;
+      other.configure({ device, format: navigator.gpu.getPreferredCanvasFormat() });
+      clear(other.getCurrentTexture());
+      ++concurrent.frames;
+    });
   const frame = context.getCurrentTexture();
+  const ordinal = frameOf(frame)?.frame;
+  if (ordinal === undefined) {
+    return "the probe did not record the scratch frame";
+  }
   clear(frame);
   await Promise.resolve();
   clear(frame);
+  const concurrent = scope.__donnerSurfaceFrameProbeSelfCheckConcurrentFrame;
+  const concurrentFrame = concurrent === undefined ? null : writeConcurrentFrame(concurrent);
   await nextTask();
+  await concurrentFrame;
   clear(frame);
   readBack(frame);
   device.destroy();
   return {
-    late: state.lateSubmits.length - lateBefore,
-    inTask: state.inTaskSubmits - inTaskBefore,
+    late: state.lateSubmits.filter((submit) => submit.frame === ordinal).length,
+    inTask: frameOf(frame)?.submitsBeforeTaskEnd ?? 0,
   };
 }
 
@@ -575,13 +612,38 @@ export async function expectSurfaceFrameProbeReady(page: Page): Promise<void> {
  * in-task, one write after the task ended counts as late, and a late read
  * counts as neither, so a working probe answers `{ late: 1, inTask: 2 }`. The
  * scratch canvas and device are the probe's own, so the editor's frames are
- * untouched.
+ * untouched, and the counts are the scratch frame's alone, so editor frames
+ * drawn while the self-check runs do not change them.
  */
 export async function selfCheckSurfaceFrameProbe(
   page: Page,
 ): Promise<Array<{ late: number; inTask: number } | string | null>> {
   // Requesting a scratch device takes longer than reading the probe's state.
   return evaluateInWorkers(probeRegistry.workers(page), selfCheckInWorker, 4 * kWorkerAnswerMs);
+}
+
+/**
+ * Run \ref selfCheckSurfaceFrameProbe with one more canvas frame written inside its window, in each
+ * worker, the way the editor's live frame loop can write one. Returns each worker's self-check
+ * answer with the number of such frames it wrote, so a caller can tell an answer that saw the extra
+ * frame from one that never had it.
+ */
+export async function selfCheckSurfaceFrameProbeWithConcurrentFrame(
+  page: Page,
+): Promise<Array<{ answer: SelfCheckAnswer | null; written: number | null }>> {
+  const workers = probeRegistry.workers(page);
+  await evaluateInWorkers(workers, () => {
+    (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeSelfCheckConcurrentFrame = { frames: 0 };
+    return true;
+  });
+  const answers = await evaluateInWorkers(workers, selfCheckInWorker, 4 * kWorkerAnswerMs);
+  const written = await evaluateInWorkers(workers, () => {
+    const scope = globalThis as ProbeGlobal;
+    const frames = scope.__donnerSurfaceFrameProbeSelfCheckConcurrentFrame?.frames ?? null;
+    delete scope.__donnerSurfaceFrameProbeSelfCheckConcurrentFrame;
+    return frames;
+  });
+  return answers.map((answer, index) => ({ answer, written: written[index] }));
 }
 
 // Control only the completion signal already returned to the app, for browser regressions that

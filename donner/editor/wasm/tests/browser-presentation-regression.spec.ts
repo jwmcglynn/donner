@@ -62,6 +62,7 @@ import {
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
+  selfCheckSurfaceFrameProbeWithConcurrentFrame,
   surfaceFrameProbeInstalled,
   type SurfaceFrameProbeReport,
 } from "./surface-frame-probe";
@@ -3720,6 +3721,12 @@ test("the surface frame probe reports canvas work submitted after its task ended
     .toEqual(expect.objectContaining({ canvasWorkers: 1, lateSubmits: 0 }));
   expect((await readSurfaceFrameProbe(page)).inTaskSubmits).toBeGreaterThan(0);
   expect(await selfCheckSurfaceFrameProbe(page)).toContainEqual({ late: 1, inTask: 2 });
+  // The editor keeps drawing while the self-check runs, so another canvas frame can land in its
+  // window; the self-check counts only its own frame's writes and still gives the exact answer.
+  expect(await selfCheckSurfaceFrameProbeWithConcurrentFrame(page)).toContainEqual({
+    answer: { late: 1, inTask: 2 },
+    written: 1,
+  });
   expect(failures).toEqual([]);
 });
 
