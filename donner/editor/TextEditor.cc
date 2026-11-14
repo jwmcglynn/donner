@@ -293,9 +293,9 @@ std::pair<int, int> calculateColumnPosition(const Line& line, float localX, floa
       columnIndex++;
     } else {
       char buf[7];
-      auto d = Utf8::SequenceLength(line[columnIndex].character);
+      auto d = TextBuffer::glyphByteLength(line[columnIndex].character);
       int i = 0;
-      while (i < 6 && d-- > 0) {
+      while (i < 6 && d-- > 0 && columnIndex < static_cast<int>(line.size())) {
         buf[i++] = line[columnIndex++].character;
       }
       buf[i] = '\0';
@@ -3254,7 +3254,7 @@ void TextEditor::renderText(const Line& line, const ImVec2& pos, ImDrawList* dra
     } else {
       // Regular character
       char buf[7];
-      auto d = Utf8::SequenceLength(glyph.character);
+      auto d = TextBuffer::glyphByteLength(glyph.character);
       int charCount = 0;
       while (charCount < d && i < line.size()) {
         buf[charCount++] = line[i++].character;
@@ -3337,10 +3337,7 @@ void TextEditor::renderText(const VisualLine& visualLine, const Line& line, cons
       ++glyphIndex;
     } else {
       char buf[7];
-      int sequenceLength = Utf8::SequenceLength(glyph.character);
-      if (sequenceLength <= 0) {
-        sequenceLength = 1;
-      }
+      const int sequenceLength = TextBuffer::glyphByteLength(glyph.character);
       int charCount = 0;
       while (charCount < sequenceLength && glyphIndex < endIndex &&
              glyphIndex < static_cast<int>(line.size())) {
@@ -4744,7 +4741,7 @@ float TextEditor::getTextDistanceToLineStart(const Coordinates& pos) const {
       ++i;
     } else {
       std::array<char, 7> tempBuffer;
-      auto seqLen = Utf8::SequenceLength(line[i].character);
+      auto seqLen = TextBuffer::glyphByteLength(line[i].character);
       int bufPos = 0;
 
       while (bufPos < 6 && seqLen-- > 0 && i < line.size()) {

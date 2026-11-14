@@ -531,6 +531,15 @@ public:
   }
 
   /**
+   * Byte length of the glyph that starts with \p c: its UTF-8 sequence length, or 1 for a byte
+   * that cannot start a sequence (a stray continuation byte or 0xF8-0xFF), so every walk over
+   * glyph bytes advances.
+   *
+   * @param c First byte of the glyph.
+   */
+  static int glyphByteLength(char c) { return std::max(1, Utf8::SequenceLength(c)); }
+
+  /**
    * Query how many characters (glyphs) are on a given line.
    */
   int getLineCharacterCount(int line) const {
@@ -683,8 +692,6 @@ private:
     }
     return line;
   }
-
-  static int glyphByteLength(char c) { return std::max(1, Utf8::SequenceLength(c)); }
 
   Line& insertLineAfterSplit(int index, int charIndex) {
     if (index < 0) {

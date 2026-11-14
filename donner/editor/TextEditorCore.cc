@@ -27,6 +27,17 @@ bool isUtfSequence(char c) {
   return (c & 0xC0) == 0x80;
 }
 
+/// Index of the first byte of the glyph that ends at \p lastIndex in \p line: the lead byte of the
+/// UTF-8 sequence holding it, or \p lastIndex itself when no preceding lead claims it (a stray
+/// continuation byte is a glyph of its own, as TextBuffer::glyphByteLength walks it forward).
+int GlyphStartBefore(const Line& line, int lastIndex) {
+  int start = lastIndex;
+  while (start > 0 && isUtfSequence(line[start].character)) {
+    --start;
+  }
+  return start + TextBuffer::glyphByteLength(line[start].character) > lastIndex ? start : lastIndex;
+}
+
 /// Encode a UTF-32 character to UTF-8 in the given buffer. Mirrors ImGui's
 /// `ImTextCharToUtf8` so the core can avoid depending on `imgui.h` while
 /// preserving exact byte output for `handleRegularCharacter`.
@@ -263,7 +274,7 @@ void TextEditorCore::advance(Coordinates& coords) const {
 
   if (charIndex + 1 < static_cast<int>(line.size())) {
     // Get length of current UTF-8 sequence at position
-    int delta = Utf8::SequenceLength(line[charIndex].character);
+    int delta = TextBuffer::glyphByteLength(line[charIndex].character);
     const int newIndex = std::min(charIndex + delta, static_cast<int>(line.size()) - 1);
     coords.column = text_.getCharacterColumn(coords.line, newIndex);
   } else {
@@ -464,7 +475,7 @@ void updateFoldColumnImpl(Coordinates& fold, const Coordinates& matchingEnd,
   while (charIndex < static_cast<int>(startLine.size()) &&
          (!skipped || (skipped && charIndex < bracketEndCharIndex))) {
     char c = startLine[charIndex].character;
-    charIndex += Utf8::SequenceLength(c);
+    charIndex += TextBuffer::glyphByteLength(c);
 
     if (c == '\t') {
       colOffset = (colOffset / tabSize) * tabSize + tabSize;
@@ -692,7 +703,7 @@ Coordinates TextEditorCore::findWordEnd(const Coordinates& from) const {
     if (ClassifyChar(line[currentIndex].character) != startClass) {
       break;
     }
-    currentIndex += Utf8::SequenceLength(line[currentIndex].character);
+    currentIndex += TextBuffer::glyphByteLength(line[currentIndex].character);
   }
 
   return Coordinates(from.line, text_.getCharacterColumn(from.line, currentIndex));
@@ -1508,7 +1519,7 @@ void TextEditorCore::handleMidLineDelete(Coordinates pos, UndoRecord& undo) {
 
   removeFolds(undo.removedStart, undo.removedEnd);
 
-  auto charLen = Utf8::SequenceLength(line[charIndex].character);
+  auto charLen = TextBuffer::glyphByteLength(line[charIndex].character);
   while (charLen-- > 0 && charIndex < static_cast<int>(line.size())) {
     line.erase(line.begin() + charIndex);
   }
@@ -1617,13 +1628,10 @@ void TextEditorCore::handleMidLineBackspace(const Coordinates& pos, UndoRecord& 
   Line& line = text_.getLineGlyphsMutable(pos.line);
 
   // Find the character cluster to remove
-  int charIndex = text_.getCharacterIndex(pos) - 1;
-  while (charIndex > 0 && isUtfSequence(line[charIndex].character)) {
-    --charIndex;
-  }
+  const int charIndex = GlyphStartBefore(line, text_.getCharacterIndex(pos) - 1);
 
-  int charLen = Utf8::SequenceLength(line[charIndex].character);
-  int endIndex = charIndex + charLen;
+  int charLen = TextBuffer::glyphByteLength(line[charIndex].character);
+  int endIndex = std::min(charIndex + charLen, static_cast<int>(line.size()));
 
   // Calculate column positions before and after the character
   int preColumn = text_.getCharacterColumn(pos.line, charIndex);
@@ -2014,7 +2022,7 @@ void TextEditorCore::colorizeInternal() {
           }
         }
 
-        currentIndex += Utf8::SequenceLength(c);
+        currentIndex += TextBuffer::glyphByteLength(c);
       }
       currentLine++;
     }
