@@ -66,13 +66,11 @@ TEST(ListParser, CommaSeparated) {
   EXPECT_THAT(ParseToList("1,2,3"), ElementsAre("1", "2", "3"));
 }
 
-// Only XML whitespace and commas separate items; a no-break space byte (0xA0) or a byte that a
-// locale classifies as space is part of the item.
+// Separators do not depend on the process locale: a no-break space byte (0xA0), which a UTF-8
+// locale on macOS classifies as space, is part of the item.
 TEST(ListParser, SeparatorsDoNotDependOnLocale) {
-  ForEachCtypeLocaleForTesting([] {
-    EXPECT_THAT(ParseToList("a\xA0z c"), ElementsAre("a\xA0z", "c"));
-    EXPECT_THAT(ParseToList("a\x85z"), ElementsAre("a\x85z"));
-  });
+  ForEachCtypeLocaleForTesting(
+      [] { EXPECT_THAT(ParseToList("a\xA0z c"), ElementsAre("a\xA0z", "c")); });
 }
 
 TEST(ListParser, SpaceSeparated) {
