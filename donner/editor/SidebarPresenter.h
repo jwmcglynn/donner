@@ -384,7 +384,7 @@ private:
     Lengthd strokeWidth = Lengthd(1.0);
     int strokeLinecap = 0;
     int strokeLinejoin = 0;
-    float strokeMiterlimit = 4.0f;
+    double strokeMiterlimit = 4.0;
     std::string strokeDasharray = "none";
     Lengthd strokeDashoffset = Lengthd(0.0);
     std::string markerStart = "none";
@@ -507,9 +507,9 @@ private:
   };
   bool renderStrokeWidthRow(const StrokeRenderContext& context);
   bool renderStrokeWidthField(const StrokeRenderContext& context, const Lengthd& widthLength,
-                              float* width);
+                              double* width);
   bool renderStrokeWidthStepper(const StrokeRenderContext& context, const Lengthd& widthLength,
-                                float width);
+                                double width);
   bool renderStrokeWidthPresetPopup(const StrokeRenderContext& context, const Lengthd& widthLength,
                                     bool fieldActivated, bool fieldDismissed);
   bool renderStrokeWidthPresetRow(const StrokeRenderContext& context, const Lengthd& widthLength,
@@ -517,10 +517,10 @@ private:
   bool renderStrokeCapRow(const StrokeRenderContext& context);
   bool renderStrokeJoinRow(const StrokeRenderContext& context);
   bool renderStrokeMiterRow(const StrokeRenderContext& context);
-  bool renderStrokeMiterInputValue(const StrokeRenderContext& context, float miterlimit,
+  bool renderStrokeMiterInputValue(const StrokeRenderContext& context, double miterlimit,
                                    bool inputChanged);
   bool renderStrokeMiterStepper(const StrokeRenderContext& context, const Box2d& field,
-                                float miterlimit);
+                                double miterlimit);
   bool renderStrokeDashSection(const StrokeRenderContext& context);
   bool renderDashPresetRow(const StrokeRenderContext& context,
                            std::span<const float> currentLengths);
