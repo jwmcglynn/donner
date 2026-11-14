@@ -462,14 +462,14 @@ TEST_F(RendererGeodeTest, TiledFilterReadsTheSameBackdropAsUntiled) {
     const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device) {
       RendererGeode renderer(device);
       RenderViewport viewport;
-      viewport.size = Vector2d(96, 96);
+      viewport.size = Vector2d(192, 192);
       viewport.devicePixelRatio = 1.0;
       renderer.beginFrame(viewport);
       renderer.setPaint(solidFill(css::RGBA(46, 139, 87, 255)));
-      renderer.drawRect(Box2d({4, 4}, {44, 60}), StrokeParams{});
-      renderer.pushFilterLayer(graph, Box2d({0, 0}, {96, 96}));
+      renderer.drawRect(Box2d({8, 8}, {88, 120}), StrokeParams{});
+      renderer.pushFilterLayer(graph, Box2d({0, 0}, {192, 192}));
       renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
-      renderer.drawRect(Box2d({70, 70}, {90, 90}), StrokeParams{});
+      renderer.drawRect(Box2d({150, 150}, {180, 180}), StrokeParams{});
       renderer.popFilterLayer();
       renderer.endFrame();
       return renderer.takeSnapshot();
@@ -477,7 +477,7 @@ TEST_F(RendererGeodeTest, TiledFilterReadsTheSameBackdropAsUntiled) {
 
     std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
     ASSERT_THAT(tiledDevice, testing::NotNull());
-    tiledDevice->filterEngine().setMaximumTileExtentForTesting(48);
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(96);
     const RendererBitmap tiled = render(tiledDevice);
     ASSERT_THAT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u));
     const RendererBitmap whole = render(sharedDevice());
@@ -489,9 +489,9 @@ TEST_F(RendererGeodeTest, TiledFilterReadsTheSameBackdropAsUntiled) {
       return whole.pixels[static_cast<std::size_t>(y) * whole.rowBytes +
                           static_cast<std::size_t>(x) * 4u + 3u];
     };
-    // The moved backdrop covers (48, 36); the filtered red square at (80, 80) is replaced.
-    EXPECT_THAT(alphaAt(48, 36), testing::Eq(255));
-    EXPECT_THAT(alphaAt(80, 80), testing::Eq(0));
+    // The moved backdrop covers (60, 60); the filtered red square at (165, 165) is replaced.
+    EXPECT_THAT(alphaAt(60, 60), testing::Eq(255));
+    EXPECT_THAT(alphaAt(165, 165), testing::Eq(0));
     editor::tests::CompareBitmapToBitmap(tiled, whole, "tiled_backdrop",
                                          editor::tests::PixelmatchIdentityParams());
   }

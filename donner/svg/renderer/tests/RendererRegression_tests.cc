@@ -1062,7 +1062,8 @@ RendererBitmap RenderBackdropCase(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-/// Renders \p body without filters, the oracle for \ref RenderBackdropCase.
+/// Renders \p body without filters, the oracle for \ref RenderBackdropCase. Oracles keep the
+/// case's isolation group, so content outside the filter result is composited the same way.
 RendererBitmap RenderBackdropOracle(std::string_view body) {
   SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
@@ -1081,10 +1082,37 @@ TEST_F(RendererRegressionTests, FilterBackgroundAlphaReadsIsolationGroupBackdrop
   ExpectVisibleBitmap(actual, "background_alpha_visible");
   editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
     <rect x="4" y="40" width="12" height="12" fill="blue"/>
-    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-    <rect x="36" y="4" width="16" height="16" fill="black"/>)svg"),
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="black"/>
+    </g>)svg"),
                                        "background_alpha_isolation_group",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// BackgroundAlpha is BackgroundImage with its colors zeroed, including where a blur spreads its
+// edges into partial alpha.
+TEST_F(RendererRegressionTests, FilterBackgroundAlphaMatchesBackgroundImageAlpha) {
+  const auto render = [](std::string_view input, std::string_view toAlpha) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64"
+                                  height="64"><feOffset in=")svg") +
+            std::string(input) + R"svg(" dx="28"/>)svg" + std::string(toAlpha) +
+            R"svg(<feGaussianBlur stdDeviation="3"/></filter>
+            <g style="isolation:isolate">
+              <rect x="6" y="10" width="20" height="40" fill="seagreen"/>
+              <rect x="40" y="40" width="8" height="8" fill="red" filter="url(#f)"/>
+            </g>)svg",
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const RendererBitmap alpha = render("BackgroundAlpha", "");
+  ExpectVisibleBitmap(alpha, "background_alpha_blur_visible");
+  editor::tests::CompareBitmapToBitmap(
+      alpha,
+      render("BackgroundImage",
+             R"svg(<feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/>)svg"),
+      "background_alpha_matches_image_alpha", editor::tests::PixelmatchIdentityParams());
 }
 
 // BackgroundImage is the same backdrop with its colors.
@@ -1098,8 +1126,10 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageReadsIsolationGroupBackdrop
   ExpectVisibleBitmap(actual, "background_image_visible");
   editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
     <rect x="4" y="40" width="12" height="12" fill="blue"/>
-    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-    <rect x="36" y="4" width="16" height="16" fill="seagreen"/>)svg"),
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen"/>
+    </g>)svg"),
                                        "background_image_isolation_group",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -1136,8 +1166,10 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageIgnoresElementOwnLayers) {
     </g>)svg");
   ExpectVisibleBitmap(actual, "background_own_layers_visible");
   editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
-    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-    <rect x="36" y="4" width="16" height="16" fill="seagreen" opacity="0.5"/>)svg"),
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen" opacity="0.5"/>
+    </g>)svg"),
                                        "background_image_own_layers",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -1152,8 +1184,10 @@ TEST_F(RendererRegressionTests, FilterBackgroundImageWithInputMarginKeepsBackdro
     </g>)svg");
   ExpectVisibleBitmap(actual, "background_margin_visible");
   editor::tests::CompareBitmapToBitmap(actual, RenderBackdropOracle(R"svg(
-    <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
-    <rect x="36" y="4" width="16" height="16" fill="seagreen"/>)svg"),
+    <g style="isolation:isolate">
+      <rect x="4" y="4" width="16" height="16" fill="seagreen"/>
+      <rect x="36" y="4" width="16" height="16" fill="seagreen"/>
+    </g>)svg"),
                                        "background_image_input_margin",
                                        editor::tests::PixelmatchIdentityParams());
 }

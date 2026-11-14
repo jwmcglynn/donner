@@ -24,11 +24,14 @@ mask and further filter stages do not change its backdrop. A document that relie
 blending with backdrop content, and `isolation: isolate` bounds what a backdrop filter input reads.
 
 **Affected resvg tests:** `filters/enable-background/*` (category default
-`Params::DeprecatedInSVG2`; four cases that already match the reference with SVG 2 semantics
-compare) and `filters/filter/in=BackgroundImage-with-enable-background` /
+`Params::DeprecatedInSVG2`; their references read an `enable-background` snapshot, so even the
+cases whose snapshot is empty differ from the isolation-group backdrop) and
+`filters/filter/in=BackgroundImage-with-enable-background` /
 `in=BackgroundAlpha-with-enable-background` (`Params::DeprecatedInSVG2`). These render without a
-pixel comparison. `filters/filter/in=BackgroundAlpha` and `filters/filter/in=BackgroundImage` read
-the isolation-group backdrop and compare.
+pixel comparison. `filters/filter/in=BackgroundImage` and `filters/filter/in=BackgroundAlpha` read
+the isolation-group backdrop and compare; the BackgroundAlpha reference's blur reaches full alpha
+slightly later than the identical-alpha BackgroundImage reference, which its registration
+explains.
 
 ## SVG Fonts (&lt;font&gt;, &lt;glyph&gt;, &lt;missing-glyph&gt;, etc.)
 
