@@ -537,11 +537,17 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
     ++i;
   }
 
+  // Offsets of the value within the source, for urlValueRange().
+  const size_t urlStart = currentOffset() + charsConsumedBefore;
+  const size_t valueStart = i;
+  size_t valueEnd = i;
+
   std::vector<char> str;
   while (i < afterUrl.size()) {
     const char ch = afterUrl[i];
 
     if (ch == ')') {
+      urlValueRange_ = {urlStart + valueStart, urlStart + valueEnd};
       return token<Token::Url>(i + charsConsumedBefore + 1, RcString::fromVector(std::move(str)));
     } else if (isWhitespace(ch)) {
       ++i;
@@ -560,6 +566,7 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
     } else if (ch == '\0') {
       Utf8::Append(Utf8::kUnicodeReplacementCharacter, std::back_inserter(str));
       ++i;
+      valueEnd = i;
     } else if (isQuote(ch) || ch == '(' || isNonPrintableCodepoint(ch)) {
       // This is a parse error. Consume the remnants of a bad url, create a <bad-url-token>, and
       // return it.
@@ -570,14 +577,17 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
       const auto [codepoint, bytesConsumed] = consumeEscapedCodepoint(afterUrl.substr(i + 1));
       Utf8::Append(codepoint, std::back_inserter(str));
       i += bytesConsumed + 1;
+      valueEnd = i;
     } else {
       // anything else: Append the current input code point to the <url-token>'s value.
       str.push_back(afterUrl[i]);
       ++i;
+      valueEnd = i;
     }
   }
 
   // EOF: This is a parse error. Return the <url-token>.
+  urlValueRange_ = {urlStart + valueStart, urlStart + valueEnd};
   auto result = token<Token::Url>(i + charsConsumedBefore, RcString::fromVector(std::move(str)));
   nextToken_ = token<Token::ErrorToken>(0, Token::ErrorToken::Type::EofInUrl);
   return result;

@@ -41,6 +41,48 @@ TEST(Tokenizer, EndOffsetCoversOnlyTheReturnedToken) {
   EXPECT_THAT(tokenizer.endOffset(), testing::Eq(19u));
 }
 
+TEST(Tokenizer, EndOffsetAtEndOfInputBadUrlAndUnterminatedComment) {
+  {
+    Tokenizer tokenizer("'abc");
+    EXPECT_THAT(tokenizer.next(), Token(Token::String("abc"), 0));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(4u));
+  }
+  {
+    Tokenizer tokenizer("url(a b) x");
+    EXPECT_THAT(tokenizer.next(), Token(Token::BadUrl(), 0));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(8u));
+  }
+  {
+    Tokenizer tokenizer("a /* x");
+    EXPECT_THAT(tokenizer.next(), Token(Token::Ident("a"), 0));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(1u));
+    EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" "), 1));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(2u));
+  }
+}
+
+TEST(Tokenizer, UrlValueRangeExcludesFunctionNameWhitespaceAndParenthesis) {
+  struct Case {
+    std::string_view text;
+    std::size_t start;
+    std::size_t end;
+  };
+  for (const Case& item :
+       {Case{"url(#a)", 4, 6}, Case{"URL(  #a  )", 6, 8}, Case{"url(\n#a\n)", 5, 7},
+        Case{"url(#a", 4, 6}, Case{"u\\72l(#a)", 6, 8}, Case{"url(#\\61 b)", 4, 10},
+        Case{"x url(#a)", 6, 8}, Case{"a\r\n\furl(#a)", 8, 10}}) {
+    SCOPED_TRACE(item.text);
+    Tokenizer tokenizer(item.text);
+    Token token = tokenizer.next();
+    while (!token.is<Token::Url>() && !token.is<Token::EofToken>()) {
+      token = tokenizer.next();
+    }
+    ASSERT_THAT(token.is<Token::Url>(), testing::IsTrue()) << token;
+    EXPECT_THAT(tokenizer.urlValueRange(),
+                testing::Pair(testing::Eq(item.start), testing::Eq(item.end)));
+  }
+}
+
 TEST(Tokenizer, Comment) {
   {
     Tokenizer tokenizer("/**/");
