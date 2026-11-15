@@ -508,6 +508,24 @@ TEST(SubDocumentFiltersTest, TransformedContentUnderBoxEffectsMatchesInDocument)
   }
 }
 
+/// A text's object box is mapped through every transform between the text and the effect owner at
+/// once, so rotations that cancel leave the text's own box, for an external text as in-document.
+TEST(SubDocumentFiltersTest, TransformedTextUnderBoxClipMatchesInDocument) {
+  constexpr std::string_view kText =
+      "x='-8' y='4' font-size='12' fill='#2050d0' transform='rotate(45)'>Hi</text>";
+  const std::string sprites[] = {"<text id='sprite' " + std::string(kText),
+                                 "<g id='sprite'><text " + std::string(kText) + "</g>"};
+  for (size_t i = 0; i < std::size(sprites); ++i) {
+    SCOPED_TRACE(sprites[i]);
+    ExpectExternalMatchesInDocument(
+        "sub-document-transformed-text-" + std::to_string(i), sprites[i],
+        "<defs><clipPath id='quarter' clipPathUnits='objectBoundingBox'>"
+        "<rect width='0.25' height='1'/></clipPath></defs>"
+        "<rect width='32' height='32' fill='#ffffff'/><g clip-path='url(#quarter)'>"
+        "<use href='{ref}sprite' transform='translate(16 16) rotate(-45)'/></g>");
+  }
+}
+
 TEST(SubDocumentFiltersTest, SymbolTargetViewportUnderBoxClip) {
   ExpectExternalMatchesInDocument(
       "sub-document-symbol-viewport",
