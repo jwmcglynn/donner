@@ -1,8 +1,8 @@
 #include "donner/css/Declaration.h"
 
-#include <algorithm>
-#include <cctype>
 #include <unordered_map>
+
+#include "donner/base/StringUtils.h"
 
 namespace donner::css {
 
@@ -40,18 +40,6 @@ std::ostream& operator<<(std::ostream& os, const Declaration& declaration) {
   return os;
 }
 
-namespace {
-
-std::string toLower(std::string_view str) {
-  std::string result(str);
-  for (char& ch : result) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
-  return result;
-}
-
-}  // namespace
-
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
                                    std::span<const Declaration> updates) {
   // Build set of update property names for O(1) lookup.
@@ -59,7 +47,7 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   updateIndexByName.reserve(updates.size());
   for (size_t i = 0; i < updates.size(); ++i) {
     // Keep the last occurrence of each property name in the updates.
-    updateIndexByName[toLower(updates[i].name)] = i;
+    updateIndexByName[StringUtils::ToLowerAscii(updates[i].name)] = i;
   }
 
   // Collect existing declarations not overridden by updates.
@@ -67,7 +55,7 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   merged.reserve(existing.size() + updateIndexByName.size());
 
   for (const auto& decl : existing) {
-    if (!updateIndexByName.contains(toLower(decl.name))) {
+    if (!updateIndexByName.contains(StringUtils::ToLowerAscii(decl.name))) {
       merged.push_back(&decl);
     }
   }
@@ -76,7 +64,7 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   // We need to preserve insertion order, so iterate updates and only emit if this index is the
   // last for its name.
   for (size_t i = 0; i < updates.size(); ++i) {
-    const std::string lowerName = toLower(updates[i].name);
+    const std::string lowerName = StringUtils::ToLowerAscii(updates[i].name);
     if (updateIndexByName[lowerName] == i) {
       merged.push_back(&updates[i]);
     }
