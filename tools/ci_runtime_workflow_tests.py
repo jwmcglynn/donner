@@ -174,17 +174,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertEqual(["--nohome_rc", "--nosystem_rc", "query", "target with spaces"],
                                  result.stdout.splitlines())
 
-    def test_self_hosted_lint_preserves_generator_retry_on_documentation_prs(self):
+    def test_self_hosted_lint_runs_on_documentation_prs_without_the_generator(self):
         job = self._job_body("lint-self-hosted", self.lint)
         condition = next(line for line in job.splitlines() if line.startswith("    if:"))
         self.assertNotIn("docs_only", condition)
         self.assertNotIn("actions/cache", job)
         self.assertIn("fetch-depth: 0", job)
         self.assertIn("run: tools/ci/lint_lane.sh", job)
-        generator = job.split("      - id: cmake-generator-check\n", 1)[1]
-        hosted = self._job_body("cmake-validate", self.lint)
-        self.assertEqual(hosted.split("      - id: cmake-generator-check\n", 1)[1].strip(),
-                         generator.strip())
+        # The CMake generator check runs once per event, in CI's Linux CMake consumer step
+        # (//tools:ci_lane_parity_tests). A documentation-only pull request skips those jobs and
+        # needs no check: no path it may change is a generator input (//tools/ci:gatekeeper_tests).
+        self.assertIsNone(re.search(r"(?m)^ +run: .*gen_cmakelists\.py", self.lint))
 
     @staticmethod
     def _variables(job):
@@ -842,9 +842,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("run: tools/ci/cmake_consumer.sh build --check "
                       "--cache --release-bazel-server --parallel 4", consumer)
         # The CMake workflow runs the same consumer through its lane script, whose commands
-        # //tools/ci:cmake_consumer_tests pins.
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache\n", linux)
-        self.assertEqual(2, self.cmake.count("run: tools/ci/cmake_consumer.sh build --ccache\n"))
+        # //tools/ci:cmake_consumer_tests pins. Its branch-push Linux job also validates the
+        # generator output, since main.yml's Linux jobs do not run for a branch push.
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --check --ccache\n", linux)
+        self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh build --ccache\n"))
         self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh install-tools\n"))
 
     def test_geode_asan_pr_lane_restores_the_main_linux_external_cache(self):
@@ -1688,7 +1689,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("install-recommends must be true or false", result.stderr)
             self.assertEqual(recorded, [])
 
-    def test_native_cmake_retains_consumer_and_generator_without_installing_tools(self):
+    def test_native_cmake_retains_consumer_without_installing_tools(self):
         native = self._job_body("macos-self-hosted", self.cmake)
         self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
         self.assertIn("run: tools/ci_select_macos_xcode.sh", native)
@@ -1698,11 +1699,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertNotIn("install-tools", native)
         self.assertNotIn("actions/cache", native)
         self.assertIn("needs: gatekeeper", native)
-        source = self._job_body("validate-generator", self.cmake)
-        first = "      - id: cmake-generator-check\n"
-        expected = source.split(first, 1)[1].strip()
-        actual = native.split(first, 1)[1].split("      # Hosted FetchContent", 1)[0].strip()
-        self.assertEqual(expected, actual)
+        # The generator check runs in CI's Linux jobs, not in the macOS consumer builds.
+        self.assertIsNone(re.search(r"(?m)^ +run: .*gen_cmakelists\.py", self.cmake))
 
     def test_cmake_cache_qualification_artifacts_are_attempt_scoped(self):
         producer = self._job_body("cmake-cache-producer", self.cmake)
@@ -1728,26 +1726,39 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                             "cmake-cache-consumer-%s" % attempt])
         self.assertNotIn("pattern:", download)
 
-    def test_cmake_generator_validation_retries_only_after_failure(self):
-        """Transient Bazel query failures get one retry without masking a persistent failure."""
-        for workflow_name, workflow in (
-                ("CMake hosted", self._job_body("validate-generator", self.cmake)),
-                ("CMake native", self._job_body("macos-self-hosted", self.cmake)),
-                ("Lint hosted", self._job_body("cmake-validate", self.lint)),
-                ("Lint ARM64", self._job_body("lint-self-hosted", self.lint))):
-            with self.subTest(workflow=workflow_name):
-                self.assertEqual(
-                    2,
-                    workflow.count("run: python3 tools/cmake/gen_cmakelists.py --check"),
-                )
-                self.assertIn("- id: cmake-generator-check", workflow)
-                self.assertIn("continue-on-error: true", workflow)
-                self.assertEqual(
-                    1,
-                    workflow.count(
-                        "if: steps.cmake-generator-check.outcome == 'failure'"
-                    ),
-                )
+    def test_macos_cmake_runs_on_main_pushes_on_demand_and_for_cmake_inputs(self):
+        """macOS CMake builds left pull requests that cannot change the CMake build.
+
+        The hosted build runs on every push to main, on manual dispatch, and on a pull request
+        only when its paths reach a CMake input; a branch push does not run it. The per-push run
+        on main makes a nightly run redundant. The Linux consumer in main.yml still builds the
+        generated CMake tree on every pull request and main push.
+        """
+        trigger = self.cmake.split("\non:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn('  push:\n    branches: ["*"]\n', trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertIn("  workflow_dispatch:", trigger)
+        paths = re.findall(r"(?m)^      - (.+)$", trigger.split("  pull_request:\n", 1)[1]
+                           .split("  workflow_dispatch:", 1)[0])
+        self.assertEqual(paths, [
+            ".github/workflows/cmake.yml", "CMakePresets.json", '"**/CMakeLists.txt"',
+            '"**/*.cmake"', '"**/*.cmake.in"', "examples/cmake_consumer/**", "tools/cmake/**",
+            "tools/ci/cmake_cache.py", "tools/ci/cmake_consumer.sh", "MODULE.bazel",
+            "third_party/bazel/non_bcr_deps.bzl", "tools/ci_macos_xcode.txt",
+            "tools/ci_select_macos_xcode.sh"])
+        for job in ("macos", "macos-self-hosted"):
+            condition = next(line for line in self._job_body(job, self.cmake).splitlines()
+                             if line.startswith("    if:"))
+            if job == "macos":
+                self.assertIn("(github.event_name != 'push' || github.ref == 'refs/heads/main')",
+                              condition)
+            else:
+                # The self-hosted build runs only for trusted pull requests.
+                self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'",
+                              condition)
+        consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --check --cache "
+                      "--release-bazel-server --parallel 4", consumer)
 
     def _editor_wasm_step_runs(self, workflow):
         """Each Editor WASM build step's name and its `run:` lines, in workflow order."""
