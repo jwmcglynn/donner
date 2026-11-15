@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
@@ -337,7 +338,7 @@ TEST(FontSynthesisStyleSnapshotTest, SameBytesKeepDistinctRequestsAcrossAllPrepa
         const FontFaceRequest request{400, style};
         ASSERT_THAT(fonts.providerFaceRequest(face), testing::Optional(request));
         if (!sourceFaces.empty()) {
-          EXPECT_THAT(fonts.fontData(face), ElementsAreArray(fonts.fontData(sourceFaces.front())));
+          EXPECT_THAT(fonts.fontData(face), BytesEqual(fonts.fontData(sourceFaces.front())));
         }
         sourceFaces.push_back(face);
         requests.push_back(request);

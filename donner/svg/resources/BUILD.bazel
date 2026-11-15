@@ -216,6 +216,7 @@ donner_cc_test(
         ":font_catalog_types",
         ":font_manager",
         ":font_metadata",
+        "//donner/base:base_test_utils",
         "//donner/base/fonts:sfnt_utils",
         "//donner/css/parser",
         "//donner/svg/core",

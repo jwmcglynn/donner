@@ -570,7 +570,7 @@ TEST(SVGTextElementPublicApiTests, SizeAdjustCharacterGeometryMatchesExplicitFon
   FontManager fontManager(document.registry());
   fontManager.addFontFace(face);
   const FontHandle font = fontManager.findFont("MetricNotoSans");
-  ASSERT_THAT(fontManager.fontData(font), testing::ElementsAreArray(*bytes));
+  ASSERT_THAT(fontManager.fontData(font), BytesEqual(*bytes));
   RecordProperty("font_fixture", "NotoSans-Regular.ttf");
   RecordProperty("font_units_per_em", 1000);
   RecordProperty("font_x_height", 536);
