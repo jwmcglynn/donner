@@ -581,9 +581,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                               (job_name, step))
         self.assertEqual(self.main.count("--config=hosted-macos-quarantine"),
                          sum(len(steps) for steps in readers.values()))
-        # The trusted-PR hosted-parity subset gets it through --config=hosted-parity.
-        parity = self._job_body("macos-hosted-parity")
-        self.assertIn("--config=hosted-parity-subset", self._step_body(parity, "Test"))
+        # No pull request job reproduces that environment, so no other job passes it.
         self.assertNotIn("DONNER_HOSTED_MACOS_QUARANTINE", self.main)
         hosted = self._job_body("macos")
         for step in ("Test", "Test (browser targets)"):
@@ -594,12 +592,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             step = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, step)
             self.assertIn("continue-on-error: true", body, step)
-            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
-                         "hosted-parity"):
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE"):
                 self.assertNotIn(name, body, step)
         for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
-            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
-                         "hosted-parity"):
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE"):
                 self.assertNotIn(name, self._job_body(job), job)
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
@@ -612,12 +608,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", text, path.name)
             self.assertNotIn("hosted-macos-quarantine", text, path.name)
         # In the repository bazelrc it is one named config, which no other config or default
-        # names except the hosted-parity config.
+        # names.
         self.assertEqual(
             [line for line in self.bazelrc.splitlines() if "HOSTED_MACOS_QUARANTINE" in line
              or "hosted-macos-quarantine" in line],
-            ["test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1",
-             "test:hosted-parity --config=hosted-macos-quarantine"])
+            ["test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"])
 
     def test_quarantine_report_lane_is_enabled_only_by_the_scheduled_editor_wasm_run(self):
         # The report-only lane lifts the Firefox quarantine of #1634 and never fails its job.
@@ -985,7 +980,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_shader_validation_runs_only_on_the_self_hosted_real_gpu(self):
         # Virtual GPUs use API validation; the dedicated native job keeps shader gates mandatory.
         for job_name in ("macos", "macos-browser", "macos-self-hosted",
-                         "macos-hosted-parity", "macos-vm-qualification"):
+                         "macos-vm-qualification"):
             job = self._job_body(job_name)
             for step in ("Select Metal validation profile", "Metal validation preflight",
                          "Fetch Metal validation dependencies"):
@@ -1025,7 +1020,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         needles = ("hosted-macos-unvalidated", "metal_shader_validation")
         self.assertIn("--config=hosted-macos-unvalidated",
                       self._step_body(self._job_body("macos"), "Test"))
-        # The hosted config and three explicit VM job environments own API-only validation.
+        # The hosted config and two explicit VM job environments own API-only validation.
         workflow = _repository_text(".github/workflows/main.yml")
         self.assertEqual(1, workflow.count(needles[0]))
         vm_flags = {
@@ -1035,9 +1030,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "macos-vm-qualification": "--//build_defs:metal_shader_validation=off --test_env=HOME "
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=vm-qualification",
-            "macos-hosted-parity": "--test_env=HOME --//build_defs:metal_shader_validation=off "
-                "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
-                "--test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm",
         }
         expected_lines = []
         for job_name, flags in vm_flags.items():
@@ -1490,7 +1482,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         there means its Bazel membership is broken.
         That must stay red rather than inherit the change-based lanes' notice.
         """
-        for job_name in ("macos", "macos-self-hosted", "macos-hosted-parity"):
+        for job_name in ("macos", "macos-self-hosted"):
             with self.subTest(job=job_name):
                 step = self._step_body(
                     self._job_body(job_name), "Test (Geode editor lane)"

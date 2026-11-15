@@ -58,14 +58,6 @@
             }
           ]
         },
-        "hosted-parity": {
-          "when": "hosted_parity_tests_affected",
-          "exception": {
-            "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-31",
-            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
-          }
-        },
         "hosted-toolchain": {
           "when": "always",
           "exception": {
@@ -141,22 +133,12 @@
             }
           ]
         },
-        "hosted-parity": {
-          "when": "hosted_parity_affected",
-          "description": "`hosted_parity` tests, rerun under the hosted runner's constraints.",
-          "counterparts": [
-            {
-              "job": "macos-hosted-parity",
-              "step": "test"
-            }
-          ]
-        },
         "hosted-equivalent": {
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-19, #1911",
-            "reason": "To keep pull request runtime short, only the `hosted_parity` subset and the Geode editor lane rerun with main's hosted Bazel scheduling configuration; every other test runs only at the fast lane's full width. No pull request lane reproduces the hosted runner's CPU speed, GPU, memory or disk."
+            "decision": "Maintainer decision 2026-11-14",
+            "reason": "Trusted pull requests run every macOS test only at the self-hosted fast lane's full width and speed; no pull request lane reruns tests under main's hosted runner configuration or reproduces the hosted runner's CPU speed, GPU, memory or disk. A failure specific to that configuration first shows on main's hosted macOS job, which runs on every push to main."
           }
         },
         "shader-validation": {
@@ -256,15 +238,13 @@
             }
           ]
         },
-        "hosted-parity": {
-          "when": "hosted_parity_affected",
-          "counterparts": [
-            {
-              "job": "macos-hosted-parity",
-              "step": "geode_test",
-              "min_tests": 1
-            }
-          ]
+        "hosted-equivalent": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-11-14",
+            "reason": "Trusted pull requests run every macOS test only at the self-hosted fast lane's full width and speed; no pull request lane reruns tests under main's hosted runner configuration or reproduces the hosted runner's CPU speed, GPU, memory or disk. A failure specific to that configuration first shows on main's hosted macOS job, which runs on every push to main."
+          }
         }
       }
     }

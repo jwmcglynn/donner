@@ -46,12 +46,9 @@ _COMPLETE = {
         "metal_profile": _ran(), "metal_preflight": _ran(), "metal_native": _ran(10)}),
     "macos-browser": _receipt("macos-browser", {
         "browser_preflight": _ran(), "browser_test": _ran(2)}),
-    "macos-hosted-parity": _receipt("macos-hosted-parity", {
-        "test": _ran(3), "geode_test": _ran(6)}),
 }
 
-_EVERYTHING = {"always": True, "browser_affected": True, "hosted_parity_affected": True,
-               "hosted_parity_tests_affected": True, "self_hosted_macos": True}
+_EVERYTHING = {"always": True, "browser_affected": True, "self_hosted_macos": True}
 
 
 class CoverageContractTest(unittest.TestCase):
@@ -93,8 +90,9 @@ class CoverageContractTest(unittest.TestCase):
         self.assertEqual(8, len(excepted))
         for line in excepted:
             self.assertIn("owner jwmcglynn", line)
-        for exception in ("hosted-equivalent", "hosted-shader-validation"):
-            self.assertTrue(any(line.startswith("macos / Test / %s: " % exception)
+        for exception in ("Test / hosted-equivalent", "Test / hosted-shader-validation",
+                          "Test (Geode editor lane) / hosted-equivalent"):
+            self.assertTrue(any(line.startswith("macos / %s: " % exception)
                                 for line in excepted), exception)
 
     def test_skipped_self_hosted_shader_validation_fails(self):
@@ -121,8 +119,8 @@ class CoverageContractTest(unittest.TestCase):
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
         for phase in ("Verify BuildBuddy remote execution / cloud-build",
-                      "Build / hosted-toolchain", "Test / hosted-parity",
-                      "Test / hosted-toolchain", "Linker canary (non-lld linker support) / linker"):
+                      "Build / hosted-toolchain", "Test / hosted-toolchain",
+                      "Linker canary (non-lld linker support) / linker"):
             with self.subTest(phase=phase):
                 self.assertTrue(any(line.startswith("linux / " + phase + ": ")
                                     and "2026-10-31" in line for line in excepted), excepted)
@@ -146,26 +144,30 @@ class CoverageContractTest(unittest.TestCase):
                     self.assertEqual(1, len(problems), problems)
                     self.assertIn(job + " / " + step, problems[0])
 
-    def test_removing_a_parity_partition_fails(self):
-        for step in ("test", "geode_test"):
-            with self.subTest(step=step):
-                receipts = copy.deepcopy(_COMPLETE)
-                receipts["macos-hosted-parity"]["steps"].pop(step)
-                problems, _ = self._check(receipts)
-                self.assertEqual(1, len(problems), problems)
-                self.assertIn("macos-hosted-parity / %s" % step, problems[0])
-        # A skipped parity job (no receipt at all) fails both parity classes.
-        receipts = copy.deepcopy(_COMPLETE)
-        del receipts["macos-hosted-parity"]
-        self.assertEqual(2, len(self._check(receipts)[0]))
-
-    def test_removing_a_parity_counterpart_from_the_manifest_fails(self):
+    def test_hosted_configuration_gap_is_a_reported_exception(self):
+        # No pull request lane reruns tests under main's hosted macOS configuration: main's
+        # hosted job is the only place a hosted-configuration failure shows. The manifest says so
+        # for each phase that runs tests, on every run, instead of expecting a counterpart.
+        problems, excepted = self._check(_COMPLETE)
+        self.assertEqual([], problems)
+        for phase in ("Test", "Test (Geode editor lane)"):
+            with self.subTest(phase=phase):
+                self.assertEqual(1, sum(line.startswith("macos / %s / hosted-equivalent: " % phase)
+                                        and "Maintainer decision 2026-11-14" in line
+                                        and "main's hosted macOS job" in line
+                                        for line in excepted), excepted)
+        # No class names a job that no longer exists.
+        jobs = {counterpart["job"] for phases in self.manifest["lanes"].values()
+                for classes in phases.values() for entry in classes.values()
+                for counterpart in entry.get("counterparts", [])}
+        self.assertEqual(set(_COMPLETE), jobs)
+        # Dropping the exception without restoring a counterpart is a manifest error.
         manifest = copy.deepcopy(self.manifest)
-        entry = manifest["lanes"]["macos"]["Test (Geode editor lane)"]["hosted-parity"]
-        entry["counterparts"] = []
+        del manifest["lanes"]["macos"]["Test (Geode editor lane)"]["hosted-equivalent"][
+            "exception"]
         self.assertEqual(
-            ["macos / Test (Geode editor lane) / hosted-parity needs either counterparts or an "
-             "exception, not both or neither"], contract.manifest_problems(manifest))
+            ["macos / Test (Geode editor lane) / hosted-equivalent needs either counterparts or "
+             "an exception, not both or neither"], contract.manifest_problems(manifest))
 
     def test_exceptions_must_name_an_owner(self):
         manifest = copy.deepcopy(self.manifest)
@@ -188,11 +190,10 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_unselected_classes_need_no_counterpart(self):
         receipts = copy.deepcopy(_COMPLETE)
-        del receipts["macos-hosted-parity"]
         del receipts["macos-browser"]
         self.assertEqual([], self._check(receipts, {"always": True, "self_hosted_macos": True})[0])
-        # A //... fallback selects every class.
-        self.assertEqual(4, len(self._check(receipts, {"always": True, "fallback": True,
+        # A //... fallback selects every class, including both desktop-browser classes.
+        self.assertEqual(2, len(self._check(receipts, {"always": True, "fallback": True,
                                                        "self_hosted_macos": True})[0]))
 
     def test_hosted_macos_routing_still_checks_linux(self):
@@ -240,12 +241,10 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_selection_comes_from_the_needs_context(self):
         needs = {"determine-targets": {"result": "success", "outputs": {
-                     "fallback": "false", "browser_affected": "true",
-                     "hosted_parity_affected": "false"}},
+                     "fallback": "false", "browser_affected": "true"}},
                  "gatekeeper": {"outputs": {"use_self_hosted_macos": "true"}}}
         self.assertEqual(contract.selection_from_needs(needs), {
             "always": True, "fallback": False, "browser_affected": True,
-            "hosted_parity_affected": False, "hosted_parity_tests_affected": False,
             "self_hosted_macos": True})
         # A skipped job sets no outputs, which read as false everywhere but `always`.
         skipped = {job: {"result": "skipped", "outputs": {}}

@@ -75,7 +75,7 @@ class WorkflowTargetsTest(unittest.TestCase):
         source = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).read_text()
         jobs = {m.group(1): m.group(2) for m in re.finditer(
             r"(?m)^  ([A-Za-z0-9_-]+):\n((?:(?:    .*|[ \\t]*)\n)*)", source)}
-        for name in ("macos-self-hosted", "macos-hosted-parity"):
+        for name in ("macos-self-hosted",):
             with self.subTest(job=name):
                 self.assertIn("runs-on: [self-hosted, macOS-vm, ARM64]", jobs[name])
                 self.assertIn("--//build_defs:metal_shader_validation=off", jobs[name])
