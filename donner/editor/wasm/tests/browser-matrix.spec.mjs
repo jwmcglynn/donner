@@ -752,13 +752,31 @@ test("every Bazel browser lane probes its browser launch before the first case",
 });
 
 // The probe launches every project of a lane's config. That matches what the lane runs only while
-// no Bazel lane narrows its config with a project filter.
-test("no Bazel browser lane passes a project filter", () => {
+// no target narrows a probed config with a project filter. The performance targets pass one
+// project each to their driver, whose config runs its own watchdog setup instead of the probe.
+test("no project filter narrows a config that probes the browser launch", () => {
   const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
-  const lanes = [...buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)];
-  assert.ok(lanes.length > 0);
-  for (const [, body] of lanes) {
-    assert.doesNotMatch(body, /--project\b/, parseBrowserLane(body).laneName);
+  const probing = new Set(["browser-launch-probe.js", "prepare-browser-archives.js"]);
+  const configSetup = (config) => {
+    const source = readFileSync(path.join(testDirectory, config), "utf8");
+    const named = /globalSetup: require\.resolve\("\.\/([^"]+)"\)/.exec(source)?.[1];
+    if (named !== undefined) return named;
+    return /require\("\.\/playwright\.bazel\.config\.js"\)/.test(source)
+      ? "browser-launch-probe.js"
+      : undefined;
+  };
+  // Every BUILD block (a target, or a list of generated targets) that passes --project.
+  const filtered = buildFile.split(/\n\n(?=\S)/).filter((block) => /--project\b/.test(block));
+  assert.ok(filtered.length > 0, "the performance targets pass a project each");
+  for (const block of filtered) {
+    const configs = [...new Set(block.match(/playwright\.[\w.-]+\.config\.js/g) ?? [])];
+    assert.ok(configs.length > 0, `a project filter without a config: ${block.slice(0, 80)}`);
+    for (const config of configs) {
+      assert.ok(
+        !probing.has(configSetup(config)),
+        `${config} probes every project, so no target may filter its projects`,
+      );
+    }
   }
 });
 

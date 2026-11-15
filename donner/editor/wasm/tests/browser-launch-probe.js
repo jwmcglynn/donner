@@ -24,7 +24,8 @@ function probeLaunchTimeout(timeout) {
 
 /**
  * The launches to probe: one per distinct browser and launch configuration among the projects.
- * Every project is probed: no Bazel lane passes a project filter (browser-matrix.spec.mjs).
+ * Every project is probed: no target filters the projects of a probed config
+ * (browser-matrix.spec.mjs).
  *
  * @param {{ projects: Array<{ name: string, use: Record<string, unknown> }> }} config The
  *     resolved Playwright config that global setup receives.
