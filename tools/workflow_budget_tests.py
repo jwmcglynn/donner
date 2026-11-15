@@ -47,6 +47,23 @@ def _block(lines, start, indent):
     return lines[start + 1:end], end
 
 
+def _scalar_value(text):
+    """A one-line YAML value without its trailing comment.
+
+    A quoted value ends at its closing quote, so a ` #` inside the quotes is part of the value.
+    A quoted value that does not close on its line continues on the next one, which the check
+    for multi-line values rejects.
+    """
+    text = text.strip()
+    if text[:1] not in ("'", '"'):
+        return text.split(" #", 1)[0].strip()
+    closing = text.find(text[0], 1)
+    # In a single-quoted value, '' is an escaped quote.
+    while text[0] == "'" and closing != -1 and text[closing + 1:closing + 2] == "'":
+        closing = text.find("'", closing + 2)
+    return text if closing == -1 else text[:closing + 1]
+
+
 def _indent(line):
     return len(line) - len(line.lstrip())
 
@@ -85,7 +102,7 @@ def _entries(lines):
             index += 1
             continue
         indent = len(match.group("indent")) + (2 if line.lstrip().startswith("- ") else 0)
-        value = (match.group("value") or "").split(" #", 1)[0].strip()
+        value = _scalar_value(match.group("value") or "")
         _check_modelled(lines, index, match.group("key"), indent, value)
         body, end = _block(lines, index, indent) if _BLOCK.match(value) else ([], index + 1)
         yield match.group("key"), value, body
@@ -232,6 +249,13 @@ class WorkflowBudgetTest(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 measure("jobs:\n  a:\n    steps:\n" + text)
         self.assertEqual(measure("    defaults:\n      run:\n        shell: bash\n")["lines"], 3)
+        # A ` #` inside a quoted value is not a comment, so the expressions after it count.
+        quoted = measure("      - run: 'echo \" # ${{ inputs.x }}\"' # note\n"
+                         "      - if: \"a == ' # ' && ${{ b }}\"\n")
+        self.assertEqual(quoted["run_expressions"], 1)
+        self.assertEqual(quoted["longest_if"], len("\"a == ' # ' && ${{ b }}\""))
+        self.assertEqual(measure("      - run: 'it''s # ${{ x }}' # c\n")["run_expressions"], 1)
+        self.assertEqual(measure("      - run: echo hi # ${{ not.run }}\n")["run_expressions"], 0)
         # Siblings at the key's own indentation are not a continuation.
         self.assertEqual(measure("    steps:\n      - run: echo hi\n        shell: bash\n"
                                  "      - if: success()\n        uses: x\n")["longest_if"],
