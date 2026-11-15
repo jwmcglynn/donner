@@ -1165,7 +1165,9 @@ TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdate
   renderer.draw(host->document);
   renderer.draw(host->document);
   SVGDocument sheet = SpriteSheetOf(*host);
-  const auto counters = [&] { return sheet.registry().ctx().get<components::RenderTreeState>().counters; };
+  const auto counters = [&] {
+    return sheet.registry().ctx().get<components::RenderTreeState>().counters;
+  };
   const auto before = counters();
   constexpr int kFrames = 6;
   for (int frame = 0; frame < kFrames; ++frame) {
