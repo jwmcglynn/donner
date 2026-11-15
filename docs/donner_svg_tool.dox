@@ -37,7 +37,7 @@
  *   65535 pixels.
  * - `--preview`: Show a terminal preview.
  * - `--interactive`: Enable mouse-driven terminal selection mode (implies `--preview`).
- * - `--quiet`: Suppress parser warnings.
+ * - `--quiet`: Suppress parser warnings and the render warnings printed after drawing.
  * - `--verbose`: Enable verbose renderer logs.
  * - `--experimental`: Enable experimental parser features.
  * - `--help`: Print usage.

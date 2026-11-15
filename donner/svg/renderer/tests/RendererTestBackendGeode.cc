@@ -173,18 +173,34 @@ public:
 [[maybe_unused]] const ::testing::Environment* const geodeBackendEnvironment =
     ::testing::AddGlobalTestEnvironment(new GeodeBackendEnvironment);
 
+/// Reads back the frame `renderer` just drew, once its GPU work has finished.
+///
+/// The snapshot's deadline is a latency budget that also counts the time spent waiting for the
+/// frame's own GPU work. A heavy frame on a slow or busy software rasterizer can take longer than
+/// that budget while it is still making progress, and the snapshot would then come back empty even
+/// though nothing is wrong. Waiting for the submitted work first, bounded only by lack of progress,
+/// leaves the snapshot budget for the readback itself; a device that really stops is still caught
+/// by the production stall bound.
+RendererBitmap SnapshotAfterSubmittedWork(RendererGeode& renderer) {
+  const geode::GpuWaitResult wait = renderer.waitForSubmittedWork();
+  if (wait == geode::GpuWaitResult::TimedOut) {
+    ADD_FAILURE() << "the frame's GPU work stopped making progress before it finished";
+  }
+  return renderer.takeSnapshot();
+}
+
 RendererBitmap GeodeRender(SVGDocument& document, bool verbose) {
   RendererGeode& renderer = SharedTestRenderer(verbose);
   renderer.setAntialias(true);
   renderer.draw(document);
-  return renderer.takeSnapshot();
+  return SnapshotAfterSubmittedWork(renderer);
 }
 
 RendererBitmap GeodeRenderForAscii(SVGDocument& document) {
   RendererGeode& renderer = SharedTestRenderer();
   renderer.setAntialias(false);
   renderer.draw(document);
-  return renderer.takeSnapshot();
+  return SnapshotAfterSubmittedWork(renderer);
 }
 
 }  // namespace

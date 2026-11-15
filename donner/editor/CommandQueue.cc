@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -15,12 +17,18 @@ bool IsStructuralReplace(EditorCommand::Kind kind) {
   return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::PasteShapes;
 }
 
-void StopAttributeCoalescingAtRemoval(
-    const EditorCommand& command,
-    std::map<std::pair<Entity, std::string>, std::size_t>& attributeSlots) {
+/// Coalescing key for attribute commands: the element plus the attribute's qualified name.
+using AttributeSlotKey = std::tuple<Entity, std::string, std::string>;
+
+AttributeSlotKey AttributeSlotKeyFor(const EditorCommand& command) {
+  return AttributeSlotKey(command.element->unsafeEntityHandle().entity(),
+                          command.attributeNamespacePrefix, command.attributeName);
+}
+
+void StopAttributeCoalescingAtRemoval(const EditorCommand& command,
+                                      std::map<AttributeSlotKey, std::size_t>& attributeSlots) {
   if (command.kind == EditorCommand::Kind::RemoveAttribute && command.element.has_value()) {
-    attributeSlots.erase(
-        std::make_pair(command.element->unsafeEntityHandle().entity(), command.attributeName));
+    attributeSlots.erase(AttributeSlotKeyFor(command));
   }
 }
 
@@ -32,7 +40,8 @@ std::optional<std::string> CommandQueue::pendingStyleAttribute(
     if (IsStructuralReplace(it->kind)) {
       break;
     }
-    if (!it->element.has_value() || *it->element != element || it->attributeName != "style") {
+    if (!it->element.has_value() || *it->element != element || it->attributeName != "style" ||
+        !it->attributeNamespacePrefix.empty()) {
       continue;
     }
     if (it->kind == EditorCommand::Kind::SetAttribute) {
@@ -89,10 +98,10 @@ CommandQueue::FlushResult CommandQueue::flush() {
   // registry.
   std::unordered_map<Entity, std::size_t> setTransformSlot;
 
-  // Coalesce SetAttribute by (element, attributeName). Successive writes
-  // to the same attribute on the same element collapse to the most recent
-  // value, just like SetTransform. The key is the (entity, attrName) pair.
-  std::map<std::pair<Entity, std::string>, std::size_t> setAttributeSlot;
+  // Coalesce SetAttribute by (element, qualified attribute name). Successive
+  // writes to the same attribute on the same element collapse to the most
+  // recent value, just like SetTransform. `href` and `xlink:href` are distinct.
+  std::map<AttributeSlotKey, std::size_t> setAttributeSlot;
 
   for (std::size_t i = startIndex; i < pending_.size(); ++i) {
     EditorCommand& cmd = pending_[i];
@@ -107,9 +116,8 @@ CommandQueue::FlushResult CommandQueue::flush() {
         result.effectiveCommands[it->second] = std::move(cmd);
       }
     } else if (cmd.kind == EditorCommand::Kind::SetAttribute && cmd.element.has_value()) {
-      const auto key =
-          std::make_pair(cmd.element->unsafeEntityHandle().entity(), cmd.attributeName);
-      auto [it, inserted] = setAttributeSlot.try_emplace(key, result.effectiveCommands.size());
+      auto [it, inserted] =
+          setAttributeSlot.try_emplace(AttributeSlotKeyFor(cmd), result.effectiveCommands.size());
       if (inserted) {
         result.effectiveCommands.push_back(std::move(cmd));
       } else {

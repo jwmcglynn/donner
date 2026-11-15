@@ -5,10 +5,32 @@ env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
 
+# The generated CMake build is validated and built on Linux by every CI run of a pull request and
+# of main (main.yml's CMake consumer step). This workflow adds the macOS CMake build, which runs on
+# every push to main, on demand, and on a pull request only when it changes an input that only the
+# CMake build reads: the generator and its dependency map, CMake files, the example consumer, the
+# CMake lane scripts, this workflow, the module versions the generator turns into FetchContent
+# downloads, and the pinned Xcode it compiles with. Branch pushes before a pull request exists still build and validate the Linux
+# consumer here.
 on:
   push:
     branches: ["*"]
   pull_request:
+    paths:
+      - .github/workflows/cmake.yml
+      - CMakePresets.json
+      - "**/CMakeLists.txt"
+      - "**/*.cmake"
+      - "**/*.cmake.in"
+      - examples/cmake_consumer/**
+      - tools/cmake/**
+      - tools/ci/cmake_cache.py
+      - tools/ci/cmake_consumer.sh
+      - MODULE.bazel
+      - third_party/bazel/non_bcr_deps.bzl
+      - tools/ci_macos_xcode.txt
+      - tools/ci_select_macos_xcode.sh
+  workflow_dispatch:
 
 # A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
 # Only opened, synchronize and reopened events share the per-PR group. Every other run (push,
@@ -115,33 +137,12 @@ jobs:
           echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
           echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
-  validate-generator:
-    runs-on: ubuntu-24.04
-    needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # This check queries the Bazel graph, so retry it once when the first
-      # attempt fails. Deterministic generator failures fail again on retry;
-      # compile and test steps remain single-attempt.
-      - id: cmake-generator-check
-        name: Validate generated CMakeLists.txt
-        continue-on-error: true
-        run: python3 tools/cmake/gen_cmakelists.py --check
-
-      - name: Retry generated CMakeLists.txt validation
-        if: steps.cmake-generator-check.outcome == 'failure'
-        run: python3 tools/cmake/gen_cmakelists.py --check
-
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: [gatekeeper, validate-generator]
-    # PRs and main build and test this consumer in the consolidated CI Linux job.
-    # Keep standalone branch-push coverage before a PR exists.
+    needs: gatekeeper
+    # PRs and main build and test this consumer, and validate the generator output, in the
+    # consolidated CI Linux job. Keep standalone branch-push coverage before a PR exists.
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'push' && github.ref != 'refs/heads/main' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -163,13 +164,15 @@ jobs:
       # it builds without restoring CMake dependency or compiler caches.
 
       - name: Build with CMake (tiny_skia)
-        run: tools/ci/cmake_consumer.sh build --ccache
+        run: tools/ci/cmake_consumer.sh build --check --ccache
 
+  # On every push to main, on demand, and on pull requests that change a CMake input (the
+  # trigger's paths). A branch push does not run it.
   macos:
     runs-on: xcode-27
     timeout-minutes: 60
-    needs: [gatekeeper, validate-generator]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
+    needs: gatekeeper
+    if: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M
@@ -264,15 +267,6 @@ jobs:
           chmod +x "$wrapper_dir/bazel"
           ln -s bazel "$wrapper_dir/bazelisk"
           echo "$wrapper_dir" >> "$GITHUB_PATH"
-
-      - id: cmake-generator-check
-        name: Validate generated CMakeLists.txt
-        continue-on-error: true
-        run: python3 tools/cmake/gen_cmakelists.py --check
-
-      - name: Retry generated CMakeLists.txt validation
-        if: steps.cmake-generator-check.outcome == 'failure'
-        run: python3 tools/cmake/gen_cmakelists.py --check
 
       # Hosted FetchContent trees contain absolute paths; start a fresh native consumer build.
       - name: Build with CMake (tiny_skia)

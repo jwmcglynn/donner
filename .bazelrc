@@ -18,6 +18,10 @@
 ##   --config=clang-tidy        - Build with clang-tidy checks.
 ##   --config=dev               - Disable renderer backend test transitions.
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
+##   --config=remote-macos      - Build and test for macOS arm64 with every action on a remote
+##                                macOS executor, from a Linux or macOS client.
+##   --config=remote-macos-gpu  - remote-macos with tests on executors that have a GPU (see the
+##                                limit at its definition).
 ##
 
 # Opt out of usage reporting by third-party Bazel modules. aspect_tools_telemetry, which
@@ -141,7 +145,9 @@ test:geode --local_test_jobs=1
 # (LOCAL_GPU_TEST_TAG in build_defs/rules.bzl), so with one unit at most one
 # GPU-opening test runs locally at a time, alongside CPU-only tests. Every
 # command needs it declared: Bazel fails a local test that requests a resource
-# it does not track. Do not raise it above 1 without a reviewed reason;
+# it does not track. One unit is the default for every client, developer runs
+# included; only the main.yml macOS lanes raise it, in --config=ci-macos below. Do
+# not raise it anywhere else without a reviewed reason;
 # //build_defs:geode_test_scheduling_tests enforces this.
 build --local_resources=local_gpu=1
 common:dev --//build_defs:disable_backend_test_transition=true
@@ -283,6 +289,14 @@ build:ci-macos --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebre
 # HOME set: to a writable directory private to that test. Declared on `build` so the build and
 # test commands keep one analysis cache (see the --test_env note below).
 build:ci-macos --test_env=HOME=
+# Up to four GPU-opening tests at a time on the main.yml macOS lanes (owner decision, 2026-11-14).
+# One unit per machine exists because a hardware adapter is process-global and one device loss
+# could cascade into other GPU tests; four accept that risk on macOS CI to shorten the GPU part
+# of the test step. A device loss would show as several GPU tests failing together. This later
+# --local_resources entry replaces the unconditional local_gpu=1 for that key only; cpu and
+# memory budgets are unchanged. Commands that also pass --local_test_jobs=1, such as the Geode
+# editor lane, stay fully serial, because Bazel then ignores resource tags.
+build:ci-macos --local_resources=local_gpu=4
 
 # apple_support's clang wrapper expects DEVELOPER_DIR. The local Darwin
 # sandbox sets it implicitly; remote execution does not. SDKROOT must NOT be
@@ -306,6 +320,21 @@ build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Develo
 # optional `%workspace%/.bazelrc.user` imported at the end of this file.
 common:re --//build_defs:enable_tracy=false
 common:ci --//build_defs:enable_tracy=false
+
+# Non-release CI lanes (everything that passes `--config=ci`) build the editor with a fixed
+# placeholder commit in its build identity, //donner/editor:editor_build_info_txt. Without an
+# explicit commit that action reads the checkout's commit, runs locally and changes on every
+# commit, so the editor binaries, the editor Wasm package and every test built on them missed the
+# cache on each new commit. Only the About dialog shows the commit; the native font preview cache
+# keys on it, and CI never runs the native editor against a persistent preview cache.
+#
+# Builds that ship or qualify an artifact pass the real commit and do not use `--config=ci`:
+# release builds, BCR preflight (tools/bcr_preflight.py) and the Editor WASM workflow's package
+# and deployment candidate (tools/ci/editor_wasm_lane.sh, tools/ci/editor_wasm_stage.py).
+# //tools:ci_lane_parity_tests checks both sides.
+# An explicit --//build_defs:release_source_commit wins only when it comes after `--config=ci`.
+common:ci-test-lane --//build_defs:release_source_commit=0000000000000000000000000000000000000000
+common:ci --config=ci-test-lane
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
@@ -674,12 +703,65 @@ run --test_sharding_strategy=disabled
 build:buildbuddy-re --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64
 build:buildbuddy-re --platforms=//tools/ci:buildbuddy_linux_x86_64
 build:buildbuddy-re --spawn_strategy=remote
-# This metadata action reads the real Git checkout.
+# Without an explicit commit, this metadata action reads the real Git checkout. With one (any
+# `--config=ci` build, through ci-test-lane, or a release commit) its progress message differs,
+# this pattern does not match, and the action needs no local checkout.
 build:buildbuddy-re --strategy_regexp="^Executing genrule //donner/editor:editor_build_info_txt$=local"
 build:buildbuddy-re --strategy=TestRunner=local
 build:buildbuddy-re --noremote_local_fallback
 build:buildbuddy-re --remote_timeout=600s
 build:buildbuddy-re --jobs=50
+
+# Remote macOS execution from a Linux or macOS client: builds and tests for macOS arm64 with every
+# action, tests too, on a remote macOS executor. Usage:
+#   DONNER_CI_XCODE_IDENTITY=<version>-<build> bazel test --config=remote-macos //donner/base/...
+# The executor endpoint, TLS credentials and queue priority are private runner configuration and
+# belong in an untracked rc file, as for `re` (under `build:re` when one endpoint serves both, or
+# under `build:remote-macos-base`). See "Remote macOS execution" in docs/building.md.
+#
+# A client that is not a Mac discovers no Xcode, so the build selects the static configuration of
+# //tools/ci:remote_macos_xcodes, built from tools/ci_macos_xcode.txt, and its default Xcode;
+# //tools:remote_macos_config_tests keeps --xcode_version on the most preferred pinned Xcode with
+# confirmed SDK versions. The executor must have that Xcode at the standard path (`re` sets
+# DEVELOPER_DIR). Compile and link keys carry the declared Xcode and SDK versions. As on the CI
+# lanes, DONNER_CI_XCODE_IDENTITY comes from the caller's environment, because only the caller
+# knows which Xcode the executor really has; tests and genrules, which reach Xcode only through
+# the executor, are kept apart across Xcode builds only when the caller exports `<version>-<build>`
+# of the selected Xcode, and a value that contradicts --xcode_version gives self-contradictory keys.
+#
+# Host-OS configs are off: `build:linux` would otherwise be chosen by the client's OS, so a Linux
+# client would pass -fno-modules to the macOS compiles and get different action keys from a macOS
+# client. The macOS config is applied explicitly instead, so every rc file's `macos` lines apply on
+# every client, and lines for other OS names are skipped. A later
+# --enable_platform_specific_config, on the command line after this config or on a later rc line,
+# turns host-OS configs back on without any warning.
+build:remote-macos-base --noenable_platform_specific_config
+build:remote-macos-base --config=macos --config=ci-macos --config=re
+build:remote-macos-base --platforms=//:macos_aarch64
+build:remote-macos-base --xcode_version_config=//tools/ci:remote_macos_xcodes
+build:remote-macos-base --xcode_version=27.2
+build:remote-macos-base --spawn_strategy=remote
+build:remote-macos-base --strategy=CppCompile=remote
+build:remote-macos-base --strategy=CppLink=remote
+build:remote-macos-base --strategy=TestRunner=remote
+build:remote-macos-base --noremote_local_fallback
+# Execution platforms accumulate and the first compatible one wins, and Bazel adds the host
+# platform as the last candidate, so the config names one execution platform and makes it the
+# host platform too. Only remote-macos uses remote-macos-base.
+build:remote-macos --config=remote-macos-base
+build:remote-macos --extra_execution_platforms=//tools/ci:remote_macos_aarch64
+build:remote-macos --host_platform=//tools/ci:remote_macos_aarch64
+# The GPU variant builds exactly as remote-macos, so every build action keeps its key and cache
+# entry, and runs its tests on executors that have a GPU: with --use_target_platform_for_tests a
+# test executes on the target platform, which is the same macOS arm64 platform asking for
+# `gpu=present` too. Execution properties are part of an action's key, so a GPU execution platform
+# would rebuild everything the tests need. Limit: a test whose rule returns testing.ExecutionInfo
+# (rules_cc's cc_test does for Apple targets) runs in its test exec group, on the base execution
+# platform without the GPU property. The project's transitioned test wrappers return none
+# (//tools:remote_macos_config_tests checks), so the GPU-opening tests reach GPU executors.
+build:remote-macos-gpu --config=remote-macos
+build:remote-macos-gpu --platforms=//tools/ci:remote_macos_aarch64_gpu
+build:remote-macos-gpu --use_target_platform_for_tests
 
 # CI lanes on the BuildBuddy remote cache (the GitHub-hosted lanes and the
 # self-hosted macOS lane) may write a remote-cache fragment here via the

@@ -18,6 +18,9 @@ Rules enforced:
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
+  - No hand-rolled XML markup scanning in non-test C++: a find/rfind/starts_with/compare-style
+    call whose argument is a markup literal ("<...", ">", "/>", "-->", "]]>", "?>", "url(#",
+    '<' or '>'). Existing sites are capped per file by _XML_SCAN_ALLOWLIST.
   - No new or worsened supported C++ function or method definition above the local
     decision-point complexity limit
 
@@ -29,7 +32,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -572,6 +577,213 @@ def _check_ref_return_types(
     return errors
 
 
+_C_LIKE_LITERAL = r"\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'"
+# A search-style call and its argument list, allowing one level of nested parentheses.
+_XML_SCAN_CALL_RE = re.compile(
+    r"(?<![\w])(?P<call>find|rfind|find_first_of|find_last_of|starts_with|ends_with|compare|"
+    r"contains|StartsWith|EndsWith|Contains|Find)\s*\("
+    r"(?P<args>(?:" + _C_LIKE_LITERAL + r"|\((?:" + _C_LIKE_LITERAL + r"|[^;()\"'])*\)|[^;()\"'])*)"
+    r"\)"
+)
+# Tokenizes an argument list so only top-level literal arguments are examined.
+_XML_SCAN_ARGUMENT_TOKEN_RE = re.compile(
+    r"(?P<literal>" + _C_LIKE_LITERAL + r")|\((?:" + _C_LIKE_LITERAL + r"|[^;()\"'])*\)|.",
+    re.DOTALL,
+)
+# A bare `<`, or `<` opening a tag, end tag, comment, CDATA section or processing instruction.
+# Operator text such as "<=", "<<" or "<>" is not markup.
+_XML_MARKUP_LITERAL_RE = re.compile(r"<|<[A-Za-z_:/!?].*|>|/>|-->|\]\]>|\?>|url\(#.*", re.DOTALL)
+# A literal wrapped in a string constructor, `find(std::string_view("</"))`, is still the argument.
+_XML_SCAN_WRAPPED_LITERAL_RE = re.compile(
+    r"(?<![\w:])(?:std::)?(?:string_view|string|RcString)\s*\(\s*(?P<literal>"
+    + _C_LIKE_LITERAL
+    + r")\s*\)"
+)
+_XML_SCAN_DESCRIPTION = "hand-rolled XML markup scan"
+_XML_SCAN_REMEDIATION = (
+    "Derive markup boundaries from the parse or token stream you already have: XMLNode location "
+    "accessors, attribute source locations, XMLParser::GetAttributeLocation, or xml::Tokenize for "
+    "tolerant cursor, highlight, and source-bounds work. A named exception carries "
+    "`// NOLINT(banned_patterns: xml-scan <exception>)`; see AGENTS.md."
+)
+# Exception names accepted by the xml-scan suppression marker (see AGENTS.md).
+_XML_SCAN_EXCEPTIONS = (
+    "xml-parser",
+    "xml-tokenizer",
+    "dirty-range-fallback",
+    "syntax-highlight",
+    "css-tokenizer",
+    "test-literal",
+)
+_XML_SCAN_SUPPRESSION_RE = re.compile(
+    r"//\s*NOLINT\(banned_patterns:\s*xml-scan\s+(?P<exception>[a-z-]+)\b[^)]*\)"
+)
+# The strict parser, the error-recovery tokenizer and the CSS tokenizer are the scanners.
+_XML_SCAN_EXEMPT_PATHS = (
+    "donner/base/xml/XMLParser.cc",
+    "donner/base/xml/XMLTokenizer.h",
+    "donner/css/parser/details/Tokenizer.cc",
+)
+_XML_SCAN_TEST_PATH_RE = re.compile(
+    r"(?:^|/)(?:tests?|testing)/|_tests?\.[a-z]+$|_fuzzer\.[a-z]+$"
+)
+# Preexisting sites, capped per file. The cap must equal the file's current count: growth fails, and
+# so does a stale cap after a site is removed, so the list only ratchets down.
+_XML_SCAN_ALLOWLIST: Dict[str, int] = {
+    "donner/base/xml/XMLDocument.cc": 1,
+    "donner/benchmarks/StructuredEditingPerfBench.cpp": 1,
+    "donner/editor/DocumentSyncController.cc": 2,
+    "donner/editor/FocusView.cc": 2,
+    "donner/editor/FontPreviewCache.cc": 3,
+    "donner/editor/ShapeClipboardCommands.cc": 7,
+    "donner/editor/SidebarPresenter.cc": 1,
+    "donner/editor/StrokeMarkerPrefabs.cc": 1,
+    "donner/editor/XmlAutocomplete.cc": 1,
+    "tools/svg_suite/Provenance.cc": 3,
+}
+
+
+# One C++ lexeme that can hide or contain markup text: a comment, a raw string, or a literal.
+# A quote after an identifier character is a digit separator (1'000) unless that identifier is an
+# encoding prefix (L'<').
+_CPP_LEXEME_RE = re.compile(
+    r"(?P<comment>//[^\n]*|/\*.*?(?:\*/|\Z))"
+    r'|(?<![\w])(?:u8|u|U|L)?R"(?P<delimiter>[^()\\\s"]{0,16})\(.*?(?:\)(?P=delimiter)"|\Z)'
+    r'|(?:(?<![\w])(?:u8|u|U|L))?"(?:\\.|[^"\\\n])*"?'
+    r"|(?:(?<![\w])|(?<=\bu8)|(?<=\b[uUL]))'(?:\\.|[^'\\\n])*'?",
+    re.DOTALL,
+)
+
+
+def _strip_comments_keep_literals(text: str) -> Tuple[str, List[Tuple[int, int]]]:
+    """Blank out C++ comments with spaces, keeping literals, offsets and line numbers intact.
+
+    Returns the text and the [start, end) offsets of its string and character literals.
+    """
+    literals: List[Tuple[int, int]] = []
+
+    def replace(lexeme: re.Match) -> str:
+        if lexeme.group("comment") is not None:
+            return re.sub(r"[^\n]", " ", lexeme.group(0))
+        literals.append(lexeme.span())
+        return lexeme.group(0)
+
+    return _CPP_LEXEME_RE.sub(replace, text), literals
+
+
+def _xml_scan_suppressed(raw_lines: List[str], line: int) -> bool:
+    markers = (
+        _XML_SCAN_SUPPRESSION_RE.search(raw_lines[idx])
+        for idx in range(line - 1, min(line + 2, len(raw_lines)))
+    )
+    return any(marker and marker.group("exception") in _XML_SCAN_EXCEPTIONS for marker in markers)
+
+
+def _markup_scan_lines(text: str, literal_spans: List[Tuple[int, int]]) -> List[int]:
+    """Return the line of every search call outside a literal whose top-level argument is markup."""
+    literal_starts = [start for start, _ in literal_spans]
+    lines: List[int] = []
+    position = 0
+    while call := _XML_SCAN_CALL_RE.search(text, position):
+        # Resume just past the call name so a nested call in its arguments is also examined.
+        position = call.start("call") + 1
+        enclosing = bisect.bisect_right(literal_starts, call.start()) - 1
+        inside_literal = enclosing >= 0 and call.start() < literal_spans[enclosing][1]
+        literals = (
+            token.group("literal")[1:-1]
+            for token in _XML_SCAN_ARGUMENT_TOKEN_RE.finditer(
+                _XML_SCAN_WRAPPED_LITERAL_RE.sub(r"\g<literal>", call.group("args"))
+            )
+            if token.group("literal")
+        )
+        if not inside_literal and any(_XML_MARKUP_LITERAL_RE.fullmatch(arg) for arg in literals):
+            lines.append(text.count("\n", 0, call.start()) + 1)
+    return lines
+
+
+def _check_xml_scanning(
+    raw: str, raw_lines: List[str], posix_path: str
+) -> List[Tuple[int, str, str]]:
+    """Flag search calls over raw markup in non-test C++, beyond the file's allowlisted count."""
+    exempt_paths = (posix_path.endswith(path) for path in _XML_SCAN_EXEMPT_PATHS)
+    if _XML_SCAN_TEST_PATH_RE.search(posix_path) or any(exempt_paths):
+        return []
+
+    hits = [
+        line
+        for line in _markup_scan_lines(*_strip_comments_keep_literals(raw))
+        if not _xml_scan_suppressed(raw_lines, line)
+    ]
+    allowed = next(
+        (count for path, count in _XML_SCAN_ALLOWLIST.items() if posix_path.endswith(path)), 0
+    )
+    if len(hits) < allowed:
+        return [_stale_xml_scan_cap(len(hits), allowed)]
+    if len(hits) == allowed:
+        return []
+    detail = f" ({len(hits)} sites, allowlist cap {allowed})" if allowed else ""
+    return [(line, _XML_SCAN_DESCRIPTION + detail, _XML_SCAN_REMEDIATION) for line in hits]
+
+
+def _stale_xml_scan_cap(hits: int, allowed: int) -> Tuple[int, str, str]:
+    action = (
+        "remove this file's entry" if hits == 0 else f"lower this file's cap to {hits}"
+    )
+    return (
+        1,
+        f"stale {_XML_SCAN_DESCRIPTION} allowlist cap ({hits} sites, allowlist cap {allowed})",
+        f"A grandfathered site was removed: {action} in _XML_SCAN_ALLOWLIST in "
+        "build_defs/check_banned_patterns.py so the cap cannot be reused.",
+    )
+
+
+def _names_existing_file(root: Path, path: str) -> bool:
+    """Return true if `path` names a file under `root`, with every component spelled as on disk."""
+    directory = root
+    for component in path.split("/"):
+        if not directory.is_dir() or component not in os.listdir(directory):
+            return False
+        directory = directory / component
+    return directory.is_file()
+
+
+def _listed_path_problem(root: Path, path: str) -> str | None:
+    if "\\" in path or path.startswith("/") or path != posixpath.normpath(path):
+        return "is not a normalized repository-relative path; write it as `dir/File.cc`"
+    if not _names_existing_file(root, path):
+        return "does not exist; remove the entry or move it to the new path"
+    return None
+
+
+def _invalid_xml_scan_list_entries(root: Path) -> List[str]:
+    """Describe allowlist and exemption entries that cannot match a file under `root`."""
+    problems = [
+        f"{path}: _XML_SCAN_ALLOWLIST cap {cap}; remove the entry, a cap must be positive"
+        for path, cap in _XML_SCAN_ALLOWLIST.items()
+        if cap <= 0
+    ]
+    for name, paths in (
+        ("_XML_SCAN_ALLOWLIST", _XML_SCAN_ALLOWLIST),
+        ("_XML_SCAN_EXEMPT_PATHS", _XML_SCAN_EXEMPT_PATHS),
+    ):
+        problems.extend(
+            f"{path}: listed in {name} but {problem}"
+            for path in paths
+            if (problem := _listed_path_problem(root, path))
+        )
+    return problems
+
+
+def _report_invalid_xml_scan_list_entries() -> int:
+    problems = _invalid_xml_scan_list_entries(Path.cwd())
+    for problem in problems:
+        print(problem)
+    if problems:
+        print("    Fix the entry in build_defs/check_banned_patterns.py so no cap or exemption is")
+        print("    left for a path that no file occupies.")
+    return len(problems)
+
+
 def _rule_applies_to_path(rule: _Rule, posix_path: str) -> bool:
     applies = not rule.applicable_path_prefixes or any(
         prefix in posix_path for prefix in rule.applicable_path_prefixes
@@ -614,6 +826,7 @@ def check_file(
             errors.append((line, rule.description, rule.remediation))
 
     errors.extend(_check_ref_return_types(stripped, raw_lines, posix_path))
+    errors.extend(_check_xml_scanning(raw, raw_lines, posix_path))
     if check_method_complexity:
         errors.extend(_check_method_complexity(stripped, method_complexity_baseline))
 
@@ -667,6 +880,14 @@ def main(argv: List[str]) -> int:
             "Requires --check-method-complexity."
         ),
     )
+    parser.add_argument(
+        "--require-allowlisted-files",
+        action="store_true",
+        help=(
+            "Fail when an XML markup scan allowlist or exemption entry is malformed or names no "
+            "file under the working directory."
+        ),
+    )
     args = parser.parse_args(argv[1:])
 
     inputs = [Path(p) for p in args.paths] if args.paths else [Path("donner"), Path("examples")]
@@ -675,7 +896,7 @@ def main(argv: List[str]) -> int:
         print("No source files found to check.", file=sys.stderr)
         return 0
 
-    total_errors = 0
+    total_errors = _report_invalid_xml_scan_list_entries() if args.require_allowlisted_files else 0
     for f in files:
         baseline = None
         if args.check_method_complexity and args.complexity_baseline_ref:

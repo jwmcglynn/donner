@@ -4,12 +4,16 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "donner/base/Length.h"
@@ -114,6 +118,21 @@ struct RendererDriverTextFrameCache {
 };
 
 namespace {
+
+/**
+ * Deliver one render warning to the host's sink, or print it to stderr only in verbose mode.
+ *
+ * @param warningSink Host destination, or null when the host did not provide one.
+ * @param verbose Whether warnings without a host destination are printed.
+ * @param warning The warning to deliver.
+ */
+void ReportRenderWarning(ParseWarningSink* warningSink, bool verbose, ParseDiagnostic&& warning) {
+  if (warningSink != nullptr) {
+    warningSink->add(std::move(warning));
+  } else if (verbose) {
+    std::cerr << warning << '\n';
+  }
+}
 
 class ScopedTextPathMeasurementWorkEpoch {
 public:
@@ -1128,11 +1147,196 @@ std::vector<Entity> CollectMainEntities(
 }
 
 /// Draw order of the last rendered instance in @p instance's subtree, itself when it has none.
-int SubtreeEndDrawOrder(Registry& registry,
-                        const components::RenderingInstanceComponent& instance) {
+int SubtreeLastDrawOrder(Registry& registry,
+                         const components::RenderingInstanceComponent& instance) {
   const auto* last =
       registry.try_get<components::RenderingInstanceComponent>(instance.subtreeLastEntity);
   return last != nullptr ? std::max(last->drawOrder, instance.drawOrder) : instance.drawOrder;
+}
+
+/// Calls @p visit with the mask, marker and pattern content drawn for @p instance. That content is
+/// instantiated once, under the first element that draws it, and shared by every later element
+/// that draws the same marker, mask or pattern.
+template <typename Visit>
+void ForEachDrawnContent(const components::RenderingInstanceComponent& instance, Visit&& visit) {
+  if (instance.mask.has_value() && instance.mask->subtreeInfo.has_value()) {
+    visit(*instance.mask->subtreeInfo);
+  }
+  for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
+    if (marker->has_value() && (*marker)->subtreeInfo.has_value()) {
+      visit(*(*marker)->subtreeInfo);
+    }
+  }
+  for (const auto* paint : {&instance.resolvedFill, &instance.resolvedStroke}) {
+    if (const auto* reference = std::get_if<components::PaintResolvedReference>(paint);
+        reference != nullptr && reference->subtreeInfo.has_value()) {
+      visit(*reference->subtreeInfo);
+    }
+  }
+}
+
+/// Draw order through which @p instance's output depends on rendered instances: its subtree and
+/// the mask, marker and pattern content drawn for it. That content can come after the subtree.
+int ContentLastDrawOrder(Registry& registry,
+                         const components::RenderingInstanceComponent& instance) {
+  int last = SubtreeLastDrawOrder(registry, instance);
+  const auto extend = [&](const components::SubtreeInfo& content) {
+    if (const auto* contentLast =
+            registry.try_get<components::RenderingInstanceComponent>(content.lastRenderedEntity)) {
+      last = std::max(last, contentLast->drawOrder);
+    }
+  };
+  if (instance.subtreeInfo.has_value()) {
+    extend(*instance.subtreeInfo);
+  }
+  ForEachDrawnContent(instance, extend);
+  return last;
+}
+
+/// Closed draw-order ranges, for finding the shared content that a visible element draws.
+class DrawOrderRanges {
+public:
+  /// Add the range of rendered instances in @p content, if both its ends are rendered.
+  void add(Registry& registry, const components::SubtreeInfo& content) {
+    const auto* first =
+        registry.try_get<components::RenderingInstanceComponent>(content.firstRenderedEntity);
+    const auto* last =
+        registry.try_get<components::RenderingInstanceComponent>(content.lastRenderedEntity);
+    if (first != nullptr && last != nullptr) {
+      ranges_.emplace_back(first->drawOrder, std::max(first->drawOrder, last->drawOrder));
+    }
+  }
+
+  /// Sort and merge the ranges; required before \ref contains and comparison.
+  void normalize() {
+    std::sort(ranges_.begin(), ranges_.end());
+    std::vector<std::pair<int, int>> merged;
+    for (const auto& range : ranges_) {
+      if (!merged.empty() && range.first <= merged.back().second) {
+        merged.back().second = std::max(merged.back().second, range.second);
+      } else {
+        merged.push_back(range);
+      }
+    }
+    ranges_ = std::move(merged);
+  }
+
+  /// Whether @p drawOrder lies in a range. The ranges must be normalized.
+  [[nodiscard]] bool contains(int drawOrder) const {
+    const auto it = std::upper_bound(
+        ranges_.begin(), ranges_.end(), drawOrder,
+        [](int order, const std::pair<int, int>& range) { return order < range.first; });
+    return it != ranges_.begin() && drawOrder <= std::prev(it)->second;
+  }
+
+  bool operator==(const DrawOrderRanges&) const = default;
+
+private:
+  std::vector<std::pair<int, int>> ranges_;
+};
+
+/// Whether @p instance paints nothing itself and contributes nothing through its subtree or its
+/// content: a zero `opacity` hides it and everything drawn for it, and a hidden leaf draws neither
+/// its geometry nor the markers, mask or pattern content drawn for it.
+///
+/// A hidden leaf's filter therefore never runs, even a filter that would paint with no source
+/// (`feFlood`), as browsers do. A visible descendant of a hidden group is not a leaf of that group
+/// and keeps its filter. `visibility` hides graphics, not a container's own filter output, so an
+/// empty hidden container such as `<g>` with a filter keeps it; without a filter it draws nothing,
+/// and neither does the mask content drawn for it.
+bool IsInvisibleInstance(Registry& registry,
+                         const components::RenderingInstanceComponent& instance) {
+  const bool filteredContainer =
+      instance.resolvedFilter.has_value() && IsNonDrawingContainer(instance.dataHandle(registry));
+  if (!instance.visible && SubtreeLastDrawOrder(registry, instance) == instance.drawOrder &&
+      !filteredContainer) {
+    return true;
+  }
+  const EntityHandle styleHandle = instance.styleHandle(registry);
+  const auto& style = styleHandle.get<components::ComputedStyleComponent>();
+  return style.properties.has_value() && style.properties->opacity.get().value() <= 0.0;
+}
+
+/// Filtered instances that reach the frame in one pass over @p entities, and the shared content
+/// those reaching instances draw.
+struct VisibilityPass {
+  std::vector<Entity> filtered;  ///< Filtered instances that reach the frame, in draw order.
+  DrawOrderRanges reached;       ///< Shared content drawn by instances that reach the frame.
+};
+
+/// Whether @p instance, at a draw order inside a hidden element's range, still reaches the frame:
+/// only when a visible element also draws it as shared content and it is not invisible itself.
+bool ReachesFrameFromHiddenRange(Registry& registry,
+                                 const components::RenderingInstanceComponent& instance,
+                                 const DrawOrderRanges& shownContent) {
+  return shownContent.contains(instance.drawOrder) && !IsInvisibleInstance(registry, instance);
+}
+
+/// One pass of \ref VisibleFilteredEntities, keeping content in @p shownContent even when it was
+/// instantiated under a hidden element.
+VisibilityPass ScanVisibleInstances(Registry& registry, std::span<const Entity> entities,
+                                    const DrawOrderRanges& shownContent) {
+  VisibilityPass pass;
+  std::optional<int> hiddenThroughDrawOrder;
+  for (const Entity entity : entities) {
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance == nullptr) {
+      continue;
+    }
+    if (hiddenThroughDrawOrder && instance->drawOrder <= *hiddenThroughDrawOrder) {
+      // Content drawn for hidden content is hidden too, and can end after the hidden subtree,
+      // unless a visible element also draws it.
+      hiddenThroughDrawOrder =
+          std::max(*hiddenThroughDrawOrder, ContentLastDrawOrder(registry, *instance));
+      if (!ReachesFrameFromHiddenRange(registry, *instance, shownContent)) {
+        continue;
+      }
+    } else {
+      hiddenThroughDrawOrder.reset();
+      if (IsInvisibleInstance(registry, *instance)) {
+        hiddenThroughDrawOrder = ContentLastDrawOrder(registry, *instance);
+        continue;
+      }
+    }
+    ForEachDrawnContent(*instance, [&](const components::SubtreeInfo& content) {
+      pass.reached.add(registry, content);
+    });
+    if (instance->resolvedFilter.has_value()) {
+      pass.filtered.push_back(entity);
+    }
+  }
+  pass.reached.normalize();
+  return pass;
+}
+
+/// The filtered instances among @p entities, in draw order, whose output can reach the frame.
+///
+/// Rendered but invisible content (anything drawn for a zero-opacity element, or for a hidden
+/// leaf) is left out, so its filters neither run nor spend the frame's filter budget; an
+/// unprepared filter hides its element, which was invisible anyway. A `<use>` copy is a separate
+/// instance under its referencing element and stays in. Marker, mask and pattern content is shared
+/// by every element that draws it, so content that a visible element draws stays in even when it
+/// was instantiated under a hidden one; within it, only instances that are themselves invisible
+/// are left out.
+std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const Entity> entities) {
+  const bool anyFilter = std::any_of(entities.begin(), entities.end(), [&](Entity entity) {
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    return instance != nullptr && instance->resolvedFilter.has_value();
+  });
+  if (!anyFilter) {
+    return {};
+  }
+  // Shared content that a visible element draws can make more content visible, including content
+  // it draws in turn, so repeat until the shared content drawn by visible elements stops growing.
+  // The hidden ranges are the same on every pass and the shown set only grows, so this ends.
+  DrawOrderRanges shownContent;
+  while (true) {
+    VisibilityPass pass = ScanVisibleInstances(registry, entities, shownContent);
+    if (pass.reached == shownContent) {
+      return std::move(pass.filtered);
+    }
+    shownContent = std::move(pass.reached);
+  }
 }
 
 void SamplePreparedImageDimension(components::FilterNode& node, std::size_t index,
@@ -2164,14 +2368,16 @@ void RendererDriver::syncFilterPreparationStats() {
 
 RendererDriver::RendererDriver(
     RendererInterface& renderer, bool verbose, SecurityStats* securityStats,
-    std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork)
+    std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork,
+    ParseWarningSink* warningSink)
     : renderer_(renderer),
       verbose_(verbose),
       textFrameCache_(std::make_unique<RendererDriverTextFrameCache>()),
       externalUseStyleWork_(externalUseStyleWork
                                 ? std::move(externalUseStyleWork)
                                 : std::make_shared<components::StyleResourceBudget>()),
-      securityStats_(securityStats) {
+      securityStats_(securityStats),
+      warningSink_(warningSink) {
   if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
     filterPreparationBudget_ = shared;
   }
@@ -2206,13 +2412,7 @@ void RendererDriver::draw(SVGDocument& document) {
       DocumentWriteAccess access = document.writeAccess();
       const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
           *externalUseStyleWork_, document.registry());
-      ParseWarningSink warnings;
-      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-      if (warnings.hasWarnings()) {
-        for (const ParseDiagnostic& warning : warnings.warnings()) {
-          std::cerr << warning << '\n';
-        }
-      }
+      prepareDocument(document);
       drawPreparedDocument(document);
       return;
     }
@@ -2225,14 +2425,7 @@ void RendererDriver::draw(SVGDocument& document) {
                                                                             document.registry());
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-  if (warnings.hasWarnings()) {
-    for (const ParseDiagnostic& warning : warnings.warnings()) {
-      std::cerr << warning << '\n';
-    }
-  }
+  prepareDocument(document);
 
   drawPreparedDocument(document);
 }
@@ -2248,31 +2441,19 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
       const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
           *externalUseStyleWork_, document.registry());
 
-      ParseWarningSink warnings;
-      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-      if (warnings.hasWarnings()) {
-        for (const ParseDiagnostic& warning : warnings.warnings()) {
-          std::cerr << warning << '\n';
-        }
-      }
+      prepareDocument(document);
 
       snapshot.setSourceRevision(document.handle()->revision());
       RenderSnapshotRecorder recorder(snapshot, renderer_);
-      RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_);
+      RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_,
+                                    warningSink_);
       snapshotDriver.drawPreparedDocument(document, viewport, surfaceFromCanvas);
     }
     if (snapshot.fontPayloadLimitExceeded()) {
       DocumentWriteAccess access = document.writeAccess();
       const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
           *externalUseStyleWork_, document.registry());
-      ParseWarningSink warnings;
-      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-      if (warnings.hasWarnings()) {
-        for (const ParseDiagnostic& warning : warnings.warnings()) {
-          std::cerr << warning << '\n';
-        }
-      }
+      prepareDocument(document);
       drawPreparedDocument(document, viewport, surfaceFromCanvas);
       return;
     }
@@ -2284,14 +2465,7 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-  if (warnings.hasWarnings()) {
-    for (const ParseDiagnostic& warning : warnings.warnings()) {
-      std::cerr << warning << '\n';
-    }
-  }
+  prepareDocument(document);
 
   drawPreparedDocument(document, viewport, surfaceFromCanvas);
 }
@@ -2307,8 +2481,7 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  prepareDocument(document);
   if (shouldCancel && shouldCancel()) {
     return false;
   }
@@ -2338,19 +2511,12 @@ RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
 
-  ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-
-  if (warnings.hasWarnings()) {
-    for (const ParseDiagnostic& warning : warnings.warnings()) {
-      std::cerr << warning << '\n';
-    }
-  }
+  prepareDocument(document);
 
   snapshot.setSourceRevision(document.handle()->revision());
 
   RenderSnapshotRecorder recorder(snapshot, renderer_);
-  RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_);
+  RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_, warningSink_);
   snapshotDriver.drawPreparedDocument(document);
   return snapshot;
 }
@@ -2478,8 +2644,10 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  // Atlas tiles never print: without a host sink their warnings are discarded even when verbose.
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(
+      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink);
 
   const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
@@ -3331,7 +3499,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
   // Each iteration re-reads the component from storage via `storage.get(entity)`, so references
   // are re-bound after any previous iteration's mutation.
-  for (const Entity entity : entities) {
+  for (const Entity entity : VisibleFilteredEntities(registry, entities)) {
     const auto* instance = beginPreparingFilterEntity(registry, entity);
     if (!instance) {
       continue;
@@ -4456,6 +4624,55 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
   return *fontCollectionCache_;
 }
 
+namespace {
+
+/**
+ * Preparation warnings a sub-document has already delivered to a host sink. A child document is
+ * prepared again for each external-use occurrence and each frame, and repeats the same warnings.
+ * Each warning, matched by its text and location, is delivered once per loaded sub-document
+ * instead, so identical warnings without a location are merged.
+ */
+struct ReportedSubDocumentWarnings {
+  std::unordered_set<std::string> keys;
+};
+
+std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
+  std::ostringstream key;
+  key << warning;
+  return std::move(key).str();
+}
+
+/**
+ * Deliver @p warnings from preparing a sub-document to @p hostSink, skipping warnings already
+ * delivered for that sub-document and marking @p hostSink truncated when any were dropped.
+ *
+ * @param registry The sub-document's registry, which records the delivered warnings.
+ * @param warnings Warnings collected while preparing the sub-document.
+ * @param hostSink The host's collecting sink.
+ */
+void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings,
+                               ParseWarningSink& hostSink) {
+  auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
+  bool truncated = warnings.resourceLimitExceeded();
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    std::string key = SubDocumentWarningKey(warning);
+    if (reported.keys.contains(key)) {
+      continue;
+    }
+    if (reported.keys.size() >= ParseWarningSink::kMaximumWarnings) {
+      truncated = true;
+      continue;
+    }
+    reported.keys.insert(std::move(key));
+    hostSink.add(ParseDiagnostic(warning));
+  }
+  if (truncated) {
+    hostSink.markResourceLimitExceeded();
+  }
+}
+
+}  // namespace
+
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
@@ -4465,10 +4682,42 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
   }
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
-  if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
+  if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
+    // Without a collecting host sink these warnings are discarded even when verbose: printing them
+    // would repeat them for every traversal. Nothing is recorded, so a later draw with a collecting
+    // sink still receives them.
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+    if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
+      RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
+    }
+    return;
+  }
+  // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
+  // the host sink once. A warning dropped by a resource limit, here or in the collecting sink,
+  // marks the host sink truncated so it does not look complete. As with any sink limit, the host
+  // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
+  // again on every traversal, each later draw of it reports truncation too.
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  ReportSubDocumentWarnings(registry, warnings, *warningSink_);
+  if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
+    ParseWarningSink restoredWarnings;
+    RendererUtils::prepareDocumentForRendering(document, verbose_, restoredWarnings);
+    ReportSubDocumentWarnings(registry, restoredWarnings, *warningSink_);
+  }
+}
+
+void RendererDriver::prepareDocument(SVGDocument& document) {
+  if (warningSink_ != nullptr) {
+    RendererUtils::prepareDocumentForRendering(document, verbose_, *warningSink_);
+    return;
+  }
+  // Without a host sink, only verbose mode pays for formatting warnings.
+  ParseWarningSink warnings = verbose_ ? ParseWarningSink() : ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    std::cerr << warning << '\n';
   }
 }
 
@@ -4563,8 +4812,11 @@ public:
                         const components::ResolvedPaintServer& fill,
                         const components::ResolvedPaintServer& stroke,
                         std::shared_ptr<components::StyleResourceBudget> work,
+                        ParseWarningSink* warningSink, bool verbose,
                         ExternalWorkCharge charge = ExternalWorkCharge::Draw)
       : registry_(child),
+        warningSink_(warningSink),
+        verbose_(verbose),
         hostLease_(
             EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
     if (!style.properties || child.ctx().contains<components::ExternalUseStyleContext>() ||
@@ -4595,7 +4847,10 @@ public:
     }
     auto& context = registry_.ctx().get<components::ExternalUseStyleContext>();
     if (context.unsupportedResource && context.work->reportExternalResourceWarning()) {
-      std::cerr << "External-use inherited cross-document URL resource is unsupported\n";
+      ReportRenderWarning(warningSink_, verbose_,
+                          ParseDiagnostic::Warning(
+                              "External-use inherited cross-document URL resource is unsupported",
+                              FileOffset::EndOfString()));
     }
     components::ExternalUseStyleRetention::FinishOccurrence(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
@@ -4618,6 +4873,8 @@ private:
   }
 
   Registry& registry_;
+  ParseWarningSink* warningSink_;
+  bool verbose_;
   ElementAnchor hostLease_;
   std::array<ElementAnchor, 2> resourceLeases_;
   bool installed_ = false;
@@ -4681,7 +4938,8 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
     return;
   }
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
-                              instance.resolvedStroke, externalUseStyleWork_);
+                              instance.resolvedStroke, externalUseStyleWork_, warningSink_,
+                              verbose_);
   if (!scope.installed()) {
     return;
   }
@@ -4836,7 +5094,7 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
       RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
   const std::vector<std::pair<int, Entity>>& uses = externalUseInstances(registry);
-  const int lastDrawOrder = SubtreeEndDrawOrder(registry, instance);
+  const int lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
   const auto firstUse =
       std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity()));
   for (auto it = firstUse; it != uses.end() && it->first <= lastDrawOrder; ++it) {
@@ -4964,8 +5222,8 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
   // occurrence's own external uses and forgets those results afterwards, so the allowance is what
   // bounds a family of documents that each use the next several times.
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
-                              instance.resolvedStroke, externalUseStyleWork_,
-                              ExternalWorkCharge::Measure);
+                              instance.resolvedStroke, externalUseStyleWork_, warningSink_,
+                              verbose_, ExternalWorkCharge::Measure);
   if (!scope.installed()) {
     return std::nullopt;
   }
@@ -5061,7 +5319,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
     viewport.devicePixelRatio = 1.0;
     offscreen->beginFrame(viewport);
 
-    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_);
+    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_, warningSink_);
     subDriver.renderingSize_ = targetSize;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
     subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
@@ -5227,7 +5485,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     // Create a sub-driver for offscreen rendering and share the recursion guard. The depth is
     // carried into the sub-driver (one level deeper) so the chain-length cap above accumulates
     // across the whole nested-fragment recursion, not just within a single driver instance.
-    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_);
+    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_, warningSink_);
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
     subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;

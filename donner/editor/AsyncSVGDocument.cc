@@ -674,7 +674,10 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // public setAttribute is correct and sufficient.
       svg::SVGElement element = *command.element;
       xml::ApplySourceEditResult result = document_->setElementAttribute(
-          element, xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
+          element,
+          xml::XMLQualifiedNameRef(std::string_view(command.attributeNamespacePrefix),
+                                   std::string_view(command.attributeName)),
+          command.attributeValue);
       lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;

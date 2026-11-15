@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/tests/StallGuard.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuLimits.h"
@@ -203,6 +204,67 @@ WorkerSubmission SubmitOnWorker(const std::function<Result<uint64_t>()>& submit,
   return outcome;
 }
 
+/// Returns once a submission to \p device is waiting for room, however late its thread started, or
+/// once \p submissionReturned is set by a submission that returned without waiting, which the case
+/// then reports. @param device Device the submission goes to. @param submissionReturned Set once
+/// the case's submission has returned.
+void AwaitWaitForRoom(const MetalDevice& device, const std::atomic<bool>& submissionReturned) {
+  while (device.commandBufferRoomWaitsForTest() == 0 &&
+         !submissionReturned.load(std::memory_order_acquire)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+/// \ref PacedSteps that start only once a submission is waiting for room, so that wait lasts at
+/// least as long as the steps take. The first step's gap is counted from \p origin, the progress
+/// the steps continue, so the time the submission takes to start waiting counts toward the pace:
+/// a host that delays the submission by most of a stall bound fails \ref KeptPaceWithin rather
+/// than the behavior the case checks.
+class PacedStepsOnceWaiting {
+public:
+  /**
+   * @param waiting Device whose submission the steps wait for.
+   * @param count Steps to run.
+   * @param interval Time to sleep before each step.
+   * @param step Run for each step with its number, counting from 1.
+   * @param origin The last progress before the steps, which the first step's gap is counted from.
+   */
+  PacedStepsOnceWaiting(const MetalDevice& waiting, int count, std::chrono::milliseconds interval,
+                        std::function<void(int)> step, std::chrono::steady_clock::time_point origin)
+      : thread_([this, &waiting, count, interval, origin, step = std::move(step)] {
+          AwaitWaitForRoom(waiting, submissionReturned_);
+          steps_.emplace(count, interval, step, origin);
+          steps_->join();
+        }) {}
+
+  /// Lets the steps run if the case never recorded its submission's return, for instance after a
+  /// fatal assertion, so destruction cannot wait forever for a wait that will not start.
+  ~PacedStepsOnceWaiting() {
+    submissionReturned();
+    join();
+  }
+
+  PacedStepsOnceWaiting(const PacedStepsOnceWaiting&) = delete;
+  PacedStepsOnceWaiting& operator=(const PacedStepsOnceWaiting&) = delete;
+
+  /// Records that the submission returned, so the steps run even if it never waited.
+  void submissionReturned() { submissionReturned_.store(true, std::memory_order_release); }
+
+  /// Waits for the last step. Call \ref submissionReturned first.
+  /// @return The steps that ran, for \ref KeptPaceWithin.
+  const PacedSteps& join() {
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+    return *steps_;
+  }
+
+private:
+  std::atomic<bool> submissionReturned_{false};
+  std::optional<PacedSteps> steps_;  //!< Written by the waiting thread, read after it is joined.
+  std::thread thread_;  //!< Declared last, so it starts once every member it uses exists.
+};
+
 /// Lets the paused work of \p device run, waits for every submission it made to finish, and checks
 /// that the system's own timeout ended none of it, which would mean the case held paused work too
 /// long, and that every command buffer was counted back out. @param device Device to settle.
@@ -261,6 +323,23 @@ protected:
     pausedWork_.moved();
   }
 
+  /// Lets the first \p count command buffers \p device paused run, as the case's first release of
+  /// that work, and waits until they have completed, recording when that was seen in
+  /// \ref firstCompletionSeen_. Until then the device's last progress, which a stall is judged
+  /// from, is its first paused commit, so a setup that a loaded machine runs slowly could use up
+  /// the stall bound before the case's paced progress begins. Once this returns the bound runs
+  /// from a completion the case has seen, no later than \ref firstCompletionSeen_.
+  /// @param device Device whose paused work to release. @param count Command buffers to release.
+  void releaseFirstPausedAndAwaitCompletion(MetalDevice& device, uint64_t count) {
+    const uint64_t inFlight = device.commandBuffersInFlightForTest();
+    ASSERT_THAT(inFlight, Ge(count));
+    releasePaused(device, count);
+    ASSERT_TRUE(donner::tests::WaitUntil([&] {
+      return device.commandBuffersInFlightForTest() <= inFlight - count;
+    })) << "the released command buffers never completed";
+    firstCompletionSeen_ = std::chrono::steady_clock::now();
+  }
+
   std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
   std::unique_ptr<MetalDevice> device_;
   /// When the fill began. The stall bound runs from the device's last progress, which can be no
@@ -269,6 +348,10 @@ protected:
   /// When the case last paused work or let some of it run, which bounds how long a submission
   /// held behind that work is waited for.
   PausedWorkClock pausedWork_;
+  /// When \ref releaseFirstPausedAndAwaitCompletion saw its released work complete: no earlier
+  /// than the progress that completion made, and within one poll of it, so pacing counted from
+  /// here covers the time the case's submission then takes to start waiting.
+  std::chrono::steady_clock::time_point firstCompletionSeen_;
 };
 
 /// Work that stays below the backstop never waits for room, so ordinary frames cost nothing extra,
@@ -294,12 +377,9 @@ TEST_F(MetalSubmissionBackstopTest, ASubmissionPastTheBackstopWaitsForRoom) {
   std::chrono::steady_clock::time_point releasedAt;
   std::atomic<bool> submissionReturned{false};
   std::thread releaser([&] {
-    // Released only once the submission is waiting for room, however late its worker starts. A
-    // submission that returns without waiting is released after, which the case reports.
-    while (device_->commandBufferRoomWaitsForTest() == 0 &&
-           !submissionReturned.load(std::memory_order_acquire)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    // Released only once the submission is waiting for room. A submission that returns without
+    // waiting is released after, which the case reports.
+    AwaitWaitForRoom(*device_, submissionReturned);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     releasedAt = std::chrono::steady_clock::now();
     releasePaused(*device_, 1);
@@ -349,13 +429,10 @@ TEST_F(MetalSubmissionBackstopTest, ALossDeclaredWhileWaitingForRoomEndsTheWait)
 
   std::atomic<bool> submissionReturned{false};
   std::thread declarer([&] {
-    // Declared only once the submission is waiting for room, however late its worker starts, so
-    // the declaration has a wait to end. A submission that returns without waiting is declared
-    // over after, which the case reports.
-    while (device_->commandBufferRoomWaitsForTest() == 0 &&
-           !submissionReturned.load(std::memory_order_acquire)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    // Declared only once the submission is waiting for room, so the declaration has a wait to
+    // end. A submission that returns without waiting is declared over after, which the case
+    // reports.
+    AwaitWaitForRoom(*device_, submissionReturned);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     (void)DeclareDeviceLost(*rootLoss_);
   });
@@ -381,18 +458,25 @@ TEST_F(MetalSubmissionBackstopTest, CommandBuffersCompletingKeepALongWaitAlive) 
   // Released this many per interval, room for a full-size submission takes longer than the stall
   // bound to appear.
   constexpr uint64_t kReleasedPerInterval = kFullSize / 8;
+  constexpr int kPacedReleases = static_cast<int>(kFullSize / kReleasedPerInterval) - 1;
   device_->setSubmissionStallTimeoutForTest(kStallBound);
   ASSERT_NO_FATAL_FAILURE(fillBackstopWhilePaused());
 
-  std::thread releaser([&] {
-    for (uint64_t released = kReleasedPerInterval; released <= kFullSize;
-         released += kReleasedPerInterval) {
-      std::this_thread::sleep_for(kReleaseInterval);
-      releasePaused(*device_, released);
-    }
-  });
+  // The first command buffers complete before the submission, so its stall bound runs from a
+  // completion the case saw rather than from the fill, however long a loaded machine took over
+  // that. The rest run one group per interval once the submission waits, so the wait lasts
+  // longer than its stall bound. The pace is counted from that first completion: a submission
+  // that takes most of a stall bound to start waiting fails the pace check.
+  ASSERT_NO_FATAL_FAILURE(releaseFirstPausedAndAwaitCompletion(*device_, kReleasedPerInterval));
+  PacedStepsOnceWaiting release(
+      *device_, kPacedReleases, kReleaseInterval,
+      [this](int step) {
+        releasePaused(*device_, static_cast<uint64_t>(step + 1) * kReleasedPerInterval);
+      },
+      firstCompletionSeen_);
   const WorkerSubmission past = submitPastTheBackstop(kFullSize);
-  releaser.join();
+  release.submissionReturned();
+  ASSERT_THAT(release.join(), KeptPaceWithin(kStallBound));
 
   EXPECT_TRUE(past.finishedInWindow)
       << "the submission was still waiting " << kReleaseDeadline.count()
@@ -408,30 +492,39 @@ TEST_F(MetalSubmissionBackstopTest, CommandBuffersCompletingKeepALongWaitAlive) 
 /// One wait for room is capped in all, however much progress it sees: a GPU that completes work
 /// too slowly to ever make room ends the wait at the cap with the root declared lost.
 TEST_F(MetalSubmissionBackstopTest, TheWaitCapEndsAWaitThatKeepsProgressing) {
+  constexpr std::chrono::milliseconds kStallBound{1000};
   constexpr std::chrono::milliseconds kCap{600};
   constexpr std::chrono::milliseconds kReleaseInterval{100};
   // Room for a full-size submission would take sixteen intervals, well past the cap.
   constexpr uint64_t kReleasedPerInterval = kFullSize / 16;
-  device_->setSubmissionStallTimeoutForTest(std::chrono::milliseconds(1000));
+  constexpr int kPacedReleases = static_cast<int>(kFullSize / kReleasedPerInterval) - 1;
+  device_->setSubmissionStallTimeoutForTest(kStallBound);
   device_->setSubmissionWaitCapForTest(kCap);
   ASSERT_NO_FATAL_FAILURE(fillBackstopWhilePaused());
 
-  std::thread releaser([&] {
-    // Stops once the root is lost, so the rest of the paused work is let go at once rather than
-    // held toward the system's own timeout for stalled command buffers.
-    for (uint64_t released = kReleasedPerInterval;
-         released <= kFullSize && !rootLoss_->lost.load(std::memory_order_acquire);
-         released += kReleasedPerInterval) {
-      std::this_thread::sleep_for(kReleaseInterval);
-      releasePaused(*device_, released);
-    }
-  });
+  // The first command buffers complete before the submission, so the wait judges a stall from a
+  // completion the case saw rather than from the fill, and ends at its cap rather than at once.
+  // The rest run one group per interval once the submission waits, so room cannot appear before
+  // the cap. Once the root is lost the steps release nothing more, and the rest of the paused
+  // work is let go when the case settles.
+  ASSERT_NO_FATAL_FAILURE(releaseFirstPausedAndAwaitCompletion(*device_, kReleasedPerInterval));
+  PacedStepsOnceWaiting release(
+      *device_, kPacedReleases, kReleaseInterval,
+      [this](int step) {
+        if (!rootLoss_->lost.load(std::memory_order_acquire)) {
+          releasePaused(*device_, static_cast<uint64_t>(step + 1) * kReleasedPerInterval);
+        }
+      },
+      firstCompletionSeen_);
   const WorkerSubmission past = submitPastTheBackstop(kFullSize);
-  releaser.join();
+  release.submissionReturned();
+  ASSERT_THAT(release.join(), KeptPaceWithin(kStallBound));
 
   EXPECT_TRUE(past.finishedInWindow);
   ASSERT_TRUE(past.result.has_value());
-  EXPECT_THAT(*past.result, IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_THAT(*past.result, IsGpuErrorWithMessage(GpuErrorType::DeviceLost,
+                                                  HasSubstr("for room among the command buffers")))
+      << "the wait did not end at its cap";
   EXPECT_THAT(past.waitedMs, Ge(kCap.count())) << "the wait ended before its cap";
   EXPECT_THAT(past.waitedMs, Lt(kCap.count() + 1000)) << "the wait ran well past its cap";
   EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::QueueIdle));
@@ -544,18 +637,20 @@ TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsACo
       GetResultOrFail(device_->registerTexture(GetResultOrFail(producer_->exportTexture(target))));
   ASSERT_NO_FATAL_FAILURE(fillConsumerBehind(source));
 
-  std::thread releaser([&] {
-    // The producer's command buffers run one per interval, the first at once and the texture's
-    // last, so the consumer sees no completion of its own for longer than its stall bound.
-    for (uint64_t released = 1; released <= kEarlier + 1; ++released) {
-      releasePaused(*producer_, released);
-      if (released <= kEarlier) {
-        std::this_thread::sleep_for(kReleaseInterval);
-      }
-    }
-  });
+  // The producer's first command buffer completes before the consumer submits, so the consumer's
+  // stall bound runs from a completion the case saw rather than from the setup above, however
+  // long a loaded machine took over it. The rest run one per interval once the consumer waits,
+  // the texture's last, so the consumer waits, with no completion of its own, for longer than its
+  // stall bound. The pace is counted from that first completion: a consumer that takes most of a
+  // stall bound to start waiting fails the pace check.
+  ASSERT_NO_FATAL_FAILURE(releaseFirstPausedAndAwaitCompletion(*producer_, 1));
+  PacedStepsOnceWaiting release(
+      *device_, static_cast<int>(kEarlier), kReleaseInterval,
+      [this](int step) { releasePaused(*producer_, static_cast<uint64_t>(step) + 1); },
+      firstCompletionSeen_);
   const WorkerSubmission past = submitConsumerPastTheBackstop();
-  releaser.join();
+  release.submissionReturned();
+  ASSERT_THAT(release.join(), KeptPaceWithin(kStallBound));
 
   EXPECT_TRUE(past.finishedInWindow)
       << "the consumer was still waiting " << kReleaseDeadline.count()

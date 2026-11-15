@@ -459,6 +459,83 @@ saved. Other runs print what eviction would keep without deleting anything.
 without the remote cache. Deleting only `BUILDBUDDY_API_KEY_READONLY` turns the cache off for
 Renovate pull requests alone.
 
+## Remote macOS execution {#RemoteMacosExecution}
+
+`--config=remote-macos` builds and tests for macOS arm64 with every action, tests included, on a
+remote macOS executor. The client can be a Linux or macOS machine and needs no Xcode. No CI
+workflow uses it yet.
+
+```sh
+DONNER_CI_XCODE_IDENTITY=27.2-27B52 bazel test --config=remote-macos //donner/base/...
+```
+
+The repository supplies everything that affects what is built: the macOS target platform, a macOS
+arm64 execution platform (`//tools/ci:remote_macos_aarch64`, also used as the host platform) that
+asks the executor for `OSFamily=darwin`, `ISA=aarch64` and `container-image=none`, a static Xcode
+configuration, remote strategies for every action and no local fallback, so an executor failure
+fails the build instead of building another way. The caller supplies the rest privately, in an
+untracked rc file such as `~/.bazelrc` or `.bazelrc.user`, as for `--config=re`: the executor and
+cache endpoint, TLS or other credentials, and any queue priority or `--jobs` value. Put them under
+`build:re` when the same endpoint serves both, or under `build:remote-macos-base`.
+
+**Xcode.** A client that is not a Mac discovers no Xcode, so the config selects
+`//tools/ci:remote_macos_xcodes` (`tools/ci/remote_macos_xcode.bzl`). It holds each tuple of
+`tools/ci_macos_xcode.txt` whose SDK versions have been confirmed on a machine with that Xcode, and
+its default is the most preferred of them. The config pins `--xcode_version` to that default, and
+the executor must have that Xcode installed at `/Applications/Xcode.app`. To add a pinned tuple,
+read its SDK versions with `xcodebuild -showsdks` on a machine with that Xcode and record them in
+`CONFIRMED_SDK_VERSIONS`; the default then moves to the most preferred confirmed tuple. An
+`xcode_config` fails analysis when `--xcode_version` names a version it does not hold, so its
+targets are tagged `manual`: wildcard builds on another Xcode, such as a macOS CI lane on a
+pinned Xcode that is not listed yet, never analyse them, and only `--xcode_version_config`
+reaches them. Passing another `--xcode_version` together with this config fails analysis.
+`//tools:remote_macos_config_tests` fails when the static configuration, the pin file, the config
+and this page disagree.
+
+**Toolchain identity.** Compile and link keys already carry the declared Xcode and SDK versions.
+Tests and genrules reach Xcode only through the executor, so, as on the CI lanes, they are kept
+apart across Xcode builds only by the toolchain identity, which comes from the caller because only
+the caller knows which Xcode the executor really has. For the default Xcode, export
+`DONNER_CI_XCODE_IDENTITY=27.2-27B52`, the same value on every client that should share action
+keys. A value that contradicts `--xcode_version` gives self-contradictory keys.
+
+**Same keys from a Linux or macOS client.** Bazel normally applies `build:linux` or `build:macos`
+according to the client's OS, which would give a Linux client different macOS compile commands
+than a macOS client. The config turns that off (`--noenable_platform_specific_config`) and applies
+the macOS config explicitly, so every rc file's `macos` lines apply on both clients and lines for
+other OS names apply on neither. Passing `--enable_platform_specific_config` after the config on
+the command line, or placing the config in an rc file before a later line that enables it, turns
+host-OS configs back on silently.
+
+**GPU executors.** `--config=remote-macos-gpu` builds exactly as `--config=remote-macos` and runs
+only its tests on executors with a GPU: it makes `//tools/ci:remote_macos_aarch64_gpu`, the same
+platform also asking for `gpu=present`, the target platform and runs tests on it
+(`--use_target_platform_for_tests`). Execution properties are part of an action's key, so the
+build actions keep their keys and share cache entries with `--config=remote-macos`; only test
+actions differ. One limit: a test whose rule returns `testing.ExecutionInfo`, as rules_cc's
+`cc_test` does for Apple targets, runs in its test exec group, which resolves to the base
+execution platform, so it runs on an executor without a GPU. The project's transitioned test
+wrapper rule, which every `opens_gpu_device` test runs through, returns none, and
+`//tools:remote_macos_config_tests` keeps it that way.
+
+**Limits.**
+
+- Actions and tests tagged `local` or `no-remote` fail under this config ("no usable spawn
+  strategy") instead of being skipped. The editor's build-information action is one: build the
+  editor with a release commit (`--//build_defs:release_source_commit=<full commit SHA>`), which
+  makes it a remote action, or leave the editor out. Select tests with a tag filter that excludes
+  local-only tests.
+- Do not combine the config with local per-mnemonic strategies from a user rc or with the hosted
+  Linux remote-execution config (`--config=buildbuddy-re`).
+- Tests that need a desktop session (a window server, a logged-in user or a visible browser) do
+  not run on a headless executor.
+- Builds outside Bazel, such as the CMake build, cannot run this way.
+- Bazel's local GPU scheduling (the local GPU resource tag and `--local_test_jobs`) does not
+  apply to remote tests. A command that runs only GPU-opening tests can bound how many run at once
+  with `--jobs`, after the config; otherwise the executor decides.
+- A Linux client and a macOS client share action keys with each other; sharing them with the
+  macOS CI lanes, which discover their Xcode locally, is not established.
+
 ## Frequently Asked Questions (FAQ)
 
 ### On macOS: bazel crashed due to an internal error
