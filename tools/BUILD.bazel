@@ -431,6 +431,8 @@ py_test(
         "ci_macos_xcode.txt",
         "//:.bazelrc",
         "//:BUILD.bazel",
+        "//:docs_files",
+        "//:github_action_definitions",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:remote_macos_xcode.bzl",
     ],

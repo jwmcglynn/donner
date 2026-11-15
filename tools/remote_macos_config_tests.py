@@ -1,8 +1,9 @@
 """Keeps `--config=remote-macos` complete, client-independent and on the approved Xcode.
 
 The config builds and tests for macOS arm64 with every action on a remote macOS executor, from a
-client on any host OS. It must name the macOS target platform, exactly one remote macOS execution
-platform, the static Xcode configuration and remote strategies with no local fallback, and it must
+Linux or macOS client. It must name the macOS target platform, exactly one remote macOS execution
+platform (also the host platform), the static Xcode configuration and remote strategies with no
+local fallback, and it must
 hold no private runner configuration: the executor endpoint, credentials and priority come from an
 untracked rc file. A Linux and a macOS client must read the same flags from it, so it turns off
 the host-OS configs that Bazel would otherwise choose by the client's OS.
@@ -24,6 +25,8 @@ PIN_FILE = "tools/ci_macos_xcode.txt"
 XCODE_BZL = "tools/ci/remote_macos_xcode.bzl"
 CI_BUILD = "tools/ci/BUILD.bazel"
 ROOT_BUILD = "BUILD.bazel"
+DOCS = "docs/building.md"
+BASE_CONFIG = "remote-macos-base"
 CONFIG = "remote-macos"
 GPU_CONFIG = "remote-macos-gpu"
 TARGET_PLATFORM = "//:macos_aarch64"
@@ -99,8 +102,9 @@ def _last_boolean(options, name, default):
 def _client_options(command, config, client_os):
     """The repository flags a client on `client_os` reads for `bazel <command> --config=<config>`.
 
-    Bazel expands the host-OS config (`<command>:<os>` lines) after every `--config`, and only when
-    the final value of --enable_platform_specific_config is true.
+    This models only Bazel's decision whether to apply the host-OS config (`<command>:<os>` lines):
+    it takes that decision from the value of --enable_platform_specific_config once every --config
+    on the command line has been expanded. It does not model where the host-OS flags land.
     """
     global_options = []
     for line in _read(".bazelrc").splitlines():
@@ -156,6 +160,11 @@ class XcodePinAgreementTest(unittest.TestCase):
                     self.assertEqual([], [option for option in _expand(command, config)
                                           if IDENTITY in option])
 
+    def test_docs_name_the_identity_of_the_default_xcode(self):
+        version, build = _default_xcode()
+        named = set(re.findall(r"%s=([0-9.]+-[0-9A-Za-z]+)" % IDENTITY, _read(DOCS)))
+        self.assertEqual({"%s-%s" % (version, build)}, named)
+
     def test_build_defines_the_static_xcode_config(self):
         self.assertIn("remote_macos_xcodes", _calls(CI_BUILD, "remote_macos_xcode_config"))
 
@@ -170,6 +179,8 @@ class RemoteMacosConfigTest(unittest.TestCase):
                                                                                  "platforms"))
                     # Execution platforms accumulate and the first compatible one wins.
                     self.assertEqual([platform], _values(options, "extra_execution_platforms"))
+                    # Bazel adds the host platform as the last execution-platform candidate.
+                    self.assertEqual([platform], _values(options, "host_platform"))
 
     def test_every_action_runs_remotely_without_local_fallback(self):
         for config in (CONFIG, GPU_CONFIG):
@@ -196,9 +207,7 @@ class RemoteMacosConfigTest(unittest.TestCase):
     def test_gpu_variant_differs_only_in_its_execution_platform(self):
         for command in ("build", "test"):
             with self.subTest(command=command):
-                plain, gpu = ("--extra_execution_platforms=" + platform
-                              for platform in (EXEC_PLATFORM, GPU_EXEC_PLATFORM))
-                self.assertEqual([gpu if option == plain else option
+                self.assertEqual([option.replace("=" + EXEC_PLATFORM, "=" + GPU_EXEC_PLATFORM)
                                   for option in _expand(command, CONFIG)],
                                  _expand(command, GPU_CONFIG))
 
@@ -234,6 +243,22 @@ class RemoteMacosConfigTest(unittest.TestCase):
         self.assertEqual([":" + EXEC_PLATFORM.rsplit(":", 1)[1]], gpu["parents"])
         self.assertEqual({"gpu": "present"}, gpu["exec_properties"])
         self.assertNotIn("constraint_values", gpu)
+
+    def test_only_the_two_variants_use_the_base_and_no_workflow_selects_them(self):
+        # The base turns local fallback off (an exception to the BuildBuddy fallback policy), so it
+        # must not reach any other config or any CI lane unseen.
+        users = {name for name, lines in _configs().items()
+                 for _, flags in lines if "--config=" + BASE_CONFIG in flags}
+        self.assertEqual({CONFIG, GPU_CONFIG}, users)
+        # Runfiles hold files, not directories, so find the tree from a file in it.
+        main = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml"))
+        github = main.parent.parent
+        files = sorted((github / "workflows").glob("*.y*ml")) + sorted(
+            (github / "actions").glob("*/action.y*ml"))
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(path=path.name):
+                self.assertNotIn("remote-macos", path.read_text(encoding="utf-8"))
 
     def test_target_platform_is_macos_arm64(self):
         target = _calls(ROOT_BUILD, "platform")[TARGET_PLATFORM.rsplit(":", 1)[1]]
