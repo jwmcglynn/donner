@@ -1723,7 +1723,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             ".github/workflows/cmake.yml", "CMakePresets.json", '"**/CMakeLists.txt"',
             '"**/*.cmake"', '"**/*.cmake.in"', "examples/cmake_consumer/**", "tools/cmake/**",
             "tools/ci/cmake_cache.py", "tools/ci/cmake_consumer.sh", "MODULE.bazel",
-            "third_party/bazel/non_bcr_deps.bzl"])
+            "third_party/bazel/non_bcr_deps.bzl", "tools/ci_macos_xcode.txt",
+            "tools/ci_select_macos_xcode.sh"])
         for job in ("macos", "macos-self-hosted"):
             condition = next(line for line in self._job_body(job, self.cmake).splitlines()
                              if line.startswith("    if:"))

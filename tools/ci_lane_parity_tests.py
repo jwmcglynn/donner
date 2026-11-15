@@ -61,9 +61,9 @@ TRIGGER_ALLOWLIST = {
     ("cmake.yml", "pull-request-paths"):
         "Pull requests run the macOS CMake build only when they change a CMake input (the "
         "generator, its dependency map, CMake files, the example consumer, the CMake lane "
-        "scripts, the workflow and the FetchContent module versions), to save scarce macOS "
-        "capacity. The Linux CMake consumer in main.yml builds the generated tree on every pull "
-        "request, and main runs the macOS build on every push.",
+        "scripts, the workflow, the FetchContent module versions and the Xcode pin), to save "
+        "scarce macOS capacity. The Linux CMake consumer in main.yml builds the generated tree "
+        "on every pull request, and main runs the macOS build on every push.",
 }
 
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs

@@ -9,8 +9,8 @@ env:
 # of main (main.yml's CMake consumer step). This workflow adds the macOS CMake build, which runs on
 # every push to main, on demand, and on a pull request only when it changes an input that only the
 # CMake build reads: the generator and its dependency map, CMake files, the example consumer, the
-# CMake lane scripts, this workflow, and the module versions the generator turns into FetchContent
-# downloads. Branch pushes before a pull request exists still build and validate the Linux
+# CMake lane scripts, this workflow, the module versions the generator turns into FetchContent
+# downloads, and the pinned Xcode it compiles with. Branch pushes before a pull request exists still build and validate the Linux
 # consumer here.
 on:
   push:
@@ -28,6 +28,8 @@ on:
       - tools/ci/cmake_consumer.sh
       - MODULE.bazel
       - third_party/bazel/non_bcr_deps.bzl
+      - tools/ci_macos_xcode.txt
+      - tools/ci_select_macos_xcode.sh
   workflow_dispatch:
 
 # A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
