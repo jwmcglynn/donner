@@ -13,6 +13,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/css/CSS.h"
@@ -2123,7 +2124,8 @@ void EditorApp::setActiveStrokeWidth(double strokeWidth) {
 }
 
 bool EditorApp::setActiveStrokeWidthFromText(std::string_view value) {
-  const auto strokeWidth = parser::NumberParser::Parse(value);
+  // Whitespace before the number is not part of the value, as in CSS.
+  const auto strokeWidth = parser::NumberParser::Parse(StringUtils::TrimWhitespace(value));
   if (!strokeWidth.hasResult()) {
     return false;
   }

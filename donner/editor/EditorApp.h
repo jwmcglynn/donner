@@ -478,10 +478,11 @@ public:
 
   /**
    * Set the active stroke width from the leading number of a CSS or attribute value such as
-   * `"2.5"` or `"3px"`, parsed independently of the process locale.
+   * `"2.5"`, `"3px"` or `" 4"`, parsed independently of the process locale. Leading ASCII
+   * whitespace is skipped.
    *
    * @param value Stroke width text.
-   * @return True if \p value starts with a number and the width was set.
+   * @return True if \p value starts with a number after any whitespace and the width was set.
    */
   bool setActiveStrokeWidthFromText(std::string_view value);
 
