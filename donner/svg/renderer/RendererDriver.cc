@@ -74,6 +74,7 @@
 #endif
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/SubDocumentWarnings.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -4753,39 +4754,6 @@ void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarning
 }
 
 /**
- * Hold @p warnings found while preparing a sub-document without a collecting host sink, skipping
- * warnings already delivered or held, and warnings and truncation that a host which already
- * received the sub-document's truncation would drop. Held warnings found before a mutation of the
- * sub-document are dropped first.
- *
- * @param registry The sub-document's registry, which holds the warnings.
- * @param warnings Warnings collected while preparing the sub-document.
- */
-void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
-  if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
-    return;
-  }
-  DropStaleSubDocumentWarnings(registry);
-  const std::size_t fingerprint = WarningBatchFingerprint(warnings);
-  const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
-  if (last != nullptr && last->fingerprint == fingerprint) {
-    return;
-  }
-  const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
-  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
-      break;
-    }
-    HoldSubDocumentWarning(registry, reported, pending, warning);
-  }
-  if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
-    EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
-  }
-  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{.fingerprint = fingerprint});
-}
-
-/**
  * Deliver @p warnings from preparing a sub-document to @p hostSink, skipping warnings already
  * delivered for that sub-document and marking @p hostSink truncated when any were dropped.
  *
@@ -4815,14 +4783,32 @@ void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warni
   }
 }
 
-/**
- * Before a draw with a collecting host sink prepares a sub-document, deliver the warnings it holds,
- * and restyle it on this preparation if a mutation dropped held warnings, so the preparation finds
- * its current ones.
- *
- * @param registry The sub-document's registry.
- * @param hostSink The host's collecting sink.
- */
+}  // namespace
+
+void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
+  if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
+    return;
+  }
+  DropStaleSubDocumentWarnings(registry);
+  const std::size_t fingerprint = WarningBatchFingerprint(warnings);
+  const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
+  if (last != nullptr && last->fingerprint == fingerprint) {
+    return;
+  }
+  const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
+  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
+      break;
+    }
+    HoldSubDocumentWarning(registry, reported, pending, warning);
+  }
+  if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
+    EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
+  }
+  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{.fingerprint = fingerprint});
+}
+
 void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSink) {
   if (registry.ctx().erase<RediscoverSubDocumentWarnings>()) {
     components::ExternalUseStyleRetention::ScheduleFullRestyle(registry);
@@ -4833,8 +4819,6 @@ void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSi
     ReportSubDocumentWarnings(registry, held.warnings, hostSink);
   }
 }
-
-}  // namespace
 
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
