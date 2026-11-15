@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,6 +22,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/ExternalUseSpriteScene.h"
 
 namespace donner::svg::tests {
@@ -879,22 +881,169 @@ TEST(ExternalUseWarningReplayTest, StyleComputationWarningReachesALaterSink) {
   ExpectLaterSinkReceivesFirstDrawWarnings(kStyleWarningHost, kStyleWarningSheet);
 }
 
+/// A host whose `<use>` inherits a marker from the host document, which the sheet refuses.
+constexpr std::string_view kMarkerHost =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6"
+          refX="3" refY="3"><rect width="6" height="6" fill="blue"/></marker></defs>
+        <use id="u" href="sprites.svg#path" fill="none" stroke="black" marker-start="url(#m)"/>
+      </svg>)svg";
+constexpr std::string_view kMarkerSheet =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <path id="path" d="M4,4 L12,4"/>
+      </svg>)svg";
+constexpr std::string_view kHostRefusal =
+    "External-use inherited cross-document URL resource is unsupported";
+
 TEST(ExternalUseWarningReplayTest, InheritedResourceRefusalReachesALaterSink) {
+  EXPECT_THAT(FirstCollectingDrawWarnings(kMarkerHost, kMarkerSheet),
+              testing::IsSupersetOf(
+                  {std::string("External-use inherited URL resources are unsupported"),
+                   std::string(kHostRefusal)}));
+  ExpectLaterSinkReceivesFirstDrawWarnings(kMarkerHost, kMarkerSheet);
+}
+
+// The host reports the refusal once per collecting draw, as it does when every draw collects.
+TEST(ExternalUseWarningReplayTest, HostRefusalReachesACollectingDrawOnce) {
   constexpr std::string_view kHost =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
         <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6"
           refX="3" refY="3"><rect width="6" height="6" fill="blue"/></marker></defs>
         <use href="sprites.svg#path" fill="none" stroke="black" marker-start="url(#m)"/>
+        <use href="sprites.svg#path" fill="none" stroke="blue" marker-start="url(#m)"/>
       </svg>)svg";
-  constexpr std::string_view kSheet =
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kHost, std::string(kMarkerSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_THAT(WarningReasons(later), testing::Contains(std::string(kHostRefusal)).Times(1));
+}
+
+TEST(ExternalUseWarningReplayTest, HostMutationDropsTheHostRefusal) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kMarkerHost, std::string(kMarkerSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  host->document.querySelector("#u")->setAttribute(xml::XMLQualifiedNameRef("marker-start"),
+                                                   "none");
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_THAT(WarningReasons(later), testing::Not(testing::Contains(std::string(kHostRefusal))));
+}
+
+/// Restyles and rendering-instance builds of a sheet over a sequence of frames.
+struct SheetCost {
+  std::size_t restyles = 0;
+  std::size_t instanceBuilds = 0;
+
+  bool operator==(const SheetCost&) const = default;
+
+  friend std::ostream& operator<<(std::ostream& os, const SheetCost& cost) {
+    return os << "{restyles=" << cost.restyles << ", instanceBuilds=" << cost.instanceBuilds
+              << "}";
+  }
+};
+
+/// How a frame mutates the sheet of \ref kStyleWarningSheet before it is drawn.
+enum class SheetMutation {
+  OtherTransform,    //!< Moves the element without a warning.
+  WarningTransform,  //!< Moves the element whose style warns.
+  WarningStyle,      //!< Restyles the element whose style warns, which finds its warning again.
+};
+
+void MutateSheet(SVGDocument sheet, SheetMutation mutation, int frame) {
+  const std::string_view selector = mutation == SheetMutation::OtherTransform ? "#other" : ".bad";
+  SVGElement element = *sheet.querySelector(selector);
+  if (mutation == SheetMutation::WarningStyle) {
+    element.setAttribute(xml::XMLQualifiedNameRef("fill-opacity"), frame % 2 == 0 ? "0.5" : "0.6");
+  } else {
+    element.cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(frame + 1.0, 0)));
+  }
+}
+
+/**
+ * Cost of six frames that each mutate the sheet and then draw, after two warm-up draws.
+ *
+ * @param hostSource Host document drawing \ref kStyleWarningSheet.
+ * @param firstDrawCollects Whether the first warm-up draw delivers the sheet's warning.
+ * @param framesCollect Whether the warm-up draw after it and every measured frame collect.
+ * @param mutation How each frame mutates the sheet.
+ */
+SheetCost MutatedFramesCost(std::string_view hostSource, bool firstDrawCollects, bool framesCollect,
+                            SheetMutation mutation) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(hostSource, std::string(kStyleWarningSheet));
+  if (!host) {
+    ADD_FAILURE() << "host did not parse";
+    return {};
+  }
+  Renderer renderer;
+  const auto draw = [&](bool collect) {
+    ParseWarningSink warnings = collect ? ParseWarningSink() : ParseWarningSink::Disabled();
+    renderer.draw(host->document, warnings);
+  };
+  draw(firstDrawCollects);
+  draw(framesCollect);
+  RestyleCounter restyles(SpriteSheetOf(*host));
+  InstanceBuildCounter instanceBuilds(SpriteSheetOf(*host));
+  for (int frame = 0; frame < 6; ++frame) {
+    MutateSheet(SpriteSheetOf(*host), mutation, frame);
+    draw(framesCollect);
+  }
+  return {.restyles = restyles.restyles(), .instanceBuilds = instanceBuilds.constructions()};
+}
+
+// Mutating a sheet whose warning is held, or was delivered, costs a sinkless draw only what the
+// mutation dirtied, the same as a collecting draw: dropping a held warning never restyles the sheet.
+// Two uses of the target with different fills restyle it, and find its warning, on every draw.
+TEST(ExternalUseWarningReplayTest, SinklessDrawsOfAMutatedSheetCostOnlyTheMutation) {
+  constexpr std::string_view kRestyledEveryDraw =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
-        <path id="path" d="M4,4 L12,4"/>
+        <use href="sprites.svg#a" fill="red"/><use href="sprites.svg#a" x="8" fill="blue"/>
       </svg>)svg";
-  EXPECT_THAT(
-      FirstCollectingDrawWarnings(kHost, kSheet),
-      testing::IsSupersetOf({"External-use inherited URL resources are unsupported",
-                             "External-use inherited cross-document URL resource is unsupported"}));
-  ExpectLaterSinkReceivesFirstDrawWarnings(kHost, kSheet);
+  for (const std::string_view hostSource : {kStyleWarningHost, kRestyledEveryDraw}) {
+    for (const SheetMutation mutation : {SheetMutation::OtherTransform,
+                                         SheetMutation::WarningTransform,
+                                         SheetMutation::WarningStyle}) {
+      const SheetCost collecting = MutatedFramesCost(hostSource, true, true, mutation);
+      for (const bool delivered : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << (hostSource == kStyleWarningHost ? "one use" : "two fills") << ", mutation "
+                     << static_cast<int>(mutation)
+                     << (delivered ? ", delivered" : ", never delivered"));
+        EXPECT_EQ(MutatedFramesCost(hostSource, delivered, false, mutation), collecting);
+      }
+    }
+  }
+  EXPECT_EQ(MutatedFramesCost(kStyleWarningHost, true, true, SheetMutation::OtherTransform).restyles,
+            0u)
+      << "a transform restyles nothing";
+}
+
+// The packaged fallback font warning is reported once per document, which its marker records.
+// When a mutation drops held warnings, possibly that report among them, the marker is removed so
+// the report is made again; a sheet whose held warnings were not dropped keeps it.
+TEST(ExternalUseWarningReplayTest, DroppingHeldWarningsLetsTheFallbackFontReportRepeat) {
+  for (const bool mutate : {false, true}) {
+    SCOPED_TRACE(mutate ? "mutated" : "not mutated");
+    std::optional<ExternalUseDocument> host =
+        MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
+    ASSERT_TRUE(host.has_value());
+    Renderer renderer;
+    renderer.draw(host->document);
+    SVGDocument sheet = SpriteSheetOf(*host);
+    sheet.registry().ctx().insert_or_assign(components::MissingFallbackFontReported{});
+    if (mutate) {
+      MutateSheet(sheet, SheetMutation::OtherTransform, 0);
+    }
+    renderer.draw(host->document);
+    EXPECT_EQ(sheet.registry().ctx().contains<components::MissingFallbackFontReported>(), !mutate);
+  }
 }
 
 // A draw that collects no warnings between collecting draws must not make the next collecting draw

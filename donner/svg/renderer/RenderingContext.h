@@ -20,6 +20,9 @@ namespace donner::svg::components {
 
 class ShadowTreeComponent;
 
+/// Registry context marker: the document's missing packaged fallback font was already reported.
+struct MissingFallbackFontReported {};
+
 /**
  * Whether \p entity is a same-document `<use>` left unexpanded because it sits in a `<defs>`
  * reached only through `<g>` ancestors. Inside an external use's instance, the walk stops at the

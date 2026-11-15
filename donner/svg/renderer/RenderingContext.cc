@@ -2076,9 +2076,6 @@ void InstantiateNestedMarkerTrees(Registry& registry, ParseWarningSink& warningS
 }
 
 #ifdef DONNER_TEXT_ENABLED
-/// Registry context marker: the document's missing packaged fallback font was already reported.
-struct MissingFallbackFontReported {};
-
 /**
  * Warn once per document when it contains text and the packaged fallback font is unavailable,
  * since text that matches no other font then has no face to draw with.
