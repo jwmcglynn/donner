@@ -116,8 +116,9 @@ TEST(GeodeFilterSurfacesWallclockTest, FilteredGameSceneOnAPhoneCanvas) {
       pieces[i].setAttribute("transform", PieceTransform(i, frame));
     }
     renderer.draw(document);
-    // A frame is not done until its pixels are; read them back so GPU work is counted.
-    (void)renderer.takeSnapshot();
+    // A frame is not done until its GPU work finishes. Wait for completion rather than reading the
+    // canvas back, so the timed interval holds no readback.
+    ASSERT_EQ(renderer.waitForSubmittedWork(), geode::GpuWaitResult::Complete);
     const double ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     if (frame >= kWarmupFrames) {
