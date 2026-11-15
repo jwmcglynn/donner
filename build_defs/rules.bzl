@@ -427,10 +427,11 @@ _donner_multi_transitioned_test = rule(
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
-# Tag for a test that opens a GPU device. It takes one unit of the `local_gpu` resource, which
-# .bazelrc declares with one unit, while the test runs locally: GPU-opening tests run one at a
-# time, alongside CPU-only tests. A hardware adapter is process-global, so this keeps a device
-# loss in one test process from cascading into another. Remote execution does not use local
+# Tag for a test that opens a GPU device. It takes one unit of the `local_gpu` resource while
+# the test runs locally. .bazelrc declares one unit by default, so GPU-opening tests run one at
+# a time, alongside CPU-only tests: a hardware adapter is process-global, and this keeps a device
+# loss in one test process from cascading into another. The macOS CI lanes declare four units
+# (--config=ci-macos), so up to four run at once there. Remote execution does not use local
 # resources. Bazel ignores resource tags when --local_test_jobs is set, so a command that sets it
 # uses 1, which runs every local test serially, or runs no GPU-opening test.
 # //build_defs:geode_test_scheduling_tests enforces this.
@@ -451,9 +452,10 @@ def donner_multi_transitioned_test(
       renderer_backend: "tiny_skia", "geode", or "inherit" to preserve the caller backend.
       opens_gpu_device: True when the test actually instantiates a GPU
         device/adapter. Only those tests get `LOCAL_GPU_TEST_TAG`, which takes
-        the machine's single `local_gpu` resource (.bazelrc) while the test
-        runs locally, so at most one GPU-opening test runs at a time and a
-        device loss in one process cannot cascade into another. Unlike
+        one unit of the machine's `local_gpu` resource (.bazelrc) while the
+        test runs locally. With the default single unit, at most one
+        GPU-opening test runs at a time and a device loss in one process
+        cannot cascade into another; the macOS CI lanes allow four. Unlike
         `exclusive-if-local`, the resource does not stop CPU-only tests from
         running alongside, so these tests overlap the parallel part of the
         test phase instead of draining one at a time after it. Selecting the
