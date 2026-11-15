@@ -23,6 +23,9 @@ REVIEWED_EXCLUSIVE = {
     ("donner/benchmarks/BUILD.bazel", "dom_lifetime_perf_capture"),
     ("third_party/tiny-skia-cpp/tests/benchmarks/BUILD.bazel", "filter_perf_regression_test"),
     ("third_party/tiny-skia-cpp/tests/benchmarks/BUILD.bazel", "render_perf_regression_test"),
+    # Headful browser latency measurements, one generated test per Playwright project; the check
+    # sees the literal prefix of their generated names. Manual and Perf-only.
+    ("donner/editor/wasm/tests/BUILD.bazel", "browser_responsiveness_perf_test_"),
 }
 _TAG = re.compile(r'"(exclusive-if-local|exclusive|resources:local_gpu:[^"]*)"')
 _NAME = re.compile(r'(?m)^\s*name = "([^"]+)"')

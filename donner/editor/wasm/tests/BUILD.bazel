@@ -145,38 +145,55 @@ playwright_bin.playwright_test(
     ],
 )
 
-js_test(
-    name = "browser_responsiveness_perf_test",
-    size = "large",
-    timeout = "long",
-    copy_data_to_bin = False,
-    data = [
-        "browser-heartbeat.cjs",
-        "browser-process-snapshot.cjs",
-        "browser-responsiveness.perf.ts",
-        "browser-watchdog-anchor.mjs",
-        "browser-watchdog-child.cjs",
-        "firefox-launch-env.cjs",
-        "playwright.responsiveness.bazel.config.js",
-        ":_browser_responsiveness_perf_driver",
-    ],
-    entry_point = "browser-watchdog.mjs",
-    env = {
-        "DONNER_WATCHDOG_DRIVER": "$(rootpath :_browser_responsiveness_perf_driver)",
-        "DONNER_WATCHDOG_HEARTBEAT": "browser-watchdog-heartbeat",
-        "DONNER_WATCHDOG_SPEC": "$(rootpath :browser-responsiveness.perf.ts)",
-        "DONNER_WATCHDOG_CONFIG": "$(rootpath :playwright.responsiveness.bazel.config.js)",
-    },
-    tags = [
-        "manual",
-        "no-sandbox",
-        "perf",
-    ],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
+# One test per Playwright project of playwright.responsiveness.bazel.config.js, so each project
+# runs under that config's whole globalTimeout instead of all four sharing one. The list must match
+# the config's projects; //donner/editor/wasm/tests:browser_matrix_tests checks it.
+RESPONSIVENESS_PERF_PROJECTS = [
+    "chromium",
+    "firefox",
+    "chromium-dpr1",
+    "firefox-dpr1",
+]
+
+[
+    js_test(
+        name = "browser_responsiveness_perf_test_" + project.replace("-", "_"),
+        size = "large",
+        timeout = "long",
+        args = ["--project=" + project],
+        copy_data_to_bin = False,
+        data = [
+            "browser-heartbeat.cjs",
+            "browser-process-snapshot.cjs",
+            "browser-responsiveness.perf.ts",
+            "browser-watchdog-anchor.mjs",
+            "browser-watchdog-child.cjs",
+            "firefox-launch-env.cjs",
+            "playwright.responsiveness.bazel.config.js",
+            ":_browser_responsiveness_perf_driver",
+        ],
+        entry_point = "browser-watchdog.mjs",
+        env = {
+            "DONNER_WATCHDOG_DRIVER": "$(rootpath :_browser_responsiveness_perf_driver)",
+            "DONNER_WATCHDOG_HEARTBEAT": "browser-watchdog-heartbeat",
+            "DONNER_WATCHDOG_SPEC": "$(rootpath :browser-responsiveness.perf.ts)",
+            "DONNER_WATCHDOG_CONFIG": "$(rootpath :playwright.responsiveness.bazel.config.js)",
+        },
+        # `exclusive`: a headful browser measuring wall-clock latency needs the machine to
+        # itself, even in a tag-filtered local run that does not pass --local_test_jobs=1.
+        tags = [
+            "exclusive",
+            "manual",
+            "no-sandbox",
+            "perf",
+        ],
+        target_compatible_with = [
+            "@platforms//cpu:aarch64",
+            "@platforms//os:macos",
+        ],
+    )
+    for project in RESPONSIVENESS_PERF_PROJECTS
+]
 
 js_test(
     name = "browser_watchdog_tests",
