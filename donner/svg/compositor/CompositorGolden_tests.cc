@@ -1839,6 +1839,25 @@ RendererBitmap ComposedTiles(const CompositorController& compositor,
   return canvas.toBitmap(reference.alphaType);
 }
 
+/// A comparison artifact name for the running test and @p step, safe as a file name.
+std::string BackdropArtifactName(std::string_view prefix, std::string_view step) {
+  std::string name = std::string(prefix) + "_" +
+                     ::testing::UnitTest::GetInstance()->current_test_info()->name() + "_" +
+                     std::string(step);
+  std::ranges::replace_if(name, [](char c) { return c == '/' || c == ' '; }, '_');
+  return name;
+}
+
+/// Renders a frame through @p verifier and requires the compositor's frame to match the full
+/// render it takes alongside, through the canonical bitmap comparison.
+void ExpectComposedFrameMatchesFullRender(DualPathVerifier& verifier,
+                                          const RenderViewport& viewport, std::string_view step) {
+  (void)verifier.renderAndVerify(viewport);
+  editor::tests::CompareBitmapToBitmap(
+      verifier.compositorSnapshot(), verifier.referenceSnapshot(),
+      BackdropArtifactName("backdrop_frame", step), editor::tests::PixelmatchIdentityParams());
+}
+
 struct BackdropFilterCase {
   const char* name;
   const char* body;
@@ -1855,19 +1874,15 @@ protected:
   void expectPresentsTheFullRender(CompositorController& compositor, SVGDocument& document,
                                    const char* when) {
     DualPathVerifier verifier(compositor, renderer_);
-    const auto frame = verifier.renderAndVerify(viewport_);
-    EXPECT_TRUE(frame.isWithinTolerance(1)) << when << ": " << frame;
+    ExpectComposedFrameMatchesFullRender(verifier, viewport_, when);
     EXPECT_EQ(compositor.snapshotState().layerCount, 0u) << when;
     ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation()) << when;
 
     svg::Renderer referenceRenderer;
     referenceRenderer.draw(document);
     const RendererBitmap reference = referenceRenderer.takeSnapshot();
-    std::string label = std::string("backdrop_tiles_") +
-                        ::testing::UnitTest::GetInstance()->current_test_info()->name() + "_" +
-                        when;
-    std::ranges::replace_if(label, [](char c) { return c == '/' || c == ' '; }, '_');
-    editor::tests::CompareBitmapToBitmap(ComposedTiles(compositor, reference), reference, label,
+    editor::tests::CompareBitmapToBitmap(ComposedTiles(compositor, reference), reference,
+                                         BackdropArtifactName("backdrop_tiles", when),
                                          editor::tests::PixelmatchIdentityParams());
   }
 };
@@ -1958,8 +1973,7 @@ TEST_F(CompositorGoldenTest, BackdropFilterPresenceControlsLayers) {
   )svg");
   CompositorController compositor(document, renderer_);
   DualPathVerifier verifier(compositor, renderer_);
-  const auto reading = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(reading.isWithinTolerance(1)) << reading;
+  ExpectComposedFrameMatchesFullRender(verifier, viewport_, "reading");
   EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
 
   auto target = document.querySelector("#target");
@@ -1968,14 +1982,12 @@ TEST_F(CompositorGoldenTest, BackdropFilterPresenceControlsLayers) {
   ASSERT_TRUE(backdrop.has_value());
   target->setAttribute("filter", "url(#plain)");
   backdrop->remove();
-  const auto removed = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(removed.isWithinTolerance(1)) << removed;
+  ExpectComposedFrameMatchesFullRender(verifier, viewport_, "removed");
   EXPECT_EQ(compositor.snapshotState().layerCount, 1u);
 
   document.svgElement().appendChild(*backdrop);
   target->setAttribute("filter", "url(#backdrop)");
-  const auto readded = verifier.renderAndVerify(viewport_);
-  EXPECT_TRUE(readded.isWithinTolerance(1)) << readded;
+  ExpectComposedFrameMatchesFullRender(verifier, viewport_, "readded");
   EXPECT_EQ(compositor.snapshotState().layerCount, 0u);
 }
 
