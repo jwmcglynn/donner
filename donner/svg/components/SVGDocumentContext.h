@@ -152,6 +152,9 @@ public:
   /// Mark the backing document state as mutated.
   void bumpMutationRevision() const { getSharedDocumentState()->bumpMutationRevision(); }
 
+  /// Current mutation revision of the backing document.
+  std::uint64_t mutationRevision() const { return getSharedDocumentState()->revision(); }
+
   /// Returns true if the current thread holds write access to the backing document.
   bool currentThreadHasWriteAccess() const {
     return getSharedDocumentState()->currentThreadHasWriteAccess();

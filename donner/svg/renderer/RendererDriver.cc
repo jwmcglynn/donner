@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <iterator>
@@ -4628,22 +4629,88 @@ namespace {
 
 /**
  * Preparation warnings a sub-document has already delivered to a host sink. A child document is
- * prepared again for each external-use occurrence and each frame, and repeats the same warnings.
- * Each warning, matched by its text and location, is delivered once per loaded sub-document
- * instead, so identical warnings without a location are merged.
+ * prepared again for each external-use occurrence and each frame, and those preparations can repeat
+ * the same warnings. Each warning, matched by its text and location, is delivered once per loaded
+ * sub-document instead, so identical warnings without a location are merged.
  */
 struct ReportedSubDocumentWarnings {
   std::unordered_set<std::string> keys;
 };
 
-/// Marks a sub-document prepared without a collecting host sink since its last collecting draw, so
-/// warnings its retained render tree will not repeat may still be undelivered.
-struct WithheldSubDocumentWarnings {};
+/**
+ * Warnings a sub-document found while no collecting host sink was installed, held for the next
+ * draw with one. A retained render tree is not prepared again, so it does not find them again.
+ * Held warnings are matched like \ref ReportedSubDocumentWarnings and bounded by the sink's limits.
+ */
+struct PendingSubDocumentWarnings {
+  ParseWarningSink warnings;
+  std::unordered_set<std::string> keys;
+  /// The sub-document's mutation revision when the warnings were found.
+  std::uint64_t documentRevision = 0;
+};
 
 std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
   std::ostringstream key;
   key << warning;
   return std::move(key).str();
+}
+
+std::uint64_t SubDocumentRevision(const Registry& registry) {
+  return registry.ctx().get<components::SVGDocumentContext>().mutationRevision();
+}
+
+/**
+ * Hold @p warnings found while preparing a sub-document without a collecting host sink, skipping
+ * warnings already delivered or held. Held warnings found before a mutation of the sub-document
+ * are dropped first.
+ *
+ * @param registry The sub-document's registry, which holds the warnings.
+ * @param warnings Warnings collected while preparing the sub-document.
+ */
+void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
+  if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
+    return;
+  }
+  const std::uint64_t revision = SubDocumentRevision(registry);
+  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  if (pending == nullptr || pending->documentRevision != revision) {
+    PendingSubDocumentWarnings fresh;
+    fresh.documentRevision = revision;
+    pending = &registry.ctx().insert_or_assign(std::move(fresh));
+  }
+  const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    if (pending->warnings.resourceLimitExceeded()) {
+      break;
+    }
+    std::string key = SubDocumentWarningKey(warning);
+    if ((reported != nullptr && reported->keys.contains(key)) || pending->keys.contains(key)) {
+      continue;
+    }
+    const std::size_t held = pending->warnings.warnings().size();
+    pending->warnings.add(ParseDiagnostic(warning));
+    if (pending->warnings.warnings().size() > held) {
+      pending->keys.insert(std::move(key));
+    }
+  }
+  if (warnings.resourceLimitExceeded()) {
+    pending->warnings.markResourceLimitExceeded();
+  }
+}
+
+/**
+ * Drop held warnings found before the sub-document was last mutated, and restyle the whole
+ * document on its next preparation so that preparation finds every current warning again.
+ *
+ * @param registry The sub-document's registry.
+ */
+void DropStaleSubDocumentWarnings(Registry& registry) {
+  const auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  if (pending == nullptr || pending->documentRevision == SubDocumentRevision(registry)) {
+    return;
+  }
+  registry.ctx().erase<PendingSubDocumentWarnings>();
+  components::ExternalUseStyleRetention::ScheduleFullRestyle(registry);
 }
 
 /**
@@ -4682,38 +4749,38 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   // One child registry can be traversed by several external uses with different context paints.
   textFrameCache_->roots.erase(&registry);
   textFrameCache_->shadowStyles.erase(&registry);
+  DropStaleSubDocumentWarnings(registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
-  }
-  if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
-    // Without a collecting host sink these warnings are discarded even when verbose: printing them
-    // would repeat them for every traversal. Nothing is recorded as delivered, and the next draw
-    // with a collecting sink rebuilds the document so that it receives them.
-    registry.ctx().emplace<WithheldSubDocumentWarnings>();
-    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-    RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
-    if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
-      RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
-    }
-    return;
   }
   // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
   // the host sink once. A warning dropped by a resource limit, here or in the collecting sink,
   // marks the host sink truncated so it does not look complete. As with any sink limit, the host
   // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
-  // again on every traversal, each later draw of it reports truncation too.
-  if (registry.ctx().erase<WithheldSubDocumentWarnings>()) {
-    // A retained render tree does not repeat the warnings its first build reported.
-    components::ExternalUseStyleRetention::ScheduleFullRebuild(registry);
+  // again on every traversal, each later draw of it reports truncation too. Without a collecting
+  // host sink the warnings are held for a later draw with one, and not printed even when verbose,
+  // since printing would repeat them for every traversal.
+  const bool collecting = warningSink_ != nullptr && warningSink_->isEnabled();
+  if (auto* pending = registry.ctx().find<PendingSubDocumentWarnings>(); collecting && pending) {
+    const PendingSubDocumentWarnings held = std::move(*pending);
+    registry.ctx().erase<PendingSubDocumentWarnings>();
+    ReportSubDocumentWarnings(registry, held.warnings, *warningSink_);
   }
+  const auto deliver = [&](const ParseWarningSink& warnings) {
+    if (collecting) {
+      ReportSubDocumentWarnings(registry, warnings, *warningSink_);
+    } else {
+      HoldSubDocumentWarnings(registry, warnings);
+    }
+  };
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-  ReportSubDocumentWarnings(registry, warnings, *warningSink_);
+  deliver(warnings);
   if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
     ParseWarningSink restoredWarnings;
     RendererUtils::prepareDocumentForRendering(document, verbose_, restoredWarnings);
-    ReportSubDocumentWarnings(registry, restoredWarnings, *warningSink_);
+    deliver(restoredWarnings);
   }
 }
 
@@ -4856,10 +4923,16 @@ public:
     }
     auto& context = registry_.ctx().get<components::ExternalUseStyleContext>();
     if (context.unsupportedResource && context.work->reportExternalResourceWarning()) {
-      ReportRenderWarning(warningSink_, verbose_,
-                          ParseDiagnostic::Warning(
-                              "External-use inherited cross-document URL resource is unsupported",
-                              FileOffset::EndOfString()));
+      ParseDiagnostic warning = ParseDiagnostic::Warning(
+          "External-use inherited cross-document URL resource is unsupported",
+          FileOffset::EndOfString());
+      if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
+        // A retained occurrence is not restyled again, so it does not raise this warning again.
+        ParseWarningSink held;
+        held.add(ParseDiagnostic(warning));
+        HoldSubDocumentWarnings(registry_, held);
+      }
+      ReportRenderWarning(warningSink_, verbose_, std::move(warning));
     }
     components::ExternalUseStyleRetention::FinishOccurrence(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
