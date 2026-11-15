@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -930,15 +931,55 @@ public:
   void beginFrame() {
     std::lock_guard lock(mutex_);
     ++currentFrameIndex_;
+    forgetWorkingSetAfterIdle();
+    recentFrameReleases_.push_back(std::exchange(releasedSinceFrameStart_, 0));
+    if (recentFrameReleases_.size() > kBudgetWindowFrames) {
+      recentFrameReleases_.pop_front();
+    }
+    lastActivityTime_ = clock_();
+    const uint64_t workingSet =
+        *std::max_element(recentFrameReleases_.begin(), recentFrameReleases_.end());
+    budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
     evictStalePoolBuckets();
+    (void)evictPoolEntriesToFit(0);
+  }
+
+  /**
+   * Drop free textures to relieve memory pressure. \ref RendererGeodeTexturePoolTrim::ToFloor
+   * forgets the recent working set and keeps at most the starting budget;
+   * \ref RendererGeodeTexturePoolTrim::All drops every free texture. A trim also applies the idle
+   * decay. Textures in use are never affected.
+   */
+  void trim(RendererGeodeTexturePoolTrim level) {
+    std::lock_guard lock(mutex_);
+    forgetWorkingSetAfterIdle();
+    if (level == RendererGeodeTexturePoolTrim::IdleOnly) {
+      (void)evictPoolEntriesToFit(0);
+      return;
+    }
+    // Releases since the last frame began belong to the working set being forgotten too; the next
+    // frame would otherwise record them and raise the budget again.
+    recentFrameReleases_.clear();
+    releasedSinceFrameStart_ = 0;
+    budgetBytes_ = level == RendererGeodeTexturePoolTrim::All ? 0 : kTexturePoolBudgetBytes;
+    (void)evictPoolEntriesToFit(0);
+    budgetBytes_ = kTexturePoolBudgetBytes;
+  }
+
+  /// Replace the clock idle decay reads, for a test.
+  void setClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock) {
+    std::lock_guard lock(mutex_);
+    clock_ = std::move(clock);
+    lastActivityTime_ = clock_();
   }
 
   [[nodiscard]] RendererGeodeTexturePoolStats stats() const {
     std::lock_guard lock(mutex_);
     RendererGeodeTexturePoolStats result;
+    result.maximumBudgetBytes = kMaximumTexturePoolBudgetBytes;
     result.textureCount = pooledTextureCount_;
     result.bytes = pooledTextureBytes_;
-    result.budgetBytes = kTexturePoolBudgetBytes;
+    result.budgetBytes = budgetBytes_;
     for (const auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
       if (!bucket.free.empty()) {
@@ -984,13 +1025,16 @@ public:
     std::lock_guard lock(mutex_);
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
+    const uint64_t textureBytes = textureByteSize(key);
+    releasedSinceFrameStart_ += textureBytes;
+    lastActivityTime_ = clock_();
     if (existingBucket != buckets_.end() &&
-        existingBucket->second.free.size() >= kMaxPoolEntriesPerKey) {
+        existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
+        textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
       destroyPooledTexture(std::move(texture));
       return;
     }
 
-    const uint64_t textureBytes = textureByteSize(key);
     if (!evictPoolEntriesToFit(textureBytes)) {
       destroyPooledTexture(std::move(texture));
       return;
@@ -1013,8 +1057,41 @@ private:
   // concurrent intermediates (blur ping-pong reuse) is the follow-up that
   // would let the cap come back down.
   static constexpr std::size_t kMaxPoolEntriesPerKey = 16;
+  // Surfaces of one size, such as the region-sized captures of many filtered instances in one
+  // frame, may exceed the entry cap up to a quarter of the current budget, so a frame of them
+  // reuses its previous frame's surfaces instead of recreating all but the first few.
+  /// Retention budget a pool starts with and never goes below.
   static constexpr uint64_t kTexturePoolBudgetBytes = 64u * 1024u * 1024u;
+  // The budget follows the most bytes released in one recent frame, up to this ceiling, so a
+  // frame's whole working set, such as one transient surface per filtered element, stays pooled
+  // for the next frame instead of being destroyed and recreated each frame. Browsers on phones
+  // reclaim a tab whose GPU process grows, so the Wasm ceiling stays close to the floor.
+#ifdef __EMSCRIPTEN__
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 96u * 1024u * 1024u;
+#else
+  static constexpr uint64_t kMaximumTexturePoolBudgetBytes = 256u * 1024u * 1024u;
+#endif
+  // A device with no frame beginning and no texture returned for this long forgets its working
+  // set: the next frame or trim drops the budget to the floor and evicts free textures beyond it.
+  // Returns at the end of a frame count as activity, so a renderer whose frames take longer, or
+  // one that renders on demand, keeps its pool across pauses shorter than this.
+  static constexpr std::chrono::seconds kIdleWorkingSetDecay{2};
+
+  void forgetWorkingSetAfterIdle() {
+    if (clock_() - lastActivityTime_ < kIdleWorkingSetDecay) {
+      return;
+    }
+    recentFrameReleases_.clear();
+    releasedSinceFrameStart_ = 0;
+    budgetBytes_ = kTexturePoolBudgetBytes;
+  }
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
+  // Frames of release history the budget follows. Frames count beginFrame calls of every
+  // renderer sharing the device, so with several renderers the window spans fewer app frames. It
+  // matches the stale-bucket age: a bucket unused for longer than the window was not part of any
+  // frame the budget still counts.
+  static constexpr std::size_t kBudgetWindowFrames =
+      static_cast<std::size_t>(kBucketEvictAfterFrames);
 
   static uint64_t textureByteSize(const RendererGeodeTextureKey& key) {
     return static_cast<uint64_t>(key.width) * key.height * key.sampleCount *
@@ -1046,11 +1123,11 @@ private:
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
-    if (incomingBytes > kTexturePoolBudgetBytes) {
+    if (incomingBytes > budgetBytes_) {
       return false;
     }
 
-    while (pooledTextureBytes_ > kTexturePoolBudgetBytes - incomingBytes) {
+    while (pooledTextureBytes_ > budgetBytes_ - incomingBytes) {
       auto victim = buckets_.end();
       for (auto it = buckets_.begin(); it != buckets_.end(); ++it) {
         if (it->second.free.empty()) {
@@ -1092,6 +1169,18 @@ private:
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;
   uint64_t currentFrameIndex_ = 0;
+  /// Bytes returned to the pool since the last \ref beginFrame.
+  uint64_t releasedSinceFrameStart_ = 0;
+  /// Bytes returned in each recent frame, newest last.
+  std::deque<uint64_t> recentFrameReleases_;
+  /// Current retention budget; see \ref kMaximumTexturePoolBudgetBytes.
+  uint64_t budgetBytes_ = kTexturePoolBudgetBytes;
+  /// Clock idle decay reads.
+  std::function<std::chrono::steady_clock::time_point()> clock_ = [] {
+    return std::chrono::steady_clock::now();
+  };
+  /// When a frame last began or a texture was last returned.
+  std::chrono::steady_clock::time_point lastActivityTime_ = std::chrono::steady_clock::now();
 };
 
 /// The one pool serving \p device, created on first use. Renderers sharing a device share its
@@ -1247,7 +1336,7 @@ struct GeodeFilterPlan {
   std::optional<geode::FilterTilePlan> localPlan;  ///< Transformed blur path plan.
   bool fullExecutionFits = false;                  ///< Whether the full plan fits limits.
   GeodeFilterWorkBounds bounds;                    ///< Work over the plans that may run.
-  uint64_t captureBytes = 0;                       ///< Capture and copy texture bytes.
+  uint64_t captureBytes = 0;                       ///< Capture texture bytes.
   uint64_t graphBytes = 0;                         ///< Graph intermediate bytes.
   std::size_t surfaces = 0;                        ///< Retained GPU surfaces.
   bool costKnown = false;                          ///< Whether the graph cost resolved.
@@ -1257,8 +1346,8 @@ struct GeodeFilterPlan {
 GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
                                 const std::optional<Box2d>& filterRegion,
                                 const Transform2d& deviceFromFilter,
-                                const GeodeFilterBuffer& buffer, int viewportWidth,
-                                int viewportHeight, const geode::GeodeFilterEngine& engine) {
+                                const GeodeFilterBuffer& buffer,
+                                const geode::GeodeFilterEngine& engine) {
   GeodeFilterPlan result{
       buffer, engine.executionPlan(filterGraph, buffer.width, buffer.height, deviceFromFilter)};
   uint64_t plannedWork = 0;
@@ -1276,15 +1365,9 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
   }
   const uint64_t localPixels =
       result.localPlan ? uint64_t{result.localPlan->width} * result.localPlan->height : 0;
-  const bool copiesViewport =
-      FilterInputBuffer{buffer.width, buffer.height, buffer.offsetX, buffer.offsetY}
-          .exceedsViewport(viewportWidth, viewportHeight);
-  const uint64_t viewportCopyBytes =
-      copiesViewport ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4 : 0;
   const uint64_t bufferPixels =
       static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
-  result.captureBytes =
-      bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes + viewportCopyBytes;
+  result.captureBytes = bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes;
   uint64_t graphWork = 0;
   result.costKnown = components::FilterGraphExecutionCost(
       filterGraph, result.bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, graphWork,
@@ -1293,8 +1376,7 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
     components::GpuFilterWorkingSet layout;
     (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
     const bool tiled = result.bounds.executions > 1;
-    result.surfaces = layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0) +
-                      (copiesViewport ? 1 : 0);
+    result.surfaces = layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0);
     result.surfaces +=
         std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
           return std::holds_alternative<components::filter_primitive::Image>(node.primitive);
@@ -1333,24 +1415,27 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                                                      components::FilterExecutionBudget& budget,
                                                      const RendererSurfaceBudget& surfaceBudget,
                                                      const geode::GeodeFilterEngine& engine) {
-  // Prefer a raster with the graph's input margin, but never let the margin turn an admissible
-  // filter into a frame-wide rejection: fall back to the viewport layout when the larger raster
-  // would not fit.
-  const FilterInputBuffer expanded = ComputeFilterInputBuffer(
+  // Prefer a raster over the part of the filter region the viewport can show, with the graph's
+  // input margin, but never let the margin turn an admissible filter into a frame-wide rejection:
+  // fall back to the viewport layout when that raster would not fit.
+  const FilterInputBuffer expanded = ComputeRegionFilterInputBuffer(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
   const std::optional<GeodeFilterBuffer> buffer =
       MakeGeodeFilterBuffer(filterRegion, expanded, viewportWidth, viewportHeight);
   if (!buffer.has_value()) {
-    budget.reject();
+    budget.refuseOversizedGraph();
     return std::nullopt;
   }
-  GeodeFilterPlan plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, *buffer,
-                                         viewportWidth, viewportHeight, engine);
-  if (expanded.exceedsViewport(viewportWidth, viewportHeight) &&
+  GeodeFilterPlan plan =
+      PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, *buffer, engine);
+  const bool largerThanViewport =
+      std::uint64_t{static_cast<uint32_t>(expanded.width)} *
+          static_cast<uint32_t>(expanded.height) >
+      std::uint64_t{static_cast<uint32_t>(viewportWidth)} * static_cast<uint32_t>(viewportHeight);
+  if (largerThanViewport &&
       !GeodeFilterPlanFits(filterGraph, plan, budget, surfaceBudget, engine)) {
     const GeodeFilterBuffer viewport{buffer->region, viewportWidth, viewportHeight, 0, 0};
-    plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, viewport, viewportWidth,
-                           viewportHeight, engine);
+    plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, viewport, engine);
   }
   if (!GeodeFilterSurfacesFit(plan, budget, surfaceBudget)) {
     budget.requireMemoryChunk();
@@ -2058,6 +2143,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // active, mapping pattern-tile units to tile-texture pixels so the
     // encoder's viewport math works out.
     Vector2d rasterScale = Vector2d(1.0, 1.0);
+    /// Filter captures open when the tile began. They hold the target the tile interrupted, not
+    /// the tile, so only captures opened inside the tile move what is drawn into it.
+    std::size_t filterStackDepth = 0;
 
     // Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
     // consume the outer element's pattern slots (e.g. a `context-fill` pattern shared between
@@ -2257,10 +2345,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
-    if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
+    if (!texturePool) {
+      return gpu::Texture{};
+    }
+    // A parked texture keeps its surface charge, which passes to the reuser.
+    if (gpu::Texture parked = takeFrameReusableTexture(desc); parked.isValid()) {
+      return parked;
+    }
+    if (!reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
     return texturePool->acquire(desc);
+  }
+
+  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any.
+  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc) {
+    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
+    const auto reusable = std::find_if(
+        frameReusableTextures.begin(), frameReusableTextures.end(),
+        [&](const PendingRelease& r) { return RendererGeodeTextureKey::From(r.desc) == key; });
+    if (reusable == frameReusableTextures.end()) {
+      return gpu::Texture{};
+    }
+    gpu::Texture texture = std::move(reusable->texture);
+    frameReusableTextures.erase(reusable);
+    return texture;
   }
 
   gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& desc) override {
@@ -2349,7 +2458,58 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
                                       const gpu::TextureDescriptor& desc) override {
-    releaseTextureAtFrameEnd(std::move(texture), desc);
+    // An execution releases its intermediates once its work is recorded; a later filter this
+    // renderer records in the frame can take them, so many small filters share a few textures
+    // instead of each holding its own until the frame ends. They reach the shared pool only after
+    // the frame submits.
+    releaseTextureWithinFrame(std::move(texture), desc);
+  }
+
+  /**
+   * Make \p texture available to a later acquisition by this renderer in this frame, when every
+   * command naming it is already recorded in this renderer's submission order: a later pass that
+   * reuses it runs after them. The texture stays out of the device-shared pool, which another
+   * renderer could take from and submit ahead of this frame, and which can destroy what it
+   * cannot hold; it reaches the pool only once this frame is submitted. It stays charged to the
+   * frame's surface budget while parked, since it is still live memory, and the charge passes to
+   * its reuser.
+   *
+   * A texture a queue upload can write is deferred to the frame end instead, since an upload runs
+   * ahead of recorded work that is not submitted yet; so is everything once the frame's recording
+   * has failed, or while within-frame reuse is disabled for a test.
+   */
+  void releaseTextureWithinFrame(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
+    if (!texture.isValid()) {
+      return;
+    }
+    if (!withinFrameReuseEnabled || frameRecordingAbandoned || frameArenaWriteFailed ||
+        !frameRecordingOpen || gpu::HasAllFlags(desc.usage, gpu::TextureUsage::CopyDst)) {
+      releaseTextureAtFrameEnd(std::move(texture), desc);
+      return;
+    }
+    frameReusableTextures.push_back({std::move(texture), desc});
+  }
+
+  /// Textures this renderer released within its open frame, reusable only by its own later
+  /// acquisitions until the frame is submitted. Each is still charged to the surface budget.
+  std::vector<PendingRelease> frameReusableTextures;
+  /// Whether \ref releaseTextureWithinFrame makes textures reusable within the frame.
+  bool withinFrameReuseEnabled = true;
+
+  /// Hand the frame's unreused within-frame textures to the pool, releasing their surface charge,
+  /// once the frame is submitted; or retain them when its submission is uncertain, as the frame's
+  /// other pending releases are.
+  void drainFrameReusableTextures(bool submissionUncertain) {
+    for (PendingRelease& reusable : frameReusableTextures) {
+      if (!submissionUncertain) {
+        releaseTexture(std::move(reusable.texture), reusable.desc);
+      } else if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+        retainRecoverableTexture(std::move(reusable.texture), reusable.desc);
+      } else {
+        failedFilterTextures.push_back(std::move(reusable));
+      }
+    }
+    frameReusableTextures.clear();
   }
 
   /// Keep unresolved frame resources alive until device teardown instead of recycling them.
@@ -2361,6 +2521,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void retainPendingFrameReleasesAfterFailure() {
+    drainFrameReusableTextures(/*submissionUncertain=*/true);
     for (PendingRelease& pending : framePendingReleases) {
       if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
         retainRecoverableTexture(std::move(pending.texture), pending.desc);
@@ -2372,6 +2533,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void drainPendingReleases() {
+    drainFrameReusableTextures(/*submissionUncertain=*/false);
     for (auto& pending : framePendingReleases) {
       releaseTexture(std::move(pending.texture), pending.desc);
     }
@@ -2600,11 +2762,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// A capture with an input margin holds the content its region reaches above or left of its
   /// outer target, moved by that margin, and a capture nested in another is moved within it, so
   /// the margins of every capture on the stack add up.
-  [[nodiscard]] Vector2i filterCaptureOffset() const {
+  /// @param firstFrame Index of the first capture counted; captures below it draw into another
+  ///   target, such as the one a pattern tile interrupted.
+  [[nodiscard]] Vector2i filterCaptureOffset(std::size_t firstFrame = 0) const {
     Vector2i offset = Vector2i::Zero();
-    for (const FilterStackFrame& frame : filterStack) {
-      offset.x += frame.filterBufferOffsetX;
-      offset.y += frame.filterBufferOffsetY;
+    for (std::size_t index = firstFrame; index < filterStack.size(); ++index) {
+      offset.x += filterStack[index].filterBufferOffsetX;
+      offset.y += filterStack[index].filterBufferOffsetY;
     }
     return offset;
   }
@@ -2818,6 +2982,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frame.savedEncoder = std::move(encoder);
     frame.savedTarget = aliasOf(target);
     frame.allocationRejected = true;
+    // The pop restores the clip stack from the frame, so the frame must hold it.
+    frame.savedClipStack = std::move(clipStack);
+    clipStack.clear();
     filterStack.push_back(std::move(frame));
     ++rejectedFilterDepth;
   }
@@ -3005,6 +3172,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     geode::FilterExecutionResult filtered;
     filtered.kind = geode::FilterExecutionResult::Kind::SourceGraphic;
     if (frame.localRasterRequiredForBudget) {
+      // The graph was admitted for a local raster that could not be allocated or run. That is a
+      // renderer failure, not a graph too large for the frame's remaining work, so it latches the
+      // frame like other external failures rather than counting as a per-graph refusal.
       filterExecutionBudget->reject();
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
       return filtered;
@@ -3727,6 +3897,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   struct AdmittedEncode {
     const geode::EncodedPath* encoded = nullptr;
     bool persistent = false;
+    /// Index of the `GeodePathCacheComponent::fillVariants` entry holding a persistent encode,
+    /// which also selects its resident slots.
+    std::size_t variant = 0;
   };
 
   /// Value returned by `getFillEncode` / `getStrokeDerived` describing
@@ -3836,39 +4009,75 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
         documentGeometryBudget(*source.registry());
     auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
+    // The encode a draw uses depends only on its own tolerance bucket, never on which scales
+    // drew the entity before, so an entity drawn at several scales renders the same every frame.
     const double tolerance = geode::FillCubicToleranceFor(deviceFromLocalTransform);
-    if (cache.fillEncode && cache.fillTolerance <= tolerance) {
-      return {&*cache.fillEncode, true};
+    if (const std::optional<std::size_t> hit = cache.fillVariantFor(tolerance)) {
+      auto& variant = cache.fillVariants[*hit];
+      variant.lastUse = ++cache.fillUseClock;
+      variant.lastUseFrame = currentFrameIndex;
+      return {&*variant.encode, true, *hit};
     }
 
     std::optional<geode::EncodedPath> encoded = encodeGeometry(path, rule);
     if (!encoded.has_value()) {
       return {&rejectedGeometry, false};
     }
+    const std::optional<std::size_t> replaceable = fillVariantToReplace(cache, currentFrameIndex);
+    if (!replaceable) {
+      // Every variant already served a draw this frame. Replacing one would make this frame's
+      // buckets evict each other on every draw, re-encoding and re-uploading each time, so this
+      // draw uses a scratch encode and the cached variants and their residence stay put.
+      fillScratchEncode = std::move(*encoded);
+      return {&*fillScratchEncode, false};
+    }
+    const std::size_t index = *replaceable;
+    auto& variant = cache.fillVariants[index];
     const std::size_t retainedBytes = encoded->retainedBytes();
     if (retainedBytes != std::numeric_limits<std::size_t>::max() &&
-        cache.fillReservation.replace(documentBudget, retainedBytes)) {
-      if (cache.fillEncode && pendingBatchReferences(&*cache.fillEncode)) {
+        variant.reservation.replace(documentBudget, retainedBytes)) {
+      if (variant.encode && pendingBatchReferences(&*variant.encode)) {
         flushPendingBatch();
       }
       if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-        // Every device's residence was uploaded from the encode being replaced.
-        resident->devices.forEach([](geode::GeodeResidentPathSlots& slots) {
-          slots.fillSlot.reset();
-          slots.gradientFillSlot.reset();
+        // Every device's residence for this variant was uploaded from the encode being replaced.
+        resident->devices.forEach([index](geode::GeodeResidentPathSlots& slots) {
+          slots.fillSlots[index].reset();
+          slots.gradientFillSlots[index].reset();
         });
       }
-      cache.fillTolerance = std::any_of(path.commands().begin(), path.commands().end(),
-                                        [](const Path::Command& command) {
-                                          return command.verb == Path::Verb::CurveTo;
-                                        })
-                                ? tolerance
-                                : 0.0;
-      cache.fillEncode = std::move(*encoded);
-      return {&*cache.fillEncode, true};
+      variant.tolerance = std::any_of(path.commands().begin(), path.commands().end(),
+                                      [](const Path::Command& command) {
+                                        return command.verb == Path::Verb::CurveTo;
+                                      })
+                              ? tolerance
+                              : 0.0;
+      variant.encode = std::move(*encoded);
+      variant.lastUse = ++cache.fillUseClock;
+      variant.lastUseFrame = currentFrameIndex;
+      return {&*variant.encode, true, index};
     }
     fillScratchEncode = std::move(*encoded);
     return {&*fillScratchEncode, false};
+  }
+
+  /// Index of the fill variant a new tolerance bucket replaces: an empty one when there is one,
+  /// otherwise the least recently used one that served no draw in frame \p frame. Nullopt when
+  /// every variant served a draw in \p frame.
+  static std::optional<std::size_t> fillVariantToReplace(
+      const geode::GeodePathCacheComponent& cache, std::uint64_t frame) {
+    std::optional<std::size_t> index;
+    for (std::size_t i = 0; i < cache.fillVariants.size(); ++i) {
+      const auto& variant = cache.fillVariants[i];
+      if (!variant.encode.has_value()) {
+        return i;
+      }
+      if (variant.lastUseFrame != frame &&
+          (!index || variant.lastUse < cache.fillVariants[*index].lastUse)) {
+        index = i;
+      }
+    }
+    return index;
   }
 
   AdmittedEncode getFillEncodeForPaint(EntityHandle source, const Path& path, FillRule rule) {
@@ -4379,16 +4588,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return slab;
   }
 
-  /// This device's GPU-residence slot for `source`'s fill encode. Returns null for a null
+  /// This device's GPU-residence slot for fill encode variant \p variant of `source` (see
+  /// `GeodePathCacheComponent::fillVariants`). Returns null for a null
   /// source (editor/overlay draws stay on the arena path). The slot lives on a
   /// `GeodeResidentPathComponent` beside the CPU encode cache and is invalidated by the same
   /// listener.
-  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source) {
+  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source, std::size_t variant) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentSlot& slot = residentPathSlots(source).fillSlot;
+    geode::GeodeResidentSlot& slot = residentPathSlots(source).fillSlots[variant];
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       // The slot's residence lives in another slab, so it must re-upload into this one. reset()
@@ -4435,12 +4645,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// See `residentFillSlot`; the slot lives on the
   /// same `GeodeResidentPathComponent` and is invalidated by the same
   /// listener.
-  geode::GeodeResidentGradientSlot* residentGradientFillSlot(EntityHandle source) {
+  geode::GeodeResidentGradientSlot* residentGradientFillSlot(EntityHandle source,
+                                                             std::size_t variant) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientFillSlot;
+    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientFillSlots[variant];
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -5683,6 +5894,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGeneration();
 
     waitForQueueIdleAtTeardown();
+    drainFrameReusableTextures(frameRecordingAbandoned || !device || device->isDeviceLost());
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
     releaseFrameTargetsAtTeardown();
@@ -5845,6 +6057,19 @@ RendererGeodeTexturePoolStats RendererGeode::texturePoolStats() const {
   return impl_->texturePoolStats();
 }
 
+void RendererGeode::trimTexturePool(RendererGeodeTexturePoolTrim level) {
+  if (impl_->texturePool) {
+    impl_->texturePool->trim(level);
+  }
+}
+
+void RendererGeode::setTexturePoolClockForTesting(
+    std::function<std::chrono::steady_clock::time_point()> clock) {
+  if (impl_->texturePool) {
+    impl_->texturePool->setClockForTesting(std::move(clock));
+  }
+}
+
 void RendererGeode::setTargetTexture(const gpu::Texture& texture) {
   impl_->borrowedTargetSnapshot.reset();
   impl_->hostTarget = Impl::aliasOf(texture);
@@ -5896,6 +6121,14 @@ RendererGeode& RendererGeode::operator=(RendererGeode&& other) noexcept {
 }
 
 void RendererGeode::draw(SVGDocument& document) {
+  drawDocument(document, nullptr);
+}
+
+void RendererGeode::draw(SVGDocument& document, ParseWarningSink& warningSink) {
+  drawDocument(document, &warningSink);
+}
+
+void RendererGeode::drawDocument(SVGDocument& document, ParseWarningSink* warningSink) {
   // No-op mode: if adapter/device acquisition failed there is no GPU to
   // render with. Return before running the driver so none of the
   // per-element callbacks (drawPath, pushClip, pushFilterLayer, ...)
@@ -5912,7 +6145,7 @@ void RendererGeode::draw(SVGDocument& document) {
   // `GeodePathCacheComponent`.
   impl_->ensureCacheInvalidationWired(document.registry());
 
-  RendererDriver driver(*this, impl_->verbose);
+  RendererDriver driver(*this, impl_->verbose, nullptr, nullptr, warningSink);
   driver.draw(document);
 }
 
@@ -5980,7 +6213,9 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .filterWorkUnits = impl_->filterExecutionBudget->workUnits(),
       .filterRetainedBytes = impl_->filterExecutionBudget->retainedBytes(),
       .filterCaptureBytesReserved = impl_->filterExecutionBudget->captureBytesReserved(),
-      .filterBudgetRejected = impl_->filterExecutionBudget->rejected(),
+      .filterGraphsRefused = impl_->filterExecutionBudget->refusedGraphs(),
+      .filterBudgetRejected = impl_->filterExecutionBudget->rejected() ||
+                              impl_->filterExecutionBudget->refusedGraphs() != 0,
       .geometryBudgetSupported = true,
       .geometryDraws = impl_->geometryBudget->draws(),
       .geometryItems = impl_->geometryBudget->items(),
@@ -5989,6 +6224,7 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .surfaceBudgetSupported = true,
       .surfaceCount = impl_->surfaceBudget->surfaces(),
       .surfaceBytes = impl_->surfaceBudget->bytes(),
+      .surfacePeakBytes = impl_->surfaceBudget->peakBytes(),
       .surfaceBudgetRejected = impl_->surfaceBudget->rejected(),
       .textMaterializationBudgetSupported = true,
       .textUniqueOutlines = impl_->textMaterializationBudget->uniqueOutlines(),
@@ -6133,8 +6369,12 @@ void RendererGeode::setTransform(const Transform2d& transform) {
   // raster scale onto the transform so draws submitted to the tile encoder
   // map 1:1 onto the tile texture's pixel grid. (Matches
   // `RendererTinySkia::setTransform`'s `scaleTransformOutput` path.)
+  //
+  // Filter captures opened inside the tile move what is drawn into them, in tile pixels, as they
+  // do outside a tile; captures opened before the tile hold the interrupted target instead.
   if (!impl_->patternStack.empty()) {
-    const Vector2d& scale = impl_->patternStack.back().rasterScale;
+    const Impl::PatternStackFrame& pattern = impl_->patternStack.back();
+    const Vector2d& scale = pattern.rasterScale;
     Transform2d scaled = transform;
     scaled.data[0] *= scale.x;
     scaled.data[2] *= scale.x;
@@ -6142,6 +6382,10 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     scaled.data[1] *= scale.y;
     scaled.data[3] *= scale.y;
     scaled.data[5] *= scale.y;
+    const Vector2i tileCaptureOffset = impl_->filterCaptureOffset(pattern.filterStackDepth);
+    if (tileCaptureOffset.x != 0 || tileCaptureOffset.y != 0) {
+      scaled = scaled * Transform2d::Translate(tileCaptureOffset.x, tileCaptureOffset.y);
+    }
     impl_->deviceFromLocalTransform = scaled;
     return;
   }
@@ -6400,7 +6644,11 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
   if (!impl_->readyForFilterCapture()) {
-    impl_->filterStack.push_back({});
+    // A placeholder frame; its pop restores the clip stack it saves.
+    Impl::FilterStackFrame placeholder;
+    placeholder.savedClipStack = std::move(impl_->clipStack);
+    impl_->clipStack.clear();
+    impl_->filterStack.push_back(std::move(placeholder));
     return;
   }
   // The capture covers the target the result composites back onto, which is larger than the
@@ -6408,6 +6656,13 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   const gpu::Extent2d outerExtent = impl_->targetExtent();
   const int outerWidth = static_cast<int>(outerExtent.width);
   const int outerHeight = static_cast<int>(outerExtent.height);
+  if (filterRegion.has_value() &&
+      FilterRegionShowsNothing(*filterRegion, impl_->deviceFromLocalTransform, outerWidth,
+                               outerHeight)) {
+    // Nothing the layer produces can show, so neither its content nor its graph runs.
+    impl_->pushRejectedFilterFrame();
+    return;
+  }
   std::optional<GeodeFilterAdmission> admission = AdmitGeodeFilter(
       filterGraph, filterRegion, impl_->deviceFromLocalTransform, outerWidth, outerHeight,
       *impl_->filterExecutionBudget, *impl_->surfaceBudget, *impl_->filterEngine);
@@ -6522,34 +6777,20 @@ void RendererGeode::popFilterLayer() {
                         frame.filterBufferOffsetY}
           .exceedsViewport(static_cast<int>(outerExtent.width),
                            static_cast<int>(outerExtent.height))) {
-    // The filter result is in an expanded texture. Extract the region the outer target covers,
-    // at the buffer offset, using a GPU texture copy, then blit it over that target. The buffer
-    // was sized as that target plus margins on each side, so the region lies wholly inside the
-    // result.
-    const uint32_t vpW = outerExtent.width;
-    const uint32_t vpH = outerExtent.height;
-
-    const gpu::TextureDescriptor vpDesc{"RendererGeodeFilterViewport", gpu::Extent2d{vpW, vpH},
-                                        filteredDesc.format,
-                                        gpu::TextureUsage::CopyDst | gpu::TextureUsage::Sampled};
-    gpu::Texture viewportTexture = impl_->acquireTexture(vpDesc);
-
-    if (viewportTexture.isValid()) {
-      const gpu::Texture& viewportHandle = viewportTexture;
-
-      // Everything recorded before this point has already been replayed into the frame command
-      // encoder by the encoder retire above, so the copy lands after those draws and before the
-      // composite recorded below.
-      const gpu::Status copied = impl_->frameGpuEncoder->copyTextureToTexture(
-          *filteredTexture, viewportHandle, gpu::Extent2d{vpW, vpH},
-          gpu::Origin2d{static_cast<uint32_t>(frame.filterBufferOffsetX),
-                        static_cast<uint32_t>(frame.filterBufferOffsetY)});
-      UTILS_RELEASE_ASSERT_MSG(!copied.hasError(),
-                               "Failed to record the filter viewport extraction copy");
-
-      impl_->encoder->blitFullTarget(viewportHandle, 1.0);
-      impl_->releaseTextureAtFrameEnd(std::move(viewportTexture), vpDesc);
-    }
+    // The result lies in a raster placed over part of the outer target, or past its edges by an
+    // input margin. Raster texel (0, 0) sits at target pixel (-offsetX, -offsetY), so draw the
+    // whole raster there, pixel aligned; the target clips whatever lies past its edges. Nearest
+    // sampling copies each texel exactly, as the viewport extraction copy it replaces did, where
+    // interpolation could land a hair off texel centers for raster sizes that do not divide evenly.
+    impl_->encoder->setTransform(Transform2d());
+    impl_->encoder->drawTexture(*filteredTexture,
+                                Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
+                                                -static_cast<double>(frame.filterBufferOffsetY),
+                                                static_cast<double>(filteredDesc.size.width),
+                                                static_cast<double>(filteredDesc.size.height)),
+                                kWholeTextureUv, 1.0, /*pixelated=*/true,
+                                /*sourceIsPremultiplied=*/true);
+    impl_->syncTransform();
   } else {
     // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
     // `frame.filterRegion` is passed in from the driver in user-space
@@ -6558,12 +6799,17 @@ void RendererGeode::popFilterLayer() {
     // all current feGaussianBlur resvg tests pass without the clip.
     impl_->encoder->blitFullTarget(*filteredTexture, 1.0);
   }
-  // Defer release to endFrame: `blitFullTarget` recorded a sample from the composited texture
-  // (which is `frame.layerTexture` when the filter graph is empty) into the frame encoder. The
-  // execution's intermediates have already been queued for frame-end pool release through
-  // `FilterTextureAllocator`; its output and the layer capture are recycled here.
+  // Defer the composited texture's release to endFrame: the composite recorded a sample from it
+  // into an encoder that has not reached the frame encoder yet. That is the output, or
+  // `frame.layerTexture` when the graph produced none. A layer the execution consumed is read only
+  // by work already recorded in order, so a later filter in this frame can take it.
+  const bool compositedOutput = filtered.kind == geode::FilterExecutionResult::Kind::Output;
   impl_->releaseTextureAtFrameEnd(std::move(filtered.texture), filtered.desc);
-  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  if (compositedOutput) {
+    impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
+  } else {
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  }
   impl_->filterExecutionBudget->release(frame.filterReservation);
 }
 
@@ -6819,6 +7065,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // encoder's pixelWidth/pixelHeight-based MVP renders the tile at its
   // native resolution.
   frame.rasterScale = rasterMetrics->rasterFromPatternScale;
+  frame.filterStackDepth = impl_->filterStack.size();
   impl_->patternStack.push_back(std::move(frame));
 
   // Redirect all subsequent draw calls into the new tile texture. The new
@@ -6862,6 +7109,10 @@ void RendererGeode::endPatternTile(bool forStroke) {
 
   Impl::PatternStackFrame frame = std::move(impl_->patternStack.back());
   impl_->patternStack.pop_back();
+  // Filter captures nest inside tiles, so every capture the tile opened has closed by now and the
+  // offsets setTransform applies inside the tile counted only those captures.
+  assert(impl_->filterStack.size() == frame.filterStackDepth &&
+         "A pattern tile must close every filter capture opened inside it");
 
   // Finish the tile's render pass so the texture contents are available
   // for sampling by subsequent draws.
@@ -7042,7 +7293,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // ends up being drawn.
   geode::GeodeResidentSlot* residentFill =
       (fillAdmission.persistent && (solidFill || gradientFillBatchable))
-          ? impl_->residentFillSlot(path.sourceEntity)
+          ? impl_->residentFillSlot(path.sourceEntity, fillAdmission.variant)
           : nullptr;
 
   // Gradient residence: a persistent per-entity gradient slot for
@@ -7051,7 +7302,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // gradient methods only run for resolved gradients).
   geode::GeodeResidentGradientSlot* residentGradientFill =
       (fillAdmission.persistent && referenceFill)
-          ? impl_->residentGradientFillSlot(path.sourceEntity)
+          ? impl_->residentGradientFillSlot(path.sourceEntity, fillAdmission.variant)
           : nullptr;
 
   bool fillAbsorbed = false;
@@ -8443,6 +8694,10 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   return RendererGeodeTextureSnapshot::readTexture(impl_->device, exported.result(),
                                                    Vector2i(impl_->pixelWidth, impl_->pixelHeight),
                                                    AlphaType::Premultiplied, shouldCancel);
+}
+
+void RendererGeode::setWithinFrameTextureReuseForTesting(bool enabled) {
+  impl_->withinFrameReuseEnabled = enabled;
 }
 
 void RendererGeode::injectDeviceLossForTesting() {

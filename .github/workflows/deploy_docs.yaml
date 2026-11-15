@@ -342,6 +342,7 @@ jobs:
           path: |
             ${{ runner.temp }}/docs-auto-publish/preflight.json
             ${{ runner.temp }}/docs-auto-publish/result.json
+            ${{ runner.temp }}/docs-auto-publish/recovery.json
             ${{ runner.temp }}/docs-auto-publish/candidate-deployment.json
             ${{ runner.temp }}/docs-auto-publish/composition-attestation.json
             ${{ runner.temp }}/docs-auto-publish/pages-attestation.json

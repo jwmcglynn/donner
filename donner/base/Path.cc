@@ -498,11 +498,83 @@ Path::PointOnPath PointOnMeasuredLine(const Segment& segment, double remaining,
   return {start + tangent * t, tangent, std::atan2(tangent.y, tangent.x), true};
 }
 
+/// Integrate the raw cubic speed with a fixed five-point Gauss-Legendre rule.
+double IntegrateCubicSpeed(const std::array<Vector2d, 4>& points, double start, double end) {
+  constexpr std::array<std::pair<double, double>, 5> kNodesAndWeights = {
+      {{0.0, 0.5688888888888889},
+       {-0.5384693101056831, 0.4786286704993665},
+       {0.5384693101056831, 0.4786286704993665},
+       {-0.9061798459386640, 0.2369268850561891},
+       {0.9061798459386640, 0.2369268850561891}}};
+  const double halfSpan = (end - start) * 0.5;
+  const double midpoint = start + halfSpan;
+  double weightedSpeed = 0.0;
+  for (const auto& [node, weight] : kNodesAndWeights) {
+    const Vector2d tangent = evalCubicTangent(points, midpoint + halfSpan * node);
+    weightedSpeed += weight * std::hypot(tangent.x, tangent.y);
+  }
+  return halfSpan * weightedSpeed;
+}
+
+/// Refine only where h*M/v0 <= 1/8 and L/(h*v0) is in [7/8, 9/8], with bracket span h,
+/// maximum acceleration M, initial speed v0, and retained increment L. Positive quadrature
+/// weights then bound the one-step map's derivative above zero. Decide per bracket so that
+/// rejected brackets use linear interpolation uniformly.
+bool CanRefineCubicParameter(const std::array<Vector2d, 4>& points, double start, double end,
+                             double sampleLength) {
+  const double span = end - start;
+  const Vector2d tangent = evalCubicTangent(points, start);
+  const double speed = std::hypot(tangent.x, tangent.y);
+  const double nominalLength = span * speed;
+  if (!(speed > 0.0) || !std::isfinite(speed) || !(nominalLength > 0.0) ||
+      !std::isfinite(nominalLength)) {
+    return false;
+  }
+  const double relativeLength = sampleLength / nominalLength;
+  if (!std::isfinite(relativeLength) || relativeLength < 0.875 || relativeLength > 1.125) {
+    return false;
+  }
+  const Vector2d firstDifference = points[1] - points[0];
+  const Vector2d secondDifference = points[2] - points[1];
+  const Vector2d thirdDifference = points[3] - points[2];
+  const Vector2d initialAcceleration = secondDifference - firstDifference;
+  const Vector2d finalAcceleration = thirdDifference - secondDifference;
+  const double initialAccelerationMagnitude =
+      std::hypot(initialAcceleration.x, initialAcceleration.y);
+  const double finalAccelerationMagnitude = std::hypot(finalAcceleration.x, finalAcceleration.y);
+  const double maximumAcceleration =
+      6.0 * std::max(initialAccelerationMagnitude, finalAccelerationMagnitude);
+  const double speedVariation = span * maximumAcceleration;
+  return std::isfinite(initialAccelerationMagnitude) && std::isfinite(finalAccelerationMagnitude) &&
+         std::isfinite(speedVariation) && speedVariation <= speed * 0.125;
+}
+
+/// Refine once within an admitted sample bracket without changing its retained length.
+double RefineCubicParameter(const std::array<Vector2d, 4>& points, double start, double end,
+                            double targetLength, double t) {
+  const double span = t - start;
+  if (!(span > 0.0) || !std::isfinite(span)) {
+    return t;
+  }
+  const Vector2d tangent = evalCubicTangent(points, t);
+  const double speed = std::hypot(tangent.x, tangent.y);
+  if (!(speed > 0.0) || !std::isfinite(speed)) {
+    return t;
+  }
+  const double length = IntegrateCubicSpeed(points, start, t);
+  if (!(length > 0.0) || !std::isfinite(length)) {
+    return t;
+  }
+  const double refined = t - (length - targetLength) / speed;
+  return std::isfinite(refined) ? std::clamp(refined, start, end) : t;
+}
+
 template <typename ArcSampleIterator>
-double InterpolateArcSampleParameter(ArcSampleIterator samplesBegin, ArcSampleIterator sample,
+double InterpolateArcSampleParameter(const std::array<Vector2d, 4>& points,
+                                     ArcSampleIterator samplesBegin, ArcSampleIterator sample,
                                      double remaining) {
   double t = sample->t;
-  if (sample == samplesBegin) {
+  if (sample == samplesBegin || remaining == sample->length) {
     return t;
   }
   const auto& previous = *std::prev(sample);
@@ -510,6 +582,9 @@ double InterpolateArcSampleParameter(ArcSampleIterator samplesBegin, ArcSampleIt
   if (sampleLength > 0.0) {
     const double fraction = (remaining - previous.length) / sampleLength;
     t = previous.t + (sample->t - previous.t) * fraction;
+    if (CanRefineCubicParameter(points, previous.t, sample->t, sampleLength)) {
+      t = RefineCubicParameter(points, previous.t, sample->t, remaining - previous.length, t);
+    }
   }
   return t;
 }
@@ -526,7 +601,7 @@ Path::PointOnPath PointOnMeasuredCubic(const Segment& segment, const ArcSampleVe
     return {endpoint, {}, 0.0, false};
   }
 
-  const double t = InterpolateArcSampleParameter(samplesBegin, sample, remaining);
+  const double t = InterpolateArcSampleParameter(segment.points, samplesBegin, sample, remaining);
   const Vector2d point = evalCubic(segment.points, t);
   const Vector2d tangent = evalMeasuredCubicTangent(segment.points, t);
   return {point, tangent, std::atan2(tangent.y, tangent.x), true};

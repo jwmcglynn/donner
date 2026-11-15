@@ -95,7 +95,9 @@ struct DeviceLostState {
   /// that publish this pair should therefore key on its value changing rather than latching the
   /// first sample they see.
   std::atomic<DeviceLostWaitSite> timedOutSite{DeviceLostWaitSite::None};
-  /// Wall time the timed-out wait spent before giving up, in milliseconds. Written before
+  /// Wall time the timed-out wait spent before giving up, in milliseconds. A wait that judges a
+  /// stall by progress can record less than its bound, since the bound runs from the work's last
+  /// progress, which may predate the wait, and this time from the wait's start. Written before
   /// `timedOutSite`, which publishes it, so a reader that sees a site also sees that site's
   /// elapsed time. Zero while `timedOutSite` is `None`.
   std::atomic<int> timedOutElapsedMs{0};

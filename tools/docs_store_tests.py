@@ -160,6 +160,61 @@ class StoreTest(unittest.TestCase):
              self.assertRaisesRegex(ValueError, "outcome is unknown"):
             store.GitHub().call("repos/jwmcglynn/donner/pages/deployments", "POST", {"artifact_id": 1})
 
+    def test_api_error_reports_status_and_safe_details_without_tokens_or_commands(self):
+        import json
+        import os
+        token = "example-sensitive-token"
+        def run(args, *, stdout, **kwargs):
+            stdout.write(json.dumps({"message": "Invalid tree " + token + "\n::error::forged",
+                                     "errors": [{"resource": "Tree", "field": "base_tree", "code": "invalid",
+                                                 "value": "private input"}]}).encode())
+            return store.subprocess.CompletedProcess(args, 1, stderr=b"gh: Validation Failed (HTTP 422)")
+        with mock.patch.dict(os.environ, {"GH_TOKEN": token}), \
+             mock.patch.object(store.subprocess, "run", side_effect=run), \
+             self.assertRaises(ValueError) as raised:
+            store.GitHub().call("repos/jwmcglynn/donner/git/trees", "POST", {"secret": "private input"})
+        detail = str(raised.exception)
+        self.assertIn("POST repos/jwmcglynn/donner/git/trees", detail)
+        self.assertIn("HTTP 422", detail)
+        self.assertIn("base_tree", detail)
+        self.assertNotIn(token, detail)
+        self.assertNotIn("private input", detail)
+        self.assertNotIn("\n", detail)
+        self.assertNotIn("::error::", detail)
+
+    def test_missing_api_object_remains_distinguishable_from_other_failures(self):
+        result = store.subprocess.CompletedProcess([], 1, stderr=b"gh: Not Found (HTTP 404)")
+        with mock.patch.object(store.subprocess, "run", return_value=result):
+            self.assertIsNone(store.GitHub().tip())
+
+    def test_non_json_failure_keeps_a_bounded_redacted_network_diagnostic(self):
+        import os
+        token = "example-network-token"
+        result = store.subprocess.CompletedProcess([], 1,
+            stderr=("TLS handshake failed " + token + "\n::error::forged " + "x" * 6000).encode())
+        with mock.patch.dict(os.environ, {"GH_TOKEN": token}), \
+             mock.patch.object(store.subprocess, "run", return_value=result), \
+             self.assertRaises(ValueError) as raised:
+            store.GitHub().call("repos/jwmcglynn/donner/git/trees", "POST")
+        detail = str(raised.exception)
+        self.assertIn("TLS handshake failed", detail)
+        self.assertNotIn(token, detail)
+        self.assertNotIn("\n", detail)
+        self.assertNotIn("::error::", detail)
+        self.assertLess(len(detail), 1600)
+
+    def test_pending_index_is_optional_but_must_be_a_distinct_content_address(self):
+        from tools.docs_site import canonical
+        api = mock.Mock()
+        state = {"schema": 1, "releases": {}, "current": "a" * 64, "previous": None}
+        for pending in ("b" * 64, "a" * 64, "latest", None):
+            api.file.return_value = canonical({**state, "pending": pending})
+            if pending == "b" * 64:
+                self.assertEqual(store.read_index(api, "c" * 40)["pending"], pending)
+            else:
+                with self.subTest(pending=pending), self.assertRaisesRegex(ValueError, "pending"):
+                    store.read_index(api, "c" * 40)
+
     def test_writer_requires_complete_live_branch_and_environment_protection(self):
         rules = [{"type": "deletion"}, {"type": "non_fast_forward"}]
         env = {"can_admins_bypass": False, "protection_rules": [
