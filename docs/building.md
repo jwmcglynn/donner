@@ -484,7 +484,11 @@ cache endpoint, TLS or other credentials, and any queue priority or `--jobs` val
 its default is the most preferred of them. The config pins `--xcode_version` to that default, and
 the executor must have that Xcode installed at `/Applications/Xcode.app`. To add a pinned tuple,
 read its SDK versions with `xcodebuild -showsdks` on a machine with that Xcode and record them in
-`CONFIRMED_SDK_VERSIONS`; the default then moves to the most preferred confirmed tuple.
+`CONFIRMED_SDK_VERSIONS`; the default then moves to the most preferred confirmed tuple. An
+`xcode_config` fails analysis when `--xcode_version` names a version it does not hold, so its
+targets are tagged `manual`: wildcard builds on another Xcode, such as a macOS CI lane on a
+pinned Xcode that is not listed yet, never analyse them, and only `--xcode_version_config`
+reaches them. Passing another `--xcode_version` together with this config fails analysis.
 `//tools:remote_macos_config_tests` fails when the static configuration, the pin file, the config
 and this page disagree.
 

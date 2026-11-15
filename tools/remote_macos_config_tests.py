@@ -168,6 +168,22 @@ class XcodePinAgreementTest(unittest.TestCase):
         named = set(re.findall(r"%s=([0-9.]+-[0-9A-Za-z]+)" % IDENTITY, _read(DOCS)))
         self.assertEqual({"%s-%s" % (version, build)}, named)
 
+    def test_static_xcode_targets_stay_out_of_wildcard_builds(self):
+        # An xcode_config fails analysis when --xcode_version names a version it does not hold,
+        # so a non-manual one breaks every wildcard build on another pinned Xcode.
+        calls = {}
+        for node in ast.walk(ast.parse(_read(XCODE_BZL))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) in (
+                    "xcode_config", "xcode_version"):
+                calls.setdefault(node.func.id, []).append(
+                    {keyword.arg: keyword.value for keyword in node.keywords})
+        self.assertEqual({"xcode_config", "xcode_version"}, set(calls))
+        for rule, instances in calls.items():
+            for attributes in instances:
+                with self.subTest(rule=rule):
+                    self.assertIn("tags", attributes)
+                    self.assertIn("manual", ast.literal_eval(attributes["tags"]))
+
     def test_build_defines_the_static_xcode_config(self):
         self.assertIn("remote_macos_xcodes", _calls(CI_BUILD, "remote_macos_xcode_config"))
 

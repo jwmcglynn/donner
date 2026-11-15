@@ -674,7 +674,9 @@ platform(
 )
 
 # The Xcode the remote executor must have installed, because a client that is not a Mac discovers
-# none. Each version comes from tools/ci_macos_xcode.txt (see remote_macos_xcode.bzl).
+# none. Each version comes from tools/ci_macos_xcode.txt (see remote_macos_xcode.bzl). The targets
+# are manual: only --xcode_version_config reaches them, and wildcard builds on another Xcode skip
+# them.
 remote_macos_xcode_config(
     name = "remote_macos_xcodes",
     visibility = ["//visibility:public"],

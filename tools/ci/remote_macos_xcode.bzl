@@ -48,6 +48,11 @@ def remote_macos_xcode_config(name, visibility = None):
     Each Xcode answers to its version, its three-part version and its build. The major version
     alone is not an alias: two pinned Xcodes can share it.
 
+    Every target is `manual`. They are reached only through `--xcode_version_config`, and an
+    xcode_config fails analysis when `--xcode_version` names a version it does not hold, so in a
+    wildcard build with another Xcode (a macOS CI lane on a pinned Xcode without confirmed SDK
+    versions here) they would fail the whole build.
+
     Args:
       name: The xcode_config target name. Each Xcode is `<name>_<version>` with `_` for `.`.
       visibility: Visibility of the xcode_config and its versions.
@@ -72,6 +77,7 @@ def remote_macos_xcode_config(name, visibility = None):
             default_tvos_sdk_version = sdks["tvos"],
             default_visionos_sdk_version = sdks["visionos"],
             default_watchos_sdk_version = sdks["watchos"],
+            tags = ["manual"],
             visibility = visibility,
         )
         versions.append(":" + target)
@@ -81,5 +87,6 @@ def remote_macos_xcode_config(name, visibility = None):
         name = name,
         default = versions[0],
         versions = versions,
+        tags = ["manual"],
         visibility = visibility,
     )
