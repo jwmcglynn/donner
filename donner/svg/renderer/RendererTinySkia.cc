@@ -1418,6 +1418,14 @@ RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
 RendererTinySkia& RendererTinySkia::operator=(RendererTinySkia&&) noexcept = default;
 
 void RendererTinySkia::draw(SVGDocument& document) {
+  drawDocument(document, nullptr);
+}
+
+void RendererTinySkia::draw(SVGDocument& document, ParseWarningSink& warningSink) {
+  drawDocument(document, &warningSink);
+}
+
+void RendererTinySkia::drawDocument(SVGDocument& document, ParseWarningSink* warningSink) {
   if (retainedSpansEnabled_) {
     // Connect the geometry-invalidation listener before the driver instantiates the render
     // tree, so a shape whose outline changed between draws drops its recording before this
@@ -1430,7 +1438,7 @@ void RendererTinySkia::draw(SVGDocument& document) {
     ClearRetainedSpans(document.registry());
   }
 
-  RendererDriver driver(*this, verbose_);
+  RendererDriver driver(*this, verbose_, nullptr, nullptr, warningSink);
   driver.draw(document);
 }
 

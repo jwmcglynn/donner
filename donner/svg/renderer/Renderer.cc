@@ -422,6 +422,10 @@ void Renderer::draw(SVGDocument& document) {
   impl_->draw(document);
 }
 
+void Renderer::draw(SVGDocument& document, ParseWarningSink& warningSink) {
+  impl_->draw(document, warningSink);
+}
+
 RendererBitmap RenderDocumentsToAtlasBitmap(RendererInterface& renderer,
                                             std::span<const AtlasDocumentPlacement> placements,
                                             Vector2i atlasSizePx) {

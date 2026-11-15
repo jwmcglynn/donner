@@ -101,6 +101,18 @@ public:
     }
   }
 
+  /**
+   * Record that warnings bound for this sink were discarded to enforce a resource limit elsewhere,
+   * for example by a sink whose warnings were filtered before being forwarded here, so that
+   * \ref resourceLimitExceeded reports the collection as incomplete. As after any resource limit,
+   * later warnings are dropped. Does nothing when disabled.
+   */
+  void markResourceLimitExceeded() {
+    if (enabled_) {
+      resourceLimitExceeded_ = true;
+    }
+  }
+
   /// Merge all warnings from another sink into this one.
   void merge(ParseWarningSink&& other) {
     if (enabled_) {
