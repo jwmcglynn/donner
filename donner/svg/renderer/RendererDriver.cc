@@ -4726,9 +4726,14 @@ PendingSubDocumentWarnings& EnsureHeldWarnings(Registry& registry,
   return *pending;
 }
 
-/// Hold @p warning under @p key, creating the held set on first use.
-void HoldSubDocumentWarning(Registry& registry, PendingSubDocumentWarnings*& pending,
-                            const ParseDiagnostic& warning, std::string&& key) {
+/// Hold @p warning unless it was already delivered or held, creating the held set on first use.
+void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
+                            PendingSubDocumentWarnings*& pending, const ParseDiagnostic& warning) {
+  std::string key = SubDocumentWarningKey(warning);
+  if ((reported != nullptr && reported->keys.contains(key)) ||
+      (pending != nullptr && pending->keys.contains(key))) {
+    return;
+  }
   PendingSubDocumentWarnings& held = EnsureHeldWarnings(registry, pending);
   const std::size_t count = held.warnings.warnings().size();
   held.warnings.add(ParseDiagnostic(warning));
@@ -4751,8 +4756,8 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
   }
   DropStaleSubDocumentWarnings(registry);
   const std::size_t fingerprint = WarningBatchFingerprint(warnings);
-  if (const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
-      last != nullptr && last->fingerprint == fingerprint) {
+  const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
+  if (last != nullptr && last->fingerprint == fingerprint) {
     return;
   }
   const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
@@ -4761,12 +4766,7 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
     if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
       break;
     }
-    std::string key = SubDocumentWarningKey(warning);
-    const bool known = (reported != nullptr && reported->keys.contains(key)) ||
-                       (pending != nullptr && pending->keys.contains(key));
-    if (!known) {
-      HoldSubDocumentWarning(registry, pending, warning, std::move(key));
-    }
+    HoldSubDocumentWarning(registry, reported, pending, warning);
   }
   if (warnings.resourceLimitExceeded()) {
     EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
