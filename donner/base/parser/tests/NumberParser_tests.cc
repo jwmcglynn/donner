@@ -4,6 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <random>
+#include <string>
 #include <string_view>
 
 #include "donner/base/MathUtils.h"
@@ -350,6 +355,123 @@ TEST(NumberParser, DroppedDigitsAreConsumed) {
     ASSERT_THAT(maybeResult, NoParseError());
     EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(testCase.expected));
     EXPECT_EQ(maybeResult.result().consumedChars, testCase.consumedChars);
+  }
+}
+
+/// Returns the distance between two doubles in units in the last place, counting across zero.
+int64_t UlpDistance(double lhs, double rhs) {
+  const auto ordered = [](double value) {
+    int64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits < 0 ? std::numeric_limits<int64_t>::min() - bits : bits;
+  };
+  const int64_t distance = ordered(lhs) - ordered(rhs);
+  return distance < 0 ? -distance : distance;
+}
+
+/// Matches a parse result within two ULPs of the C library's correctly rounded `strtod`.
+MATCHER_P(NearStrtodOf, input, "is within two ULPs of strtod(\"" + std::string(input) + "\")") {
+  const double oracle = std::strtod(std::string(input).c_str(), nullptr);
+  const int64_t distance = UlpDistance(arg, oracle);
+  *result_listener << "strtod gives " << testing::PrintToString(oracle) << ", " << distance
+                   << " ULPs away";
+  return distance <= 2;
+}
+
+/// Parses \p input, which must be fully consumed, and returns the number.
+double ParseWhole(std::string_view input) {
+  const auto maybeResult = NumberParser::Parse(input);
+  EXPECT_THAT(maybeResult, NoParseError());
+  EXPECT_EQ(maybeResult.result().consumedChars, input.size());
+  return maybeResult.result().number;
+}
+
+/// Matches a double that is bit-identical to \p expected.
+MATCHER_P(BitIdenticalTo, expected, "is bit-identical to " + testing::PrintToString(expected)) {
+  return UlpDistance(arg, expected) == 0 && std::signbit(arg) == std::signbit(expected);
+}
+
+// Below 1e-307, 10^exponent is not a normal double, so values there used to lose most or all of
+// their precision; each of these parsed to 0 or was off by many ULPs and is now exact.
+TEST(NumberParser, TinyExponentsAreExact) {
+  for (const std::string_view input : {
+           "2.2250738585072014e-308",  // DBL_MIN
+           "1.23456789e-315",
+           "6.631236846766476e-316",
+           "3.4e-317",
+           "7.0e-323",
+           "9.8813129168249309e-324",
+           "4.9406564584124654e-324",  // Smallest subnormal.
+           "5e-324",
+           "123456789012345678e-330",
+           "18446744073709551615e-340",
+           "-1.2345678901234567e-310",
+       }) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    EXPECT_THAT(ParseWhole(input),
+                BitIdenticalTo(std::strtod(std::string(input).c_str(), nullptr)));
+  }
+}
+
+// These used to parse to 0 or about 1.2e8 ULPs off; they are now within one or two ULPs.
+TEST(NumberParser, TinyExponentsNearStrtod) {
+  for (const std::string_view input : {
+           "2.2250738585072011e-308",
+           "4.4501477170144023e-308",
+           "1.2345678901234567e-300",
+       }) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    EXPECT_THAT(ParseWhole(input), NearStrtodOf(input));
+  }
+}
+
+// A deterministic sample of long significands whose exponents put 10^exponent below the normal
+// range while the result stays far above the smallest subnormal, so two ULPs is a tight bound.
+TEST(NumberParser, TinyExponentSweepMatchesStrtod) {
+  std::mt19937_64 random(20261114);
+  for (int i = 0; i < 2000; ++i) {
+    std::string input = std::to_string(1 + random() % 9);
+    const int digits = 17 + static_cast<int>(random() % 3);
+    for (int digit = 1; digit < digits; ++digit) {
+      input += static_cast<char>('0' + random() % 10);
+    }
+    input += "e" + std::to_string(-326 + static_cast<int>(random() % 18));
+
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    ASSERT_THAT(ParseWhole(input), NearStrtodOf(input));
+  }
+}
+
+// Where 10^exponent is a normal double, the value is the mantissa times pow(10, exponent), so these
+// results are unchanged by the subnormal-range handling.
+TEST(NumberParser, NormalRangeExponentsAreExact) {
+  for (const std::string_view input : {
+           "1e-23",
+           "0.00000000000000000000001",
+           "1e-305",
+           "1e-307",
+           "7.761314664591695623e-11",
+       }) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    EXPECT_THAT(ParseWhole(input),
+                BitIdenticalTo(std::strtod(std::string(input).c_str(), nullptr)));
+  }
+}
+
+TEST(NumberParser, NormalRangeExponentSweepMultipliesByPowerOfTen) {
+  std::mt19937_64 random(20261115);
+  for (int i = 0; i < 4000; ++i) {
+    const int digits = 1 + static_cast<int>(random() % 19);
+    uint64_t mantissa = 1 + random() % 9;
+    for (int digit = 1; digit < digits; ++digit) {
+      mantissa = mantissa * 10 + random() % 10;
+    }
+    const int exponent = -307 + static_cast<int>(random() % 285);  // [-307, -23]
+    const std::string input = std::to_string(mantissa) + "e" + std::to_string(exponent);
+
+    SCOPED_TRACE(testing::Message() << "Parsing: " << input);
+    ASSERT_THAT(ParseWhole(input), BitIdenticalTo(static_cast<double>(mantissa) *
+                                                  std::pow(10.0, static_cast<double>(exponent))));
   }
 }
 
