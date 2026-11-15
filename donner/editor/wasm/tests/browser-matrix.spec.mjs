@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -211,13 +211,13 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   // A target that lists its config and the config's base, but not the file the base requires.
   const target = [
     "name = \"synthetic_lane\",",
-    "args = [\"--config=$(rootpath :playwright.boot-presentation.bazel.config.js)\"],",
-    "data = [\"playwright.boot-presentation.bazel.config.js\", \"playwright.bazel.config.js\", "
+    "args = [\"--config=$(rootpath :playwright.standalone-geode.bazel.config.js)\"],",
+    "data = [\"playwright.standalone-geode.bazel.config.js\", \"playwright.bazel.config.js\", "
     + "\"chromium-launch-env.cjs\"],",
   ].join("\n");
   assert.throws(() => assertListsLoadedFiles("synthetic_lane", target), {
     message: "synthetic_lane is missing playwright.config.js, loaded through "
-      + "playwright.boot-presentation.bazel.config.js -> playwright.bazel.config.js -> "
+      + "playwright.standalone-geode.bazel.config.js -> playwright.bazel.config.js -> "
       + "playwright.config.js",
   });
   assert.doesNotThrow(() =>
@@ -454,8 +454,6 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   assert.ok(existsSync(buildFilePath), "Wasm browser tests need a Bazel package");
   const buildFile = readFileSync(buildFilePath, "utf8");
   assert.match(buildFile, /playwright_bin\.playwright_test\(/);
-  assert.match(buildFile, /name = "chromium_remote_smoke"/);
-  assert.match(buildFile, /name = "browser_presentation_regression_test"/);
   // Every Bazel-owned browser lane, checked one at a time rather than against
   // the file as a whole: a contract satisfied by some other lane in the same
   // file is not a contract. Each lane names a spec, a config and sometimes a
@@ -470,12 +468,8 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     [
       "_browser_responsiveness_perf_driver",
       "animation_preview_browser_test",
-      "boot_presentation_test",
-      "browser_presentation_regression_test",
       "canvas_snapshot_browser_test",
-      "catalog_font_loading_test",
       "chromium_composited_invariants_test",
-      "chromium_remote_smoke",
       "docs_selector_browser_tests",
       "firefox_composited_invariants_test",
       "font_reference_probe",
@@ -486,10 +480,27 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     assertBrowserLane(lane);
   }
-  const watchdog = [...buildFile.matchAll(/js_test\(([\s\S]*?)\n\)\n/g)]
-    .map(([, body]) => body)
-    .find((body) => body.includes("name = \"browser_responsiveness_perf_test\""));
-  assert.ok(watchdog, "the public responsiveness lane must own its watchdog");
+  // One watchdog test per responsiveness project, generated from one js_test body, so each
+  // project runs under the config's whole globalTimeout rather than all four sharing it.
+  const watchdogPattern =
+    /\n {4}js_test\(\n([\s\S]*?)\n {4}\)\n {4}for project in RESPONSIVENESS_PERF_PROJECTS\n/;
+  const watchdog = watchdogPattern.exec(buildFile)?.[1];
+  assert.ok(watchdog, "the public responsiveness lanes must own their watchdog");
+  assert.match(
+    watchdog,
+    /name = "browser_responsiveness_perf_test_" \+ project\.replace\("-", "_"\)/,
+  );
+  assert.match(watchdog, /args = \["--project=" \+ project\]/);
+  const buildProjects = responsivenessPerfProjects();
+  const responsivenessConfig = readFileSync(
+    path.join(testDirectory, "playwright.responsiveness.bazel.config.js"),
+    "utf8",
+  );
+  assert.deepEqual(
+    buildProjects,
+    [...responsivenessConfig.matchAll(/^ {6}name: "([^"]+)",$/gm)].map(([, project]) => project),
+    "every responsiveness project, and only those, must have its own watchdog test",
+  );
   assert.match(watchdog, /entry_point = "browser-watchdog\.mjs"/);
   assert.ok(
     watchdog.includes("\":_browser_responsiveness_perf_driver\""),
@@ -501,7 +512,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   const driver = lanes.find((lane) =>
     lane.includes("name = \"_browser_responsiveness_perf_driver\"")
   );
-  assertListsLoadedFiles("browser_responsiveness_perf_test", watchdog, {
+  assertListsLoadedFiles(responsivenessPerfTarget("<project>"), watchdog, {
     entryPoints: ["browser-watchdog.mjs"],
     runfilesFrom: [driver],
   });
@@ -514,15 +525,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     ...(/tags = \[([\s\S]*?)\]/.exec(watchdog)?.[1] ?? "").matchAll(/"([^"]+)"/g),
   ]
     .map(([, tag]) => tag).sort();
-  assert.deepEqual(watchdogTags, ["manual", "no-sandbox", "perf"]);
-  const overlayLane = lanes.find((body) =>
-    body.includes("name = \"browser_presentation_regression_test\"")
-  );
-  assert.ok(overlayLane?.includes("\"overlay-bitmap-compare.ts\""));
-  assert.ok(
-    overlayLane?.includes("\"//donner/editor/tests:standalone_geode_browser_png_compare\""),
-  );
-  assert.ok(overlayLane?.includes("\"DONNER_BROWSER_GOLDEN_COMPARE\":"));
+  assert.deepEqual(watchdogTags, ["exclusive", "manual", "no-sandbox", "perf"]);
   // Every editor lane serves the one production browser-selected package. The standalone
   // renderer has its own page and package, verified separately below.
   const editorPackage = "//donner/editor/wasm:_wasm_web_package_for_serve";
@@ -564,13 +567,6 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       `${laneName} must expect the browser backend exactly when it checks package selection`,
     );
   }
-  for (const laneName of ["boot_presentation_test"]) {
-    const lane = lanes.find((body) => body.includes(`name = "${laneName}"`));
-    assert.ok(
-      lane?.includes("$(rootpath :browser-backend-selection.spec.ts)"),
-      `${laneName} must check which backend the raster worker selected`,
-    );
-  }
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
   assert.match(
     buildFile,
@@ -607,6 +603,121 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     /channel:\s*"chromium"/,
     "the regular Chromium build preserves WebGPU presentation without opening a window",
   );
+});
+
+// The specs whose Chromium cases only the Editor WASM chromium-default lane runs. Bazel no longer
+// runs a Chromium-only copy of them: the lane already ran every one of those cases on each pull
+// request and main push that could change them.
+const kChromiumDefaultLaneSpecs = [
+  "boot-presentation.spec.ts",
+  "browser-backend-selection.spec.ts",
+  "browser-presentation-regression.spec.ts",
+  "browser-surface-recovery.spec.ts",
+  "smoke.spec.ts",
+];
+// Bazel lanes that may still name one of those specs, because they run a browser project the
+// chromium-default lane does not.
+const kNonDefaultBrowserLanesOverDefaultSpecs = {
+  animation_preview_browser_test: "smoke.spec.ts",
+  canvas_snapshot_browser_test: "smoke.spec.ts",
+};
+
+function assertDefaultLaneDiscovers(spec) {
+  const defaultConfig = require("./playwright.config.js");
+  assert.equal(defaultConfig.testMatch, "**/*.spec.ts", "the default lane discovers every spec");
+  assert.ok(existsSync(path.join(testDirectory, spec)), `${spec} must exist`);
+  assert.ok(
+    !defaultConfig.testIgnore.includes(spec),
+    `${spec} must stay in the chromium-default lane's discovery`,
+  );
+}
+
+test("the Editor WASM chromium-default lane owns the Chromium editor specs", () => {
+  const defaultConfig = require("./playwright.config.js");
+  // One Chromium project, run whole: no project list or grep that could drop a case.
+  assert.equal(defaultConfig.projects, undefined);
+  assert.equal(defaultConfig.grep, undefined);
+  assert.equal(defaultConfig.grepInvert, undefined);
+  assert.equal(defaultConfig.use.channel, "chromium");
+  // A committed test.only would otherwise narrow the lane to one case and still pass.
+  assert.match(
+    readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8"),
+    /\n {2}forbidOnly: Boolean\(process\.env\.CI\),\n/,
+  );
+  for (const spec of kChromiumDefaultLaneSpecs) assertDefaultLaneDiscovers(spec);
+
+  const browserCi = readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8");
+  assert.ok(
+    browserCi.includes(
+      "run_lane \"chromium-default\" \\\n  bash donner/editor/wasm/tests/run_tests.sh --headed\n",
+    ),
+    "the chromium-default lane runs the default config with no filter",
+  );
+  // The environment the Bazel copies of these specs set, so the same cases run, and the overlay
+  // pixel cases have their native comparator.
+  for (
+    const exported of [
+      "export DONNER_WASM_REQUIRE_WEBGPU=\"1\"",
+      "export DONNER_WASM_EXPECTED_HEADLESS_BACKEND=browser",
+      "export DONNER_BROWSER_GOLDEN_COMPARE=\"${compare_copy}\"",
+      "export CI=\"${CI:-true}\"",
+    ]
+  ) {
+    assert.ok(browserCi.includes(exported), `tools/run-browser-ci.sh must ${exported}`);
+  }
+  assert.doesNotMatch(browserCi, /DONNER_HOSTED_MACOS_QUARANTINE/);
+
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  for (const [, body] of buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)) {
+    const { laneName, specFiles } = parseBrowserLane(body);
+    for (const spec of specFiles.filter((file) => kChromiumDefaultLaneSpecs.includes(file))) {
+      assert.equal(
+        kNonDefaultBrowserLanesOverDefaultSpecs[laneName],
+        spec,
+        `${laneName} runs ${spec}, whose Chromium cases the Editor WASM chromium-default lane `
+          + "already runs; a Bazel lane over it must run only cases that lane does not",
+      );
+    }
+  }
+});
+
+// A browser lane pays for a browser and a served package; a case that never takes a page pays
+// for neither. Page-free presentation cases run under Node with the unit tests instead.
+test("browser presentation cases that take no page run under Node", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-presentation-regression.spec.ts"), "utf8");
+  const nodeTests = readFileSync(path.join(testDirectory, "presentation-evidence_tests.mjs"), "utf8");
+  const pageFree = [
+    ...spec.matchAll(/^test\(\s*"([^"]+)",\s*(?:async\s*)?\(\s*\)\s*=>/gm),
+  ].map(([, title]) => title);
+  assert.deepEqual(pageFree, [], "move page-free cases to presentation-evidence_tests.mjs");
+  const nodeTitles = [...nodeTests.matchAll(/^test\("([^"]+)"/gm)].map(([, title]) => title);
+  assert.equal(nodeTitles.length, 13, "the page-free presentation cases keep running");
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const target = buildFile
+    .split("js_test(\n")
+    .find((body) => body.startsWith("    name = \"presentation_evidence_tests\","))
+    ?.split("\n)\n")[0];
+  assert.ok(target, "the Node presentation cases need their own target");
+  assert.match(target, /entry_point = "presentation-evidence_tests\.mjs"/);
+  assert.doesNotMatch(target, /tags = |@playwright\/\/:|target_compatible_with/);
+});
+
+test("every Bazel Playwright config is loaded by a Bazel lane", () => {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const bazelConfigs = readdirSync(testDirectory)
+    .filter((name) => /^playwright\..*bazel\.config\.js$/.test(name));
+  assert.ok(bazelConfigs.includes("playwright.bazel.config.js"));
+  const loaded = new Set(
+    [...buildFile.matchAll(/--config=\$\(rootpath :([^)]+)\)/g)].map(([, config]) => config),
+  );
+  for (const config of [...loaded]) {
+    for (const specifier of localFileReferences(readFileSync(path.join(testDirectory, config), "utf8"))) {
+      loaded.add(resolveLocalFile(config, specifier, [config]));
+    }
+  }
+  for (const config of bazelConfigs) {
+    assert.ok(loaded.has(config), `${config} is loaded by no Bazel lane; delete it with its lane`);
+  }
 });
 
 test("default browser discovery excludes the manual font reference probe", () => {
@@ -819,6 +930,17 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     /kFailureArchiveDir="\$\{kTestsDir\}\/playwright-failures"/,
   );
   assert.match(normalizedWorkflow, /path: donner\/editor\/wasm\/tests\/playwright-failures/);
+  // A hung lane must end in a recorded failure, not run into the job's own limit: every lane
+  // runs under the stall guard, which writes into that lane's archived evidence.
+  assert.match(normalizedBrowserCi, /guarded "\$\{name\}" "\$@" \|\| code=\$\?/);
+  assert.match(
+    normalizedBrowserCi,
+    /--diagnostics-dir "\$\{kFailureArchiveDir\}\/\$\{name\}\/stall-guard"/,
+  );
+  assert.match(
+    normalizedWorkflow,
+    /- name: Serve Geode package and run browser suites timeout-minutes: \d+ /,
+  );
 });
 
 test("composited probe evidence survives lane archival and the next lane", async () => {
@@ -1337,6 +1459,18 @@ function perfMatrixSetting(workflow, key) {
   ]);
 }
 
+// The Playwright projects that BUILD.bazel gives one watchdog test each, in declaration order.
+function responsivenessPerfProjects() {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const list = /\nRESPONSIVENESS_PERF_PROJECTS = \[([\s\S]*?)\]/.exec(buildFile)?.[1] ?? "";
+  return [...list.matchAll(/"([^"]+)"/g)].map(([, project]) => project);
+}
+
+// The Bazel test name BUILD.bazel generates for a responsiveness project.
+function responsivenessPerfTarget(project) {
+  return `browser_responsiveness_perf_test_${project.replaceAll("-", "_")}`;
+}
+
 // The body of the Perf workflow step named `name`, up to the next step.
 function perfStep(workflow, name) {
   const start = workflow.indexOf(`- name: ${name}`);
@@ -1363,13 +1497,26 @@ test("only the hosted macOS Perf job reports latency gates without enforcing the
     ),
     "the summary must also follow a failed test step",
   );
-  const testLog =
-    "bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log";
+  assert.ok(summaryStep.includes("PERF_OUTCOME: ${{ steps.perf.outcome }}\n"));
   assert.ok(
     summaryStep.includes(
-      `node donner/editor/wasm/tests/latency-gate-summary.mjs ${testLog} >> "$GITHUB_STEP_SUMMARY"`,
+      "if [[ \"$PERF_OUTCOME\" == \"success\" ]]; then\n            require=(--require-all)\n",
     ),
-    "the summary must come from the browser lane's own test log",
+    "after a passing test step a missing project log must fail the summary",
+  );
+  assert.ok(summaryStep.includes("logs=bazel-testlogs/donner/editor/wasm/tests\n"));
+  // One command reads every project's log and writes the job summary.
+  const command = new RegExp(
+    String.raw`\n {10}node donner/editor/wasm/tests/latency-gate-summary\.mjs `
+      + String.raw`\$\{require\[@\]\+"\$\{require\[@\]\}"\} \\\n`
+      + String.raw`((?: {12}"\$logs/\w+/test\.log" \\\n)+)`
+      + String.raw` {12}>> "\$GITHUB_STEP_SUMMARY"\n`,
+  ).exec(summaryStep);
+  assert.ok(command, "the summary command must append its output to the job summary");
+  assert.deepEqual(
+    [...command[1].matchAll(/"\$logs\/(\w+)\/test\.log"/g)].map(([, target]) => target),
+    responsivenessPerfProjects().map(responsivenessPerfTarget),
+    "the summary must read the log of every responsiveness project, and only those",
   );
 });
 
@@ -1403,13 +1550,42 @@ test("the latency gate summary command prints the gates recorded in a test log",
       execFileSync(process.execPath, [command, log], { encoding: "utf8" }),
       /\| firefox \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| missed \(reported\) \|/,
     );
-    assert.equal(
-      execFileSync(process.execPath, [command, path.join(directory, "missing.log")], {
-        encoding: "utf8",
-      }),
-      "No latency gate results were recorded.\n",
-      "a test that did not run leaves no log",
+    const secondLog = path.join(directory, "second.log");
+    writeFileSync(
+      secondLog,
+      `latency-gate ${JSON.stringify({ ...record, browser: "chromium", met: true })}\n`,
     );
+    const combined = execFileSync(
+      process.execPath,
+      [command, log, path.join(directory, "missing.log"), secondLog],
+      { encoding: "utf8" },
+    );
+    assert.match(combined, /\| firefox \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| missed/);
+    assert.match(
+      combined,
+      /\| chromium \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| met \|/,
+      "every project's log is summarized, skipping one that did not run",
+    );
+    // A test that did not run leaves no log, named by its target directory.
+    const missing = path.join(directory, "browser_responsiveness_perf_test_firefox", "test.log");
+    const notice = "Missing test log for browser_responsiveness_perf_test_firefox: "
+      + "that test did not run.\n";
+    assert.equal(
+      execFileSync(process.execPath, [command, missing], { encoding: "utf8" }),
+      `No latency gate results were recorded.\n${notice}`,
+      "without --require-all a missing log is reported and the command still succeeds",
+    );
+    const required = spawnSync(process.execPath, [command, "--require-all", log, missing], {
+      encoding: "utf8",
+    });
+    assert.equal(required.status, 1, "with --require-all a missing log fails the command");
+    assert.ok(required.stdout.endsWith(notice), "the failing summary still names the missing log");
+    assert.match(required.stdout, /\| firefox \| first-drag-193 \| inputP95 \|/);
+    const complete = spawnSync(process.execPath, [command, "--require-all", log, secondLog], {
+      encoding: "utf8",
+    });
+    assert.equal(complete.status, 0, "with every log present --require-all succeeds");
+    assert.doesNotMatch(complete.stdout, /Missing test log/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1604,13 +1780,6 @@ test("only the tracked responsiveness checks go through the completion check hel
 
 test("catalog browser gate admits resource failure and warm update acceptance without dropping cases", () => {
   const spec = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
-  const build = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
-  const lane = [...build.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)]
-    .map(([, body]) => body)
-    .find((body) => body.includes("name = \"catalog_font_loading_test\""));
-  assert.ok(lane, "the normal catalog browser gate must exist");
-  const pattern = /"--grep=([^"]+)"/.exec(lane)?.[1];
-  assert.ok(pattern, "the gate must declare its selected smoke cases");
   const titles = [...spec.matchAll(/^test(?:\.\w+)?\(\s*"([^"]+)"/gm)].map(([, title]) => title);
   const expected = [
     "catalog font loading adopts deferred WOFF2 without authored edits",
@@ -1626,11 +1795,9 @@ test("catalog browser gate admits resource failure and warm update acceptance wi
   assert.ok(unitSpec.includes(pureTitle), "the marker assertion must remain in the Node suite");
   assert.ok(selectors.includes('./browser-diagnostic-policy.spec.mjs'), "normal Node tests must include it");
   for (const title of expected) assert.ok(titles.includes(title), `${title} must remain declared`);
-  assert.deepEqual(
-    titles.filter((title) => new RegExp(pattern).test(title)).sort(),
-    expected.sort(),
-    "the named normal gate must execute both resource acceptance cases and every existing case",
-  );
+  // The Editor WASM chromium-default lane runs every case of smoke.spec.ts, these included (see
+  // "the Editor WASM chromium-default lane owns the Chromium editor specs").
+  assertDefaultLaneDiscovers("smoke.spec.ts");
 });
 
 // The first-boot case takes each browser's one-time startup cost, so the animation cases after it
@@ -2060,8 +2227,8 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
     lane.includes(
       "DONNER_BROWSER_QUARANTINE_REPORT=report"
         + " DONNER_QUARANTINE_REPORT_JSON=\"${kQuarantineReportDir}/quarantine-report.json\""
-        + " bash donner/editor/wasm/tests/run_tests.sh --headed"
-        + " --config=playwright.quarantine-report.config.js || report_lane_code=$?",
+        + " guarded \"${kQuarantineReportLane}\" bash donner/editor/wasm/tests/run_tests.sh"
+        + " --headed --config=playwright.quarantine-report.config.js || report_lane_code=$?",
     ),
     "the report lane must lift the quarantine for its own command only",
   );

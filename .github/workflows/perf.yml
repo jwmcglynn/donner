@@ -132,9 +132,24 @@ jobs:
       - name: Summarize interaction latency gates
         if: ${{ !cancelled() && matrix.target_tag == 'perf' && steps.perf.outcome != 'skipped' }}
         shell: bash
+        env:
+          PERF_OUTCOME: ${{ steps.perf.outcome }}
         run: |
           set -euo pipefail
-          node donner/editor/wasm/tests/latency-gate-summary.mjs bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log >> "$GITHUB_STEP_SUMMARY"
+          # After a passing test step every project must have left a log: a missing one is a
+          # project that never ran, so the summary fails the job. After a failing test step the
+          # summary only names the missing logs, and the test step already failed the job.
+          require=()
+          if [[ "$PERF_OUTCOME" == "success" ]]; then
+            require=(--require-all)
+          fi
+          logs=bazel-testlogs/donner/editor/wasm/tests
+          node donner/editor/wasm/tests/latency-gate-summary.mjs ${require[@]+"${require[@]}"} \
+            "$logs/browser_responsiveness_perf_test_chromium/test.log" \
+            "$logs/browser_responsiveness_perf_test_firefox/test.log" \
+            "$logs/browser_responsiveness_perf_test_chromium_dpr1/test.log" \
+            "$logs/browser_responsiveness_perf_test_firefox_dpr1/test.log" \
+            >> "$GITHUB_STEP_SUMMARY"
 
       # Both matrix entries run this job, so artifact names carry the entry's target tag.
       - name: Upload perf test failure artifacts

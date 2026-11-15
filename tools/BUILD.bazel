@@ -414,7 +414,31 @@ py_test(
         "//donner/gpu/metal/tests:BUILD.bazel",
     ],
     deps = [
+        ":bazelrc_configs",
         ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# Keeps `--config=remote-macos` (remote macOS execution from a client on any host OS) complete,
+# free of private runner configuration, identical for Linux and macOS clients, and on the Xcode
+# tuples of tools/ci_macos_xcode.txt.
+py_test(
+    name = "remote_macos_config_tests",
+    size = "small",
+    srcs = ["remote_macos_config_tests.py"],
+    data = [
+        "ci_macos_xcode.txt",
+        "//:.bazelrc",
+        "//:BUILD.bazel",
+        "//:docs_files",
+        "//:github_action_definitions",
+        "//build_defs:rules.bzl",
+        "//tools/ci:BUILD.bazel",
+        "//tools/ci:remote_macos_xcode.bzl",
+    ],
+    deps = [
+        ":bazelrc_configs",
         "@rules_python//python/runfiles",
     ],
 )
@@ -738,7 +762,10 @@ py_test(
     name = "editor_build_info_tests",
     size = "small",
     srcs = ["editor_build_info_tests.py"],
-    data = ["//donner/editor:write_build_info.sh"],
+    data = [
+        "//:.bazelrc",
+        "//donner/editor:write_build_info.sh",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -973,9 +1000,14 @@ py_test(
         "ci_lane_parity_tests.py",
     ],
     data = [
+        "bcr_preflight.py",
+        "release_candidate.py",
+        "run-browser-ci.sh",
         "//:.bazelrc",
         "//:github_action_definitions",
         "//tools/ci:coverage_contract.json",
+        "//tools/ci:editor_wasm_lane.sh",
+        "//tools/ci:editor_wasm_stage.py",
     ],
     main = "ci_lane_parity_tests.py",
     deps = [

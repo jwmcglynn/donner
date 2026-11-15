@@ -263,16 +263,46 @@ class GatekeeperTest(unittest.TestCase):
                 self.assertEqual(output, "docs_only=false\n")
                 self.assertIn(f"Non-doc change: {path}", result.stdout)
 
-    def test_deletions_are_not_counted(self):
-        # Pins the existing ACMR filter: a pull request that only deletes a build input next to
-        # documentation edits is classed docs-only. Changing this is a deliberate policy change.
-        _commit(self.repo, ["donner/old.cc"], "add source")
-        base = _git(self.repo, "rev-parse", "HEAD")
-        _git(self.repo, "rm", "-q", "donner/old.cc")
-        head = _commit(self.repo, ["docs/guide.md"], "delete source, edit docs")
-        result, output, _ = self._run("docs-only", **self._pull_request(base, head))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(output, "docs_only=true\n")
+    def test_cmake_generator_inputs_clear_docs_only(self):
+        # A documentation-only pull request runs no CMake generator check (gen_cmakelists.py
+        # --check runs only in CI's Linux jobs, which docs-only pull requests skip). That is safe
+        # only while no path docs-only admits is a generator input: the Bazel build graph it
+        # queries, the generator and its dependency map, CMake files and the module versions it
+        # turns into FetchContent downloads.
+        for path in ("tools/cmake/gen_cmakelists.py", "tools/cmake/external_deps.json",
+                     "examples/cmake_consumer/CMakeLists.txt", "third_party/entt/CMakeLists.txt",
+                     "tools/cmake/apply_woff2_patch.cmake", "CMakePresets.json",
+                     "donner/base/BUILD.bazel", "donner/base/RcString.h", "build_defs/rules.bzl",
+                     "MODULE.bazel", "third_party/bazel/non_bcr_deps.bzl"):
+            with self.subTest(path=path):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                head = _commit(self.repo, ["docs/guide.md", path], "change " + path)
+                result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "docs_only=false\n")
+
+    def test_deleted_build_inputs_clear_docs_only(self):
+        # A deleted build input can break the build (and the CMake generator check, which a
+        # docs-only pull request skips) as surely as an edited one, so it is not a doc change.
+        # A rename counts as deleting its old path, so moving a build input under docs/ is not
+        # docs-only; deleting a document still is.
+        for path, rename, expected in (("donner/old.cc", False, "false"),
+                                       ("tools/cmake/external_deps.json", False, "false"),
+                                       ("donner/base/BUILD.bazel", True, "false"),
+                                       ("docs/old.md", False, "true")):
+            with self.subTest(path=path, rename=rename):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                _commit(self.repo, [path], "add " + path)
+                base = _git(self.repo, "rev-parse", "HEAD")
+                if rename:
+                    (Path(self.repo) / "docs").mkdir(exist_ok=True)
+                    _git(self.repo, "mv", path, "docs/moved.txt")
+                else:
+                    _git(self.repo, "rm", "-q", path)
+                head = _commit(self.repo, ["docs/guide.md"], "remove %s, edit docs" % path)
+                result, output, _ = self._run("docs-only", **self._pull_request(base, head))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "docs_only=%s\n" % expected)
 
     def test_base_drift_after_the_fork_is_not_attributed_to_the_pull_request(self):
         head = _commit(self.repo, ["docs/guide.md"], "docs")

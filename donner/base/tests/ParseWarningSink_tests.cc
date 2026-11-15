@@ -184,6 +184,20 @@ TEST(ParseWarningSink, BoundsWarningBytes) {
   EXPECT_TRUE(sink.resourceLimitExceeded());
 }
 
+TEST(ParseWarningSink, MarkResourceLimitExceededReportsIncompleteAndDropsLaterWarnings) {
+  ParseWarningSink sink;
+  sink.add(ParseDiagnostic::Warning("kept", FileOffset::Offset(0)));
+  sink.markResourceLimitExceeded();
+  sink.add(ParseDiagnostic::Warning("dropped", FileOffset::Offset(1)));
+  EXPECT_TRUE(sink.resourceLimitExceeded());
+  ASSERT_EQ(sink.warnings().size(), 1u);
+  EXPECT_EQ(sink.warnings()[0].reason.str(), "kept");
+
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  disabled.markResourceLimitExceeded();
+  EXPECT_FALSE(disabled.resourceLimitExceeded());
+}
+
 TEST(ParseWarningSink, MergeRespectsDestinationBudget) {
   ParseWarningSink destination;
   ParseWarningSink source;

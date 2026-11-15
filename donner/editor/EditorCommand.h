@@ -47,9 +47,9 @@ struct EditorCommand {
 
     /// Set a single attribute on the element. Used by the structured-
     /// editing writeback path when a tool modifies an attribute
-    /// value. Coalesces by `(element, attributeName)` - successive
-    /// SetAttribute commands for the same element and attribute collapse
-    /// to the most-recently-queued value.
+    /// value. Coalesces by element plus qualified attribute name (so `href`
+    /// and `xlink:href` are distinct) - successive SetAttribute commands for
+    /// the same element and attribute collapse to the most-recently-queued value.
     SetAttribute,
 
     /// Remove a single attribute from the element (DOM-level). Used to clear a
@@ -154,6 +154,10 @@ struct EditorCommand {
   /// SetAttribute payload: the attribute name (e.g. "transform", "fill").
   std::string attributeName;
 
+  /// SetAttribute payload: the attribute's namespace prefix (e.g. "xlink" for
+  /// `xlink:href`), empty for an unprefixed attribute.
+  std::string attributeNamespacePrefix;
+
   /// SetAttribute payload: the new attribute value.
   std::string attributeValue;
 
@@ -189,6 +193,16 @@ struct EditorCommand {
     cmd.element = std::move(element);
     cmd.attributeName = std::move(name);
     cmd.attributeValue = std::move(value);
+    return cmd;
+  }
+
+  /// Builds a SetAttribute command for a namespace-prefixed attribute such as
+  /// `xlink:href`; the prefix is preserved when the attribute is written.
+  static EditorCommand SetPrefixedAttributeCommand(svg::SVGElement element,
+                                                   std::string namespacePrefix, std::string name,
+                                                   std::string value) {
+    EditorCommand cmd = SetAttributeCommand(std::move(element), std::move(name), std::move(value));
+    cmd.attributeNamespacePrefix = std::move(namespacePrefix);
     return cmd;
   }
 

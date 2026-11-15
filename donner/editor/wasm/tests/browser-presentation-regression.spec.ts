@@ -1,15 +1,13 @@
-import { errors, expect, type Page, test, type Worker } from "@playwright/test";
+import { expect, type Page, test, type Worker } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { PNG } from "pngjs";
 import {
   awaitBefore,
   captureReadyBasicShapesFrame,
   captureSettledCanvas,
-  hasPresentedBasicShapesHostFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
-import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
+import { readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   captureEditorPage,
@@ -35,15 +33,24 @@ import {
 } from "./canvas-color-stats";
 import {
   armFailureCanvasEvidence,
-  captureFailureCanvasEvidence,
-  type EvidencePage,
   installFailureCanvasEvidence,
-  kFailureEvidenceBudgetMs,
 } from "./failure-canvas-evidence";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
+import {
+  boundFailureDiagnostic,
+  type CanvasCaptureEvidence,
+  captureWithCanvasAccount,
+  completedFrameMatchesCamera,
+  diagnoseCanvasAfterState,
+  diagnosePostFailureGpuReadback,
+  diagnosePresentedCanvas,
+  type ScoredCanvasProbe,
+  scoredFrameIsStable,
+  type SurfaceFrameSnapshot,
+} from "./presentation-evidence";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
 import {
   sampleThumbnailLaneQuiescent,
@@ -609,113 +616,6 @@ async function captureSplashDragFrame(
   );
 }
 
-/**
- * A `size` x `size` opaque PNG of `background`, with an optional `square` x `square` block of
- * `fill` at the origin.
- */
-function syntheticCapturePng(
-  size: number,
-  background: [number, number, number],
-  square = 0,
-  fill: [number, number, number] = background,
-): Buffer {
-  const image = new PNG({ width: size, height: size });
-  for (let y = 0; y < size; ++y) {
-    for (let x = 0; x < size; ++x) {
-      const color = x < square && y < square ? fill : background;
-      image.data.set([...color, 255], (y * size + x) * 4);
-    }
-  }
-  return PNG.sync.write(image);
-}
-
-// Fixtures are built offline: the fake pages test only the helpers' retry policy, and a live
-// capture can fail on its own, for example when the GPU process is lost mid-capture.
-test("editor page capture leaves retries to the outer poll and keeps drags one-shot", async () => {
-  const visible = syntheticCapturePng(64, [44, 47, 56], 8, [45, 110, 230]);
-  const black = syntheticCapturePng(64, [12, 15, 20]);
-
-  // The baseline poll owns the retry schedule: black, timeout, then visible.
-  let shots = 0;
-  const baselinePage = {
-    screenshot: async (options?: unknown) => {
-      expect(options).toBeUndefined();
-      ++shots;
-      if (shots === 1) {
-        return black;
-      }
-      if (shots === 2) {
-        throw new errors.TimeoutError(
-          "Timeout 1000ms exceeded\nCall log:\n - taking page screenshot\n - waiting for fonts to load...",
-        );
-      }
-      return visible;
-    },
-  } as unknown as Page;
-  const observations: Array<[number, boolean, boolean]> = [];
-  await expect.poll(async () => {
-    const capture = await captureEditorPage(baselinePage);
-    const blue = capture.usable
-      ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", { width: 64, height: 64 }, {
-        minX: 0,
-        minY: 0,
-        maxX: 64,
-        maxY: 64,
-      })
-      : null;
-    observations.push([shots, capture.usable, blue !== null]);
-    return blue?.pixels ?? 0;
-  }, { intervals: [10], timeout: 1_000 }).toBeGreaterThan(0);
-  expect(shots).toBe(3);
-  expect(observations).toEqual([
-    [1, true, false],
-    [2, false, false],
-    [3, true, true],
-  ]);
-
-  let dragShots = 0;
-  const oneShotDragPage = {
-    viewportSize: () => ({ width: 64, height: 64 }),
-    screenshot: async (options?: unknown) => {
-      expect(options).toBeUndefined();
-      ++dragShots;
-      return black;
-    },
-  } as unknown as Page;
-  const dragCapture = await readEditorResizePixelBounds(
-    oneShotDragPage,
-    { x: 0, y: 0, width: 64, height: 64 },
-  );
-  expect([dragCapture.usableCapture, dragCapture.blue, dragCapture.teal, dragShots]).toEqual([
-    true,
-    null,
-    null,
-    1,
-  ]);
-  expect(dragCapture.png).toEqual(black);
-
-  const timedOut = await captureEditorPage({
-    screenshot: async () => {
-      throw new errors.TimeoutError(
-        "Timeout 1000ms exceeded\nCall log:\n - taking page screenshot\n - waiting for fonts to load...\n - fonts loaded",
-      );
-    },
-  } as unknown as Page);
-  expect([timedOut.usable, timedOut.attempts, timedOut.timedOutCaptures]).toEqual([false, 1, 1]);
-  expect(timedOut.png).toHaveLength(0);
-  expect(timedOut.timeoutStage).toEqual({
-    takingPageScreenshot: true,
-    waitingForFonts: true,
-    fontsLoaded: true,
-  });
-
-  await expect(captureEditorPage({
-    screenshot: async () => {
-      throw new Error("non-timeout screenshot failure");
-    },
-  } as unknown as Page)).rejects.toThrow("non-timeout screenshot failure");
-});
-
 test("Splash capture accepts stable pixels while frames keep advancing", async ({ page }) => {
   // A thumbnail-like wake can keep the frame counter moving even when the
   // presented picture is already stable. Waiting for a parked loop on every
@@ -789,46 +689,6 @@ async function readDocumentPresentationState(page: Page): Promise<DocumentPresen
   });
 }
 
-interface SurfaceFrameSnapshot {
-  renderedFrames: number;
-  hostFrames: number | null;
-  acquiredFrames: number | null;
-  presentedFrames: number | null;
-  lastAcquired: boolean | null;
-  lastPresented: boolean | null;
-}
-
-interface ScoredCanvasProbe {
-  beforeRead: SurfaceFrameSnapshot;
-  afterRead: SurfaceFrameSnapshot;
-  opaquePixels: number | null;
-  pngBase64: string | null;
-}
-
-function snapshotsAgree(left: SurfaceFrameSnapshot, right: SurfaceFrameSnapshot): boolean {
-  return left.renderedFrames === right.renderedFrames && left.hostFrames === right.hostFrames
-    && left.acquiredFrames === right.acquiredFrames
-    && left.presentedFrames === right.presentedFrames
-    && left.lastAcquired === right.lastAcquired
-    && left.lastPresented === right.lastPresented;
-}
-
-function scoredFrameIsStable(
-  beforeScreenshot: SurfaceFrameSnapshot | null,
-  canvasProbe: ScoredCanvasProbe | null,
-): boolean {
-  if (
-    beforeScreenshot === null || canvasProbe === null || beforeScreenshot.hostFrames === null
-    || beforeScreenshot.acquiredFrames === null || beforeScreenshot.presentedFrames === null
-    || beforeScreenshot.lastAcquired === null || beforeScreenshot.lastPresented === null
-  ) {
-    return false;
-  }
-  return beforeScreenshot.hostFrames === beforeScreenshot.renderedFrames
-    && snapshotsAgree(beforeScreenshot, canvasProbe.beforeRead)
-    && snapshotsAgree(canvasProbe.beforeRead, canvasProbe.afterRead);
-}
-
 function readSurfaceFrameSnapshot(page: Page): Promise<SurfaceFrameSnapshot> {
   return page.evaluate(() => {
     const host = window.__donnerHostFrameTiming;
@@ -841,18 +701,6 @@ function readSurfaceFrameSnapshot(page: Page): Promise<SurfaceFrameSnapshot> {
       lastPresented: host?.lastSurfacePresented ?? null,
     };
   });
-}
-
-// A hung Gecko evaluation cannot replace the already-attached scored PNG or its assertion.
-// The abandoned evaluation is never followed by another page command in this failure path.
-// The geometry frame account also bounds its reads with this, and there the capture follows:
-// an abandoned evaluation keeps running in the browser, so the bound covers a read that throws
-// or is slow, not a browser that has stopped answering page commands.
-async function boundFailureDiagnostic<T>(
-  work: Promise<T>,
-  timeoutMs = scaledMs(2_000),
-): Promise<T | null> {
-  return boundBrowserDiagnostic(work, timeoutMs);
 }
 
 const kCaptureSentinelSize = 12;
@@ -1086,33 +934,6 @@ async function readBasicShapesDragFrame(
   return { geometry, state };
 }
 
-test("scored Firefox frame evidence attributes only stable app frames", async () => {
-  const frame: SurfaceFrameSnapshot = {
-    renderedFrames: 60,
-    hostFrames: 60,
-    acquiredFrames: 59,
-    presentedFrames: 59,
-    lastAcquired: false,
-    lastPresented: false,
-  };
-  const probe: ScoredCanvasProbe = {
-    beforeRead: frame,
-    afterRead: frame,
-    opaquePixels: 0,
-    pngBase64: null,
-  };
-  expect(scoredFrameIsStable(frame, probe)).toBe(true);
-  expect(scoredFrameIsStable(frame, { ...probe, afterRead: { ...frame, renderedFrames: 61 } }))
-    .toBe(false);
-  expect(scoredFrameIsStable(frame, { ...probe, beforeRead: { ...frame, presentedFrames: 60 } }))
-    .toBe(false);
-  expect(scoredFrameIsStable({ ...frame, hostFrames: null }, probe)).toBe(false);
-  expect(scoredFrameIsStable({ ...frame, acquiredFrames: null }, probe)).toBe(false);
-  expect(scoredFrameIsStable(null, probe)).toBe(false);
-  expect(scoredFrameIsStable(frame, null)).toBe(false);
-  expect(await boundFailureDiagnostic(new Promise<never>(() => {}), 10)).toBeNull();
-});
-
 // The worker's device health, published alongside the frame counter every
 // gate in this file waits on.
 interface WorkerHealth {
@@ -1267,226 +1088,6 @@ async function openEditor(
   await expect(page.locator("#status")).toBeHidden({ timeout: 20_000 });
   return failures;
 }
-
-// Sample the canvas element after the scored screenshot failed, then once more
-// after requesting another frame. These observers run at different times:
-// a colored direct read beside a black screenshot records a disagreement in
-// this window, and a zero after wake may precede the browser's next composite.
-// Neither sample alone identifies which GPU or capture stage lost content.
-//
-// This diagnostic runs only after the original pixel assertion has failed;
-// the wake cannot turn that failure into a pass.
-interface PresentedCanvasDiagnosis {
-  beforeWake: number;
-  afterWake: number;
-  framesBeforeWake: number;
-  framesAfterWake: number;
-  hostBeforeWake: HostPresentationCounters | null;
-  hostAfterWake: HostPresentationCounters | null;
-  canvasWidth: number;
-  canvasHeight: number;
-}
-
-interface HostPresentationCounters {
-  frames: number;
-  acquiredFrames: number;
-  presentedFrames: number;
-  lastAcquired: boolean;
-  lastPresented: boolean;
-  underlaySequence: number;
-  underlayHostFrame: number;
-  checkerboardDraws: number;
-  overviewTileDraws: number;
-  activeTileDraws: number;
-  underlayDirectMs: number;
-  imguiVertices: number;
-  imguiIndices: number;
-  imguiCommandLists: number;
-}
-
-async function diagnosePostFailureGpuReadback(
-  page: Page,
-  baselineFailed: boolean,
-): Promise<object | null> {
-  if (!baselineFailed) return null;
-  const diagnosis = await boundFailureDiagnostic(
-    (async () => {
-      const before = await page.evaluate(() => ({
-        hostFrameAtRequest: window.__donnerHostFrameTiming?.frames ?? null,
-        renderedFramesAtRequest: window.__donnerMainLoopRenderedFrames || 0,
-        request: window.__donnerRequestWgpuReadback?.() ?? 0,
-      }));
-      if (before.request <= 0) {
-        return { unavailable: "WGPU readback request hook unavailable", ...before };
-      }
-      let completion = "completed";
-      try {
-        await page.waitForFunction(
-          (requestId) => Number(window.__donnerWgpuReadbackCompleted || 0) >= requestId,
-          before.request,
-          { timeout: scaledMs(4_000) },
-        );
-      } catch {
-        completion = "request did not complete";
-      }
-      const after = await page.evaluate(() => ({
-        hostFrameAtRead: window.__donnerHostFrameTiming?.frames ?? null,
-        renderedFramesAtRead: window.__donnerMainLoopRenderedFrames || 0,
-        underlaySequenceAtRead: window.__donnerHostFrameTiming?.lastUnderlaySequence ?? null,
-        stats: window.__donnerWgpuReadbackStats ?? null,
-        starts: window.__donnerWgpuReadbackCaptureStarts || 0,
-        completions: window.__donnerWgpuReadbackCaptureCompletions || 0,
-        failures: window.__donnerWgpuReadbackCaptureFailures || 0,
-        completedRequest: window.__donnerWgpuReadbackCompleted || 0,
-      }));
-      return {
-        frameRelation: "later than the retained scored screenshot",
-        ...before,
-        completion,
-        ...after,
-      };
-    })(),
-    scaledMs(5_000),
-  );
-  return diagnosis ?? { unavailable: "post-failure WGPU readback unavailable" };
-}
-
-async function diagnosePresentedCanvas(
-  page: Page,
-): Promise<PresentedCanvasDiagnosis | { unavailable: string }> {
-  const diagnosis = await boundFailureDiagnostic(
-    page.evaluate(async () => {
-      const surface = document.getElementById("canvas") as HTMLCanvasElement | null;
-      if (surface === null) {
-        throw new Error("the editor canvas is missing");
-      }
-      const scratch = document.createElement("canvas");
-      scratch.width = 240;
-      scratch.height = 150;
-      const context = scratch.getContext("2d", { willReadFrequently: true });
-      if (context === null) {
-        throw new Error("no 2d context for the canvas probe");
-      }
-      const hostCounters = (): HostPresentationCounters | null => {
-        const host = window.__donnerHostFrameTiming;
-        return host === undefined ? null : {
-          frames: host.frames,
-          acquiredFrames: host.surfaceAcquiredFrames,
-          presentedFrames: host.surfacePresentedFrames,
-          lastAcquired: host.lastSurfaceAcquired,
-          lastPresented: host.lastSurfacePresented,
-          underlaySequence: host.lastUnderlaySequence ?? 0,
-          underlayHostFrame: host.lastUnderlayHostFrame ?? 0,
-          checkerboardDraws: host.lastCheckerboardDraws ?? 0,
-          overviewTileDraws: host.lastOverviewTileDraws ?? 0,
-          activeTileDraws: host.lastActiveTileDraws ?? 0,
-          underlayDirectMs: host.lastUnderlayDirectMs ?? 0,
-          imguiVertices: host.lastImguiVertices ?? 0,
-          imguiIndices: host.lastImguiIndices ?? 0,
-          imguiCommandLists: host.lastImguiCommandLists ?? 0,
-        };
-      };
-      // Count pixels that carry both coverage and hue, so the editor's own
-      // chrome registers while the flat page background does not.
-      const readColoredPixels = (): number => {
-        context.clearRect(0, 0, scratch.width, scratch.height);
-        context.drawImage(
-          surface,
-          0,
-          0,
-          surface.width,
-          surface.height,
-          0,
-          0,
-          scratch.width,
-          scratch.height,
-        );
-        const pixels = context.getImageData(0, 0, scratch.width, scratch.height).data;
-        let colored = 0;
-        for (let index = 0; index < pixels.length; index += 4) {
-          const red = pixels[index];
-          const green = pixels[index + 1];
-          const blue = pixels[index + 2];
-          const alpha = pixels[index + 3];
-          const spread = Math.max(red, green, blue) - Math.min(red, green, blue);
-          if (alpha >= 40 && spread >= 12) {
-            colored += 1;
-          }
-        }
-        return colored;
-      };
-
-      const framesBeforeWake = window.__donnerMainLoopRenderedFrames || 0;
-      const hostBeforeWake = hostCounters();
-      const beforeWake = readColoredPixels();
-
-      // Ask the editor for one frame through the same flag the page uses, then
-      // wait for the loop to report it before reading again.
-      window.__donnerEditorFrameRequested = true;
-      const deadline = performance.now() + 2000;
-      while (
-        (window.__donnerMainLoopRenderedFrames || 0) === framesBeforeWake
-        && performance.now() < deadline
-      ) {
-        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-      }
-      await new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)))
-      );
-
-      return {
-        beforeWake,
-        afterWake: readColoredPixels(),
-        framesBeforeWake,
-        framesAfterWake: window.__donnerMainLoopRenderedFrames || 0,
-        hostBeforeWake,
-        hostAfterWake: hostCounters(),
-        canvasWidth: surface.width,
-        canvasHeight: surface.height,
-      };
-    }),
-    scaledMs(4_000),
-  );
-  return diagnosis ?? { unavailable: "canvas diagnosis unavailable" };
-}
-
-async function diagnoseCanvasAfterState(
-  page: Page,
-  baselineFailed: boolean,
-  stateAvailable: boolean,
-): Promise<PresentedCanvasDiagnosis | { unavailable: string } | null> {
-  if (!baselineFailed) return null;
-  if (!stateAvailable) {
-    return { unavailable: "canvas diagnosis skipped after state IPC unavailable" };
-  }
-  return diagnosePresentedCanvas(page);
-}
-
-test("canvas diagnosis does not queue after an unavailable state IPC", async () => {
-  let pageReads = 0;
-  const page = {
-    evaluate: async () => {
-      ++pageReads;
-      return null;
-    },
-  } as unknown as Page;
-  expect(await diagnoseCanvasAfterState(page, true, false)).toEqual({
-    unavailable: "canvas diagnosis skipped after state IPC unavailable",
-  });
-  expect(pageReads).toBe(0);
-});
-
-test("post-failure WGPU readback stays idle after a successful baseline", async () => {
-  let pageReads = 0;
-  const page = {
-    evaluate: async () => {
-      ++pageReads;
-      return null;
-    },
-  } as unknown as Page;
-  expect(await diagnosePostFailureGpuReadback(page, false)).toBeNull();
-  expect(pageReads).toBe(0);
-});
 
 test("canvas diagnosis brackets host presentation counters around a wake", async ({ page }) => {
   await page.setContent(`<canvas id="canvas" width="80" height="45"></canvas>`);
@@ -1644,30 +1245,6 @@ async function readBasicShapesProbeState(
   }
   return state;
 }
-
-test("Basic Shapes capture gate accepts a completed current frame after UI coalescing", () => {
-  const state = {
-    sampleId: "basic-shapes",
-    completedResults: 1,
-    presentedAtMs: 11835,
-    renderedFrames: 61,
-    hostFrames: 61,
-    hostPresented: false,
-    frameId: 40,
-    captureId: 4,
-    completedFrameId: 40,
-    completedCaptureId: 4,
-    completedInputRepresented: true,
-  };
-  expect(hasPresentedBasicShapesHostFrame(state, 0)).toBe(true);
-  expect(hasPresentedBasicShapesHostFrame({ ...state, completedInputRepresented: false }, 0)).toBe(
-    false,
-  );
-  expect(hasPresentedBasicShapesHostFrame({ ...state, completedCaptureId: 3 }, 0)).toBe(false);
-  expect(hasPresentedBasicShapesHostFrame({ ...state, completedFrameId: 39 }, 0)).toBe(false);
-  expect(hasPresentedBasicShapesHostFrame({ ...state, hostFrames: 60 }, 0)).toBe(false);
-  expect(hasPresentedBasicShapesHostFrame({ ...state, completedResults: 0 }, 0)).toBe(false);
-});
 
 test("Basic Shapes pre-capture gate reads app scalars without layout observation", async ({ page }) => {
   await page.setContent("<canvas id='canvas'></canvas>");
@@ -2249,26 +1826,6 @@ async function waitForBrowserComposite(page: Page): Promise<void> {
   );
 }
 
-// The application's own account of its canvas frames, read immediately before and after one
-// capture. `uiVertices` is the UI vertex count the latest host frame recorded. `probe` is the
-// canvas owner's surface frame probe; null when it is not installed or did not answer, which
-// leaves the account incomplete. Its `frames` counts the owner's canvas acquisitions and
-// `newestLateFrame` is the highest acquisition ordinal written after its acquiring task ended, on
-// the same counter, so the two are equal when the newest acquired frame was written late.
-interface CanvasCaptureEvidence {
-  surface: SurfaceFrameSnapshot;
-  uiVertices: number | null;
-  completedResults: number;
-  presentedAtMs: number | null;
-  probe: {
-    canvasWorkers: number;
-    frames: number;
-    inTaskSubmits: number;
-    lateSubmits: number;
-    newestLateFrame: number | null;
-  } | null;
-}
-
 async function readCanvasCaptureEvidence(
   page: Page,
   owner: Worker | null,
@@ -2290,103 +1847,6 @@ async function readCanvasCaptureEvidence(
       : Math.max(...report.lateSubmits.map((submit) => submit.frame)),
   };
   return { surface, ...published, probe };
-}
-
-// A probe that saw frames but none of their in-task writes cannot vouch for late writes either.
-function frameAccountIsComplete(evidence: CanvasCaptureEvidence): boolean {
-  return evidence.surface.acquiredFrames !== null && evidence.surface.presentedFrames !== null
-    && evidence.probe?.canvasWorkers === 1 && evidence.probe.inTaskSubmits > 0;
-}
-
-// A late write never reaches the screen, so a newest frame written late leaves an empty or
-// partial frame on screen even when it finished before the first read.
-function newestCanvasFrameWasWrittenLate(evidence: CanvasCaptureEvidence): boolean {
-  return evidence.probe !== null && evidence.probe.newestLateFrame === evidence.probe.frames;
-}
-
-// Why the editor, rather than the browser's capture, could explain an empty picture between the
-// `before` and `after` reads, or null when its account is complete and shows only drawn frames.
-// Every editor frame records the menu bar and panels, so a host frame with no UI vertices recorded
-// no editor UI. This classifies evidence for a reader of a failed run; it decides nothing.
-function canvasCaptureImplicatesApplication(
-  before: CanvasCaptureEvidence,
-  after: CanvasCaptureEvidence,
-): string | null {
-  if (!frameAccountIsComplete(before) || !frameAccountIsComplete(after)) {
-    return "the application's frame account is incomplete";
-  }
-  const acquired = after.surface.acquiredFrames! - before.surface.acquiredFrames!;
-  const presented = after.surface.presentedFrames! - before.surface.presentedFrames!;
-  if (acquired > presented) {
-    return "a frame acquired the canvas without completing its draw";
-  }
-  if (before.surface.lastPresented !== true || after.surface.lastPresented !== true) {
-    return "the latest host frame did not complete its presentation";
-  }
-  if ((before.uiVertices ?? 0) <= 0 || (after.uiVertices ?? 0) <= 0) {
-    return "the latest host frame recorded no editor UI";
-  }
-  if (newestCanvasFrameWasWrittenLate(before) || newestCanvasFrameWasWrittenLate(after)) {
-    return "the newest canvas frame was written after its acquiring task ended";
-  }
-  if (after.probe!.lateSubmits > before.probe!.lateSubmits) {
-    return "a frame wrote to the canvas after its acquiring task ended";
-  }
-  return null;
-}
-
-// What the account records in place of a read that failed or outlasted its bound.
-interface UnavailableCanvasAccount {
-  unavailable: string;
-}
-
-const kUnavailableCanvasAccount: UnavailableCanvasAccount = {
-  unavailable: "the frame account read failed or exceeded its bound",
-};
-
-interface CanvasFrameAccountRecorder {
-  read: () => Promise<CanvasCaptureEvidence>;
-  attach: (json: string) => Promise<void>;
-  boundMs: number;
-}
-
-async function readCanvasAccountOrUnavailable(
-  recorder: CanvasFrameAccountRecorder,
-): Promise<CanvasCaptureEvidence | UnavailableCanvasAccount> {
-  const evidence = await boundFailureDiagnostic(
-    Promise.resolve().then(recorder.read),
-    recorder.boundMs,
-  );
-  return evidence ?? kUnavailableCanvasAccount;
-}
-
-function classifyCanvasAccount(
-  before: CanvasCaptureEvidence | UnavailableCanvasAccount,
-  after: CanvasCaptureEvidence | UnavailableCanvasAccount,
-): string | null {
-  if ("unavailable" in before || "unavailable" in after) {
-    return "the application's frame account is unavailable";
-  }
-  return canvasCaptureImplicatesApplication(before, after);
-}
-
-// Take one capture between two reads of the editor's frame account and attach the account. Every
-// read and the attach are bounded and caught, so the account can only be recorded as unavailable;
-// the capture itself runs outside them and fails or returns exactly as it would without them.
-async function captureWithCanvasAccount(
-  recorder: CanvasFrameAccountRecorder,
-  capture: () => Promise<Buffer>,
-): Promise<Buffer> {
-  const before = await readCanvasAccountOrUnavailable(recorder);
-  const png = await capture();
-  const after = await readCanvasAccountOrUnavailable(recorder);
-  const applicationImplication = classifyCanvasAccount(before, after);
-  const json = JSON.stringify({ before, after, applicationImplication }, null, 2);
-  await boundFailureDiagnostic(
-    Promise.resolve().then(() => recorder.attach(json)),
-    recorder.boundMs,
-  );
-  return png;
 }
 
 // Capture the Geometry Debug Overlay frame once, as every engine does, and where the canvas surface
@@ -2412,202 +1872,6 @@ async function captureGeometryOverlayWithAccount(
     boundMs,
   }, compositeThenCapture);
 }
-
-interface CanvasEvidenceOverrides extends Partial<SurfaceFrameSnapshot> {
-  lateSubmits?: number;
-  newestLateFrame?: number | null;
-  uiVertices?: number | null;
-  probe?: CanvasCaptureEvidence["probe"];
-}
-
-function canvasEvidenceForTest(overrides: CanvasEvidenceOverrides = {}): CanvasCaptureEvidence {
-  const { lateSubmits = 0, newestLateFrame = null, uiVertices = 3940, probe, ...surface } =
-    overrides;
-  return {
-    surface: {
-      renderedFrames: 10,
-      hostFrames: 10,
-      acquiredFrames: 10,
-      presentedFrames: 10,
-      lastAcquired: true,
-      lastPresented: true,
-      ...surface,
-    },
-    uiVertices,
-    completedResults: 3,
-    presentedAtMs: 100,
-    probe: "probe" in overrides
-      ? probe ?? null
-      : { canvasWorkers: 1, frames: 10, inTaskSubmits: 10, lateSubmits, newestLateFrame },
-  };
-}
-
-test("canvas frame account clears an editor that drew every frame", () => {
-  const clean = canvasEvidenceForTest();
-  expect(canvasCaptureImplicatesApplication(clean, clean)).toBeNull();
-  // A frame written late before the reads is not the frame on screen once a newer one presents.
-  const olderLateFrame = canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 9 });
-  expect(canvasCaptureImplicatesApplication(olderLateFrame, olderLateFrame)).toBeNull();
-});
-
-test("canvas frame account implicates the editor for each way it could present nothing", () => {
-  const probe = (canvasWorkers: number, inTaskSubmits: number) => ({
-    canvasWorkers,
-    frames: 10,
-    inTaskSubmits,
-    lateSubmits: 0,
-    newestLateFrame: null,
-  });
-  const cases: Array<[CanvasCaptureEvidence, CanvasCaptureEvidence, string]> = [
-    [
-      canvasEvidenceForTest({ acquiredFrames: null }),
-      canvasEvidenceForTest(),
-      "the application's frame account is incomplete",
-    ],
-    [
-      canvasEvidenceForTest(),
-      canvasEvidenceForTest({ probe: null }),
-      "the application's frame account is incomplete",
-    ],
-    [
-      canvasEvidenceForTest({ probe: probe(2, 10) }),
-      canvasEvidenceForTest({ probe: probe(2, 10) }),
-      "the application's frame account is incomplete",
-    ],
-    [
-      canvasEvidenceForTest({ probe: probe(1, 0) }),
-      canvasEvidenceForTest({ probe: probe(1, 0) }),
-      "the application's frame account is incomplete",
-    ],
-    [
-      canvasEvidenceForTest(),
-      canvasEvidenceForTest({ acquiredFrames: 11 }),
-      "a frame acquired the canvas without completing its draw",
-    ],
-    [
-      canvasEvidenceForTest({ lastPresented: false }),
-      canvasEvidenceForTest(),
-      "the latest host frame did not complete its presentation",
-    ],
-    [
-      canvasEvidenceForTest(),
-      canvasEvidenceForTest({ uiVertices: 0 }),
-      "the latest host frame recorded no editor UI",
-    ],
-    [
-      canvasEvidenceForTest({ uiVertices: null }),
-      canvasEvidenceForTest(),
-      "the latest host frame recorded no editor UI",
-    ],
-    [
-      canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 10 }),
-      canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 10 }),
-      "the newest canvas frame was written after its acquiring task ended",
-    ],
-    [
-      canvasEvidenceForTest(),
-      canvasEvidenceForTest({ lateSubmits: 1 }),
-      "a frame wrote to the canvas after its acquiring task ended",
-    ],
-  ];
-  expect(cases.map(([before, after]) => canvasCaptureImplicatesApplication(before, after)))
-    .toEqual(cases.map(([, , reason]) => reason));
-});
-
-// Drives the account path with injected reads, capture and attach; no page is involved.
-async function recordCanvasAccountForTest(
-  read: () => Promise<CanvasCaptureEvidence>,
-  attach: (json: string) => Promise<void> = async () => {},
-): Promise<{ png: Buffer; captures: number; attached: string[] }> {
-  const shot = Buffer.from("capture");
-  let captures = 0;
-  const attached: string[] = [];
-  const png = await captureWithCanvasAccount({
-    read,
-    attach: async (json) => {
-      attached.push(json);
-      await attach(json);
-    },
-    boundMs: 50,
-  }, async () => {
-    ++captures;
-    return shot;
-  });
-  return { png, captures, attached };
-}
-
-const kUnavailableAccountRecord = {
-  before: kUnavailableCanvasAccount,
-  after: kUnavailableCanvasAccount,
-  applicationImplication: "the application's frame account is unavailable",
-};
-
-test("a frame account read that throws records the account as unavailable", async () => {
-  for (
-    const read of [
-      async (): Promise<CanvasCaptureEvidence> => {
-        throw new Error("evaluation failed");
-      },
-      (): Promise<CanvasCaptureEvidence> => {
-        throw new Error("synchronous failure");
-      },
-    ]
-  ) {
-    const result = await recordCanvasAccountForTest(read);
-    expect([result.png.toString(), result.captures]).toEqual(["capture", 1]);
-    expect(result.attached.map((json) => JSON.parse(json))).toEqual([kUnavailableAccountRecord]);
-  }
-});
-
-test("failure canvas evidence stays within its bound when the page never answers", async () => {
-  const silentPage: EvidencePage = {
-    evaluate: () => new Promise<never>(() => {}),
-    screenshot: () => new Promise<never>(() => {}),
-    workers: () => [{ evaluate: () => new Promise<never>(() => {}) }],
-  } as unknown as EvidencePage;
-  const stepMs = 50;
-  const startedAt = Date.now();
-  await captureFailureCanvasEvidence(silentPage, test.info(), stepMs);
-  const elapsedMs = Date.now() - startedAt;
-  // The state read and the screenshot each time out; the readback is skipped because the page did
-  // not answer the state read, so the capture costs two steps here and never more than three.
-  expect(elapsedMs).toBeLessThan(3 * stepMs + 500);
-  expect(kFailureEvidenceBudgetMs).toBeLessThanOrEqual(15_000);
-  const recordPath = test.info().outputPath("failure-canvas-evidence.json");
-  const record = JSON.parse(await readFile(recordPath, "utf8"));
-  expect(record.presentation).toBe("timeout");
-  expect(record.screenshot).toEqual({ error: "timeout" });
-  expect(record.readback).toEqual({ skipped: "the page did not answer the state read" });
-  // A worker that never answers is read in the state step and recorded as a timeout.
-  expect(record.workers).toEqual([{ timeout: true, askedAt: expect.any(Number) }]);
-});
-
-test("a frame account read that never settles records the account as unavailable", async () => {
-  const result = await recordCanvasAccountForTest(() =>
-    new Promise<CanvasCaptureEvidence>(() => {})
-  );
-  expect([result.png.toString(), result.captures]).toEqual(["capture", 1]);
-  expect(result.attached.map((json) => JSON.parse(json))).toEqual([kUnavailableAccountRecord]);
-});
-
-test("a frame account attach that fails or never settles still returns the capture", async () => {
-  const clean = canvasEvidenceForTest();
-  const attaches = [
-    async () => {
-      throw new Error("attach failed");
-    },
-    () => new Promise<void>(() => {}),
-  ];
-  for (const attach of attaches) {
-    const result = await recordCanvasAccountForTest(async () => clean, attach);
-    expect([result.png.toString(), result.captures, result.attached.length]).toEqual([
-      "capture",
-      1,
-      1,
-    ]);
-    expect(JSON.parse(result.attached[0]).applicationImplication).toBeNull();
-  }
-});
 
 // Block until the editor can accept a press.
 //
@@ -2665,59 +1929,6 @@ async function waitForPressReadiness(
 }
 
 test.use({ viewport: { width: 1600, height: 900 } });
-
-test("native overlay pixelmatch retains a one-pixel artwork regression", async () => {
-  const golden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
-  const baseline = await readFile(golden);
-  const outputDir = test.info().outputPath("overlay-native-guard");
-  const hostileEnvironment = {
-    ...process.env,
-    GTEST_FILTER: "NoSuchSuite.NoSuchCase",
-    GTEST_REPEAT: "0",
-    GTEST_TOTAL_SHARDS: "4",
-    GTEST_SHARD_INDEX: "3",
-    GTEST_LIST_TESTS: "1",
-    GTEST_OUTPUT: "json:stale.json",
-    TESTBRIDGE_TEST_ONLY: "NoSuchSuite.NoSuchCase",
-    UPDATE_GOLDEN_IMAGES_DIR: outputDir,
-  };
-  expect(compareOverlayBitmap(baseline, golden, outputDir, hostileEnvironment).matched).toBe(true);
-
-  const oneChannel = PNG.sync.read(baseline);
-  const roundedOffset = (274 * oneChannel.width + 279) * 4 + 1;
-  oneChannel.data[roundedOffset] += 1;
-  const accepted = compareOverlayBitmap(
-    PNG.sync.write(oneChannel),
-    golden,
-    outputDir,
-    hostileEnvironment,
-  );
-  expect(accepted.matched, accepted.detail).toBe(true);
-
-  oneChannel.data[roundedOffset] += 1;
-  const rejected = compareOverlayBitmap(
-    PNG.sync.write(oneChannel),
-    golden,
-    outputDir,
-    hostileEnvironment,
-  );
-  expect(rejected.matched, rejected.detail).toBe(false);
-  expect([rejected.failureActual, rejected.failureExpected, rejected.diff].every(existsSync))
-    .toBe(true);
-
-  const changed = PNG.sync.read(baseline);
-  const artworkOffset = (80 * changed.width + 100) * 4;
-  changed.data.set([255, 0, 0, 255], artworkOffset);
-  const comparison = compareOverlayBitmap(
-    PNG.sync.write(changed),
-    golden,
-    outputDir,
-    hostileEnvironment,
-  );
-  expect(comparison.matched, comparison.detail).toBe(false);
-  expect([comparison.failureActual, comparison.failureExpected, comparison.diff].every(existsSync))
-    .toBe(true);
-});
 
 test("browser overlay control stays disabled after a normal editor frame", async ({ page }) => {
   const failures = await openEditor(page);
@@ -4501,38 +3712,6 @@ async function pinchZoom(
     }
   }, { ...at, deltaY, count });
 }
-
-type CompletedZoomState = {
-  queue?: Pick<
-    NonNullable<Window["__donnerPresentationQueueStats"]>,
-    "captureId" | "inputRepresented" | "deviceLost" | "viewportZoom"
-  >;
-  viewport?: Pick<ViewportStats, "zoom">;
-  host?: Pick<NonNullable<Window["__donnerHostFrameTiming"]>, "lastSurfacePresented">;
-};
-
-function completedFrameMatchesCamera(state: CompletedZoomState): boolean {
-  if (!state.queue || !state.viewport || !state.host?.lastSurfacePresented) return false;
-  // Canvas-size commits change scene revision while retained tiles still cover the new camera.
-  return state.queue.captureId > 0 && state.queue.deviceLost !== true
-    && Math.abs(state.queue.viewportZoom - state.viewport.zoom) < 0.001;
-}
-
-test("zoom camera completion accepts retained scenes but rejects failed presentation", () => {
-  const state: CompletedZoomState = {
-    queue: { captureId: 14, inputRepresented: false, viewportZoom: 3.375 },
-    viewport: { zoom: 3.375 },
-    host: { lastSurfacePresented: true },
-  };
-  expect(completedFrameMatchesCamera(state)).toBe(true);
-  expect(completedFrameMatchesCamera({ ...state, host: { lastSurfacePresented: false } }))
-    .toBe(false);
-  expect(completedFrameMatchesCamera({ ...state, viewport: { zoom: 5.0625 } })).toBe(false);
-  expect(completedFrameMatchesCamera({ ...state, queue: { ...state.queue!, deviceLost: true } }))
-    .toBe(false);
-  expect(completedFrameMatchesCamera({ ...state, queue: { ...state.queue!, captureId: 0 } }))
-    .toBe(false);
-});
 
 /** A completed UI frame can redraw retained GPU tiles without a new worker raster. */
 async function pinchZoomAndAwaitPresentation(

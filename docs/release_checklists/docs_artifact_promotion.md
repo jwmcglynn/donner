@@ -35,6 +35,22 @@ skipped. Unknown history, changed releases, changed archive state or ambiguous d
 stop mutation. Recovery after an unhealthy cutover uses the verified prior complete site; elective
 rollback remains manual.
 
+Before an automatic Pages request, the archive index records its retained candidate as `pending`.
+If Pages becomes healthy but the final index update fails, the next serialized publisher restores
+and verifies both signed archives, the original successful source build, source ancestry, unchanged
+release roster and the exact live candidate before finishing that index update. It retains
+`recovery.json` and proceeds against the recovered snapshot; it sends no recovery deployment request.
+An accepted index update whose response was lost is recognized only as the exact index-only child
+of the expected snapshot. Verified terminal `unchanged` or `restored` outcomes clear pending state.
+An unknown request outcome or a pending candidate that is not verified live still stops mutation;
+the prior site being visible alone does not prove that a delayed Pages request cannot cut over.
+Manual promotion and rollback wait for unfinished automatic publication to be reconciled.
+
+API refusals report the method, endpoint without query parameters, HTTP status and bounded error
+details. Credential values are redacted and control characters escaped. A timeout is reported as
+an unknown outcome rather than a confirmed refusal; inspect retained publication evidence before
+repeating a write.
+
 The publisher listens only to the separate source-build workflow. Its own manual or automatic
 completion does not trigger another publication run. GitHub rejects workflows that listen to
 themselves; the workflow policy test rejects that invalid configuration before publication.

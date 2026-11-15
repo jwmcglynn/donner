@@ -26,6 +26,7 @@ import textwrap
 import unittest
 
 from python.runfiles import runfiles
+from tools import bazelrc_configs
 from tools import test_timing
 
 
@@ -81,6 +82,11 @@ RUNNER_INDEPENDENT_INHERITED = {
 # test setup (tools/test/test-setup.sh) replaces a HOME that is not an absolute path with the
 # test's own TEST_TMPDIR, so each test runs with a writable, private home.
 CI_MACOS_HOME = "--test_env=HOME="
+# --config=ci-macos also lets every main.yml macOS lane run up to four GPU-opening tests at a time
+# (//build_defs:geode_test_scheduling_tests holds the reviewed reason). It replaces the
+# unconditional local_gpu=1 for that key only and changes no action key.
+MACOS_CI_LOCAL_GPU = "--local_resources=local_gpu=4"
+_LOCAL_GPU_UNITS = re.compile(r"^--local_resources=local_gpu=(\S+)$")
 # The main.yml lanes that must compute identical action keys. Every macOS job, in any workflow,
 # selects the pinned Xcode and fails without it.
 LANES = (HOSTED, SELF_HOSTED, "macos-metal", "macos-vm-qualification", "macos-browser")
@@ -290,7 +296,9 @@ def _bazelrc_problems(bazelrc):
     problems = []
     if rc.count(CI_MACOS_HOME) != 1:
         problems.append("--config=ci-macos must set %s exactly once" % CI_MACOS_HOME)
-    rc = [line for line in rc if line != CI_MACOS_HOME]
+    if rc.count(MACOS_CI_LOCAL_GPU) != 1:
+        problems.append("--config=ci-macos must set %s exactly once" % MACOS_CI_LOCAL_GPU)
+    rc = [line for line in rc if line not in (CI_MACOS_HOME, MACOS_CI_LOCAL_GPU)]
     paths = [re.fullmatch(r"--(action_env|host_action_env)=PATH=(\S+)", line) for line in rc]
     if (len(rc) != 2 or not all(paths) or
             {match.group(1) for match in paths} != {"action_env", "host_action_env"} or
@@ -337,6 +345,43 @@ def inherited_env_problems(workflow, bazelrc):
                            if match})
         problems += ["%s sets %s from a shell or workflow expression" % (name, variable)
                      for variable in expanded]
+    return problems
+
+
+def _lane_test_command_words(job):
+    """(step name, words) of each Bazel test command of a job, with its flag lists substituted."""
+    lists = {"$" + variable: (_job_env(job, variable) or "").split()
+             for variable in ("BAZEL_MACOS_BUILD_FLAGS",) + TEST_ONLY_VARIABLES}
+    commands = []
+    for step_name, command in _bazel_commands(job):
+        match = BAZEL_INVOCATION.search(command)
+        if match.group(1) in ("test", "coverage"):
+            commands.append((step_name, [flag for word in command[match.end():].split()
+                                         for flag in lists.get(word, [word])]))
+    return commands
+
+
+def local_gpu_unit_problems(workflow, bazelrc):
+    """Test commands of a macOS lane that do not get the macOS CI local_gpu count.
+
+    Bazel keeps the last --local_resources value for each resource, so the unconditional
+    .bazelrc line comes first, then the platform `macos` config, then the command's own flags
+    and the configs they name, in order."""
+    jobs = _jobs(workflow)
+    unconditional = [flag for line in bazelrc.splitlines()
+                     if re.match(r"^(?:build|test|common)\s", line)
+                     for flag in shlex.split(line.split(None, 1)[1])]
+    configs = _config_flags(bazelrc)
+    expected = MACOS_CI_LOCAL_GPU.rsplit("=", 1)[1]
+    problems = []
+    for name in LANES:
+        for step_name, words in _lane_test_command_words(jobs[name]):
+            expanded = _expand_configs(unconditional + [IMPLICIT_MACOS_CONFIG] + words, configs)
+            units = [found.group(1) for found in map(_LOCAL_GPU_UNITS.match, expanded) if found]
+            actual = units[-1] if units else "untracked"
+            if actual != expected:
+                problems.append("%s step %r runs GPU tests with local_gpu=%s, not %s" % (
+                    name, step_name, actual, expected))
     return problems
 
 
@@ -404,7 +449,7 @@ def key_parity_problems(workflow, bazelrc):
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
     return (problems + _step_divergence(by_step) + _bazelrc_problems(bazelrc) +
-            inherited_env_problems(workflow, bazelrc))
+            inherited_env_problems(workflow, bazelrc) + local_gpu_unit_problems(workflow, bazelrc))
 
 
 def _step_divergence(by_step):
@@ -549,6 +594,38 @@ class MacosCacheKeyParityTest(unittest.TestCase):
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
 
+    def test_macos_lanes_build_one_editor_identity(self):
+        # `--config=ci` names the test-lane editor commit (`ci-test-lane` in .bazelrc). It is a
+        # key-affecting build setting, so every macOS lane must take it from that one config for
+        # the editor actions, its Wasm package and the tests built on them to share keys.
+        for command in ("build", "test", "coverage"):
+            self.assertIn("--//build_defs:release_source_commit=" + "0" * 40,
+                          bazelrc_configs.expand(command, ["--config=ci"],
+                                                 bazelrc_configs.parse(self.bazelrc)))
+        neutral = neutral_configs(self.bazelrc)
+        self.assertNotIn("ci-test-lane", neutral)
+        self.assertNotIn("ci", neutral)
+        jobs = _jobs(self.workflow)
+        built = 0
+        for name in LANES:
+            for step_name, command in _bazel_commands(jobs[name]):
+                if BAZEL_INVOCATION.search(command).group(1) not in ("build", "test", "coverage"):
+                    continue
+                built += 1
+                words = command.split()
+                with self.subTest(lane=name, step=step_name):
+                    self.assertIn("--config=ci", words)
+                    self.assertEqual(
+                        [], [word for word in words
+                             if word.startswith("--//build_defs:release_source_commit=")])
+        self.assertGreater(built, 10)
+        # An editor identity set in one lane only is a key divergence the parity check reports.
+        command = "bazelisk --nohome_rc --nosystem_rc build --config=ci --config=macos-vm"
+        self.assertIn(command, self.workflow)
+        diverged = self.workflow.replace(
+            command, command + " --//build_defs:release_source_commit=" + "1" * 40)
+        self.assertTrue(key_parity_problems(diverged, self.bazelrc))
+
     def test_metal_shader_validation_setting_selects_only_test_environment(self):
         build_defs = _read("build_defs/BUILD.bazel")
         metal = _read("donner/gpu/metal/tests/BUILD.bazel")
@@ -658,6 +735,16 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.workflow,
                 self.bazelrc + "build:macos-vm --action_env=TMPDIR=${{ runner.temp }}\n",
                 "macos-self-hosted sets TMPDIR from a shell or workflow expression"),
+            "a macOS lane dropping ci-macos goes back to one GPU test at a time": (
+                before + 'BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"\n' + after,
+                self.bazelrc, "macos-self-hosted step 'Test' runs GPU tests with local_gpu=1"),
+            "ci-macos stops raising the GPU test count": (self.workflow, self.bazelrc.replace(
+                "build:ci-macos %s\n" % MACOS_CI_LOCAL_GPU, "", 1),
+                "runs GPU tests with local_gpu=1"),
+            "a lane lowers the GPU test count after ci-macos": (self.workflow.replace(
+                LANE_TEST_ENV[SELF_HOSTED],
+                LANE_TEST_ENV[SELF_HOSTED] + " --local_resources=local_gpu=1", 1),
+                self.bazelrc, "macos-self-hosted step 'Test' runs GPU tests with local_gpu=1"),
             "ci-macos stops giving tests a fixed HOME": (self.workflow, self.bazelrc.replace(
                 "build:ci-macos %s\n" % CI_MACOS_HOME, "", 1),
                 "must set %s exactly once" % CI_MACOS_HOME),

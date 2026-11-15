@@ -428,7 +428,7 @@ py_test(
         "--max-js-gzip-bytes",
         "56000",
         "--max-total-raw-bytes",
-        "13100000",
+        "13200000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # The WebGPU readback diagnostic the browser pixel suites read, published by

@@ -106,7 +106,10 @@ def docs_only(environ: Mapping[str, str]) -> bool:
     event = json.loads(Path(environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     base_sha = event["pull_request"]["base"]["sha"]
     head_sha = event["pull_request"]["head"]["sha"]
-    changed = _run(["git", "diff", "--name-only", "--diff-filter=ACMR",
+    # Deletions count: deleting a build input (a source, a BUILD file, a CMake file) can break
+    # the build as surely as editing it. --no-renames reports a rename as its deleted old path and
+    # its added new path, so moving a build input under docs/ is not docs-only either.
+    changed = _run(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMD",
                     _diff_base(base_sha, head_sha), head_sha]).splitlines()
     return _all_docs(path for path in changed if path)
 
