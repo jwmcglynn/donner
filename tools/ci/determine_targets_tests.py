@@ -57,6 +57,8 @@ def answer(output, status=0):
 
 
 if tool == "git":
+    with open(os.environ["CAPTURE"] + ".cwd", "a", encoding="utf-8") as cwd:
+        cwd.write(os.getcwd() + "\n")
     if args[:1] == ["merge-base"]:
         if config.get("merge_base") is None:
             answer("", 1)
@@ -128,7 +130,7 @@ class _ScriptTest(unittest.TestCase):
         self.capture = self.work / "calls.jsonl"
         self.output = self.work / "github-output"
 
-    def run_script(self, *args, config=None, event=None, **env):
+    def run_script(self, *args, config=None, event=None, cwd=None, **env):
         self.capture.write_text("", encoding="utf-8")
         self.output.write_text("", encoding="utf-8")
         config_path = self.work / "config.json"
@@ -144,7 +146,8 @@ class _ScriptTest(unittest.TestCase):
             "GITHUB_REF": "refs/pull/7/merge", "GITHUB_SHA": "sha0",
         }
         environ.update(env)
-        result = subprocess.run([self.bash, str(self.script), *args], cwd=self.workspace,
+        result = subprocess.run([self.bash, str(self.script), *args],
+                                cwd=self.workspace if cwd is None else cwd,
                                 env=environ, capture_output=True, text=True, check=False,
                                 timeout=test_timing.STALL_GUARD_SECONDS)
         calls = [json.loads(line) for line in self.capture.read_text().splitlines()]
@@ -387,6 +390,19 @@ class DetermineTest(_ScriptTest):
                     FULL_TEST=full_test)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assert_outputs(outputs, "run=" + expected)
+
+    def test_bazel_run_selects_in_the_checkout(self):
+        elsewhere = self.work / "runfiles"
+        elsewhere.mkdir()
+        cwd = Path(str(self.capture) + ".cwd")
+        cwd.write_text("")
+        for env, directory in (({}, self.workspace),
+                               ({"BUILD_WORKSPACE_DIRECTORY": str(self.workspace)}, elsewhere)):
+            with self.subTest(env=env):
+                result, _, _ = self.run_script("determine", config={"changed": ""},
+                                               event=_pull_request(), cwd=directory, **env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(cwd.read_text().splitlines()), {str(self.workspace.resolve())})
 
     def test_rejects_an_unknown_subcommand(self):
         for args in ((), ("select",), ("determine", "extra")):

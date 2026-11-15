@@ -5,6 +5,7 @@
 # determine-targets job and writes that step's outputs to $GITHUB_OUTPUT.
 #
 # Usage: tools/ci/determine_targets.sh pr-meta|determine|select-wgpu-reference
+#        bazel run //tools/ci:plan -- pr-meta|determine|select-wgpu-reference
 #
 #   pr-meta                The revision whose bazel-diff hashes the job restores or saves
 #                          (`base_sha`): a pull request's base, or this commit on a main push.
@@ -24,6 +25,11 @@
 # shellcheck disable=SC2129
 
 set -euo pipefail
+
+# `bazel run` starts in the runfiles tree; the selection reads the checkout.
+if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+  cd "${BUILD_WORKSPACE_DIRECTORY}"
+fi
 
 pr_meta() {
   base_sha=""

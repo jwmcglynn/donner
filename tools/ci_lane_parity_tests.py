@@ -247,7 +247,7 @@ _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
      "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "5057c9deaeac7852"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "c2708d9566911b2f"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "e2ba74d7428f1a5b"),
 }
 
 SHARED_STEP_ALLOWLIST = {
