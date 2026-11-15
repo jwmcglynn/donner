@@ -619,11 +619,12 @@ TEST(SubDocumentFiltersTest, BranchingExternalUseMeasurementStaysWithinItsAllowa
   };
   components::StyleResourceBudget::Limits limits;
   limits.ruleElementMatches = 64;
+  limits.externalMeasureEntities = 64;
   SVGDocument filtered = Parse(host("<g filter='url(#box)'>"), documents);
   const auto work = std::make_shared<components::StyleResourceBudget>(limits);
   ExternalInstanceWork(filtered, work);
   EXPECT_THAT(work->externalMeasureWork(),
-              testing::AllOf(Gt(0u), testing::Le(limits.ruleElementMatches)));
+              testing::AllOf(Gt(0u), testing::Le(limits.externalMeasureEntities)));
 }
 
 /// Nested box-effect owners in different spaces measure each external occurrence once per frame,
@@ -679,7 +680,7 @@ TEST(SubDocumentFiltersTest, NestedBoxEffectOwnersMeasureEachExternalUseOnce) {
               testing::Eq(singleWork));
 
   components::StyleResourceBudget::Limits boundary;
-  boundary.ruleElementMatches = singleWork;
+  boundary.externalMeasureEntities = singleWork;
   const struct {
     std::string_view label;
     std::string_view owners;
