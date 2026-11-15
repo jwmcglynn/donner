@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "donner/css/parser/details/Tokenizer.h"
 
 namespace donner::css {
@@ -52,7 +54,8 @@ TEST(Serialize, IdentifierEdgeCases) {
 TEST(Serialize, IdentifierFollowedByWhitespaceKeepsTheCombinator) {
   for (const std::string_view id : {"7", "-7", "\x01 b", "a\\", "\xF0\x9F\x98\x80"}) {
     SCOPED_TRACE(id);
-    Tokenizer tokenizer("#" + SerializeIdentifier(id) + " .x");
+    const std::string text = "#" + SerializeIdentifier(id) + " .x";
+    Tokenizer tokenizer(text);
     const Token hash = tokenizer.next();
     ASSERT_THAT(hash.is<Token::Hash>(), testing::IsTrue()) << hash;
     EXPECT_THAT(hash.get<Token::Hash>().name, testing::Eq(RcString(id)));
