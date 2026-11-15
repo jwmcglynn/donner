@@ -507,10 +507,12 @@ other OS names apply on neither. Passing `--enable_platform_specific_config` aft
 the command line, or placing the config in an rc file before a later line that enables it, turns
 host-OS configs back on silently.
 
-**GPU executors.** `--config=remote-macos-gpu` is the same config on
-`//tools/ci:remote_macos_aarch64_gpu`, which also asks for `gpu=present`. Every action of that
-build, not only its tests, goes to executors with a GPU, so it shares no cache entries with
-`--config=remote-macos`.
+**GPU executors.** `--config=remote-macos-gpu` builds exactly as `--config=remote-macos` and runs
+only its tests on executors with a GPU: it makes `//tools/ci:remote_macos_aarch64_gpu`, the same
+platform also asking for `gpu=present`, the target platform and runs tests on it
+(`--use_target_platform_for_tests`). Execution properties are part of an action's key, so the
+build actions keep their keys and share cache entries with `--config=remote-macos`; only test
+actions differ.
 
 **Limits.**
 
@@ -524,8 +526,9 @@ build, not only its tests, goes to executors with a GPU, so it shares no cache e
 - Tests that need a desktop session (a window server, a logged-in user or a visible browser) do
   not run on a headless executor.
 - Builds outside Bazel, such as the CMake build, cannot run this way.
-- GPU tests that must not overlap rely on the executor to serialize them; Bazel's local test
-  scheduling (`--local_test_jobs`) does not apply to remote tests.
+- Bazel's local GPU scheduling (the local GPU resource tag and `--local_test_jobs`) does not
+  apply to remote tests. A command that runs only GPU-opening tests can bound how many run at once
+  with `--jobs`, after the config; otherwise the executor decides.
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 

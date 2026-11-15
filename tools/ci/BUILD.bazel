@@ -663,7 +663,8 @@ platform(
     visibility = ["//visibility:public"],
 )
 
-# The same executor class with a GPU (`--config=remote-macos-gpu`).
+# The same executor class with a GPU. `--config=remote-macos-gpu` makes it the target platform and
+# runs tests on it, so only test actions ask for a GPU.
 platform(
     name = "remote_macos_aarch64_gpu",
     exec_properties = {

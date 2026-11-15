@@ -20,7 +20,7 @@
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
 ##   --config=remote-macos      - Build and test for macOS arm64 with every action on a remote
 ##                                macOS executor, from a Linux or macOS client.
-##   --config=remote-macos-gpu  - remote-macos on executors that have a GPU.
+##   --config=remote-macos-gpu  - remote-macos with tests on executors that have a GPU.
 ##
 
 # Opt out of usage reporting by third-party Bazel modules. aspect_tools_telemetry, which
@@ -735,15 +735,19 @@ build:remote-macos-base --strategy=CppLink=remote
 build:remote-macos-base --strategy=TestRunner=remote
 build:remote-macos-base --noremote_local_fallback
 # Execution platforms accumulate and the first compatible one wins, and Bazel adds the host
-# platform as the last candidate, so each variant names one execution platform and makes it the
-# host platform too. The GPU variant sends every action, not only tests, to executors that have a
-# GPU. Only these two variants may use remote-macos-base.
+# platform as the last candidate, so the config names one execution platform and makes it the
+# host platform too. Only remote-macos uses remote-macos-base.
 build:remote-macos --config=remote-macos-base
 build:remote-macos --extra_execution_platforms=//tools/ci:remote_macos_aarch64
 build:remote-macos --host_platform=//tools/ci:remote_macos_aarch64
-build:remote-macos-gpu --config=remote-macos-base
-build:remote-macos-gpu --extra_execution_platforms=//tools/ci:remote_macos_aarch64_gpu
-build:remote-macos-gpu --host_platform=//tools/ci:remote_macos_aarch64_gpu
+# The GPU variant builds exactly as remote-macos, so every build action keeps its key and cache
+# entry, and runs only its tests on executors that have a GPU: with
+# --use_target_platform_for_tests a test executes on the target platform, which is the same macOS
+# arm64 platform asking for `gpu=present` too. Execution properties are part of an action's key,
+# so a GPU execution platform would rebuild everything the tests need.
+build:remote-macos-gpu --config=remote-macos
+build:remote-macos-gpu --platforms=//tools/ci:remote_macos_aarch64_gpu
+build:remote-macos-gpu --use_target_platform_for_tests
 
 # CI lanes on the BuildBuddy remote cache (the GitHub-hosted lanes and the
 # self-hosted macOS lane) may write a remote-cache fragment here via the

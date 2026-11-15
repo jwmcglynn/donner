@@ -31,7 +31,7 @@ CONFIG = "remote-macos"
 GPU_CONFIG = "remote-macos-gpu"
 TARGET_PLATFORM = "//:macos_aarch64"
 EXEC_PLATFORM = "//tools/ci:remote_macos_aarch64"
-GPU_EXEC_PLATFORM = "//tools/ci:remote_macos_aarch64_gpu"
+GPU_PLATFORM = "//tools/ci:remote_macos_aarch64_gpu"
 XCODE_CONFIG = "//tools/ci:remote_macos_xcodes"
 EXEC_PROPERTIES = {"OSFamily": "darwin", "ISA": "aarch64", "container-image": "none"}
 SDK_PLATFORMS = ("ios", "macos", "tvos", "visionos", "watchos")
@@ -190,16 +190,16 @@ class XcodePinAgreementTest(unittest.TestCase):
 
 class RemoteMacosConfigTest(unittest.TestCase):
     def test_config_targets_macos_on_one_remote_macos_execution_platform(self):
-        for config, platform in ((CONFIG, EXEC_PLATFORM), (GPU_CONFIG, GPU_EXEC_PLATFORM)):
+        for config, target in ((CONFIG, TARGET_PLATFORM), (GPU_CONFIG, GPU_PLATFORM)):
             for command in ("build", "test"):
                 with self.subTest(config=config, command=command):
                     options = _expand(command, config)
-                    self.assertEqual(TARGET_PLATFORM, bazelrc_configs.last_value(options,
-                                                                                 "platforms"))
+                    self.assertEqual(target, bazelrc_configs.last_value(options, "platforms"))
                     # Execution platforms accumulate and the first compatible one wins.
-                    self.assertEqual([platform], _values(options, "extra_execution_platforms"))
+                    self.assertEqual([EXEC_PLATFORM],
+                                     _values(options, "extra_execution_platforms"))
                     # Bazel adds the host platform as the last execution-platform candidate.
-                    self.assertEqual([platform], _values(options, "host_platform"))
+                    self.assertEqual([EXEC_PLATFORM], _values(options, "host_platform"))
 
     def test_every_action_runs_remotely_without_local_fallback(self):
         for config in (CONFIG, GPU_CONFIG):
@@ -223,12 +223,15 @@ class RemoteMacosConfigTest(unittest.TestCase):
                 for option in nested_options:
                     self.assertIn(option, options)
 
-    def test_gpu_variant_differs_only_in_its_execution_platform(self):
+    def test_gpu_variant_builds_as_remote_macos_and_runs_only_tests_on_a_gpu(self):
+        # Execution properties are part of an action's key: the variant keeps the execution
+        # platform, so its build actions share remote-macos's cache entries, and runs each test
+        # on the target platform, which asks for a GPU too.
         for command in ("build", "test"):
             with self.subTest(command=command):
-                self.assertEqual([option.replace("=" + EXEC_PLATFORM, "=" + GPU_EXEC_PLATFORM)
-                                  for option in _expand(command, CONFIG)],
-                                 _expand(command, GPU_CONFIG))
+                self.assertEqual(_expand(command, CONFIG) + [
+                    "--platforms=" + GPU_PLATFORM, "--use_target_platform_for_tests"],
+                    _expand(command, GPU_CONFIG))
 
     def test_repository_config_holds_no_private_runner_configuration(self):
         for config in (CONFIG, GPU_CONFIG):
@@ -258,17 +261,19 @@ class RemoteMacosConfigTest(unittest.TestCase):
                          sorted(base["constraint_values"]))
         self.assertEqual(EXEC_PROPERTIES, base["exec_properties"])
         self.assertNotIn("parents", base)
-        gpu = platforms[GPU_EXEC_PLATFORM.rsplit(":", 1)[1]]
+        gpu = platforms[GPU_PLATFORM.rsplit(":", 1)[1]]
         self.assertEqual([":" + EXEC_PLATFORM.rsplit(":", 1)[1]], gpu["parents"])
         self.assertEqual({"gpu": "present"}, gpu["exec_properties"])
         self.assertNotIn("constraint_values", gpu)
 
-    def test_only_the_two_variants_use_the_base_and_no_workflow_selects_them(self):
+    def test_only_the_variants_use_the_base_and_no_workflow_names_them(self):
         # The base turns local fallback off (an exception to the BuildBuddy fallback policy), so it
         # must not reach any other config or any CI lane unseen.
-        users = {name for name, lines in _configs().items()
-                 for _, flags in lines if "--config=" + BASE_CONFIG in flags}
-        self.assertEqual({CONFIG, GPU_CONFIG}, users)
+        users = {name: [flag for _, flags in lines for flag in flags
+                        if flag.startswith("--config=remote-macos")]
+                 for name, lines in _configs().items()}
+        self.assertEqual({CONFIG: ["--config=" + BASE_CONFIG], GPU_CONFIG: ["--config=" + CONFIG]},
+                         {name: flags for name, flags in users.items() if flags})
         # Runfiles hold files, not directories, so find the tree from a file in it.
         main = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml"))
         github = main.parent.parent
