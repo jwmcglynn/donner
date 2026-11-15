@@ -318,7 +318,7 @@ jobs:
                 wgpu_reference_changed=true
                 break
                 ;;
-              third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc|build_defs/*|.github/workflows/main.yml)
+              third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc|build_defs/*|.github/workflows/main.yml|tools/ci/bazel_watchdog.sh)
                 wgpu_reference_changed=true
                 break
                 ;;
@@ -346,7 +346,7 @@ jobs:
           while IFS= read -r path; do
             [[ -z "$path" ]] && continue
             case "$path" in
-              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*)
+              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*|tools/ci/bazel_watchdog.sh)
                 echo "Infra change requires full //... coverage: $path"
                 should_fallback=true
                 break

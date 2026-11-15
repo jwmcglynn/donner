@@ -321,6 +321,7 @@ py_test(
         "test_executable_fixtures.py",
     ],
     data = [
+        "BUILD.bazel",
         "//:.bazelrc",
         "//:.github/actions/apt-install/action.yml",
         "//:.github/workflows/cmake.yml",
