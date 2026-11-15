@@ -3940,10 +3940,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci
         # outranks the fragment's plain `build` lines, so a fallback flag anywhere in .bazelrc
-        # could turn the fallback off on every lane.
+        # could turn the fallback off on every lane. An opt-in remote-execution config may turn
+        # it off for the commands that select it, as buildbuddy-re does: remote-macos runs every
+        # action on a remote macOS executor and must never build on the client instead.
         self.assertIsNone(REMOTE_FALLBACK_FLAG.search("\n".join(
             line for line in _read(".bazelrc").splitlines()
-            if not line.startswith("build:buildbuddy-re "))))
+            if not line.startswith("build:buildbuddy-re ")
+            and line != "build:remote-macos-base --noremote_local_fallback")))
 
     def test_linux_package_change_invalidates_cache_with_the_same_runner_image(self):
         for route in (dict(event="push", write="fixture-key"),
