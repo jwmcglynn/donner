@@ -1195,7 +1195,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         determine = self._job_body("determine-targets")
         self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", determine)
         start = determine.index("          # The manual reference is removed")
-        end = determine.index('          manual_affected="', start)
+        # The reference selection ends where the macos-metal selection begins.
+        end = determine.index("          # BEGIN macos-metal selection", start)
+        self.assertLess(end, determine.index('          manual_affected="', start))
         impacted_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         impacted_script += textwrap.dedent(determine[start:end])
         self.assertIn("labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))", impacted_script)
@@ -1313,6 +1315,95 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertIn("steps.wgpu_resvg_reference.outcome == 'failure'", job)
         for job_name in ("macos", "macos-self-hosted"):
             self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
+
+    def test_native_metal_job_is_selected_only_for_prs_that_reach_its_suites(self):
+        """The macos-metal job runs when the affected set reaches its suites, fails closed."""
+        determine = self._job_body("determine-targets")
+        self.assertIn("      metal_affected: ${{ steps.determine.outputs.metal_affected }}\n",
+                      determine)
+        start = determine.index("          # BEGIN macos-metal selection (metal_affected).\n")
+        end = determine.index("          # END macos-metal selection.\n", start)
+        # It reads the selection before manual targets are filtered out.
+        self.assertLess(end, determine.index('          manual_affected="'))
+        block = "#!/usr/bin/env bash\nset -euo pipefail\n" + textwrap.dedent(determine[start:end])
+        suites = ("//tools/ci:metal_full_validation", "//tools/ci:metal_preflight",
+                  "//tools/ci:metal_offline_compiler", "//tools/ci:metal_native")
+        self.assertIn("tests(%s)" % " + ".join(suites), block)
+        for suite in suites:
+            self.assertIn('name = "%s"' % suite.split(":", 1)[1], self.ci_target_definitions)
+        # The dependency inputs bazel-diff cannot attribute that the WebGPU reference selection
+        # lists also select the Metal job; it adds every third-party BUILD overlay.
+        reference = determine[determine.index("          # Direct renderer/GPU/image inputs"):start]
+        for entry in ("third_party/bazel/non_bcr_deps.bzl", "MODULE.bazel.lock"):
+            self.assertIn(entry, reference)
+            self.assertIn(entry, block)
+        metal_test = "//donner/gpu/metal/tests:metal_buffer_bounds_tests"
+        # A stand-in for Bazel: the suite query lists the suites' tests (SUITE_TESTS) and the
+        # intersection query prints what Bazel would (INTERSECTION), failing with SUITE_STATUS or
+        # INTERSECTION_STATUS. Each query is recorded so the test can read what was asked.
+        stub = ("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QUERY_LOG\"\n"
+                "case \"$*\" in\n"
+                "  *intersect*) [ -n \"$INTERSECTION\" ] && printf '%s\\n' \"$INTERSECTION\"\n"
+                "               exit \"${INTERSECTION_STATUS:-0}\" ;;\n"
+                "  *) [ -n \"$SUITE_TESTS\" ] && printf '%s\\n' \"$SUITE_TESTS\"\n"
+                "     exit \"${SUITE_STATUS:-0}\" ;;\n"
+                "esac\n")
+        unrelated = "//donner/base:base_tests"
+        cases = (
+            # (affected, changed path, suite tests, intersection, suite status, intersection
+            #  status, expected)
+            (metal_test, "donner/gpu/metal/MetalDevice.mm", metal_test, metal_test, 0, 0, "true"),
+            (unrelated, "donner/base/x.cc", metal_test, "", 0, 0, "false"),
+            # bazel-diff may print a label in another canonical form; Bazel resolves both.
+            ("@@//donner/gpu/metal/tests:metal_buffer_bounds_tests", "donner/base/x.cc",
+             metal_test, metal_test, 0, 0, "true"),
+            (unrelated, "tools/ci_macos_xcode.txt", metal_test, "", 0, 0, "true"),
+            (unrelated, "tools/ci_metal_toolchain.py", metal_test, "", 0, 0, "true"),
+            # Dependency inputs bazel-diff cannot attribute, as the WebGPU reference lists them.
+            (unrelated, "third_party/bazel/non_bcr_deps.bzl", metal_test, "", 0, 0, "true"),
+            (unrelated, "MODULE.bazel.lock", metal_test, "", 0, 0, "true"),
+            (unrelated, "third_party/BUILD.wgpu_native_platform", metal_test, "", 0, 0, "true"),
+            (unrelated, "third_party/cmark-gfm.BUILD", metal_test, "", 0, 0, "true"),
+            # Fail closed: a failed suite query, suites with no tests, a failed intersection.
+            (unrelated, "donner/base/x.cc", "", "", 3, 0, "true"),
+            (unrelated, "donner/base/x.cc", "", "", 0, 0, "true"),
+            (unrelated, "donner/base/x.cc", metal_test, "", 0, 3, "true"),
+            (unrelated, "donner/base/x.cc", metal_test, "", 0, 7, "true"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bazelisk = Path(directory) / "bazelisk"
+            fake_bazelisk.write_text(stub)
+            fake_bazelisk.chmod(0o755)
+            for index, (affected, changed, suite, intersection, suite_status,
+                        intersection_status, expected) in enumerate(cases):
+                with self.subTest(index=index, affected=affected, changed=changed):
+                    output = Path(directory) / ("outputs-%d" % index)
+                    log = Path(directory) / ("queries-%d" % index)
+                    result = self._run_script(
+                        block, [],
+                        env={**os.environ, "affected": affected, "changed_files": changed,
+                             "head_dir": directory, "GITHUB_OUTPUT": str(output),
+                             "QUERY_LOG": str(log), "SUITE_TESTS": suite,
+                             "INTERSECTION": intersection, "SUITE_STATUS": str(suite_status),
+                             "INTERSECTION_STATUS": str(intersection_status),
+                             "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual("metal_affected=%s\n" % expected, output.read_text())
+                    # The decision is Bazel's intersection of the quoted affected labels with
+                    # the suites, never a comparison of label strings.
+                    queries = log.read_text() if log.exists() else ""
+                    if changed.startswith("donner/") and suite and not suite_status:
+                        self.assertIn('set("%s") intersect tests(%s)'
+                                      % (affected, " + ".join(suites)), queries)
+        # The job runs on a selected or full-fallback pull request only; its steps stay mandatory.
+        native = self._job_body("macos-metal")
+        condition = next(line for line in native.splitlines() if line.startswith("    if:"))
+        self.assertTrue(condition.endswith(
+            "&& needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
+            "(needs.determine-targets.outputs.fallback == 'true' || "
+            "needs.determine-targets.outputs.metal_affected == 'true') }}"), condition)
+        self.assertIn("determine-targets", native.split("    if:", 1)[0])
 
     def _coverage_jobs(self):
         """Every (name, body) pair for a top-level key in coverage.yml."""

@@ -152,6 +152,7 @@ jobs:
       affected: ${{ steps.determine.outputs.affected }}
       full_test: ${{ steps.determine.outputs.full_test }}
       browser_affected: ${{ steps.determine.outputs.browser_affected }}
+      metal_affected: ${{ steps.determine.outputs.metal_affected }}
       wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}
     steps:
       - name: Checkout
@@ -444,6 +445,48 @@ jobs:
               break
             fi
           done
+
+          # BEGIN macos-metal selection (metal_affected).
+          # The native Metal job reruns fixed suites with test caching off, so it runs only when
+          # Bazel finds a test of those suites in the affected set (bazel-diff marks a test
+          # affected when anything it depends on changed), or a changed path is one bazel-diff
+          # cannot attribute or one the job runs outside Bazel. The dependency inputs are the
+          # WebGPU reference list's (non-registry dependency definitions, the module lockfile)
+          # plus every third-party BUILD overlay. It reads the selection before manual targets
+          # are filtered out, like the reference above. Fail closed: any query failure, or suites
+          # with no tests, selects the job.
+          metal_affected=false
+          while IFS= read -r path; do
+            case "$path" in
+              third_party/bazel/non_bcr_deps.bzl|MODULE.bazel.lock|third_party/BUILD.*|third_party/*.BUILD|\
+              tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|tools/ci_bazel_test.sh)
+                echo "Metal job input changed: $path"
+                metal_affected=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+          if [[ "$metal_affected" != "true" ]]; then
+            metal_suites='tests(//tools/ci:metal_full_validation + //tools/ci:metal_preflight + //tools/ci:metal_offline_compiler + //tools/ci:metal_native)'
+            # Intentional word splitting: each affected label is one argument. Labels are quoted
+            # because npm package labels contain query operators.
+            # shellcheck disable=SC2086
+            metal_set="$(python3 -c 'import sys; print(" ".join("\"%s\"" % label for label in sys.argv[1:]))' $affected)"
+            if metal_tests="$(cd "$head_dir" && bazelisk query --keep_going "$metal_suites")" &&
+                [[ -n "$metal_tests" ]] &&
+                metal_targets="$(cd "$head_dir" && bazelisk query --keep_going "set($metal_set) intersect $metal_suites")"; then
+              if [[ -n "$metal_targets" ]]; then
+                echo "Affected Metal suite tests:"
+                printf '%s\n' "$metal_targets"
+                metal_affected=true
+              fi
+            else
+              echo "Metal suite query failed or found no tests; selecting the native Metal job."
+              metal_affected=true
+            fi
+          fi
+          echo "metal_affected=$metal_affected" >> "$GITHUB_OUTPUT"
+          # END macos-metal selection.
 
           manual_affected="$(
             # Quote each label: npm package labels contain query operators such as `+`.
@@ -1345,10 +1388,11 @@ jobs:
           # compiler, which is a separate ~700 MB downloadable component. The MSL
           # validation suite fails rather than skips when it cannot find that
           # compiler, so this lane drops it by tag and says so in the run summary
-          # instead of collecting silent skips. Trusted PRs run it on the
-          # capable self-hosted runner; every PR still needs exact-head full
-          # Metal validation before merge (docs/metal_validation.md). Main's
-          # hosted result alone does not establish that hardware signal.
+          # instead of collecting silent skips. Trusted PRs whose affected targets
+          # reach the Metal suites run it on the capable self-hosted runner, and such
+          # a PR needs exact-head full Metal validation before merge
+          # (docs/metal_validation.md). Main's hosted result alone does not
+          # establish that hardware signal.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           # Its virtual GPU cannot run shader validation either, so the tests that assert it
           # (the validation profile probe and the out-of-bounds canary) run only on the
@@ -2017,7 +2061,7 @@ jobs:
   macos-metal:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.metal_affected == 'true') }}
     # Bound at 60 min so healthy affected-target runs have buffer while a stuck
     # run still fails instead of tailing for hours.
     timeout-minutes: 60
