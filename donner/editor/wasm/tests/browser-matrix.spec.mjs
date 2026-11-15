@@ -727,7 +727,7 @@ test("every Bazel Playwright config is loaded by a Bazel lane", () => {
 // setup.
 test("every Bazel browser lane probes its browser launch before the first case", () => {
   const base = readFileSync(path.join(testDirectory, "playwright.bazel.config.js"), "utf8");
-  assert.match(base, /\n  globalSetup: require\.resolve\("\.\/browser-launch-probe\.js"\),\n/);
+  assert.match(base, /\n {2}globalSetup: require\.resolve\("\.\/browser-launch-probe\.js"\),\n/);
   const probing = new Set(["browser-launch-probe.js", "prepare-browser-archives.js"]);
   const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
   const configs = new Set();
