@@ -81,7 +81,7 @@ RUNNER_INDEPENDENT_INHERITED = {
 # test setup (tools/test/test-setup.sh) replaces a HOME that is not an absolute path with the
 # test's own TEST_TMPDIR, so each test runs with a writable, private home.
 CI_MACOS_HOME = "--test_env=HOME="
-# --config=ci-macos also lets every macOS CI lane run up to four GPU-opening tests at a time
+# --config=ci-macos also lets every main.yml macOS lane run up to four GPU-opening tests at a time
 # (//build_defs:geode_test_scheduling_tests holds the reviewed reason). It replaces the
 # unconditional local_gpu=1 for that key only and changes no action key.
 MACOS_CI_LOCAL_GPU = "--local_resources=local_gpu=4"

@@ -430,7 +430,7 @@ _donner_multi_transitioned_test = rule(
 # Tag for a test that opens a GPU device. It takes one unit of the `local_gpu` resource while
 # the test runs locally. .bazelrc declares one unit by default, so GPU-opening tests run one at
 # a time, alongside CPU-only tests: a hardware adapter is process-global, and this keeps a device
-# loss in one test process from cascading into another. The macOS CI lanes declare four units
+# loss in one test process from cascading into another. The main.yml macOS lanes declare four units
 # (--config=ci-macos), so up to four run at once there. Remote execution does not use local
 # resources. Bazel ignores resource tags when --local_test_jobs is set, so a command that sets it
 # uses 1, which runs every local test serially, or runs no GPU-opening test.
@@ -455,7 +455,7 @@ def donner_multi_transitioned_test(
         one unit of the machine's `local_gpu` resource (.bazelrc) while the
         test runs locally. With the default single unit, at most one
         GPU-opening test runs at a time and a device loss in one process
-        cannot cascade into another; the macOS CI lanes allow four. Unlike
+        cannot cascade into another; the main.yml macOS lanes allow four. Unlike
         `exclusive-if-local`, the resource does not stop CPU-only tests from
         running alongside, so these tests overlap the parallel part of the
         test phase instead of draining one at a time after it. Selecting the

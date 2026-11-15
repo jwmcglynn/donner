@@ -3,7 +3,7 @@
 
 A test that opens a GPU device takes one unit of the `local_gpu` resource
 (`LOCAL_GPU_TEST_TAG` in build_defs/rules.bzl). The machine's unit count, one by default and
-four on the macOS CI lanes, then bounds how many run at once, alongside CPU-only tests. This
+four on the main.yml macOS lanes, then bounds how many run at once, alongside CPU-only tests. This
 check keeps every test at one unit and the old whole-machine tags from coming back:
 
   - no `exclusive-if-local` tag anywhere;
