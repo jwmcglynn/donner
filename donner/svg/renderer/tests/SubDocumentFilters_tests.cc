@@ -477,8 +477,7 @@ TEST(SubDocumentFiltersTest, TransformedContentUnderBoxEffectsMatchesInDocument)
   };
   constexpr std::string_view kSquare = "x='-5' y='-5' width='10' height='10' fill='#2050d0'";
   const std::string square(kSquare);
-  const std::string rootRotated =
-      "<rect id='sprite' " + square + " transform='rotate(45)'/>";
+  const std::string rootRotated = "<rect id='sprite' " + square + " transform='rotate(45)'/>";
   const std::string nestedRotated = "<g id='sprite'><g transform='rotate(30)'><rect " + square +
                                     " transform='rotate(15)'/></g></g>";
   const std::string skewed = "<g id='sprite'><rect " + square + " transform='skewX(30)'/></g>";

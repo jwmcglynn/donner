@@ -480,8 +480,9 @@ private:
    */
   std::optional<Box2d> objectBoundingBox(Registry& registry, Entity entity);
   /**
-   * \ref objectBoundingBox in a target space, bounding the geometry of @p entity and of the external
-   * content in its subtree after @p targetFromEntity maps it there. Not kept for the frame.
+   * \ref objectBoundingBox in a target space, bounding the geometry of @p entity and of the
+   * external content in its subtree after @p targetFromEntity maps it there. Not kept for the
+   * frame.
    *
    * @param registry Registry holding @p entity.
    * @param entity Element to measure.
