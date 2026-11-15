@@ -133,8 +133,17 @@ common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 common:geode --//donner/svg/renderer:renderer_backend=geode
 common:geode --//donner/svg/renderer/geode:enable_geode=true
 # A local hardware adapter is process-global. Keep explicit Geode suites
-# serial so independent test processes cannot cascade one device loss.
+# serial so independent test processes cannot cascade one device loss. Under
+# this config every renderer test uses Geode, including tests that do not
+# declare the local GPU resource below, so the whole suite stays serial.
 test:geode --local_test_jobs=1
+# The local GPU resource. Each test that opens a GPU device takes one unit
+# (LOCAL_GPU_TEST_TAG in build_defs/rules.bzl), so with one unit at most one
+# GPU-opening test runs locally at a time, alongside CPU-only tests. Every
+# command needs it declared: Bazel fails a local test that requests a resource
+# it does not track. Do not raise it above 1 without a reviewed reason;
+# //build_defs:geode_test_scheduling_tests enforces this.
+build --local_resources=local_gpu=1
 common:dev --//build_defs:disable_backend_test_transition=true
 # Disable forced opt compilation of perf-sensitive deps to avoid
 # cross-configuration link conflicts.  Use: --config=no-perf-opt

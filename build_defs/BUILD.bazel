@@ -51,6 +51,9 @@ py_test(
         ":rules.bzl",
         "//:.bazelrc",
         "//:.github/workflows/main.yml",
+        "//:github_action_definitions",
+        "//donner/editor/tests:BUILD.bazel",
+        "//donner/svg/renderer/geode:BUILD.bazel",
     ],
 )
 

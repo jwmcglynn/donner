@@ -23,7 +23,10 @@ exports_files(
         "BUILD.bazel",
         "RunEditorWindowVulkanSurfaceTests.sh",
     ],
-    visibility = ["//tools:__pkg__"],
+    visibility = [
+        "//build_defs:__pkg__",
+        "//tools:__pkg__",
+    ],
 )
 
 exports_files(
@@ -217,9 +220,9 @@ donner_cc_test(
     srcs = ["EditorShell_tests.cc"],
     opens_gpu_device = True,
     renderer_backend = "geode",
-    # GPU-backed framebuffer cases need short shards and isolated local device use.
+    # GPU-backed framebuffer cases need short shards; opens_gpu_device keeps local device use
+    # isolated.
     shard_count = 8,
-    tags = ["exclusive-if-local"],
     deps = [
         ":async_test_polling",
         ":bitmap_golden_compare",
@@ -370,17 +373,17 @@ donner_cc_test(
     }),
 )
 
-# The test starts an X server and presents through that host's lavapipe ICD. Serialize it with
-# other local GPU tests so the display and driver remain on one execution host.
+# The test starts an X server and presents through that host's lavapipe ICD. It takes the local
+# GPU resource, like other GPU-opening tests, so it never runs alongside another one.
 sh_test(
     name = "editor_window_vulkan_surface_tests",
     srcs = ["RunEditorWindowVulkanSurfaceTests.sh"],
     args = ["$(location :editor_window_tests_geode)"],
     data = [":editor_window_tests_geode"],
     tags = [
-        "exclusive-if-local",
         "local-gpu-isolated",
         "requires_xvfb",
+        "resources:local_gpu:1",
     ],
     target_compatible_with = ["@platforms//os:linux"],
 )
@@ -396,9 +399,9 @@ sh_test(
     ],
     data = [":editor_window_tests_geode"],
     tags = [
-        "exclusive-if-local",
         "local-gpu-isolated",
         "requires_xvfb",
+        "resources:local_gpu:1",
     ],
     target_compatible_with = ["@platforms//os:linux"],
 )

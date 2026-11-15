@@ -96,7 +96,10 @@ filegroup(
         ".github/workflows/*.yaml",
         ".github/workflows/*.yml",
     ]),
-    visibility = ["//tools:__pkg__"],
+    visibility = [
+        "//build_defs:__pkg__",
+        "//tools:__pkg__",
+    ],
 )
 
 exports_files(
