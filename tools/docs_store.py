@@ -8,6 +8,7 @@ import io
 import math
 import os
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -50,6 +51,46 @@ def _owner_review_required(environment: dict) -> bool:
     return reviewers == [("User", "jwmcglynn", 103489)]
 
 
+def _safe_diagnostic(value: str, data: dict | None) -> str:
+    secrets = {os.environ.get(name, "") for name in
+               ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
+    secrets.update(value for key, value in (data or {}).items()
+                   if isinstance(value, str) and any(word in key.lower() for word in ("token", "secret", "password")))
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            value = value.replace(secret, "[REDACTED]")
+    value = re.sub(r"(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+                   "[REDACTED]", value)
+    return json.dumps(value[:1024], ensure_ascii=True).replace(":", "\\u003a")
+
+
+def _validation_details(errors, data: dict | None) -> list[str]:
+    if not isinstance(errors, list):
+        return []
+    details = []
+    for error in errors[:8]:
+        if isinstance(error, dict):
+            details.extend(key + "=" + _safe_diagnostic(error[key], data) for key in ("resource", "field", "code")
+                           if isinstance(error.get(key), str))
+    return details
+
+
+def _failure_detail(payload: bytes, stderr: bytes, data: dict | None) -> str:
+    status = re.search(rb"HTTP ([1-5][0-9]{2})", stderr)
+    details = ["HTTP " + status[1].decode() if status else "HTTP status unavailable"]
+    try:
+        value = json.loads(payload) if len(payload) <= 65536 else {}
+    except (ValueError, UnicodeError):
+        value = {}
+    if isinstance(value, dict):
+        if isinstance(value.get("message"), str):
+            details.append("message=" + _safe_diagnostic(value["message"], data))
+        details.extend(_validation_details(value.get("errors"), data))
+    if len(details) == 1 and stderr:
+        details.append("diagnostic=" + _safe_diagnostic(stderr.decode("utf-8", errors="replace"), data))
+    return "; ".join(details)[:4096]
+
+
 class GitHub:
     def call(self, endpoint: str, method: str = "GET", data: dict | None = None,
              raw: bool = False, maximum: int = MAX_CONTROL) -> object:
@@ -74,7 +115,10 @@ class GitHub:
             except (OSError, subprocess.SubprocessError):
                 raise ValueError("GitHub request outcome is unknown: " + endpoint.split("?")[0]) from None
             if result.returncode:
-                raise ValueError("GitHub request failed: " + endpoint.split("?")[0]
+                output.seek(0)
+                detail = _failure_detail(output.read(65537), result.stderr or b"", data)
+                raise ValueError("GitHub request failed: " + method + " " + endpoint.split("?")[0]
+                                 + "; " + detail
                                  + (" (404)" if b"HTTP 404" in result.stderr else ""))
             site.require(output.tell() <= maximum, "GitHub response is oversized")
             output.seek(0)
@@ -132,11 +176,17 @@ def index(api: GitHub, expected: str | None) -> dict:
 def read_index(api: GitHub, commit: str) -> dict:
     site.require(bool(site.SHA.fullmatch(commit)), "invalid pinned snapshot commit")
     value = json.loads(api.file(commit, "index.json"))
-    site.require(set(value) == {"schema", "releases", "current", "previous"}
+    fields = {"schema", "releases", "current", "previous"}
+    site.require(set(value) in (fields, fields | {"pending"})
                  and value["schema"] == 1 and isinstance(value["releases"], dict)
                  and len(value["releases"]) <= site.MAX_VERSIONS, "invalid snapshot index")
     for key in ("current", "previous"):
         site.require(value[key] is None or site.DIGEST.fullmatch(value[key]), "invalid composition ID")
+    if "pending" in value:
+        pending = value["pending"]
+        site.require(isinstance(pending, str) and bool(site.DIGEST.fullmatch(pending))
+                     and value["current"] is not None and pending != value["current"],
+                     "invalid pending composition ID")
     return value
 
 

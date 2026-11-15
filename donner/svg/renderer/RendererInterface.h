@@ -13,6 +13,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/FillRule.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
@@ -167,6 +168,7 @@ public:
   /// Clears usage counters and the sticky rejection state for a new frame.
   void reset() {
     bytes_ = 0;
+    peakBytes_ = 0;
     surfaces_ = 0;
     rejected_ = false;
   }
@@ -198,6 +200,7 @@ public:
     }
 
     bytes_ += byteCount;
+    peakBytes_ = std::max(peakBytes_, bytes_);
     surfaces_ += surfaceCount;
     return true;
   }
@@ -241,6 +244,8 @@ public:
 
   /// Bytes currently reserved by active surfaces.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  /// Most bytes reserved at once since the last \ref reset.
+  [[nodiscard]] std::uint64_t peakBytes() const { return peakBytes_; }
   /// Number of active reserved surfaces.
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
   /// Whether a reservation or release has failed in this frame.
@@ -255,6 +260,7 @@ public:
 private:
   Limits limits_;
   std::uint64_t bytes_ = 0;
+  std::uint64_t peakBytes_ = 0;
   std::size_t surfaces_ = 0;
   bool rejected_ = false;
 };
@@ -734,6 +740,13 @@ struct RendererResourceStats {
   std::uint64_t filterWorkUnits = 0;
   std::uint64_t filterRetainedBytes = 0;
   std::uint64_t filterCaptureBytesReserved = 0;
+  /// Filter graphs refused this frame, up to and including the refusal that latched the frame;
+  /// a latched frame counts no later graphs. A refusal for one graph's work leaves later graphs
+  /// that fit admitted; see \ref components::FilterExecutionBudget. A graph dropped because a
+  /// requested memory chunk could not start is not counted here, though \ref filterBudgetRejected
+  /// reflects it.
+  std::uint64_t filterGraphsRefused = 0;
+  /// Whether any filter graph was refused or dropped this frame, latched or not.
   bool filterBudgetRejected = false;
   bool geometryBudgetSupported = false;
   std::size_t geometryDraws = 0;
@@ -743,6 +756,8 @@ struct RendererResourceStats {
   bool surfaceBudgetSupported = false;
   std::size_t surfaceCount = 0;
   std::uint64_t surfaceBytes = 0;
+  /// Most surface bytes reserved at once during the frame.
+  std::uint64_t surfacePeakBytes = 0;
   bool surfaceBudgetRejected = false;
   bool drawBudgetSupported = false;
   std::size_t drawCalls = 0;
@@ -1138,6 +1153,9 @@ public:
   /**
    * Renders the given SVG document. Implementations prepare the document, traverse the render
    * tree, and emit drawing commands.
+   *
+   * Warnings found while preparing the document are discarded, or printed to stderr by a backend
+   * created in verbose mode. Use the overload taking a \ref ParseWarningSink to receive them.
    */
   virtual void draw(SVGDocument& document) = 0;
 
@@ -1509,6 +1527,26 @@ public:
     (void)colorInterpolation;
     pushMask(maskBounds, maskType);
   }
+
+  /**
+   * Renders the given SVG document and reports the warnings found while preparing it.
+   *
+   * Preparation resolves references, loads external resources, and builds the render tree.
+   * Recoverable problems found on the way, such as an unresolved `href` or the parse warnings of
+   * an SVG document loaded for `<use href="other.svg#id">`, are appended to @p warningSink instead
+   * of being printed, so the host decides how to surface them. A preparation step that reuses
+   * cached results does not report its warnings again, so a document that has not changed since
+   * the previous draw usually reports none.
+   *
+   * Every implementation must deliver the warnings of the preparation it performs to
+   * @p warningSink; one that renders through \ref RendererDriver passes the sink to the driver's
+   * constructor.
+   *
+   * @param document The SVG document to render.
+   * @param warningSink Receives preparation warnings. Pass \ref ParseWarningSink::Disabled to
+   *   discard them.
+   */
+  virtual void draw(SVGDocument& document, ParseWarningSink& warningSink) = 0;
 };
 
 }  // namespace donner::svg

@@ -762,8 +762,72 @@ TEST(FilterGraphExecutorTest, RejectsAggregateWorkAcrossSeparateFilterExecutions
   }
   EXPECT_GT(maximumSurfaceExecutions, 0u);
   EXPECT_LT(maximumSurfaceExecutions, components::FilterExecutionBudget::kMaximumExecutions);
-  EXPECT_TRUE(budget.rejected());
   EXPECT_LE(budget.workUnits(), components::kMaximumFilterFrameWorkUnits);
+  // Exceeding the remaining work refuses that graph alone; a graph that still fits runs.
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_EQ(budget.refusedGraphs(), 1u);
+  EXPECT_EQ(budget.lastRefusalReason(),
+            components::FilterExecutionBudget::RejectionReason::WorkLimit);
+  EXPECT_TRUE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+}
+
+TEST(FilterGraphExecutorTest, RefusedAttemptsLatchTheFrameAtTheExecutionCap) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  components::FilterExecutionBudget budget;
+  while (budget.consume(graph, components::kMaximumFilterSurfacePixels,
+                        components::FilterMemoryModel::CpuFloatNamedResults)) {}
+  ASSERT_EQ(budget.refusedGraphs(), 1u);
+  ASSERT_FALSE(budget.rejected());
+
+  // Each refused attempt counts toward the execution cap, so a frame that keeps offering graphs
+  // too large for its remaining work stops admitting anything once attempts reach the cap.
+  constexpr std::uint64_t kCap = components::FilterExecutionBudget::kMaximumExecutions;
+  while (!budget.rejected()) {
+    ASSERT_LT(budget.executions() + budget.refusedGraphs(), kCap);
+    EXPECT_FALSE(budget.consume(graph, components::kMaximumFilterSurfacePixels,
+                                components::FilterMemoryModel::CpuFloatNamedResults));
+  }
+  EXPECT_EQ(budget.executions() + budget.refusedGraphs(), kCap);
+  EXPECT_EQ(budget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::WorkLimit);
+  EXPECT_FALSE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_EQ(budget.refusedGraphs(), kCap - budget.executions())
+      << "a latched frame refuses without counting further attempts";
+}
+
+TEST(FilterGraphExecutorTest, AdmissionsAfterRefusalsStopAtTheExecutionCap) {
+  components::FilterGraph invalidGraph;
+  invalidGraph.nodes.resize(components::kMaximumFilterGraphNodes + 1u);
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 1.0,
+      .stdDeviationY = 1.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  // Refusals that leave the frame open still use up attempts, so admissions after them stop once
+  // admitted and refused attempts together reach the cap.
+  constexpr std::uint64_t kCap = components::FilterExecutionBudget::kMaximumExecutions;
+  components::FilterExecutionBudget budget;
+  for (std::uint64_t i = 0; i + 1 < kCap; ++i) {
+    ASSERT_FALSE(budget.consume(invalidGraph, 1, components::FilterMemoryModel::GpuAllNodes));
+  }
+  ASSERT_FALSE(budget.rejected());
+  EXPECT_TRUE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_EQ(budget.executions() + budget.refusedGraphs(), kCap);
+  EXPECT_FALSE(budget.consume(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::ExecutionLimit);
+  EXPECT_EQ(budget.executions(), 1u);
 }
 
 TEST(FilterGraphExecutorTest, ReservesCaptureMemoryBeforeAllocationAndLatchesRejection) {
@@ -796,15 +860,17 @@ TEST(FilterGraphExecutorTest, ReservesCaptureMemoryBeforeAllocationAndLatchesRej
                    .has_value());
 }
 
-TEST(FilterGraphExecutorTest, PermanentRejectionCannotStartMemoryChunk) {
+TEST(FilterGraphExecutorTest, InvalidGraphRefusalCannotStartMemoryChunk) {
   components::FilterGraph invalidGraph;
   invalidGraph.nodes.resize(components::kMaximumFilterGraphNodes + 1u);
   components::FilterExecutionBudget budget;
 
   EXPECT_FALSE(
       budget.reserve(invalidGraph, 1, components::FilterMemoryModel::GpuAllNodes, 4).has_value());
-  EXPECT_EQ(budget.rejectionReason(),
+  EXPECT_EQ(budget.lastRefusalReason(),
             components::FilterExecutionBudget::RejectionReason::InvalidGraph);
+  EXPECT_EQ(budget.refusedGraphs(), 1u);
+  EXPECT_FALSE(budget.rejected()) << "an invalid graph is refused alone";
   EXPECT_FALSE(budget.beginChunkAfterSubmit());
   EXPECT_EQ(budget.chunks(), 0u);
 }
@@ -856,14 +922,77 @@ TEST(FilterGraphExecutorTest, EmptyChunkCannotRetryIntrinsicallyOversizedGraph) 
   EXPECT_GT(budget.retainedGpuBytes(), 0u);
   ASSERT_TRUE(budget.beginChunkAfterSubmit());
   EXPECT_EQ(budget.chunks(), 1u);
+  EXPECT_EQ(budget.refusedGraphs(), 0u) << "starting a chunk withdraws its memory refusal";
 
   EXPECT_FALSE(budget
                    .reserve(graph, kOversizedPixels, components::FilterMemoryModel::GpuAllNodes,
                             kCaptureBytes)
                    .has_value());
   EXPECT_EQ(budget.retainedGpuBytes(), 0u);
+  EXPECT_EQ(budget.refusedGraphs(), 1u);
   EXPECT_FALSE(budget.beginChunkAfterSubmit());
   EXPECT_EQ(budget.chunks(), 1u);
+}
+
+TEST(FilterGraphExecutorTest, GraphAdmittedInANewMemoryChunkIsNotRefused) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  constexpr std::uint64_t kPixels = 1024ULL * 1024;
+  constexpr std::uint64_t kCaptureBytes = kPixels * 4;
+  components::FilterExecutionBudget budget;
+  std::uint64_t admitted = 0;
+  while (auto reservation = budget.reserve(
+             graph, kPixels, components::FilterMemoryModel::GpuAllNodes, kCaptureBytes)) {
+    budget.release(*reservation);
+    ++admitted;
+  }
+  ASSERT_GT(admitted, 0u);
+  ASSERT_EQ(budget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit);
+  ASSERT_EQ(budget.refusedGraphs(), 1u);
+
+  ASSERT_TRUE(budget.beginChunkAfterSubmit());
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_EQ(budget.refusedGraphs(), 0u);
+  EXPECT_EQ(budget.lastRefusalReason(), components::FilterExecutionBudget::RejectionReason::None);
+  auto retried =
+      budget.reserve(graph, kPixels, components::FilterMemoryModel::GpuAllNodes, kCaptureBytes);
+  ASSERT_TRUE(retried.has_value());
+  budget.release(*retried);
+  EXPECT_EQ(budget.executions(), admitted + 1);
+  EXPECT_EQ(budget.refusedGraphs(), 0u);
+}
+
+TEST(FilterGraphExecutorTest, RequestedMemoryChunkWithdrawsNoRefusal) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  components::FilterExecutionBudget budget;
+  EXPECT_FALSE(budget.consume(graph, components::kMaximumFilterSurfacePixels * 64,
+                              components::FilterMemoryModel::CpuFloatNamedResults));
+  ASSERT_EQ(budget.refusedGraphs(), 1u);
+  const auto refusal = budget.lastRefusalReason();
+  auto reservation = budget.reserve(graph, 1024, components::FilterMemoryModel::GpuAllNodes, 4096);
+  ASSERT_TRUE(reservation.has_value());
+  budget.release(*reservation);
+
+  // A chunk another GPU budget asks for refused nothing, so it leaves the earlier refusal counted.
+  budget.requireMemoryChunk();
+  ASSERT_TRUE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.refusedGraphs(), 1u);
+  EXPECT_EQ(budget.lastRefusalReason(), refusal);
+  EXPECT_FALSE(budget.rejected());
 }
 
 TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
@@ -878,17 +1007,23 @@ TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
   constexpr std::uint64_t kPixels = 1024ULL * 1024;
   constexpr std::uint64_t kCaptureBytes = kPixels * 4;
 
+  // The CPU executions are small so the live captures, not the frame's work, run out first.
+  constexpr std::uint64_t kCpuExecutionPixels = 64ULL * 64;
   components::FilterExecutionBudget cpuBudget;
   std::vector<components::FilterExecutionBudget::Reservation> cpuReservations;
   while (true) {
-    auto reservation = cpuBudget.reserve(
-        graph, kPixels, components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes);
+    auto reservation =
+        cpuBudget.reserve(graph, kCpuExecutionPixels,
+                          components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes);
     if (!reservation.has_value()) {
       break;
     }
     cpuReservations.push_back(*reservation);
   }
   EXPECT_FALSE(cpuReservations.empty());
+  EXPECT_EQ(cpuBudget.refusedGraphs(), 1u);
+  EXPECT_EQ(cpuBudget.lastRefusalReason(),
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit);
   EXPECT_TRUE(cpuBudget.rejected());
   EXPECT_EQ(cpuBudget.captureBytesReserved(), cpuReservations.size() * kCaptureBytes);
   EXPECT_EQ(cpuBudget.retainedBytes(), cpuReservations.size() * kCaptureBytes);
@@ -905,6 +1040,8 @@ TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
     ++gpuReservations;
   }
   EXPECT_GT(gpuReservations, 0u);
+  EXPECT_EQ(gpuBudget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit);
   EXPECT_TRUE(gpuBudget.rejected());
   EXPECT_EQ(gpuBudget.captureBytesReserved(), gpuReservations * kCaptureBytes);
   EXPECT_LE(gpuBudget.retainedBytes(), components::kMaximumFilterFrameBytes);
@@ -2652,6 +2789,68 @@ TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
       ComputeFilterInputBuffer(graph, Box2d::FromXYWH(-200, -200, 464, 464), Transform2d(), 64, 64);
   // After the viewport the capture extends by the graph's own 31-pixel reach.
   EXPECT_THAT(buffer, testing::FieldsAre(186, 186, 91, 91));
+}
+
+TEST(FilterInputMarginTest, RegionBufferCoversOnlyTheVisibleRegionAndItsReach) {
+  using namespace components;
+  using testing::FieldsAre;
+  const FilterGraph blur = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
+  // A 40-pixel region in a 1206x2622 viewport: the region plus nothing, since the capture holds
+  // nothing outside the region, rounded up to the 64-pixel granularity. Texel (0, 0) is at
+  // viewport pixel (100, 200).
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100, 200, 40, 40), Transform2d(),
+                                             1206, 2622),
+              FieldsAre(64, 64, -100, -200));
+  // A fractional region rounds outward before the granularity.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100.5, 200.25, 40, 40),
+                                             Transform2d(), 1206, 2622),
+              FieldsAre(64, 64, -100, -200));
+  // Scaling the filter scales the region in device pixels.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(10, 20, 40, 40),
+                                             Transform2d::Scale(3.0), 1206, 2622),
+              FieldsAre(128, 128, -30, -60));
+}
+
+TEST(FilterInputMarginTest, RegionBufferReachesPastTheViewportOnlyByTheGraphReach) {
+  using namespace components;
+  using testing::FieldsAre;
+  const FilterGraph blur = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
+  // The region starts 50 pixels left of and above the viewport; output there is invisible, but
+  // the visible output reads 7 pixels past the edge (three deviations and a rounding pixel).
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(-50, -50, 90, 90), Transform2d(),
+                                             64, 64),
+              FieldsAre(64, 64, 7, 7));
+  // Past the far edge too: the visible part is 24..64, read 7 pixels further, so 24..71.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(24, 24, 100, 100), Transform2d(),
+                                             64, 64),
+              FieldsAre(64, 64, -24, -24));
+  // A region wholly outside the viewport shows nothing and gets a single pixel.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(blur, Box2d::FromXYWH(100, 100, 20, 20), Transform2d(),
+                                             64, 64),
+              FieldsAre(1, 1, 0, 0));
+}
+
+TEST(FilterInputMarginTest, RegionBufferKeepsViewportLayoutsWhereRequired) {
+  using namespace components;
+  using testing::FieldsAre;
+  const std::optional<Box2d> region = Box2d::FromXYWH(10, 10, 20, 20);
+  // Turbulence keeps a viewport-aligned capture.
+  EXPECT_THAT(ComputeRegionFilterInputBuffer(SinglePrimitiveGraph(filter_primitive::Turbulence{}),
+                                             region, Transform2d(), 64, 64),
+              FieldsAre(64, 64, 0, 0));
+  // Without a region the filter covers the viewport.
+  EXPECT_THAT(
+      ComputeRegionFilterInputBuffer(SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0}),
+                                     std::nullopt, Transform2d(), 64, 64),
+      FieldsAre(64, 64, 0, 0));
+  // A graph that reads anywhere in its input covers its whole region, even past the viewport, and
+  // one that wraps or duplicates the raster edge keeps the region's exact extent.
+  filter_primitive::GaussianBlur wrap{2.0, 2.0};
+  wrap.edgeMode = filter_primitive::GaussianBlur::EdgeMode::Wrap;
+  EXPECT_THAT(
+      ComputeRegionFilterInputBuffer(SinglePrimitiveGraph(wrap), Box2d::FromXYWH(-50, 10, 100, 20),
+                                     Transform2d(), 64, 64),
+      FieldsAre(100, 20, 50, -10));
 }
 
 }  // namespace

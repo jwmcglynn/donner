@@ -6,8 +6,10 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.test_executable_fixtures import ExecutableFixtureDirectory
@@ -19,6 +21,21 @@ assert _CHECKER_SPEC is not None
 assert _CHECKER_SPEC.loader is not None
 check_banned_patterns = importlib.util.module_from_spec(_CHECKER_SPEC)
 _CHECKER_SPEC.loader.exec_module(check_banned_patterns)
+
+
+def _write_xml_scan_allowlist_files(root: Path) -> None:
+    """Create every exempt file, and every allowlisted file with exactly its capped site count."""
+    for relative_path in check_banned_patterns._XML_SCAN_EXEMPT_PATHS:
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    for relative_path, cap in check_banned_patterns._XML_SCAN_ALLOWLIST.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(f'void Site{i}(std::string_view s) {{ s.rfind("</"); }}\n' for i in range(cap)),
+            encoding="utf-8",
+        )
 
 
 class CheckBannedPatternsTests(unittest.TestCase):
@@ -91,6 +108,205 @@ class CheckBannedPatternsTests(unittest.TestCase):
             'const char* name = "requiresTextureSnapshotPresentation()";\n',
             "donner/svg/compositor/CompositorControllerRasterize.cc",
         ))
+
+    _XML_SCAN = "hand-rolled XML markup scan"
+
+    def test_blocks_markup_literal_searches_in_production_code(self):
+        for statement in (
+            'auto pos = source.rfind("</svg>");',
+            'auto pos = source.find("</", start);',
+            'bool comment = text.starts_with("<!--");',
+            'bool cdata = text.starts_with("<![CDATA[");',
+            'bool pi = text.starts_with("<?");',
+            'bool root = svg.find("<svg") != npos;',
+            "auto end = source.find('>', start);",
+            "auto open = source.rfind('<', idPos);",
+            'bool group = source.compare(scan, 2, "<g") == 0;',
+            'bool ref = value.compare(i, 5, "url(#") == 0;',
+            'auto end = text.find("-->");',
+            'bool close = StringUtils::EndsWith(text, "/>");',
+            "auto it = std::find(begin, end, '>');",
+            "auto open = text.find(L'<');",
+            'auto pos = text.find(std::string_view("</"));',
+            'auto pos = text.find(std::string_view{"</"}, start);',
+            'auto pos = text.find(RcString("<svg"), start);',
+            'bool open = text.starts_with("<");',
+        ):
+            with self.subTest(statement=statement):
+                descriptions = self._descriptions_at_path(
+                    f"void Scan() {{ {statement} }}\n", "donner/editor/NewScanner.cc"
+                )
+                self.assertEqual([self._XML_SCAN], descriptions)
+
+    def test_allows_non_markup_searches_emission_and_comments(self):
+        for statement in (
+            "auto pos = name.find(':');",
+            'auto pos = text.find("->");',
+            "bool ok = text.ends_with(')');",
+            'std::string tag = "</" + name + ">";',
+            'out << "<svg" << attrs << ">";',
+            '// source.rfind("</svg>") would be wrong here.',
+            "/* text.find('>') */",
+            'const char* hint = "use find(\\"<svg\\") carefully";',
+            "int million = 1'000'000; auto pos = name.find(':');",
+            'const char* doc = R"(text.find("<svg"))";',
+            'bool le = op.compare("<=") == 0;',
+            'auto shift = text.find("<<");',
+            'auto angle = text.find_first_of("<>");',
+            'auto pos = text.find(Wrap("</"));',
+        ):
+            with self.subTest(statement=statement):
+                self.assertEqual([], self._descriptions_at_path(
+                    f"void Scan() {{ {statement} }}\n", "donner/editor/NewScanner.cc"
+                ))
+
+    def test_markup_scan_exempts_tests_and_the_scanners_themselves(self):
+        scan = 'void Scan() { auto pos = source.rfind("</svg>"); }\n'
+        for path in (
+            "donner/editor/tests/Scanner_tests.cc",
+            "donner/base/xml/tests/XMLHelpers.h",
+            "donner/editor/Scanner_fuzzer.cc",
+            "tools/svg_suite/vdiff/Csv_tests.cpp",
+            "donner/base/xml/XMLParser.cc",
+            "donner/base/xml/XMLTokenizer.h",
+            "donner/css/parser/details/Tokenizer.cc",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual([], self._descriptions_at_path(scan, path))
+
+    def test_markup_scan_allowlist_caps_preexisting_sites(self):
+        path = "donner/editor/StrokeMarkerPrefabs.cc"
+        self.assertEqual(1, check_banned_patterns._XML_SCAN_ALLOWLIST[path])
+        one_site = 'bool Ref(std::string_view r) { return r.starts_with("url(#"); }\n'
+        self.assertEqual([], self._descriptions_at_path(one_site, path))
+
+        two_sites = one_site + 'bool Close(std::string_view r) { return r.find("</") == 0; }\n'
+        self.assertEqual(
+            [f"{self._XML_SCAN} (2 sites, allowlist cap 1)"] * 2,
+            self._descriptions_at_path(two_sites, path),
+        )
+
+    def test_markup_scan_allowlist_rejects_a_stale_cap(self):
+        one_site = 'bool Ref(std::string_view r) { return r.starts_with("url(#"); }\n'
+        cases = (
+            ("donner/editor/StrokeMarkerPrefabs.cc", "void Unused() {}\n",
+             "stale hand-rolled XML markup scan allowlist cap (0 sites, allowlist cap 1)",
+             "remove this file's entry"),
+            ("donner/editor/DocumentSyncController.cc", one_site,
+             "stale hand-rolled XML markup scan allowlist cap (1 sites, allowlist cap 2)",
+             "lower this file's cap to 1"),
+        )
+        for path, source, description, action in cases:
+            with self.subTest(path=path):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    source_path = Path(temp_dir) / path
+                    source_path.parent.mkdir(parents=True)
+                    source_path.write_text(source, encoding="utf-8")
+                    errors = check_banned_patterns.check_file(source_path)
+                self.assertEqual([description], [error[1] for error in errors])
+                self.assertIn(action, errors[0][2])
+
+    def _run_checker_requiring_allowlisted_files(self, missing: str | None):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_xml_scan_allowlist_files(root)
+            if missing:
+                (root / missing).unlink()
+            return subprocess.run(
+                [sys.executable, str(_CHECKER_PATH), "--require-allowlisted-files",
+                 "donner/editor/FocusView.cc"],
+                cwd=root, check=False, capture_output=True, text=True,
+            )
+
+    def test_markup_scan_allowlist_entries_must_name_existing_files(self):
+        present = self._run_checker_requiring_allowlisted_files(None)
+        self.assertEqual(0, present.returncode, present.stdout + present.stderr)
+
+        missing = "donner/editor/XmlAutocomplete.cc"
+        completed = self._run_checker_requiring_allowlisted_files(missing)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+        self.assertIn(f"{missing}: listed in _XML_SCAN_ALLOWLIST but does not exist",
+                      completed.stdout)
+
+    def test_lint_rejects_allowlist_entry_for_missing_file(self):
+        missing = "donner/editor/XmlAutocomplete.cc"
+        completed = self._run_lint_in_git_repo(
+            current_decision_points=10, provide_origin_main=True,
+            missing_allowlisted_file=missing,
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn(f"{missing}: listed in _XML_SCAN_ALLOWLIST but does not exist",
+                      completed.stdout)
+
+    def _invalid_entries(self, allowlist, exempt_paths=None):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_xml_scan_allowlist_files(root)
+            (root / "donner/editor/lowercase.cc").write_text("", encoding="utf-8")
+            exempt = exempt_paths
+            if exempt is None:
+                exempt = check_banned_patterns._XML_SCAN_EXEMPT_PATHS
+            module = check_banned_patterns
+            with mock.patch.dict(module._XML_SCAN_ALLOWLIST, allowlist, clear=True), \
+                 mock.patch.object(module, "_XML_SCAN_EXEMPT_PATHS", exempt):
+                return module._invalid_xml_scan_list_entries(root)
+
+    def test_markup_scan_list_entries_must_be_positive_normalized_and_exact(self):
+        self.assertEqual([], self._invalid_entries({"donner/editor/FocusView.cc": 2}))
+        cases = {
+            "donner/editor/FocusView.cc": (0, "cap 0; remove the entry, a cap must be positive"),
+            "./donner/editor/FocusView.cc": (2, "is not a normalized repository-relative path"),
+            "donner\\editor\\FocusView.cc": (2, "is not a normalized repository-relative path"),
+            "donner/editor/../editor/FocusView.cc": (
+                2, "is not a normalized repository-relative path"),
+            "donner/editor/LowerCase.cc": (
+                2, "does not exist; remove the entry or move it to the new path"),
+            "donner/Editor/FocusView.cc": (
+                2, "does not exist; remove the entry or move it to the new path"),
+            "Donner/editor/FocusView.cc": (
+                2, "does not exist; remove the entry or move it to the new path"),
+        }
+        for path, (cap, problem) in cases.items():
+            with self.subTest(path=path):
+                problems = self._invalid_entries({path: cap})
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn(problem, problems[0])
+                self.assertTrue(problems[0].startswith(path + ": "), problems[0])
+
+    def test_markup_scan_exempt_paths_must_name_existing_files(self):
+        problems = self._invalid_entries(
+            {}, exempt_paths=("donner/base/xml/XMLParser.cc", "donner/base/xml/Gone.cc")
+        )
+        self.assertEqual(
+            ["donner/base/xml/Gone.cc: listed in _XML_SCAN_EXEMPT_PATHS but does not exist; "
+             "remove the entry or move it to the new path"],
+            problems,
+        )
+
+    def test_lint_on_explicit_paths_ignores_missing_allowlisted_file(self):
+        completed = self._run_lint_in_git_repo(
+            current_decision_points=10, provide_origin_main=True,
+            missing_allowlisted_file="donner/editor/XmlAutocomplete.cc",
+            lint_args=("donner/base/Example.cc",),
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertNotIn("_XML_SCAN_ALLOWLIST", completed.stdout)
+
+    def test_markup_scan_suppression_must_name_an_exception(self):
+        scan = 'auto pos = source.rfind("</", end);'
+        named = "// NOLINT(banned_patterns: xml-scan dirty-range-fallback)"
+        self.assertEqual([], self._descriptions_at_path(
+            f"void Scan() {{\n  {scan}  {named}\n}}\n", "donner/editor/NewScanner.cc"
+        ))
+        for marker in (
+            "// NOLINT(banned_patterns)",
+            "// NOLINT(banned_patterns: xml-scan)",
+            "// NOLINT(banned_patterns: xml-scan convenient)",
+        ):
+            with self.subTest(marker=marker):
+                self.assertEqual([self._XML_SCAN], self._descriptions_at_path(
+                    f"void Scan() {{\n  {scan}  {marker}\n}}\n", "donner/editor/NewScanner.cc"
+                ))
 
     def test_blocks_typographic_hyphens_and_dashes_in_comments_and_strings(self):
         descriptions = self._descriptions_for(
@@ -549,6 +765,8 @@ const char* text = "it's quoted";
         diverged_target: bool = False,
         unrelated_target: bool = False,
         python_growth: bool = False,
+        missing_allowlisted_file: str | None = None,
+        lint_args: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -599,6 +817,9 @@ const char* text = "it's quoted";
             subprocess.run(
                 ["git", "config", "user.name", "Lint Test"], cwd=repo, check=True
             )
+            _write_xml_scan_allowlist_files(repo)
+            if missing_allowlisted_file:
+                (repo / missing_allowlisted_file).unlink()
             write_source(10)
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(
@@ -671,7 +892,7 @@ const char* text = "it's quoted";
             )
 
             return subprocess.run(
-                [str(repo / "tools" / "lint.sh")],
+                [str(repo / "tools" / "lint.sh"), *lint_args],
                 cwd=repo,
                 env={
                     **os.environ,

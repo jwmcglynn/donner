@@ -2,8 +2,9 @@
 """Checks every tracked BUILD file for the local GPU test scheduling tags.
 
 A test that opens a GPU device takes one unit of the `local_gpu` resource
-(`LOCAL_GPU_TEST_TAG` in build_defs/rules.bzl), so GPU-opening tests run one at a time but
-alongside CPU-only tests. This check keeps the old whole-machine tags from coming back:
+(`LOCAL_GPU_TEST_TAG` in build_defs/rules.bzl). The machine's unit count, one by default and
+four on the main.yml macOS lanes, then bounds how many run at once, alongside CPU-only tests. This
+check keeps every test at one unit and the old whole-machine tags from coming back:
 
   - no `exclusive-if-local` tag anywhere;
   - `resources:local_gpu:<count>` only with a count of 1;
@@ -23,6 +24,9 @@ REVIEWED_EXCLUSIVE = {
     ("donner/benchmarks/BUILD.bazel", "dom_lifetime_perf_capture"),
     ("third_party/tiny-skia-cpp/tests/benchmarks/BUILD.bazel", "filter_perf_regression_test"),
     ("third_party/tiny-skia-cpp/tests/benchmarks/BUILD.bazel", "render_perf_regression_test"),
+    # Headful browser latency measurements, one generated test per Playwright project; the check
+    # sees the literal prefix of their generated names. Manual and Perf-only.
+    ("donner/editor/wasm/tests/BUILD.bazel", "browser_responsiveness_perf_test_"),
 }
 _TAG = re.compile(r'"(exclusive-if-local|exclusive|resources:local_gpu:[^"]*)"')
 _NAME = re.compile(r'(?m)^\s*name = "([^"]+)"')
