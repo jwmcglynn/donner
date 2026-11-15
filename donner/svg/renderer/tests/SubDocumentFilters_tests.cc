@@ -657,15 +657,16 @@ TEST(SubDocumentFiltersTest, NestedBoxEffectOwnersMeasureEachExternalUseOnce) {
     uses += "<use href='{ref}sprite' transform='translate(" + std::to_string(4 + x * 8) +
             " 16) rotate(-30)'/>";
   }
-  const auto host = [&](std::string_view prefix, std::string_view owners,
-                        std::string_view closers, bool inlineSprite) {
-    std::string content = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
-                          "<filter id='half' x='0' y='0' width='0.5' height='1'><feOffset/>"
-                          "</filter><clipPath id='most' clipPathUnits='objectBoundingBox'>"
-                          "<rect width='0.75' height='1'/></clipPath>" +
-                          (inlineSprite ? sprite : std::string()) +
-                          "</defs><rect width='32' height='32' fill='#ffffff'/>" +
-                          std::string(owners) + uses + std::string(closers) + "</svg>";
+  const auto host = [&](std::string_view prefix, std::string_view owners, std::string_view closers,
+                        bool inlineSprite) {
+    std::string content =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+        "<filter id='half' x='0' y='0' width='0.5' height='1'><feOffset/>"
+        "</filter><clipPath id='most' clipPathUnits='objectBoundingBox'>"
+        "<rect width='0.75' height='1'/></clipPath>" +
+        (inlineSprite ? sprite : std::string()) +
+        "</defs><rect width='32' height='32' fill='#ffffff'/>" + std::string(owners) + uses +
+        std::string(closers) + "</svg>";
     for (size_t at = content.find("{ref}"); at != std::string::npos; at = content.find("{ref}")) {
       content.replace(at, 5, prefix);
     }
@@ -711,10 +712,9 @@ TEST(SubDocumentFiltersTest, NestedBoxEffectOwnersMeasureEachExternalUseOnce) {
     RendererBitmap actual;
     EXPECT_THAT(measureWork(scene.owners, scene.closers, boundary, &actual),
                 testing::Eq(singleWork));
-    editor::tests::CompareBitmapToBitmap(
-        actual, Draw(localRenderer, local),
-        "sub-document-nested-owners-" + std::string(scene.label),
-        editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(actual, Draw(localRenderer, local),
+                                         "sub-document-nested-owners-" + std::string(scene.label),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 

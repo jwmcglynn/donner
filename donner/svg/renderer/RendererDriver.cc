@@ -402,9 +402,9 @@ void CollectRenderingObjectGeometry(Registry& registry, EntityHandle handle,
                                     std::vector<components::BoundsGeometryPiece>& pieces) {
 #ifdef DONNER_TEXT_ENABLED
   if (const TextEngine* textEngine = ObjectBoxTextEngine(registry, handle)) {
-    pieces.push_back(components::BoundsGeometryPiece{
-        .spaceFromPiece = spaceFromEntity,
-        .geometry = textEngine->computedObjectBoundingBox(handle)});
+    pieces.push_back(
+        components::BoundsGeometryPiece{.spaceFromPiece = spaceFromEntity,
+                                        .geometry = textEngine->computedObjectBoundingBox(handle)});
     return;
   }
 #else
@@ -5123,7 +5123,8 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
     return cached->second;
   }
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-  std::optional<Box2d> bounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+  std::optional<Box2d> bounds =
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
   for (const auto& [drawOrder, use] : externalUsesInSubtree(registry, instance)) {
     const auto& useInstance = registry.get<components::RenderingInstanceComponent>(use);
