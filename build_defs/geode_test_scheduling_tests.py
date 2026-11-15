@@ -12,8 +12,20 @@ from build_defs import check_local_gpu_tags
 LOCAL_GPU_TAG = '"resources:local_gpu:1"'
 # The one declaration of the resource, applied to every command.
 LOCAL_GPU_DECLARATION = "build --local_resources=local_gpu=1"
-# Commands that may override the resource count, each with its reviewed reason. None may today.
-REVIEWED_LOCAL_GPU_OVERRIDES = {}
+# .bazelrc or workflow lines that may raise the resource count, each with its reviewed reason.
+REVIEWED_LOCAL_GPU_OVERRIDES = {
+    # Owner decision, 2026-11-14. One unit exists because a hardware adapter is process-global
+    # and one device loss could cascade into other GPU tests. Four concurrent GPU tests accept
+    # that risk on the main.yml macOS lanes to shorten the GPU part of the test step; a device
+    # loss would show as several GPU tests failing together. Each of those lanes passes
+    # --config=ci-macos (//tools:macos_cache_key_parity_tests); developer runs, other macOS jobs
+    # that do not pass the config and every other client keep one unit.
+    "build:ci-macos --local_resources=local_gpu=4":
+        "the main.yml macOS lanes run up to four GPU-opening tests at a time",
+}
+# The config that carries the macOS CI override. Only jobs on macOS runners may pass it.
+MACOS_CI_CONFIG = "ci-macos"
+_MACOS_RUNNER = re.compile(r"macOS|macos|xcode-")
 # Packages that tag GPU-opening tests directly rather than through opens_gpu_device, with the
 # number of tags each carries.
 DIRECT_GPU_TAGS = {
@@ -53,10 +65,15 @@ def _rc_problems(bazelrc):
     """Problems of the .bazelrc declaration of the local GPU resource."""
     lines = [line for line in bazelrc.splitlines() if not line.lstrip().startswith("#")]
     problems = []
-    declarations = [line for line in lines if "local_gpu" in line]
-    if declarations != [LOCAL_GPU_DECLARATION]:
+    declarations = [line.strip() for line in lines if "local_gpu" in line]
+    if declarations.count(LOCAL_GPU_DECLARATION) != 1:
         problems.append(".bazelrc must declare exactly %r, found %r" % (
             LOCAL_GPU_DECLARATION, declarations))
+    problems += [".bazelrc sets local_gpu without a reviewed reason: %s" % line
+                 for line in declarations
+                 if line != LOCAL_GPU_DECLARATION and line not in REVIEWED_LOCAL_GPU_OVERRIDES]
+    problems += [".bazelrc must carry the reviewed local_gpu override %r once" % line
+                 for line in REVIEWED_LOCAL_GPU_OVERRIDES if declarations.count(line) != 1]
     problems += [".bazelrc sets --local_test_jobs above 1: %s" % line
                  for line in lines if _parallel_local_test_jobs(line)]
     return problems
@@ -77,13 +94,35 @@ def _command_problems(path, line):
     return problems
 
 
+def _macos_config_problems(path, text):
+    """Jobs that pass the macOS CI config, and with it four local_gpu units, off macOS.
+
+    YAML comment lines are ignored, so a job may describe the config without passing it. Not
+    covered: a workflow-level env variable, a composite action or another config that composes
+    the macOS CI config."""
+    if "\njobs:\n" not in text:
+        return []
+    body = "\n".join(line for line in text.split("\njobs:\n", 1)[1].splitlines()
+                     if not line.lstrip().startswith("#")) + "\n"
+    problems = []
+    for match in re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n((?:(?:    .*|[ \t]*)\n)*)", body):
+        job = match.group(2)
+        runs_on = re.search(r"(?m)^    runs-on: (.+)$", job)
+        if ("--config=%s" % MACOS_CI_CONFIG in job and
+                not (runs_on and _MACOS_RUNNER.search(runs_on.group(1)))):
+            problems.append("%s job %s passes --config=%s off a macOS runner" % (
+                path, match.group(1), MACOS_CI_CONFIG))
+    return problems
+
+
 def local_gpu_problems(bazelrc, workflows):
-    """Ways a command could run two GPU-opening tests at once on one machine."""
+    """Ways a command could run more GPU-opening tests at once than its machine allows."""
     problems = _rc_problems(bazelrc)
     for path, text in sorted(workflows.items()):
         problems += [problem for line in _logical_lines(text)
                      if not line.lstrip().startswith("#")
                      for problem in _command_problems(path, line.strip())]
+        problems += _macos_config_problems(path, text)
     return problems
 
 
@@ -112,12 +151,13 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn("test:geode --local_test_jobs=1", self.bazelrc)
 
     def test_gpu_opening_targets_take_the_local_gpu_resource(self):
-        """GPU-opening tests share one `local_gpu` unit instead of the whole machine.
+        """GPU-opening tests take a `local_gpu` unit instead of the whole machine.
 
         `exclusive` and `exclusive-if-local` hold every other local test back, so
         the GPU-opening tests drained one at a time in a serial tail after the
-        parallel phase. One unit of a declared resource still keeps two of them
-        from running at once, but lets CPU-only tests run alongside.
+        parallel phase. Each test takes one unit of a declared resource, so the
+        machine's unit count (one by default, four on the main.yml macOS lanes) bounds
+        how many run at once, and CPU-only tests run alongside.
         """
         self.assertIn("LOCAL_GPU_TEST_TAG = %s" % LOCAL_GPU_TAG, self.rules)
         self.assertIn("tags = tags + [LOCAL_GPU_TEST_TAG]", self.rules)
@@ -170,7 +210,18 @@ class GeodeTestSchedulingTest(unittest.TestCase):
                 {}, "must declare exactly"),
             "a config raises the count": (
                 self.bazelrc + "test:ci --local_resources=local_gpu=2\n", {},
-                "must declare exactly"),
+                "without a reviewed reason"),
+            "macOS CI raises the count to five": (
+                self.bazelrc.replace("build:ci-macos --local_resources=local_gpu=4",
+                                     "build:ci-macos --local_resources=local_gpu=5"), {},
+                "without a reviewed reason"),
+            "Linux raises the count to four": (
+                self.bazelrc + "build:linux --local_resources=local_gpu=4\n", {},
+                "without a reviewed reason"),
+            "a Linux job passes the macOS CI config": (self.bazelrc, {
+                main: "on: push\njobs:\n  linux:\n    runs-on: ubuntu-24.04\n    steps:\n"
+                      "      - run: bazelisk test --config=ci --config=ci-macos //...\n"},
+                "passes --config=ci-macos off a macOS runner"),
             "a config sets parallel local test jobs": (
                 self.bazelrc + "test:ci --local_test_jobs=4\n", {}, "above 1"),
             "a config sets parallel local test jobs in the space form": (
@@ -203,6 +254,17 @@ class GeodeTestSchedulingTest(unittest.TestCase):
                 self.assertTrue(any(expected in problem for problem in problems), problems)
         allowed = "          bazelisk test --local_test_jobs=4 //tools/ci:browser_gpu_comparison\n"
         self.assertEqual([], local_gpu_problems(self.bazelrc, {main: allowed}))
+        macos_job = ("on: push\njobs:\n  macos:\n    runs-on: [self-hosted, macOS, ARM64]\n"
+                     "    steps:\n"
+                     "      - run: bazelisk test --config=ci --config=ci-macos //...\n")
+        self.assertEqual([], local_gpu_problems(self.bazelrc, {main: macos_job}))
+        # A Linux job that only mentions the config in a comment does not pass it.
+        commented = ("on: push\njobs:\n  launcher:\n    runs-on: ubuntu-24.04\n"
+                     "    # The remote macOS lane it starts passes --config=ci-macos.\n"
+                     "    steps:\n"
+                     "      # --config=ci-macos is applied on the macOS side.\n"
+                     "      - run: bazelisk test --config=ci //...\n")
+        self.assertEqual([], local_gpu_problems(self.bazelrc, {main: commented}))
         # 0 lets local resources bound the tests, so the resource tag applies.
         for value in ("0", "1"):
             with self.subTest(local_test_jobs=value):
