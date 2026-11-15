@@ -14,6 +14,7 @@
 #   - tools/check_js_lint_coverage.py: every tracked JavaScript file is in the ESLint test
 #   - the lexical no-Rust-dependency verifier, which also scans paths .bazelignore hides
 #   - tools/ci/fuzz_lane_coverage.py: a Fuzz workflow phase soaks every fuzzer (a Bazel query)
+#   - build_defs/check_local_gpu_tags.py: GPU test scheduling tags in every tracked BUILD file
 #
 # Usage: tools/ci/lint_lane.sh
 # Each check is a `::group::` in the Actions log and a row in the job summary; the first failing
@@ -25,7 +26,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "${script_dir}/../.."
 
 if [[ $# -ne 0 ]]; then
-  sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 fi
 
@@ -42,3 +43,4 @@ lane_phase "Check JavaScript lint coverage" python3 tools/check_js_lint_coverage
 lane_phase "No-Rust-dependency verifier (blocking)" \
   python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default
 lane_phase "Check every fuzzer is soaked by the Fuzz workflow" python3 tools/ci/fuzz_lane_coverage.py
+lane_phase "Check GPU test scheduling tags" python3 build_defs/check_local_gpu_tags.py
