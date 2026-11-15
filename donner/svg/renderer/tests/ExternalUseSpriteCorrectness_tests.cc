@@ -10,12 +10,14 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStopElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -24,32 +26,44 @@
 namespace donner::svg::tests {
 namespace {
 
-/// Counts element restyles in a document: each restyle constructs a computed style.
-class RestyleCounter {
+/// Counts constructions of \p Component in a document.
+template <typename Component>
+class ConstructionCounter {
 public:
-  explicit RestyleCounter(SVGDocument document) : document_(std::move(document)) {
+  explicit ConstructionCounter(SVGDocument document) : document_(std::move(document)) {
     document_.registry()
-        .on_construct<components::ComputedStyleComponent>()
-        .connect<&RestyleCounter::onRestyle>(*this);
+        .template on_construct<Component>()
+        .template connect<&ConstructionCounter::onConstruct>(*this);
   }
 
-  ~RestyleCounter() {
+  ~ConstructionCounter() {
     document_.registry()
-        .on_construct<components::ComputedStyleComponent>()
-        .disconnect<&RestyleCounter::onRestyle>(*this);
+        .template on_construct<Component>()
+        .template disconnect<&ConstructionCounter::onConstruct>(*this);
   }
 
-  RestyleCounter(const RestyleCounter&) = delete;
-  RestyleCounter& operator=(const RestyleCounter&) = delete;
+  ConstructionCounter(const ConstructionCounter&) = delete;
+  ConstructionCounter& operator=(const ConstructionCounter&) = delete;
 
-  std::size_t restyles() const { return restyles_; }
+  std::size_t constructions() const { return constructions_; }
 
 private:
-  void onRestyle(Registry&, Entity) { ++restyles_; }
+  void onConstruct(Registry&, Entity) { ++constructions_; }
 
   SVGDocument document_;
-  std::size_t restyles_ = 0;
+  std::size_t constructions_ = 0;
 };
+
+/// Counts element restyles in a document: each restyle constructs a computed style.
+class RestyleCounter : public ConstructionCounter<components::ComputedStyleComponent> {
+public:
+  using ConstructionCounter::ConstructionCounter;
+
+  std::size_t restyles() const { return constructions(); }
+};
+
+/// Counts rendering-instance builds in a document: each render-tree rebuild constructs them anew.
+using InstanceBuildCounter = ConstructionCounter<components::RenderingInstanceComponent>;
 
 /// Renders a self-contained document, recording a test failure if it does not parse.
 RendererBitmap RenderStandalone(std::string_view source) {
@@ -792,6 +806,204 @@ TEST(ExternalUseSpriteCorrectnessTest, RootAndDescendantDrawnEveryFrameRestyleTh
     renderer.draw(host->document);
   }
   EXPECT_EQ(counter.restyles(), 48u);
+}
+
+/// A sheet whose stylesheet gives an element of the target an invalid fill, which only computing
+/// that element's style reports.
+constexpr std::string_view kStyleWarningSheet =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <style>.bad { fill: nonsense(1) }</style>
+        <g id="a"><rect class="bad" width="8" height="8"/><rect id="other" width="4" height="4"/></g>
+      </svg>)svg";
+
+constexpr std::string_view kStyleWarningHost =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use id="u" href="sprites.svg#a"/>
+      </svg>)svg";
+
+std::vector<std::string> WarningReasons(const ParseWarningSink& sink) {
+  std::vector<std::string> reasons;
+  for (const ParseDiagnostic& warning : sink.warnings()) {
+    reasons.emplace_back(warning.reason.str());
+  }
+  return reasons;
+}
+
+/// Warnings the first draw of a freshly loaded \p hostSource reports to a collecting sink.
+std::vector<std::string> FirstCollectingDrawWarnings(std::string_view hostSource,
+                                                     std::string_view sheet) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(hostSource, std::string(sheet));
+  if (!host) {
+    return {};
+  }
+  Renderer renderer;
+  ParseWarningSink warnings;
+  renderer.draw(host->document, warnings);
+  return WarningReasons(warnings);
+}
+
+/// How a draw that does not collect warnings is made.
+enum class SinklessDraw {
+  NoSink,        //!< `Renderer::draw` without a sink.
+  DisabledSink,  //!< `Renderer::draw` with `ParseWarningSink::Disabled()`.
+};
+
+void DrawWithoutCollecting(Renderer& renderer, SVGDocument& document, SinklessDraw draw) {
+  if (draw == SinklessDraw::NoSink) {
+    renderer.draw(document);
+  } else {
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    renderer.draw(document, disabled);
+  }
+}
+
+/// Expects a draw that collects no warnings, then a collecting draw, to report what the first
+/// collecting draw of a fresh document reports.
+void ExpectLaterSinkReceivesFirstDrawWarnings(std::string_view hostSource, std::string_view sheet) {
+  const std::vector<std::string> expected = FirstCollectingDrawWarnings(hostSource, sheet);
+  ASSERT_THAT(expected, testing::Not(testing::IsEmpty()));
+  for (const SinklessDraw draw : {SinklessDraw::NoSink, SinklessDraw::DisabledSink}) {
+    SCOPED_TRACE(draw == SinklessDraw::NoSink ? "no sink" : "disabled sink");
+    std::optional<ExternalUseDocument> host =
+        MakeExternalUseDocument(hostSource, std::string(sheet));
+    ASSERT_TRUE(host.has_value());
+    Renderer renderer;
+    DrawWithoutCollecting(renderer, host->document, draw);
+    ParseWarningSink later;
+    renderer.draw(host->document, later);
+    EXPECT_THAT(WarningReasons(later), testing::UnorderedElementsAreArray(expected));
+  }
+}
+
+TEST(ExternalUseWarningReplayTest, StyleComputationWarningReachesALaterSink) {
+  ExpectLaterSinkReceivesFirstDrawWarnings(kStyleWarningHost, kStyleWarningSheet);
+}
+
+TEST(ExternalUseWarningReplayTest, InheritedResourceRefusalReachesALaterSink) {
+  constexpr std::string_view kHost =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6"
+          refX="3" refY="3"><rect width="6" height="6" fill="blue"/></marker></defs>
+        <use href="sprites.svg#path" fill="none" stroke="black" marker-start="url(#m)"/>
+      </svg>)svg";
+  constexpr std::string_view kSheet =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <path id="path" d="M4,4 L12,4"/>
+      </svg>)svg";
+  EXPECT_THAT(
+      FirstCollectingDrawWarnings(kHost, kSheet),
+      testing::IsSupersetOf({"External-use inherited URL resources are unsupported",
+                             "External-use inherited cross-document URL resource is unsupported"}));
+  ExpectLaterSinkReceivesFirstDrawWarnings(kHost, kSheet);
+}
+
+// A draw that collects no warnings between collecting draws must not make the next collecting draw
+// restyle or rebuild a retained sheet that nothing changed.
+TEST(ExternalUseWarningReplayTest, TogglingTheSinkDoesNotRestyleOrRebuildTheSheet) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ParseWarningSink first;
+  renderer.draw(host->document, first);
+  ASSERT_THAT(WarningReasons(first), testing::Not(testing::IsEmpty()));
+  renderer.draw(host->document);
+
+  RestyleCounter restyles(SpriteSheetOf(*host));
+  InstanceBuildCounter instanceBuilds(SpriteSheetOf(*host));
+  for (int frame = 0; frame < 8; ++frame) {
+    if (frame % 2 == 0) {
+      ParseWarningSink collecting;
+      renderer.draw(host->document, collecting);
+      EXPECT_THAT(WarningReasons(collecting), testing::IsEmpty()) << "frame " << frame;
+    } else {
+      DrawWithoutCollecting(renderer, host->document,
+                            frame % 4 == 1 ? SinklessDraw::NoSink : SinklessDraw::DisabledSink);
+    }
+  }
+  EXPECT_EQ(restyles.restyles(), 0u);
+  EXPECT_EQ(instanceBuilds.constructions(), 0u);
+}
+
+TEST(ExternalUseWarningReplayTest, MutationDropsWarningsHeldFromBeforeIt) {
+  for (const bool sinklessDrawAfterMutation : {false, true}) {
+    SCOPED_TRACE(sinklessDrawAfterMutation ? "sinkless draw after the mutation"
+                                           : "collecting draw right after the mutation");
+    std::optional<ExternalUseDocument> host =
+        MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
+    ASSERT_TRUE(host.has_value());
+    Renderer renderer;
+    renderer.draw(host->document);
+    SpriteSheetOf(*host).querySelector(".bad")->setAttribute(xml::XMLQualifiedNameRef("class"),
+                                                             "good");
+    if (sinklessDrawAfterMutation) {
+      renderer.draw(host->document);
+    }
+    ParseWarningSink later;
+    renderer.draw(host->document, later);
+    EXPECT_THAT(WarningReasons(later), testing::IsEmpty());
+  }
+}
+
+TEST(ExternalUseWarningReplayTest, UnrelatedMutationKeepsCurrentWarningsForALaterSink) {
+  const std::vector<std::string> expected =
+      FirstCollectingDrawWarnings(kStyleWarningHost, kStyleWarningSheet);
+  ASSERT_THAT(expected, testing::Not(testing::IsEmpty()));
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  // A transform change restyles nothing, so only a restyle the mutation forces finds the
+  // stylesheet's warning again.
+  SpriteSheetOf(*host).querySelector("#other")->cast<SVGGraphicsElement>().setTransform(
+      Transform2d::Translate(Vector2d(1, 0)));
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_THAT(WarningReasons(later), testing::UnorderedElementsAreArray(expected));
+}
+
+// Two occurrences of one target with different fills restyle it for every draw, so each draw finds
+// the same warnings again.
+TEST(ExternalUseWarningReplayTest, CollectingSinkReceivesEachWarningOnce) {
+  constexpr std::string_view kHost =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use id="u" href="sprites.svg#a" fill="red"/>
+        <use href="sprites.svg#a" x="8" fill="blue"/>
+      </svg>)svg";
+  const std::vector<std::string> expected = FirstCollectingDrawWarnings(kHost, kStyleWarningSheet);
+  ASSERT_THAT(expected, testing::Not(testing::IsEmpty()));
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kHost, std::string(kStyleWarningSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  SVGGraphicsElement use = host->document.querySelector("#u")->cast<SVGGraphicsElement>();
+  std::vector<std::string> received;
+  for (int frame = 0; frame < 4; ++frame) {
+    use.setTransform(Transform2d::Translate(Vector2d(frame * 1.0, 0)));
+    ParseWarningSink warnings;
+    renderer.draw(host->document, warnings);
+    const std::vector<std::string> reasons = WarningReasons(warnings);
+    received.insert(received.end(), reasons.begin(), reasons.end());
+  }
+  EXPECT_THAT(received, testing::UnorderedElementsAreArray(expected));
+}
+
+TEST(ExternalUseWarningReplayTest, HeldWarningsKeepTheSinkLimit) {
+  std::string sheet =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><g id="a">)svg";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    sheet += "<use href=\"#missing" + std::to_string(i) + "\"/>";
+  }
+  sheet += "</g></svg>";
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(kStyleWarningHost, sheet);
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_THAT(later.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_TRUE(later.resourceLimitExceeded());
 }
 
 }  // namespace
