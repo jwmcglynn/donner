@@ -18,6 +18,9 @@ const kAngleCompositorArgs = process.platform === "linux" ? [] : ["--use-gl=angl
 
 module.exports = defineConfig({
   testDir: ".",
+  // The Editor WASM chromium-default lane is the only Chromium run of most editor specs; a
+  // committed test.only must fail it rather than quietly narrow it to one case.
+  forbidOnly: Boolean(process.env.CI),
   // The .spec.mjs files use Node's test runner and have their own Bazel targets.
   // Playwright's default discovery pattern would also run them without Bazel's archive inputs.
   testMatch: "**/*.spec.ts",

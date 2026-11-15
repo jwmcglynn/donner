@@ -376,7 +376,7 @@ _PULL_REQUEST = {
     "github.event_name": "pull_request",
     "github.ref": "refs/pull/1/merge",
     "fallback": "false",
-    "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
+    "affected": "//donner/editor/wasm/tests:standalone_geode_browser_renderer_test",
     "browser_affected": "true",
     "metal_affected": "true",
     "wgpu_reference": "false",

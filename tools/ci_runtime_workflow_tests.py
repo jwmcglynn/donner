@@ -290,16 +290,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("ci:browser-gpu-diagnostics", detection)
         self.assertIn("BROWSER_GPU_DIAGNOSTICS_REQUESTED:", detection)
         self.assertIn('should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"', detection)
-        targets = (
-            "chromium_remote_smoke", "catalog_font_loading_test",
-            "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
-        )
+        targets = ("standalone_geode_browser_renderer_test",)
         metadata = _repository_text("tools/ci/BUILD.bazel")
         suite = re.search(r'test_suite\(\s+name = "browser_gpu_comparison",.*?\n\)',
                           metadata, re.DOTALL)
         self.assertIsNotNone(suite, "browser comparison suite must be declared")
-        for target in targets:
-            self.assertIn("//donner/editor/wasm/tests:" + target, suite.group())
+        # The comparison reruns exactly the Bazel browser lanes the detection step reads, and no
+        # lane whose Chromium cases moved to the Editor WASM chromium-default lane.
+        self.assertEqual(
+            sorted(re.findall(r'"//donner/editor/wasm/tests:([^"]+)"', suite.group())),
+            sorted(targets))
+        self.assertIn("for target in %s; do" % " ".join(targets), detection)
         for mode, jobs in (("serial", 1), ("parallel", 4)):
             name = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, name)
@@ -454,10 +455,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 launching.append(name)
                 self.assertIn("launches-browser", tag_names, "%s:%s" % (package, name))
         self.assertEqual(sorted(launching), [
-            "boot_presentation_test",
-            "browser_presentation_regression_test",
-            "catalog_font_loading_test",
-            "chromium_remote_smoke",
             "docs_selector_browser_tests",
             "linux_browser_archive_tests",
             "mac_browser_archive_tests",
@@ -642,6 +639,30 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", path.read_text(encoding="utf-8"),
                              path.name)
         self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", self.bazelrc)
+
+    def test_editor_wasm_runs_on_every_input_of_its_chromium_lane(self):
+        # The chromium-default lane is the only Chromium run of the editor's browser specs. A
+        # change to anything its served package, comparator or browser specs are built from must
+        # start it: the editor sources, the module extension that configures them, the notice
+        # renderer embedded in the package and the package that defines it, the native pixel
+        # comparator, the build setup, and the scripts the job itself runs (the Xcode selection
+        # and its pin file, the runner disk check).
+        header = self.editor_wasm.split("\njobs:", 1)[0]
+        triggers = {}
+        for event in ("push", "pull_request"):
+            body = header.split("\n  %s:\n" % event, 1)[1].split("\n  schedule:", 1)[0]
+            if event == "push":
+                body = body.split("\n  pull_request:", 1)[0]
+            triggers[event] = re.findall(r'^      - "([^"]+)"$', body, re.MULTILINE)
+        self.assertEqual(triggers["push"], triggers["pull_request"])
+        for path in (".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel",
+                     "MODULE.bazel.lock", "build_defs/**", "config/**", "donner/**",
+                     "third_party/**", "tools/BUILD.bazel", "tools/ci/**",
+                     "tools/ci_check_runner_disk.sh", "tools/ci_disk_cache.py",
+                     "tools/ci_macos_xcode.txt", "tools/ci_select_macos_xcode.sh",
+                     "tools/http/**", "tools/render_notice.py", "tools/run-browser-ci.sh",
+                     "tools/svg_suite/**"):
+            self.assertIn(path, triggers["pull_request"])
 
     def test_headed_browser_tests_have_a_single_native_owner(self):
         for job_name in ("macos", "macos-browser", "macos-self-hosted"):
