@@ -332,8 +332,8 @@ jobs:
           # its default target pattern (the working directory's package, which
           # holds no tests here), so the step would build something nobody
           # selected and then report that empty test set as success.
-          # Unreachable today because the deriving job widens an empty result
-          # to //..., and cheap to keep unreachable.
+          # Unreachable: the deriving job selects //tools/ci:no_affected_targets
+          # for a proven empty change, or else //..., and stays so cheaply.
           if [[ "$TARGETS" =~ ^[[:space:]]*$ ]]; then
             echo "::error::Empty target selection reached the test step."
             exit 1
