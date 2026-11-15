@@ -120,6 +120,49 @@ def _client_options(command, config, client_os):
     return options
 
 
+RULES_BZL = "build_defs/rules.bzl"
+WRAPPER_IMPL = "_donner_transitioned_executable_impl"
+# What the transitioned test wrapper may return. testing.ExecutionInfo would move its tests into
+# their test exec group, on the base execution platform, away from the GPU variant's executors.
+WRAPPER_PROVIDERS = {"DefaultInfo", "DonnerTransitionedBinaryInfo", "InstrumentedFilesInfo",
+                     "RunEnvironmentInfo"}
+
+
+def wrapper_provider_problems(rules):
+    """Why the transitioned test wrapper's tests might not run on the target platform."""
+    # Up to the next top-level definition; the body holds an unindented launcher script.
+    match = re.search(r"(?ms)^def %s\(ctx\):\n(.*?)(?=^def |^\w+ = )" % WRAPPER_IMPL, rules)
+    if not match:
+        return ["%s is missing" % WRAPPER_IMPL]
+    body = match.group(1)
+    problems = ["%s returns testing.ExecutionInfo" % WRAPPER_IMPL] if "ExecutionInfo" in body \
+        else []
+    returned = set(re.findall(r"\b([A-Z][A-Za-z]*Info)\(", body)) | set(
+        re.findall(r"\[([A-Z][A-Za-z]*Info)\]", body))
+    problems += ["%s returns %s" % (WRAPPER_IMPL, name)
+                 for name in sorted(returned - WRAPPER_PROVIDERS)]
+    rules_using = re.findall(r"(?ms)^(\w+) = rule\(\n    implementation = %s," % WRAPPER_IMPL,
+                             rules)
+    if not {"_donner_multi_transitioned_test", "donner_transitioned_cc_test"} <= set(rules_using):
+        problems.append("the transitioned test rules no longer use %s" % WRAPPER_IMPL)
+    return problems
+
+
+def output_directory_problems(rc):
+    """A platform name in output directory names would split build keys between the variants."""
+    return ["%r puts the platform in output directories" % line for line in rc.splitlines()
+            if "platform_in_output_dir" in line.split("#", 1)[0]]
+
+
+def _constraints(platforms, name):
+    """A platform's effective constraint values, through its parents."""
+    platform = platforms[name]
+    inherited = set()
+    for parent in platform.get("parents", []):
+        inherited |= _constraints(platforms, parent.rsplit(":", 1)[1])
+    return inherited | set(platform.get("constraint_values", []))
+
+
 def _default_xcode():
     """The most preferred pinned Xcode with confirmed SDK versions: the static config's default."""
     confirmed = _bzl_constant("CONFIRMED_SDK_VERSIONS")
@@ -283,6 +326,33 @@ class RemoteMacosConfigTest(unittest.TestCase):
         for path in files:
             with self.subTest(path=path.name):
                 self.assertNotIn("remote-macos", path.read_text(encoding="utf-8"))
+
+    def test_gpu_tests_run_through_a_wrapper_that_returns_no_execution_info(self):
+        rules = _read(RULES_BZL)
+        self.assertEqual([], wrapper_provider_problems(rules))
+        start = rules.index("def %s(ctx):" % WRAPPER_IMPL)
+        end = rules.index("    return providers\n", start)
+        for addition in ("    providers.append(testing.ExecutionInfo({}))\n",
+                         "    providers.append(OutputGroupInfo())\n"):
+            with self.subTest(addition=addition):
+                self.assertTrue(wrapper_provider_problems(rules[:end] + addition + rules[end:]))
+
+    def test_gpu_platform_has_the_target_platforms_constraints(self):
+        # Equal constraints keep select() and target compatibility identical between variants.
+        ci = _calls(CI_BUILD, "platform")
+        root = _calls(ROOT_BUILD, "platform")
+        self.assertEqual(_constraints(root, TARGET_PLATFORM.rsplit(":", 1)[1]),
+                         _constraints(ci, GPU_PLATFORM.rsplit(":", 1)[1]))
+        changed = dict(ci, remote_macos_aarch64_gpu=dict(
+            ci["remote_macos_aarch64_gpu"], constraint_values=["@platforms//os:linux"]))
+        self.assertNotEqual(_constraints(root, TARGET_PLATFORM.rsplit(":", 1)[1]),
+                            _constraints(changed, GPU_PLATFORM.rsplit(":", 1)[1]))
+
+    def test_output_directories_do_not_name_the_platform(self):
+        rc = _read(".bazelrc")
+        self.assertEqual([], output_directory_problems(rc))
+        self.assertTrue(output_directory_problems(
+            rc + "build --experimental_platform_in_output_dir\n"))
 
     def test_target_platform_is_macos_arm64(self):
         target = _calls(ROOT_BUILD, "platform")[TARGET_PLATFORM.rsplit(":", 1)[1]]

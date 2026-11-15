@@ -20,7 +20,8 @@
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
 ##   --config=remote-macos      - Build and test for macOS arm64 with every action on a remote
 ##                                macOS executor, from a Linux or macOS client.
-##   --config=remote-macos-gpu  - remote-macos with tests on executors that have a GPU.
+##   --config=remote-macos-gpu  - remote-macos with tests on executors that have a GPU (see the
+##                                limit at its definition).
 ##
 
 # Opt out of usage reporting by third-party Bazel modules. aspect_tools_telemetry, which
@@ -741,10 +742,13 @@ build:remote-macos --config=remote-macos-base
 build:remote-macos --extra_execution_platforms=//tools/ci:remote_macos_aarch64
 build:remote-macos --host_platform=//tools/ci:remote_macos_aarch64
 # The GPU variant builds exactly as remote-macos, so every build action keeps its key and cache
-# entry, and runs only its tests on executors that have a GPU: with
-# --use_target_platform_for_tests a test executes on the target platform, which is the same macOS
-# arm64 platform asking for `gpu=present` too. Execution properties are part of an action's key,
-# so a GPU execution platform would rebuild everything the tests need.
+# entry, and runs its tests on executors that have a GPU: with --use_target_platform_for_tests a
+# test executes on the target platform, which is the same macOS arm64 platform asking for
+# `gpu=present` too. Execution properties are part of an action's key, so a GPU execution platform
+# would rebuild everything the tests need. Limit: a test whose rule returns testing.ExecutionInfo
+# (rules_cc's cc_test does for Apple targets) runs in its test exec group, on the base execution
+# platform without the GPU property. The project's transitioned test wrappers return none
+# (//tools:remote_macos_config_tests checks), so the GPU-opening tests reach GPU executors.
 build:remote-macos-gpu --config=remote-macos
 build:remote-macos-gpu --platforms=//tools/ci:remote_macos_aarch64_gpu
 build:remote-macos-gpu --use_target_platform_for_tests

@@ -433,6 +433,7 @@ py_test(
         "//:BUILD.bazel",
         "//:docs_files",
         "//:github_action_definitions",
+        "//build_defs:rules.bzl",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:remote_macos_xcode.bzl",
     ],

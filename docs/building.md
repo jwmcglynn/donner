@@ -512,7 +512,11 @@ only its tests on executors with a GPU: it makes `//tools/ci:remote_macos_aarch6
 platform also asking for `gpu=present`, the target platform and runs tests on it
 (`--use_target_platform_for_tests`). Execution properties are part of an action's key, so the
 build actions keep their keys and share cache entries with `--config=remote-macos`; only test
-actions differ.
+actions differ. One limit: a test whose rule returns `testing.ExecutionInfo`, as rules_cc's
+`cc_test` does for Apple targets, runs in its test exec group, which resolves to the base
+execution platform, so it runs on an executor without a GPU. The project's transitioned test
+wrapper rule, which every `opens_gpu_device` test runs through, returns none, and
+`//tools:remote_macos_config_tests` keeps it that way.
 
 **Limits.**
 
