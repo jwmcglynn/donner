@@ -272,5 +272,20 @@ TEST(InvisibleFilterWorkTest, HiddenLeafRunsNoFilterButVisibleChildOfHiddenGroup
   }
 }
 
+/// `visibility` hides graphics elements, not a container's own filter output. An empty hidden group
+/// has no graphics to hide, so a filter that paints with no source still paints for it.
+TEST(InvisibleFilterWorkTest, EmptyHiddenGroupStillRunsItsFilter) {
+  const Frame frame = Draw(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+      "<filter id='fill' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='32'>"
+      "<feFlood flood-color='#d02020'/></filter></defs>"
+      "<rect width='32' height='32' fill='#ffffff'/>"
+      "<g visibility='hidden' filter='url(#fill)'/></svg>");
+  EXPECT_THAT(PixelAt(frame.bitmap, 16, 16), test::Rgba(Gt(180), Lt(80), Lt(80), 255));
+  if (frame.stats.filterBudgetSupported) {
+    EXPECT_EQ(frame.stats.filterExecutions, 1u);
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
