@@ -10,6 +10,8 @@ Each workflow rule is a function that returns the problems it finds, so the test
 on the real workflow and fails on a workflow that breaks it.
 """
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -715,6 +717,22 @@ sys.exit(status)
 '''
 
 
+def _collect(case, testlogs, cwd=None):
+    """What the workflow's collector uploads when its `testlogs` input is `testlogs` (GitHub
+    passes an omitted input as empty), run in `cwd` or an empty directory."""
+    action = _read(COLLECTOR[2:] + "/action.yml")
+    body = re.search(r"(?m)^      run: \|\n((?:(?:        .*)?\n)+)", action).group(1)
+    directory = tempfile.TemporaryDirectory()
+    case.addCleanup(directory.cleanup)
+    result = subprocess.run(["bash", "-c", textwrap.dedent(body)], cwd=cwd or directory.name,
+                            env=dict(os.environ, RUNNER_TEMP=directory.name, TESTLOGS=testlogs),
+                            capture_output=True, text=True, check=False)
+    case.assertEqual(0, result.returncode, result.stdout + result.stderr)
+    artifacts = Path(directory.name) / "bazel-test-artifacts"
+    return {path.relative_to(artifacts).as_posix(): path.read_text(encoding="utf-8")
+            for path in artifacts.rglob("*") if path.is_file()}
+
+
 class LaneRunTest(unittest.TestCase):
     """Runs the lane end to end with a stand-in Bazel."""
 
@@ -736,10 +754,13 @@ class LaneRunTest(unittest.TestCase):
                        GITHUB_STEP_SUMMARY=str(summary_file), BAZEL_HEARTBEAT_INTERVAL_SECONDS="1",
                        **environment)
         environ.pop(lane.IDENTITY, None)
+        # The fake Bazel's output tree stands for the lane's own output root.
+        root = ["--output-user-root", environ["FAKE_TESTLOGS"]] if "FAKE_TESTLOGS" in environ \
+            else []
         result = subprocess.run(
             [sys.executable, str(_root() / "tools/ci/macos_remote_shadow.py"), "--out", str(out),
-             "--bazel", self.bazel], cwd=_root(), env=environ, capture_output=True, text=True,
-            check=False)
+             "--bazel", self.bazel, *root], cwd=_root(), env=environ, capture_output=True,
+            text=True, check=False)
         calls = (Path(directory.name) / "calls").read_text(encoding="utf-8").splitlines()
         return result, out, summary_file, calls
 
@@ -836,18 +857,7 @@ class LaneRunTest(unittest.TestCase):
 
     def _collected(self, out):
         """What the workflow's collector uploads from the script's staged tree."""
-        action = _read(COLLECTOR[2:] + "/action.yml")
-        body = re.search(r"(?m)^      run: \|\n((?:(?:        .*)?\n)+)", action).group(1)
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        result = subprocess.run(["bash", "-c", textwrap.dedent(body)], cwd=directory.name,
-                                env=dict(os.environ, RUNNER_TEMP=directory.name,
-                                         TESTLOGS=str(out / lane.ARTIFACTS)),
-                                capture_output=True, text=True, check=False)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        artifacts = Path(directory.name) / "bazel-test-artifacts"
-        return {path.relative_to(artifacts).as_posix(): path.read_text(encoding="utf-8")
-                for path in artifacts.rglob("*") if path.is_file()}
+        return _collect(self, str(out / lane.ARTIFACTS))
 
     def _run_with_outputs(self, **environment):
         directory = tempfile.TemporaryDirectory()
@@ -863,7 +873,7 @@ class LaneRunTest(unittest.TestCase):
 
     @staticmethod
     def _phase_outputs(phase):
-        prefix = "%s/fake/%s_test/" % (phase, phase)
+        prefix = "%s/darwin_arm64-fastbuild/fake/%s_test/" % (phase, phase)
         return {prefix + "test.log": "%s log\n" % phase,
                 prefix + "test.xml": "<testsuites/>\n",
                 prefix + "test.outputs/outputs.zip": "%s images\n" % phase}
@@ -879,8 +889,8 @@ class LaneRunTest(unittest.TestCase):
                     expected.update(self._phase_outputs(phase))
                 self.assertEqual(expected, self._collected(out))
                 for phase in failing:
-                    self.assertIn("staged 3 output files of the %s phase's failed tests" % phase,
-                                  result.stdout)
+                    self.assertIn("staged 3 output files (", result.stdout)
+                    self.assertIn("of the %s phase's failed tests" % phase, result.stdout)
 
     def test_nothing_is_staged_when_every_test_passes(self):
         result, out, _, _ = self._run_with_outputs()
@@ -1083,59 +1093,13 @@ class BuildEventTest(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, lane.preflight_problem(statuses, executors))
 
-    def test_failed_test_outputs_come_only_from_this_invocations_results_that_did_not_pass(self):
-        testlogs = "/base/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs"
-
-        def result(path, status, *names, uri=None):
-            fields = {"testActionOutput": [
-                {"name": name, "uri": uri or "file://%s/%s/%s" % (testlogs, path, name)}
-                for name in names]}
-            if status:
-                fields["status"] = status
-            return {"id": {"testResult": {"label": "//" + path.replace("/", ":")}},
-                    "testResult": fields}
-
-        lines = _events(
-            result("a/passed", "PASSED", "test.log", "test.outputs/outputs.zip"),
-            result("a/failed", "FAILED", "test.log", "test.outputs/outputs.zip"),
-            result("a/timeout", "TIMEOUT", "test.log"),
-            # Bazel omits a NO_STATUS result's status.
-            result("a/unknown", None, "test.log"),
-            result("a/remote", "FAILED", "test.log", uri="bytestream://cache.invalid/blobs/0/1"),
-            result("a/outside", "FAILED", "test.log", uri="file:///elsewhere/test.log"),
-            result("a/escape", "FAILED", "test.log",
-                   uri="file://%s/../../other/test.log" % testlogs),
-            {"id": {"testSummary": {"label": "//a:failed"}},
-             "testSummary": {"overallStatus": "FAILED"}}) + [
-            # A Bazel server stopped mid-write leaves a partial last line.
-            '{"id": {"testResult": {"label": "//a:cut']
-        self.assertEqual({name: Path("%s/%s" % (testlogs, name)) for name in (
-            "a/failed/test.log", "a/failed/test.outputs/outputs.zip", "a/timeout/test.log",
-            "a/unknown/test.log")}, lane.failed_test_outputs(lines))
-        self.assertEqual(1, lane.summarize(lines)["tests"]["failed"])
-
-    def test_staging_copies_downloaded_regular_files_and_replaces_an_earlier_stage(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            testlogs = root / "base/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs"
-            target = testlogs / "a" / "failed"
-            (target / "test.outputs").mkdir(parents=True)
-            (target / "test.log").write_text("failure details", encoding="utf-8")
-            (root / "secret").write_text("outside sentinel", encoding="utf-8")
-            (target / "test.outputs" / "outputs.zip").symlink_to(root / "secret")
-            names = ("test.log", "test.outputs/outputs.zip", "test.xml")
-            lines = _events({"id": {"testResult": {"label": "//a:failed"}}, "testResult": {
-                "status": "FAILED", "testActionOutput": [
-                    {"name": name, "uri": (target / name).as_uri()} for name in names]}})
-            out = root / "out"
-            earlier = out / lane.ARTIFACTS / "native" / "a" / "earlier" / "test.log"
-            earlier.parent.mkdir(parents=True)
-            earlier.write_text("an earlier stage", encoding="utf-8")
-            self.assertEqual(1, lane.stage_failed_test_outputs(lines, out, "native"))
-            staged = out / lane.ARTIFACTS / "native"
-            self.assertEqual({"a/failed/test.log": "failure details"},
-                             {path.relative_to(staged).as_posix(): path.read_text()
-                              for path in staged.rglob("*") if path.is_file()})
+    def test_probe_readers_skip_fields_of_an_unexpected_type(self):
+        junk = _events({"id": "x"}, {"id": {"testResult": "x"}}, {"id": ["x"]},
+                       {"id": {"testResult": {"label": lane.ROUTING_PROBE}}, "testResult": "x"},
+                       {"id": {"testResult": {"label": lane.ROUTING_PROBE}},
+                        "testResult": {"status": "PASSED", "executionInfo": "remote"}})
+        self.assertFalse(lane.probe_executed_remotely(junk))
+        self.assertFalse(lane.probe_ran_and_failed(junk))
 
     def test_summary_counts_targets_tests_cache_and_runners(self):
         events = _events(
@@ -1168,6 +1132,281 @@ class BuildEventTest(unittest.TestCase):
                                        summary["action_cache_misses"]))
         self.assertEqual({"remote": 10, "remote cache hit": 8}, summary["runners"])
         self.assertEqual(65.4, summary["wall_time_seconds"])
+
+
+class StagingTest(unittest.TestCase):
+    """What the lane stages from a phase's build events, and what it refuses to stage."""
+
+    CFG = "darwin_arm64-fastbuild"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.dir = Path(directory.name).resolve()
+        self.root = self.dir / "output-root"
+        self.execroot = self.root / "base" / "execroot" / "_main"
+        self.testlogs = self.execroot / "bazel-out" / self.CFG / "testlogs"
+        self.out = self.dir / "out"
+
+    def _file(self, path, data=b"failure details"):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    @staticmethod
+    def _result(label, *uris, status="FAILED", outputs=None):
+        fields = {"testActionOutput": outputs if outputs is not None else
+                  [{"name": "test.log", "uri": uri} for uri in uris]}
+        if status:
+            fields["status"] = status
+        return {"id": {"testResult": {"label": label}}, "testResult": fields}
+
+    def _stage(self, *events, budget=lane.MAX_ARTIFACT_TOTAL_BYTES, root=None):
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            files, used = lane.stage_failed_test_outputs(
+                _events(*events), self.out, "native", str(root or self.root), budget)
+        stage = self.out / lane.ARTIFACTS / "native"
+        staged = {path.relative_to(stage).as_posix(): path.read_bytes()
+                  for path in stage.rglob("*") if path.is_file()}
+        self.assertEqual((len(staged), sum(map(len, staged.values()))), (files, used))
+        return staged, printed.getvalue()
+
+    def _assert_refused(self, uri, control=None):
+        """Nothing is staged from `uri`, while a valid output after it still is."""
+        control = control or self._file(self.testlogs / "ok" / "test.log", b"ok")
+        staged, _ = self._stage(self._result("//a:bad", uri, control.as_uri()))
+        self.assertEqual({self.CFG + "/ok/test.log": b"ok"}, staged)
+
+    def test_selection_reads_only_this_invocations_results_that_did_not_pass(self):
+        logs = "/r/base/execroot/_main/bazel-out/%s/testlogs" % self.CFG
+        other = "/r/base/execroot/_main/bazel-out/k8-opt/testlogs"
+        lines = _events(
+            self._result("//a:passed", "file://%s/a/passed/test.log" % logs, status="PASSED"),
+            self._result("//a:failed", outputs=[
+                {"uri": "file://%s/a/failed/%s" % (logs, name)} for name in (
+                    "test.log", "test.xml", "test.outputs/outputs.zip",
+                    # Not collected: the manifest and an earlier attempt's log.
+                    "test.outputs_manifest/MANIFEST", "test_attempts/attempt_1.log")]),
+            self._result("//a:timeout", "file://%s/a/timeout/test.log" % logs, status="TIMEOUT"),
+            # Bazel omits a NO_STATUS result's status.
+            self._result("//a:unknown", "file://localhost%s/a/unknown/test.log" % logs,
+                         status=None),
+            # The same test in a second configuration keeps its own key; a repeat does not.
+            self._result("//a:failed", "file://%s/a/failed/test.log" % other,
+                         "file://%s/a/failed/test.log" % other),
+            {"id": {"testSummary": {"label": "//a:failed"}},
+             "testSummary": {"overallStatus": "FAILED"}}) + [
+            # A Bazel server stopped mid-write leaves a partial last line.
+            '{"id": {"testResult": {"label": "//a:cut']
+        selected = [(str(key), path, label) for key, path, label in lane.failed_test_outputs(lines)]
+        self.assertEqual([
+            (self.CFG + "/a/failed/test.log", logs + "/a/failed/test.log", "//a:failed"),
+            (self.CFG + "/a/failed/test.xml", logs + "/a/failed/test.xml", "//a:failed"),
+            (self.CFG + "/a/failed/test.outputs/outputs.zip",
+             logs + "/a/failed/test.outputs/outputs.zip", "//a:failed"),
+            (self.CFG + "/a/timeout/test.log", logs + "/a/timeout/test.log", "//a:timeout"),
+            (self.CFG + "/a/unknown/test.log", logs + "/a/unknown/test.log", "//a:unknown"),
+            ("k8-opt/a/failed/test.log", other + "/a/failed/test.log", "//a:failed")], selected)
+        self.assertEqual(1, lane.summarize(lines)["tests"]["failed"])
+
+    def test_a_downloaded_failed_output_is_staged_and_an_earlier_stage_is_replaced(self):
+        log = self._file(self.testlogs / "a" / "failed" / "test.log")
+        earlier = self._file(self.out / lane.ARTIFACTS / "native" / "earlier" / "test.log")
+        missing = self.testlogs / "a" / "failed" / "test.xml"
+        staged, printed = self._stage(self._result("//a:failed", log.as_uri(), missing.as_uri()))
+        self.assertEqual({self.CFG + "/a/failed/test.log": b"failure details"}, staged)
+        self.assertFalse(earlier.exists())
+        self.assertNotIn("::warning::", printed)
+
+    def test_only_a_local_file_uri_is_read(self):
+        log = self._file(self.testlogs / "a" / "test.log")
+        for uri in ("http://%s" % log, "file://cache.invalid%s" % log,
+                    "bytestream://cache.invalid/blobs/0/1"):
+            with self.subTest(uri=uri):
+                self._assert_refused(uri)
+
+    def test_an_empty_dot_or_dot_dot_segment_is_refused(self):
+        # Each names a real file inside the output root once normalized, so only the segment
+        # rule refuses it; an empty segment after testlogs would otherwise make a key that
+        # starts at the root of the file system.
+        self._file(self.testlogs / "etc" / "x" / "test.log")
+        for uri in ("file://%s//etc/x/test.log" % self.testlogs,
+                    "file://%s/./etc/x/test.log" % self.testlogs,
+                    "file://%s/x/../base/execroot/_main/bazel-out/%s/testlogs/etc/x/test.log"
+                    % (self.root, self.CFG)):
+            with self.subTest(uri=uri):
+                self._assert_refused(uri)
+
+    def test_malformed_or_nul_uris_and_odd_fields_are_skipped(self):
+        control = self._file(self.testlogs / "ok" / "test.log", b"ok")
+        self._file(self.testlogs / "a" / "test.log")
+        staged, _ = self._stage(
+            self._result("//a:bad", "file://[", "file://%s/a%%00/test.log" % self.testlogs),
+            self._result("//a:odd", outputs="file://%s/a/test.log" % self.testlogs),
+            self._result("//a:odd", outputs=5),
+            self._result("//a:odd", outputs=["x", {"uri": 7}, {"uri": None}]),
+            {"id": {"testResult": "x"}, "testResult": {"status": "FAILED"}},
+            {"id": {"testResult": {"label": "//a:odd"}}, "testResult": ["x"]},
+            self._result("//a:ok", control.as_uri()))
+        self.assertEqual({self.CFG + "/ok/test.log": b"ok"}, staged)
+
+    def test_a_symbolic_link_anywhere_below_the_output_root_is_refused(self):
+        inside = self._file(self.root / "elsewhere" / "a" / "test.log")
+        outside = self._file(self.dir / "outside" / "a" / "test.log")
+        self.testlogs.mkdir(parents=True, exist_ok=True)
+        (self.testlogs / "inside").symlink_to(inside.parent, target_is_directory=True)
+        (self.testlogs / "outside").symlink_to(outside.parent, target_is_directory=True)
+        (self.testlogs / "leaf").mkdir()
+        (self.testlogs / "leaf" / "test.log").symlink_to(inside)
+        for name in ("inside", "outside", "leaf"):
+            with self.subTest(link=name):
+                self._assert_refused((self.testlogs / name / "test.log").as_uri())
+
+    def test_a_source_outside_the_output_root_is_refused(self):
+        elsewhere = self.dir / "other-root" / "base/execroot/_main/bazel-out" / self.CFG
+        self._assert_refused(self._file(elsewhere / "testlogs" / "a" / "test.log").as_uri())
+
+    def test_an_output_root_reached_through_a_link_still_stages(self):
+        log = self._file(self.testlogs / "a" / "test.log")
+        link = self.dir / "root-link"
+        link.symlink_to(self.root, target_is_directory=True)
+        uri = "file://%s" % (link / log.relative_to(self.root))
+        staged, _ = self._stage(self._result("//a:failed", uri), root=link)
+        self.assertEqual({self.CFG + "/a/test.log": b"failure details"}, staged)
+
+    def test_only_a_regular_file_is_opened_and_a_final_link_is_not_followed(self):
+        regular = self._file(self.dir / "regular", b"12345")
+        link = self.dir / "link"
+        link.symlink_to(regular)
+        fifo = self.dir / "fifo"
+        os.mkfifo(fifo)
+        opened = lane._open_regular(str(regular))
+        self.addCleanup(os.close, opened[0])
+        self.assertEqual(5, opened[1])
+        for path in (link, self.dir, fifo, self.dir / "absent"):
+            with self.subTest(path=path.name):
+                self.assertIsNone(lane._open_regular(str(path)))
+
+    def test_a_staged_file_stays_inside_the_stage_root(self):
+        stage = self.out / "stage"
+        outside = self.dir / "outside-stage"
+        outside.mkdir()
+        stage.mkdir(parents=True)
+        (stage / "link").symlink_to(outside, target_is_directory=True)
+        self.assertEqual(stage / "cfg" / "a" / "test.log",
+                         lane._destination(stage, "cfg/a/test.log"))
+        # "a/../b" stays inside, so only the lexical rule refuses it; "link/x" passes that rule,
+        # so only the resolved containment check refuses it.
+        for key in ("/etc/x", "a/../b", "a/../../x", "link/x"):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    lane._destination(stage, key)
+        self.assertEqual([], list(outside.iterdir()))
+
+    def test_a_file_over_the_per_file_cap_is_skipped_and_named(self):
+        from unittest import mock
+        big = self._file(self.testlogs / "big" / "test.log", b"x" * 11)
+        small = self._file(self.testlogs / "small" / "test.log", b"x" * 10)
+        with mock.patch.object(lane, "MAX_ARTIFACT_FILE_BYTES", 10):
+            staged, printed = self._stage(self._result("//a:big", big.as_uri()),
+                                          self._result("//a:small", small.as_uri()))
+        self.assertEqual([self.CFG + "/small/test.log"], list(staged))
+        self.assertIn("::warning::", printed)
+        self.assertIn("big/test.log of //a:big is not uploaded: 11 bytes is over the per-file "
+                      "cap of 10 bytes", printed)
+
+    def test_files_over_the_per_run_cap_are_skipped_and_named(self):
+        first = self._file(self.testlogs / "first" / "test.log", b"x" * 6)
+        second = self._file(self.testlogs / "second" / "test.log", b"x" * 6)
+        staged, printed = self._stage(self._result("//a:first", first.as_uri()),
+                                      self._result("//a:second", second.as_uri()), budget=10)
+        self.assertEqual([self.CFG + "/first/test.log"], list(staged))
+        self.assertIn("second/test.log of //a:second is not uploaded: 6 bytes is over the "
+                      "per-run cap of 4 bytes", printed)
+
+    def test_the_copy_itself_is_bounded(self):
+        # A file that grows after it was measured: the copy stops at the cap plus one byte.
+        source = self._file(self.dir / "growing", b"x" * 20)
+        for limit, expected in ((20, 20), (19, None), (25, 20)):
+            with self.subTest(limit=limit):
+                target = self.dir / ("copy-%d" % limit)
+                read = os.open(source, os.O_RDONLY)
+                write = os.open(target, os.O_WRONLY | os.O_CREAT)
+                try:
+                    self.assertEqual(expected, lane._copy_bounded(read, write, limit))
+                finally:
+                    os.close(read)
+                    os.close(write)
+                self.assertLessEqual(target.stat().st_size, limit)
+
+    def test_staging_and_summary_failures_never_cost_the_report(self):
+        from unittest import mock
+        log = self._file(self.testlogs / "a" / "test.log")
+        bep = _events({"id": {"testSummary": {"label": "//a:t"}},
+                       "testSummary": {"overallStatus": "FAILED"}},
+                      self._result("//a:t", "file://[", "file://%s/a%%00/test.log" % self.testlogs,
+                                   log.as_uri()),
+                      self._result("//a:t", outputs="not a list"))
+
+        def fake_phase(command, environment, console):
+            events = next(word.split("=", 1)[1] for word in command
+                          if word.startswith("--build_event_json_file="))
+            Path(events).write_text("\n".join(bep) + "\n", encoding="utf-8")
+            return 3, False
+
+        for name, patch in (
+                ("malformed events", None),
+                ("staging raises", mock.patch.object(lane, "stage_failed_test_outputs",
+                                                     side_effect=RuntimeError("x"))),
+                ("summary raises", mock.patch.object(lane, "summarize",
+                                                     side_effect=self._raising_summarize()))):
+            with self.subTest(case=name):
+                out = self.dir / ("out-" + name.replace(" ", "-"))
+                args = lane.parse_args(["--out", str(out), "--fallback", "true",
+                                        "--output-user-root", str(self.root)], {})
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(mock.patch.object(lane, "_preflight",
+                                                          return_value=(None, 0)))
+                    stack.enter_context(mock.patch.object(lane, "run_phase",
+                                                          side_effect=fake_phase))
+                    if patch is not None:
+                        stack.enter_context(patch)
+                    printed = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                    status = lane.run(args, {})
+                self.assertEqual(3, status)
+                self.assertTrue((out / "report.md").is_file())
+                summary = json.loads((out / "shadow-summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(3, summary["phases"]["native"]["status"])
+                if name == "malformed events":
+                    self.assertEqual(
+                        [self.CFG + "/a/test.log"],
+                        [path.relative_to(out / lane.ARTIFACTS / "native").as_posix()
+                         for path in (out / lane.ARTIFACTS / "native").rglob("*")
+                         if path.is_file()])
+                else:
+                    self.assertIn("::warning::", printed.getvalue())
+
+    @staticmethod
+    def _raising_summarize():
+        real = lane.summarize
+
+        def summarize(lines):
+            if lines:
+                raise TypeError("malformed")
+            return real(lines)
+        return summarize
+
+    def test_the_collector_reads_bazel_testlogs_when_its_input_is_empty(self):
+        workspace = self.dir / "workspace"
+        workspace.mkdir()
+        logs = self.dir / "logs"
+        self._file(logs / "pkg" / "test" / "test.log", b"from bazel-testlogs")
+        self._file(logs / "pkg" / "test" / "test.outputs" / "actual.png", b"image")
+        (workspace / "bazel-testlogs").symlink_to(logs, target_is_directory=True)
+        self.assertEqual({"pkg/test/test.log": "from bazel-testlogs",
+                          "pkg/test/test.outputs/actual.png": "image"},
+                         _collect(self, "", cwd=str(workspace)))
 
 
 if __name__ == "__main__":

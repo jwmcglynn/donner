@@ -617,14 +617,21 @@ build event and execution logs and any stall note stay on the runner.
 
 When a phase has a test that did not pass, the lane copies the `test.log`, `test.xml` and undeclared
 outputs (`test.outputs/outputs.zip`, such as a pixel comparison's actual, expected and diff images)
-that the phase's build events name for that test to `test-artifacts/<phase>/`, and the job uploads
-them through the test-artifact collector the other lanes use, as the
+that the phase's build events name for that test to `test-artifacts/<phase>/<configuration>/`, and
+the job uploads them through the test-artifact collector the other lanes use, as the
 `macos-remote-shadow-test-failures-<attempt>` artifact. Only results of the current invocation
 select files, so a log another run left in the lane's persistent output root is never uploaded.
-The lane downloads outputs with `--remote_download_outputs=minimal` plus a
-`--remote_download_regex` for `test.log`, `test.xml` and `outputs.zip`. Bazel has no download
-mode that depends on a test's result, so those three files come back for every test the lane runs,
-and nothing else does.
+Only regular files inside the lane's output root, reached without symbolic links, are copied, at
+most 64 MB each and 256 MB per run; a larger file is skipped with a warning that names the test.
+Earlier attempts of a retried test are not kept, only its final attempt. The lane downloads
+outputs with `--remote_download_outputs=minimal` plus a `--remote_download_regex` for `test.log`,
+`test.xml` and `outputs.zip`. Bazel has no download mode that depends on a test's result, so those
+three files come back for every test the lane runs, and nothing else does.
+
+This makes the job upload output produced on the remote executor as a public artifact, where
+before everything from the executor stayed on the runner: a failed test's log, XML and zipped
+undeclared outputs can include the executor's working-directory paths and anything the test
+prints.
 
 A runner must provide, in its own rc files under `build:remote-macos-base`:
 

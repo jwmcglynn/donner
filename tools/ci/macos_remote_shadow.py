@@ -22,7 +22,8 @@ It runs, in order:
 
 After each phase it copies the logs and undeclared outputs of the tests that did not pass in that
 phase, as its build event file names them, to OUT/test-artifacts/PHASE/ for the workflow's
-test-artifact collector.
+test-artifact collector: only files inside the lane's output root and reached without symbolic
+links, at most MAX_ARTIFACT_FILE_BYTES each and MAX_ARTIFACT_TOTAL_BYTES per run.
 
 Bazel's local GPU scheduling (the local resource tag and --local_test_jobs) does not apply to
 remote tests, so the gpu phase caps the whole invocation at GPU_JOBS concurrent actions instead,
@@ -49,11 +50,12 @@ runs nothing.
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -238,23 +240,29 @@ def _decoded(lines):
     for line in lines:
         try:
             event = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(event, dict):
             yield event
+
+
+def _dict(value):
+    """`value` when it is a JSON object, else an empty one: build event fields are read without
+    trusting their types."""
+    return value if isinstance(value, dict) else {}
 
 
 def _probe_results(lines):
     """Every testResult payload of the routing probe in a build event file."""
     results = []
     for event in _decoded(lines):
-        if event.get("id", {}).get("testResult", {}).get("label") == ROUTING_PROBE:
-            results.append(event.get("testResult", {}))
+        if _dict(_dict(event.get("id")).get("testResult")).get("label") == ROUTING_PROBE:
+            results.append(_dict(event.get("testResult")))
     return results
 
 
 def _ran_remotely(result):
-    info = result.get("executionInfo", {})
+    info = _dict(result.get("executionInfo"))
     return (not result.get("cachedLocally") and not info.get("cachedRemotely") and
             info.get("strategy") == "remote")
 
@@ -347,7 +355,7 @@ def _preflight(args, environment):
         lines = _read_lines(events)
         try:
             executors[probe] = None if lines is None else effective_executor(lines)
-        except ValueError:
+        except Exception:  # Any unreadable event file is reported as unreadable.
             executors[probe] = None
         # The event file records the runner's effective options; drop it at once.
         events.unlink(missing_ok=True)
@@ -439,49 +447,190 @@ def summarize(lines):
 
 
 # Where a phase stages its failed tests' logs and undeclared outputs: OUT/test-artifacts/PHASE/,
-# laid out like Bazel's testlogs tree, for the workflow's test-artifact collector
-# (.github/actions/upload-bazel-test-artifacts), which keeps test.log, test.xml and test.outputs.
+# laid out as CONFIGURATION/PACKAGE/TARGET/... like Bazel's testlogs trees, for the workflow's
+# test-artifact collector (.github/actions/upload-bazel-test-artifacts), which keeps test.log,
+# test.xml and anything below test.outputs/ wherever they are. Keeping the configuration keeps a
+# test that ran in two configurations from overwriting itself.
 ARTIFACTS = "test-artifacts"
-# A test output's path below its configuration's testlogs directory.
-_TESTLOGS = re.compile(r"/bazel-out/[^/]+/testlogs/(.+)$")
+# What one file and one run may stage. A larger file is skipped with a warning.
+MAX_ARTIFACT_FILE_BYTES = 64 * 1024 * 1024
+MAX_ARTIFACT_TOTAL_BYTES = 256 * 1024 * 1024
+_COPY_CHUNK = 1024 * 1024
+# The files the collector keeps: a final attempt's log and XML, and its undeclared outputs.
+# Earlier attempts of a retried test (test_attempts/attempt_N.*) are not kept.
+_COLLECTED_NAMES = ("test.log", "test.xml")
+
+
+def _output_path(uri):
+    """The local path a build event output URI names, or None. It must be a `file` URI without a
+    host whose path is absolute, holds no NUL and has no empty, `.` or `..` segment."""
+    if not isinstance(uri, str):
+        return None
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        return None
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+        return None
+    path = unquote(parsed.path)
+    segments = path.split("/")
+    if "\0" in path or segments[0] != "" or any(part in ("", ".", "..") for part in segments[1:]):
+        return None
+    return path
+
+
+def _staged_key(path):
+    """CONFIGURATION/PATH BELOW TESTLOGS of a test output the collector keeps, or None when the
+    path names no single `bazel-out/CONFIGURATION/testlogs/` directory."""
+    segments = path.split("/")
+    found = [index for index in range(len(segments) - 3)
+             if segments[index] == "bazel-out" and segments[index + 2] == "testlogs"]
+    if len(found) != 1:
+        return None
+    key = PurePosixPath(segments[found[0] + 1], *segments[found[0] + 3:])
+    if key.name in _COLLECTED_NAMES or "test.outputs" in key.parts[:-1]:
+        return key
+    return None
 
 
 def failed_test_outputs(lines):
-    """{path below testlogs: local file} of every output that a test result of this invocation
-    that did not pass names. The lane's output root persists between runs, so files are selected
-    only from this invocation's own results; a passed test contributes nothing. The lane disables
-    build event path conversion, so every output is named by its local file."""
-    outputs = {}
+    """[(staged key, local path, label)] of every collected output that a test result of this
+    invocation that did not pass names, each key once. The lane's output root persists between
+    runs, so files are selected only from this invocation's own results; a passed test contributes
+    nothing. The lane disables build event path conversion, so outputs are named by local file.
+    Fields of an unexpected type are skipped."""
+    outputs, seen = [], set()
     for event in _decoded(lines):
+        identity = _dict(_dict(event.get("id")).get("testResult"))
         result = event.get("testResult")
-        if "testResult" not in event.get("id", {}) or not isinstance(result, dict) or \
-                result.get("status") == "PASSED":
+        if not identity or not isinstance(result, dict) or result.get("status") == "PASSED":
             continue
-        for output in result.get("testActionOutput") or []:
-            uri = urlparse(output.get("uri") or "")
-            match = _TESTLOGS.search(unquote(uri.path))
-            if uri.scheme != "file" or uri.netloc not in ("", "localhost") or not match or \
-                    ".." in match.group(1).split("/"):
-                continue
-            outputs[match.group(1)] = Path(unquote(uri.path))
+        label = identity.get("label") if isinstance(identity.get("label"), str) else "a test"
+        listed = result.get("testActionOutput")
+        for output in listed if isinstance(listed, list) else []:
+            path = _output_path(_dict(output).get("uri"))
+            key = _staged_key(path) if path else None
+            if key is not None and key not in seen:
+                seen.add(key)
+                outputs.append((key, path, label))
     return outputs
 
 
-def stage_failed_test_outputs(lines, out, phase):
-    """Copies a phase's failed tests' outputs that Bazel downloaded (test.log, test.xml and
-    test.outputs/outputs.zip, by the lane's download regex) to OUT/test-artifacts/PHASE/; returns
-    how many files it copied. Symbolic links and files that were not downloaded are skipped."""
-    root = Path(out) / ARTIFACTS / phase
-    shutil.rmtree(root, ignore_errors=True)
-    staged = 0
-    for relative, source in sorted(failed_test_outputs(lines).items()):
-        if source.is_symlink() or not source.is_file():
+def _contained_source(path, output_root):
+    """The real path of a test output, or None unless it lies below the lane's output root and no
+    component below the root is a symbolic link: its real path must be the root's real path plus
+    the same relative path. The root itself may be reached through a link."""
+    real_root = os.path.realpath(output_root)
+    for root in dict.fromkeys((os.path.normpath(os.path.abspath(output_root)), real_root)):
+        prefix = root.rstrip("/") + "/"
+        if path.startswith(prefix):
+            expected = os.path.normpath(os.path.join(real_root, path[len(prefix):]))
+            if os.path.commonpath([real_root, expected]) != real_root:
+                return None
+            return expected if os.path.realpath(path) == expected else None
+    return None
+
+
+def _open_regular(path):
+    """(read descriptor, size) of a regular file, or None. A final symbolic link is not followed,
+    and the type and size come from the opened descriptor, so the file cannot be swapped between
+    the check and the copy."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
+                             getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(descriptor)
+        return None
+    return descriptor, info.st_size
+
+
+def _copy_bounded(source, destination, limit):
+    """Copies descriptor to descriptor; returns the bytes copied, or None when the source holds
+    more than `limit` bytes, for example because it grew after it was measured."""
+    copied = 0
+    while True:
+        chunk = os.read(source, min(_COPY_CHUNK, limit - copied + 1))
+        if not chunk:
+            return copied
+        copied += len(chunk)
+        if copied > limit:
+            return None
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(destination, view):]
+
+
+def _destination(stage_root, key):
+    """The staged file of a key. Raises ValueError unless it stays inside the stage root."""
+    key = PurePosixPath(key)
+    if key.is_absolute() or not key.parts or any(part in (".", "..") for part in key.parts):
+        raise ValueError("a staged key must be a relative path without . or ..")
+    destination = Path(stage_root) / key
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    real_root = os.path.realpath(stage_root)
+    if os.path.commonpath([real_root, os.path.realpath(destination.parent)]) != real_root:
+        raise ValueError("a staged file would leave the stage root")
+    return destination
+
+
+def _printable(text):
+    return "".join(character if character.isprintable() else "?" for character in str(text))
+
+
+def _skip(label, key, size, cap, which):
+    print("::warning::macOS remote shadow lane: %s of %s is not uploaded: %d bytes is over the "
+          "%s cap of %d bytes." % (_printable(key), _printable(label), size, which, cap))
+
+
+def _stage_one(stage_root, key, source, limit):
+    """Copies one opened source to its staged file; returns the bytes copied, or None when the
+    source exceeded `limit` while it was copied."""
+    destination = _destination(stage_root, key)
+    target = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        copied = _copy_bounded(source, target, limit)
+    finally:
+        os.close(target)
+    if copied is None:
+        destination.unlink()
+    return copied
+
+
+def stage_failed_test_outputs(lines, out, phase, output_root, budget):
+    """Copies a phase's failed tests' collected outputs that Bazel downloaded (by the lane's
+    download regex) and that lie inside the lane's output root to OUT/test-artifacts/PHASE/.
+    `budget` is how many bytes this run may still stage. Returns (files, bytes) staged."""
+    stage_root = Path(out) / ARTIFACTS / phase
+    shutil.rmtree(stage_root, ignore_errors=True)
+    files = used = 0
+    for key, path, label in failed_test_outputs(lines):
+        source = _contained_source(path, output_root)
+        opened = _open_regular(source) if source else None
+        if opened is None:
             continue
-        destination = root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-        staged += 1
-    return staged
+        descriptor, size = opened
+        try:
+            cap, which = min((MAX_ARTIFACT_FILE_BYTES, "per-file"),
+                             (budget - used, "per-run"))
+            if size > cap:
+                _skip(label, key, size, cap, which)
+                continue
+            try:
+                copied = _stage_one(stage_root, key, descriptor, cap)
+            except (OSError, ValueError) as error:
+                print("::warning::macOS remote shadow lane: %s of %s is not staged (%s)."
+                      % (_printable(key), _printable(label), type(error).__name__))
+                continue
+            if copied is None:
+                _skip(label, key, size, cap, which + " (it grew while it was copied)")
+                continue
+            files, used = files + 1, used + copied
+        finally:
+            os.close(descriptor)
+    return files, used
 
 
 _HEADER = ("| Phase | Exit status | Bazel result | Wall time (s) | Targets built | "
@@ -628,7 +777,7 @@ def _run(command, environment):
 
 def _read_lines(path):
     try:
-        return Path(path).read_text(encoding="utf-8").splitlines()
+        return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
 
@@ -679,6 +828,7 @@ def _run_lane(args, environment, targets, summary):
         _finish(args.out, summary)
         return status
     first_failure = 0
+    budget = MAX_ARTIFACT_TOTAL_BYTES
     for phase in PHASES:
         if first_failure == STARVED_STATUS:
             # The executor gave no progress; another phase would only wait again.
@@ -691,16 +841,13 @@ def _run_lane(args, environment, targets, summary):
                                                   args.rc_option, args.out, targets),
                                     environment, files["console"])
         lines = _read_lines(files["bep"]) or []
-        entry = summarize(lines)
         try:
-            staged = stage_failed_test_outputs(lines, args.out, phase)
-        except OSError as error:
-            print("::warning::macOS remote shadow lane: the %s phase's failed test outputs were "
-                  "not staged (%s)." % (phase, type(error).__name__))
-        else:
-            if staged:
-                print("macOS remote shadow lane: staged %d output files of the %s phase's failed "
-                      "tests." % (staged, phase))
+            entry = summarize(lines)
+        except Exception as error:  # A malformed event file must not cost the summary.
+            print("::warning::macOS remote shadow lane: the %s phase's build event file could "
+                  "not be summarized (%s)." % (phase, type(error).__name__))
+            entry = summarize([])
+        budget -= _stage_phase(args, lines, phase, budget, status)
         entry["status"] = status
         if starved:
             entry["outcome"] = STARVED
@@ -715,6 +862,27 @@ def _run_lane(args, environment, targets, summary):
             first_failure = first_failure or status
     _finish(args.out, summary)
     return first_failure
+
+
+def _stage_phase(args, lines, phase, budget, status):
+    """Stages a phase's failed test outputs; returns the bytes staged. Never raises: staging must
+    not cost the summary."""
+    if not args.output_user_root:
+        if status != 0:
+            print("::warning::macOS remote shadow lane: failed test outputs are staged only with "
+                  "--output-user-root.")
+        return 0
+    try:
+        files, used = stage_failed_test_outputs(lines, args.out, phase, args.output_user_root,
+                                                budget)
+    except Exception as error:  # Staging is diagnostic only; never lose the summary.
+        print("::warning::macOS remote shadow lane: the %s phase's failed test outputs were not "
+              "staged (%s)." % (phase, type(error).__name__))
+        return 0
+    if files:
+        print("macOS remote shadow lane: staged %d output files (%d bytes) of the %s phase's "
+              "failed tests." % (files, used, phase))
+    return used
 
 
 def parse_args(argv, environ):
