@@ -4659,6 +4659,18 @@ std::uint64_t SubDocumentRevision(const Registry& registry) {
   return registry.ctx().get<components::SVGDocumentContext>().mutationRevision();
 }
 
+/// The sub-document's held warnings, emptied first if they predate its current mutation revision.
+PendingSubDocumentWarnings& CurrentHeldWarnings(Registry& registry) {
+  const std::uint64_t revision = SubDocumentRevision(registry);
+  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  if (pending != nullptr && pending->documentRevision == revision) {
+    return *pending;
+  }
+  PendingSubDocumentWarnings fresh;
+  fresh.documentRevision = revision;
+  return registry.ctx().insert_or_assign(std::move(fresh));
+}
+
 /**
  * Hold @p warnings found while preparing a sub-document without a collecting host sink, skipping
  * warnings already delivered or held. Held warnings found before a mutation of the sub-document
@@ -4671,30 +4683,24 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
   if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
     return;
   }
-  const std::uint64_t revision = SubDocumentRevision(registry);
-  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  if (pending == nullptr || pending->documentRevision != revision) {
-    PendingSubDocumentWarnings fresh;
-    fresh.documentRevision = revision;
-    pending = &registry.ctx().insert_or_assign(std::move(fresh));
-  }
+  PendingSubDocumentWarnings& pending = CurrentHeldWarnings(registry);
   const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
   for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (pending->warnings.resourceLimitExceeded()) {
+    if (pending.warnings.resourceLimitExceeded()) {
       break;
     }
     std::string key = SubDocumentWarningKey(warning);
-    if ((reported != nullptr && reported->keys.contains(key)) || pending->keys.contains(key)) {
+    if ((reported != nullptr && reported->keys.contains(key)) || pending.keys.contains(key)) {
       continue;
     }
-    const std::size_t held = pending->warnings.warnings().size();
-    pending->warnings.add(ParseDiagnostic(warning));
-    if (pending->warnings.warnings().size() > held) {
-      pending->keys.insert(std::move(key));
+    const std::size_t held = pending.warnings.warnings().size();
+    pending.warnings.add(ParseDiagnostic(warning));
+    if (pending.warnings.warnings().size() > held) {
+      pending.keys.insert(std::move(key));
     }
   }
   if (warnings.resourceLimitExceeded()) {
-    pending->warnings.markResourceLimitExceeded();
+    pending.warnings.markResourceLimitExceeded();
   }
 }
 
