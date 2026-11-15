@@ -414,6 +414,7 @@ py_test(
         "//donner/gpu/metal/tests:BUILD.bazel",
     ],
     deps = [
+        ":bazelrc_configs",
         ":test_timing",
         "@rules_python//python/runfiles",
     ],
@@ -738,7 +739,10 @@ py_test(
     name = "editor_build_info_tests",
     size = "small",
     srcs = ["editor_build_info_tests.py"],
-    data = ["//donner/editor:write_build_info.sh"],
+    data = [
+        "//:.bazelrc",
+        "//donner/editor:write_build_info.sh",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -973,9 +977,14 @@ py_test(
         "ci_lane_parity_tests.py",
     ],
     data = [
+        "bcr_preflight.py",
+        "release_candidate.py",
+        "run-browser-ci.sh",
         "//:.bazelrc",
         "//:github_action_definitions",
         "//tools/ci:coverage_contract.json",
+        "//tools/ci:editor_wasm_lane.sh",
+        "//tools/ci:editor_wasm_stage.py",
     ],
     main = "ci_lane_parity_tests.py",
     deps = [

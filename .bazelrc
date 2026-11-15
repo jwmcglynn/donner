@@ -307,6 +307,20 @@ build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Develo
 common:re --//build_defs:enable_tracy=false
 common:ci --//build_defs:enable_tracy=false
 
+# Non-release CI lanes (everything that passes `--config=ci`) build the editor with a fixed
+# placeholder commit in its build identity, //donner/editor:editor_build_info_txt. Without an
+# explicit commit that action reads the checkout's commit, runs locally and changes on every
+# commit, so the editor binaries, the editor Wasm package and every test built on them missed the
+# cache on each new commit. Only the About dialog shows the commit; the native font preview cache
+# keys on it, and CI never runs the native editor against a persistent preview cache.
+#
+# Builds that ship or qualify an artifact pass the real commit and do not use `--config=ci`:
+# release builds, BCR preflight (tools/bcr_preflight.py) and the Editor WASM workflow's package
+# and deployment candidate (tools/ci/editor_wasm_lane.sh, tools/ci/editor_wasm_stage.py).
+# //tools:ci_lane_parity_tests checks both sides.
+common:ci-test-lane --//build_defs:release_source_commit=0000000000000000000000000000000000000000
+common:ci --config=ci-test-lane
+
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
 build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
