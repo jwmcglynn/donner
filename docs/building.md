@@ -615,6 +615,17 @@ executed and cached, actions, cache hits, spawns by runner, wall time) and uploa
 `shadow-summary.json` and the Bazel profiles, as the `macos-remote-shadow-<attempt>` artifact. The
 build event and execution logs and any stall note stay on the runner.
 
+When a phase has a test that did not pass, the lane copies the `test.log`, `test.xml` and undeclared
+outputs (`test.outputs/outputs.zip`, such as a pixel comparison's actual, expected and diff images)
+that the phase's build events name for that test to `test-artifacts/<phase>/`, and the job uploads
+them through the test-artifact collector the other lanes use, as the
+`macos-remote-shadow-test-failures-<attempt>` artifact. Only results of the current invocation
+select files, so a log another run left in the lane's persistent output root is never uploaded.
+The lane downloads outputs with `--remote_download_outputs=minimal` plus a
+`--remote_download_regex` for `test.log`, `test.xml` and `outputs.zip`. Bazel has no download
+mode that depends on a test's result, so those three files come back for every test the lane runs,
+and nothing else does.
+
 A runner must provide, in its own rc files under `build:remote-macos-base`:
 
 - `--remote_executor` and `--remote_cache` for the macOS executor, and any instance name;

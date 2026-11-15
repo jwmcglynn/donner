@@ -1,7 +1,7 @@
 {
   "tree": {
-    "lines": 5779,
-    "comment_lines": 661,
+    "lines": 5795,
+    "comment_lines": 664,
     "multiline_runs": 72,
     "longest_run": 194,
     "run_expressions": 12,
@@ -97,8 +97,8 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1378,
-      "comment_lines": 221,
+      "lines": 1388,
+      "comment_lines": 224,
       "multiline_runs": 10,
       "longest_run": 31,
       "run_expressions": 6,
@@ -225,10 +225,10 @@
       "longest_if": 0
     },
     ".github/actions/upload-bazel-test-artifacts/action.yml": {
-      "lines": 46,
+      "lines": 52,
       "comment_lines": 0,
       "multiline_runs": 1,
-      "longest_run": 24,
+      "longest_run": 25,
       "run_expressions": 0,
       "longest_if": 0
     }

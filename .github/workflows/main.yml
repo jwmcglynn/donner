@@ -654,6 +654,16 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # The logs and undeclared outputs of tests that did not pass, which the script stages per
+      # phase from that phase's build events. The lane step continues on error, so its outcome
+      # decides, not failure().
+      - name: Upload failed test logs and outputs
+        if: ${{ !cancelled() && steps.shadow.outcome == 'failure' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: macos-remote-shadow-test-failures-${{ github.run_attempt }}
+          testlogs: ${{ runner.temp }}/macos-remote-shadow/test-artifacts
+
   macos:
     runs-on: xcode-27
     needs: [gatekeeper, determine-targets]

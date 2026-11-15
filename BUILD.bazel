@@ -121,6 +121,7 @@ exports_files(
         ".github/actions/re-turnstile/action.yml",
         ".github/actions/re-turnstile/admission.py",
         ".github/actions/re-turnstile/turnstile.py",
+        ".github/actions/upload-bazel-test-artifacts/action.yml",
         ".github/workflows/cmake.yml",
         ".github/workflows/codeql.yml",
         ".github/workflows/coverage.yml",

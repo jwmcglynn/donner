@@ -20,6 +20,10 @@ It runs, in order:
   gpu        `bazel test --config=remote-macos-gpu --jobs=4 --build_tests_only` of the GPU-opening
              tests of the selection, on executors that have a GPU.
 
+After each phase it copies the logs and undeclared outputs of the tests that did not pass in that
+phase, as its build event file names them, to OUT/test-artifacts/PHASE/ for the workflow's
+test-artifact collector.
+
 Bazel's local GPU scheduling (the local resource tag and --local_test_jobs) does not apply to
 remote tests, so the gpu phase caps the whole invocation at GPU_JOBS concurrent actions instead,
 which bounds how many GPU-opening tests run on the executors at once. `--jobs` comes after the
@@ -48,10 +52,12 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
 import time
+from urllib.parse import unquote, urlparse
 
 # Not resolved: under Bazel the script runs from its runfiles tree, beside its data files.
 ROOT = Path(os.path.abspath(__file__)).parents[2]
@@ -225,13 +231,23 @@ def routing_command(bazel, startup, rc_options, out):
             events, console)
 
 
+def _decoded(lines):
+    """The events of a build event file. A line that is not a JSON object is skipped: a Bazel
+    server stopped mid-write leaves a partial last line, and the lane must still report and stage
+    what the rest of the file says."""
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
 def _probe_results(lines):
     """Every testResult payload of the routing probe in a build event file."""
     results = []
-    for line in lines:
-        if not line.strip():
-            continue
-        event = json.loads(line)
+    for event in _decoded(lines):
         if event.get("id", {}).get("testResult", {}).get("label") == ROUTING_PROBE:
             results.append(event.get("testResult", {}))
     return results
@@ -401,7 +417,7 @@ def summarize(lines):
     """Counts of one phase's build event file. Option values are never read into it."""
     state = {"targets": {"succeeded": 0, "failed": 0}, "tests": {}, "executed": set(),
              "result": dict(_metrics({}), exit=None)}
-    for event in (json.loads(line) for line in lines if line.strip()):
+    for event in _decoded(lines):
         handler = _HANDLERS.get(next(iter(event.get("id", {})), None))
         if handler:
             handler(event, state)
@@ -420,6 +436,52 @@ def summarize(lines):
     result["failed_tests"] = sorted(label for label, status in tests.items()
                                     if status not in _PASSED + _FLAKY)
     return result
+
+
+# Where a phase stages its failed tests' logs and undeclared outputs: OUT/test-artifacts/PHASE/,
+# laid out like Bazel's testlogs tree, for the workflow's test-artifact collector
+# (.github/actions/upload-bazel-test-artifacts), which keeps test.log, test.xml and test.outputs.
+ARTIFACTS = "test-artifacts"
+# A test output's path below its configuration's testlogs directory.
+_TESTLOGS = re.compile(r"/bazel-out/[^/]+/testlogs/(.+)$")
+
+
+def failed_test_outputs(lines):
+    """{path below testlogs: local file} of every output that a test result of this invocation
+    that did not pass names. The lane's output root persists between runs, so files are selected
+    only from this invocation's own results; a passed test contributes nothing. The lane disables
+    build event path conversion, so every output is named by its local file."""
+    outputs = {}
+    for event in _decoded(lines):
+        result = event.get("testResult")
+        if "testResult" not in event.get("id", {}) or not isinstance(result, dict) or \
+                result.get("status") == "PASSED":
+            continue
+        for output in result.get("testActionOutput") or []:
+            uri = urlparse(output.get("uri") or "")
+            match = _TESTLOGS.search(unquote(uri.path))
+            if uri.scheme != "file" or uri.netloc not in ("", "localhost") or not match or \
+                    ".." in match.group(1).split("/"):
+                continue
+            outputs[match.group(1)] = Path(unquote(uri.path))
+    return outputs
+
+
+def stage_failed_test_outputs(lines, out, phase):
+    """Copies a phase's failed tests' outputs that Bazel downloaded (test.log, test.xml and
+    test.outputs/outputs.zip, by the lane's download regex) to OUT/test-artifacts/PHASE/; returns
+    how many files it copied. Symbolic links and files that were not downloaded are skipped."""
+    root = Path(out) / ARTIFACTS / phase
+    shutil.rmtree(root, ignore_errors=True)
+    staged = 0
+    for relative, source in sorted(failed_test_outputs(lines).items()):
+        if source.is_symlink() or not source.is_file():
+            continue
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        staged += 1
+    return staged
 
 
 _HEADER = ("| Phase | Exit status | Bazel result | Wall time (s) | Targets built | "
@@ -630,6 +692,15 @@ def _run_lane(args, environment, targets, summary):
                                     environment, files["console"])
         lines = _read_lines(files["bep"]) or []
         entry = summarize(lines)
+        try:
+            staged = stage_failed_test_outputs(lines, args.out, phase)
+        except OSError as error:
+            print("::warning::macOS remote shadow lane: the %s phase's failed test outputs were "
+                  "not staged (%s)." % (phase, type(error).__name__))
+        else:
+            if staged:
+                print("macOS remote shadow lane: staged %d output files of the %s phase's failed "
+                      "tests." % (staged, phase))
         entry["status"] = status
         if starved:
             entry["outcome"] = STARVED

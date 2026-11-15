@@ -5,31 +5,37 @@ inputs:
   name:
     description: Artifact name.
     required: true
+  testlogs:
+    description: The Bazel test log tree to collect from; bazel-testlogs when empty.
+    required: false
 
 runs:
   using: composite
   steps:
     - name: Collect Bazel test artifacts
       shell: bash
+      env:
+        TESTLOGS: ${{ inputs.testlogs }}
       run: |
         set -euo pipefail
 
+        testlogs="${TESTLOGS:-bazel-testlogs}"
         output_dir="${RUNNER_TEMP}/bazel-test-artifacts"
         rm -rf "${output_dir}"
         mkdir -p "${output_dir}"
 
-        if [[ ! -e bazel-testlogs ]]; then
-          echo "No bazel-testlogs symlink found."
+        if [[ ! -e "${testlogs}" ]]; then
+          echo "No ${testlogs} found."
           exit 0
         fi
 
         while IFS= read -r -d '' file; do
-          rel="${file#bazel-testlogs/}"
+          rel="${file#"${testlogs}"/}"
           dest="${output_dir}/${rel}"
           mkdir -p "$(dirname "${dest}")"
           cp "${file}" "${dest}"
         done < <(
-          find -H bazel-testlogs \
+          find -H "${testlogs}" \
             \( -name test.log -o -name test.xml -o -path '*/test.outputs/*' \) \
             -type f -print0
         )

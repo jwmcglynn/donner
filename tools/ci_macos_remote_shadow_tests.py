@@ -18,6 +18,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 
@@ -52,6 +53,10 @@ PRIVATE_FLAG = re.compile(
     r"remote_cache_header|remote_exec_header|remote_downloader_header|remote_execution_priority|"
     r"remote_proxy|tls_|credential_helper|google_|bes_|local_resources)")
 ENDPOINT = re.compile(r"\b(?:grpcs?|https?|unix)://")
+# The reviewed test-artifact collector every test lane uploads its failed tests' outputs with.
+COLLECTOR = "./.github/actions/upload-bazel-test-artifacts"
+# The lane step continues on error, so failure() is never true after it; its outcome is.
+FAILURE_UPLOAD_IF = "${{ !cancelled() && steps.shadow.outcome == 'failure' }}"
 # Flags of `--config=ci` the lane leaves out, with why.
 CI_OMISSIONS = {
     "--repository_cache=~/.cache/bazel-repo": "A runner path; the runner's rc can set its own.",
@@ -223,6 +228,30 @@ def upload_problems(text):
             if path.rsplit("/", 1)[-1] not in allowed]
 
 
+def _staged_root():
+    """The workflow's spelling of the directory the script stages failed tests' outputs in."""
+    out = RUN.split('--out "', 1)[1].split('"', 1)[0]
+    return out.replace("$RUNNER_TEMP", "${{ runner.temp }}") + "/" + lane.ARTIFACTS
+
+
+def failure_artifact_problems(text):
+    """A failed test's log and undeclared outputs leave the runner, through the reviewed
+    collector and from the directory the script stages them in, whenever the lane step failed."""
+    steps = _steps(_job(text, JOB))
+    uploads = [step for step in steps if "        uses: %s\n" % COLLECTOR in step]
+    if len(uploads) != 1:
+        return ["%s does not upload its failed tests' outputs through the collector" % JOB]
+    upload, shadow = uploads[0], _step(_job(text, JOB), "shadow")
+    problems = []
+    if shadow is None or steps.index(upload) < steps.index(shadow):
+        problems.append("the failed test outputs are uploaded before the lane step runs")
+    if _key(upload, "if", 8) != FAILURE_UPLOAD_IF:
+        problems.append("the failed test outputs are not uploaded on the lane step's outcome")
+    if _with(upload, "testlogs") != _staged_root():
+        problems.append("the collector does not read the script's staged failed test outputs")
+    return problems
+
+
 def _flags(command):
     return [word for word in command if word.startswith("--")]
 
@@ -335,7 +364,7 @@ class WorkflowTest(unittest.TestCase):
             with self.subTest(leak=leak):
                 self.assertTrue(privacy_problems(dict(texts, **{JOB: texts[JOB] + leak})))
         # Bazel never appears in the workflow: the script owns every flag.
-        self.assertNotRegex(texts[JOB], r"\bbazel(?:isk)?\b|--config")
+        self.assertNotRegex(texts[JOB].replace(COLLECTOR, ""), r"\bbazel(?:isk)?\b|--config")
 
     def test_lane_uploads_derived_files_only(self):
         self.assertEqual([], upload_problems(self.text))
@@ -345,6 +374,21 @@ class WorkflowTest(unittest.TestCase):
                     "macos-remote-shadow/report.md\n",
                     "macos-remote-shadow/report.md\n            ${{ runner.temp }}/"
                     "macos-remote-shadow/%s\n" % leak)))
+
+    def test_failed_test_outputs_are_uploaded_on_the_lane_steps_outcome(self):
+        self.assertEqual([], failure_artifact_problems(self.text))
+        upload = next(step for step in _steps(_job(self.text, JOB)) if COLLECTOR in step)
+        for old, new in (
+                # The lane step continues on error, so failure() would never upload anything.
+                (FAILURE_UPLOAD_IF, "failure() && steps.shadow.outcome == 'failure'"),
+                (FAILURE_UPLOAD_IF, "${{ !cancelled() && steps.shadow.conclusion == 'failure' }}"),
+                # The workspace's bazel-testlogs is the last command's configuration and keeps
+                # results of earlier runs in the lane's persistent output root.
+                ("          testlogs: %s\n" % _staged_root(), ""),
+                (_staged_root(), "${{ runner.temp }}/macos-remote-shadow"),
+                (upload, "")):
+            with self.subTest(old=old[:40], new=new[:40]):
+                self.assertTrue(failure_artifact_problems(self._mutated(old, new)))
 
     def test_identity_comes_from_the_lane_script_not_the_workflow(self):
         # A workflow never names the toolchain identity (//tools:macos_cache_key_parity_tests).
@@ -641,8 +685,22 @@ else:
     phase = "gpu" if "--config=remote-macos-gpu" in args else "native"
     status = int(os.environ.get("FAKE_STATUS_" + phase.upper(), "0"))
     label = "//fake:%s_test" % phase
+    result = {}
+    if os.environ.get("FAKE_TESTLOGS"):
+        # The test's outputs as Bazel downloads them, and one it names but did not download.
+        directory = os.path.join(os.environ["FAKE_TESTLOGS"], "execroot", "_main", "bazel-out",
+                                 "darwin_arm64-fastbuild", "testlogs", "fake", phase + "_test")
+        os.makedirs(os.path.join(directory, "test.outputs"), exist_ok=True)
+        files = {"test.log": "%s log\n" % phase, "test.xml": "<testsuites/>\n",
+                 "test.outputs/outputs.zip": "%s images\n" % phase}
+        for name, text in files.items():
+            with open(os.path.join(directory, name), "w") as handle:
+                handle.write(text)
+        result = {"status": "FAILED" if status else "PASSED", "testActionOutput": [
+            {"name": name.replace("/", "__"), "uri": "file://" + os.path.join(directory, name)}
+            for name in [*files, "test.outputs_manifest/MANIFEST"]]}
     lines += [{"id": {"targetCompleted": {"label": label}}, "completed": {"success": True}},
-              {"id": {"testResult": {"label": label}}, "testResult": {}},
+              {"id": {"testResult": {"label": label}}, "testResult": result},
               {"id": {"testSummary": {"label": label}},
                "testSummary": {"overallStatus": "FAILED" if status else "PASSED"}},
               {"id": {"buildFinished": {}},
@@ -775,6 +833,62 @@ class LaneRunTest(unittest.TestCase):
         self.assertIn("::warning::macOS remote shadow lane: the native phase exited 3",
                       result.stdout)
         self.assertIn("//fake:native_test", summary_file.read_text(encoding="utf-8"))
+
+    def _collected(self, out):
+        """What the workflow's collector uploads from the script's staged tree."""
+        action = _read(COLLECTOR[2:] + "/action.yml")
+        body = re.search(r"(?m)^      run: \|\n((?:(?:        .*)?\n)+)", action).group(1)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        result = subprocess.run(["bash", "-c", textwrap.dedent(body)], cwd=directory.name,
+                                env=dict(os.environ, RUNNER_TEMP=directory.name,
+                                         TESTLOGS=str(out / lane.ARTIFACTS)),
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        artifacts = Path(directory.name) / "bazel-test-artifacts"
+        return {path.relative_to(artifacts).as_posix(): path.read_text(encoding="utf-8")
+                for path in artifacts.rglob("*") if path.is_file()}
+
+    def _run_with_outputs(self, **environment):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        testlogs = Path(directory.name) / "output-base"
+        # A failed result an earlier run left in the lane's persistent output root.
+        stale = testlogs / "execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs/fake/old_test"
+        (stale / "test.outputs").mkdir(parents=True)
+        (stale / "test.log").write_text("an earlier run\n", encoding="utf-8")
+        (stale / "test.outputs" / "outputs.zip").write_text("old images\n", encoding="utf-8")
+        return self._run(FAKE_EXECUTOR="grpcs://executor.invalid", FAKE_TESTLOGS=str(testlogs),
+                         **environment)
+
+    @staticmethod
+    def _phase_outputs(phase):
+        prefix = "%s/fake/%s_test/" % (phase, phase)
+        return {prefix + "test.log": "%s log\n" % phase,
+                prefix + "test.xml": "<testsuites/>\n",
+                prefix + "test.outputs/outputs.zip": "%s images\n" % phase}
+
+    def test_each_failed_phase_stages_its_failed_tests_outputs_for_the_collector(self):
+        for failing in (("native", "gpu"), ("native",), ("gpu",)):
+            with self.subTest(failing=failing):
+                result, out, _, _ = self._run_with_outputs(**{
+                    "FAKE_STATUS_" + phase.upper(): "3" for phase in failing})
+                self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+                expected = {}
+                for phase in failing:
+                    expected.update(self._phase_outputs(phase))
+                self.assertEqual(expected, self._collected(out))
+                for phase in failing:
+                    self.assertIn("staged 3 output files of the %s phase's failed tests" % phase,
+                                  result.stdout)
+
+    def test_nothing_is_staged_when_every_test_passes(self):
+        result, out, _, _ = self._run_with_outputs()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual([], [path for path in (out / lane.ARTIFACTS).rglob("*")
+                              if path.is_file()])
+        self.assertEqual({}, self._collected(out))
+        self.assertNotIn("staged", result.stdout)
 
     def test_empty_selection_fails_before_bazel(self):
         directory = tempfile.TemporaryDirectory()
@@ -968,6 +1082,60 @@ class BuildEventTest(unittest.TestCase):
                 ({"lane": 0, "plain": 1}, {"lane": "a", "plain": "b"}, "exit 1")):
             with self.subTest(needle=needle):
                 self.assertIn(needle, lane.preflight_problem(statuses, executors))
+
+    def test_failed_test_outputs_come_only_from_this_invocations_results_that_did_not_pass(self):
+        testlogs = "/base/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs"
+
+        def result(path, status, *names, uri=None):
+            fields = {"testActionOutput": [
+                {"name": name, "uri": uri or "file://%s/%s/%s" % (testlogs, path, name)}
+                for name in names]}
+            if status:
+                fields["status"] = status
+            return {"id": {"testResult": {"label": "//" + path.replace("/", ":")}},
+                    "testResult": fields}
+
+        lines = _events(
+            result("a/passed", "PASSED", "test.log", "test.outputs/outputs.zip"),
+            result("a/failed", "FAILED", "test.log", "test.outputs/outputs.zip"),
+            result("a/timeout", "TIMEOUT", "test.log"),
+            # Bazel omits a NO_STATUS result's status.
+            result("a/unknown", None, "test.log"),
+            result("a/remote", "FAILED", "test.log", uri="bytestream://cache.invalid/blobs/0/1"),
+            result("a/outside", "FAILED", "test.log", uri="file:///elsewhere/test.log"),
+            result("a/escape", "FAILED", "test.log",
+                   uri="file://%s/../../other/test.log" % testlogs),
+            {"id": {"testSummary": {"label": "//a:failed"}},
+             "testSummary": {"overallStatus": "FAILED"}}) + [
+            # A Bazel server stopped mid-write leaves a partial last line.
+            '{"id": {"testResult": {"label": "//a:cut']
+        self.assertEqual({name: Path("%s/%s" % (testlogs, name)) for name in (
+            "a/failed/test.log", "a/failed/test.outputs/outputs.zip", "a/timeout/test.log",
+            "a/unknown/test.log")}, lane.failed_test_outputs(lines))
+        self.assertEqual(1, lane.summarize(lines)["tests"]["failed"])
+
+    def test_staging_copies_downloaded_regular_files_and_replaces_an_earlier_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            testlogs = root / "base/execroot/_main/bazel-out/darwin_arm64-fastbuild/testlogs"
+            target = testlogs / "a" / "failed"
+            (target / "test.outputs").mkdir(parents=True)
+            (target / "test.log").write_text("failure details", encoding="utf-8")
+            (root / "secret").write_text("outside sentinel", encoding="utf-8")
+            (target / "test.outputs" / "outputs.zip").symlink_to(root / "secret")
+            names = ("test.log", "test.outputs/outputs.zip", "test.xml")
+            lines = _events({"id": {"testResult": {"label": "//a:failed"}}, "testResult": {
+                "status": "FAILED", "testActionOutput": [
+                    {"name": name, "uri": (target / name).as_uri()} for name in names]}})
+            out = root / "out"
+            earlier = out / lane.ARTIFACTS / "native" / "a" / "earlier" / "test.log"
+            earlier.parent.mkdir(parents=True)
+            earlier.write_text("an earlier stage", encoding="utf-8")
+            self.assertEqual(1, lane.stage_failed_test_outputs(lines, out, "native"))
+            staged = out / lane.ARTIFACTS / "native"
+            self.assertEqual({"a/failed/test.log": "failure details"},
+                             {path.relative_to(staged).as_posix(): path.read_text()
+                              for path in staged.rglob("*") if path.is_file()})
 
     def test_summary_counts_targets_tests_cache_and_runners(self):
         events = _events(

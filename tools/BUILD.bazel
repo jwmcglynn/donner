@@ -488,6 +488,7 @@ py_test(
         "ci_bazel_test.sh",
         "ci_macos_xcode.txt",
         "//:.bazelrc",
+        "//:.github/actions/upload-bazel-test-artifacts/action.yml",
         "//:.github/workflows/main.yml",
         "//:docs_files",
         "//build_defs:editor_build_info.bzl",
