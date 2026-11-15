@@ -32,7 +32,7 @@ public:
   /**
    * Prepare the referenced document's styles for the occurrence installed in its
    * \ref ExternalUseStyleContext. Restyles the referenced subtree only when its retained inputs
-   * differ.
+   * differ, first restoring any retained ancestor subtree to the document's own styles.
    *
    * @param registry Referenced document's registry, with its occurrence context installed.
    */
