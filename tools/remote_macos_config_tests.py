@@ -37,11 +37,14 @@ EXEC_PROPERTIES = {"OSFamily": "darwin", "ISA": "aarch64", "container-image": "n
 SDK_PLATFORMS = ("ios", "macos", "tvos", "visionos", "watchos")
 IDENTITY = "DONNER_CI_XCODE_IDENTITY"
 # Private runner configuration: where the executor and cache are, how to authenticate to them,
-# queue priority and per-host concurrency. None of it belongs in the repository's .bazelrc.
+# queue priority and per-host concurrency. None of it belongs in the repository's .bazelrc. The
+# number of GPU test slots (`--local_resources=local_gpu=`) is public scheduling policy for local
+# GPU tests, which the macOS CI config may set, and has no effect under remote execution; CPU and
+# memory budgets describe a particular host and stay private.
 PRIVATE_FLAG = re.compile(
     r"^--(?:no)?(?:remote_executor|remote_cache|remote_instance_name|remote_header|"
     r"remote_cache_header|remote_exec_header|remote_downloader_header|remote_execution_priority|"
-    r"remote_proxy|tls_|credential_helper|google_|bes_|jobs|local_resources)")
+    r"remote_proxy|tls_|credential_helper|google_|bes_|jobs|local_resources(?!=local_gpu=))")
 # Bazel's names for the client OS in host-OS config lines (`build:linux`, `build:macos`).
 CLIENT_OSES = ("linux", "macos")
 
