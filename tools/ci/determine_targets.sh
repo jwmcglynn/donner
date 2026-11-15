@@ -133,10 +133,14 @@ determine() {
 
   # Workflow logic kept in scripts so the workflow files stay thin. A change to one of
   # them changes what CI runs exactly as a workflow edit does, so it selects the same
-  # coverage as a change to this workflow. List only scripts moved out of a workflow.
+  # coverage as a change to this workflow. List only scripts moved out of a workflow, and the
+  # lane entry point and table that hold the Bazel steps' commands.
   is_workflow_logic() {
     case "$1" in
       tools/ci/bazel_watchdog.sh|tools/ci/determine_targets.sh|tools/ci/fetch_bazel_diff.sh)
+        return 0
+        ;;
+      tools/ci/lane.py|tools/ci/lanes.py)
         return 0
         ;;
     esac

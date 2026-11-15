@@ -17,6 +17,9 @@ exports_files([
     "editor_wasm_stage.py",
     "fetch_bazel_diff.sh",
     "github_rate_limit.py",
+    "lane.py",
+    "lane_commands.golden.json",
+    "lanes.py",
     "remote_macos_xcode.bzl",
     "test_with_exclusions.py",
 ])
@@ -416,6 +419,14 @@ py_library(
 py_binary(
     name = "lane",
     srcs = ["lane.py"],
+    deps = [":lanes"],
+)
+
+# Workflow text with each lane step's commands, and lane table edits, for the workflow policy tests.
+py_library(
+    name = "lane_view",
+    testonly = True,
+    srcs = ["lane_view.py"],
     deps = [":lanes"],
 )
 

@@ -6,6 +6,9 @@ import textwrap
 import unittest
 
 from build_defs import check_local_gpu_tags
+from tools.ci import lane
+from tools.ci import lane_view
+from tools.ci import lanes
 
 
 # The tag a GPU-opening test carries: one unit of the `local_gpu` resource.
@@ -134,11 +137,10 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         cls.rules = (runfiles / "build_defs/rules.bzl").read_text()
         cls.main_workflow = (runfiles / ".github/workflows/main.yml").read_text()
         github = runfiles / ".github"
-        cls.workflows = {
-            str(path.relative_to(runfiles)): path.read_text()
-            for path in sorted(github.glob("workflows/*.y*ml")) + sorted(
-                github.glob("actions/*/action.yml"))
-        }
+        # Each lane step with its commands from the lane table (tools/ci/lane_view.py).
+        cls.workflow_paths = sorted(github.glob("workflows/*.y*ml")) + sorted(
+            github.glob("actions/*/action.yml"))
+        cls.workflows = cls._workflow_texts(runfiles)
         cls.direct_tag_builds = {path: (runfiles / path).read_text() for path in DIRECT_GPU_TAGS}
 
     def test_linux_suite_keeps_hardware_adapter_enabled(self):
@@ -194,9 +196,29 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertEqual([], check_local_gpu_tags.build_file_problems(
             {"donner/x/BUILD.bazel": rule % LOCAL_GPU_TAG}))
 
+    @classmethod
+    def _workflow_texts(cls, runfiles):
+        return {str(path.relative_to(runfiles)): lane_view.with_dry_runs(path.read_text())
+                for path in cls.workflow_paths}
+
     def test_every_command_runs_at_most_one_gpu_opening_test_at_a_time(self):
         self.assertIn(".github/workflows/main.yml", self.workflows)
+        self.assertIn("--local_test_jobs=1", self.workflows[".github/workflows/main.yml"])
         self.assertEqual([], local_gpu_problems(self.bazelrc, self.workflows))
+
+    def test_local_gpu_policy_reads_the_lane_table(self):
+        # The lane phases' commands live in tools/ci/lanes.py; an edit there must fail like an
+        # edit to a workflow step.
+        runfiles = Path(os.environ["TEST_SRCDIR"]) / os.environ["TEST_WORKSPACE"]
+        for edit, expected in (
+                (lane_view.replacing("--local_test_jobs=1", "--local_test_jobs=2"),
+                 "ignores the local_gpu resource"),
+                (lane_view.replacing("--local_test_jobs=1", "--local_test_jobs=1",
+                                     "--local_resources=local_gpu=2"), "overrides")):
+            with self.subTest(expected=expected):
+                with lane_view.edited_lane("macos-self-hosted", edit, ("browser_test",)):
+                    problems = local_gpu_problems(self.bazelrc, self._workflow_texts(runfiles))
+                self.assertTrue(any(expected in problem for problem in problems), problems)
 
     def test_local_gpu_policy_rejects_concurrent_gpu_tests(self):
         main = ".github/workflows/main.yml"
@@ -307,69 +329,22 @@ class GeodeTestSchedulingTest(unittest.TestCase):
             "test --test_tag_filters=-ci-remote-gpu",
             self.bazelrc,
         )
-        remote_job = self.main_workflow.split("  linux-self-hosted:\n", 1)[1]
-        remote_job = remote_job.split("\n  macos:\n", 1)[0]
-        self.assertIn("--strategy=TestRunner=remote", remote_job)
-        self.assertIn("--remote_local_fallback=false", remote_job)
-        self.assertIn(
-            "--test_tag_filters=-manual,-perf,-local-gpu-isolated",
-            remote_job,
-        )
-        self.assertNotIn("mapfile -t TARGETS", remote_job)
-        self.assertIn(
-            'if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py',
-            remote_job,
-        )
-        test_step = remote_job.split('      - name: Test\n', 1)[1].split('\n      - ', 1)[0]
-        self.assertEqual(2, test_step.count('=~ ^[[:space:]]*$ ]]; then'))
-
-    def test_remote_target_mapping_blocks_propagate_failure_and_empty_output(self):
-        remote_job = self.main_workflow.split("  linux-self-hosted:\n", 1)[1]
-        remote_job = remote_job.split("\n  macos:\n", 1)[0]
-        cases = [
-            (
-                "test",
-                remote_job,
-                'TARGETS="$mapped_targets"',
-                'TARGETS="//donner/editor/tests:rnr_replay_tests_geode"',
-                'printf "%s\\n" "$TARGETS"',
-            ),
-        ]
-        fake_mapper = r"""
-        python3() {
-          case "$MAPPER_MODE" in
-            fail) return 23 ;;
-            empty) return 0 ;;
-            ok) printf '%s\n' "$MAPPED_TARGETS" ;;
-          esac
-        }
-        """
-        expected = "//donner/editor/tests:rnr_replay_tests_geode_ci_remote"
-        for name, workflow, final_line, setup, print_line in cases:
-            start = workflow.index('          if ! mapped_targets="$(python3')
-            end = workflow.index(final_line, start) + len(final_line)
-            block = textwrap.dedent(workflow[start:end])
-            script = "set -euo pipefail\n" + textwrap.dedent(fake_mapper) + setup + "\n" + block
-            for mode in ("fail", "empty"):
-                with self.subTest(route=name, mode=mode):
-                    result = subprocess.run(
-                        ["bash", "-c", script],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        env={**os.environ, "MAPPER_MODE": mode, "MAPPED_TARGETS": expected},
-                    )
-                    self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-            with self.subTest(route=name, mode="ok"):
-                result = subprocess.run(
-                    ["bash", "-c", script + "\n" + print_line],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    env={**os.environ, "MAPPER_MODE": "ok", "MAPPED_TARGETS": expected},
-                )
-                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertEqual(expected, result.stdout.strip())
+        # The self-hosted Linux lane's test phase (tools/ci/lanes.py): it rejects an empty
+        # selection, maps each opted-in suite to its remote wrapper (failing closed on a failed or
+        # empty mapping, //tools/ci:lane_tests), then tests the mapped targets remotely.
+        self.assertIn("run: python3 tools/ci/lane.py phase linux-self-hosted test",
+                      self.main_workflow)
+        phase = lanes.LANES["linux-self-hosted"].phases["test"]
+        self.assertEqual([lanes.RequireSelection, lanes.MapRemoteGpu, lanes.Bazel],
+                         [type(action) for action in phase.actions])
+        [command] = [action["argv"] for action in
+                     lane.dry_run("linux-self-hosted", "test", {})["actions"]
+                     if action["action"] == "bazel"]
+        self.assertIn("--strategy=TestRunner=remote", command)
+        self.assertIn("--remote_local_fallback=false", command)
+        self.assertIn("--test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak", command)
+        self.assertEqual("$(python3 tools/ci_remote_gpu_targets.py @selected_targets)",
+                         command[-1])
 
     def test_variant_specs_cannot_pin_a_remote_execution_platform_property(self):
         """Variant specs must not carry `exec_properties`.

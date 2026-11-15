@@ -89,7 +89,8 @@ class LaneTest(unittest.TestCase):
         for name, tool in (("tools/ci_remote_gpu_targets.py", "remote_gpu"),
                            ("tools/browser_gpu_test_summary.py", "summary")):
             (self.checkout / name).write_text(
-                "import os, sys\nos.execv(sys.executable, [sys.executable, %r, %r] + sys.argv[1:])\n"
+                "import os, sys\n"
+                "os.execv(sys.executable, [sys.executable, %r, %r] + sys.argv[1:])\n"
                 % (str(self.recorder), tool), encoding="utf-8")
         self.capture = self.root / "capture.jsonl"
         self.config = self.root / "config.json"
@@ -162,6 +163,45 @@ class LaneTest(unittest.TestCase):
                 self.assertIn("::error::Empty target selection reached %s." % where,
                               result.stdout)
                 self.assertEqual(self.bazel_calls(calls), [])
+
+    def test_empty_selection_guard_rejects_only_whitespace(self):
+        # The step scripts derived the selection with `$(echo "<affected>")` and rejected it with
+        # `[[ "$TARGETS" =~ ^[[:space:]]*$ ]]`; the phase decides every case the same way.
+        script = ('TARGETS=$(echo "$1")\n'
+                  'if [[ "$TARGETS" =~ ^[[:space:]]*$ ]]; then echo empty; else echo nonempty; fi')
+        cases = {"": "empty", "   ": "empty", " \t ": "empty", "\n\n": "empty",
+                 " \n ": "empty", "\r": "empty", "//...": "nonempty",
+                 "  //a:b  //c:d  ": "nonempty", "//a:b\n//c:d": "nonempty",
+                 "\n//a:b\n": "nonempty"}
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                shell = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", script,
+                     "guard", value], capture_output=True, text=True, check=True)
+                self.assertEqual(shell.stdout.strip(), expected)
+                result, _ = self.run_phase("linux", "test", TARGETS_FALLBACK="false",
+                                           TARGETS_AFFECTED=value)
+                self.assertEqual(result.returncode == 1 and "Empty target selection" in
+                                 result.stdout, expected == "empty", result.stdout)
+                self.reset()
+
+    def test_local_xvfb_tolerates_a_selection_without_display_tests(self):
+        native = "//donner/editor/tests:editor_window_vulkan_surface_tests"
+        for fallback, affected, target, status in (
+                ("false", native, native, 0),
+                ("false", "//donner/base:base_tests", "//donner/base:base_tests", 4),
+                ("true", "", "//...", 0)):
+            with self.subTest(fallback=fallback, affected=affected):
+                result, calls = self.run_phase("linux-self-hosted", "local_xvfb",
+                                               {"bazelisk test": [["", status]]},
+                                               TARGETS_FALLBACK=fallback,
+                                               TARGETS_AFFECTED=affected)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                [call] = self.bazel_calls(calls)
+                self.assertIn("--test_tag_filters=requires_xvfb,-fuzz_soak", call)
+                self.assertEqual(call[-1], target)
+                self.assertEqual("No test targets" in result.stdout, status == 4)
+                self.reset()
 
     def test_an_unguarded_build_runs_with_an_empty_selection(self):
         result, calls = self.run_phase("linux", "build", TARGETS_FALLBACK="false",

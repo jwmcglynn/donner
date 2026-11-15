@@ -13,7 +13,8 @@ Each action runs as the step script ran it under `set -euo pipefail`: the first 
 ends the phase with its exit status (128 + N for a command killed by signal N), apart from the
 deferred commands of an advisory phase, which run to the end and report the first failure.
 `--dry-run` prints the phase's actions with every run-time value filled in, as JSON, and runs
-nothing: a run-time variable that is unset prints as `$NAME`, an unset selection as
+nothing: a run-time variable that is unset prints as written (`$NAME` or `${NAME}`), an unset
+selection as
 @selected_targets, and a value only a command can produce as that command's `$(...)`.
 
 Standard library only: this runs under each runner's system python3 (3.9 or later).
@@ -63,15 +64,16 @@ class _Context:
         self.dry_run = dry_run
         self.mapped = None
 
-    def variable(self, name):
+    def variable(self, name, spelling=None):
         if name in self.environ:
             return self.environ[name]
         if self.dry_run:
-            return "$" + name
+            return spelling or "$" + name
         raise PhaseFailed(1, "lane.py: %s: unbound variable" % name)
 
     def word(self, text):
-        return _VARIABLE.sub(lambda match: self.variable(match.group(1) or match.group(2)), text)
+        return _VARIABLE.sub(lambda match: self.variable(match.group(1) or match.group(2),
+                                                         match.group(0)), text)
 
     def selection(self):
         """The selection as the step scripts derived it: the raw text and its words."""
