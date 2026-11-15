@@ -49,12 +49,13 @@ public:
   static void PrepareInstance(Registry& registry);
 
   /**
-   * Schedule a full render-tree rebuild of the document. With an occurrence installed, forget the
-   * saved inputs of every other retained subtree that rebuild restyles.
+   * Schedule a restyle of every element and a full render-tree rebuild of the document. With an
+   * occurrence installed, forget the saved inputs of every other retained subtree, since that
+   * restyle runs under the installed occurrence alone.
    *
    * @param registry Referenced document's registry.
    */
-  static void ScheduleFullRebuild(Registry& registry);
+  static void ScheduleFullRestyle(Registry& registry);
 
   /**
    * After the render tree is instantiated for the installed occurrence, restore every other
