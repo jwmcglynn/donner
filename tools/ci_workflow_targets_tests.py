@@ -83,6 +83,9 @@ class WorkflowTargetsTest(unittest.TestCase):
         native = jobs["macos-metal"]
         self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", native)
+        # Only pull requests that reach the Metal suites, or fall back to //..., run it.
+        self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "
+                      "needs.determine-targets.outputs.metal_affected == 'true')", native)
         for target in ("metal_full_validation", "metal_preflight", "metal_native",
                        "metal_offline_compiler"):
             self.assertIn("//tools/ci:" + target, native)

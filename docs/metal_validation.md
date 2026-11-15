@@ -1,6 +1,6 @@
 # Metal validation and the hosted virtual GPU
 
-Full Metal shader validation is a pre-merge requirement. Hosted macOS CI does not provide it, and that includes every run on `main`.
+Full Metal shader validation is a pre-merge requirement for every pull request whose changes can reach the Metal suites (see "When the native Metal job runs"). Hosted macOS CI does not provide it, and that includes every run on `main`.
 
 ## Hosted CI runs no shader validation
 
@@ -14,15 +14,27 @@ Donner's own compute kernels also fail to compile there whenever shader validati
 and the native desktop runner: the VM excludes `requires_desktop_session`, while `macos-browser`
 selects only those desktop-session cases. The hosted jobs also exclude the tests tagged `requires_shader_validation`, the validation profile probe and the out-of-bounds canary, which always request full validation. A hosted green result says nothing about shader validation, and `main` alone no longer runs it.
 
-The CI shader-validation gate is the native `macos-metal` job, which runs on trusted pull requests that are not labeled `ci:hosted-macos` while the self-hosted macOS runner is enabled. Its mandatory "Require full Metal shader validation" step requires actual enabled pipeline validation on a real GPU. Its mandatory "Metal validation preflight" step runs the memory-validation canary, which requires a real GPU out-of-bounds-read diagnostic and `SIGABRT`; a setup or compilation error cannot satisfy it. `tools/ci/coverage_contract.json` records the hosted lane's gap as an owned exception.
+The CI shader-validation gate is the native `macos-metal` job, which runs on trusted pull requests that are not labeled `ci:hosted-macos` while the self-hosted macOS runner is enabled, when the pull request reaches the Metal suites. Its mandatory "Require full Metal shader validation" step requires actual enabled pipeline validation on a real GPU. Its mandatory "Metal validation preflight" step runs the memory-validation canary, which requires a real GPU out-of-bounds-read diagnostic and `SIGABRT`; a setup or compilation error cannot satisfy it. `tools/ci/coverage_contract.json` records the hosted lane's gap as an owned exception.
 
 On macOS 26.6.2 (build 25G83) the same device also reported pipeline validation `Disabled`, but its memory checks still worked: an [earlier comparison](https://github.com/jwmcglynn/donner/actions/runs/34690658076) showed that `MTL_SHADER_VALIDATION_TEXTURE_USAGE=0` alone restored exact pixels while the out-of-bounds read still aborted. `metal_validation_profile` still classifies that exact device/OS/build/disabled-state tuple as `paravirtual-texture-usage-off`, only to describe that earlier runtime; no CI lane depends on it, and the full-validation gate and verifier accept only `full`. It does not recognize macOS 27.0.1, because that runtime fails the out-of-bounds control.
 
 The ordinary self-hosted macOS jobs use the `macOS-vm` capability label and run Metal device tests with API validation only. The native job uses the `macOS` label and keeps shader validation enabled. VM runners omit default labels, so a job requiring `macOS` cannot reach them. The coverage contract requires the native job independently; a skipped or empty native suite cannot be replaced by a VM receipt.
 
+## When the native Metal job runs
+
+The `macos-metal` job runs four fixed suites, `//tools/ci:metal_full_validation`, `//tools/ci:metal_preflight`, `//tools/ci:metal_offline_compiler` and `//tools/ci:metal_native`, with test caching disabled. A pull request reaches them, and the job runs for it, when any of these holds:
+
+- Its CI target selection is the full `//...` fallback: every infrastructure change (workflows, composite actions, `.bazelrc`, `.bazelversion`, `MODULE.bazel`, `build_defs/`), the `ci:full-test` label, and every case where the affected targets cannot be computed.
+- Its affected targets include a test of those suites. The `determine-targets` job asks bazel-diff for the targets whose inputs changed in the pull request's merge graph; a test is affected when anything it transitively depends on changed, including the shaders, Metal backend sources, test data and build rules.
+- It changes a script the job runs outside Bazel: `tools/ci_metal_toolchain.py`, `tools/ci_select_macos_xcode.sh`, the Xcode pin in `tools/ci_macos_xcode.txt`, or `tools/ci_bazel_test.sh`.
+
+The decision fails closed: if the suite query fails or finds no tests, the job runs. The `determine-targets` job's log names the affected suite test or changed script, and its `metal_affected` output records the result for every pull request, including those that do not run the job.
+
+A pull request that reaches none of them cannot change what those suites test: every source, shader, test and build input they read is unchanged, and so is every script and toolchain pin the job uses. Rerunning them would only test the runner again, not the change. `main` runs exactly what it ran before: its hosted `macos` job runs the Metal device tests with API validation only and no shader validation, as described above.
+
 ## Required full-validation evidence
 
-Before merging a PR whose CI runs the macOS lanes (every PR except a docs-only one) but did not run the native `macos-metal` job at its exact head, for example an untrusted PR or one labeled `ci:hosted-macos`, run from its clean, committed checkout on capable Metal hardware:
+Before merging a PR that reaches the Metal suites but did not run the native `macos-metal` job at its exact head, for example an untrusted PR or one labeled `ci:hosted-macos`, run from its clean, committed checkout on capable Metal hardware:
 
 ```sh
 python3 tools/verify_metal_validation.py \

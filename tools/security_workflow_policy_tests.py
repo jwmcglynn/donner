@@ -129,6 +129,9 @@ SELF_HOSTED_NARROWING = {
         "needs.determine-targets.outputs.browser_affected == 'true')",
     (".github/workflows/main.yml", "macos-vm-qualification"):
         " && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
+    (".github/workflows/main.yml", "macos-metal"):
+        " && (needs.determine-targets.outputs.fallback == 'true' || "
+        "needs.determine-targets.outputs.metal_affected == 'true')",
 }
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
@@ -4521,10 +4524,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         # The desktop browser partition extends it with a reviewed narrowing condition.
         gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
         narrowing = SELF_HOSTED_NARROWING[(main, "macos-browser")]
+        # The native Metal job narrows the gate to pull requests that reach its suites.
+        metal = SELF_HOSTED_NARROWING[(main, "macos-metal")]
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
-        self.assertEqual(2, files[main].count(gate + " }}"))
+        self.assertEqual(1, files[main].count(gate + " }}"))
         self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
+        self.assertEqual(1, files[main].count(gate + metal + " }}"))
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         bazel = "        bazel: ['7.x', '8.x']\n"
         self.assertEqual(1, files[bcr].count(bazel))
@@ -4534,6 +4540,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 gate + narrowing, gate + narrowing.replace(" && (", " || (", 1), 1), ungated),
             "browser narrowing dropped": (main, files[main].replace(
                 gate + narrowing, gate, 1), ungated),
+            "metal narrowing widened": (main, files[main].replace(
+                gate + metal, gate + metal.replace(" && (", " || (", 1), 1), ungated),
+            "metal narrowing dropped": (main, files[main].replace(
+                gate + metal, gate, 1), ungated),
             "status prefix widened": (main, files[main].replace(
                 "${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push",
                 "${{ always() || needs.gatekeeper.outputs.is_duplicate_push", 1),

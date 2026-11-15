@@ -48,7 +48,8 @@ _COMPLETE = {
         "browser_preflight": _ran(), "browser_test": _ran(2)}),
 }
 
-_EVERYTHING = {"always": True, "browser_affected": True, "self_hosted_macos": True}
+_EVERYTHING = {"always": True, "browser_affected": True, "metal_affected": True,
+               "self_hosted_macos": True}
 
 
 class CoverageContractTest(unittest.TestCase):
@@ -106,6 +107,22 @@ class CoverageContractTest(unittest.TestCase):
                 self.assertEqual(problems, [
                     "macos / Test / %s is required on this pull request but did not run; "
                     "expected an executed macos-metal / %s" % (entry, step)])
+
+    def test_unaffected_pull_request_expects_no_native_metal_receipt(self):
+        # The native Metal job runs only when the pull request reaches its suites. Its skip on
+        # any other trusted pull request is expected, so its classes are not selected.
+        receipts = copy.deepcopy(_COMPLETE)
+        del receipts["macos-metal"]
+        problems, _ = self._check(receipts, dict(_EVERYTHING, metal_affected=False))
+        self.assertEqual([], problems)
+        # A pull request that reaches them, or falls back to //..., still requires every step.
+        for selection in (_EVERYTHING, dict(_EVERYTHING, metal_affected=False, fallback=True)):
+            with self.subTest(selection=selection):
+                problems, _ = self._check(receipts, selection)
+                self.assertEqual(3, len(problems), problems)
+                for name in ("shader-validation", "shader-memory-canary", "native-metal"):
+                    self.assertTrue(any("macos / Test / %s is required" % name in problem
+                                        for problem in problems), problems)
 
     def test_native_metal_suite_cannot_be_skipped_or_empty(self):
         for result in (_SKIPPED, _ran(0)):
@@ -241,11 +258,11 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_selection_comes_from_the_needs_context(self):
         needs = {"determine-targets": {"result": "success", "outputs": {
-                     "fallback": "false", "browser_affected": "true"}},
+                     "fallback": "false", "browser_affected": "true", "metal_affected": "true"}},
                  "gatekeeper": {"outputs": {"use_self_hosted_macos": "true"}}}
         self.assertEqual(contract.selection_from_needs(needs), {
             "always": True, "fallback": False, "browser_affected": True,
-            "self_hosted_macos": True})
+            "metal_affected": True, "self_hosted_macos": True})
         # A skipped job sets no outputs, which read as false everywhere but `always`.
         skipped = {job: {"result": "skipped", "outputs": {}}
                    for job in ("determine-targets", "gatekeeper")}

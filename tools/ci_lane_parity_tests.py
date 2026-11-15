@@ -243,7 +243,7 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9335dc43fed955b3"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "89f6dc59233caf58"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "60a1b7a4e8d1b120"),
 }
@@ -371,13 +371,14 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
 # `trusted_pr` and `renovate_pr` are the .github/actions/pr-trust outputs, which both the
 # self-hosted routing and the remote cache wiring read; a push gets "false" for both. A PR here
 # does not reach the WebGPU reference corpus (`wgpu_reference`), and it does reach a browser
-# test (`browser_affected`).
+# test (`browser_affected`) and a test of the native Metal suites (`metal_affected`).
 _PULL_REQUEST = {
     "github.event_name": "pull_request",
     "github.ref": "refs/pull/1/merge",
     "fallback": "false",
     "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
     "browser_affected": "true",
+    "metal_affected": "true",
     "wgpu_reference": "false",
 }
 
@@ -396,17 +397,18 @@ SCENARIOS = {
         "affected": "",
         "wgpu_reference": "",
         "browser_affected": "",
+        "metal_affected": "",
     },
     "trusted-pr": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                        renovate_pr="false"),
-    # A trusted PR whose affected set reaches no browser test.
+    # A trusted PR whose affected set reaches no browser, runner-sensitive or Metal suite test.
     "trusted-pr-native-only": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                    renovate_pr="false", affected="//donner/base:base_tests",
-                                   browser_affected="false"),
+                                   browser_affected="false", metal_affected="false"),
     # A trusted PR that falls back to //... (an infrastructure change).
     "trusted-pr-fallback": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                 renovate_pr="false", fallback="true", affected="",
-                                browser_affected=""),
+                                browser_affected="", metal_affected=""),
     "untrusted-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
                          renovate_pr="false"),
     "renovate-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
@@ -439,6 +441,7 @@ _MODELLED_OUTPUTS = {
     "needs.determine-targets.outputs.affected": "affected",
     "needs.determine-targets.outputs.wgpu_reference": "wgpu_reference",
     "needs.determine-targets.outputs.browser_affected": "browser_affected",
+    "needs.determine-targets.outputs.metal_affected": "metal_affected",
 }
 
 BAZEL_COMMANDS = ("build", "test")
@@ -2181,6 +2184,24 @@ class CiLaneParityTest(unittest.TestCase):
                                      "-requires_desktop_session" in tags)
         for other in ("main-push", "untrusted-pr", "renovate-pr", "trusted-pr-native-only"):
             self.assertFalse(job_gates(workflow, "macos-browser", other), other)
+
+    def test_native_metal_job_runs_only_when_the_pull_request_reaches_its_suites(self):
+        # The native Metal job reruns fixed suites uncached. It runs for a trusted pull request
+        # whose affected targets reach those suites, or that falls back to //..., and never for
+        # one that reaches neither; main and untrusted pull requests never route to it.
+        workflow = self.workflows["main.yml"]
+        for scenario, expected in (("trusted-pr", True), ("trusted-pr-fallback", True),
+                                   ("trusted-pr-native-only", False), ("main-push", False),
+                                   ("untrusted-pr", False), ("renovate-pr", False)):
+            with self.subTest(scenario=scenario):
+                self.assertEqual(expected, job_gates(workflow, "macos-metal", scenario))
+        # A skipped run is an expected skip for the coverage contract, not a gap.
+        manifest = self._coverage_manifest()
+        metal = {name for name, entry in manifest["lanes"]["macos"]["Test"].items()
+                 if any(c["job"] == "macos-metal" for c in entry.get("counterparts", []))}
+        self.assertEqual({"shader-validation", "shader-memory-canary", "native-metal"}, metal)
+        for name in metal:
+            self.assertEqual("metal_affected", manifest["lanes"]["macos"]["Test"][name]["when"])
 
     def test_subset_order_problems_are_found(self):
         main = parse_workflow(

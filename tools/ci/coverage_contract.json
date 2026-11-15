@@ -142,7 +142,7 @@
           }
         },
         "shader-validation": {
-          "when": "always",
+          "when": "metal_affected",
           "pr_only": true,
           "description": "Full Metal shader validation on a real GPU. The native Metal job is independent of the virtual macOS build and test pool.",
           "counterparts": [
@@ -153,7 +153,7 @@
           ]
         },
         "shader-memory-canary": {
-          "when": "always",
+          "when": "metal_affected",
           "pr_only": true,
           "description": "The Metal preflight, including the deliberate out-of-bounds read that shader validation must abort, on a real GPU.",
           "counterparts": [
@@ -167,12 +167,12 @@
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-20, #1952",
-            "reason": "Main's hosted macOS lane runs its Metal tests without shader validation and skips the tests that assert it: on the xcode-27 image (macOS 27.0.1, 26A434) the virtual GPU reports pipeline validation disabled and does not abort a deliberate out-of-bounds read (https://github.com/jwmcglynn/donner/actions/runs/39381507143). Shader validation runs only on the self-hosted real GPU, for trusted pull requests routed to it; any other pull request needs a local verifier receipt before merge."
+            "decision": "Maintainer decisions 2026-10-20, #1952, and 2026-11-14",
+            "reason": "Main's hosted macOS lane runs its Metal tests without shader validation and skips the tests that assert it: on the xcode-27 image (macOS 27.0.1, 26A434) the virtual GPU reports pipeline validation disabled and does not abort a deliberate out-of-bounds read (https://github.com/jwmcglynn/donner/actions/runs/39381507143). Shader validation runs only on the self-hosted real GPU, for trusted pull requests routed to it whose changes reach the Metal suites; any other pull request that reaches them needs a local verifier receipt before merge, and one that does not reach them needs none (docs/metal_validation.md)."
           }
         },
         "native-metal": {
-          "when": "always",
+          "when": "metal_affected",
           "pr_only": true,
           "description": "The complete native Metal device suite keeps shader validation enabled alongside the virtual pool.",
           "counterparts": [

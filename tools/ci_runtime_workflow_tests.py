@@ -1314,6 +1314,57 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for job_name in ("macos", "macos-self-hosted"):
             self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
 
+    def test_native_metal_job_is_selected_only_for_prs_that_reach_its_suites(self):
+        """The macos-metal job runs when the affected set reaches its suites, fails closed."""
+        determine = self._job_body("determine-targets")
+        self.assertIn("      metal_affected: ${{ steps.determine.outputs.metal_affected }}\n",
+                      determine)
+        start = determine.index("          # BEGIN macos-metal selection (metal_affected).\n")
+        end = determine.index("          # END macos-metal selection.\n", start)
+        # It reads the selection before manual targets are filtered out.
+        self.assertLess(end, determine.index('          manual_affected="'))
+        block = "#!/usr/bin/env bash\nset -euo pipefail\n" + textwrap.dedent(determine[start:end])
+        suites = ("//tools/ci:metal_full_validation", "//tools/ci:metal_preflight",
+                  "//tools/ci:metal_offline_compiler", "//tools/ci:metal_native")
+        self.assertIn("tests(%s)" % " + ".join(suites), block)
+        for suite in suites:
+            self.assertIn('name = "%s"' % suite.split(":", 1)[1], self.ci_target_definitions)
+        metal_test = "//donner/gpu/metal/tests:metal_buffer_bounds_tests"
+        listing = "#!/bin/sh\nprintf '%s\\n' '" + metal_test + "' '//donner/gpu/shader:msl_tests'\n"
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bazelisk = Path(directory) / "bazelisk"
+            for index, (bazelisk, affected, changed, expected) in enumerate((
+                (listing, metal_test, "donner/gpu/metal/MetalDevice.mm", "true"),
+                (listing, "//donner/base:base_tests " + metal_test, "donner/base/x.cc", "true"),
+                (listing, metal_test + "_extra", "donner/base/x.cc", "false"),
+                (listing, "//donner/base:base_tests", "donner/base/x.cc", "false"),
+                (listing, "//donner/base:base_tests", "tools/ci_macos_xcode.txt", "true"),
+                (listing, "//donner/base:base_tests", "tools/ci_metal_toolchain.py", "true"),
+                # A failed or empty suite query selects the job.
+                ("#!/bin/sh\nexit 3\n", "//donner/base:base_tests", "donner/base/x.cc", "true"),
+                ("#!/bin/sh\nexit 0\n", "//donner/base:base_tests", "donner/base/x.cc", "true"),
+            )):
+                with self.subTest(index=index, affected=affected, changed=changed):
+                    fake_bazelisk.write_text(bazelisk)
+                    fake_bazelisk.chmod(0o755)
+                    output = Path(directory) / ("outputs-%d" % index)
+                    result = self._run_script(
+                        block, [],
+                        env={**os.environ, "affected": affected, "changed_files": changed,
+                             "head_dir": directory, "GITHUB_OUTPUT": str(output),
+                             "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual("metal_affected=%s\n" % expected, output.read_text())
+        # The job runs on a selected or full-fallback pull request only; its steps stay mandatory.
+        native = self._job_body("macos-metal")
+        condition = next(line for line in native.splitlines() if line.startswith("    if:"))
+        self.assertTrue(condition.endswith(
+            "&& needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
+            "(needs.determine-targets.outputs.fallback == 'true' || "
+            "needs.determine-targets.outputs.metal_affected == 'true') }}"), condition)
+        self.assertIn("determine-targets", native.split("    if:", 1)[0])
+
     def _coverage_jobs(self):
         """Every (name, body) pair for a top-level key in coverage.yml."""
         parts = re.split(
