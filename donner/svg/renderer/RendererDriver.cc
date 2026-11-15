@@ -4645,6 +4645,14 @@ namespace {
  */
 struct ReportedSubDocumentWarnings {
   std::unordered_set<std::string> keys;
+  /// Whether the host sink was marked truncated for this sub-document's warnings.
+  bool truncationReported = false;
+
+  /// Whether delivering @p key would only drop it, after the truncation it causes was reported.
+  bool dropsAfterTruncation(const std::string& key) const {
+    return truncationReported && keys.size() >= ParseWarningSink::kMaximumWarnings &&
+           !keys.contains(key);
+  }
 };
 
 /**
@@ -4726,11 +4734,13 @@ PendingSubDocumentWarnings& EnsureHeldWarnings(Registry& registry,
   return *pending;
 }
 
-/// Hold @p warning unless it was already delivered or held, creating the held set on first use.
+/// Hold @p warning unless it was already delivered or held, or delivering it would only drop it,
+/// creating the held set on first use.
 void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
                             PendingSubDocumentWarnings*& pending, const ParseDiagnostic& warning) {
   std::string key = SubDocumentWarningKey(warning);
-  if ((reported != nullptr && reported->keys.contains(key)) ||
+  if ((reported != nullptr &&
+       (reported->keys.contains(key) || reported->dropsAfterTruncation(key))) ||
       (pending != nullptr && pending->keys.contains(key))) {
     return;
   }
@@ -4744,8 +4754,9 @@ void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarning
 
 /**
  * Hold @p warnings found while preparing a sub-document without a collecting host sink, skipping
- * warnings already delivered or held. Held warnings found before a mutation of the sub-document
- * are dropped first.
+ * warnings already delivered or held, and warnings and truncation that a host which already
+ * received the sub-document's truncation would drop. Held warnings found before a mutation of the
+ * sub-document are dropped first.
  *
  * @param registry The sub-document's registry, which holds the warnings.
  * @param warnings Warnings collected while preparing the sub-document.
@@ -4768,7 +4779,7 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
     }
     HoldSubDocumentWarning(registry, reported, pending, warning);
   }
-  if (warnings.resourceLimitExceeded()) {
+  if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
     EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
   }
   registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{.fingerprint = fingerprint});
@@ -4800,6 +4811,7 @@ void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warni
   }
   if (truncated) {
     hostSink.markResourceLimitExceeded();
+    reported.truncationReported = true;
   }
 }
 
