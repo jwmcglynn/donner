@@ -20,14 +20,19 @@ from tools import test_timing
 from tools.test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 
 _TOOLS = ("bazelisk", "curl", "git", "java", "sha256sum", "sleep")
+# The host commands the scripts run besides the stand-ins and the shell's builtins. The scripts
+# see these and the stand-ins only, so a command missing here fails on every host, as it would on
+# a remote executor whose PATH has no /usr/bin.
+_HOST_TOOLS = ("cp", "dirname", "grep", "mkdir", "mktemp", "rm")
 _REFERENCE = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"
 # Query expressions, by a fragment each one contains.
 _REFERENCE_QUERY = "labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))"
 _MANUAL_QUERY = '"manual", set('
 _MANIFEST_QUERY = "tests(//...)) except"
 _BROWSER_QUERY = '"launches-browser", set('
-_PARITY_QUERY = "intersect tests(//tools/ci:editor_geode)"
-_TAGGED_QUERY = "hosted_parity[,\\]]\", tests(set("
+# The Metal suite intersection comes first: its expression also names the suites.
+_METAL_INTERSECTION_QUERY = ") intersect tests(//tools/ci:metal_full_validation"
+_METAL_SUITE_QUERY = "tests(//tools/ci:metal_full_validation"
 _JAR_URL = "https://github.com/Tinder/bazel-diff/releases/download/v0.0.0/bazel-diff_deploy.jar"
 
 # One stand-in for every tool. It records its name and arguments, then answers from the JSON
@@ -115,6 +120,13 @@ class _ScriptTest(unittest.TestCase):
         for tool in _TOOLS:
             write_python_stand_in(cls.bin / tool, recorder, tool)
         shutil.copy(cls.executables.write_python3(), cls.bin / "python3")
+        cls.host = cls.executables.path / "host"
+        cls.host.mkdir()
+        for tool in _HOST_TOOLS:
+            found = shutil.which(tool)
+            if found is None:
+                raise unittest.SkipTest("host command %s is unavailable" % tool)
+            os.symlink(found, cls.host / tool)
         # The macOS image's /bin/bash is 3.2; the selection runs on Linux bash, and both work.
         cls.bash = "/bin/bash" if os.path.exists("/bin/bash") else shutil.which("bash")
 
@@ -138,7 +150,7 @@ class _ScriptTest(unittest.TestCase):
         event_path = self.work / "event.json"
         event_path.write_text(json.dumps(event or {}), encoding="utf-8")
         environ = {
-            "PATH": os.pathsep.join((str(self.bin), "/usr/bin", "/bin")),
+            "PATH": os.pathsep.join((str(self.bin), str(self.host))),
             "CAPTURE": str(self.capture), "STUB_CONFIG": str(config_path),
             "HOME": str(self.home), "RUNNER_TEMP": str(self.runner_temp),
             "GITHUB_WORKSPACE": str(self.workspace), "GITHUB_OUTPUT": str(self.output),
@@ -169,8 +181,8 @@ def _queries(**overrides):
         _MANUAL_QUERY: ("", 0),
         _MANIFEST_QUERY: ("//w:smoke\n\n//w:regression\n", 0),
         _BROWSER_QUERY: ("//w:smoke\n", 0),
-        _PARITY_QUERY: ("//e:shell_tests\n", 0),
-        _TAGGED_QUERY: ("//e:shell_tests\n", 0),
+        _METAL_INTERSECTION_QUERY: ("", 0),
+        _METAL_SUITE_QUERY: ("//donner/gpu/metal/tests:metal_tests\n", 0),
     }
     queries.update(overrides)
     return [[fragment, output, status] for fragment, (output, status) in queries.items()]
@@ -282,7 +294,7 @@ class DetermineTest(_ScriptTest):
             affected="//a:manual\n", queries=_queries(**{_MANUAL_QUERY: ("//a:manual\n", 0)}))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
-                            "fallback=true", "affected=")
+                            "metal_affected=false", "fallback=true", "affected=")
         self.assertIn("Filtered 1 manual-tagged affected target(s).", result.stdout)
         self.assertIn("Only manual-tagged affected targets detected", result.stdout)
 
@@ -294,7 +306,7 @@ class DetermineTest(_ScriptTest):
                     queries=_queries(**{_MANIFEST_QUERY: listing}))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
-                                    "fallback=true", "affected=")
+                                    "metal_affected=false", "fallback=true", "affected=")
                 self.assertIn("Could not list browser tests", result.stdout)
 
     def test_an_affected_set_publishes_the_selection_and_lane_hints(self):
@@ -305,16 +317,16 @@ class DetermineTest(_ScriptTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         selection = "//a:b %s @npm//:pkg+x //w:smoke //w:regression" % _REFERENCE
         self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=true",
-                            "wgpu_reference_affected=true", "browser_affected=true",
-                            "hosted_parity_affected=true", "hosted_parity_tests_affected=true",
-                            "fallback=false", "affected=" + selection)
+                            "wgpu_reference_affected=true", "metal_affected=false",
+                            "browser_affected=true", "fallback=false", "affected=" + selection)
         queries = self.queried(calls)
         self.assertIn('attr("tags", "manual", set("//a:b" "%s" "//a:manual" "@npm//:pkg+x"))'
                       % _REFERENCE, queries)
         self.assertIn('attr("tags", "launches-browser", set(%s))' % selection, queries)
-        quoted = " ".join('"%s"' % label for label in selection.split())
-        self.assertIn('attr("tags", "[\\[ ]hosted_parity[,\\]]", tests(set(%s)))' % quoted,
-                      queries)
+        # The Metal suites are intersected with the selection before manual targets drop out.
+        before_manual = " ".join('"%s"' % label for label in affected.split())
+        self.assertIn('set(%s) intersect tests(//tools/ci:metal_full_validation' % before_manual,
+                      "\n".join(queries))
         # Every query runs in the merge commit's worktree, and bazel-diff hashes both sides.
         heads = [call for call in calls if call[:3] == ["git", "worktree", "add"]]
         self.assertEqual([call[-1] for call in heads], ["merge0", "base0"])
@@ -339,27 +351,37 @@ class DetermineTest(_ScriptTest):
         self.assertTrue(outputs.endswith("fallback=false\naffected=//a:b\n"), outputs)
 
     def test_lane_hints_follow_their_queries(self):
-        empty = _queries(**{_REFERENCE_QUERY: ("//other:test\n", 0), _BROWSER_QUERY: ("", 0),
-                            _PARITY_QUERY: ("", 0), _TAGGED_QUERY: ("", 0)})
-        failed = _queries(**{_BROWSER_QUERY: ("", 1), _PARITY_QUERY: ("", 1),
-                             _TAGGED_QUERY: ("", 1)})
-        for name, queries, expected in (
-                ("none reached", empty, ("browser_affected=false", "hosted_parity_affected=false",
-                                         "hosted_parity_tests_affected=false")),
-                # A failed query selects its lane.
-                ("queries failed", failed, ("wgpu_reference_affected=false",
-                                            "browser_affected=true", "hosted_parity_affected=true",
-                                            "hosted_parity_tests_affected=true"))):
+        hints = ("wgpu_reference_affected", "metal_affected", "browser_affected")
+        cases = (
+            ("none reached", {_REFERENCE_QUERY: ("//other:test\n", 0), _BROWSER_QUERY: ("", 0)},
+             ("metal_affected=false", "browser_affected=false")),
+            ("Metal suite reached",
+             {_METAL_INTERSECTION_QUERY: ("//donner/gpu/metal/tests:metal_tests\n", 0)},
+             ("wgpu_reference_affected=true", "metal_affected=true", "browser_affected=true")),
+            # A failed or empty query selects its lane.
+            ("queries failed", {_BROWSER_QUERY: ("", 1), _METAL_SUITE_QUERY: ("", 1)},
+             ("wgpu_reference_affected=true", "metal_affected=true", "browser_affected=true")),
+            ("no Metal suite tests", {_METAL_SUITE_QUERY: ("", 0)},
+             ("wgpu_reference_affected=true", "metal_affected=true", "browser_affected=true")),
+        )
+        for name, overrides, expected in cases:
             with self.subTest(name):
-                result, _, outputs = self.determine(queries=queries)
+                result, _, outputs = self.determine(affected=_REFERENCE + "\n",
+                                                    queries=_queries(**overrides))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                lines = [line for line in outputs.splitlines()
-                         if line.split("=")[0] in ("browser_affected", "hosted_parity_affected",
-                                                   "hosted_parity_tests_affected",
-                                                   "wgpu_reference_affected")]
-                self.assertEqual(tuple(lines), tuple(line for line in expected
-                                                     if line != "wgpu_reference_affected=false"))
-                self.assertTrue(outputs.endswith("fallback=false\naffected=//a:b\n"), outputs)
+                lines = [line for line in outputs.splitlines() if line.split("=")[0] in hints]
+                self.assertEqual(tuple(lines), expected)
+                self.assertTrue(outputs.endswith("fallback=false\naffected=%s\n" % _REFERENCE),
+                                outputs)
+
+    def test_metal_job_inputs_outside_bazel_select_the_metal_job(self):
+        for changed in ("tools/ci_metal_toolchain.py\n", "third_party/BUILD.wgpu_native\n",
+                        "MODULE.bazel.lock\n"):
+            with self.subTest(changed=changed):
+                result, calls, outputs = self.determine(changed=changed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("metal_affected=true\n", outputs)
+                self.assertNotIn(_METAL_SUITE_QUERY, "\n".join(self.queried(calls)))
 
     def test_pr_meta_names_the_revision_whose_hashes_are_cached(self):
         for name, env, expected in (

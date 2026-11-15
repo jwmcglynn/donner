@@ -202,8 +202,8 @@ determine() {
   # workspace checkout, refs/pull/N/merge), not against HEAD_SHA.
   # Hashing base-tip vs HEAD_SHA attributes post-fork drift on main to
   # the PR, inflating the affected set on any branch that has not
-  # rebased (measured up to 126x over-inclusion; see
-  # docs/design_docs/0029-2). In the tip-vs-merge comparison, drift is
+  # rebased (measured up to 126x over-inclusion). In the tip-vs-merge
+  # comparison, drift is
   # present on BOTH sides, so unchanged-by-the-PR targets hash
   # identically and drop out; and because the merge graph is the one
   # hashed, reverse dependencies that exist ONLY in the merge (a dep
