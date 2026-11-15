@@ -24,7 +24,8 @@ description: >
    change touches the mirror — anything under `tools/cmake/`, a generated `CMakeLists.txt`, or a
    `BUILD.bazel` change that adds/removes/renames targets or deps — also run it with
    `--check --build` (`--build` requires `--check`); plain `--check` is static and misses real
-   compile drift that `cmake.yml` will catch in CI.
+   compile drift that CI's CMake consumer builds (`main.yml` on Linux, `cmake.yml` on macOS)
+   will catch.
 4. `tools/format/clang_format.sh -i` on every modified C/C++ file: the pinned clang-format
    21.1.6 that `bazel test //...` and the Lint lane check with. Other versions can differ.
 5. For fuzzer-sensitive changes (anything matching `fuzz.yml`'s PR paths:
@@ -163,8 +164,8 @@ Workflow map (all in `.github/workflows/`):
 | `main.yml`           | push + PR (opened/synchronize/reopened) + `workflow_call`                                                                    | Required gate: Bazel build/test on Linux + macOS                                                               |
 | `pr_base_change.yml` | PR edited                                                                                                                    | Calls `main.yml` only when the edit changed the base branch; a title or description edit skips                 |
 | `pr_metadata.yml`    | PR opened/synchronize/reopened/edited                                                                                        | PR text checks (`tools/check_pr_body.py`); its own concurrency group, never touches CI                         |
-| `cmake.yml`          | push + PR                                                                                                                    | CMake mirror: `gen_cmakelists.py --check` + real CMake build/ctest                                             |
-| `lint.yml`           | push + PR                                                                                                                    | Banned-pattern check for `examples/`, `gen_cmakelists.py --check`                                              |
+| `cmake.yml`          | nightly cron + dispatch + PR touching CMake inputs (see its `paths`) + non-main branch push                                  | macOS CMake build/ctest; branch-push Linux consumer with `--check`                                             |
+| `lint.yml`           | push + PR                                                                                                                    | Whole-tree lint (`tools/ci/lint_lane.sh`)                                                                      |
 | `sanitizers-pr.yml`  | PR touching Geode renderer paths                                                                                             | ASan+Geode; currently informational (`continue-on-error`, see doc 0031 M1.2)                                   |
 | `sanitizers.yml`     | nightly cron + dispatch                                                                                                      | Full sanitizer sweep                                                                                           |
 | `coverage.yml`       | nightly cron + dispatch (main only)                                                                                          | Complete-tree coverage; separate `upload-coverage` job sends it to Codecov (no PR runs or patch status)        |
@@ -176,8 +177,8 @@ Workflow map (all in `.github/workflows/`):
 
 **Check-name collisions**: `gh pr checks` interleaves every workflow's checks, and job names
 repeat — `cmake.yml` also defines `gatekeeper`, `linux`, and `macos` (its build lanes show a
-matrix suffix, e.g. `linux (tiny_skia)`). Other names you will see: `validate-generator`
-(cmake.yml), `lint` + `cmake-validate` (lint.yml), `asan-geode` (sanitizers-pr.yml). Disambiguate
+matrix suffix, e.g. `linux (tiny_skia)`). Other names you will see: `lint` and
+`lint-self-hosted` (lint.yml), `asan-geode` (sanitizers-pr.yml). Disambiguate
 by the run URL's workflow name, never by the job-name column alone.
 
 ## 6. Failure decision tree: transient vs real

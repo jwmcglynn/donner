@@ -263,6 +263,24 @@ class GatekeeperTest(unittest.TestCase):
                 self.assertEqual(output, "docs_only=false\n")
                 self.assertIn(f"Non-doc change: {path}", result.stdout)
 
+    def test_cmake_generator_inputs_clear_docs_only(self):
+        # A documentation-only pull request runs no CMake generator check (gen_cmakelists.py
+        # --check runs only in CI's Linux jobs, which docs-only pull requests skip). That is safe
+        # only while no path docs-only admits is a generator input: the Bazel build graph it
+        # queries, the generator and its dependency map, CMake files and the module versions it
+        # turns into FetchContent downloads.
+        for path in ("tools/cmake/gen_cmakelists.py", "tools/cmake/external_deps.json",
+                     "examples/cmake_consumer/CMakeLists.txt", "third_party/entt/CMakeLists.txt",
+                     "tools/cmake/apply_woff2_patch.cmake", "CMakePresets.json",
+                     "donner/base/BUILD.bazel", "donner/base/RcString.h", "build_defs/rules.bzl",
+                     "MODULE.bazel", "third_party/bazel/non_bcr_deps.bzl"):
+            with self.subTest(path=path):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                head = _commit(self.repo, ["docs/guide.md", path], "change " + path)
+                result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "docs_only=false\n")
+
     def test_deletions_are_not_counted(self):
         # Pins the existing ACMR filter: a pull request that only deletes a build input next to
         # documentation edits is classed docs-only. Changing this is a deliberate policy change.

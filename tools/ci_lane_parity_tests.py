@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shlex
 import unittest
+from unittest import mock
 
 from python.runfiles import runfiles
 from tools import bazelrc_configs
@@ -63,10 +64,7 @@ TRIGGER_ALLOWLIST = {
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
     ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
-    ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
-    ("cmake.yml", "validate-generator", "trusted-pr"): "macos-self-hosted",
     ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
-    ("lint.yml", "cmake-validate", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
@@ -123,22 +121,8 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
-    ("cmake.yml", "macos", "macos-self-hosted", "Build with CMake (tiny_skia)",
-     "step-changed", "e04392c28e167107"):
-        "The same consumer configure/build/CTest runs with two build tasks and persistent ccache; "
-        "native tool provisioning is checked rather than installed during a PR.",
-    ("cmake.yml", "macos", "macos-self-hosted", "Install build tools", "step-main-only", ""):
-        "The persistent runner must already provide CMake and Ninja; CI does not install host tools.",
-    ("cmake.yml", "macos", "macos-self-hosted", "Restore CMake dependencies", "step-main-only", ""):
-        "Native builds extract verified source archives into fresh build directories.",
-    ("cmake.yml", "macos", "macos-self-hosted", "Restore compiler outputs", "step-main-only", ""):
-        "The bounded native consumer uses persistent ccache instead of hosted snapshots.",
     ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
         "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
-    ("lint.yml", "cmake-validate", "lint-self-hosted",
-     "actions/checkout@v7 [('persist-credentials', 'false')]", "step-main-only", ""):
-        "The shared lint checkout retains full history for changed-method complexity checks; "
-        "the generator consumes the same event source tree.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
         "The native macos-browser partition runs desktop-session tests separately; "
@@ -423,7 +407,7 @@ _CACHE_HIT = ("", "A cache restore result only gates that cache's save step; a m
 
 STEP_OUTPUTS = {
     **{"steps.%s.outputs.cache-hit" % step_id: _CACHE_HIT
-       for step_id in ("base-hashes", "bazel-cache", "ccache", "cmake-deps", "npm-cache")},
+       for step_id in ("base-hashes", "bazel-cache", "npm-cache")},
     "steps.browser_gpu_failure.outputs.run_probe": (
         "", "Gates the advisory browser GPU comparisons, which run only after a failure and "
             "cannot fail the job."),
@@ -1313,6 +1297,40 @@ def trigger_differences(workflows, main_push_workflows):
     for name in main_push_workflows:
         observed |= _pull_request_trigger_differences(name, workflows[name]["on"])
     return observed
+
+
+def _event_starts(workflow, scenario):
+    """Whether a workflow's trigger starts a run for this scenario's event. A pull request's
+    path filter is taken to match: a pull request can change any path."""
+    trigger = triggers(workflow.get("on"))
+    values = SCENARIOS[scenario]
+    if values["github.event_name"] == "pull_request":
+        return "pull_request" in trigger
+    if "push" not in trigger:
+        return False
+    push = trigger["push"] or {}
+    branch = values["github.ref"].removeprefix("refs/heads/")
+    return branch_filter_includes(branch, push.get("branches"), push.get("branches-ignore"))
+
+
+# The CMake generator check, run directly or through the CMake consumer script.
+_GENERATOR_CHECK = re.compile(
+    r"gen_cmakelists\.py\b[^\n]*--check\b|cmake_consumer\.sh build\b[^\n]*--check\b")
+
+
+def _runs_generator_check(workflow, job_name, scenario):
+    checks = [step for step in _jobs(workflow)[job_name].get("steps") or []
+              if _GENERATOR_CHECK.search(str(step.get("run") or ""))]
+    return bool(checks) and job_runs(workflow, job_name, scenario) and any(
+        runs(step.get("if"), scenario) for step in checks)
+
+
+def generator_check_jobs(workflows, scenario):
+    """(workflow, job) pairs that run the CMake generator check for this scenario's event."""
+    return {(name, job_name) for name, workflow in sorted(workflows.items())
+            if _event_starts(workflow, scenario)
+            for job_name in _jobs(workflow)
+            if _runs_generator_check(workflow, job_name, scenario)}
 
 
 def _jobs_on_both_triggers(workflows, main_push_workflows):
@@ -2321,6 +2339,35 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(job=job, output=output):
                 self.assertIn(output, jobs[job]["outputs"])
                 self.assertIn(job, _needs(jobs["coverage-contract"]))
+
+    def test_cmake_generator_check_runs_once_per_event(self):
+        # gen_cmakelists.py --check runs once per event, in the CMake consumer step of the Linux
+        # job that the event runs: main.yml's hosted or self-hosted Linux job for main pushes and
+        # pull requests, and the CMake workflow's Linux consumer for a branch push before its pull
+        # request exists. A documentation-only pull request runs none, since no path it can change
+        # is a generator input (tools/ci/gatekeeper_tests.py). The label-gated CMake cache
+        # qualification jobs repeat the main lane's command on purpose and never run without
+        # their label, which no scenario carries.
+        expected = {
+            "main-push": ("main.yml", "linux"),
+            "branch-push": ("cmake.yml", "linux"),
+            "trusted-pr": ("main.yml", "linux-self-hosted"),
+            "trusted-pr-native-only": ("main.yml", "linux-self-hosted"),
+            "trusted-pr-fallback": ("main.yml", "linux-self-hosted"),
+            "untrusted-pr": ("main.yml", "linux"),
+            "renovate-pr": ("main.yml", "linux"),
+        }
+        branch_push = dict(SCENARIOS["main-push"], **{"github.ref": "refs/heads/topic"})
+        with mock.patch.dict(SCENARIOS, {"branch-push": branch_push}):
+            self.assertEqual(set(SCENARIOS), set(expected))
+            for scenario, owner in expected.items():
+                with self.subTest(scenario=scenario):
+                    self.assertEqual({owner}, generator_check_jobs(self.workflows, scenario))
+        # The pattern sees both ways of running the check.
+        for line in ("python3 tools/cmake/gen_cmakelists.py --check",
+                     "tools/ci/cmake_consumer.sh build --check --ccache"):
+            self.assertRegex(line, _GENERATOR_CHECK)
+        self.assertNotRegex("tools/ci/cmake_consumer.sh build --ccache", _GENERATOR_CHECK)
 
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():
