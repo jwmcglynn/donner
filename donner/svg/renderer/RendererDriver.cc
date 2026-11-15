@@ -4673,10 +4673,16 @@ struct PendingSubDocumentWarnings {
 /// host sink restyles it to find its current warnings.
 struct RediscoverSubDocumentWarnings {};
 
-/// Fingerprint of the last warnings a preparation without a collecting host sink found, once each
-/// of them was delivered or held, so finding the same warnings again needs no matching.
+/// The last warnings a preparation without a collecting host sink found, once each of them was
+/// delivered or held, so finding exactly the same warnings again needs no matching or formatting.
 struct HeldSubDocumentWarningBatch {
-  std::size_t fingerprint = 0;
+  std::vector<ParseDiagnostic> warnings;  //!< The batch's warnings, in order.
+  bool truncated = false;                 //!< Whether the batch was truncated.
+
+  /// Whether @p batch holds exactly these warnings and truncation.
+  bool matches(const ParseWarningSink& batch) const {
+    return truncated == batch.resourceLimitExceeded() && warnings == batch.warnings();
+  }
 };
 
 std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
@@ -4687,22 +4693,6 @@ std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
 
 std::uint64_t SubDocumentRevision(const Registry& registry) {
   return registry.ctx().get<components::SVGDocumentContext>().mutationRevision();
-}
-
-/// Order-sensitive fingerprint of @p warnings, computed without formatting them.
-std::size_t WarningBatchFingerprint(const ParseWarningSink& warnings) {
-  constexpr std::size_t kNoOffset = static_cast<std::size_t>(-1);
-  std::size_t fingerprint = warnings.resourceLimitExceeded() ? 1 : 0;
-  const auto mix = [&fingerprint](std::size_t value) {
-    fingerprint ^= value + 0x9e3779b97f4a7c15ULL + (fingerprint << 6) + (fingerprint >> 2);
-  };
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    mix(std::hash<std::string_view>()(std::string_view(warning.reason)));
-    mix(static_cast<std::size_t>(warning.severity));
-    mix(warning.range.start.offset.value_or(kNoOffset));
-    mix(warning.range.end.offset.value_or(kNoOffset));
-  }
-  return fingerprint;
 }
 
 /**
@@ -4790,9 +4780,8 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
     return;
   }
   DropStaleSubDocumentWarnings(registry);
-  const std::size_t fingerprint = WarningBatchFingerprint(warnings);
   const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
-  if (last != nullptr && last->fingerprint == fingerprint) {
+  if (last != nullptr && last->matches(warnings)) {
     return;
   }
   const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
@@ -4806,7 +4795,8 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
   if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
     EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
   }
-  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{.fingerprint = fingerprint});
+  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{
+      .warnings = warnings.warnings(), .truncated = warnings.resourceLimitExceeded()});
 }
 
 void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSink) {
