@@ -981,8 +981,8 @@ struct PaintParams {
   components::ResolvedPaintServer stroke = PaintServer::None{};
   double fillOpacity = 1.0;
   double strokeOpacity = 1.0;
-  /// CurrentColor value for paint server resolution.
-  css::Color currentColor = css::Color(css::RGBA());
+  /// Computed `color` property, already resolved to RGBA, used to resolve `currentColor` paint.
+  css::RGBA currentColor = css::RGBA();
   /// View box used for unit resolution and gradient coordinate conversion.
   Box2d viewBox;
   StrokeParams strokeParams;

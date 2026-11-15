@@ -3899,6 +3899,118 @@ INSTANTIATE_TEST_SUITE_P(SpreadingPrimitives, FilterInputMarginTest,
                                        : "BottomRight");
                          });
 
+/// `hsl(120, 100%, 50%)` is exactly `rgb(0, 255, 0)`, the `lime` keyword.
+constexpr std::string_view kLimeHsl = "hsl(120, 100%, 50%)";
+
+/// Renders a 64x64 document whose root carries \p rootStyle, with the hermetic test fonts.
+RendererBitmap RenderColorDocument(std::string_view rootStyle, std::string_view body) {
+  SVGDocument document = ParseSvg(
+      std::string(
+          R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" style=")svg") +
+      std::string(rootStyle) + "\">" + std::string(body) + "</svg>");
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders \p body under `color: hsl(...)` and under no color with `lime` substituted for each
+/// `currentColor`, and expects identical lime-colored output.
+void ExpectHslCurrentColorMatchesLime(std::string_view body, std::string_view label) {
+  std::string limeBody(body);
+  for (std::size_t pos = limeBody.find("currentColor"); pos != std::string::npos;
+       pos = limeBody.find("currentColor", pos)) {
+    limeBody.replace(pos, std::string_view("currentColor").size(), "lime");
+  }
+  const auto actual = RenderColorDocument("color: " + std::string(kLimeHsl), body);
+  const auto expected = RenderColorDocument("", limeBody);
+  ExpectVisibleBitmap(expected, label);
+  editor::tests::CompareBitmapToBitmap(actual, expected, label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, CurrentColorFromHslColorPaintsShapeFillAndStroke) {
+  constexpr std::string_view kBody =
+      R"svg(<rect x="8" y="8" width="20" height="48" fill="currentColor"/>
+         <rect x="40" y="12" width="12" height="40" fill="none" stroke="currentColor"
+               stroke-width="8"/>)svg";
+  ExpectHslCurrentColorMatchesLime(kBody, "hsl_current_color_shape");
+  const auto actual = RenderColorDocument("color: " + std::string(kLimeHsl), kBody);
+  EXPECT_THAT(PixelAt(actual, 18, 32), testing::ElementsAre(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actual, 40, 32), testing::ElementsAre(0, 255, 0, 255));
+}
+
+TEST_F(RendererRegressionTests, HslColorDoesNotDisturbLiteralAndGradientPaint) {
+  constexpr std::string_view kBody =
+      R"svg(<linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+         </linearGradient>
+         <rect x="8" y="8" width="20" height="48" fill="blue" stroke="red"/>
+         <rect x="36" y="8" width="20" height="48" fill="url(#g)"/>)svg";
+  const auto actual = RenderColorDocument("color: " + std::string(kLimeHsl), kBody);
+  const auto expected = RenderColorDocument("", kBody);
+  ExpectVisibleBitmap(expected, "hsl_color_literal_paint");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "hsl_color_literal_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, CurrentColorFromHslColorPaintsText) {
+  ExpectHslCurrentColorMatchesLime(
+      R"svg(<text x="4" y="40" font-size="32" fill="currentColor" stroke="currentColor"
+               text-decoration="underline">Hi</text>)svg",
+      "hsl_current_color_text");
+}
+
+TEST_F(RendererRegressionTests, CurrentColorKeywordOnColorPropertyInherits) {
+  constexpr std::string_view kRect = R"svg(<rect width="64" height="64" fill="currentColor"/>)svg";
+  const auto rootActual = RenderColorDocument("color: currentcolor", kRect);
+  editor::tests::CompareBitmapToBitmap(rootActual, RenderColorDocument("", kRect),
+                                       "root_currentcolor_initial",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(rootActual, 32, 32), testing::ElementsAre(0, 0, 0, 255));
+
+  const auto lime = RenderColorDocument("", R"svg(<rect width="64" height="64" fill="lime"/>)svg");
+  for (std::string_view body : {
+           R"svg(<g style="color: hsl(120, 100%, 50%)">
+                <rect width="64" height="64" style="color: currentcolor" fill="currentColor"/></g>)svg",
+           R"svg(<g color="hsl(120, 100%, 50%)"><g color="currentColor">
+                <rect width="64" height="64" fill="currentColor"/></g></g>)svg",
+       }) {
+    SCOPED_TRACE(body);
+    const auto actual = RenderColorDocument("color: red", body);
+    editor::tests::CompareBitmapToBitmap(actual, lime, "child_currentcolor_inherits",
+                                         editor::tests::PixelmatchIdentityParams());
+    EXPECT_THAT(PixelAt(actual, 32, 32), testing::ElementsAre(0, 255, 0, 255));
+  }
+}
+
+TEST_F(RendererRegressionTests, CurrentColorFromHslColorResolvesFilterColors) {
+  ExpectHslCurrentColorMatchesLime(
+      R"svg(<filter id="f" x="0" y="0" width="1" height="1"><feFlood flood-color="currentColor"/>
+         </filter><rect x="8" y="8" width="48" height="48" filter="url(#f)"/>)svg",
+      "hsl_current_color_flood");
+  ExpectHslCurrentColorMatchesLime(
+      R"svg(<filter id="f"><feDropShadow dx="4" dy="4" stdDeviation="0"
+                                      flood-color="currentColor"/></filter>
+         <rect x="8" y="8" width="40" height="40" fill="blue" filter="url(#f)"/>)svg",
+      "hsl_current_color_drop_shadow_primitive");
+  ExpectHslCurrentColorMatchesLime(
+      R"svg(<rect x="8" y="8" width="40" height="40" fill="blue"
+               style="filter: drop-shadow(4px 4px 0 currentColor)"/>)svg",
+      "hsl_current_color_drop_shadow_function");
+  ExpectHslCurrentColorMatchesLime(
+      R"svg(<filter id="f" x="0" y="0" width="1" height="1">
+           <feDiffuseLighting lighting-color="currentColor" surfaceScale="0">
+             <feDistantLight elevation="90"/></feDiffuseLighting></filter>
+         <rect x="8" y="8" width="48" height="48" filter="url(#f)"/>)svg",
+      "hsl_current_color_lighting");
+}
+
+TEST_F(RendererRegressionTests, CurrentColorFromHslColorResolvesStopColor) {
+  ExpectHslCurrentColorMatchesLime(
+      R"svg(<linearGradient id="g"><stop stop-color="currentColor"/>
+           <stop offset="1" stop-color="currentColor" stop-opacity="0.5"/></linearGradient>
+         <rect x="8" y="8" width="48" height="48" fill="url(#g)"/>)svg",
+      "hsl_current_color_stop");
+}
+
 class ClipContourClosureTest : public testing::TestWithParam<std::string_view> {};
 
 TEST_P(ClipContourClosureTest, OpenAndExplicitClosureProduceIdenticalMasks) {
