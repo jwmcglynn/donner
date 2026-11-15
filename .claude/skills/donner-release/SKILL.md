@@ -38,8 +38,9 @@ logs.
    MODULE.bazel still says `-pre` is a defect. `docs/release_checklists/release_checklist.md` has no version-bump
    item (the step only appears as BCR pre-flight gate #1 in 0018); do it anyway.
 5. **Last of all**: the dedicated build-report commit. It is the commit that gets tagged.
-6. Qualify the exact main commit with BCR Preflight, then tag, push the tag, create the GitHub
-   Release and verify that its artifacts match the qualified bytes.
+6. Qualify the exact main commit with BCR Preflight (dispatch it on `main`; pushes do not run
+   it), then tag, push the tag, create the GitHub Release and verify that its artifacts match
+   the qualified bytes.
 7. (If BCR publish is in scope) obtain separate approval and prepare the fork — see §BCR publishing.
 8. Post-release: update `docs/ProjectRoadmap.md` (mark milestone shipped), announce.
 

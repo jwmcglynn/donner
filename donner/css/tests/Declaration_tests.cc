@@ -6,6 +6,7 @@
 #include <optional>
 #include <sstream>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/css/CSS.h"
 
 namespace donner::css {
@@ -437,6 +438,24 @@ TEST(MergeStyleDeclarations, EmptyInputs) {
 
   auto existing = parse("fill: red");
   EXPECT_EQ(mergeStyleDeclarations(existing, {}), "fill: red");
+}
+
+// Property names are matched with ASCII-only case folding, so names that differ in a byte above
+// 0x7F stay distinct in every locale.
+TEST(MergeStyleDeclarations, MatchesNamesWithAsciiCaseFoldingInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    auto existing = parse("\xC3\x89: 1; Fill: red");
+    auto updates = parse("\xE3\x89: 2; fill: blue");
+    EXPECT_EQ(mergeStyleDeclarations(existing, updates), "\xC3\x89: 1; \xE3\x89: 2; fill: blue");
+  });
+}
+
+// Custom property names are case-sensitive, so `--Foo` and `--foo` are different properties, while
+// standard property names still match case-insensitively.
+TEST(MergeStyleDeclarations, CustomPropertyNamesAreCaseSensitive) {
+  auto existing = parse("--Foo: 1; COLOR: red");
+  auto updates = parse("--foo: 2; color: blue");
+  EXPECT_EQ(mergeStyleDeclarations(existing, updates), "--Foo: 1; --foo: 2; color: blue");
 }
 
 TEST(MergeStyleDeclarations, AddsNewProperty) {

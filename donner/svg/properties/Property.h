@@ -192,8 +192,8 @@ struct Property {
 
     if constexpr (kCascade == PropertyCascade::Inherit ||
                   kCascade == PropertyCascade::PaintInherit) {
-      assert(parent.state != PropertyState::Inherit && "Parent should already be resolved");
-
+      // A parent still in the Inherit state had no ancestor to inherit from, such as `inherit` on
+      // the root; its get() returns the initial value, which is the CSS result for that case.
       const bool isPaint = kCascade == PropertyCascade::PaintInherit;
       const bool canInherit = options == PropertyInheritOptions::All ||
                               (options == PropertyInheritOptions::NoPaint && !isPaint);

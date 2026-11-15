@@ -1,8 +1,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
 #include <tuple>
 
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGFEFloodElement.h"
 #include "donner/svg/SVGMarkerElement.h"
@@ -167,6 +169,30 @@ TEST(RendererAnimationCoordinateContext, PatternBaseUsesStylesheetAndTypedOverri
 }
 
 #ifdef DONNER_TEXT_ENABLED
+// An additive animation on text `x` serializes the underlying positions and parses them back. Under
+// a comma-decimal global locale "0.5" must not be read as the two-item list "0,5", nor "1000.5" as
+// "1.000,5".
+TEST(RendererAnimationCoordinateContext, TextPositionAnimationIgnoresGlobalLocale) {
+  const ScopedCommaDecimalGlobalLocale commaDecimalLocale;
+  for (const auto& [underlying, sum, offset] :
+       {std::tuple{"0.5", "4.5", ""}, std::tuple{"1000.5", "1004.5", "-1000"}}) {
+    SCOPED_TRACE(testing::Message() << "x=" << underlying);
+    const std::string prefix = std::string("<g transform='translate(") + (*offset ? offset : "0") +
+                               " 0)'><text font-size='12' y='14' x='";
+    auto document = instantiateSubtree(prefix + underlying +
+                                           "'>H<animate attributeName='x' by='4' additive='sum' "
+                                           "dur='1s' fill='freeze'/></text></g>",
+                                       parser::SVGParser::Options(), Vector2i(64, 16));
+    auto expected = instantiateSubtree(prefix + sum + "'>H</text></g>",
+                                       parser::SVGParser::Options(), Vector2i(64, 16));
+    document.setTime(2);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         std::string("text-position-locale-") + underlying,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererAnimationCoordinateContext, TextPathToOnlyUsesTypedOffset) {
   const std::string prefix = "<text font-size='12'><textPath id='p' path='M0 14H64'";
   const std::string suffix = ">H</textPath></text>";

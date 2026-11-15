@@ -4,6 +4,7 @@
 #include <numeric>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/StringUtils.h"
 #include "donner/css/parser/details/ComponentValueParser.h"
 #include "donner/css/parser/details/Tokenizer.h"
 
@@ -162,9 +163,7 @@ public:
         auto ident = std::move(token.get<Token::Ident>());
 
         // Comparisons are case-insensitive, convert token to lowercase.
-        std::string name = ident.value.str();
-        std::transform(name.begin(), name.end(), name.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+        const std::string name = StringUtils::ToLowerAscii(ident.value);
 
         // TODO: <system-color>
         if (auto color = Color::ByName(name)) {
