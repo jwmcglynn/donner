@@ -389,6 +389,41 @@ TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
   }
 }
 
+// A frame whose filters outgrow the retained GPU memory submits a chunk and retries the filter in
+// it. A frame recovered that way drew every filter, so it reports no refusal. These blurs outgrow
+// the memory every few filters, and the frame stops short of its work limit. Natively the surface
+// budget asks for each chunk before the filter budget refuses anything; the filter execution budget
+// tests cover a chunk that follows a memory refusal.
+TEST_F(RendererGeodeTest, FilterFrameRecoveredThroughAMemoryChunkReportsNoRefusal) {
+  using namespace components;
+  constexpr uint32_t kWidth = 1024;
+  constexpr uint32_t kHeight = 768;
+  constexpr uint64_t kFilters = 24;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(device);
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kWidth, kHeight);
+  renderer.beginFrame(viewport);
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 2, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  for (uint64_t i = 0; i < kFilters; ++i) {
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kWidth, kHeight}));
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kWidth, kHeight}), StrokeParams{});
+    renderer.popFilterLayer();
+  }
+  const RendererResourceStats stats = renderer.resourceStats();
+  renderer.endFrame();
+  ASSERT_GT(renderer.filterBudgetChunksForTesting(), 0u)
+      << "the frame must outgrow one chunk's memory for this to cover the retry";
+  EXPECT_EQ(stats.filterExecutions, kFilters) << "every filter ran";
+  EXPECT_EQ(stats.filterGraphsRefused, 0u);
+  EXPECT_FALSE(stats.filterBudgetRejected);
+}
+
 // Tiles on the raster edge keep the transparent outside of the raster, so the box passes there
 // must keep their spill past the edge exactly as an untiled raster with room does. Covers even and
 // odd windows, an anisotropic blur whose X axis uses the sampled kernel, and a drop shadow. Its
