@@ -41,9 +41,11 @@ donner_cc_library(
     name = "url_loader",
     srcs = [
         "UrlLoader.cc",
+        "UrlReference.cc",
     ],
     hdrs = [
         "UrlLoader.h",
+        "UrlReference.h",
     ],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
@@ -214,6 +216,7 @@ donner_cc_test(
         ":font_catalog_types",
         ":font_manager",
         ":font_metadata",
+        "//donner/base:base_test_utils",
         "//donner/base/fonts:sfnt_utils",
         "//donner/css/parser",
         "//donner/svg/core",
@@ -252,6 +255,8 @@ donner_cc_test(
         ":font_catalog",
         ":font_catalog_types",
         ":font_manager",
+        "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/svg/core",
         "//donner/svg/text:text_backend_simple",
         "@com_google_gtest//:gtest_main",
@@ -277,6 +282,7 @@ donner_cc_test(
     name = "url_loader_tests",
     srcs = [
         "tests/UrlLoader_tests.cc",
+        "tests/UrlReference_tests.cc",
     ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
@@ -290,6 +296,13 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "url_reference_fuzzer",
+    srcs = ["tests/UrlReference_fuzzer.cc"],
+    corpus = "tests/url_reference_corpus",
+    deps = [":url_loader"],
 )
 
 donner_cc_fuzzer(

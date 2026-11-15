@@ -45,13 +45,16 @@ exports_files(
 )
 
 # Read by the source-boundary and fuzzer-routing checks, which live in a test-only package so
-# this package loads no development-only rule set.
+# this package loads no development-only rule set, and by the GPU test scheduling check.
 exports_files(
     [
         "BUILD.bazel",
         "tests/GeodeSvgGeometryBudget_fuzzer.cc",
     ],
-    visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
+    visibility = [
+        "//build_defs:__pkg__",
+        "//donner/svg/renderer/geode/boundary_tests:__pkg__",
+    ],
 )
 
 # Build flag controlling whether Geode's GPU targets are compiled. It defaults on when a downstream
@@ -120,8 +123,8 @@ donner_cc_fuzzer(
     routing_manifest = "geode_geometry_fuzzer_routing_manifest",
     routing_manifest_visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
     tags = [
-        "exclusive-if-local",
         "fuzz_geode",
+        "resources:local_gpu:1",
     ],
     deps = [
         "//donner/base:packaged_resource_test_fixture",
@@ -911,7 +914,7 @@ donner_cc_test(
     # Matches the tag `donner_multi_transitioned_test` adds for GPU-opening
     # tests, so running the impl directly cannot land alongside another test
     # that is driving the GPU.
-    tags = ["exclusive-if-local"],
+    tags = ["resources:local_gpu:1"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_counters",
@@ -949,7 +952,7 @@ donner_cc_test(
     name = "geode_glyph_instancing_tests_impl",
     srcs = ["tests/GeodeGlyphInstancing_tests.cc"],
     data = ["//third_party/resvg-test-suite:fonts"],
-    tags = ["exclusive-if-local"],
+    tags = ["resources:local_gpu:1"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_counters",

@@ -84,6 +84,7 @@ declare global {
     __donnerWholeAppWorker?: boolean;
     __donnerCanStartWasm?: boolean;
     __donnerResourcesInstalledAtMs?: number;
+    __donnerPackagedResourceCacheTimeouts?: () => string[];
     __donnerFirstFramePresented?: boolean;
     __donnerRasterShutdownRequests?: number;
     __donnerLayerThumbnailStats?: {
@@ -815,6 +816,43 @@ test("welcome picker does not render a hidden document", async ({ page }) => {
   expect(fatalMessages).toEqual([]);
 });
 
+interface ReadbackStatsPublication {
+  request: number;
+  thumbnails: number | null;
+}
+
+// Records each `__donnerWgpuReadbackStats` object the editor assigns from now on, as it is
+// assigned: its request and how many carousel thumbnails it carries.
+async function recordReadbackStatsPublications(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const scope = window as Window & {
+      __donnerReadbackStatsPublications?: ReadbackStatsPublication[];
+    };
+    const published: ReadbackStatsPublication[] = [];
+    let current = window.__donnerWgpuReadbackStats;
+    scope.__donnerReadbackStatsPublications = published;
+    Object.defineProperty(window, "__donnerWgpuReadbackStats", {
+      configurable: true,
+      get: () => current,
+      set: (value) => {
+        const thumbnails = value?.carouselThumbnails;
+        published.push({
+          request: value?.request ?? 0,
+          thumbnails: Array.isArray(thumbnails) ? thumbnails.length : null,
+        });
+        current = value;
+      },
+    });
+  });
+}
+
+async function readReadbackStatsPublications(page: Page): Promise<ReadbackStatsPublication[]> {
+  return page.evaluate(() =>
+    (window as Window & { __donnerReadbackStatsPublications?: ReadbackStatsPublication[] })
+      .__donnerReadbackStatsPublications ?? []
+  );
+}
+
 test("welcome picker paints before asynchronously rendering real SVG thumbnails", async ({ page }) => {
   test.skip(
     kHostedMacosQuarantine,
@@ -888,6 +926,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   let geodeThumbnailStats: WgpuCarouselThumbnailStats[] | undefined;
   if (kBackend === "geode") {
+    await recordReadbackStatsPublications(page);
     const requestId = await requestWgpuDiagnostic(page);
     await expect
       .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
@@ -899,6 +938,13 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     geodeThumbnailStats = await page.evaluate(
       () => window.__donnerWgpuReadbackStats?.carouselThumbnails,
     );
+    // A page read can land between any two main-thread tasks, so every readback object published
+    // for this request must already carry its thumbnails when it is assigned.
+    const published = (await readReadbackStatsPublications(page))
+      .filter((publication) => publication.request >= requestId);
+    expect(published.length).toBeGreaterThan(0);
+    expect(published, "a readback was published without its carousel thumbnails")
+      .toEqual(published.map((publication) => ({ request: publication.request, thumbnails: 4 })));
   }
 
   const settled = await page.evaluate(() => ({
@@ -2639,13 +2685,40 @@ test("code-only updates transfer no unchanged essential resource bodies from a p
     });
   }, cachedAssets);
   await page.unroute(isCriticalAsset);
+  // A cache read that misses the broker's deadline falls back to the network by design, and loaded
+  // runners can produce such reads. Hold one read open so the fallback runs on every warm load; the
+  // contract is that every other unchanged essential resource comes from the cache.
+  const heldAsset = critical.find((asset) => asset.group === "chrome") ?? critical[0];
+  await page.addInitScript((heldId) => {
+    const match = Cache.prototype.match;
+    Cache.prototype.match = function(request, options) {
+      const key = request instanceof Request ? request.url : String(request);
+      if (key.endsWith(`/.donner-asset-cache/v1/${heldId}`)) return new Promise(() => {});
+      return match.call(this, request, options);
+    };
+  }, heldAsset.sha256);
   const coldBodies = bodies.length;
   const coldBodyUrls = [...bodies];
   bodies.length = 0;
   codeRevision = 2;
   const warmErrors = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(warmErrors).toEqual([]);
-  expect(bodies).toEqual([]);
+  const timedOut = await page.evaluate(() => window.__donnerPackagedResourceCacheTimeouts?.());
+  expect(timedOut).toContain(heldAsset.sha256);
+  const timedOutUrls = critical
+    .filter((asset) => timedOut?.includes(asset.sha256))
+    .map((asset) => new URL(asset.path, baseUrl).href);
+  // Misses, rejected cache bodies and repeated transfers all fail this exact comparison.
+  expect([...bodies].sort()).toEqual([...new Set(timedOutUrls)].sort());
+  // A cache that answers no read at all is a defect, not degradation.
+  expect(bodies.length).toBeLessThan(urls.size);
+  const unexpectedTimeouts = timedOut?.filter((id) => id !== heldAsset.sha256) ?? [];
+  if (unexpectedTimeouts.length > 0) {
+    testInfo.annotations.push({
+      type: "cache-read-deadline-fallback",
+      description: unexpectedTimeouts.join(","),
+    });
+  }
   const transferPath = testInfo.outputPath("essential-resource-transfer.json");
   const transferReport = {
     ...packageHashes(),
@@ -2655,6 +2728,7 @@ test("code-only updates transfer no unchanged essential resource bodies from a p
     warmBodies: bodies.length,
     coldBodyUrls,
     warmBodyUrls: [...bodies],
+    warmCacheReadTimeouts: timedOut,
   };
   await writeFile(transferPath, JSON.stringify(transferReport, null, 2));
   await testInfo.attach("essential-resource-transfer", {

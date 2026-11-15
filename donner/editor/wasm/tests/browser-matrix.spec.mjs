@@ -329,6 +329,32 @@ function assertDocsLane({ lane, tags, specFiles }) {
   assert.doesNotMatch(lane, /wasm_web_package|DONNER_WASM_REQUIRE_WEBGPU/);
 }
 
+// The Editor WASM chromium-default lane runs every case of smoke.spec.ts in Chromium: the default
+// config discovers it, the lane runs that config with no filter, and a selected case has no skip
+// that could leave Chromium out.
+function assertChromiumDefaultLaneRuns(lane) {
+  const defaultConfig = require("./playwright.config.js");
+  assert.equal(defaultConfig.testMatch, "**/*.spec.ts");
+  assert.ok(!defaultConfig.testIgnore.includes("smoke.spec.ts"));
+  assert.equal(defaultConfig.projects, undefined);
+  const browserCi = readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8");
+  assert.ok(browserCi.includes(
+    "run_lane \"chromium-default\" \\\n  bash donner/editor/wasm/tests/run_tests.sh --headed\n",
+  ));
+  const spec = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  const grep = /"--grep=([^"]+)"/.exec(lane)?.[1];
+  assert.ok(grep, "the lane selects its cases with --grep");
+  const pattern = new RegExp(grep);
+  const declarations = [...spec.matchAll(/^test(?:\.\w+)?\(\s*"([^"]+)"/gm)];
+  const selected = declarations.filter(([, title]) => pattern.test(title));
+  assert.ok(selected.length > 0, `${grep} selects smoke cases`);
+  for (const match of selected) {
+    const next = spec.indexOf("\ntest", match.index + 1);
+    const body = spec.slice(match.index, next === -1 ? undefined : next);
+    assert.doesNotMatch(body, /test\.(?:skip|fixme)\(/, `${match[1]} runs in Chromium`);
+  }
+}
+
 function assertAnimationLane({ lane, tags, specFiles }, grep) {
   assert.deepEqual(specFiles, ["smoke.spec.ts"]);
   assert.ok(tags.includes("launches-browser"));
@@ -336,27 +362,23 @@ function assertAnimationLane({ lane, tags, specFiles }, grep) {
   assert.ok(!tags.includes("manual") && !tags.includes("perf"));
   assert.match(lane, /--config=\$\(rootpath :playwright\.animation\.bazel\.config\.js\)/);
   assert.match(lane, grep);
-  assert.doesNotMatch(
-    lane,
-    /--project(?:=|"|\s)/,
-    "the normal animation gate includes both browsers",
-  );
+  assert.doesNotMatch(lane, /--project(?:=|"|\s)/, "the config, not the lane, names the browser");
   assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
   assert.match(lane, /"NODE_OPTIONS": ""/);
   assert.ok(lane.includes("\"chromium-launch-env.cjs\""));
-  for (const name of ["DONNER_CHROMIUM_ARCHIVE", "DONNER_FIREFOX_ARCHIVE"]) {
-    assert.ok(lane.includes(`"${name}":`));
-  }
-  assert.ok(lane.includes("\"@playwright_chromium_mac_arm64//file\""));
+  // Firefox only: the Chromium copy of these cases is the Editor WASM chromium-default lane's.
+  assert.ok(lane.includes("\"DONNER_FIREFOX_ARCHIVE\":"));
   assert.ok(lane.includes("\"@playwright-firefox-mac14-arm64//file\""));
+  assert.doesNotMatch(lane, /DONNER_CHROMIUM_ARCHIVE|@playwright_chromium_mac_arm64|@playwright\/\/:chromium/);
   const config = readFileSync(
     path.join(testDirectory, "playwright.animation.bazel.config.js"),
     "utf8",
   );
   assert.deepEqual([...config.matchAll(/name: "([^"]+)"/g)].map((match) => match[1]), [
-    "chromium-animation",
     "firefox-animation",
   ]);
+  assert.match(config, /metadata: \{ pinnedBrowsers: \["firefox"\] \}/);
+  assertChromiumDefaultLaneRuns(lane);
   assert.match(config, /globalSetup: require\.resolve\("\.\/prepare-browser-archives\.js"\)/);
 }
 

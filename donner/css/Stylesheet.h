@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <ostream>
+#include <span>
+#include <vector>
 
 #include "donner/base/Utils.h"
 #include "donner/css/Declaration.h"
@@ -50,6 +52,23 @@ struct SelectorRule {
 };
 
 /**
+ * An unconditional `@import` rule retained by the stylesheet parser, such as
+ * `@import url("theme.css");`.
+ *
+ * Only imports that are valid and apply unconditionally are retained. Imports with layer,
+ * `supports()` or media conditions other than `all`, and imports that appear after another rule,
+ * are diagnosed and dropped by the parser. The parser never resolves or fetches the URL; loading is
+ * the responsibility of the document that owns the stylesheet.
+ */
+struct ImportRule {
+  /// URL of the imported stylesheet, exactly as authored (unresolved).
+  RcString url;
+
+  /// Source position of the `@` token in the local CSS source.
+  FileOffset sourceOffset = FileOffset::EndOfString();
+};
+
+/**
  * A CSS stylesheet, which is a list of rules. This is created by the parser, from the \ref
  * CSS::ParseStylesheet() API.
  */
@@ -83,6 +102,14 @@ public:
              SecurityStats securityStats)
       : rules_(std::move(rules)), fontFaces_(std::move(fontFaces)), securityStats_(securityStats) {}
 
+  /** Construct a stylesheet with retained `@import` rules and parser accounting. */
+  Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces,
+             std::vector<ImportRule>&& imports, SecurityStats securityStats)
+      : rules_(std::move(rules)),
+        fontFaces_(std::move(fontFaces)),
+        imports_(std::move(imports)),
+        securityStats_(securityStats) {}
+
   // Copyable and moveable.
   /// Copy constructor.
   Stylesheet(const Stylesheet&) = default;
@@ -106,6 +133,18 @@ public:
    */
   std::span<const FontFace> fontFaces() const UTILS_LIFETIME_BOUND { return fontFaces_; }
 
+  /**
+   * Get mutable access to the `@font-face` rules, for example to resolve their relative source
+   * URLs against the URL a stylesheet was loaded from.
+   */
+  std::span<FontFace> mutableFontFaces() UTILS_LIFETIME_BOUND { return fontFaces_; }
+
+  /**
+   * Get the unconditional `@import` rules of this stylesheet, in source order. Imported rules
+   * precede this stylesheet's own \ref rules in the cascade.
+   */
+  std::span<const ImportRule> imports() const UTILS_LIFETIME_BOUND { return imports_; }
+
   /// Return resource-limit accounting from parsing this stylesheet.
   const SecurityStats& securityStats() const { return securityStats_; }
 
@@ -125,6 +164,7 @@ public:
 private:
   std::vector<SelectorRule> rules_;
   std::vector<FontFace> fontFaces_;
+  std::vector<ImportRule> imports_;
   SecurityStats securityStats_;
 };
 

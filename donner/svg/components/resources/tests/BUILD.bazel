@@ -32,3 +32,14 @@ donner_cc_fuzzer(
         "//donner/svg/components/resources:resource_manager_context",
     ],
 )
+
+donner_cc_fuzzer(
+    name = "stylesheet_import_loader_fuzzer",
+    srcs = ["StylesheetImportLoader_fuzzer.cc"],
+    corpus = "stylesheet_import_loader_corpus",
+    deps = [
+        "//donner/base",
+        "//donner/css/parser",
+        "//donner/svg/components/resources:resource_manager_context",
+    ],
+)

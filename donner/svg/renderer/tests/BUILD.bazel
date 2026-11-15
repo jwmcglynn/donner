@@ -181,6 +181,7 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":renderer_test_backend",
+        "//donner/base",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest",
@@ -863,6 +864,7 @@ donner_cc_test(
 donner_cc_test(
     name = "text_path_convergence_tests",
     srcs = ["TextPathConvergence_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
     opens_gpu_device = True,
     variants = [
         "text_full",
@@ -870,7 +872,10 @@ donner_cc_test(
     ],
     deps = [
         ":renderer_test_utils",
+        "//donner/base:runfiles",
+        "//donner/css",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1355,6 +1360,28 @@ donner_cc_test(
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
         "//third_party/public-sans",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "css_import_tests",
+    srcs = [
+        "CssImport_tests.cc",
+    ],
+    # The tiny, text_full and geode wrappers run under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/resources:resource_loader_interface",
+        "//donner/svg/resources:url_loader",
         "@com_google_gtest//:gtest_main",
     ],
 )

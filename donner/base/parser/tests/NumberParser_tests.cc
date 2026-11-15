@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <string_view>
+
 #include "donner/base/MathUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 
@@ -18,6 +21,13 @@ using Result = NumberParser::Result;
 
 [[maybe_unused]] static void PrintTo(const Result& result, std::ostream* os) {
   *os << "(" << result.number << ", consumed: " << result.consumedChars << ")";
+}
+
+/// Matches a double within one unit in the last place of \p expected.
+MATCHER_P(WithinOneUlpOf, expected, "is within one ULP of " + testing::PrintToString(expected)) {
+  const double ulp = std::abs(std::nextafter(expected, HUGE_VAL) - expected);
+  *result_listener << "differs by " << std::abs(arg - expected) << ", one ULP is " << ulp;
+  return std::abs(arg - expected) <= ulp;
 }
 
 TEST(NumberParser, TestHelpers) {
@@ -278,56 +288,69 @@ TEST(NumberParser, OverflowedDigits) {
   }
 }
 
-/**
- * Exercises digit overflow in ParseDigitsSaturating: specifically the case where
- * nextVal < result.value on add.  We do this by carefully selecting enough digits
- * so that multiply-by-10 is safe, but adding one more digit overflows 64-bit.
- */
+// An integer one past UINT64_MAX keeps its magnitude: the digit that does not fit raises the
+// exponent instead of overflowing the mantissa.
 TEST(NumberParser, DigitAddOverflow) {
-  // 18446744073709551615 == 2^64 - 1, which we *can* parse without triggering
-  // the addition overflow check (because we saturate multiplication first).
-  // Instead, let's start one step below that boundary and then add a digit that
-  // overflows.
-  //
-  // One way is to parse "1844674407370955161" (which is 2^64 - 1 with the last digit removed)
-  // and then add another digit '9', pushing it over the limit in the add step.
-  // This should trigger 'nextVal < result.value' in ParseDigitsSaturating.
-  //
-  // Combining them: "18446744073709551619".
-  //
-  // The exact boundary depends on your saturate logic, so you may tweak the number
-  // to ensure we *really do* hit the (nextVal < result.value) branch.
   const std::string toParse = "18446744073709551619";
 
   const auto maybeResult = NumberParser::Parse(toParse);
-  EXPECT_THAT(maybeResult, NoParseError());
-
-  // We don't particularly care about the final double, just that we didn't crash
-  // and consumed all digits (which demonstrates we parsed them, saturating the integer).
-  // Because it saturates the internal 64-bit, it should remain a very large double ~1.8446744e19
-  // but not infinite. You can do a more precise check if you like.
-  const auto result = maybeResult.result();
-  EXPECT_EQ(result.consumedChars, toParse.size());
-
-  // We only check that it's finite and "large".
-  EXPECT_TRUE(std::isfinite(result.number));
-  EXPECT_GT(result.number, 1e19);
+  ASSERT_THAT(maybeResult, NoParseError());
+  EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(18446744073709551619.0));
+  EXPECT_EQ(maybeResult.result().consumedChars, toParse.size());
 }
 
-/**
- * Exercises integer saturation plus fractional overflow checks in NumberParser,
- * testing the `(mantissa + fracPart < mantissa)` overfow condition.
- */
-TEST(NumberParser, MantissaPlusFractionOverflow) {
-  const std::string toParse = "184467.488870955161800";
+// Significands with more digits than a 64-bit mantissa holds keep their magnitude: digits past
+// that capacity only shift the decimal exponent (integer part) or are dropped (fraction part).
+TEST(NumberParser, LongSignificandsKeepTheirMagnitude) {
+  const struct {
+    std::string_view input;
+    double expected;
+  } kCases[] = {
+      {"18.500000000000000000", 18.5},
+      {"-18.500000000000000000", -18.5},
+      {"1.9999999999999999999", 2.0},
+      {"184467.488870955161800", 184467.488870955161800},
+      {"0.123456789012345678901234567890", 0.123456789012345678901234567890},
+      {"123456789012345.678901234567", 123456789012345.678901234567},
+      {"9999999999999999999.99", 1e19},
+      {"1844674407370955161.5", 1844674407370955161.5},
+      {"18446744073709551615.5", 18446744073709551615.5},
+      {"99999999999999999999.9", 1e20},
+      {"18.500000000000000000e2", 1850.0},
+      {"1.9999999999999999999e-3", 0.002},
+      // Leading zeros do not use mantissa capacity.
+      {"0000000000000000000000018.500000000000000000", 18.5},
+      {"-000.00000000000000000000001234567890123456789012", -1.234567890123456789012e-23},
+      {"00000000000000000000001.9999999999999999999e-3", 0.002},
+  };
+  for (const auto& testCase : kCases) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << testCase.input);
+    const auto maybeResult = NumberParser::Parse(testCase.input);
+    ASSERT_THAT(maybeResult, NoParseError());
+    EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(testCase.expected));
+    EXPECT_EQ(maybeResult.result().consumedChars, testCase.input.size());
+  }
+}
 
-  const auto maybeResult = NumberParser::Parse(toParse);
-  EXPECT_THAT(maybeResult, NoParseError());
-
-  const auto result = maybeResult.result();
-  // We consumed everything:
-  EXPECT_EQ(result.consumedChars, toParse.size());
-  EXPECT_DOUBLE_EQ(result.number, 184467.44073709552);
+// Digits that do not fit in the mantissa are still consumed, so parsing resumes after the whole
+// number rather than inside it.
+TEST(NumberParser, DroppedDigitsAreConsumed) {
+  const struct {
+    std::string_view input;
+    double expected;
+    size_t consumedChars;
+  } kCases[] = {
+      {"123456789012345678901234567890px", 123456789012345678901234567890.0, 30},
+      {"18.500000000000000000000000000 20", 18.5, 30},
+      {"1.99999999999999999999999e2,", 200.0, 27},
+  };
+  for (const auto& testCase : kCases) {
+    SCOPED_TRACE(testing::Message() << "Parsing: " << testCase.input);
+    const auto maybeResult = NumberParser::Parse(testCase.input);
+    ASSERT_THAT(maybeResult, NoParseError());
+    EXPECT_THAT(maybeResult.result().number, WithinOneUlpOf(testCase.expected));
+    EXPECT_EQ(maybeResult.result().consumedChars, testCase.consumedChars);
+  }
 }
 
 }  // namespace donner::parser

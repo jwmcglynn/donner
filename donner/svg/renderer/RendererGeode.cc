@@ -2919,6 +2919,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (std::exchange(failNextTransformedResampleArenaWriteForTesting, false)) {
       resampleEncoder->injectNextArenaWriteFailureForTesting();
     }
+    const Transform2d localDeviceFromFilter =
+        Transform2d::Scale(geometry->scaleX, geometry->scaleY);
+    const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
+                                  Vector2d(geometry->blurPadding + frame.filterRegion.width(),
+                                           geometry->blurPadding + frame.filterRegion.height()));
+    // The filter region bounds SourceGraphic, so the capture beyond it must not reach the padding
+    // the blur reads. The region is axis-aligned in this local space even when the device
+    // transform skews or rotates it; round outward like the CPU executor's source crop.
+    const Box2d localRegionPixels = localDeviceFromFilter.transformBox(localFilterRegion);
+    const auto regionX0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.x));
+    const auto regionY0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.y));
+    resampleEncoder->setScissorRect(
+        regionX0, regionY0,
+        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.x)) - regionX0,
+        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.y)) - regionY0);
     resampleEncoder->setTransform(localFromDevice);
     // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
     // past the viewport's top-left corner.
@@ -2932,11 +2947,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     resampleEncoder->finish();
     retireFinishedEncoder(std::move(resampleEncoder));
 
-    const Transform2d localDeviceFromFilter =
-        Transform2d::Scale(geometry->scaleX, geometry->scaleY);
-    const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
-                                  Vector2d(geometry->blurPadding + frame.filterRegion.width(),
-                                           geometry->blurPadding + frame.filterRegion.height()));
     if (!suspendFrameForFilter()) {
       if (!frameArenaWriteFailed) {
         device->markDeviceLost("frame commands could not be submitted before filter execution");
@@ -3140,7 +3150,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (std::holds_alternative<PaintServer::None>(server)) {
       return std::nullopt;
     }
-    const css::RGBA currentColor = paint.currentColor.rgba();
+    const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
     if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
       return solid->color.resolve(currentColor, opacity);
@@ -5176,7 +5186,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (ref == nullptr) {
       return false;
     }
-    const css::RGBA currentColor = paint.currentColor.rgba();
+    const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
     const Box2d geometryBounds = geometryPath.bounds();
     bool stopsTruncated = false;
@@ -5258,7 +5268,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
 
-    const css::RGBA currentColor = paint.currentColor.rgba();
+    const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
 
     // Solid color: straight through the flat fill pipeline.
@@ -7090,7 +7100,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     geode::GeoEncoder::ScenePaint scenePaint;
     if (solidFill) {
       const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
-      scenePaint.color = solid.color.resolve(impl_->paint.currentColor.rgba(),
+      scenePaint.color = solid.color.resolve(impl_->paint.currentColor,
                                              static_cast<float>(impl_->paint.fillOpacity));
     } else {
       scenePaint.linearGradient = batchLinear.has_value() ? &*batchLinear : nullptr;
@@ -7210,8 +7220,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       path.canDeferGeometry() && !impl_->patternStrokePaint.has_value()) {
     const auto& solidStroke = std::get<PaintServer::Solid>(strokeServer);
     geode::GeoEncoder::ScenePaint strokePaint;
-    strokePaint.color = solidStroke.color.resolve(impl_->paint.currentColor.rgba(),
-                                                  static_cast<float>(effectiveOpacity));
+    strokePaint.color =
+        solidStroke.color.resolve(impl_->paint.currentColor, static_cast<float>(effectiveOpacity));
     if (impl_->tryAppendOrStartBatch(path.sourceEntity.registry(), path.sourceEntity.entity(),
                                      strokedOutline, strokePaint, strokeDerived.fillRule,
                                      strokeDerived.encoded, residentStroke,
@@ -7377,7 +7387,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     defaultFill = css::RGBA(0, 0, 0, 0);
   }
 
-  const css::RGBA currentColor = impl_->paint.currentColor.rgba();
+  const css::RGBA currentColor = impl_->paint.currentColor;
 
   // The element-level fill is already scaled by the top-level
   // `setPaint` call, but per-span fill overrides need their own

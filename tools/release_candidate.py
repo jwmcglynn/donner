@@ -205,6 +205,10 @@ def _verify_run(run: dict, run_id: int, attempt: int, commit: str, workflow: str
         raise ValueError("candidate evidence run is not a successful exact-source attempt")
     if workflow == ARTIFACT_WORKFLOWS["docs"] and (run.get("event") != "push" or run.get("head_branch") != "main"):
         raise ValueError("documentation artifact must come from a main push")
+    # Registry publication (tools/bcr_release.py) accepts only a preflight dispatched on main, so
+    # assembly refuses a nightly or other preflight run instead of failing after the release.
+    if workflow == ARTIFACT_WORKFLOWS["source"] and run.get("event") != "workflow_dispatch":
+        raise ValueError("BCR Preflight artifacts must come from a run dispatched on main")
 
 
 def _expiry(artifact: dict) -> datetime | None:

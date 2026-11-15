@@ -231,6 +231,20 @@ TEST(Property, InheritFromCoversStateAndSpecificityBranches) {
   }
 }
 
+TEST(Property, InheritFromUnresolvedInheritParentUsesInitialValue) {
+  using InheritingProperty = Property<int, PropertyCascade::Inherit>;
+
+  // A root element's `inherit` has no ancestor to resolve against and keeps the Inherit state.
+  InheritingProperty rootParent("integer", []() -> std::optional<int> { return 7; });
+  rootParent.set(PropertyState::Inherit, Specificity::FromABC(0, 1, 0));
+
+  // Distinct initial values show the child takes the value the parent reports, not its own.
+  InheritingProperty child("integer", []() -> std::optional<int> { return 5; });
+  const InheritingProperty inherited = child.inheritFrom(rootParent);
+  EXPECT_EQ(inherited.get(), 7);
+  EXPECT_EQ(inherited.state, PropertyState::Set);
+}
+
 TEST(Property, NonInheritingPropertyOnlyInheritsExplicitInheritState) {
   Property<int> parent("integer");
   parent.set(10, Specificity::FromABC(0, 2, 0));
@@ -1724,7 +1738,7 @@ TEST(PropertyRegistry, DisplayAnchorVisibilityOverflowAndPointerEventsErrors) {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("visibility: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid display value"));
+                ParseErrorIs("Invalid visibility value"));
   }
 
   {
@@ -1908,7 +1922,7 @@ TEST(PropertyRegistry, EmptyComponentDeclarationsReportPropertySpecificErrors) {
       {"alignment-baseline", "Invalid alignment-baseline value"},
       {"mix-blend-mode", "Invalid mix-blend-mode value"},
       {"writing-mode", "Invalid writing-mode value"},
-      {"visibility", "Invalid display value"},
+      {"visibility", "Invalid visibility value"},
       {"overflow", "Invalid overflow value"},
       {"fill-rule", "Invalid fill rule"},
       {"color-interpolation-filters", "Invalid color-interpolation-filters value"},
@@ -1938,7 +1952,7 @@ TEST(PropertyRegistry, NonIdentSingleTokenDeclarationsReportPropertySpecificErro
       {"alignment-baseline", "Invalid alignment-baseline value"},
       {"mix-blend-mode", "Invalid mix-blend-mode value"},
       {"writing-mode", "Invalid writing-mode value"},
-      {"visibility", "Invalid display value"},
+      {"visibility", "Invalid visibility value"},
       {"overflow", "Invalid overflow value"},
       {"fill-rule", "Invalid fill rule"},
       {"color-interpolation-filters", "Invalid color-interpolation-filters value"},
@@ -3650,6 +3664,43 @@ TEST(PropertyRegistry, StyleSynthesisCascadesIndependentlyOfFontAndSmallCaps) {
 
 TEST(PropertyRegistry, StyleSynthesisIsNotAnSvgPresentationAttribute) {
   EXPECT_THAT(PropertyRegistry::isPresentationAttributeName("font-synthesis-style"), Eq(false));
+}
+
+TEST(PropertyRegistry, ParsesDirectionAndUnicodeBidi) {
+  {
+    const std::pair<const char*, Direction> cases[] = {
+        {"ltr", Direction::Ltr},
+        {"rtl", Direction::Rtl},
+        {"RTL", Direction::Rtl},
+    };
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("direction: ") + value);
+      EXPECT_THAT(registry.direction.get(), Optional(expected));
+    }
+    PropertyRegistry invalid;
+    invalid.parseStyle("direction: up");
+    EXPECT_THAT(invalid.direction.get(), Optional(Direction::Ltr)) << "invalid keeps the initial";
+  }
+
+  {
+    const std::pair<const char*, UnicodeBidi> cases[] = {
+        {"normal", UnicodeBidi::Normal},
+        {"embed", UnicodeBidi::Embed},
+        {"isolate", UnicodeBidi::Isolate},
+        {"bidi-override", UnicodeBidi::BidiOverride},
+        {"isolate-override", UnicodeBidi::IsolateOverride},
+        {"plaintext", UnicodeBidi::Plaintext},
+    };
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("unicode-bidi: ") + value);
+      EXPECT_THAT(registry.unicodeBidi.get(), Optional(expected));
+    }
+    PropertyRegistry invalid;
+    invalid.parseStyle("unicode-bidi: override");
+    EXPECT_THAT(invalid.unicodeBidi.get(), Optional(UnicodeBidi::Normal));
+  }
 }
 
 }  // namespace donner::svg

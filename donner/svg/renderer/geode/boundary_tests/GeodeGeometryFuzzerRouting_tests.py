@@ -38,9 +38,10 @@ class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
         self.assertNotIn("fuzz_soak", routing[CORPUS])
         self.assertNotIn("fuzz_soak", routing[BINARY])
 
-    def test_gpu_opening_targets_are_serialized(self):
+    def test_gpu_opening_targets_take_the_local_gpu_resource(self):
         routing = _routing(sys.argv[1])
-        self.assertTrue(all("exclusive-if-local" in tags for tags in routing.values()))
+        self.assertTrue(all("resources:local_gpu:1" in tags for tags in routing.values()))
+        self.assertFalse(any("exclusive-if-local" in tags for tags in routing.values()))
 
     def test_boundary_oracle_skips_when_no_device_is_available(self):
         source = Path(sys.argv[2]).read_text(encoding="utf-8")

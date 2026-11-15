@@ -455,6 +455,7 @@ For common string helpers, see `"donner/base/StringUtils.h"`:
 - `StringUtils::EqualsLowercase("ExAmPle", "example")` - to compare a string against a lowercase string.
 - `StringUtils::StartsWith("Example", "Ex")` - to check if a string starts with a prefix.
 - `StringUtils::EndsWith("Example", "ple")` - to check if a string ends with a suffix.
+- `StringUtils::ToLowerAscii("Noto SANS")` - to lowercase only ASCII letters, independent of the process locale (for lookup keys).
 
 Case-insensitive matching is configurable:
 

@@ -19,6 +19,7 @@
 #include "donner/base/PackagedResource.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/fonts/SfntUtils.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/css/parser/StylesheetParser.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
@@ -560,7 +561,7 @@ TEST(FontManagerTest, ExhaustedCffWorkBudgetPreservesReplacementAndAllowsTrueTyp
                                       manager.fontData(handle).end());
   EXPECT_FALSE(FontManagerTestAccess::ReplaceFontData(manager, handle, cff));
   ASSERT_EQ(manager.fontData(handle).size(), original.size());
-  EXPECT_THAT(manager.fontData(handle), testing::ElementsAreArray(original));
+  EXPECT_THAT(manager.fontData(handle), BytesEqual(original));
   EXPECT_EQ(manager.fontValidationWork(), 0u);
 
   EXPECT_TRUE(FontManagerTestAccess::ReplaceFontData(manager, handle, trueType));

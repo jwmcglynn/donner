@@ -67,7 +67,8 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
 - [ ] Milestone 2: External resource loading
   - [ ] External-URL `<image>` references (with the security limits in the Security section).
   - [ ] `<use>` referencing an external file.
-  - [ ] External CSS `@import`.
+  - [x] External CSS `@import`, through the caller-provided resource loader only (see the
+        [CSS documentation](../css.md)).
   - [ ] `<svg>` with no explicit size: compute bounds from content.
 - [ ] Milestone 3: Masking and clipping edge cases
   - [x] Vector text children inside `clipPath` and text objectBoundingBox clip-unit plumbing.
