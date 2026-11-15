@@ -779,9 +779,9 @@ TEST_F(SVGElementTests, OpacityWriteRestylesTheSubtreeButNotSiblings) {
   auto parent = doc.querySelector("#parent");
   auto child = doc.querySelector("#child");
   auto sibling = doc.querySelector("#sibling");
-  ASSERT_TRUE(parent.has_value());
-  ASSERT_TRUE(child.has_value());
-  ASSERT_TRUE(sibling.has_value());
+  ASSERT_THAT(parent, Optional(testing::_));
+  ASSERT_THAT(child, Optional(testing::_));
+  ASSERT_THAT(sibling, Optional(testing::_));
 
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->setAttribute("opacity", "0.5");
