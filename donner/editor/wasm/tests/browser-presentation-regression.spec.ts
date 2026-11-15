@@ -62,10 +62,11 @@ import {
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
+  selfCheckSurfaceFrameProbeWithConcurrentFrame,
   surfaceFrameProbeInstalled,
   type SurfaceFrameProbeReport,
 } from "./surface-frame-probe";
-import { kStallGuardMs, scaledMs } from "./test-timing";
+import { kStallGuardMs, scaledMs, stallGuardFor } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -3709,6 +3710,8 @@ test("Geode crown face paints at each held pointer position before release", asy
 // editor's own canvas work and that it reports the ordering it exists for: a
 // scratch canvas frame cleared after the task that acquired it has ended.
 test("the surface frame probe reports canvas work submitted after its task ended", async ({ page }) => {
+  // The concurrent-frame self-check below takes a full stall guard after the setup above it.
+  test.slow();
   const failures = await openEditor(page);
   await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
@@ -3722,6 +3725,15 @@ test("the surface frame probe reports canvas work submitted after its task ended
     .toEqual(expect.objectContaining({ canvasWorkers: 1, lateSubmits: 0 }));
   expect((await readSurfaceFrameProbe(page)).inTaskSubmits).toBeGreaterThan(0);
   expect(await selfCheckSurfaceFrameProbe(page)).toContainEqual({ late: 1, inTask: 2 });
+  // The editor keeps drawing while the self-check runs, so another canvas frame can land in its
+  // window; the self-check counts only its own frame's writes and still gives the exact answer.
+  expect(
+    await selfCheckSurfaceFrameProbeWithConcurrentFrame(page, stallGuardFor(test.info().timeout)),
+  ).toEqual({
+    late: 1,
+    inTask: 2,
+    written: 1,
+  });
   expect(failures).toEqual([]);
 });
 
