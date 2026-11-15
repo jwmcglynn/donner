@@ -49,6 +49,14 @@ public:
   static void PrepareInstance(Registry& registry);
 
   /**
+   * Schedule a full render-tree rebuild of the document. With an occurrence installed, forget the
+   * saved inputs of every other retained subtree that rebuild restyles.
+   *
+   * @param registry Referenced document's registry.
+   */
+  static void ScheduleFullRebuild(Registry& registry);
+
+  /**
    * After the render tree is instantiated for the installed occurrence, restore every other
    * retained subtree to the document's own styles if drawing the occurrence may read any element
    * outside its own subtree: a paint server, clip path, mask, marker, filter, instantiated element,

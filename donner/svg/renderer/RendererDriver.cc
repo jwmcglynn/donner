@@ -4636,6 +4636,10 @@ struct ReportedSubDocumentWarnings {
   std::unordered_set<std::string> keys;
 };
 
+/// Marks a sub-document prepared without a collecting host sink since its last collecting draw, so
+/// warnings its retained render tree will not repeat may still be undelivered.
+struct WithheldSubDocumentWarnings {};
+
 std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
   std::ostringstream key;
   key << warning;
@@ -4684,8 +4688,9 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   }
   if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
     // Without a collecting host sink these warnings are discarded even when verbose: printing them
-    // would repeat them for every traversal. Nothing is recorded, so a later draw with a collecting
-    // sink still receives them.
+    // would repeat them for every traversal. Nothing is recorded as delivered, and the next draw
+    // with a collecting sink rebuilds the document so that it receives them.
+    registry.ctx().emplace<WithheldSubDocumentWarnings>();
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
     if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
@@ -4698,6 +4703,10 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   // marks the host sink truncated so it does not look complete. As with any sink limit, the host
   // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
   // again on every traversal, each later draw of it reports truncation too.
+  if (registry.ctx().erase<WithheldSubDocumentWarnings>()) {
+    // A retained render tree does not repeat the warnings its first build reported.
+    components::ExternalUseStyleRetention::ScheduleFullRebuild(registry);
+  }
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
   ReportSubDocumentWarnings(registry, warnings, *warningSink_);
