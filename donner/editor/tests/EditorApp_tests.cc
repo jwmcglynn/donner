@@ -1186,6 +1186,17 @@ TEST(EditorAppTest, SetActiveStrokeWidthFromTextSkipsLeadingWhitespace) {
   EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(3.0));
 }
 
+// Only a CSS number sets the width, so non-finite words leave it unchanged instead of producing an
+// infinite or undefined stroke.
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextRejectsNonFiniteWords) {
+  EditorApp app;
+  ASSERT_TRUE(app.setActiveStrokeWidthFromText("2"));
+
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText("inf"));
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText(" nan"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.0));
+}
+
 // Replayed stroke widths read with the locale-independent parser, so a comma-decimal C locale does
 // not truncate "2.5" to 2.
 TEST(EditorAppTest, SetActiveStrokeWidthFromTextIgnoresACommaDecimalCLocale) {
