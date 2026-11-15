@@ -943,5 +943,170 @@ class DocsPublishTest(unittest.TestCase):
             publish._verify_live("a" * 64, marker)
 
 
+    def pending_fixture(self):
+        work, record, selected, durable, approved, api, current = self.recovery_fixture()
+        candidate = record["archive_sha256"]
+        current.update(current="f" * 64, pending=candidate)
+        selected.update(base_snapshot_commit="a" * 40, previous_composition="f" * 64)
+        record.update(run_id=456, attempt=1, base_snapshot_commit="a" * 40,
+                      previous_composition="f" * 64)
+        source = selected["source_inputs"]["main"]
+        manifest = {"versions": {"0.8.0": {"identity": source}, "main": {"identity": source}}}
+        origin = {"id": 456, "run_attempt": 1, "path": publish.WORKFLOW, "event": "workflow_run",
+                  "head_branch": "main", "head_sha": record["workflow_commit"], "status": "completed",
+                  "repository": {"full_name": "jwmcglynn/donner"}}
+        marker = site.verify_site(work / "site")
+        def restore(api, snapshot, target, output):
+            path = output / "site/_docs"
+            path.mkdir(parents=True)
+            (path / "versions.json").write_bytes(site.canonical(manifest))
+            return record, selected
+        return current, record, origin, marker, restore
+
+    def test_next_run_finishes_verified_healthy_pending_activation_without_deploying(self):
+        current, record, origin, marker, restore = self.pending_fixture()
+        with mock.patch.object(publish, "_restore_composition", side_effect=restore), \
+             mock.patch.object(publish, "github_json", return_value=origin), \
+             mock.patch.object(publish, "_verify_retained_auto_source"), \
+             mock.patch.object(publish, "_verify_retained_release"), \
+             mock.patch.object(publish, "_source_order", return_value=True), \
+             mock.patch.object(publish.site, "verify_site", return_value=marker), \
+             mock.patch.object(publish, "_verify_live") as live, \
+             mock.patch.object(publish.store, "index", return_value=current), \
+             mock.patch.object(publish, "_activate", return_value="b" * 40) as activate, \
+             mock.patch.object(publish, "deploy") as deploy:
+            snapshot, state = publish._reconcile_pending(self.api, "a" * 40, current, self.root / "next")
+        self.assertEqual(snapshot, "b" * 40)
+        self.assertEqual(state["current"], record["archive_sha256"])
+        self.assertEqual(state["previous"], current["current"])
+        self.assertNotIn("pending", state)
+        self.assertEqual(state["releases"], current["releases"])
+        live.assert_called_once_with(record["manifest_sha256"], marker)
+        activate.assert_called_once()
+        deploy.assert_not_called()
+
+    def test_pending_recovery_rejects_manual_origin_or_unverified_live_candidate(self):
+        for event in ("workflow_dispatch", "workflow_run"):
+            with self.subTest(event=event):
+                current, record, origin, marker, restore = self.pending_fixture()
+                origin["event"] = event
+                with mock.patch.object(publish, "_restore_composition", side_effect=restore), \
+                     mock.patch.object(publish, "github_json", return_value=origin), \
+                     mock.patch.object(publish, "_verify_retained_auto_source"), \
+                     mock.patch.object(publish, "_verify_retained_release"), \
+                     mock.patch.object(publish, "_source_order", return_value=True), \
+                     mock.patch.object(publish.site, "verify_site", return_value=marker), \
+                     mock.patch.object(publish, "_verify_live", side_effect=ValueError("live composition differs")), \
+                     mock.patch.object(publish, "_activate") as activate, \
+                     self.assertRaises(ValueError):
+                    publish._reconcile_pending(self.api, "a" * 40, current, self.root / ("next-" + event))
+                activate.assert_not_called()
+                self.api.call.assert_not_called()
+                # The fixture uses a fixed directory; keep independent cases in fresh setup.
+                if event == "workflow_dispatch":
+                    import shutil
+                    shutil.rmtree(self.root / "recovery")
+
+    def test_lost_activation_response_is_reconciled_only_for_exact_index_child(self):
+        desired = {"schema": 1, "current": "a" * 64, "previous": "b" * 64, "releases": {}}
+        self.api.tip.return_value = "c" * 40
+        commit = {"parents": [{"sha": "e" * 40}], "files": [{"filename": "index.json"}]}
+        with mock.patch.object(publish.store, "commit", side_effect=ValueError("response lost")), \
+             mock.patch.object(publish.store, "read_index", return_value=desired), \
+             mock.patch.object(publish, "github_json", return_value=commit):
+            self.assertEqual(publish._activate(self.api, "e" * 40, self.root, desired), "c" * 40)
+            commit["files"].append({"filename": "unrelated.json"})
+            with self.assertRaisesRegex(ValueError, "unrelated"):
+                publish._activate(self.api, "e" * 40, self.root, desired)
+
+    def test_terminal_automatic_recovery_clears_pending_without_redeploying(self):
+        import copy
+        original_root = self.root
+        for outcome in ("unchanged", "restored"):
+            with self.subTest(outcome=outcome):
+                self.root = original_root / outcome
+                self.root.mkdir()
+                work, record, plan, commit, restore = self.transaction()
+                plan.update(snapshot="c" * 40, automatic=True)
+                (work / "payload/selection.json").write_bytes(site.canonical(
+                    {"releases": {}, "source_inputs": {"main": {}}}))
+                record["payload_files"] = site.inventory(work / "payload")
+                record["payload_files"].pop("composition.json")
+                path = work / "prior-proof/site/_docs"
+                path.mkdir(parents=True)
+                (path / "versions.json").write_text('{}')
+                saved = []
+                def save(api, expected, folder, state):
+                    saved.append(copy.deepcopy(state))
+                    return "e" * 40
+                with mock.patch.dict(os.environ, self.automatic_environment()), \
+                     mock.patch.object(publish, "_automatic_scope"), \
+                     mock.patch.object(publish, "_verify_auto_source"), \
+                     mock.patch.object(publish.store, "commit", side_effect=save), \
+                     mock.patch.object(publish.store, "restore", side_effect=restore), \
+                     mock.patch.object(publish, "deploy", side_effect=ValueError("failed")) as deploy, \
+                     mock.patch.object(publish, "_recover", return_value={"status": outcome}), \
+                     self.assertRaisesRegex(ValueError, "promotion did not publish"):
+                    publish._retain_and_deploy(record, plan, 9, work, self.api, candidate_id=11)
+                self.assertEqual(saved[0]["pending"], record["archive_sha256"])
+                self.assertEqual(saved[1], plan["current"])
+                self.assertEqual(site.read_json(work / "result.json")["status"], outcome)
+                self.assertEqual(publish._reconcile_pending(self.api, "e" * 40, saved[1], work / "next"),
+                                 ("e" * 40, plan["current"]))
+                self.assertEqual(deploy.call_count, 1)
+        self.root = original_root
+
+    def test_manual_publish_and_rollback_reject_unfinished_automatic_publication(self):
+        current = {"current": "f" * 64, "pending": "a" * 64}
+        with mock.patch.object(publish.store, "index", return_value=current), \
+             mock.patch.object(publish, "_live_identity") as live:
+            with self.assertRaisesRegex(ValueError, "unfinished automatic publication"):
+                publish._preflight_record({"base_snapshot_commit": "c" * 40}, "f" * 64, self.root, self.api)
+            with self.assertRaisesRegex(ValueError, "unfinished automatic publication"):
+                publish.rollback_preflight("b" * 64, "c" * 40, "f" * 64, self.root / "rollback", self.api)
+        live.assert_not_called()
+
+    def test_pending_recovery_refuses_concurrent_index_advance(self):
+        current, record, origin, marker, restore = self.pending_fixture()
+        with mock.patch.object(publish, "_restore_composition", side_effect=restore), \
+             mock.patch.object(publish, "github_json", return_value=origin), \
+             mock.patch.object(publish, "_verify_retained_auto_source"), \
+             mock.patch.object(publish, "_verify_retained_release"), \
+             mock.patch.object(publish, "_source_order", return_value=True), \
+             mock.patch.object(publish.site, "verify_site", return_value=marker), \
+             mock.patch.object(publish, "_verify_live"), \
+             mock.patch.object(publish.store, "index", side_effect=ValueError("snapshot branch advanced")), \
+             mock.patch.object(publish, "_activate") as activate, self.assertRaisesRegex(ValueError, "advanced"):
+            publish._reconcile_pending(self.api, "a" * 40, current, self.root / "concurrent")
+        activate.assert_not_called()
+
+    def test_retained_source_verification_does_not_depend_on_the_new_trigger(self):
+        source = {"source_commit": "a" * 40, "run_id": 123, "attempt": 1}
+        run = {"id": 123, "run_attempt": 1, "head_sha": "a" * 40,
+               "repository": {"full_name": "jwmcglynn/donner"},
+               "head_repository": {"full_name": "jwmcglynn/donner"},
+               "event": "push", "head_branch": "main", "status": "completed", "conclusion": "success",
+               "path": ".github/workflows/build_docs.yaml"}
+        with mock.patch.object(publish, "github_json", side_effect=[run, {"object": {"sha": "a" * 40}}]), \
+             mock.patch.object(publish, "_automatic_trigger", side_effect=AssertionError("new trigger")) as trigger:
+            publish._verify_retained_auto_source(source)
+        trigger.assert_not_called()
+        for change in ({"event": "workflow_dispatch"}, {"conclusion": "failure"}, {"head_sha": "b" * 40}):
+            with self.subTest(change=change), mock.patch.object(publish, "github_json", return_value={**run, **change}), \
+                 self.assertRaises(ValueError):
+                publish._verify_retained_auto_source(source)
+
+    def test_failed_pending_cleanup_keeps_truthful_recovery_required_receipt(self):
+        result = {"candidate": "a" * 64, "snapshot_commit": "e" * 40}
+        plan = {"automatic": True, "prior_identity": self.prior, "current": {"current": "b" * 64}}
+        with mock.patch.object(publish, "_recover", return_value={"status": "restored"}), \
+             mock.patch.object(publish, "_activate", side_effect=ValueError("HTTP 422")):
+            publish._failed_publication({}, plan, 9, self.root, self.api, "failed", "e" * 40, {}, result)
+        self.assertEqual(result["status"], "recovery-required")
+        self.assertEqual(result["snapshot_commit"], "e" * 40)
+        self.assertIn("pending publication cleanup unconfirmed", result["recovery_error"])
+        self.assertIn("HTTP 422", result["recovery_error"])
+
+
 if __name__ == "__main__":
     unittest.main()
