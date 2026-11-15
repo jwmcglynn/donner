@@ -174,23 +174,6 @@ class BcrPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(calls, self._consumer_commands()[:1])
 
-    def test_packaged_resource_inputs_select_the_full_matrix(self):
-        for path in ("build_defs/packaged_resources.py", "build_defs/packaged_resources.bzl",
-                     "donner/base/PackagedResource.cc", "third_party/public-sans/BUILD.bazel",
-                     "third_party/fira-code/FiraCode-Regular.ttf", "third_party/roboto/Roboto.ttf",
-                     "third_party/google_fonts/catalog_generate.py",
-                     "donner/editor/art/samples/basic-shapes.svg"):
-            with self.subTest(path=path):
-                self.assertTrue(bcr_preflight.is_release_path(path))
-
-    def test_native_packaging_inputs_select_the_full_matrix(self):
-        for path in ("LICENSE", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
-                     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
-                     "tools/release_macos_editor.py", "tools/release_candidate.py",
-                     "tools/macos_editor_test_bundle.py", "tools/macos_editor_test_bundle_tests.py"):
-            with self.subTest(path=path):
-                self.assertTrue(bcr_preflight.is_release_path(path))
-
     def test_cli_builds_proves_tests_and_packages_each_platform(self):
         for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos")):
             with self.subTest(platform=platform):
@@ -305,77 +288,13 @@ class BcrPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(calls, [])
 
-    def _scope_with_changed_paths(self, paths):
-        """Runs `scope` on a fixture repository whose pull request adds `paths` (bytes)."""
-        repo = self.work / "repo"
-        repo.mkdir()
-        environ = {"PATH": os.environ.get("PATH", os.defpath), "HOME": str(self.work),
-                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "fixture",
-                   "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-                   "GIT_COMMITTER_NAME": "fixture",
-                   "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
-
-        def git(*args, stdin=None):
-            return subprocess.run(["git", *args], cwd=repo, env=environ, input=stdin,
-                                  capture_output=True, check=True).stdout.strip()
-
-        git("init", "-q")
-        git("commit", "-q", "--allow-empty", "-m", "base")
-        base = git("rev-parse", "HEAD").decode()
-        # Index entries only, so a byte path the host file system would refuse still works.
-        blob = git("hash-object", "-w", "--stdin", stdin=b"change\n").decode()
-        for path in paths:
-            git("update-index", "--add", "--cacheinfo", b"100644," + blob.encode() + b"," + path)
-        git("commit", "-q", "-m", "head")
-        event = self.work / "event.json"
-        event.write_text(json.dumps({"pull_request": {
-            "base": {"sha": base}, "head": {"sha": git("rev-parse", "HEAD").decode()}}}))
-        output = self.work / "output"
-        output.write_text("")
-        result = subprocess.run(
-            [sys.executable, "-B", bcr_preflight.__file__, "scope"], cwd=repo,
-            env=dict(environ, GITHUB_EVENT_NAME="pull_request", GITHUB_EVENT_PATH=str(event),
-                     GITHUB_OUTPUT=str(output)),
-            capture_output=True, check=False, timeout=test_timing.STALL_GUARD_SECONDS)
-        return result, output.read_text()
-
-    def test_scope_classifies_paths_that_are_not_utf8(self):
-        # Git lists such a path's raw bytes (core.quotePath=false); the shell `case` the
-        # workflow used matched them as bytes, so they are classified like any other path.
-        for paths, expected in (([b"donner/a\xff"], "full_matrix=false\n"),
-                                ([b"donner/a\xff", b"MODULE.bazel"], "full_matrix=true\n"),
-                                ([b".bcr/\xfe.yml"], "full_matrix=true\n")):
-            with self.subTest(paths=paths):
-                shutil.rmtree(self.work / "repo", ignore_errors=True)
-                result, output = self._scope_with_changed_paths(paths)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(output, expected)
-        self.assertIn(b"Full preflight matrix selected by .bcr/\xfe.yml\n", result.stdout)
-
-    def test_native_example_delivery_selects_full_scope_with_negative_controls(self):
-        positive = ["examples/BUILD.bazel", "examples/svg_to_png.cc",
-                    "examples/svg_text_interaction.cc", "examples/svg_viewer.cc",
-                    "examples/geode_embed.cc", "examples/native_resource_delivery_tests.py",
-                    "examples/native_no_text_resource_delivery_tests.py"]
-        negative = ["examples/svg_tree_interaction.cc", "examples/svg_quickstart.cc",
-                    "examples/README.md", "examples/svg_viewer.cc.orig"]
-        for path, expected in [(path, True) for path in positive] + [
-                (path, False) for path in negative]:
-            with self.subTest(path=path):
-                shutil.rmtree(self.work / "repo", ignore_errors=True)
-                result, output = self._scope_with_changed_paths([path.encode()])
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(output, "full_matrix=" + str(expected).lower() + "\n")
-
-    def test_release_paths_match_like_shell_case_patterns(self):
-        # `*` crosses directories, as in the shell `case` the workflow used.
-        for path in ("tools/bcr_preflight.py", "tools/native_delivery.py", ".bcr/nested/presubmit.yml",
-                     "third_party/licenses/a/b.txt", "third_party/BUILD.harfbuzz",
-                     "tools/ci/release_compiler_identity.cc"):
-            self.assertTrue(bcr_preflight.is_release_path(path), path)
-        for path in ("MODULE.bazel.orig", "donner/MODULE.bazel", "tools/ci/BUILD",
-                     "third_party/resvg/x.bzl.txt", "tools/ci/lane.sh"):
-            self.assertFalse(bcr_preflight.is_release_path(path), path)
+    def test_no_step_narrows_the_matrix(self):
+        # Every run, nightly, dispatched or on a pull request that changes a registry input, is
+        # the full matrix that qualifies a release candidate; no subcommand selects a smaller one.
+        result, calls = self._run("scope")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice: 'scope'", result.stderr)
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

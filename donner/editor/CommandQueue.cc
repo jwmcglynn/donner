@@ -12,8 +12,7 @@ namespace donner::editor {
 namespace {
 
 bool IsStructuralReplace(EditorCommand::Kind kind) {
-  return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::CutShapes ||
-         kind == EditorCommand::Kind::PasteShapes;
+  return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::PasteShapes;
 }
 
 void StopAttributeCoalescingAtRemoval(
@@ -61,7 +60,7 @@ CommandQueue::FlushResult CommandQueue::flush() {
   // Find the latest structural-replace and drop everything queued before it.
   // Commands queued after the latest structural-replace survive coalescing
   // against each other, but anything before it is logically wiped out.
-  // ReplaceDocument, CutShapes, and PasteShapes are all "swap the whole
+  // ReplaceDocument and PasteShapes are both "swap the whole
   // document" commands - they invalidate any element handles that earlier
   // commands hold, so prior commands must be discarded.
   std::size_t startIndex = 0;

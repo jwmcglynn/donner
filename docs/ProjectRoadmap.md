@@ -15,10 +15,11 @@ Geode GPU renderer on Donner's own GPU runtime (Metal, Vulkan, and browser WebGP
 animation, and hardened handling of untrusted documents, with the tiny-skia CPU renderer remaining
 the default for embedders. See [RELEASE_NOTES.md](../RELEASE_NOTES.md).
 
-The next release target is **v1.0**, the production-quality release for animation, scripting,
-multiplayer editing, diagramming, an embeddable runtime, conformance completion, parser hardening,
-and ecosystem integration. Work is tracked on the
-[v1.0 milestone](https://github.com/jwmcglynn/donner/milestone/3).
+The next release target is **v1.0**, the production-quality release for animation, diagramming,
+an embeddable runtime, conformance completion, parser hardening, and ecosystem integration. Work is
+tracked on the [v1.0 milestone](https://github.com/jwmcglynn/donner/milestone/3). Multiplayer
+editing and scripting remain planned directions that do not gate v1.0; see
+[Future Work](#future-work-post-v10).
 
 ---
 
@@ -182,8 +183,9 @@ Released 2026-10-23. See [RELEASE_NOTES.md](../RELEASE_NOTES.md) for the full no
 The production-quality release that follows v0.8, tracked on the
 [v1.0 milestone](https://github.com/jwmcglynn/donner/milestone/3).
 
-Focus: interactive editing, multiplayer editing, diagramming, conformance, parser hardening, an
-embeddable runtime, and ecosystem integration.
+Focus: interactive editing, diagramming, conformance, parser hardening, an embeddable runtime, and
+ecosystem integration. Multiplayer editing and scripting are planned directions under
+[Future Work](#future-work-post-v10) and do not gate v1.0.
 
 ### Landed on main since v0.8
 
@@ -271,65 +273,6 @@ The structured editing API, partial re-parsing, reverse serialization, and inval
 shipped in v0.8 (see Structured Editing under v0.8). Open editor issues on the v1.0
 milestone include [#1942](https://github.com/jwmcglynn/donner/issues/1942) and
 [#1965](https://github.com/jwmcglynn/donner/issues/1965).
-
-### Multiplayer Editing
-
-Real-time multi-user editing of one SVG document, modeled on Excalidraw's collaboration design:
-element-level highest-version-wins reconciliation over a relay that only forwards end-to-end
-encrypted messages. Local and remote changes both flow through the structured editing API, so
-collaboration attaches at that mutation seam instead of introducing a second document model. This
-section does not gate the v1.0 release criteria.
-
-- [ ] **Per-element versioning**: Each element carries a stable collaboration ID, a monotonically
-      increasing `version`, and a random `versionNonce` that changes with every version bump. Any
-      edit to an element's attributes, style, text content, or position in the tree bumps its
-      version. Element granularity is a deliberate tradeoff: concurrent edits to different
-      attributes of one element keep only the winning version, and per-attribute versioning is a
-      possible refinement. The collaboration ID is separate from the SVG `id` attribute, and
-      collaboration state records the collaboration ID that each IRI reference (`href`, `url(#...)`)
-      targets. Concurrent edits that produce duplicate `id` values are repaired deterministically by
-      renaming one element and rewriting only the references bound to it.
-- [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
-      the same ID the higher `version` wins, equal versions break ties by the lower `versionNonce`,
-      and equal nonces break ties by the editing peer's unique session ID, so every peer converges
-      without a coordinating server. Deletions are tombstones retained in collaboration state until
-      every active peer has acknowledged them. Session membership is itself versioned collaboration
-      state: a peer that leaves, or stops acknowledging for longer than a documented retention
-      window, is retired by a membership update, so tombstone storage stays bounded. Compacting
-      acknowledged tombstones advances a session epoch; a peer whose state predates that epoch,
-      including a retired peer that rejoins, resynchronizes from current state instead of merging
-      its stale copy. On replay of its unsent edits, updates to elements that existed before its
-      last sync but are absent from the current state are rejected and reported as conflicts, while
-      elements it created after that sync are inserted, so a deleted element is never resurrected.
-      The saved SVG never contains deleted elements.
-- [ ] **Tree ordering**: SVG is a tree whose document order is paint order, unlike Excalidraw's flat
-      element list. Each element records its parent ID and a fractional index among its siblings, so
-      concurrent inserts and reorders merge without renumbering. Equal indices are ordered by
-      collaboration ID, and invalid or colliding indices are repaired deterministically. Reparenting
-      is an ordinary versioned update. Cycle and missing-parent repair runs on the complete merged
-      state, not in arrival order: within each parent cycle, the element whose winning record sorts
-      lowest under the reconciliation order (`version`, `versionNonce`, peer ID) is detached to the
-      document root, and an element whose parent is missing is detached the same way, so every peer
-      reaches the same tree.
-- [ ] **Incremental application**: Remote updates apply through the same structured edits and
-      incremental invalidation as local edits, never a full document reparse, and the source pane
-      mirrors them through reverse serialization.
-- [ ] **Relay and encryption**: A stateless relay scopes messages to a room and forwards encrypted
-      payloads without decrypting or ordering them. The room key travels only in the share link's
-      URL fragment, which browsers never send to the server. The native editor and the WebAssembly
-      build use the same protocol.
-- [ ] **Presence**: Cursors, selections, and in-progress gestures travel on a volatile channel that
-      is never persisted or recorded in undo history.
-- [ ] **Undo**: Undo is per user. Undoing a local change emits a new versioned edit instead of
-      rewinding shared state, and it skips elements a peer has changed since.
-- [ ] **Local-first persistence**: Each peer holds a full copy, keeps editing while offline, and
-      reconciles on reconnect. The saved file stays plain SVG; collaboration metadata (versions,
-      nonces, fractional indices, tombstones) lives in session or workspace state, not in exported
-      markup.
-- [ ] **Trust boundary**: Remote payloads are untrusted input. They pass the same parsers, resource
-      limits, and secure processing mode as file open, with message size caps, schema validation,
-      and no external resource loading on a peer's behalf. Fuzzers cover payload decoding and
-      reconciliation.
 
 ### Diagramming
 
@@ -430,13 +373,6 @@ Open follow-ups from the v0.8 reviews:
 - [ ] A scheduled ThreadSanitizer lane for the editor and GPU runtime
       ([#1815](https://github.com/jwmcglynn/donner/issues/1815)).
 
-### Optional Extensions
-
-- [ ] **JavaScript support**: Identify a small embeddable JavaScript engine and integrate as an
-      optional feature (similar to how filters are optional). Enable scripted SVG content for
-      interactive applications. See [0027-2](design_docs/0027-2-scripting.md) and
-      [#1238](https://github.com/jwmcglynn/donner/issues/1238).
-
 ### Optimization
 
 - [ ] **Performance profiling**: Profile end-to-end render paths and identify remaining
@@ -526,7 +462,74 @@ not gate the v1.0 release criteria. See [0067](design_docs/0067-donner_tiny.md).
 
 ## Future Work (post-v1.0)
 
+Planned directions that remain on the roadmap but do not gate v1.0 or its release criteria.
+
 - Game-runtime suitability profile (latency, frame pacing, memory budgets).
+
+### Multiplayer Editing
+
+Real-time multi-user editing of one SVG document, modeled on Excalidraw's collaboration design:
+element-level highest-version-wins reconciliation over a relay that only forwards end-to-end
+encrypted messages. Local and remote changes both flow through the structured editing API, so
+collaboration attaches at that mutation seam instead of introducing a second document model.
+
+- [ ] **Per-element versioning**: Each element carries a stable collaboration ID, a monotonically
+      increasing `version`, and a random `versionNonce` that changes with every version bump. Any
+      edit to an element's attributes, style, text content, or position in the tree bumps its
+      version. Element granularity is a deliberate tradeoff: concurrent edits to different
+      attributes of one element keep only the winning version, and per-attribute versioning is a
+      possible refinement. The collaboration ID is separate from the SVG `id` attribute, and
+      collaboration state records the collaboration ID that each IRI reference (`href`, `url(#...)`)
+      targets. Concurrent edits that produce duplicate `id` values are repaired deterministically by
+      renaming one element and rewriting only the references bound to it.
+- [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
+      the same ID the higher `version` wins, equal versions break ties by the lower `versionNonce`,
+      and equal nonces break ties by the editing peer's unique session ID, so every peer converges
+      without a coordinating server. Deletions are tombstones retained in collaboration state until
+      every active peer has acknowledged them. Session membership is itself versioned collaboration
+      state: a peer that leaves, or stops acknowledging for longer than a documented retention
+      window, is retired by a membership update, so tombstone storage stays bounded. Compacting
+      acknowledged tombstones advances a session epoch; a peer whose state predates that epoch,
+      including a retired peer that rejoins, resynchronizes from current state instead of merging
+      its stale copy. On replay of its unsent edits, updates to elements that existed before its
+      last sync but are absent from the current state are rejected and reported as conflicts, while
+      elements it created after that sync are inserted, so a deleted element is never resurrected.
+      The saved SVG never contains deleted elements.
+- [ ] **Tree ordering**: SVG is a tree whose document order is paint order, unlike Excalidraw's flat
+      element list. Each element records its parent ID and a fractional index among its siblings, so
+      concurrent inserts and reorders merge without renumbering. Equal indices are ordered by
+      collaboration ID, and invalid or colliding indices are repaired deterministically. Reparenting
+      is an ordinary versioned update. Cycle and missing-parent repair runs on the complete merged
+      state, not in arrival order: within each parent cycle, the element whose winning record sorts
+      lowest under the reconciliation order (`version`, `versionNonce`, peer ID) is detached to the
+      document root, and an element whose parent is missing is detached the same way, so every peer
+      reaches the same tree.
+- [ ] **Incremental application**: Remote updates apply through the same structured edits and
+      incremental invalidation as local edits, never a full document reparse, and the source pane
+      mirrors them through reverse serialization.
+- [ ] **Relay and encryption**: A stateless relay scopes messages to a room and forwards encrypted
+      payloads without decrypting or ordering them. The room key travels only in the share link's
+      URL fragment, which browsers never send to the server. The native editor and the WebAssembly
+      build use the same protocol.
+- [ ] **Presence**: Cursors, selections, and in-progress gestures travel on a volatile channel that
+      is never persisted or recorded in undo history.
+- [ ] **Undo**: Undo is per user. Undoing a local change emits a new versioned edit instead of
+      rewinding shared state, and it skips elements a peer has changed since.
+- [ ] **Local-first persistence**: Each peer holds a full copy, keeps editing while offline, and
+      reconciles on reconnect. The saved file stays plain SVG; collaboration metadata (versions,
+      nonces, fractional indices, tombstones) lives in session or workspace state, not in exported
+      markup.
+- [ ] **Trust boundary**: Remote payloads are untrusted input. They pass the same parsers, resource
+      limits, and secure processing mode as file open, with message size caps, schema validation,
+      and no external resource loading on a peer's behalf. Fuzzers cover payload decoding and
+      reconciliation.
+
+### Scripting
+
+- [ ] **JavaScript support**: Identify a small embeddable JavaScript engine and integrate as an
+      optional feature (similar to how filters are optional). Enable scripted SVG content for
+      interactive applications. See [0027-2](design_docs/0027-2-scripting.md) and
+      [#1238](https://github.com/jwmcglynn/donner/issues/1238).
 
 ---
 

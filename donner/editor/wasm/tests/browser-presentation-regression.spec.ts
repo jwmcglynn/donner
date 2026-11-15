@@ -62,10 +62,11 @@ import {
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
+  selfCheckSurfaceFrameProbeWithConcurrentFrame,
   surfaceFrameProbeInstalled,
   type SurfaceFrameProbeReport,
 } from "./surface-frame-probe";
-import { kStallGuardMs, scaledMs } from "./test-timing";
+import { kStallGuardMs, scaledMs, stallGuardFor } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -219,6 +220,8 @@ declare global {
       viewportZoom: number;
       deviceLost?: boolean;
       timeoutSerial?: number;
+      timeoutAgeMs?: number;
+      completionConfirmations?: number;
       pointerX?: number;
       pointerY?: number;
       mouseDown?: boolean;
@@ -3707,6 +3710,8 @@ test("Geode crown face paints at each held pointer position before release", asy
 // editor's own canvas work and that it reports the ordering it exists for: a
 // scratch canvas frame cleared after the task that acquired it has ended.
 test("the surface frame probe reports canvas work submitted after its task ended", async ({ page }) => {
+  // The concurrent-frame self-check below takes a full stall guard after the setup above it.
+  test.slow();
   const failures = await openEditor(page);
   await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
@@ -3720,6 +3725,15 @@ test("the surface frame probe reports canvas work submitted after its task ended
     .toEqual(expect.objectContaining({ canvasWorkers: 1, lateSubmits: 0 }));
   expect((await readSurfaceFrameProbe(page)).inTaskSubmits).toBeGreaterThan(0);
   expect(await selfCheckSurfaceFrameProbe(page)).toContainEqual({ late: 1, inTask: 2 });
+  // The editor keeps drawing while the self-check runs, so another canvas frame can land in its
+  // window; the self-check counts only its own frame's writes and still gives the exact answer.
+  expect(
+    await selfCheckSurfaceFrameProbeWithConcurrentFrame(page, stallGuardFor(test.info().timeout)),
+  ).toEqual({
+    late: 1,
+    inTask: 2,
+    written: 1,
+  });
   expect(failures).toEqual([]);
 });
 
@@ -6311,11 +6325,13 @@ test("browser trackpad pinch matches the desktop zoom identity", async ({ page }
   }
 });
 
-// Longer than the editor's UI admission deadline
-// (`PresentationSubmissionQueue::kCompletionDeadline`, 5 s), its 250 ms completion recheck and the
-// 5.5 s presentation progress window that ends in the frame performing that recheck, with ample
-// room for the pinch's first held submission to start late.
-const kGpuCompletionStallMs = 15_000;
+// Stall guard for the editor to record the UI admission timeout once completions are held: the
+// deadline (`PresentationSubmissionQueue::kCompletionDeadline`, 5 s), its 250 ms completion recheck
+// and the 5.5 s presentation progress window that ends in the frame performing that recheck, with
+// ample room for the pinch's first held submission to start late. The hold itself lasts until the
+// timeout is recorded, however late that is; this bound only turns a missing timeout into a
+// failure.
+const kAdmissionTimeoutGuardMs = 15_000 + kStallGuardMs;
 
 interface GpuCompletionHold {
   installed: boolean;
@@ -6323,18 +6339,15 @@ interface GpuCompletionHold {
   released: boolean;
 }
 
-// Holds every GPU queue completion in every editor worker for `holdMs`, as a browser whose GPU
-// process stops answering does: the work may finish, but no completion callback reaches the
-// editor until the hold ends. Every worker releases at the same wall-clock time, and a worker
-// reached after that time installs nothing.
-async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
-  const releaseAtMs = Date.now() + holdMs;
+// Holds every GPU queue completion in every editor worker until \ref releaseGpuCompletions, as a
+// browser whose GPU process stops answering does: the work may finish, but no completion callback
+// reaches the editor until the hold ends.
+async function holdGpuCompletions(page: Page): Promise<number> {
   const installed = await Promise.all(
     page.workers().map((worker) =>
       boundFailureDiagnostic(
-        worker.evaluate((releaseAtMs) => {
-          const holdMs = releaseAtMs - Date.now();
-          if (typeof GPUQueue === "undefined" || holdMs <= 0) {
+        worker.evaluate(() => {
+          if (typeof GPUQueue === "undefined") {
             return false;
           }
           const scope = globalThis as typeof globalThis & {
@@ -6365,12 +6378,11 @@ async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
             }
             release();
           };
-          setTimeout(restore, holdMs);
           scope.__donnerGpuCompletionHold = state;
           scope.__donnerReleaseGpuCompletions = restore;
           GPUQueue.prototype.onSubmittedWorkDone = held;
           return true;
-        }, releaseAtMs),
+        }),
         kStallGuardMs,
       )
     ),
@@ -6405,6 +6417,44 @@ async function releaseGpuCompletions(page: Page): Promise<void> {
   );
 }
 
+interface PublishedTimeoutFields {
+  timeoutSerial: number | null;
+  timeoutAgeMs: number | null;
+  completionConfirmations: number | null;
+}
+
+// Records the timeout fields of every presentation stats object the editor assigns from now on, as
+// it is assigned, so a snapshot published without them is seen whatever the timing of later reads.
+async function recordPresentationStatsPublications(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const scope = window as Window & {
+      __donnerPresentationStatsPublications?: PublishedTimeoutFields[];
+    };
+    const published: PublishedTimeoutFields[] = [];
+    let current = window.__donnerPresentationQueueStats;
+    scope.__donnerPresentationStatsPublications = published;
+    Object.defineProperty(window, "__donnerPresentationQueueStats", {
+      configurable: true,
+      get: () => current,
+      set: (value) => {
+        published.push({
+          timeoutSerial: value?.timeoutSerial ?? null,
+          timeoutAgeMs: value?.timeoutAgeMs ?? null,
+          completionConfirmations: value?.completionConfirmations ?? null,
+        });
+        current = value;
+      },
+    });
+  });
+}
+
+async function readPresentationStatsPublications(page: Page): Promise<PublishedTimeoutFields[]> {
+  return page.evaluate(() =>
+    (window as Window & { __donnerPresentationStatsPublications?: PublishedTimeoutFields[] })
+      .__donnerPresentationStatsPublications ?? []
+  );
+}
+
 test("a GPU completion stall past the UI admission deadline still presents the pinch", async ({ page }) => {
   // Hosted macOS CI once had the browser's GPU completions stop for about 20 s just after the
   // editor started. The overdue UI frame reached the admission deadline, the editor declared its
@@ -6429,33 +6479,51 @@ test("a GPU completion stall past the UI admission deadline still presents the p
     .toBe(0);
   expect((await presentationQueue())?.timeoutSerial ?? 0).toBe(0);
 
+  // The stall ends only once the editor has recorded the admission timeout, so the case cannot pass
+  // or fail on how long after the hold the pinch's first held frame happened to be submitted.
+  let holdsAtTimeout: GpuCompletionHold[] = [];
+  let recorded: { timeoutSerial?: number; timeoutAgeMs?: number } | undefined;
   try {
-    expect(await holdGpuCompletions(page, kGpuCompletionStallMs), "no worker owns a GPU queue")
-      .toBeGreaterThan(0);
+    expect(await holdGpuCompletions(page), "no worker owns a GPU queue").toBeGreaterThan(0);
     await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
     await expect
-      .poll(async () => {
-        const holds = await readGpuCompletionHolds(page);
-        return holds.length > 0 && holds.every((hold) => hold.released);
-      }, {
-        message: "the completion stall must end on its own timer",
-        timeout: kGpuCompletionStallMs + kStallGuardMs,
+      .poll(async () => (await presentationQueue())?.timeoutSerial ?? 0, {
+        message: "the editor never recorded the UI admission timeout while completions were held",
+        timeout: kAdmissionTimeoutGuardMs,
       })
-      .toBe(true);
+      .toBeGreaterThan(0);
+    holdsAtTimeout = await readGpuCompletionHolds(page);
+    recorded = await presentationQueue();
+    await recordPresentationStatsPublications(page);
   } finally {
     await releaseGpuCompletions(page);
   }
 
+  expect(
+    holdsAtTimeout.reduce((calls, hold) => calls + hold.calls, 0),
+    "the admission timeout must come from frames waiting on held completions",
+  ).toBeGreaterThan(0);
+  // Each stats object the editor publishes replaces the previous one. Every one published after the
+  // timeout must already carry its fields when it is assigned; a page read can land between any two
+  // main-thread tasks.
+  await expect
+    .poll(async () => (await readPresentationStatsPublications(page)).length, {
+      message: "the editor never published presentation stats after the completion stall",
+      timeout: kStallGuardMs,
+    })
+    .toBeGreaterThanOrEqual(1);
+  const published = await readPresentationStatsPublications(page);
+  expect(published, "a published presentation stats object lacked the recorded timeout fields")
+    .toEqual(published.map(() => ({
+      timeoutSerial: recorded?.timeoutSerial,
+      timeoutAgeMs: recorded?.timeoutAgeMs,
+      completionConfirmations: expect.any(Number),
+    })));
   const holds = await readGpuCompletionHolds(page);
-  expect(
-    holds.reduce((calls, hold) => calls + hold.calls, 0),
-    "the pinch's frames must have waited on held completions",
-  ).toBeGreaterThan(0);
+  expect(holds.length).toBeGreaterThan(0);
+  expect(holds, "every completion hold must be released")
+    .toEqual(holds.map((hold) => ({ ...hold, released: true })));
   const afterStall = await presentationQueue();
-  expect(
-    afterStall?.timeoutSerial ?? 0,
-    "the stall must outlast the UI admission deadline for this case to exercise it",
-  ).toBeGreaterThan(0);
   expect(
     afterStall?.deviceLost,
     "an overdue UI frame declared the presentation device lost, so nothing presents again",

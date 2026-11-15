@@ -24,9 +24,9 @@ from pathlib import Path
 import sys
 
 # Pull request selections a class can depend on, from the determine-targets job. `always` holds
-# whenever CI runs at all; a //... fallback reaches every class.
-CONDITIONS = ("always", "browser_affected", "hosted_parity_affected",
-              "hosted_parity_tests_affected")
+# whenever CI runs at all; a //... fallback reaches every class. `metal_affected` holds when the
+# affected targets reach the native Metal job's suites, which is the only time that job runs.
+CONDITIONS = ("always", "browser_affected", "metal_affected")
 # Routing outputs that say a lane's hosted job was replaced by self-hosted jobs on this pull
 # request. A fallback does not change routing.
 ROUTES = ("always", "self_hosted_macos")
@@ -34,8 +34,7 @@ ROUTES = ("always", "self_hosted_macos")
 SELECTION_SOURCES = {
     "fallback": ("determine-targets", "fallback"),
     "browser_affected": ("determine-targets", "browser_affected"),
-    "hosted_parity_affected": ("determine-targets", "hosted_parity_affected"),
-    "hosted_parity_tests_affected": ("determine-targets", "hosted_parity_tests_affected"),
+    "metal_affected": ("determine-targets", "metal_affected"),
     "self_hosted_macos": ("gatekeeper", "use_self_hosted_macos"),
 }
 MANIFEST = "tools/ci/coverage_contract.json"

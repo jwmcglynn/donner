@@ -464,7 +464,6 @@ void TextEditor::autocompleteSelect() {
   insertText(entry.second, true);
 
   autocompleteOpened_ = false;
-  autocompleteObject_.clear();
 }
 
 void TextEditor::autocompleteNavigate(bool up) {
@@ -688,7 +687,6 @@ void TextEditor::handleMouseInputs() {
 
   if (click && tryNavigateToFocusReferenceRopeAt(ImGui::GetMousePos())) {
     autocompleteOpened_ = false;
-    autocompleteObject_.clear();
     lastClick_ = -1.0f;
     return;
   }
@@ -742,7 +740,6 @@ void TextEditor::handleMouseInputs() {
 
     // Normal click in text area
     autocompleteOpened_ = false;
-    autocompleteObject_.clear();
 
     const auto clickCoords = screenPosToCoordinates(mousePos);
 
@@ -1134,7 +1131,6 @@ void TextEditor::renderInternal(std::string_view title) {
   contentRegionMax_ = contentSize;
   scrollViewportHeight_ = std::max(0.0f, contentSize.y - contentRegionMin.y);
   auto* drawList = ImGui::GetWindowDrawList();
-  float longestLine = textStart_;
   tickSourceFlashes();
 
   if (scrollToTop_) {
@@ -1143,10 +1139,9 @@ void TextEditor::renderInternal(std::string_view title) {
   }
 
   const ImVec2 cursorScreenPos = uiCursorPos_ = ImGui::GetCursorScreenPos();
-  if (!horizontalScroll_) {
-    ImGui::SetScrollX(0.0f);
-  }
-  const float scrollX = lastScrollX_ = horizontalScroll_ ? ImGui::GetScrollX() : 0.0f;
+  // The text view never scrolls horizontally; long lines wrap or are clipped.
+  ImGui::SetScrollX(0.0f);
+  const float scrollX = lastScrollX_ = 0.0f;
   const float scrollY = lastScroll_ = ImGui::GetScrollY();
 
   // Calculate visible lines
@@ -1171,7 +1166,7 @@ void TextEditor::renderInternal(std::string_view title) {
           lineStartPos.x + textStart_ + visualLines_[visualIndex].indentColumns * charAdvance_.x,
           lineStartPos.y};
       renderVisualLine(visualLines_[visualIndex], visualIndex, lineStartPos, textPos, contentSize,
-                       drawList, longestLine);
+                       drawList);
     }
   } else {
     while (lineNo <= visibleLineMax) {
@@ -1179,7 +1174,7 @@ void TextEditor::renderInternal(std::string_view title) {
                                 cursorScreenPos.y + (lineNo - foldedLines_) * charAdvance_.y};
       const ImVec2 textPos{lineStartPos.x + textStart_, lineStartPos.y};
 
-      renderLine(lineNo, lineStartPos, textPos, contentSize, scrollX, drawList, longestLine);
+      renderLine(lineNo, lineStartPos, textPos, contentSize, scrollX, drawList);
       lineNo++;
     }
   }
@@ -1188,7 +1183,7 @@ void TextEditor::renderInternal(std::string_view title) {
   renderSourceStyleDecorationChips(drawList);
   hitTestSourceStyleDecorationChips();
   renderSourceStyleDecorationTooltip();
-  renderExtraUI(drawList, cursorScreenPos, scrollX, scrollY, longestLine, contentSize);
+  renderExtraUI(drawList, cursorScreenPos, scrollX, scrollY, contentSize);
   handleScrolling();
 }
 void TextEditor::handleScrolling() {
@@ -1336,16 +1331,12 @@ void TextEditor::updateFoldedLines(int currentLine, int totalLines) {
 }
 
 void TextEditor::renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& textStart,
-                            const ImVec2& contentSize, float scrollX, ImDrawList* drawList,
-                            float& longestLine) {
+                            const ImVec2& contentSize, float scrollX, ImDrawList* drawList) {
   if (lineNo >= text_.getTotalLines()) {
     return;
   }
 
   const Line& line = text_.getLineGlyphs(lineNo);
-  longestLine = std::max(
-      textStart_ + getTextDistanceToLineStart(Coordinates(lineNo, text_.getLineMaxColumn(lineNo))),
-      longestLine);
 
   // Current line highlight
   if (state_.cursorPosition.line == lineNo) {
@@ -1374,10 +1365,9 @@ void TextEditor::renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& t
 
 void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIndex,
                                   const ImVec2& lineStart, const ImVec2& textStart,
-                                  const ImVec2& contentSize, ImDrawList* drawList,
-                                  float& longestLine) {
+                                  const ImVec2& contentSize, ImDrawList* drawList) {
   if (visualLine.focusHiddenPlaceholder) {
-    renderFocusHiddenPlaceholder(visualLine, lineStart, contentSize, drawList, longestLine);
+    renderFocusHiddenPlaceholder(visualLine, lineStart, contentSize, drawList);
     return;
   }
 
@@ -1386,9 +1376,6 @@ void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIn
   }
 
   const Line& line = text_.getLineGlyphs(visualLine.lineNo);
-  const int visualColumns =
-      visualLine.indentColumns + std::max(0, visualLine.endColumn - visualLine.startColumn);
-  longestLine = std::max(textStart_ + visualColumns * charAdvance_.x, longestLine);
 
   renderLineBackground(visualLine, lineStart, contentSize, drawList);
 
@@ -1411,8 +1398,7 @@ void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIn
 }
 
 void TextEditor::renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
-                                              const ImVec2& contentSize, ImDrawList* drawList,
-                                              float& longestLine) {
+                                              const ImVec2& contentSize, ImDrawList* drawList) {
   const ImVec2 rowStart{lineStart.x + ImGui::GetScrollX(), lineStart.y};
   const ImVec2 rowEnd{lineStart.x + contentSize.x + 2.0f * ImGui::GetScrollX(),
                       lineStart.y + charAdvance_.y};
@@ -1431,7 +1417,6 @@ void TextEditor::renderFocusHiddenPlaceholder(const VisualLine& visualLine, cons
   const ImU32 color = palette_[static_cast<int>(ColorIndex::Comment)];
   const ImVec2 textPos{lineStart.x + textStart_, lineStart.y};
   drawList->AddText(textPos, color, "...");
-  longestLine = std::max(longestLine, textStart_ + 3.0f * charAdvance_.x);
 
   (void)visualLine;
 }
@@ -3643,8 +3628,21 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
 
 }  // namespace
 
+void TextEditor::scrollRequestedCursorIntoView() {
+  if (!scrollToCursor_) {
+    return;
+  }
+  if (scrollSelectionIntoView_ && hasSelection()) {
+    scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
+    scrollSelectionIntoView_ = false;
+  } else {
+    ensureCursorVisible();
+  }
+  scrollToCursor_ = false;
+}
+
 void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, float scrollX,
-                               float scrollY, float longest, const ImVec2& contentSize) {
+                               float scrollY, const ImVec2& contentSize) {
   // Function declaration tooltip
   if (functionDeclarationTooltip_) {
     const ImVec2 tooltipPos = coordinatesToScreenPos(functionDeclarationCoord_);
@@ -3674,7 +3672,6 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
     ImGui::SetWindowFocus();
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
       autocompleteOpened_ = false;
-      autocompleteObject_.clear();
     }
   }
 
@@ -3682,19 +3679,9 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
   const int visualLineCount = (wordWrapEnabled_ || focusPartitionActive_)
                                   ? static_cast<int>(visualLines_.size())
                                   : text_.getTotalLines() - foldedLines_;
-  const float dummyWidth = horizontalScroll_ ? longest + 100.0f * uiScale_ : 0.0f;
-  ImGui::Dummy(ImVec2(dummyWidth, visualLineCount * charAdvance_.y));
+  ImGui::Dummy(ImVec2(0.0f, visualLineCount * charAdvance_.y));
 
-  // Handle cursor visibility
-  if (scrollToCursor_) {
-    if (scrollSelectionIntoView_ && hasSelection()) {
-      scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
-      scrollSelectionIntoView_ = false;
-    } else {
-      ensureCursorVisible();
-    }
-    scrollToCursor_ = false;
-  }
+  scrollRequestedCursorIntoView();
 
   // Find/Replace dialog background
   if (findOpened_) {
@@ -3840,64 +3827,6 @@ RcString TextEditor::autocompleteParseSnippet(std::string_view text, const Coord
   return RcString(result);
 }
 
-// void TextEditor::autocompleteSelect() {
-//   UndoRecord undo;
-//   undo.before = state_;
-
-//   auto cursorPos = getCursorPosition();
-//   cursorPos.column = std::max(cursorPos.column - 1, 0);
-
-//   auto completionStart = findWordStart(cursorPos);
-//   auto completionEnd = findWordEnd(cursorPos);
-
-//   // TODO: autocompleteObject_ is never assigned
-//   if (!autocompleteObject_.empty()) {
-//     completionStart = autocompletePosition_;
-//   }
-
-//   undo.addedStart = completionStart;
-//   int undoPopCount =
-//       std::max(0, completionEnd.column - completionStart.column) + 1;
-
-//   if (!autocompleteObject_.empty() && autocompleteWord_.empty()) {
-//     undoPopCount = 0;
-//   }
-
-//   const auto &selectedEntry = autocompleteSuggestions_[autocompleteIndex_];
-//   RcString entryText =
-//       autocompleteParseSnippet(selectedEntry.second, completionStart);
-
-//   if (completionStart.column != completionEnd.column) {
-//     setSelection(completionStart, completionEnd);
-//     backspace();
-//   }
-//   insertText(entryText, true);
-
-//   undo.added = entryText;
-//   undo.addedEnd = getActualCursorCoordinates();
-
-//   if (isSnippet_ && !snippetTagStart_.empty()) {
-//     setSelection(snippetTagStart_[0], snippetTagEnd_[0]);
-//     setCursorPosition(snippetTagEnd_[0]);
-//     snippetTagSelected_ = 0;
-//     snippetTagLength_ = 0;
-//     snippetTagPreviousLength_ = snippetTagEnd_[snippetTagSelected_].column -
-//                                 snippetTagStart_[snippetTagSelected_].column;
-//   }
-
-//   requestAutocomplete_ = false;
-//   autocompleteOpened_ = false;
-//   autocompleteObject_.clear();
-
-//   undo.after = state_;
-
-//   while (undoPopCount-- != 0) {
-//     undoIndex_--;
-//     undoBuffer_.pop_back();
-//   }
-//   addUndo(undo);
-// }
-
 namespace {
 
 struct AutocompleteEntry {
@@ -3974,31 +3903,28 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
   const std::string searchWord = StringUtils::ToLowerAscii(autocompleteWord_);
   std::vector<AutocompleteEntry> matches;
 
-  // Build matches for non-member completions
-  if (autocompleteObject_.empty()) {
-    // Match against stored entries
-    for (size_t i = 0; i < autocompleteSearchTerms_.size(); i++) {
-      const std::string lowerEntry = StringUtils::ToLowerAscii(autocompleteSearchTerms_[i]);
-      if (size_t loc = lowerEntry.find(searchWord); loc != std::string::npos) {
-        matches.emplace_back(autocompleteEntries_[i].first, autocompleteEntries_[i].second,
-                             static_cast<int>(loc));
-      }
+  // Match against stored entries
+  for (size_t i = 0; i < autocompleteSearchTerms_.size(); i++) {
+    const std::string lowerEntry = StringUtils::ToLowerAscii(autocompleteSearchTerms_[i]);
+    if (size_t loc = lowerEntry.find(searchWord); loc != std::string::npos) {
+      matches.emplace_back(autocompleteEntries_[i].first, autocompleteEntries_[i].second,
+                           static_cast<int>(loc));
     }
+  }
 
-    // Match against language keywords
-    for (const auto& keyword : languageDefinition_.keywords) {
-      const std::string lowerKeyword = StringUtils::ToLowerAscii(keyword);
-      if (size_t loc = lowerKeyword.find(searchWord); loc != std::string::npos) {
-        matches.emplace_back(keyword, keyword, static_cast<int>(loc));
-      }
+  // Match against language keywords
+  for (const auto& keyword : languageDefinition_.keywords) {
+    const std::string lowerKeyword = StringUtils::ToLowerAscii(keyword);
+    if (size_t loc = lowerKeyword.find(searchWord); loc != std::string::npos) {
+      matches.emplace_back(keyword, keyword, static_cast<int>(loc));
     }
+  }
 
-    // Match against language identifiers
-    for (const auto& [identifier, _] : languageDefinition_.identifiers) {
-      const std::string lowerIdentifier = StringUtils::ToLowerAscii(identifier);
-      if (size_t loc = lowerIdentifier.find(searchWord); loc != std::string::npos) {
-        matches.emplace_back(identifier, identifier, static_cast<int>(loc));
-      }
+  // Match against language identifiers
+  for (const auto& [identifier, _] : languageDefinition_.identifiers) {
+    const std::string lowerIdentifier = StringUtils::ToLowerAscii(identifier);
+    if (size_t loc = lowerIdentifier.find(searchWord); loc != std::string::npos) {
+      matches.emplace_back(identifier, identifier, static_cast<int>(loc));
     }
   }
 
@@ -4215,10 +4141,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 
   if (!ignoreImGuiChild_) {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav;
-    if (horizontalScroll_) {
-      flags |= ImGuiWindowFlags_AlwaysHorizontalScrollbar;
-    }
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav;
     ImGui::BeginChild(title.data(), size, showBorder, flags);
   }
 
@@ -4910,252 +4833,6 @@ int TextEditor::pageMoveLines() const {
   }
   return std::max(1, getPageSize() - 1);
 }
-
-// `UndoRecord::UndoRecord`, `UndoRecord::undo`, and `UndoRecord::redo`
-// moved to TextEditorCore.cc as part of the C1 extraction. They now
-// operate on a `TextEditorCore*` rather than a `TextEditor*`.
-
-// `LanguageDefinition::SVG()` moved to TextEditorCore.cc.
-#if 0
-const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::SVG() {
-  static const LanguageDefinition langDef = [] {
-    LanguageDefinition def;
-
-    // SVG element names - used as keywords so tag names like <rect>, <circle>
-    // highlight distinctly from unknown elements. This list is hardcoded
-    // rather than pulled from kSVGElementNames because the text_editor
-    // target must not depend on //donner/svg. Callers that want the full
-    // registry-derived list can add more via `def.keywords.insert(...)`.
-    static constexpr std::array keywords{
-        "a",
-        "animate",
-        "animateMotion",
-        "animateTransform",
-        "circle",
-        "clipPath",
-        "defs",
-        "desc",
-        "ellipse",
-        "feBlend",
-        "feColorMatrix",
-        "feComponentTransfer",
-        "feComposite",
-        "feConvolveMatrix",
-        "feDiffuseLighting",
-        "feDisplacementMap",
-        "feDistantLight",
-        "feDropShadow",
-        "feFlood",
-        "feFuncA",
-        "feFuncB",
-        "feFuncG",
-        "feFuncR",
-        "feGaussianBlur",
-        "feImage",
-        "feMerge",
-        "feMergeNode",
-        "feMorphology",
-        "feOffset",
-        "fePointLight",
-        "feSpecularLighting",
-        "feSpotLight",
-        "feTile",
-        "feTurbulence",
-        "filter",
-        "g",
-        "image",
-        "line",
-        "linearGradient",
-        "marker",
-        "mask",
-        "mpath",
-        "path",
-        "pattern",
-        "polygon",
-        "polyline",
-        "radialGradient",
-        "rect",
-        "set",
-        "stop",
-        "style",
-        "svg",
-        "switch",
-        "symbol",
-        "text",
-        "textPath",
-        "title",
-        "tspan",
-        "use",
-    };
-    def.keywords.insert(keywords.begin(), keywords.end());
-
-    // Known SVG/CSS attribute names - highlighted as KnownIdentifier.
-    static constexpr std::array knownAttrs{
-        "id",    "class",   "style",  "viewBox", "xmlns",
-        "href",  "transform", "fill",   "stroke",  "opacity",
-        "d",     "cx",      "cy",     "r",       "rx",
-        "ry",    "x",       "y",      "width",   "height",
-        "x1",    "y1",      "x2",     "y2",      "preserveAspectRatio",
-        "offset", "stop-color", "stop-opacity",
-        "font-family", "font-size", "font-weight", "font-style",
-        "text-anchor", "dominant-baseline", "stroke-width",
-        "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
-        "fill-opacity", "stroke-opacity", "fill-rule", "clip-path",
-        "clip-rule", "mask", "filter", "display", "visibility",
-        "color", "pointer-events",
-    };
-    for (const auto& attr : knownAttrs) {
-      def.identifiers.emplace(attr, TextEditor::Identifier(attr));
-    }
-
-    // Custom XML-aware tokenizer. Runs per-line; multi-line comments
-    // (<!-- -->) are handled by the comment-detection pass below.
-    def.tokenize = [](const char* inBegin, const char* inEnd, const char*& outBegin,
-                      const char*& outEnd, ColorIndex& outColor) -> bool {
-      if (inBegin >= inEnd) return false;
-
-      const char* p = inBegin;
-      const char c = *p;
-
-      // Tag delimiters: <, </, />, >
-      if (c == '<') {
-        if (p + 1 < inEnd && p[1] == '/') {
-          outBegin = p;
-          outEnd = p + 2;
-          outColor = ColorIndex::Punctuation;
-          return true;
-        }
-        outBegin = p;
-        outEnd = p + 1;
-        outColor = ColorIndex::Punctuation;
-        return true;
-      }
-      if (c == '>') {
-        outBegin = p;
-        outEnd = p + 1;
-        outColor = ColorIndex::Punctuation;
-        return true;
-      }
-      if (c == '/' && p + 1 < inEnd && p[1] == '>') {
-        outBegin = p;
-        outEnd = p + 2;
-        outColor = ColorIndex::Punctuation;
-        return true;
-      }
-
-      // Quoted strings (attribute values). Emit the opening/closing
-      // quote chars as Punctuation and just the inner value as String,
-      // so double-click on the value text selects the contents without
-      // the quote delimiters (double-click boundaries track color
-      // changes, per findWordStart/findWordEnd).
-      if (c == '"' || c == '\'') {
-        // First call: emit the opening quote as Punctuation (1 char)
-        // and let the next tokenizer invocation handle the inner
-        // value. Since the tokenizer is called in a loop until
-        // end-of-line, the subsequent iterations will colorize the
-        // inner value char by char via the identifier/number/etc.
-        // paths below. The closing quote is emitted similarly.
-        outBegin = p;
-        outEnd = p + 1;
-        outColor = ColorIndex::Punctuation;
-        return true;
-      }
-
-      // Entity references: &name; or &#digits; or &#xhex;
-      if (c == '&') {
-        ++p;
-        if (p < inEnd && *p == '#') {
-          ++p;
-          if (p < inEnd && (*p == 'x' || *p == 'X')) ++p;
-        }
-        while (p < inEnd && *p != ';' && *p != '<' && *p != '>' && *p != ' ' &&
-               *p != '\t' && *p != '\n') {
-          ++p;
-        }
-        if (p < inEnd && *p == ';') ++p;
-        outBegin = inBegin;
-        outEnd = p;
-        outColor = ColorIndex::Number;
-        return true;
-      }
-
-      // Numbers (attribute values like x="10.5")
-      if ((c >= '0' && c <= '9') || (c == '-' && p + 1 < inEnd && p[1] >= '0' && p[1] <= '9') ||
-          (c == '.' && p + 1 < inEnd && p[1] >= '0' && p[1] <= '9')) {
-        if (c == '-') ++p;
-        while (p < inEnd && ((*p >= '0' && *p <= '9') || *p == '.')) {
-          ++p;
-        }
-        // Handle scientific notation (e.g., 1e-5)
-        if (p < inEnd && (*p == 'e' || *p == 'E')) {
-          ++p;
-          if (p < inEnd && (*p == '+' || *p == '-')) ++p;
-          while (p < inEnd && *p >= '0' && *p <= '9') ++p;
-        }
-        // Handle unit suffixes (px, em, %)
-        if (p < inEnd && *p == '%') {
-          ++p;
-        } else {
-          const char* unitStart = p;
-          while (p < inEnd && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'))) {
-            ++p;
-          }
-          (void)unitStart;
-        }
-        outBegin = inBegin;
-        outEnd = p;
-        outColor = ColorIndex::Number;
-        return true;
-      }
-
-      // Identifiers: element names, attribute names
-      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':' ||
-          static_cast<unsigned char>(c) >= 0x80) {
-        ++p;
-        while (p < inEnd &&
-               ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
-                *p == '_' || *p == '-' || *p == '.' || *p == ':' ||
-                static_cast<unsigned char>(*p) >= 0x80)) {
-          ++p;
-        }
-        outBegin = inBegin;
-        outEnd = p;
-        outColor = ColorIndex::Identifier;
-        // The caller (colorizeRange) will promote Identifier → Keyword if
-        // the token text matches def.keywords, or → KnownIdentifier if it
-        // matches def.identifiers.
-        return true;
-      }
-
-      // Equals sign (structural, not colored)
-      if (c == '=') {
-        outBegin = p;
-        outEnd = p + 1;
-        outColor = ColorIndex::Punctuation;
-        return true;
-      }
-
-      // Fall through for whitespace and anything else - the caller advances
-      // past it character-by-character.
-      return false;
-    };
-
-    // XML comment delimiters for the multi-line comment detection pass.
-    def.commentStart = "<!--";
-    def.commentEnd = "-->";
-    def.singleLineComment = "";  // XML has no single-line comment syntax.
-
-    // Settings
-    def.caseSensitive = true;
-    def.autoIndentation = true;
-    def.name = "SVG";
-
-    return def;
-  }();
-
-  return langDef;
-}
-#endif
 
 void TextEditor::detectIndentationStyle() {
   core_.detectIndentationStyle();
