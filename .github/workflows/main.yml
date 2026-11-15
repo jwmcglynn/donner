@@ -851,7 +851,7 @@ jobs:
       # test binaries) added minutes of pure transfer per run. Tests execute
       # remotely, so only test logs/XML need to come back.
       DIAG_BUILD_FLAGS: "--remote_download_outputs=minimal"
-      DIAG_TEST_FLAGS: "--remote_download_outputs=minimal --remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"
+      DIAG_TEST_FLAGS: '--remote_download_outputs=minimal --remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$'
     steps:
       - name: Checkout
         uses: actions/checkout@v7

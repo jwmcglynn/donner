@@ -352,6 +352,19 @@ py_test(
     ],
 )
 
+# The measured size of the workflow tree, so growth of logic in workflow YAML is a reviewed edit.
+py_test(
+    name = "workflow_budget_tests",
+    size = "small",
+    srcs = ["workflow_budget_tests.py"],
+    data = [
+        "workflow_budget.json",
+        "//:BUILD.bazel",
+        "//:github_action_definitions",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
 # Only a newer pull request head commit cancels runs, running or queued, of the earlier head.
 py_test(
     name = "ci_concurrency_policy_tests",

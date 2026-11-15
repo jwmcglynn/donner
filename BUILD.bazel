@@ -95,7 +95,10 @@ filegroup(
         ".github/actions/*/action.yml",
         ".github/workflows/*.yaml",
         ".github/workflows/*.yml",
-    ]),
+    ]) + glob(
+        [".github/actions/*/action.yaml"],
+        allow_empty = True,
+    ),
     visibility = [
         "//build_defs:__pkg__",
         "//tools:__pkg__",
