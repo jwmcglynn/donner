@@ -286,29 +286,40 @@ void ForgetInputsReachedByRestyle(Registry& registry, ExternalUseRetainedState& 
 }
 
 /**
- * Restyle \p occurrence's subtree for its inputs. Every retained ancestor subtree is restored to
- * the document's own styles first, since the subtree reads its ancestors, such as the root's font
- * size for rem lengths. Forgets the inputs of every retained subtree the restyle overlaps. Returns
- * the occurrence's entry, which records the inputs only when \p retain is set.
+ * Drop the style-derived state of \p root's subtree and of every retained subtree that is its
+ * ancestor, forgetting those ancestors, since \p root's subtree reads them, such as the root's font
+ * size for rem lengths. Returns \p root and the forgotten ancestor roots.
+ */
+std::vector<Entity> InvalidateWithRetainedAncestors(Registry& registry,
+                                                    ExternalUseRetainedState& state, Entity root) {
+  std::vector<Entity> invalidated{root};
+  for (const RetainedSubtree& other : state.subtrees) {
+    if (other.root != root && IsAncestorOrSelf(registry, other.root, root)) {
+      invalidated.push_back(other.root);
+    }
+  }
+  for (const Entity entity : invalidated) {
+    InvalidateSubtree(registry, entity);
+  }
+  std::erase_if(state.subtrees, [&](const RetainedSubtree& s) {
+    return s.root != root &&
+           std::find(invalidated.begin(), invalidated.end(), s.root) != invalidated.end();
+  });
+  return invalidated;
+}
+
+/**
+ * Restyle \p occurrence's subtree for its inputs, first restoring every retained ancestor subtree
+ * to the document's own styles. Forgets the inputs of every retained subtree the restyle overlaps.
+ * Returns the occurrence's entry, which records the inputs only when \p retain is set.
  */
 RetainedSubtree& RestyleForOccurrence(Registry& registry, ExternalUseRetainedState& state,
                                       const ExternalUseStyleContext& occurrence, bool retain) {
-  std::vector<Entity> restored{occurrence.root};
-  for (const RetainedSubtree& other : state.subtrees) {
-    if (other.root != occurrence.root && IsAncestorOrSelf(registry, other.root, occurrence.root)) {
-      restored.push_back(other.root);
-    }
-  }
-  for (const Entity root : restored) {
-    InvalidateSubtree(registry, root);
-  }
-  std::erase_if(state.subtrees, [&](const RetainedSubtree& s) {
-    return s.root != occurrence.root &&
-           std::find(restored.begin(), restored.end(), s.root) != restored.end();
-  });
+  const std::vector<Entity> invalidated =
+      InvalidateWithRetainedAncestors(registry, state, occurrence.root);
   for (RetainedSubtree& other : state.subtrees) {
     if (other.root != occurrence.root &&
-        std::any_of(restored.begin(), restored.end(),
+        std::any_of(invalidated.begin(), invalidated.end(),
                     [&](Entity root) { return Overlaps(registry, other.root, root); })) {
       other.inputs.reset();
     }
