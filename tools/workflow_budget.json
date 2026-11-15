@@ -1,11 +1,11 @@
 {
   "tree": {
-    "lines": 5677,
-    "comment_lines": 634,
+    "lines": 5779,
+    "comment_lines": 661,
     "multiline_runs": 72,
     "longest_run": 194,
     "run_expressions": 12,
-    "longest_if": 402
+    "longest_if": 625
   },
   "files": {
     ".github/workflows/badges.yaml": {
@@ -97,12 +97,12 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1292,
-      "comment_lines": 194,
+      "lines": 1378,
+      "comment_lines": 221,
       "multiline_runs": 10,
       "longest_run": 31,
       "run_expressions": 6,
-      "longest_if": 402
+      "longest_if": 625
     },
     ".github/workflows/perf.yml": {
       "lines": 167,
@@ -217,7 +217,7 @@
       "longest_if": 0
     },
     ".github/actions/re-turnstile/action.yml": {
-      "lines": 105,
+      "lines": 121,
       "comment_lines": 0,
       "multiline_runs": 0,
       "longest_run": 0,

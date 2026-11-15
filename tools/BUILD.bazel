@@ -15,6 +15,15 @@ exports_files([
     "run-browser-ci.sh",
 ])
 
+# Data of //tools/ci:macos_remote_shadow, which runs the test wrapper and reads the Xcode pins.
+exports_files(
+    [
+        "ci_bazel_test.sh",
+        "ci_macos_xcode.txt",
+    ],
+    visibility = ["//tools/ci:__pkg__"],
+)
+
 exports_files(
     [
         "docs/selector.js",
@@ -464,6 +473,33 @@ py_test(
     ],
     deps = [
         ":bazelrc_configs",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# Keeps the advisory macOS remote-execution shadow lane (tools/ci/macos_remote_shadow.py) behind the
+# self-hosted Linux lane's trust gate and an opt-in, unable to fail a pull request, free of private
+# runner configuration, and running a documented subset of the self-hosted macOS lane's tests.
+py_test(
+    name = "ci_macos_remote_shadow_tests",
+    size = "small",
+    srcs = ["ci_macos_remote_shadow_tests.py"],
+    data = [
+        "ci_bazel_test.sh",
+        "ci_macos_xcode.txt",
+        "//:.bazelrc",
+        "//:.github/workflows/main.yml",
+        "//:docs_files",
+        "//build_defs:editor_build_info.bzl",
+        "//build_defs:rules.bzl",
+        "//tools/ci:BUILD.bazel",
+        "//tools/ci:bazel_watchdog.sh",
+        "//tools/ci:coverage_contract.json",
+    ],
+    deps = [
+        ":bazelrc_configs",
+        ":test_executable_fixtures",
+        "//tools/ci:macos_remote_shadow",
         "@rules_python//python/runfiles",
     ],
 )

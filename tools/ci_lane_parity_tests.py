@@ -437,6 +437,23 @@ STEP_OUTPUTS = {
         "set", "Main pushes and pull requests both have a base revision for bazel-diff."),
 }
 
+# Repository variables a condition may read, with the value used in every scenario and why. A
+# variable not listed here fails the test, so a new switch is reviewed before it can gate a check.
+REPOSITORY_VARIABLES = {
+    "vars.MACOS_REMOTE_SHADOW_LANE": (
+        "true", "Turns on the advisory macOS shadow lane for every trusted pull request. On, so "
+                "the evaluation reaches that job; it never gates (continue-on-error)."),
+}
+
+# Job results and outputs of the advisory shadow lane's prerequisites, with the value used in every
+# scenario and why. The shadow lane never gates, so these only decide whether it is evaluated.
+SHADOW_LANE_CONTEXT = {
+    "needs.linux-self-hosted.result": (
+        "success", "The shadow lane runs after its run's Linux lane, passed or failed."),
+    "needs.macos-remote-shadow-turnstile.outputs.admitted": (
+        "true", "Its own admission let it run; otherwise it is skipped."),
+}
+
 # Job outputs a condition may read, mapped to the scenario key that holds each one's value.
 _MODELLED_OUTPUTS = {
     "needs.gatekeeper.outputs.trusted_pr": "trusted_pr",
@@ -764,6 +781,10 @@ def _context(scenario):
             return []
         if name in STEP_OUTPUTS:
             return STEP_OUTPUTS[name][0]
+        if name in REPOSITORY_VARIABLES:
+            return REPOSITORY_VARIABLES[name][0]
+        if name in SHADOW_LANE_CONTEXT:
+            return SHADOW_LANE_CONTEXT[name][0]
         # An output that is not modelled above can decide which checks run, so it fails the
         # test until it is reviewed and listed.
         raise ValueError("unmodelled context %s" % name)
@@ -1804,6 +1825,8 @@ class CiLaneParityTest(unittest.TestCase):
             "macos-metal": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
             "linux": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "linux-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
+            "macos-remote-shadow": {"main-push": False, "trusted-pr": True,
+                                    "untrusted-pr": False},
         }
         for job, scenarios in expected.items():
             for scenario, expected_runs in scenarios.items():
@@ -1824,6 +1847,17 @@ class CiLaneParityTest(unittest.TestCase):
                 with self.subTest(scenario=scenario, condition=condition):
                     with self.assertRaisesRegex(ValueError, "unmodelled context runner.os"):
                         runs(condition, scenario)
+
+    def test_advisory_shadow_lane_never_gates(self):
+        workflow = self.workflows["main.yml"]
+        for scenario in SCENARIOS:
+            with self.subTest(scenario=scenario):
+                self.assertFalse(job_gates(workflow, "macos-remote-shadow", scenario))
+        self.assertTrue(job_runs(workflow, "macos-remote-shadow", "trusted-pr"))
+        job = dict(_jobs(workflow)["macos-remote-shadow"])
+        job.pop("continue-on-error")
+        self.assertTrue(job_gates(dict(workflow, jobs=dict(_jobs(workflow), **{
+            "macos-remote-shadow": job})), "macos-remote-shadow", "trusted-pr"))
 
     def test_every_main_push_workflow_runs_on_pull_requests(self):
         self._assert_matches_allowlist(

@@ -57,6 +57,10 @@ TRACKED_CI_SCRIPTS = {
     "tools/ci/cmake_consumer.sh": "//tools/ci:cmake_consumer_tests",
     "tools/ci/free_hosted_macos_disk.sh": "//tools/ci:free_hosted_macos_disk_tests",
     "tools/ci/gatekeeper.py": "//tools/ci:gatekeeper_tests",
+    # The advisory macOS shadow lane: its library's only user is
+    # //tools:ci_macos_remote_shadow_tests, which bazel-diff selects when the script changes. It is
+    # not workflow logic: a change to it must not send every gating lane to full coverage.
+    "tools/ci/macos_remote_shadow.py": "//tools/ci:macos_remote_shadow",
     "tools/ci_bazel_test.sh": "//tools:ci_bazel_test_tests",
     "tools/ci_coverage_contract.py": "//tools:ci_coverage_contract_tests",
     "tools/ci_diagnostics_report.py": "//tools:ci_diagnostics_report_tests",

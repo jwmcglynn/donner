@@ -243,6 +243,45 @@ class WorkflowResolutionTests(unittest.TestCase):
         )
 
 
+# The advisory shadow lane's own pool of one (macos-remote-shadow), as the jobs API reports it. A
+# job still waiting on `needs` is not listed at all, so a run whose Linux lane is still going has no
+# shadow job yet.
+_SHADOW_LANE = "macos-remote-shadow"
+_SHADOW_POOL = [_SHADOW_LANE]
+
+
+class ShadowPoolTests(unittest.TestCase):
+    def _decide(self, runs, me=20):
+        return _decide(me, runs, capacity=1, pool=_SHADOW_POOL)
+
+    def test_an_older_run_still_in_its_linux_lane_holds_the_slot(self):
+        # Its shadow job is not listed yet, which reads as absent and may still be created.
+        older = _run(10, _jobs((_LINUX_LANE, "in_progress")))
+        self.assertEqual(admission.ABSENT, admission.pool_state(older["jobs"], _SHADOW_POOL))
+        self.assertFalse(self._decide([older])["admit"])
+
+    def test_a_running_or_queued_shadow_job_holds_the_slot(self):
+        for status in ("in_progress", "queued", "waiting"):
+            with self.subTest(status=status):
+                older = _run(10, _jobs((_LINUX_LANE, "completed"), (_SHADOW_LANE, status)))
+                self.assertFalse(self._decide([older])["admit"])
+
+    def test_a_skipped_or_finished_shadow_job_releases_the_slot(self):
+        older = _run(10, _jobs((_LINUX_LANE, "completed"), (_SHADOW_LANE, "completed")))
+        self.assertEqual(admission.CLEAR, admission.pool_state(older["jobs"], _SHADOW_POOL))
+        self.assertTrue(self._decide([older])["admit"])
+
+    def test_a_newer_run_blocks_only_while_its_shadow_job_runs(self):
+        self.assertTrue(self._decide([_run(30, _jobs((_LINUX_LANE, "in_progress")))])["admit"])
+        self.assertFalse(self._decide([_run(30, _jobs((_LINUX_LANE, "completed"),
+                                                      (_SHADOW_LANE, "in_progress")))])["admit"])
+
+    def test_the_linux_pool_never_counts_the_shadow_job(self):
+        # The shadow job runs outside the Linux lane's accounting (see docs/building.md).
+        payload = _jobs((_LINUX_LANE, "completed"), (_SHADOW_LANE, "in_progress"))
+        self.assertEqual(admission.CLEAR, admission.pool_state(payload, [_LINUX_LANE]))
+
+
 class TurnstileWiringTests(unittest.TestCase):
     """The rules only help if the self-hosted lane is actually gated by them."""
 
@@ -252,21 +291,40 @@ class TurnstileWiringTests(unittest.TestCase):
         self.workflows = {"main.yml": _read("donner/.github/workflows/main.yml")}
 
     def _turnstile_usages(self, text):
-        """Every `uses: ./.github/actions/re-turnstile` block's `with:` body."""
+        """Every `uses: ./.github/actions/re-turnstile` step's `with:` body, by lane."""
         pattern = re.compile(
-            r"uses:\s*\./\.github/actions/re-turnstile\s*\n"
-            r"(?P<with>(?:[ \t]*\n|[ \t]+\S.*\n)+)"
+            r"uses:\s*\./\.github/actions/re-turnstile\s*\n {8}with:\n"
+            r"(?P<with>(?: {10}.*\n)+)"
         )
-        return [match.group("with") for match in pattern.finditer(text)]
+        usages = [match.group("with") for match in pattern.finditer(text)]
+        return {re.search(r"(?m)^ +lane: (\S+)$", usage).group(1): usage for usage in usages}
 
     def test_the_linux_lane_is_gated_by_a_fleet_sized_pool(self):
         usages = self._turnstile_usages(self.workflows["main.yml"])
-        self.assertEqual(len(usages), 1, "expected one turnstile for the self-hosted lane")
-        (usage,) = usages
-        self.assertRegex(usage, r"(?m)^\s+lane: " + _LINUX_LANE + r"$")
+        self.assertEqual({_LINUX_LANE, _SHADOW_LANE}, set(usages))
+        usage = usages[_LINUX_LANE]
         self.assertRegex(usage, r"(?m)^\s+pool: " + _LINUX_LANE + r"$")
         self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
         self.assertRegex(usage, r"capacity:\s*\"?" + _EXPECTED_CAPACITY)
+        # The gating lane keeps the default fail-open timeout.
+        self.assertNotIn("timeout-result", usage)
+
+    def test_the_shadow_lane_has_a_fail_closed_pool_of_one(self):
+        usage = self._turnstile_usages(self.workflows["main.yml"])[_SHADOW_LANE]
+        self.assertRegex(usage, r"(?m)^\s+pool: " + _SHADOW_LANE + r"$")
+        self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
+        self.assertRegex(usage, r'(?m)^\s+capacity: "1"$')
+        self.assertRegex(usage, r"(?m)^\s+timeout-result: skip$")
+        minutes = int(re.search(r'(?m)^\s+timeout-minutes: "(\d+)"$', usage).group(1))
+        self.assertLessEqual(minutes, 30)
+        shadow = self._job_body(self.workflows["main.yml"], _SHADOW_LANE)
+        self.assertIn("needs.macos-remote-shadow-turnstile.outputs.admitted == 'true'", shadow)
+
+    def test_action_fails_closed_only_when_asked(self):
+        self.assertRegex(self.action, r'timeout-result:\n(?:.*\n)*?\s+default: "proceed"')
+        self.assertIn("value: ${{ steps.wait.outputs.admitted }}", self.action)
+        self.assertIn('self.fail_closed = environ.get("TURNSTILE_TIMEOUT_RESULT") == "skip"',
+                      self.loop)
 
     def test_every_workflow_that_calls_ci_shares_the_pool(self):
         directory = Path(_runfile("donner/.github/workflows/main.yml")).parent
@@ -275,11 +333,11 @@ class TurnstileWiringTests(unittest.TestCase):
             if re.search(r"(?m)^    uses: \./\.github/workflows/main\.yml\s*$",
                          path.read_text(encoding="utf-8")))
         self.assertEqual(callers, ["pr_base_change.yml"])
-        (usage,) = self._turnstile_usages(self.workflows["main.yml"])
-        listed = re.search(r"(?m)^\s+pool-workflows: (.+)$", usage).group(1).split()
-        self.assertEqual(sorted(set(listed) - {"main.yml"}), callers,
-                         "a workflow that calls main.yml can run its self-hosted job, so "
-                         "its runs must be counted by the turnstile")
+        for lane, usage in self._turnstile_usages(self.workflows["main.yml"]).items():
+            listed = re.search(r"(?m)^\s+pool-workflows: (.+)$", usage).group(1).split()
+            self.assertEqual(sorted(set(listed) - {"main.yml"}), callers,
+                             "a workflow that calls main.yml can run %s, so its runs must be "
+                             "counted by the turnstile" % lane)
 
     def _job_body(self, text, job):
         match = re.search(

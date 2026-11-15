@@ -8,6 +8,7 @@ requests per poll and the spacing between polls are part of its contract.
 
 import importlib.util
 import re
+import tempfile
 import unittest
 
 from python.runfiles import runfiles
@@ -262,6 +263,56 @@ class WaitLoopTests(unittest.TestCase):
         self.assertIn("Actions API metadata is unavailable; proceeding (fail-open)",
                       "".join(self.logged))
         self.assertLessEqual(self.clock.now, 1_000_000 + 300)
+
+
+class FailClosedTests(unittest.TestCase):
+    """timeout-result "skip": an advisory lane does not run after the safety timeout."""
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.logged = []
+
+    def _turnstile(self, api, **environ):
+        return turnstile.Turnstile(_environ(**environ), api, sleep=self.clock.sleep,
+                                   clock=self.clock, jitter=lambda: 0, log=self.logged.append)
+
+    def _run_with_output(self, api, **environ):
+        with tempfile.TemporaryDirectory() as directory:
+            output = directory + "/output"
+            status = self._turnstile(api, GITHUB_OUTPUT=output, **environ).run()
+            try:
+                written = open(output, encoding="utf-8").read()
+            except FileNotFoundError:
+                written = None
+        return status, written
+
+    def test_timeout_reports_not_admitted(self):
+        api = FakeActions(self.clock, {100: (1, "in_progress"), _ME: (1, "queued")})
+        status, written = self._run_with_output(
+            api, TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="5",
+            TURNSTILE_TIMEOUT_RESULT="skip")
+        self.assertEqual((0, "admitted=false\n"), (status, written))
+        self.assertIn("not admitted (fail-closed)", "".join(self.logged))
+        self.assertNotIn("fail-open", "".join(self.logged))
+
+    def test_unresolvable_workflows_report_not_admitted(self):
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        api.refuse_until = self.clock.now + 10_000
+        status, written = self._run_with_output(api, TURNSTILE_TIMEOUT_MINUTES="5",
+                                                TURNSTILE_TIMEOUT_RESULT="skip")
+        self.assertEqual((0, "admitted=false\n"), (status, written))
+
+    def test_admission_reports_admitted(self):
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        status, written = self._run_with_output(api, TURNSTILE_TIMEOUT_RESULT="skip")
+        self.assertEqual((0, "admitted=true\n"), (status, written))
+
+    def test_default_writes_no_output_and_still_fails_open(self):
+        api = FakeActions(self.clock, {100: (1, "in_progress"), _ME: (1, "queued")})
+        status, written = self._run_with_output(api, TURNSTILE_CAPACITY="1",
+                                                TURNSTILE_TIMEOUT_MINUTES="5")
+        self.assertEqual((0, None), (status, written))
+        self.assertIn("proceeding (fail-open)", self.logged[-2])
 
 
 class WiringTests(unittest.TestCase):

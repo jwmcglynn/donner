@@ -93,6 +93,10 @@ class Turnstile:
         self.base = float(environ.get("TURNSTILE_POLL_SECONDS") or "60")
         self.maximum = max(self.base, float(environ.get("TURNSTILE_MAX_POLL_SECONDS") or "300"))
         self.deadline = clock() + float(environ.get("TURNSTILE_TIMEOUT_MINUTES") or "150") * 60
+        # "skip" fails closed for an advisory lane: a timeout reports admitted=false, which its
+        # dependent job reads. The default keeps the gating lanes' fail-open behavior.
+        self.fail_closed = environ.get("TURNSTILE_TIMEOUT_RESULT") == "skip"
+        self.output = environ.get("GITHUB_OUTPUT") if self.fail_closed else None
         self.client = client
         self.sleep = sleep
         self.clock = clock
@@ -274,19 +278,38 @@ class Turnstile:
                          f"in {int(delay)}s")
                 self._wait(delay + self.jitter())
             if self._expired():
+                if self.fail_closed:
+                    self.log("turnstile: safety timeout reached while Actions API metadata is "
+                             "unavailable; not admitted (fail-closed)")
+                    self._admitted(False)
+                    self._report()
+                    return None
                 self.log("turnstile: safety timeout reached while Actions API metadata is "
                          "unavailable; proceeding (fail-open)")
                 self._report()
                 return None
 
     def _fail_open(self, blockers: str) -> int:
+        if self.fail_closed:
+            self.log(f"turnstile: safety timeout reached while waiting behind {blockers}; "
+                     f"not admitted (fail-closed)")
+            self._admitted(False)
+            self._report()
+            return 0
         self.log(f"turnstile: safety timeout reached while waiting behind {blockers}; "
                  f"proceeding (fail-open)")
         return self._done()
 
     def _done(self) -> int:
+        self._admitted(True)
         self._report()
         return 0
+
+    def _admitted(self, admitted: bool) -> None:
+        """Writes the `admitted` output in fail-closed mode only."""
+        if self.output:
+            with open(self.output, "a", encoding="utf-8") as handle:
+                handle.write("admitted=%s\n" % ("true" if admitted else "false"))
 
     def _report(self) -> None:
         self.log(f"turnstile: {self.client.requests} API requests "
