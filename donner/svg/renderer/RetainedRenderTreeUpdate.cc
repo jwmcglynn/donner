@@ -168,6 +168,9 @@ void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
           resourceManager.loadAdmittedExternalSVG(ref.documentUrl(), warningSink)) {
     registry.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDocument),
                                                       RcString(ref.fragment()));
+  } else {
+    // A refused admission must not leave an earlier instance of the document drawing.
+    registry.remove<ExternalUseComponent>(entity);
   }
 }
 
