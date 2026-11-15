@@ -865,12 +865,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertNotIn("Test local Xvfb targets", hosted)
         self.assertIn("xvfb xauth", hosted)
         self.assertIn("-local-gpu-isolated", remote)
-        target = self.editor_tests_build.split(
-            'name = "editor_window_vulkan_surface_tests",', 1
-        )[1].split("\n)\n", 1)[0]
-        for tag in ("exclusive-if-local", "local-gpu-isolated", "requires_xvfb"):
-            self.assertIn('"%s"' % tag, target)
-        self.assertIn('data = [":editor_window_tests_geode"]', target)
+        # Both displayed-Vulkan targets stay on the local Xvfb route and take the local GPU
+        # resource, so neither runs alongside another GPU-opening test.
+        for name in ("editor_window_vulkan_surface_tests", "editor_window_vulkan_default_tests"):
+            with self.subTest(target=name):
+                target = self.editor_tests_build.split(
+                    'name = "%s",' % name, 1
+                )[1].split("\n)\n", 1)[0]
+                for tag in ("local-gpu-isolated", "requires_xvfb", "resources:local_gpu:1"):
+                    self.assertIn('"%s"' % tag, target)
+                self.assertNotIn('"exclusive-if-local"', target)
+                self.assertIn('data = [":editor_window_tests_geode"]', target)
         self.assertIn("export DONNER_GPU_BACKEND=vulkan", self.xvfb_runner)
         self.assertIn("xvfb-run -a", self.xvfb_runner)
 
