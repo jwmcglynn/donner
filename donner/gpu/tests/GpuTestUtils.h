@@ -122,8 +122,8 @@ inline int64_t MillisecondsBetween(std::chrono::steady_clock::time_point from,
  * Runs a step on a thread of its own at a steady pace, standing in for a GPU that finishes work
  * slowly: \p count steps, \p interval apart, the first one \p interval after construction. Records
  * when the last step began and returned, and the longest time between consecutive step starts
- * (the first counted from construction), so a case can tell a host that fell behind from the
- * behavior it checks; see \ref KeptPaceWithin.
+ * (the first counted from the pacing origin, construction unless given), so a case can tell a
+ * host that fell behind from the behavior it checks; see \ref KeptPaceWithin.
  */
 class PacedSteps {
 public:
@@ -131,9 +131,14 @@ public:
    * @param count Steps to run.
    * @param interval Time to sleep before each step.
    * @param step Run for each step with its number, counting from 1.
+   * @param origin What the first step's gap is counted from: the progress the steps continue,
+   *   when that came before construction.
    */
-  PacedSteps(int count, std::chrono::milliseconds interval, std::function<void(int)> step)
-      : step_(std::move(step)), thread_([this, count, interval] { run(count, interval); }) {}
+  PacedSteps(int count, std::chrono::milliseconds interval, std::function<void(int)> step,
+             std::chrono::steady_clock::time_point origin = std::chrono::steady_clock::now())
+      : step_(std::move(step)),
+        origin_(origin),
+        thread_([this, count, interval] { run(count, interval); }) {}
 
   /// Waits for the last step.
   ~PacedSteps() { join(); }
@@ -155,8 +160,8 @@ public:
   /// Just after the last step returned.
   std::chrono::steady_clock::time_point lastStepEnd() const { return lastStepEnd_; }
 
-  /// Longest time in milliseconds between consecutive step starts, the first counted from
-  /// construction.
+  /// Longest time in milliseconds between consecutive step starts, the first counted from the
+  /// pacing origin.
   int64_t longestGapMs() const { return longestGapMs_; }
 
   /// Prints the longest gap, which is what a failed \ref KeptPaceWithin is about.
@@ -168,7 +173,7 @@ public:
 private:
   /// The stepping thread. @param count Steps to run. @param interval Sleep before each step.
   void run(int count, std::chrono::milliseconds interval) {
-    std::chrono::steady_clock::time_point previous = constructedAt_;
+    std::chrono::steady_clock::time_point previous = origin_;
     for (int i = 1; i <= count; ++i) {
       std::this_thread::sleep_for(interval);
       lastStepStart_ = std::chrono::steady_clock::now();
@@ -179,8 +184,8 @@ private:
     }
   }
 
-  std::function<void(int)> step_;  //!< What each step does.
-  const std::chrono::steady_clock::time_point constructedAt_ = std::chrono::steady_clock::now();
+  std::function<void(int)> step_;                        //!< What each step does.
+  const std::chrono::steady_clock::time_point origin_;   //!< What the first gap is counted from.
   std::chrono::steady_clock::time_point lastStepStart_;  //!< Written by the stepping thread.
   std::chrono::steady_clock::time_point lastStepEnd_;    //!< Written by the stepping thread.
   int64_t longestGapMs_ = 0;                             //!< Written by the stepping thread.
