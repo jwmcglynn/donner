@@ -1197,11 +1197,14 @@ private:
 /// A hidden leaf's filter therefore never runs, even a filter that would paint with no source
 /// (`feFlood`), as browsers do. A visible descendant of a hidden group is not a leaf of that group
 /// and keeps its filter. `visibility` hides graphics, not a container's own filter output, so an
-/// empty hidden container such as `<g>` is not a hidden leaf and keeps its filter too.
+/// empty hidden container such as `<g>` with a filter keeps it; without a filter it draws nothing,
+/// and neither does the mask content drawn for it.
 bool IsInvisibleInstance(Registry& registry,
                          const components::RenderingInstanceComponent& instance) {
+  const bool filteredContainer =
+      instance.resolvedFilter.has_value() && IsNonDrawingContainer(instance.dataHandle(registry));
   if (!instance.visible && SubtreeLastDrawOrder(registry, instance) == instance.drawOrder &&
-      !IsNonDrawingContainer(instance.dataHandle(registry))) {
+      !filteredContainer) {
     return true;
   }
   const EntityHandle styleHandle = instance.styleHandle(registry);
