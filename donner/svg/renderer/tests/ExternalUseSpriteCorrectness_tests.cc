@@ -928,8 +928,7 @@ TEST(ExternalUseWarningReplayTest, HostMutationDropsTheHostRefusal) {
   ASSERT_TRUE(host.has_value());
   Renderer renderer;
   renderer.draw(host->document);
-  host->document.querySelector("#u")->setAttribute(xml::XMLQualifiedNameRef("marker-start"),
-                                                   "none");
+  host->document.querySelector("#u")->removeAttribute(xml::XMLQualifiedNameRef("marker-start"));
   ParseWarningSink later;
   renderer.draw(host->document, later);
   EXPECT_THAT(WarningReasons(later), testing::Not(testing::Contains(std::string(kHostRefusal))));
