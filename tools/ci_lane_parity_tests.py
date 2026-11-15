@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shlex
 import unittest
+from unittest import mock
 
 from python.runfiles import runfiles
 from tools import bazelrc_configs
@@ -57,6 +58,12 @@ TRIGGER_ALLOWLIST = {
     ("build_docs.yaml", "push-only"):
         "Builds the documentation site from main for verified publication. Doxygen warnings "
         "are not errors, so a pull request cannot make it fail through source changes alone.",
+    ("cmake.yml", "pull-request-paths"):
+        "Pull requests run the macOS CMake build only when they change a CMake input (the "
+        "generator, its dependency map, CMake files, the example consumer, the CMake lane "
+        "scripts, the workflow, the FetchContent module versions and the Xcode pin), to save "
+        "scarce macOS capacity. The Linux CMake consumer in main.yml builds the generated tree "
+        "on every pull request, and main runs the macOS build on every push.",
 }
 
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
@@ -64,9 +71,7 @@ TRIGGER_ALLOWLIST = {
 JOB_REPLACEMENTS = {
     ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
     ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
-    ("cmake.yml", "validate-generator", "trusted-pr"): "macos-self-hosted",
     ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
-    ("lint.yml", "cmake-validate", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
@@ -135,10 +140,6 @@ INVOCATION_ALLOWLIST = {
         "The bounded native consumer uses persistent ccache instead of hosted snapshots.",
     ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
         "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
-    ("lint.yml", "cmake-validate", "lint-self-hosted",
-     "actions/checkout@v7 [('persist-credentials', 'false')]", "step-main-only", ""):
-        "The shared lint checkout retains full history for changed-method complexity checks; "
-        "the generator consumes the same event source tree.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
         "The native macos-browser partition runs desktop-session tests separately; "
@@ -376,7 +377,7 @@ _PULL_REQUEST = {
     "github.event_name": "pull_request",
     "github.ref": "refs/pull/1/merge",
     "fallback": "false",
-    "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
+    "affected": "//donner/editor/wasm/tests:standalone_geode_browser_renderer_test",
     "browser_affected": "true",
     "metal_affected": "true",
     "wgpu_reference": "false",
@@ -1315,6 +1316,40 @@ def trigger_differences(workflows, main_push_workflows):
     return observed
 
 
+def _event_starts(workflow, scenario):
+    """Whether a workflow's trigger starts a run for this scenario's event. A pull request's
+    path filter is taken to match: a pull request can change any path."""
+    trigger = triggers(workflow.get("on"))
+    values = SCENARIOS[scenario]
+    if values["github.event_name"] == "pull_request":
+        return "pull_request" in trigger
+    if "push" not in trigger:
+        return False
+    push = trigger["push"] or {}
+    branch = values["github.ref"].removeprefix("refs/heads/")
+    return branch_filter_includes(branch, push.get("branches"), push.get("branches-ignore"))
+
+
+# The CMake generator check, run directly or through the CMake consumer script.
+_GENERATOR_CHECK = re.compile(
+    r"gen_cmakelists\.py\b[^\n]*--check\b|cmake_consumer\.sh build\b[^\n]*--check\b")
+
+
+def _runs_generator_check(workflow, job_name, scenario):
+    checks = [step for step in _jobs(workflow)[job_name].get("steps") or []
+              if _GENERATOR_CHECK.search(str(step.get("run") or ""))]
+    return bool(checks) and job_runs(workflow, job_name, scenario) and any(
+        runs(step.get("if"), scenario) for step in checks)
+
+
+def generator_check_jobs(workflows, scenario):
+    """(workflow, job) pairs that run the CMake generator check for this scenario's event."""
+    return {(name, job_name) for name, workflow in sorted(workflows.items())
+            if _event_starts(workflow, scenario)
+            for job_name in _jobs(workflow)
+            if _runs_generator_check(workflow, job_name, scenario)}
+
+
 def _jobs_on_both_triggers(workflows, main_push_workflows):
     for name in main_push_workflows:
         workflow = workflows[name]
@@ -1581,6 +1616,35 @@ def _bazel_commands(workflows):
                     yield name, job_name, _step_name(step), invocation
 
 
+# The editor build identity every non-release CI lane builds with (see `ci-test-lane` in
+# .bazelrc). A fixed commit keeps the editor binaries, its Wasm package and the tests built on them
+# cacheable across commits; release, BCR preflight and the Editor WASM package pass the real one.
+_RELEASE_COMMIT_FLAG = "--//build_defs:release_source_commit="
+TEST_LANE_EDITOR_COMMIT = _RELEASE_COMMIT_FLAG + "0" * 40
+# Workflows and scripts that build an artifact which ships or qualifies a release.
+RELEASE_IDENTITY_SOURCES = (
+    ".github/workflows/bcr_preflight.yml", ".github/workflows/editor_wasm.yml",
+    ".github/workflows/publish_bcr.yml", ".github/workflows/release.yml",
+    ".github/workflows/release_candidate.yml", ".github/workflows/sign_macos_release.yml",
+    "tools/bcr_preflight.py", "tools/ci/editor_wasm_lane.sh", "tools/ci/editor_wasm_stage.py",
+    "tools/release_candidate.py", "tools/run-browser-ci.sh",
+)
+_CI_CONFIG = re.compile(r"--config[= ]ci(?![\w-])")
+
+
+def editor_identity_problems(workflows):
+    """main.yml Bazel builds and tests that would not build the test-lane editor identity."""
+    problems = []
+    for _, job, step, invocation in _bazel_commands({"main.yml": workflows["main.yml"]}):
+        if invocation["command"] not in ("build", "test", "coverage"):
+            continue
+        commits = sorted(flag for flag in invocation["flags"]
+                         if flag.startswith(_RELEASE_COMMIT_FLAG))
+        if commits != [TEST_LANE_EDITOR_COMMIT]:
+            problems.append("%s %s: editor identity %s" % (job, step, commits))
+    return sorted(set(problems))
+
+
 def build_event_file_problems(workflows):
     """Bazel commands whose build event file would depend on the remote cache."""
     return sorted({"%s %s %s: %s" % (name, job, step, problem)
@@ -1752,6 +1816,46 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertEqual([], [line for line in rc_lines if not line.startswith("#") and any(
             _PATH_CONVERSION_ON.match(word) for word in line.split())])
         self.assertEqual([], build_event_file_problems(self.workflows))
+
+    def test_ci_lanes_build_one_constant_editor_identity(self):
+        commands = [invocation for _, _, _, invocation
+                    in _bazel_commands({"main.yml": self.workflows["main.yml"]})
+                    if invocation["command"] in ("build", "test", "coverage")]
+        self.assertGreater(len(commands), 20)
+        self.assertEqual([], editor_identity_problems(self.workflows))
+        # It comes from the one named config, which only `ci` applies.
+        rc = [line for line in _read(".bazelrc").splitlines() if not line.startswith("#")]
+        self.assertEqual([line for line in rc if "ci-test-lane" in line], [
+            "common:ci-test-lane " + TEST_LANE_EDITOR_COMMIT,
+            "common:ci --config=ci-test-lane",
+        ])
+        self.assertEqual([line for line in rc if _RELEASE_COMMIT_FLAG in line],
+                         ["common:ci-test-lane " + TEST_LANE_EDITOR_COMMIT])
+        # A lane that leaves `ci` out, or overrides the commit, is found.
+        main = next(path for path in _workflow_paths() if path.name == "main.yml")
+        text = main.read_text(encoding="utf-8")
+        command = "bazelisk test --config=ci --config=geode"
+        self.assertIn(command, text)
+        for replacement in ("bazelisk test --config=geode",
+                            command + " " + _RELEASE_COMMIT_FLAG + "1" * 40):
+            workflows = dict(self.workflows)
+            workflows["main.yml"] = parse_workflow(text.replace(command, replacement))
+            self.assertTrue(editor_identity_problems(workflows), replacement)
+
+    def test_release_builds_keep_their_real_editor_identity(self):
+        for path in RELEASE_IDENTITY_SOURCES:
+            with self.subTest(path=path):
+                self.assertNotRegex(_read(path), _CI_CONFIG)
+        # Each of these passes the commit it builds explicitly.
+        self.assertIn('source_args=("--//build_defs:release_source_commit=${GITHUB_SHA}")',
+                      _read("tools/ci/editor_wasm_lane.sh"))
+        self.assertIn('return ["--//build_defs:release_source_commit=" + commit]',
+                      _read("tools/ci/editor_wasm_stage.py"))
+        self.assertIn('f"--//build_defs:release_source_commit={commit}"',
+                      _read("tools/bcr_preflight.py"))
+        self.assertRegex("bazelisk test --config=ci //x", _CI_CONFIG)
+        self.assertRegex("bazelisk test --config ci //x", _CI_CONFIG)
+        self.assertNotRegex("bazelisk test --config=ci-macos //x", _CI_CONFIG)
 
     def test_build_event_file_problems_are_found(self):
         geode = "Test (Geode editor lane)"
@@ -2321,6 +2425,43 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(job=job, output=output):
                 self.assertIn(output, jobs[job]["outputs"])
                 self.assertIn(job, _needs(jobs["coverage-contract"]))
+
+    def test_cmake_generator_check_runs_once_per_event(self):
+        # gen_cmakelists.py --check runs once per event, in the CMake consumer step of the Linux
+        # job that the event runs: main.yml's hosted or self-hosted Linux job for main pushes and
+        # pull requests, and the CMake workflow's Linux consumer for a branch push before its pull
+        # request exists. A documentation-only pull request runs none, since no path it can change
+        # is a generator input (tools/ci/gatekeeper_tests.py). The label-gated CMake cache
+        # qualification jobs repeat the main lane's command on purpose and never run without
+        # their label, which no scenario carries.
+        expected = {
+            "main-push": ("main.yml", "linux"),
+            "branch-push": ("cmake.yml", "linux"),
+            "trusted-pr": ("main.yml", "linux-self-hosted"),
+            "trusted-pr-native-only": ("main.yml", "linux-self-hosted"),
+            "trusted-pr-fallback": ("main.yml", "linux-self-hosted"),
+            "untrusted-pr": ("main.yml", "linux"),
+            "renovate-pr": ("main.yml", "linux"),
+        }
+        branch_push = dict(SCENARIOS["main-push"], **{"github.ref": "refs/heads/topic"})
+        with mock.patch.dict(SCENARIOS, {"branch-push": branch_push}):
+            self.assertEqual(set(SCENARIOS), set(expected))
+            for scenario, owner in expected.items():
+                with self.subTest(scenario=scenario):
+                    self.assertEqual({owner}, generator_check_jobs(self.workflows, scenario))
+        # Main pushes still run the hosted macOS CMake build, which validates nothing a second
+        # time; branch pushes and pull requests that start the CMake workflow without a trusted
+        # route run it only for a pull request (its trigger's paths).
+        cmake = self.workflows["cmake.yml"]
+        self.assertTrue(_event_starts(cmake, "main-push"))
+        self.assertTrue(job_gates(cmake, "macos", "main-push"))
+        with mock.patch.dict(SCENARIOS, {"branch-push": branch_push}):
+            self.assertFalse(job_gates(cmake, "macos", "branch-push"))
+        # The pattern sees both ways of running the check.
+        for line in ("python3 tools/cmake/gen_cmakelists.py --check",
+                     "tools/ci/cmake_consumer.sh build --check --ccache"):
+            self.assertRegex(line, _GENERATOR_CHECK)
+        self.assertNotRegex("tools/ci/cmake_consumer.sh build --ccache", _GENERATOR_CHECK)
 
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():

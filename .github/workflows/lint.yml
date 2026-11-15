@@ -22,9 +22,9 @@ permissions:
   contents: read
   pull-requests: read
 
-# Fast lint jobs covering checks that don't live inside `bazel test //...`: the whole-tree
-# checks in tools/ci/lint_lane.sh, and the gen_cmakelists.py --check validator (reentrant Bazel
-# prevents running it from inside `bazel test`).
+# Fast lint jobs covering the whole-tree checks that don't live inside `bazel test //...`, in
+# tools/ci/lint_lane.sh. The gen_cmakelists.py --check validator runs once per event in the CI
+# Linux jobs' CMake consumer step (main.yml), not here.
 
 jobs:
   gatekeeper:
@@ -157,28 +157,6 @@ jobs:
             ~/.cache/bazel
           key: ${{ steps.bazel-cache.outputs.cache-primary-key }}
 
-  cmake-validate:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # This check queries the Bazel graph, so retry it once when the first
-      # attempt fails. Deterministic generator failures fail again on retry;
-      # source lint checks remain single-attempt.
-      - id: cmake-generator-check
-        name: gen_cmakelists.py --check
-        continue-on-error: true
-        run: python3 tools/cmake/gen_cmakelists.py --check
-
-      - name: Retry gen_cmakelists.py --check
-        if: steps.cmake-generator-check.outcome == 'failure'
-        run: python3 tools/cmake/gen_cmakelists.py --check
-
   lint-self-hosted:
     runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 20
@@ -205,12 +183,3 @@ jobs:
 
       - name: Lint
         run: tools/ci/lint_lane.sh
-
-      - id: cmake-generator-check
-        name: gen_cmakelists.py --check
-        continue-on-error: true
-        run: python3 tools/cmake/gen_cmakelists.py --check
-
-      - name: Retry gen_cmakelists.py --check
-        if: steps.cmake-generator-check.outcome == 'failure'
-        run: python3 tools/cmake/gen_cmakelists.py --check

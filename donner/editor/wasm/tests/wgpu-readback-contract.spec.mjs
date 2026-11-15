@@ -329,10 +329,7 @@ test("late browser map rejection cannot change a reused mapping ID", () => {
 
 test("mid-drag GPU probe follows the retained scored frame and state", () => {
   const start = presentationRegressionSource.indexOf("async function readBasicShapesDragFrame(");
-  const end = presentationRegressionSource.indexOf(
-    "test(\"scored Firefox frame evidence",
-    start,
-  );
+  const end = presentationRegressionSource.indexOf("interface WorkerHealth {", start);
   assert.ok(start >= 0 && end > start, "expected the scored mid-drag frame helper");
   const dragFrame = presentationRegressionSource.slice(start, end);
   const steps = [

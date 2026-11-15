@@ -2,6 +2,7 @@
 /// @file
 
 #include <string_view>
+#include <utility>
 
 #include "donner/css/Token.h"
 
@@ -52,6 +53,21 @@ public:
    */
   bool isEOF() const;
 
+  /**
+   * Returns the offset just past the token most recently returned by \ref next(), before any
+   * comment that follows it, so `[token.offset(), endOffset())` is exactly that token's source
+   * text.
+   */
+  size_t endOffset() const { return currentOffset(); }
+
+  /**
+   * For the url token most recently returned by \ref next(), returns the `[start, end)` source
+   * offsets of its value: the bytes after `url(` and any leading whitespace, up to trailing
+   * whitespace, `)` or the end of input. Escapes are included as written. Only meaningful when the
+   * last token returned was a \ref Token::Url; otherwise it describes an earlier url token.
+   */
+  std::pair<size_t, size_t> urlValueRange() const { return urlValueRange_; }
+
 private:
   /// Get the current offset in the input string.
   size_t currentOffset() const;
@@ -99,6 +115,8 @@ private:
       remaining_;  ///< Remaining input string, as the tokenizer advances this is updated.
 
   std::optional<Token> nextToken_;  ///< Next token to return, if already computed.
+  /// Source range of the most recent url token's value, see \ref urlValueRange().
+  std::pair<size_t, size_t> urlValueRange_{0, 0};
 };
 
 }  // namespace donner::css::parser::details
