@@ -56,7 +56,7 @@ coalesce; everything else is emitted in queue order:
 | Kind                                                                  | Coalescing                                                                       |
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `SetTransform`                                                        | Collapses per target element to the most-recent transform (60 Hz drag → 1 apply) |
-| `SetAttribute`                                                        | Collapses per `(element, attributeName)` to the most-recent value                |
+| `SetAttribute`                                                        | Collapses per element and qualified name (`href`, `xlink:href` differ)           |
 | `ReplaceDocument`                                                     | Exclusive — drops every command queued before it (entities invalidated)          |
 | `PasteShapes`                                                         | ReplaceDocument-like, exclusive, with `preserveUndoOnReparse`                    |
 | All others (incl. `SetTextContent`, `InsertElement`, `DeleteElement`) | Not coalesced — passes through                                                   |

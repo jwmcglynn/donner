@@ -99,6 +99,10 @@ Stages transform components through the ECS:
 - Actions issued _from_ the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
 - See the project `CLAUDE.md` § "DOM-Level Editing Only" for the full rule.
 
+## Source Text: Markup Comes From the Parser
+
+- **Production code never scans raw XML/SVG text for markup boundaries.** There is one strict XML parser (`donner::xml::XMLParser`) and one error-recovery tokenizer (`donner::xml::Tokenize`); every other consumer derives boundaries from the parse or token stream it already has: `XMLNode` location accessors (`getNodeLocation()`, `getOpeningTagLocation()`, `getClosingTagLocation()`), attribute source locations, `XMLParser::GetAttributeLocation`, or `xml::Tokenize` for tolerant cursor, highlight and source-bounds work. Banned: `find`/`rfind`/`starts_with` on tag punctuation (`<`, `>`, `</`, `<svg`, `<!--`, `<![CDATA[`, `<?`), `find('>')` without quote awareness, manual element-depth counting, manual quote skipping or attribute parsing, and manual `href`/`url(#` scanning. The only exceptions are `xml-parser` and `xml-tokenizer` (the parser and tokenizer themselves), `dirty-range-fallback` (fallback scans inside the XML document implementation, which must fail closed), `syntax-highlight` (display-only per-line punctuation emission), `css-tokenizer` (the CSS tokenizer), and `test-literal` (test-only literal searches); outside the parser, tokenizer, CSS tokenizer and test files, which are exempt by path, an exception carries `// NOLINT(banned_patterns: xml-scan <exception>)` with one of those six names. Existing sites in the per-file allowlist in `build_defs/check_banned_patterns.py` are grandfathered until they are touched; any new or modified site needs the named marker or a parser-derived replacement. `tools/lint.sh` enforces the search-call shape and the allowlist caps, which must match each file's current count.
+
 ## Pull Request Workflow
 
 **NEVER merge a PR without explicit operator approval.** Agents open, update, monitor, and review PRs — but `gh pr merge` (any flavor) is operator-gated: the operator must approve merging that specific PR in the current conversation. Green CI, passing reviews, or "obviously safe" changes do not substitute for approval.
@@ -133,7 +137,7 @@ When creating a pull request:
      `//donner/editor/tests:async_renderer_tests_geode`, `//donner/editor/tests:rnr_replay_tests_geode`, and
      `//donner/editor/tests:gl_rnr_replay_tests_geode`. This matches the separate CI editor lane;
      run it explicitly in addition to the Geode variants covered by the default `//...` gate.
-   - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
+   - **`tools/lint.sh`** (~3 s) - the banned-patterns gate over `donner/`, `examples/` and `tools/` C++ (`.cc`, `.h`, `.cpp`, `.hpp`, `.mm`): `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation, and hand-rolled XML markup searches. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
    - **Workflow changes:** run `bazel test //tools:ci_concurrency_policy_tests
      //tools:macos_cache_key_parity_tests //tools:security_workflow_policy_tests
      //tools:supply_chain_policy_tests` before publication. Syntax lint alone does not check the

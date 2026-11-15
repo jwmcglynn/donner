@@ -132,6 +132,48 @@ TEST_F(CommandQueueTest, PendingStyleIsScopedToElementAndCurrentDocumentBatch) {
   EXPECT_THAT(queue.pendingStyleAttribute(*b), testing::Eq(std::nullopt));
 }
 
+TEST_F(CommandQueueTest, SetAttributeCoalescesByQualifiedName) {
+  CommandQueue queue;
+  queue.push(EditorCommand::SetAttributeCommand(*a, "href", "#one"));
+  queue.push(EditorCommand::SetPrefixedAttributeCommand(*a, "xlink", "href", "#two"));
+  queue.push(EditorCommand::SetPrefixedAttributeCommand(*a, "xlink", "href", "#three"));
+  queue.push(EditorCommand::SetPrefixedAttributeCommand(*a, "xlink", "style", "fill: red"));
+  EXPECT_THAT(queue.pendingStyleAttribute(*a), testing::Eq(std::nullopt));
+
+  const auto attributeIs = [](std::string_view prefix, std::string_view name,
+                              std::string_view value) {
+    return AllOf(CommandKindIs(EditorCommand::Kind::SetAttribute),
+                 Field("attributeNamespacePrefix", &EditorCommand::attributeNamespacePrefix,
+                       std::string(prefix)),
+                 Field("attributeName", &EditorCommand::attributeName, std::string(name)),
+                 Field("attributeValue", &EditorCommand::attributeValue, std::string(value)));
+  };
+  const auto flushResult = queue.flush();
+  EXPECT_THAT(flushResult.effectiveCommands,
+              ElementsAre(attributeIs("", "href", "#one"), attributeIs("xlink", "href", "#three"),
+                          attributeIs("xlink", "style", "fill: red")));
+}
+
+TEST_F(CommandQueueTest, RemovingUnprefixedAttributeKeepsPrefixedSlot) {
+  CommandQueue queue;
+  queue.push(EditorCommand::SetPrefixedAttributeCommand(*a, "xlink", "href", "#one"));
+  queue.push(EditorCommand::RemoveAttributeCommand(*a, "href"));
+  queue.push(EditorCommand::SetPrefixedAttributeCommand(*a, "xlink", "href", "#two"));
+
+  const auto flushResult = queue.flush();
+  EXPECT_THAT(
+      flushResult.effectiveCommands,
+      ElementsAre(
+          AllOf(CommandKindIs(EditorCommand::Kind::SetAttribute),
+                Field("attributeNamespacePrefix", &EditorCommand::attributeNamespacePrefix,
+                      std::string("xlink")),
+                Field("attributeValue", &EditorCommand::attributeValue, std::string("#two"))),
+          AllOf(CommandKindIs(EditorCommand::Kind::RemoveAttribute),
+                Field("attributeNamespacePrefix", &EditorCommand::attributeNamespacePrefix,
+                      std::string()),
+                Field("attributeName", &EditorCommand::attributeName, std::string("href")))));
+}
+
 TEST_F(CommandQueueTest, EmptyFlushReturnsNothing) {
   CommandQueue queue;
   EXPECT_TRUE(queue.empty());

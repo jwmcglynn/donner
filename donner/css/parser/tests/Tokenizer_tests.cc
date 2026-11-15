@@ -31,6 +31,58 @@ TEST(Tokenizer, Whitespace) {
   EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" \t\f\r\n"), 0));
 }
 
+TEST(Tokenizer, EndOffsetCoversOnlyTheReturnedToken) {
+  Tokenizer tokenizer("url(#a)/* note */ x");
+  EXPECT_THAT(tokenizer.next(), Token(Token::Url("#a"), 0));
+  EXPECT_THAT(tokenizer.endOffset(), testing::Eq(7u));
+  EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" "), 17));
+  EXPECT_THAT(tokenizer.endOffset(), testing::Eq(18u));
+  EXPECT_THAT(tokenizer.next(), Token(Token::Ident("x"), 18));
+  EXPECT_THAT(tokenizer.endOffset(), testing::Eq(19u));
+}
+
+TEST(Tokenizer, EndOffsetAtEndOfInputBadUrlAndUnterminatedComment) {
+  {
+    Tokenizer tokenizer("'abc");
+    EXPECT_THAT(tokenizer.next(), Token(Token::String("abc"), 0));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(4u));
+  }
+  {
+    Tokenizer tokenizer("url(a b) x");
+    EXPECT_THAT(tokenizer.next(), Token(Token::BadUrl(), 0));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(8u));
+  }
+  {
+    Tokenizer tokenizer("a /* x");
+    EXPECT_THAT(tokenizer.next(), Token(Token::Ident("a"), 0));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(1u));
+    EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" "), 1));
+    EXPECT_THAT(tokenizer.endOffset(), testing::Eq(2u));
+  }
+}
+
+TEST(Tokenizer, UrlValueRangeExcludesFunctionNameWhitespaceAndParenthesis) {
+  struct Case {
+    std::string_view text;
+    std::size_t start;
+    std::size_t end;
+  };
+  for (const Case& item :
+       {Case{"url(#a)", 4, 6}, Case{"URL(  #a  )", 6, 8}, Case{"url(\n#a\n)", 5, 7},
+        Case{"url(#a", 4, 6}, Case{"u\\72l(#a)", 6, 8}, Case{"url(#\\61 b)", 4, 10},
+        Case{"x url(#a)", 6, 8}, Case{"a\r\n\furl(#a)", 8, 10}}) {
+    SCOPED_TRACE(item.text);
+    Tokenizer tokenizer(item.text);
+    Token token = tokenizer.next();
+    while (!token.is<Token::Url>() && !token.is<Token::EofToken>()) {
+      token = tokenizer.next();
+    }
+    ASSERT_THAT(token.is<Token::Url>(), testing::IsTrue()) << token;
+    EXPECT_THAT(tokenizer.urlValueRange(),
+                testing::Pair(testing::Eq(item.start), testing::Eq(item.end)));
+  }
+}
+
 TEST(Tokenizer, Comment) {
   {
     Tokenizer tokenizer("/**/");
@@ -155,9 +207,9 @@ TEST(Tokenizer, StringEscapedCodepoint) {
   // It should stop parsing after 6, the 'A' becomes a normal codepoint.
   EXPECT_THAT(Tokenizer("'\\100000A'").next(), Token(Token::String("\U00100000A"), 0));
 
-  // Whitespace at the end is skipped.
+  // One whitespace code point after an escape is skipped; the space after `\BB\r` is content.
   EXPECT_THAT(Tokenizer("'\\A \\BB\r \\CCC\\D000 abc'").next(),
-              Token(Token::String("\u000A\u00BB\u0CCC\uD000abc"), 0));
+              Token(Token::String("\u000A\u00BB \u0CCC\uD000abc"), 0));
 
   // Newlines are allowed if they are escaped, character is not added.
   EXPECT_THAT(AllTokens(Tokenizer("'newline\\\nafter'")),
@@ -379,6 +431,35 @@ TEST(Tokenizer, Escapes) {
   EXPECT_THAT(AllTokens(Tokenizer("\\30\r\nred")), ElementsAre(Token(Token::Ident("0red"), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("\\376\\37 6\\000376\\0000376\\")),
               ElementsAre(Token(Token::Ident("Ͷ76Ͷ76\uFFFD"), 0)));
+}
+
+// After a hex escape exactly one whitespace code point is consumed, with CR LF counting as one;
+// any further whitespace is its own token.
+TEST(Tokenizer, HexEscapeConsumesOneWhitespace) {
+  EXPECT_THAT(AllTokens(Tokenizer("#\\37  .x")),
+              ElementsAre(Token(Token::Hash(Token::Hash::Type::Id, "7"), 0),
+                          Token(Token::Whitespace(" "), 5), Token(Token::Delim('.'), 6),
+                          Token(Token::Ident("x"), 7)));
+  EXPECT_THAT(AllTokens(Tokenizer("#\\37 \n.x")),
+              ElementsAre(Token(Token::Hash(Token::Hash::Type::Id, "7"), 0),
+                          Token(Token::Whitespace("\n"), 5), Token(Token::Delim('.'), 6),
+                          Token(Token::Ident("x"), 7)));
+  EXPECT_THAT(AllTokens(Tokenizer("#\\37 \r\n.x")),
+              ElementsAre(Token(Token::Hash(Token::Hash::Type::Id, "7"), 0),
+                          Token(Token::Whitespace("\r\n"), 5), Token(Token::Delim('.'), 7),
+                          Token(Token::Ident("x"), 8)));
+  EXPECT_THAT(AllTokens(Tokenizer("#\\37\r\n.x")),
+              ElementsAre(Token(Token::Hash(Token::Hash::Type::Id, "7"), 0),
+                          Token(Token::Delim('.'), 6), Token(Token::Ident("x"), 7)));
+  EXPECT_THAT(AllTokens(Tokenizer("#\\37")),
+              ElementsAre(Token(Token::Hash(Token::Hash::Type::Id, "7"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("#\\37 1")),
+              ElementsAre(Token(Token::Hash(Token::Hash::Type::Id, "71"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("url(#\\61  )")), ElementsAre(Token(Token::Url("#a"), 0)));
+
+  Tokenizer tokenizer("url(#\\61  ) red");
+  EXPECT_THAT(tokenizer.next(), Token(Token::Url("#a"), 0));
+  EXPECT_THAT(tokenizer.urlValueRange(), testing::Pair(testing::Eq(4u), testing::Eq(9u)));
 }
 
 TEST(Tokenizer, Url) {
