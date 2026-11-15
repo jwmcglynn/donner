@@ -88,8 +88,8 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    */
   static int compare(const char* lhs, const char* rhs, size_t sizeToCompare) {
     for (size_t i = 0; i < sizeToCompare; ++i) {
-      const char lhsCh = static_cast<char>(lower(lhs[i]));
-      const char rhsCh = static_cast<char>(lower(rhs[i]));
+      const int lhsCh = lower(lhs[i]);
+      const int rhsCh = lower(rhs[i]);
       if (lhsCh < rhsCh) {
         return -1;
       } else if (lhsCh > rhsCh) {

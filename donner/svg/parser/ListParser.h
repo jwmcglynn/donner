@@ -6,7 +6,6 @@
 #include <string_view>
 
 #include "donner/base/ParseDiagnostic.h"
-#include "donner/base/StringUtils.h"
 
 namespace donner::svg::parser {
 
@@ -89,7 +88,7 @@ public:
 
       // If we reach here, we expect an item (not a comma or whitespace)
       const size_t start = i;
-      while (i < length && !StringUtils::IsAsciiWhitespace(value[i]) && value[i] != ',') {
+      while (i < length && !IsSeparatorWhitespace(value[i]) && value[i] != ',') {
         i++;
       }
 
@@ -125,13 +124,25 @@ public:
 
 private:
   /**
+   * Returns true for the whitespace that separates list items. The text positioning attributes
+   * that use this parser have CSS value syntax in SVG 2, so this is CSS whitespace: space, tab,
+   * line feed, carriage return and form feed (https://www.w3.org/TR/css-syntax-3/#whitespace).
+   * Vertical tab is not whitespace.
+   *
+   * @param ch The character to classify.
+   */
+  static constexpr bool IsSeparatorWhitespace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f';
+  }
+
+  /**
    * Skips whitespace characters in a string_view starting from a given index.
    *
    * @param value The string view to process.
    * @param i Reference to the current index, will be updated.
    */
   static inline void SkipWhitespace(std::string_view value, size_t& i) {
-    while (i < value.size() && StringUtils::IsAsciiWhitespace(value[i])) {
+    while (i < value.size() && IsSeparatorWhitespace(value[i])) {
       i++;
     }
   }

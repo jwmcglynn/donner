@@ -370,6 +370,20 @@ TEST(StylesheetParser, SelectorRuleSourceRanges) {
                             SourceRangeTextIs(kCss, R"([data-tone="warm"])"))))));
 }
 
+// An escaped vertical tab is part of an identifier (vertical tab is not CSS whitespace), so the
+// selector range keeps it.
+TEST(StylesheetParser, SelectorRangesKeepEscapedVerticalTab) {
+  constexpr std::string_view kCss = "a\\\v{fill:red}";
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(kCss, disabled);
+  EXPECT_THAT(
+      sheet.rules(),
+      ElementsAre(AllOf(Field("selectorSourceRange", &SelectorRule::selectorSourceRange,
+                              SourceRangeTextIs(kCss, "a\\\v")),
+                        Field("selectorEntrySourceRanges", &SelectorRule::selectorEntrySourceRanges,
+                              ElementsAre(SourceRangeTextIs(kCss, "a\\\v"))))));
+}
+
 TEST(StylesheetParser, SelectorRangesIgnoreCommasAndBracesInStrings) {
   constexpr std::string_view kCss =
       R"(rect[data-list="a,b"], circle { background: url("}"); /* } */ fill: red; })";
