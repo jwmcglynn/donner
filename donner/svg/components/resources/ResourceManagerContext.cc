@@ -634,6 +634,9 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadAdmittedExternalSVG
   if (document) {
     admittedExternalSvgs_.insert_or_assign(
         RcString(url), AdmittedExternalSvg{*document, cacheGeneration_, fingerprint(*document)});
+  } else {
+    // A refused document keeps no earlier verdict: the next request checks admission again.
+    admittedExternalSvgs_.erase(RcString(url));
   }
   return document;
 }
