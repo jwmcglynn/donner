@@ -8042,6 +8042,31 @@ TEST_F(RendererGeodeTest, TrimTexturePoolFreesFreeTextures) {
   EXPECT_THAT(renderer.texturePoolStats().textureCount, testing::Eq(0u));
 }
 
+// A trim forgets the heavy frame's working set even when rendering resumes before the idle decay:
+// the textures that frame returned after it submitted must not raise the budget again at the next
+// frame.
+TEST_F(RendererGeodeTest, TrimTexturePoolForgetsTheLastFrameReleases) {
+  SVGDocument heavy = ParseDocumentOrFail(VariedGlowSource());
+  SVGDocument light = ParseDocumentOrFail(GlowingPiecesSource(64, 64, 0));
+  for (const RendererGeodeTexturePoolTrim level :
+       {RendererGeodeTexturePoolTrim::ToFloor, RendererGeodeTexturePoolTrim::All}) {
+    SCOPED_TRACE(level == RendererGeodeTexturePoolTrim::All ? "All" : "ToFloor");
+    std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    RendererGeode renderer(device);
+    for (int frame = 0; frame < 3; ++frame) {
+      renderer.draw(heavy);
+    }
+    ASSERT_THAT(renderer.texturePoolStats().budgetBytes, testing::Gt(kPoolFloorBytes));
+
+    renderer.trimTexturePool(level);
+    renderer.draw(light);
+    ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+    EXPECT_THAT(renderer.texturePoolStats().budgetBytes, testing::Eq(kPoolFloorBytes));
+    EXPECT_THAT(renderer.texturePoolStats().bytes, testing::Le(kPoolFloorBytes));
+  }
+}
+
 // A device that stops rendering forgets its working set after two seconds, whether the next
 // event is a frame or an idle trim, so a scene rendered once does not keep its peak forever.
 TEST_F(RendererGeodeTest, IdleTexturePoolReturnsToItsFloor) {
