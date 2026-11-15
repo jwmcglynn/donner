@@ -5,9 +5,11 @@ donner_cc_library(
     name = "css",
     srcs = [
         "CSS.cc",
+        "Serialize.cc",
     ],
     hdrs = [
         "CSS.h",
+        "Serialize.h",
     ],
     visibility = [
         "//visibility:public",
@@ -95,6 +97,7 @@ donner_cc_test(
         "tests/Declaration_tests.cc",
         "tests/OstreamOutput_tests.cc",
         "tests/Selector_tests.cc",
+        "tests/Serialize_tests.cc",
         "tests/Specificity_tests.cc",
     ],
     shard_count = 3,
