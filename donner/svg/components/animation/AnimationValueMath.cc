@@ -7,6 +7,7 @@
 #include <sstream>
 #include <vector>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/StringUtils.h"
 #include "donner/base/parser/LengthParser.h"
 #include "donner/css/parser/ColorParser.h"
@@ -109,8 +110,7 @@ std::optional<std::string> CombineAngles(std::string_view first, std::string_vie
   if (!std::isfinite(result)) {
     return std::nullopt;
   }
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   output << result << "rad";
   return output.str();
 }
@@ -218,8 +218,7 @@ std::optional<std::string> CombineLengths(const std::vector<Lengthd>& first,
   if (first.size() != second.size()) {
     return std::nullopt;
   }
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   for (std::size_t i = 0; i < first.size(); ++i) {
     const bool sameUnit = first[i].unit == second[i].unit;
     const double a = sameUnit ? first[i].value : ResolveAnimationLength(first[i], context, false);

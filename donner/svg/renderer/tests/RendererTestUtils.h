@@ -2,12 +2,12 @@
 #pragma once
 
 #include <algorithm>
-#include <cctype>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -101,7 +101,7 @@ struct AsciiImage {
 private:
   bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {
     // Remove spaces and newlines at the beginning of the golden image.
-    while (!golden.empty() && (std::isspace(golden.front()) || golden.front() == '\n')) {
+    while (!golden.empty() && StringUtils::IsAsciiWhitespace(golden.front())) {
       golden.remove_prefix(1);
     }
 
@@ -117,7 +117,7 @@ private:
       auto goldEnd = std::find(goldBegin, golden.end(), '\n');
 
       // Remove whitespace at the beginning of the golden image line.
-      while (goldBegin != goldEnd && std::isspace(*goldBegin)) {
+      while (goldBegin != goldEnd && StringUtils::IsAsciiWhitespace(*goldBegin)) {
         ++goldBegin;
       }
 

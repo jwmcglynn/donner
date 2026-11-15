@@ -16,6 +16,7 @@ donner_cc_library(
         "BezierUtils.h",
         "Box.h",
         "ChunkedString.h",
+        "ClassicNumberStream.h",
         "CompileTimeMap.h",
         "EcsRegistry.h",
         "EcsRegistry_fwd.h",
@@ -145,6 +146,7 @@ donner_cc_library(
         "tests/Runfiles.h",
         "tests/ScopedCtypeLocale.h",
         "tests/ScopedEnvironmentVariable.h",
+        "tests/ScopedCommaDecimalGlobalLocale.h",
         "tests/TestTempDir.h",
     ],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene

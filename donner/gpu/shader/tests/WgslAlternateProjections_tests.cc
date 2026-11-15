@@ -4,7 +4,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cctype>
 #include <cstdlib>
 #include <ostream>
 #include <string>
@@ -71,10 +70,11 @@ TEST_P(WgslAlternateProjectionsTest, NativeDeviceReceivesTheLinkedArtifact) {
 std::string FamilyName(std::string_view program) {
   std::string family;
   for (const char c : program) {
-    if (std::isupper(static_cast<unsigned char>(c)) && !family.empty()) {
+    const bool upper = c >= 'A' && c <= 'Z';
+    if (upper && !family.empty()) {
       family.push_back('_');
     }
-    family.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    family.push_back(upper ? static_cast<char>(c - 'A' + 'a') : c);
   }
   return family;
 }
