@@ -644,7 +644,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # The chromium-default lane is the only Chromium run of the editor's browser specs. A
         # change to anything its served package, comparator or browser specs are built from must
         # start it: the editor sources, the module extension that configures them, the notice
-        # renderer embedded in the package, the native pixel comparator, and the build setup.
+        # renderer embedded in the package and the package that defines it, the native pixel
+        # comparator, the build setup, and the scripts the job itself runs (the Xcode selection
+        # and its pin file, the runner disk check).
         header = self.editor_wasm.split("\njobs:", 1)[0]
         triggers = {}
         for event in ("push", "pull_request"):
@@ -655,8 +657,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(triggers["push"], triggers["pull_request"])
         for path in (".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel",
                      "MODULE.bazel.lock", "build_defs/**", "config/**", "donner/**",
-                     "third_party/**", "tools/ci/**", "tools/http/**", "tools/render_notice.py",
-                     "tools/run-browser-ci.sh", "tools/svg_suite/**"):
+                     "third_party/**", "tools/BUILD.bazel", "tools/ci/**",
+                     "tools/ci_check_runner_disk.sh", "tools/ci_disk_cache.py",
+                     "tools/ci_macos_xcode.txt", "tools/ci_select_macos_xcode.sh",
+                     "tools/http/**", "tools/render_notice.py", "tools/run-browser-ci.sh",
+                     "tools/svg_suite/**"):
             self.assertIn(path, triggers["pull_request"])
 
     def test_headed_browser_tests_have_a_single_native_owner(self):
