@@ -535,8 +535,7 @@ void ExternalUseStyleRetention::PrepareInstance(Registry& registry) {
   if (retain && state->renderTree && state->renderTree->matches(occurrence, viewport)) {
     return;
   }
-  auto& renderState = GetOrEmplaceContext<RenderTreeState>(registry);
-  renderState.needsInstanceRebuild = true;
+  GetOrEmplaceContext<RenderTreeState>(registry).needsInstanceRebuild = true;
   state->renderTree.reset();
   if (retain) {
     state->renderTree = RenderTreeOccurrence{.root = occurrence.root,
@@ -547,8 +546,17 @@ void ExternalUseStyleRetention::PrepareInstance(Registry& registry) {
   if (HasUnexpandedUse(registry, occurrence.root)) {
     // A rebuild for another root re-expanded only the `<use>` elements that root presents, so
     // this subtree's definition uses need the shadow trees a full rebuild instantiates.
-    renderState.needsFullRebuild = true;
-    ForgetInputsReachedByRestyle(registry, *state, renderState, occurrence.root,
+    ScheduleFullRebuild(registry);
+  }
+}
+
+void ExternalUseStyleRetention::ScheduleFullRebuild(Registry& registry) {
+  auto& renderState = GetOrEmplaceContext<RenderTreeState>(registry);
+  renderState.needsFullRebuild = true;
+  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  auto* state = registry.ctx().find<ExternalUseRetainedState>();
+  if (occurrence != nullptr && state != nullptr) {
+    ForgetInputsReachedByRestyle(registry, *state, renderState, occurrence->root,
                                  /*restylingCurrent=*/true);
   }
 }
