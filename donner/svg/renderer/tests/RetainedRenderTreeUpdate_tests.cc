@@ -565,8 +565,8 @@ TEST(RetainedRenderTreeUpdateTest, ExternalUseRefusedReadmissionAfterResizeDraws
   constexpr std::string_view kEmpty =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>)";
   for (const ExpectedPath path : {ExpectedPath::Retained, ExpectedPath::FullRebuild}) {
-    const std::string label =
-        path == ExpectedPath::Retained ? "refused-readmission-retained" : "refused-readmission-full";
+    const std::string label = path == ExpectedPath::Retained ? "refused-readmission-retained"
+                                                             : "refused-readmission-full";
     std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
         R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)"
         R"(<use id="use" href="sprites.svg#a" width="8" height="8"/></svg>)",
@@ -586,7 +586,7 @@ TEST(RetainedRenderTreeUpdateTest, ExternalUseRefusedReadmissionAfterResizeDraws
     const RenderTreeState::Counters before = ReadCounters(host->document);
 
     // A family member that allows a single entity tightens the shared limits below what the
-    // external document needs. Binding that empty member is itself refused, which is not under test.
+    // external document needs, whether or not binding the empty member itself succeeds.
     Registry stricter;
     {
       const DocumentReadAccess access = host->document.readAccess();
