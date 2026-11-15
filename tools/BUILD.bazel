@@ -413,10 +413,6 @@ py_test(
         "//build_defs:macos_app_bundle.bzl",
         "//donner/gpu/metal/tests:BUILD.bazel",
     ],
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
-    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
-    # job's parity step).
-    tags = ["hosted_parity"],
     deps = [
         ":test_timing",
         "@rules_python//python/runfiles",
@@ -711,7 +707,6 @@ py_test(
     size = "small",
     srcs = ["native_delivery_elf_tests.py"],
     data = [":native_delivery_elf_fixture"],
-    tags = ["hosted_parity"],
     target_compatible_with = [
         "@platforms//os:linux",
         "@platforms//cpu:x86_64",
@@ -978,10 +973,8 @@ py_test(
         "ci_lane_parity_tests.py",
     ],
     data = [
-        "BUILD.bazel",
         "//:.bazelrc",
         "//:github_action_definitions",
-        "//donner/editor/tests:BUILD.bazel",
         "//tools/ci:coverage_contract.json",
     ],
     main = "ci_lane_parity_tests.py",
