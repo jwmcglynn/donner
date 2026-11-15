@@ -31,8 +31,9 @@ template <typename Component>
 class ConstructionCounter {
 public:
   explicit ConstructionCounter(SVGDocument document) : document_(std::move(document)) {
-    document_.registry().template on_construct<Component>().template connect<&ConstructionCounter::onConstruct>(
-        *this);
+    document_.registry()
+        .template on_construct<Component>()
+        .template connect<&ConstructionCounter::onConstruct>(*this);
   }
 
   ~ConstructionCounter() {
@@ -889,10 +890,10 @@ TEST(ExternalUseWarningReplayTest, InheritedResourceRefusalReachesALaterSink) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
         <path id="path" d="M4,4 L12,4"/>
       </svg>)svg";
-  EXPECT_THAT(FirstCollectingDrawWarnings(kHost, kSheet),
-              testing::IsSupersetOf(
-                  {"External-use inherited URL resources are unsupported",
-                   "External-use inherited cross-document URL resource is unsupported"}));
+  EXPECT_THAT(
+      FirstCollectingDrawWarnings(kHost, kSheet),
+      testing::IsSupersetOf({"External-use inherited URL resources are unsupported",
+                             "External-use inherited cross-document URL resource is unsupported"}));
   ExpectLaterSinkReceivesFirstDrawWarnings(kHost, kSheet);
 }
 
