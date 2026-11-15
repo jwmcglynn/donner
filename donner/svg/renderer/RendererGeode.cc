@@ -956,7 +956,10 @@ public:
       (void)evictPoolEntriesToFit(0);
       return;
     }
+    // Releases since the last frame began belong to the working set being forgotten too; the next
+    // frame would otherwise record them and raise the budget again.
     recentFrameReleases_.clear();
+    releasedSinceFrameStart_ = 0;
     budgetBytes_ = level == RendererGeodeTexturePoolTrim::All ? 0 : kTexturePoolBudgetBytes;
     (void)evictPoolEntriesToFit(0);
     budgetBytes_ = kTexturePoolBudgetBytes;
