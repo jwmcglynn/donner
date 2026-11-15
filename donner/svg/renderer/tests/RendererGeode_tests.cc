@@ -8291,6 +8291,53 @@ TEST_F(RendererGeodeTest, FilterRegionsNearCanvasEdgesMatchFiltersWithRoom) {
   }
 }
 
+// A filtered group inside a pattern tile, away from the tile origin, captures a raster over its
+// own filter region, so its children must be drawn moved into that raster just as outside a tile.
+// A tile that covers the canvas one to one shows the same pixels as the group drawn directly, also
+// when a filter outside the tile, whose capture does not hold the tile's content, encloses both.
+TEST_F(RendererGeodeTest, FilterInsidePatternTileMatchesTheFilterDrawnDirectly) {
+  RendererGeode renderer = createRenderer();
+  const std::string filters = R"svg(
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="halo"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shift" x="-60%" y="-60%" width="220%" height="220%">
+      <feOffset dx="-14" dy="-11"/>
+    </filter>)svg";
+  const std::string group =
+      R"svg(<g filter="url(#glow)"><circle cx="64" cy="60" r="10" fill="#e05090"/>)svg"
+      R"svg(<rect x="54" y="40" width="20" height="8" fill="#40c0f0"/></g>)svg";
+  const std::string tiled =
+      R"svg(<defs><pattern id="p" patternUnits="userSpaceOnUse" width="96" height="96">)svg" +
+      group + R"svg(</pattern></defs><rect width="96" height="96" fill="url(#p)"/>)svg";
+  const auto canvas = [&](const std::string& content) {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">)svg" + filters +
+           content + "</svg>";
+  };
+  const std::array<std::pair<std::string_view, std::string_view>, 2> wrappers{{
+      {"alone", ""},
+      {"inside_outer_filter", R"svg(filter="url(#shift)")svg"},
+  }};
+  for (const auto& [label, wrapper] : wrappers) {
+    SCOPED_TRACE(label);
+    const auto wrap = [&](const std::string& content) {
+      return "<g " + std::string(wrapper) + ">" + content + "</g>";
+    };
+    SVGDocument patternDocument = ParseDocumentOrFail(canvas(wrap(tiled)));
+    renderer.draw(patternDocument);
+    const RendererBitmap patternBitmap = renderer.takeSnapshot();
+    SVGDocument directDocument = ParseDocumentOrFail(canvas(wrap(group)));
+    renderer.draw(directDocument);
+    const RendererBitmap directBitmap = renderer.takeSnapshot();
+    ASSERT_FALSE(patternBitmap.empty());
+    ASSERT_FALSE(directBitmap.empty());
+    editor::tests::CompareBitmapToBitmap(patternBitmap, directBitmap,
+                                         "filter_inside_pattern_tile_" + std::string(label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 // A rotated anisotropic blur runs on the transformed path, which resamples the capture into a
 // local raster aligned with the filter's axes. That resampling is not exactly invariant to where
 // the canvas edge falls: some edge pixels of the halo differ slightly, which they also did when
