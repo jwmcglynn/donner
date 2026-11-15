@@ -311,7 +311,7 @@ COUNTERPART_ALLOWLIST = {
         ("*", "flag-pr-only", "--remote_timeout=60s"),
         ("*", "flag-pr-only", "--remote_download_outputs=minimal"),
         ("Test", "flag-pr-only",
-         r"--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"),
+         r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$"),
     ], "Runner-specific remote execution settings; they choose where actions run and which "
        "outputs come back, not what is built or tested."),
     **_counterpart_entries("linux", "linux-self-hosted", [
@@ -348,7 +348,7 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
       for flag, filename in (("build_event_json_file", "bep.json"),
                              ("execution_log_compact_file", "exec.log.zst"),
                              ("profile", "profile.gz"))],
-    ("Test", "flag-pr-only", r"--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"),
+    ("Test", "flag-pr-only", r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$"),
     ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
     ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
     ("Test", "target-main-only", SELECTED_TARGETS),

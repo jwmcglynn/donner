@@ -1,7 +1,7 @@
 {
   "tree": {
-    "lines": 6642,
-    "comment_lines": 685,
+    "lines": 6639,
+    "comment_lines": 691,
     "multiline_runs": 114,
     "longest_run": 324,
     "run_expressions": 53,
@@ -33,8 +33,8 @@
       "longest_if": 27
     },
     ".github/workflows/cmake.yml": {
-      "lines": 361,
-      "comment_lines": 32,
+      "lines": 355,
+      "comment_lines": 38,
       "multiline_runs": 5,
       "longest_run": 30,
       "run_expressions": 0,
@@ -57,7 +57,7 @@
       "longest_if": 48
     },
     ".github/workflows/deploy_docs.yaml": {
-      "lines": 349,
+      "lines": 350,
       "comment_lines": 3,
       "multiline_runs": 8,
       "longest_run": 2,
@@ -65,8 +65,8 @@
       "longest_if": 342
     },
     ".github/workflows/editor_wasm.yml": {
-      "lines": 324,
-      "comment_lines": 48,
+      "lines": 342,
+      "comment_lines": 51,
       "multiline_runs": 2,
       "longest_run": 3,
       "run_expressions": 0,
@@ -89,8 +89,8 @@
       "longest_if": 70
     },
     ".github/workflows/lint.yml": {
-      "lines": 216,
-      "comment_lines": 19,
+      "lines": 185,
+      "comment_lines": 16,
       "multiline_runs": 2,
       "longest_run": 30,
       "run_expressions": 0,
@@ -105,7 +105,7 @@
       "longest_if": 402
     },
     ".github/workflows/perf.yml": {
-      "lines": 152,
+      "lines": 167,
       "comment_lines": 10,
       "multiline_runs": 3,
       "longest_run": 18,
