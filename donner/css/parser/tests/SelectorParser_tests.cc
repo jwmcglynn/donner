@@ -364,6 +364,12 @@ TEST(SelectorParser, InvalidAttributeSelector) {
   EXPECT_THAT(SelectorParser::Parse("[attr=~value]"),
               ParseErrorIs("Expected ident or string after '=', found '=~'. Did you mean '~=', "
                            "'|=', '^=', '$=', or '*='?"));
+
+  // A non-printable delimiter is shown as its two-digit hex value.
+  EXPECT_THAT(
+      SelectorParser::Parse("[attr=\x01value]"),
+      ParseErrorIs("Expected ident or string after '=', found '=<non-printable: 0x01>'. Did "
+                   "you mean '~=', '|=', '^=', '$=', or '*='?"));
 }
 
 // view-source:http://test.csswg.org/suites/selectors-4_dev/nightly-unstable/html/is.htm

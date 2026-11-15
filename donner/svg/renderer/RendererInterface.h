@@ -27,6 +27,7 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/ColorInterpolation.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MaskType.h"
@@ -980,8 +981,8 @@ struct PaintParams {
   components::ResolvedPaintServer stroke = PaintServer::None{};
   double fillOpacity = 1.0;
   double strokeOpacity = 1.0;
-  /// CurrentColor value for paint server resolution.
-  css::Color currentColor = css::Color(css::RGBA());
+  /// Computed `color` property, already resolved to RGBA, used to resolve `currentColor` paint.
+  css::RGBA currentColor = css::RGBA();
   /// View box used for unit resolution and gradient coordinate conversion.
   Box2d viewBox;
   StrokeParams strokeParams;
@@ -1105,6 +1106,13 @@ struct TextParams {
   std::shared_ptr<const PreparedTextDraw> preparedTextDraw;
   /// Computed CSS first-line start margin for a positive inline-size area; paths ignore it.
   double textIndentPx = 0.0;
+
+  // Later fields go last so positional initializers of the earlier fields stay valid.
+
+  /// CSS `direction` of this text element, the base direction of its bidi paragraphs.
+  Direction direction = Direction::Ltr;
+  /// Whether this text element's own `unicode-bidi` overrides every character to `direction`.
+  bool bidiOverride = false;
 };
 
 /**

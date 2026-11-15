@@ -14,11 +14,16 @@ class NativeEditorReleaseContractTest(unittest.TestCase):
         self.assertIn("editor-macos", release_candidate.LOCK_ROLES)
         self.assertNotIn("editor-macos", release_candidate.CLI_PLATFORMS)
 
-    def test_every_native_provenance_input_selects_full_preflight(self):
-        from tools import release_macos_editor
-        for path in (*release_macos_editor.INPUTS, "LICENSE"):
-            with self.subTest(path=path):
-                self.assertTrue(bcr_preflight.is_release_path(path))
+    def test_every_preflight_run_builds_and_packages_the_native_editor(self):
+        # The native provenance inputs are general build inputs that do not start the preflight
+        # on a pull request (tools/security_workflow_policy_tests.py); every preflight run,
+        # nightly included, builds the editor from them and packages it in its macOS CLI lane.
+        plan = [command.argv for command in bcr_preflight.cli_plan(
+            bcr_preflight.Layout("/temp"), "darwin-arm64", "c" * 40, "7", "2")]
+        builds = [argv for argv in plan if argv[:2] == ("bazelisk", "build")]
+        self.assertTrue(any("//donner/editor:editor_macos_app" in argv for argv in builds))
+        self.assertEqual(1, sum(argv[:5] == ("python3", "-B", "-m", "tools.release_macos_editor",
+                                             "package") for argv in plan))
 
     def test_native_notice_registration_requires_the_exact_font_files(self):
         from pathlib import Path

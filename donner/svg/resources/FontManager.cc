@@ -52,19 +52,6 @@ void writeBE16(uint8_t* p, uint16_t v) {
   p[1] = static_cast<uint8_t>(v & 0xFF);
 }
 
-/// ASCII-only lowercase, used for the map keys that stand in for the case-insensitive family
-/// comparison. Locale-sensitive lowercasing would make those keys depend on the process locale
-/// while the comparison they mirror would not.
-std::string ToLowerAscii(std::string_view value) {
-  std::string lowered(value);
-  for (char& c : lowered) {
-    if (c >= 'A' && c <= 'Z') {
-      c = static_cast<char>(c - 'A' + 'a');
-    }
-  }
-  return lowered;
-}
-
 using FontMatchScore = std::tuple<int, double, int, int, int64_t>;
 
 std::pair<int, double> FontWidthRank(const css::FontFace& face, int requestedWidth) {
@@ -341,7 +328,7 @@ FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
   auto view = registry_.view<FontFaceComponent>();
   for (const Entity entity : view) {
     registeredFamiliesLower_.insert(
-        ToLowerAscii(view.get<FontFaceComponent>(entity).face.familyName));
+        StringUtils::ToLowerAscii(view.get<FontFaceComponent>(entity).face.familyName));
   }
 }
 FontManager::~FontManager() = default;
@@ -542,7 +529,7 @@ void FontManager::addFontFace(const css::FontFace& face) {
   const Entity entity = registry_.create();
   registry_.emplace<FontFaceComponent>(entity, face, nextFaceSequence_++);
   faceEntities_.emplace(std::move(key), entity);
-  registeredFamiliesLower_.insert(ToLowerAscii(face.familyName));
+  registeredFamiliesLower_.insert(StringUtils::ToLowerAscii(face.familyName));
   // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
   // have to be recomputed.
   cache_.clear();
@@ -572,15 +559,15 @@ std::string_view FontManager::faceFamilyName(size_t index) const {
 
 void FontManager::setGenericFamilyMapping(std::string_view genericName,
                                           std::string_view realFamily) {
-  genericFamilyMap_[ToLowerAscii(genericName)] = std::string(realFamily);
+  genericFamilyMap_[StringUtils::ToLowerAscii(genericName)] = std::string(realFamily);
 }
 
 bool FontManager::hasFamily(std::string_view family) const {
-  const std::string familyLower = ToLowerAscii(family);
+  const std::string familyLower = StringUtils::ToLowerAscii(family);
   const auto generic = genericFamilyMap_.find(familyLower);
   const bool isGeneric = generic != genericFamilyMap_.end();
   const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
-  const std::string resolvedLower = isGeneric ? ToLowerAscii(resolved) : familyLower;
+  const std::string resolvedLower = isGeneric ? StringUtils::ToLowerAscii(resolved) : familyLower;
 
   if (registeredFamiliesLower_.count(resolvedLower) != 0 ||
       providerResolvedFamiliesLower_.count(resolvedLower) != 0) {
@@ -602,12 +589,12 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   weight = std::clamp(weight, 1, 1000);
   stretch = std::clamp(stretch, 1, 9);
   // Resolve CSS generic family names to real family names.
-  const std::string familyLower = ToLowerAscii(family);
+  const std::string familyLower = StringUtils::ToLowerAscii(family);
   if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
     family = it->second;
   }
 
-  const ProviderFontKey dependencyKey{ToLowerAscii(family), weight, style, stretch};
+  const ProviderFontKey dependencyKey{StringUtils::ToLowerAscii(family), weight, style, stretch};
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
   invalidateChangedProviderAnswer(family, dependencyKey, cacheKey);
@@ -689,7 +676,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
 
   if (provider_ != nullptr && provider_->hasFamily(family)) {
     // Record the claim so later availability queries for this family skip the provider entirely.
-    providerResolvedFamiliesLower_.insert(ToLowerAscii(family));
+    providerResolvedFamiliesLower_.insert(StringUtils::ToLowerAscii(family));
     return findProviderFont(family, dependencyKey, cacheKey, matchedSourceFailedToLoad);
   }
 

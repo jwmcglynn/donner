@@ -796,17 +796,9 @@ public:
   /// Enable or disable automatic closing-brace insertion.
   /// @param value Whether matching braces are completed.
   void setCompleteBraces(bool value) { core_.setCompleteBraces(value); }
-  /// Disable horizontal scrolling; the legacy argument is ignored.
-  void setHorizontalScroll(bool /*value*/) { horizontalScroll_ = false; }
-  /// Store the legacy prediction preference; current rendering does not read it.
-  /// @param value Preference to store.
-  void setSmartPredictions(bool value) { autocomplete_ = value; }
   /// Enable or disable function declaration tooltips.
   /// @param value Whether declaration tooltips are shown.
   void setFunctionDeclarationTooltip(bool value) { functionDeclarationTooltipEnabled_ = value; }
-  /// Store the legacy function-tooltip preference; current rendering does not read it.
-  /// @param value Preference to store.
-  void setFunctionTooltips(bool value) { funcTooltips_ = value; }
   /// Enable or disable active autocomplete requests.
   /// @param value Whether autocomplete is active.
   void setActiveAutocomplete(bool value) { core_.setActiveAutocomplete(value); }
@@ -816,12 +808,6 @@ public:
   /// Show or hide the editor sidebar.
   /// @param value Whether the sidebar is visible.
   void setSidebarVisible(bool value) { sidebar_ = value; }
-  /// Store the legacy search preference; current rendering does not read it.
-  /// @param value Preference to store.
-  void setSearchEnabled(bool value) { hasSearch_ = value; }
-  /// Store the legacy bracket-highlight preference; current rendering does not read it.
-  /// @param value Preference to store.
-  void setHighlightBrackets(bool value) { highlightBrackets_ = value; }
   /// Enable or disable source fold controls.
   /// @param value Whether folding is enabled.
   void setFoldEnabled(bool value) { foldEnabled_ = value; }
@@ -843,9 +829,6 @@ public:
   /// Set the size reference for find/replace control geometry; this does not select a font.
   /// @param size UI sizing reference.
   void setUIFontSize(float size) { uiFontSize_ = size; }
-  /// Store a legacy editor-sizing reference; current rendering does not read it.
-  /// @param size Legacy sizing reference.
-  void setEditorFontSize(float size) { editorFontSize_ = size; }
 
   /**
    * Bind a keyboard shortcut to an editor action, replacing every existing binding for it.
@@ -917,8 +900,6 @@ public:
   using AutocompleteProvider =
       std::function<std::optional<AutocompleteResponse>(const AutocompleteRequest&)>;
 
-  /// Compatibility no-op; structured autocomplete has no stored payload to clear.
-  void clearAutocompleteData() {}
   /// Clear generic autocomplete entries and their search terms.
   void clearAutocompleteEntries() {
     autocompleteEntries_.clear();
@@ -969,16 +950,6 @@ public:
   static const Palette& getDarkPalette();
 
   // Callbacks
-  /// Legacy identifier-hover callback slot; current rendering does not invoke it.
-  std::function<void(TextEditor*, std::string_view)> onIdentifierHover;
-  /// Legacy identifier-hover availability slot; current rendering does not read it.
-  std::function<bool(TextEditor*, std::string_view)> hasIdentifierHover;
-  /// Legacy expression-hover callback slot; current rendering does not invoke it.
-  std::function<void(TextEditor*, std::string_view)> onExpressionHover;
-  /// Legacy expression-hover availability slot; current rendering does not read it.
-  std::function<bool(TextEditor*, std::string_view)> hasExpressionHover;
-  /// Legacy modified-click callback slot; current input handling does not invoke it.
-  std::function<void(TextEditor*, std::string_view, Coordinates)> onCtrlAltClick;
   std::function<void(TextEditor*)>
       onContentUpdate;  //!< Called for core edit updates, not full setText loads.
 
@@ -1271,18 +1242,12 @@ private:
   TextEditorCore core_;
 
   // Member variables following trailing underscore convention...
-  bool funcTooltips_ = true;
   float uiScale_ = 1.0f;
   float uiFontSize_ = 18.0f;
-  float editorFontSize_ = 18.0f;
 
   // Utility methods
   float calculateUISize(float height) const {
     return height * (uiScale_ + uiFontSize_ / 18.0f - 1.0f);
-  }
-
-  float calculateEditorSize(float height) const {
-    return height * (uiScale_ + editorFontSize_ / 18.0f - 1.0f);
   }
 
   bool functionDeclarationTooltipEnabled_ = false;
@@ -1301,7 +1266,6 @@ private:
 
   // UI state
   bool sidebar_ = true;          //!< Show sidebar
-  bool hasSearch_ = true;        //!< Enable search functionality
   std::string findWord_;         //!< Current search term
   bool findOpened_ = false;      //!< Search dialog is open
   bool findJustOpened_ = false;  //!< Search dialog was just opened
@@ -1342,13 +1306,11 @@ private:
   // `core_` so editing-path helpers there can use it.
   bool requestAutocomplete_ = false;   //!< Request to show autocomplete
   bool readyForAutocomplete_ = false;  //!< Ready to show autocomplete
-  bool autocomplete_ = true;           //!< Autocomplete enabled
   std::string autocompleteWord_;       //!< Current word being completed
   std::vector<std::pair<RcString, RcString>> autocompleteSuggestions_;  //!< Current suggestions
   int autocompleteIndex_;                       //!< Selected suggestion index
   bool autocompleteOpened_ = false;             //!< Autocomplete popup is open
   bool autocompleteSwitched_;                   //!< Allow enter to select
-  std::string autocompleteObject_;              //!< Object for member completion
   Coordinates autocompletePosition_;            //!< Position of completion
   AutocompleteProvider autocompleteProvider_;   //!< Syntax-aware autocomplete source
   bool autocompleteReplacementActive_ = false;  //!< Provider supplied an explicit replace range
@@ -1545,11 +1507,9 @@ private:
   // `scrollbarMarkers_`, and `changedLines_` all moved into
   // `TextEditorCore`. The reference aliases below preserve the short
   // names used by the render / input-handling code.
-  bool horizontalScroll_ = false;                   //!< Enable horizontal scrolling
   bool wordWrapEnabled_ = true;                     //!< Enable source-pane soft wrapping
   bool showLineNumbers_ = true;                     //!< Show line numbers
   bool highlightLine_ = true;                       //!< Highlight current line
-  bool highlightBrackets_ = false;                  //!< Highlight matching brackets
   bool focused_ = false;                            //!< Editor has keyboard focus
   bool withinRender_ = false;                       //!< Currently rendering
   bool cursorPositionChangedByMouse_ = false;       //!< Mouse moved cursor this frame
@@ -1757,17 +1717,13 @@ private:
    * @param contentSize Available content size
    * @param scrollX Current horizontal scroll position
    * @param drawList ImGui draw list for rendering
-   * @param longestLine Updated with line length if longer than current value
    */
   void renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& textStart,
-                  const ImVec2& contentSize, float scrollX, ImDrawList* drawList,
-                  float& longestLine);
+                  const ImVec2& contentSize, float scrollX, ImDrawList* drawList);
   void renderVisualLine(const VisualLine& visualLine, int visualLineIndex, const ImVec2& lineStart,
-                        const ImVec2& textStart, const ImVec2& contentSize, ImDrawList* drawList,
-                        float& longestLine);
+                        const ImVec2& textStart, const ImVec2& contentSize, ImDrawList* drawList);
   void renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
-                                    const ImVec2& contentSize, ImDrawList* drawList,
-                                    float& longestLine);
+                                    const ImVec2& contentSize, ImDrawList* drawList);
 
   // TODO: Doc comments
   void renderErrorTooltip(int line, const std::string& message);
@@ -1830,7 +1786,10 @@ private:
    * Render additional UI elements like autocomplete and function tooltips.
    */
   void renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, float scrollX, float scrollY,
-                     float longest, const ImVec2& contentSize);
+                     const ImVec2& contentSize);
+
+  /// Scroll the cursor, or the requested selection, into view if a render requested it.
+  void scrollRequestedCursorIntoView();
 
   /**
    * Process all input events.

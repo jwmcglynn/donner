@@ -12,6 +12,15 @@
 
 namespace donner::css::parser {
 
+namespace {
+
+/// Returns true for the bytes `std::isprint` accepts in the "C" locale, in any process locale.
+bool IsAsciiPrintable(char ch) {
+  return ch >= 0x20 && ch < 0x7F;
+}
+
+}  // namespace
+
 /*
 Parse according to the following CSS selector grammar, from
 https://www.w3.org/TR/2022/WD-selectors-4-20221111/#typedef-selector-list.
@@ -917,12 +926,13 @@ private:
         // message.
         std::string foundStr;
         if (auto maybeDelim = peekNextDelim()) {
-          if (std::isprint(static_cast<unsigned char>(maybeDelim.value()))) {
+          if (IsAsciiPrintable(maybeDelim.value())) {
             foundStr = " ";
             foundStr[0] = maybeDelim.value();
           } else {
             std::stringstream ss;
-            ss << std::hex << "0x" << maybeDelim.value();
+            ss << std::hex << std::setw(2) << std::setfill('0')
+               << static_cast<int>(static_cast<unsigned char>(maybeDelim.value()));
             foundStr = std::string("<non-printable: 0x") + ss.str() + ">";
           }
 

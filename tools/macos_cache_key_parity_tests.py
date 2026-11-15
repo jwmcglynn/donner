@@ -6,7 +6,9 @@ the client unless it is pinned), and the Xcode version and build, which Apple to
 carry in their environment. Both lanes configure the remote cache only through the BuildBuddy
 action, so their build flags must be identical. Test-only flags and environment (--test_env)
 are deliberately left to each lane, and each lane names itself in its test environment: a test
-result depends on the runner's GPU, so it must not be shared across runners.
+result depends on the runner's GPU, so it must not be shared across runners. Within a lane, no
+action or test environment may be copied from the runner: runners of one lane can have
+different home directories, and a copied value would keep each from reusing another's results.
 
 Every GitHub-hosted job is also kept off any private remote cache and remote
 execution configuration.
@@ -29,9 +31,6 @@ from tools import test_timing
 
 HOSTED = "macos"
 SELF_HOSTED = "macos-self-hosted"
-# Reruns the hosted job's runner-sensitive tests on the self-hosted runner under the hosted
-# runner's resource limits, with the hosted job's action keys.
-PARITY = "macos-hosted-parity"
 # Remote cache and executor flags. The macOS lanes get their remote cache only from the
 # BuildBuddy action, so neither passes any of these itself.
 REMOTE_FLAG = re.compile(r"^--(?:no)?(?:remote_|incompatible_remote_|credential_helper)")
@@ -56,12 +55,35 @@ _RC_LINE = re.compile(r"^(?:build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 LANE_TEST_ENV = {"macos-browser": "--test_env=DONNER_CI_MACOS_LANE=native-desktop-browser",
                  "macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
                  "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm",
-                 "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm",
                  "macos-metal": "--test_env=DONNER_CI_MACOS_LANE=native-metal",
                  "macos-vm-qualification": "--test_env=DONNER_CI_MACOS_LANE=vm-qualification"}
+# A flag without a value copies the variable from the client's environment into every action or
+# test key it applies to.
+INHERITED_ENV_FLAG = re.compile(
+    r"^--(?:test_env|action_env|host_action_env)=([A-Za-z_][A-Za-z0-9_]*)$")
+# A value with `$` is expanded from the runner's shell or a workflow expression, so it can differ
+# between runners just as an inherited value can.
+EXPANDED_ENV_FLAG = re.compile(
+    r"^--(?:test_env|action_env|host_action_env)=([A-Za-z_][A-Za-z0-9_]*)=.*\$")
+# Bazel applies the `macos` config on every macOS client (--enable_platform_specific_config), so
+# its flags reach every macOS lane without the lane naming it.
+IMPLICIT_MACOS_CONFIG = "--config=macos"
+# The only variables a macOS lane may copy from the runner, each with the same value on every
+# runner of a lane.
+RUNNER_INDEPENDENT_INHERITED = {
+    # Exported by tools/ci_select_macos_xcode.sh from the pinned Xcode tuple it selects.
+    "DONNER_CI_XCODE_IDENTITY",
+    # Local opt-ins (.bazelrc); no CI job sets them, so they are absent from every CI key.
+    "LLM",
+    "DONNER_RENDERER_TEST_VERBOSE",
+}
+# --config=ci-macos sets HOME to an empty value, so every test key carries the same value. Bazel's
+# test setup (tools/test/test-setup.sh) replaces a HOME that is not an absolute path with the
+# test's own TEST_TMPDIR, so each test runs with a writable, private home.
+CI_MACOS_HOME = "--test_env=HOME="
 # The main.yml lanes that must compute identical action keys. Every macOS job, in any workflow,
 # selects the pinned Xcode and fails without it.
-LANES = (HOSTED, SELF_HOSTED, PARITY, "macos-metal", "macos-vm-qualification", "macos-browser")
+LANES = (HOSTED, SELF_HOSTED, "macos-metal", "macos-vm-qualification", "macos-browser")
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -141,14 +163,20 @@ def _bazel_commands(job):
             if BAZEL_INVOCATION.search(command)]
 
 
-def neutral_configs(bazelrc):
-    """Repository configs whose flags, through any configs they name, are all test-only or
-    scheduling-only, so passing one never changes a build action's key."""
+def _config_flags(bazelrc):
+    """Flags of each named repository config, by config name."""
     flags = {}
     for line in bazelrc.splitlines():
         match = _RC_LINE.match(line)
         if match:
             flags.setdefault(match.group(1), []).extend(shlex.split(match.group(2)))
+    return flags
+
+
+def neutral_configs(bazelrc):
+    """Repository configs whose flags, through any configs they name, are all test-only or
+    scheduling-only, so passing one never changes a build action's key."""
+    flags = _config_flags(bazelrc)
 
     def neutral(name, seen):
         return name in flags and name not in seen and all(
@@ -255,17 +283,70 @@ def _refresh_problems(name, commands, by_step):
 
 
 def _bazelrc_problems(bazelrc):
-    """Problems of the ci-macos config, which must pin one PATH for actions and tools."""
+    """Problems of the ci-macos config, which must pin one PATH for actions and tools and give
+    tests a HOME that does not depend on the runner."""
     rc = [line.split(None, 1)[1] for line in bazelrc.splitlines()
           if re.match(r"^(?:build|common|test):ci-macos\s", line)]
+    problems = []
+    if rc.count(CI_MACOS_HOME) != 1:
+        problems.append("--config=ci-macos must set %s exactly once" % CI_MACOS_HOME)
+    rc = [line for line in rc if line != CI_MACOS_HOME]
     paths = [re.fullmatch(r"--(action_env|host_action_env)=PATH=(\S+)", line) for line in rc]
     if (len(rc) != 2 or not all(paths) or
             {match.group(1) for match in paths} != {"action_env", "host_action_env"} or
             paths[0].group(2) != paths[1].group(2)):
-        return ["--config=ci-macos must pin exactly one PATH for actions and tools"]
+        return problems + ["--config=ci-macos must pin exactly one PATH for actions and tools"]
     if "/Users/" in paths[0].group(2) or "$" in paths[0].group(2):
-        return ["the pinned action PATH depends on a runner's home or environment"]
-    return []
+        problems.append("the pinned action PATH depends on a runner's home or environment")
+    return problems
+
+
+def _expand_configs(words, configs, seen=frozenset()):
+    """Words with each --config=NAME replaced by that repository config's flags, recursively."""
+    expanded = []
+    for word in words:
+        name = word.split("=", 1)[1] if word.startswith("--config=") else None
+        if name is None or name in seen:
+            expanded.append(word)
+        else:
+            expanded += _expand_configs(configs.get(name, []), configs, seen | {name})
+    return expanded
+
+
+def inherited_env_problems(workflow, bazelrc):
+    """Environment a macOS lane copies from its runner into action or test keys.
+
+    Runners of one lane can differ in such values (their home directories in particular), so a
+    copied or shell-expanded value keeps each runner from reusing another's cached results.
+    Covers the lane's flag lists, every Bazel command of the job, every config those name, the
+    platform `macos` config and the repository's unconditional build, test and common flags."""
+    jobs = _jobs(workflow)
+    unconditional = [flag for line in bazelrc.splitlines()
+                     if re.match(r"^(?:build|test|common)\s", line)
+                     for flag in shlex.split(line.split(None, 1)[1])]
+    configs = _config_flags(bazelrc)
+    problems = []
+    for name in LANES:
+        words = _expand_configs(
+            unconditional + [IMPLICIT_MACOS_CONFIG] + _lane_command_words(jobs[name]), configs)
+        inherited = sorted({match.group(1) for match in map(INHERITED_ENV_FLAG.match, words)
+                            if match})
+        problems += ["%s copies %s from the runner into its keys" % (name, variable)
+                     for variable in inherited if variable not in RUNNER_INDEPENDENT_INHERITED]
+        expanded = sorted({match.group(1) for match in map(EXPANDED_ENV_FLAG.match, words)
+                           if match})
+        problems += ["%s sets %s from a shell or workflow expression" % (name, variable)
+                     for variable in expanded]
+    return problems
+
+
+def _lane_command_words(job):
+    """Words of every Bazel command of a job, with the lane's flag lists substituted."""
+    lists = {"$" + variable: (_job_env(job, variable) or "").split()
+             for variable in ("BAZEL_MACOS_BUILD_FLAGS",) + TEST_ONLY_VARIABLES}
+    return [flag for _, command in _bazel_commands(job)
+            for word in command[BAZEL_INVOCATION.search(command).end():].split()
+            for flag in lists.get(word, [word])]
 
 
 # Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
@@ -322,7 +403,8 @@ def key_parity_problems(workflow, bazelrc):
         problems += _select_problems(name, _steps(job), commands)
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
-    return problems + _step_divergence(by_step) + _bazelrc_problems(bazelrc)
+    return (problems + _step_divergence(by_step) + _bazelrc_problems(bazelrc) +
+            inherited_env_problems(workflow, bazelrc))
 
 
 def _step_divergence(by_step):
@@ -531,8 +613,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
                 "bazel build --config=ci $TARGETS", 1), self.bazelrc, "runs Bazel without"),
             "a build flag hidden in the test list": (self.workflow.replace(
-                'BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME',
-                'BAZEL_MACOS_TEST_FLAGS: "--copt=-O0 --test_env=HOME', 1),
+                'BAZEL_MACOS_TEST_FLAGS: "', 'BAZEL_MACOS_TEST_FLAGS: "--copt=-O0 ', 1),
                 self.bazelrc, "not test-only"),
             "self-hosted job env overrides xcodebuild": (
                 before + hosted_flags + "      XCODEBUILD: /usr/bin/true\n" + after,
@@ -548,23 +629,42 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                     "      - name: Checkout\n", 1),
                 self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
             "a lane shares its test results": (self.workflow.replace(
-                LANE_TEST_ENV["macos-self-hosted"], "--test_env=HOME", 1),
+                LANE_TEST_ENV["macos-self-hosted"], "", 1),
                 self.bazelrc, "does not name its lane"),
-            "the parity lane shares the hosted lane's test results": (self.workflow.replace(
-                LANE_TEST_ENV[PARITY], LANE_TEST_ENV[HOSTED], 1),
-                self.bazelrc, "does not name its lane"),
-            "the parity configuration hides a build flag": (self.workflow, self.bazelrc.replace(
-                "build:hosted-macos --jobs=3\n", "build:hosted-macos --jobs=3 --copt=-O0\n", 1),
-                "step 'Test (Geode editor lane)' differs"),
-            "the parity lane changes a key-affecting flag": (self.workflow.replace(
-                "--config=geode --config=hosted-parity-runtime \\\n",
-                "--config=geode --config=hosted-parity-runtime --copt=-O0 \\\n", 1),
-                self.bazelrc, "step 'Test (Geode editor lane)' differs"),
-            "the parity lane drops the Xcode pin": (self.workflow[:self.workflow.index(
-                "\n  %s:\n" % PARITY)] + self.workflow[self.workflow.index(
-                    "\n  %s:\n" % PARITY):].replace(
-                    "run: tools/ci_select_macos_xcode.sh\n", "run: echo skipped\n",
-                    1), self.bazelrc, "macos-hosted-parity selects Xcode other than"),
+            "a lane copies HOME from the runner into test keys": (self.workflow.replace(
+                LANE_TEST_ENV[SELF_HOSTED], "--test_env=HOME " + LANE_TEST_ENV[SELF_HOSTED], 1),
+                self.bazelrc, "macos-self-hosted copies HOME from the runner"),
+            "a step copies a runner variable into action keys": (self.workflow.replace(
+                "build --config=ci --config=macos-vm $BAZEL_MACOS_BUILD_FLAGS",
+                "build --config=ci --config=macos-vm --action_env=USER "
+                "$BAZEL_MACOS_BUILD_FLAGS", 1),
+                self.bazelrc, "macos-self-hosted copies USER from the runner"),
+            "a lane's config copies a runner variable": (self.workflow, self.bazelrc.replace(
+                "build:macos-vm --jobs=32\n",
+                "build:macos-vm --jobs=32\nbuild:macos-vm --test_env=TMPDIR\n", 1),
+                "macos-self-hosted copies TMPDIR from the runner"),
+            "an unconditional rc line copies a runner variable": (
+                self.workflow, self.bazelrc.replace(
+                    "build --test_env=LLM\n", "build --test_env=LLM\ntest --test_env=USER\n", 1),
+                "macos copies USER from the runner"),
+            "the implicit macos config copies a runner variable": (
+                self.workflow, self.bazelrc + "build:macos --test_env=FOO\n",
+                "macos-self-hosted copies FOO from the runner"),
+            "a lane sets HOME from a shell expansion": (self.workflow.replace(
+                LANE_TEST_ENV[SELF_HOSTED], "--test_env=HOME=$HOME " + LANE_TEST_ENV[SELF_HOSTED],
+                1), self.bazelrc,
+                "macos-self-hosted sets HOME from a shell or workflow expression"),
+            "a config sets a variable from a workflow expression": (
+                self.workflow,
+                self.bazelrc + "build:macos-vm --action_env=TMPDIR=${{ runner.temp }}\n",
+                "macos-self-hosted sets TMPDIR from a shell or workflow expression"),
+            "ci-macos stops giving tests a fixed HOME": (self.workflow, self.bazelrc.replace(
+                "build:ci-macos %s\n" % CI_MACOS_HOME, "", 1),
+                "must set %s exactly once" % CI_MACOS_HOME),
+            "ci-macos gives tests a runner's home": (self.workflow, self.bazelrc.replace(
+                "build:ci-macos %s\n" % CI_MACOS_HOME,
+                "build:ci-macos %s/Users/runner\n" % CI_MACOS_HOME, 1),
+                "must set %s exactly once" % CI_MACOS_HOME),
             "a step drops the lane flags": (self.workflow.replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
                 "bazelisk build --config=ci $TARGETS", 1),
@@ -600,6 +700,17 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertNotEqual((workflow, bazelrc), (self.workflow, self.bazelrc))
                 problems = key_parity_problems(workflow, bazelrc)
                 self.assertTrue(any(expected in problem for problem in problems), problems)
+
+    def test_local_opt_in_variables_are_never_set_in_ci(self):
+        # They may be copied from the runner only because CI never sets them.
+        local = RUNNER_INDEPENDENT_INHERITED - {"DONNER_CI_XCODE_IDENTITY"}
+        self.assertEqual({"LLM", "DONNER_RENDERER_TEST_VERBOSE"}, local)
+        files = _workflow_files()
+        self.assertIn(".github/workflows/main.yml", files)
+        for path, text in files.items():
+            for variable in sorted(local):
+                with self.subTest(path=path, variable=variable):
+                    self.assertIsNone(re.search(r"\b%s\b" % variable, text))
 
     def test_host_tool_actions_stay_out_of_the_remote_cache(self):
         bundle = _read("build_defs/macos_app_bundle.bzl")
@@ -645,7 +756,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual({owner for owner, *_ in _macos_jobs(files)}, {
             ".github/workflows/" + job for job in (
                 "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
-                "main.yml:" + PARITY, "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos", "cmake.yml:macos-self-hosted", "editor_wasm.yml:build",
+                "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos",
+                "cmake.yml:macos-self-hosted", "editor_wasm.yml:build",
                 "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
                 "perf.yml:perf", "sign_macos_release.yml:sign", "sign_macos_release.yml:verify")})
         cmake, wasm = ".github/workflows/cmake.yml", ".github/workflows/editor_wasm.yml"

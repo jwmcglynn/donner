@@ -6,6 +6,8 @@
   const maximumAssetBytes = 8 * 1024 * 1024;
   const maximumCacheBytes = 16 * 1024 * 1024;
   const cacheName = "donner-assets-v1";
+  // LRU stamps only order eviction, so a hit rewrites its entry at most once per interval.
+  const stampRefreshMs = 24 * 60 * 60 * 1000;
   const hashPattern = /^[a-f0-9]{64}$/;
 
   class CatalogFailure extends Error {
@@ -164,6 +166,13 @@
       this.persistenceQueueBytes = 0;
       this.cachePersistence = null;
       this.persistenceDisabled = false;
+      // Stale-stamp refreshes found by cache hits wait until no load is active, so a warm start
+      // never competes with its own critical reads. Bounded like the persistence queue.
+      this.deferredRefreshes = [];
+      this.deferredRefreshBytes = 0;
+      // Identities whose cache read missed its deadline and fell back to the network. Bounded by
+      // the compiled asset count; it lets tests tell intended degradation from a cache miss.
+      this.cacheReadTimeouts = new Set();
     }
 
     request(id, token, priority = 0) {
@@ -209,6 +218,8 @@
       this.closed = true;
       this.persistenceQueue = [];
       this.persistenceQueueBytes = 0;
+      this.deferredRefreshes = [];
+      this.deferredRefreshBytes = 0;
       this.cachePersistence?.controller.abort();
       for (const request of this.requests.values()) {
         request.controller?.abort();
@@ -238,6 +249,12 @@
           --this.running;
           this.pump();
         });
+      }
+      if (this.running === 0 && this.queue.length === 0 && this.deferredRefreshes.length) {
+        const refreshes = this.deferredRefreshes;
+        this.deferredRefreshes = [];
+        this.deferredRefreshBytes = 0;
+        for (const { asset, bytes } of refreshes) this.persist(asset, bytes, { refresh: true });
       }
     }
 
@@ -282,7 +299,12 @@
           );
           throwIfCancelled(signal);
           if (this.closed) return null;
-          this.persist(asset, bytes);
+          // A hit replaces nothing and grows nothing: refresh a stale LRU stamp later, never rescan.
+          const used = Number(response.headers.get("x-donner-used"));
+          const now = this.now();
+          if (!(Number.isFinite(used) && used <= now && now - used < stampRefreshMs)) {
+            this.deferRefresh(asset, bytes);
+          }
           return bytes;
         } catch {
           throwIfCancelled(signal);
@@ -299,6 +321,7 @@
       let timer;
       const timeout = new Promise((resolve) => {
         timer = this.timers.setTimeout(() => {
+          this.cacheReadTimeouts.add(asset.id);
           controller.abort();
           resolve(null);
         }, 250);
@@ -311,19 +334,52 @@
       }
     }
 
-    persist(asset, bytes) {
+    deferRefresh(asset, bytes) {
+      if (!this.locks || !this.storage || this.closed || this.persistenceDisabled) return;
+      if (this.deferredRefreshes.some((entry) => entry.asset.id === asset.id)) return;
+      // Deferred and queued payloads share one budget, as they did when hits queued directly.
+      if (
+        bytes.byteLength
+          > maximumCacheBytes - this.persistenceQueueBytes - this.deferredRefreshBytes
+      ) return;
+      this.deferredRefreshes.push({ asset, bytes });
+      this.deferredRefreshBytes += bytes.byteLength;
+    }
+
+    persist(asset, bytes, { refresh = false } = {}) {
       // Skip persistence when another tab owns the namespace; font delivery never waits for it.
       if (
         !this.locks || !this.storage || this.closed || this.persistenceDisabled
       ) return;
+      if (!refresh) {
+        // A full write supersedes a pending stamp refresh and must not be dropped in its favor:
+        // the refresh would find a peer-evicted entry gone and leave the asset uncached.
+        const deferred = this.deferredRefreshes.findIndex((entry) => entry.asset.id === asset.id);
+        if (deferred !== -1) {
+          this.deferredRefreshBytes -= this.deferredRefreshes[deferred].bytes.byteLength;
+          this.deferredRefreshes.splice(deferred, 1);
+        }
+        // Full writes outrank stamp refreshes for the shared payload budget.
+        while (
+          this.deferredRefreshes.length
+          && bytes.byteLength
+            > maximumCacheBytes - this.persistenceQueueBytes - this.deferredRefreshBytes
+        ) {
+          this.deferredRefreshBytes -= this.deferredRefreshes.pop().bytes.byteLength;
+        }
+      }
       if (this.cacheWritePending) {
-        if (this.persistenceQueue.some((entry) => entry.asset.id === asset.id)) return;
+        const queued = this.persistenceQueue.find((entry) => entry.asset.id === asset.id);
+        if (queued) {
+          if (!refresh) queued.refresh = false;
+          return;
+        }
         if (bytes.byteLength > maximumCacheBytes - this.persistenceQueueBytes) return;
-        this.persistenceQueue.push({ asset, bytes });
+        this.persistenceQueue.push({ asset, bytes, refresh });
         this.persistenceQueueBytes += bytes.byteLength;
         return;
       }
-      const work = { asset, bytes, controller: new AbortController() };
+      const work = { asset, bytes, refresh, controller: new AbortController() };
       this.cachePersistence = work;
       this.cacheWritePending = true;
       this.cacheWork = this.runPersistence(work);
@@ -359,7 +415,7 @@
         const next = this.persistenceQueue.shift();
         if (next) {
           this.persistenceQueueBytes -= next.bytes.byteLength;
-          this.persist(next.asset, next.bytes);
+          this.persist(next.asset, next.bytes, { refresh: next.refresh });
         }
       }
     }
@@ -370,7 +426,20 @@
       const cache = await abortable(this.storage.open(cacheName), signal);
       throwIfCancelled(signal);
       if (!cache) return;
-      await this.trimCache(cache, work.asset, signal);
+      const key = this.cacheKey(work.asset.id);
+      if (work.refresh) {
+        // Replacing an entry of the same verified size cannot exceed the bound, so a stamp
+        // refresh skips the retention scan. Never resurrect an entry a peer evicted meanwhile.
+        const existing = await abortable(cache.match(key), signal);
+        void existing?.body?.cancel().catch(() => {});
+        throwIfCancelled(signal);
+        if (!existing) return;
+        if (existing.headers.get("content-length") !== String(work.asset.encodedBytes)) {
+          await this.trimCache(cache, work.asset, signal);
+        }
+      } else {
+        await this.trimCache(cache, work.asset, signal);
+      }
       throwIfCancelled(signal);
       const response = new Response(work.bytes, {
         headers: {
@@ -381,7 +450,7 @@
       });
       work.bytes = null;
       // Keep the cross-tab lock until an issued mutation settles, even if cacheWork times out.
-      await cache.put(this.cacheKey(work.asset.id), response);
+      await cache.put(key, response);
       throwIfCancelled(signal);
     }
 

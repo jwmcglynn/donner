@@ -34,6 +34,17 @@ test("both pinned archives are required before extraction starts", () => {
   assert.equal(existsSync(path.join(env.TEST_TMPDIR, "perf-browsers")), false);
 });
 
+test("a config's pinned browsers limit which archives are required", () => {
+  const env = environment();
+  delete env.DONNER_CHROMIUM_ARCHIVE;
+  env.DONNER_FIREFOX_ARCHIVE = path.join(env.TEST_TMPDIR, "absent-firefox.zip");
+  // Firefox alone needs no Chromium archive; it fails on its own missing archive instead.
+  assert.throws(() => prepareBrowserArchives(env, ["firefox"]), { code: "ENOENT" });
+  assert.throws(() => prepareBrowserArchives(env), /DONNER_CHROMIUM_ARCHIVE must be supplied/);
+  assert.throws(() => prepareBrowserArchives(env, ["webkit"]), /no pinned browser archive named webkit/);
+  assert.equal(existsSync(path.join(env.TEST_TMPDIR, "perf-browsers")), false);
+});
+
 test("pinned macOS archives preserve runnable executables and native framework symlinks", () => {
   const env = environment();
   prepareBrowserArchives(env);

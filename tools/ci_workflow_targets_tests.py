@@ -75,7 +75,7 @@ class WorkflowTargetsTest(unittest.TestCase):
         source = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).read_text()
         jobs = {m.group(1): m.group(2) for m in re.finditer(
             r"(?m)^  ([A-Za-z0-9_-]+):\n((?:(?:    .*|[ \\t]*)\n)*)", source)}
-        for name in ("macos-self-hosted", "macos-hosted-parity"):
+        for name in ("macos-self-hosted",):
             with self.subTest(job=name):
                 self.assertIn("runs-on: [self-hosted, macOS-vm, ARM64]", jobs[name])
                 self.assertIn("--//build_defs:metal_shader_validation=off", jobs[name])
@@ -83,6 +83,9 @@ class WorkflowTargetsTest(unittest.TestCase):
         native = jobs["macos-metal"]
         self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", native)
+        # Only pull requests that reach the Metal suites, or fall back to //..., run it.
+        self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "
+                      "needs.determine-targets.outputs.metal_affected == 'true')", native)
         for target in ("metal_full_validation", "metal_preflight", "metal_native",
                        "metal_offline_compiler"):
             self.assertIn("//tools/ci:" + target, native)
@@ -91,9 +94,20 @@ class WorkflowTargetsTest(unittest.TestCase):
         self.assertNotIn("continue-on-error:", native)
         self.assertIn("macos-metal", jobs["coverage-contract"].split("steps:", 1)[0])
         fast = jobs["macos-self-hosted"]
-        for flag in ("--jobs=6", "--local_resources=cpu=6", "--local_resources=memory=6144"):
-            for command in re.findall(r"(?m)^.*bazelisk .* (?:test|build) .*", fast):
-                self.assertIn(flag, command)
+        commands = re.findall(r"(?m)^.*bazelisk .* (?:test|build) .*", fast)
+        self.assertGreaterEqual(len(commands), 6)
+        for command in commands:
+            self.assertIn("--config=macos-vm", command)
+            self.assertNotRegex(command, r"--jobs|--local_resources")
+        # Local execution stays bounded by the VM's CPU and memory budget. --jobs sits above the
+        # CPU budget so cache lookups and downloads are not throttled to local concurrency.
+        bazelrc = Path(resolver.Rlocation("donner/.bazelrc")).read_text()
+        budget = re.findall(r"(?m)^build:macos-vm (.+)$", bazelrc)
+        self.assertEqual(budget[1:], ["--local_resources=cpu=6",
+                                      "--local_resources=memory=6144"])
+        jobs_flag = re.fullmatch(r"--jobs=(\d+)", budget[0])
+        self.assertIsNotNone(jobs_flag, budget)
+        self.assertGreater(int(jobs_flag.group(1)), 6)
         manifest = json.loads(Path(resolver.Rlocation(
             "donner/tools/ci/coverage_contract.json")).read_text())
         for kind in ("shader-validation", "shader-memory-canary", "native-metal"):

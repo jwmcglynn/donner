@@ -400,7 +400,7 @@ TEST(Woff2ParserTest, ExactOutputAndScopedBrotliBudget) {
   options.maximumBrotliMemory = 8 * 1024 * 1024;
   const auto bounded = Woff2Parser::Decompress(bytes, options);
   ASSERT_EQ(bounded.hasError(), false);
-  EXPECT_THAT(bounded.result(), testing::ElementsAreArray(generic.result()));
+  EXPECT_THAT(bounded.result(), BytesEqual(generic.result()));
   options.maximumBrotliMemory = 1;
   const auto denied = Woff2Parser::Decompress(bytes, options);
   ASSERT_EQ(denied.hasError(), true);

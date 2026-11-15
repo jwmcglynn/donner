@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -12,10 +13,12 @@
 #include "donner/base/Utils.h"
 #include "donner/base/encoding/Decompress.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/StylesheetImportLoader.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/resources/ImageLoader.h"
 #include "donner/svg/resources/NullResourceLoader.h"
@@ -427,6 +430,61 @@ void LoadFontFaces(std::vector<css::FontFace>& fontFaces, std::span<const size_t
   }
 }
 
+/// Whether \p stylesheet is an applied author stylesheet that declares imports.
+/// Whether \p stylesheet is an applied author stylesheet, which may declare imports.
+bool IsAuthorCssStylesheet(const Registry& registry, Entity entity,
+                           const StylesheetComponent& stylesheet) {
+  return !stylesheet.isUserAgentStylesheet && stylesheet.isCssType() &&
+         HasSvgNamespace(registry, entity);
+}
+
+/// Why an external stylesheet import may not be fetched at all, or nullptr if it may.
+const char* ExternalImportRefusal(ProcessingMode mode, bool hasLoader) {
+  if (mode == ProcessingMode::SecureStatic || mode == ProcessingMode::SecureAnimated) {
+    return "CSS @import was not loaded: external resources are disabled in secure processing mode";
+  }
+  if (!hasLoader) {
+    return "CSS @import was not loaded: no ResourceLoader provided";
+  }
+  return nullptr;
+}
+
+/// Whether \p url has a positive (already charged) entry in the shared external-fetch cache.
+bool HasCachedBytes(
+    const std::unordered_map<std::string, std::variant<std::vector<uint8_t>, ResourceLoaderError>>&
+        cache,
+    std::string_view url) {
+  const auto it = cache.find(std::string(url));
+  return it != cache.end() && std::holds_alternative<std::vector<uint8_t>>(it->second);
+}
+
+/// As for images, an external fetch refused for size latches the aggregate budget closed.
+void LatchAggregateOnOversizedFetch(UrlLoaderError error, bool external, size_t& remainingBytes) {
+  if (error == UrlLoaderError::ResourceTooLarge && external) {
+    remainingBytes = 0;
+  }
+}
+
+/// Charge \p bytes to the aggregate budget, latching it closed if they do not fit.
+bool ChargeAggregateBytes(size_t& remainingBytes, size_t bytes) {
+  if (bytes > remainingBytes) {
+    remainingBytes = 0;
+    return false;
+  }
+  remainingBytes -= bytes;
+  return true;
+}
+
+/// Map import diagnostics from local CSS offsets to the document source of the `<style>` element.
+void MapImportWarnings(ParseWarningSink& warnings, const StylesheetSourceMap& sourceMap) {
+  warnings.mapSourceRanges([&](const SourceRange& range) {
+    if (const auto point = sourceMap.mapPointToDocumentSource(range.start)) {
+      return SourceRange{*point, *point};
+    }
+    return range;
+  });
+}
+
 }  // namespace
 
 ResourceManagerContext::ResourceManagerContext(Registry& registry,
@@ -441,6 +499,7 @@ ResourceManagerContext::ResourceManagerContext(Registry& registry,
 
 void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
   stylesheetFontFaceRegistrations_.erase(entity);
+  importRootsChanged_ = true;
 }
 
 uint64_t ResourceManagerContext::NextCacheGeneration() {
@@ -579,6 +638,97 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadAdmittedExternalSVG
   return document;
 }
 
+bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink) {
+  // Any author stylesheet that was reparsed (gaining or losing imports) or removed since the last
+  // pass can change how the shared budget divides among the remaining importing sheets.
+  auto view = registry_.view<StylesheetComponent>();
+  const bool pending =
+      importRootsChanged_ || std::any_of(view.begin(), view.end(), [&](Entity entity) {
+        const auto& stylesheet = view.get<StylesheetComponent>(entity);
+        return IsAuthorCssStylesheet(registry_, entity, stylesheet) &&
+               stylesheet.importGeneration != cacheGeneration_;
+      });
+  if (!pending) {
+    return false;
+  }
+  importRootsChanged_ = false;
+
+  // Reload every importing stylesheet in one pass so the document-wide import budget does not
+  // depend on edit history. Repeated URLs are answered by the shared external-fetch cache.
+  StylesheetImportBudget budget;
+  const StylesheetImportFetch fetch = [this](std::string_view url, size_t maximumBytes) {
+    return fetchStylesheetImport(url, maximumBytes);
+  };
+  bool reloaded = false;
+  for (const Entity entity : view) {
+    auto& stylesheet = view.get<StylesheetComponent>(entity);
+    if (!IsAuthorCssStylesheet(registry_, entity, stylesheet)) {
+      continue;
+    }
+    if (stylesheet.stylesheet.imports().empty()) {
+      stylesheet.importGeneration = cacheGeneration_;
+      continue;
+    }
+    reloaded = true;
+    ParseWarningSink warnings =
+        warningSink.isEnabled() ? ParseWarningSink() : ParseWarningSink::Disabled();
+    std::vector<css::Stylesheet> imported =
+        LoadStylesheetImports(stylesheet.stylesheet, fetch, budget, warnings);
+    MapImportWarnings(warnings, stylesheet.sourceMap);
+    warningSink.merge(std::move(warnings));
+    stylesheet.setImportedStylesheets(std::move(imported), cacheGeneration_);
+  }
+  return reloaded;
+}
+
+std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStylesheetImport(
+    std::string_view url, size_t maximumBytes) {
+  const bool external = NeedsExternalLoader(url);
+  if (external) {
+    if (const char* refusal = ExternalImportRefusal(processingMode_, loader_ != nullptr)) {
+      return RcString(refusal);
+    }
+  }
+
+  NullResourceLoader nullLoader;
+  WriteAccessGuardedResourceLoader guardedLoader(
+      registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
+  // The shared cache applies only the fixed per-resource cap, so its outcome for a URL never
+  // depends on this pass's remaining import allowance; that allowance is enforced afterwards.
+  // A stylesheet already admitted to the cache was charged by the fetch that admitted it, so its
+  // reuse is not refused when the remaining aggregate budget is now smaller (or latched closed).
+  size_t cacheHitAllowance = std::numeric_limits<size_t>::max();
+  BudgetedCachingResourceLoader cachedLoader(
+      guardedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
+      UrlLoader::kDefaultMaximumResourceSize,
+      HasCachedBytes(externalFetchCache_, url) ? cacheHitAllowance : remainingResourceBytes_);
+  // Data URLs decode without any loader; only external URLs reach the application's loader.
+  ResourceLoaderInterface& loader = external ? static_cast<ResourceLoaderInterface&>(cachedLoader)
+                                             : static_cast<ResourceLoaderInterface&>(nullLoader);
+  const size_t attemptsBefore = fetchSecurityStats_.attempts;
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize);
+  auto result = urlLoader.fromUri(url);
+  if (const auto* error = std::get_if<UrlLoaderError>(&result)) {
+    LatchAggregateOnOversizedFetch(*error, external, remainingResourceBytes_);
+    return RcString("CSS @import was not loaded: " + std::string(ToString(*error)));
+  }
+
+  // A new fetch is now resident in the shared cache, so charge the document's aggregate budget
+  // before any pass-specific check, even if this pass then refuses the bytes. Cache hits were
+  // charged by the fetch that admitted them, and data URLs are part of the document text.
+  auto& loaded = std::get<UrlLoader::Result>(result);
+  const bool newFetch = fetchSecurityStats_.attempts != attemptsBefore;
+  // The pass allowance is also enforced by the import loader; checking it here keeps an oversized
+  // result from being handed back at all.
+  if ((newFetch && !ChargeAggregateBytes(remainingResourceBytes_, loaded.data.size())) ||
+      loaded.data.size() > maximumBytes) {
+    fetchSecurityStats_.rejected = true;
+    return RcString("CSS @import was not loaded: " +
+                    std::string(ToString(UrlLoaderError::ResourceTooLarge)));
+  }
+  return std::move(loaded);
+}
+
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
   for (const css::FontFace& fontFace : fontFaces) {
     std::string identity = css::FontFaceIdentityKey(fontFace);
@@ -596,12 +746,13 @@ void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFac
 }
 
 void ResourceManagerContext::synchronizeStylesheetFontFaces(
-    Entity stylesheetEntity, std::span<const css::FontFace> fontFaces) {
+    Entity stylesheetEntity, std::span<const css::FontFace> fontFaces, std::uint64_t revision) {
   auto& registration = stylesheetFontFaceRegistrations_[stylesheetEntity];
-  if (registration.data == fontFaces.data() && registration.size == fontFaces.size()) {
+  if (registration.data == fontFaces.data() && registration.size == fontFaces.size() &&
+      registration.revision == revision) {
     return;
   }
-  registration = {.data = fontFaces.data(), .size = fontFaces.size()};
+  registration = {.data = fontFaces.data(), .size = fontFaces.size(), .revision = revision};
 
   for (const css::FontFace& fontFace : fontFaces) {
     std::string identity = css::FontFaceIdentityKey(fontFace);

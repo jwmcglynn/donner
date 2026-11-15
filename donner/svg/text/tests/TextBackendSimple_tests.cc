@@ -660,7 +660,8 @@ TEST_F(TextBackendSimpleTest, CrossSpanKerningUsesResolvedVerticalOrientation) {
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalCjkAdvancesByEmHeight) {
   const FontHandle font = fullFont();
 
-  // U+4E00 in vertical mode: upright glyph, advance equals the font size.
+  // U+4E00 in vertical mode: upright glyph. Without vmtx and with a zeroed OS/2 typographic
+  // cell, the advance is the horizontal header's one-em ascent-to-descent cell.
   const auto shaped =
       backend_.shapeRun(font, 100.0f, "\xE4\xB8\x80", 0, 3, true, FontVariant::Normal, false);
   EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(3), GlyphXAdvanceIs(DoubleEq(0.0)),

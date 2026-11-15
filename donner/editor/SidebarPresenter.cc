@@ -952,7 +952,7 @@ void SidebarPresenter::captureStrokeSnapshot(const EditorApp& app,
   inspector.strokeWidth = stroke.strokeWidth.get().value();
   inspector.strokeLinecap = static_cast<int>(stroke.strokeLinecap.get().value());
   inspector.strokeLinejoin = static_cast<int>(stroke.strokeLinejoin.get().value());
-  inspector.strokeMiterlimit = static_cast<float>(stroke.strokeMiterlimit.get().value());
+  inspector.strokeMiterlimit = stroke.strokeMiterlimit.get().value();
   if (const auto dasharray = stroke.strokeDasharray.get(); dasharray.has_value()) {
     std::ostringstream stream;
     stream << *dasharray;
@@ -1329,7 +1329,7 @@ bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) 
   StrokeRowLabel("Width", context.rowStartX, theme);
   const Lengthd widthLength =
       context.canMutate ? FirstSelectedStrokeWidth(*context.app) : inspectorSnapshot_.strokeWidth;
-  float width = static_cast<float>(widthLength.value);
+  double width = widthLength.value;
   bool queuedMutation = renderStrokeWidthField(context, widthLength, &width);
   const bool fieldActivated = ImGui::IsItemActivated();
   // Enter or Escape ends typing; the presets must not linger over an unfocused field.
@@ -1345,7 +1345,7 @@ bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) 
 }
 
 bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context,
-                                              const Lengthd& widthLength, float* width) {
+                                              const Lengthd& widthLength, double* width) {
   ImGui::SetNextItemWidth(96.0f);
   const InspectorLengthEdit edit =
       InputInspectorLength("##stroke_width", widthLength,
@@ -1358,7 +1358,7 @@ bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context
   }
   bool queuedMutation = beginStrokeLengthEdit(context, StrokeScalarField::Width, widthLength.unit);
   if (edit.typed.has_value() && context.canMutate) {
-    *width = static_cast<float>(edit.typed->value);
+    *width = edit.typed->value;
     queuedMutation = applyStrokeWidth(*context.app, *edit.typed) || queuedMutation;
   }
   queuedMutation =
@@ -1375,7 +1375,7 @@ bool SidebarPresenter::applyStrokeWidth(EditorApp& liveApp, Lengthd width) {
   beginStrokeScalarEdit(liveApp, StrokeScalarField::Width);
   if (width.unit == LengthUnit::None || width.unit == LengthUnit::Px) {
     width.value = std::min(width.value, 200.0);
-    liveApp.setActiveStrokeWidth(static_cast<float>(width.value));
+    liveApp.setActiveStrokeWidth(width.value);
   }
   const bool changed = liveApp.setStylePropertyOnSelection("stroke-width", width.toRcString());
   strokeScalarEdit_->changed |= changed;
@@ -1610,7 +1610,7 @@ LengthUnit SidebarPresenter::strokeLengthBareUnit(StrokeScalarField field, Lengt
 }
 
 bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& context,
-                                                const Lengthd& widthLength, float width) {
+                                                const Lengthd& widthLength, double width) {
   if (!strokeWidthRect_.has_value()) {
     return false;
   }
@@ -1626,7 +1626,7 @@ bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& conte
     return false;
   }
 
-  width = std::max(0.0f, width + (steps.increment ? 1.0f : -1.0f));
+  width = std::max(0.0, width + (steps.increment ? 1.0 : -1.0));
   if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
     context.app->setActiveStrokeWidth(width);
   }
@@ -1784,10 +1784,10 @@ bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) 
   strokeMiterDecrementRect_.reset();
   if (join == 0 || join == 1 || join == 4) {
     StrokeRowLabel("Limit", rowStartX, theme);
-    float miterlimit = inspectorSnapshot_.strokeMiterlimit;
+    double miterlimit = inspectorSnapshot_.strokeMiterlimit;
     ImGui::SetNextItemWidth(90.0f);
     const bool limitChanged =
-        ImGui::InputFloat("##stroke_miter_limit", &miterlimit, 0.0f, 0.0f, "%.1f");
+        ImGui::InputDouble("##stroke_miter_limit", &miterlimit, 0.0, 0.0, "%.1f");
     queuedMutation =
         renderStrokeMiterInputValue(context, miterlimit, limitChanged) || queuedMutation;
     trackStrokeScalarItem(context, StrokeScalarField::MiterLimit);
@@ -1810,24 +1810,24 @@ bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) 
 }
 
 bool SidebarPresenter::renderStrokeMiterInputValue(const StrokeRenderContext& context,
-                                                   float miterlimit, bool inputChanged) {
+                                                   double miterlimit, bool inputChanged) {
   if (!inputChanged || !context.canMutate) {
     return false;
   }
-  if (!std::isfinite(miterlimit) || miterlimit < 1.0f) {
+  if (!std::isfinite(miterlimit) || miterlimit < 1.0) {
     strokeMiterError_ = "Limit must be at least 1";
     return false;
   }
   beginStrokeScalarEdit(*context.app, StrokeScalarField::MiterLimit);
-  const bool changed =
-      context.app->setStylePropertyOnSelection("stroke-miterlimit", std::to_string(miterlimit));
+  const bool changed = context.app->setStylePropertyOnSelection(
+      "stroke-miterlimit", donner::detail::FormatNumberForSVG(miterlimit));
   strokeScalarEdit_->changed |= changed;
   strokeMiterError_.clear();
   return changed;
 }
 
 bool SidebarPresenter::renderStrokeMiterStepper(const StrokeRenderContext& context,
-                                                const Box2d& field, float miterlimit) {
+                                                const Box2d& field, double miterlimit) {
   const ImVec2 min(static_cast<float>(field.topLeft.x), static_cast<float>(field.topLeft.y));
   const ImVec2 max(static_cast<float>(field.bottomRight.x),
                    static_cast<float>(field.bottomRight.y));
@@ -1838,7 +1838,7 @@ bool SidebarPresenter::renderStrokeMiterStepper(const StrokeRenderContext& conte
   if (!context.canMutate || (!steps.increment && !steps.decrement)) {
     return false;
   }
-  miterlimit = std::max(1.0f, miterlimit + (steps.increment ? 1.0f : -1.0f));
+  miterlimit = std::max(1.0, miterlimit + (steps.increment ? 1.0 : -1.0));
   const bool changed =
       applyStrokeStyle(*context.app, "stroke-miterlimit",
                        donner::detail::FormatNumberForSVG(miterlimit), "Change stroke miter limit");

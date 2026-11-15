@@ -11,8 +11,10 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -389,6 +391,8 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
   params.textAnchor = properties.textAnchor.get().value();
+  params.direction = properties.direction.get().value();
+  params.bidiOverride = OverridesBidi(properties.unicodeBidi.get().value());
   params.writingMode = properties.writingMode.get().value();
   params.fontKerning = properties.fontKerning.get().value();
   params.fontSizeAdjust = properties.fontSizeAdjust.get().value();
@@ -433,8 +437,7 @@ size_t TextSpanCodepointCount(const components::ComputedTextComponent::TextSpan&
 }
 
 std::string SerializeTextPositionLengths(std::span<const Lengthd> values) {
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   for (size_t index = 0; index < values.size(); ++index) {
     if (index != 0) {
       output << ' ';
@@ -445,8 +448,7 @@ std::string SerializeTextPositionLengths(std::span<const Lengthd> values) {
 }
 
 std::string SerializeTextPositionRotations(std::span<const double> values) {
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   for (size_t index = 0; index < values.size(); ++index) {
     if (index != 0) {
       output << ' ';
@@ -834,6 +836,21 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
   }
 }
 
+/// Whether a span progresses right to left on its line. Vertical lines and text on a path keep
+/// left-to-right progression: their right-to-left layout is not implemented.
+bool RightToLeftInline(Direction direction, WritingMode writingMode, bool onPath) {
+  return direction == Direction::Rtl && !isVertical(writingMode) && !onPath;
+}
+
+/// The anchor edge, in left-to-right inline terms, that \p anchor names. `start` and `end` name
+/// the logical edges, so a right-to-left chunk starts at its right edge.
+TextAnchor PhysicalTextAnchor(TextAnchor anchor, bool rightToLeft) {
+  if (!rightToLeft || anchor == TextAnchor::Middle) {
+    return anchor;
+  }
+  return anchor == TextAnchor::Start ? TextAnchor::End : TextAnchor::Start;
+}
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
                                 const Box2d& viewBox, const FontMetrics& fontMetrics,
                                 const TextStyleContext* styleContext = nullptr) {
@@ -870,7 +887,11 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       continue;
     }
 
-    span.textAnchor = style->properties->textAnchor.get().value();
+    span.rightToLeftInline = RightToLeftInline(style->properties->direction.get().value(),
+                                               style->properties->writingMode.get().value(),
+                                               span.pathSpline.has_value());
+    span.textAnchor =
+        PhysicalTextAnchor(style->properties->textAnchor.get().value(), span.rightToLeftInline);
     span.textDecoration = style->properties->textDecoration.get().value();
     span.textOrientation = style->properties->textOrientation.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
@@ -2743,8 +2764,38 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
   return !glyph.visualOrder || (vertical ? glyph.yAdvance : glyph.xAdvance) != 0;
 }
 
+/// The current text position a chunk leaves for the next chunk without an absolute x.
+///
+/// Layout records every chunk origin as a left-to-right pen. A right-to-left chunk's pen instead
+/// runs leftward from its origin, so its actual pen end is one chunk width left of that origin;
+/// anchoring applies afterwards and does not move it. `recordedEnd` is the chunk's far edge as laid
+/// out left to right: the gap from it to the next recorded origin, less that chunk's authored
+/// shift, is trailing spacing, which a leftward pen places on the left. After a left-to-right
+/// chunk the next origin keeps its recorded offset, moved by `correction`, the distance between
+/// actual and recorded origins accumulated since the last absolute x.
+struct PenContinuation {
+  bool rightToLeft = false;
+  double penEnd = 0.0;
+  double recordedEnd = 0.0;
+  double correction = 0.0;
+
+  /// The actual origin of a following chunk recorded at \p recorded with authored shift
+  /// \p authored.
+  double originFor(double recorded, double authored) const {
+    if (!rightToLeft) {
+      return recorded + correction;
+    }
+    const double spacing = recorded - authored - recordedEnd;
+    return penEnd - spacing + authored;
+  }
+};
+
+/// Anchors one chunk. \p continuation, when set, moves the chunk's origin to the current text
+/// position the previous chunk left; on success \p next receives the position this chunk leaves.
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
-                     const AnchorExclusions& exclusions, double indent) {
+                     const AnchorExclusions& exclusions, double indent,
+                     const std::optional<PenContinuation>& continuation = std::nullopt,
+                     std::optional<PenContinuation>* next = nullptr) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
@@ -2761,6 +2812,10 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   if (range.begin.anchorPosition) {
     bounds.initial = *range.begin.anchorPosition;
   }
+  const double recorded = bounds.initial;
+  if (continuation) {
+    bounds.initial = continuation->originFor(recorded, range.begin.authoredShift);
+  }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
   finite &= std::isfinite(shift);
@@ -2774,38 +2829,67 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   }
   ForEachAnchorGlyph(runs, range,
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
+  if (next) {
+    // Anchoring applies last and never moves the current text position.
+    *next =
+        PenContinuation{range.begin.rightToLeft, bounds.initial - (bounds.maximum - bounds.minimum),
+                        bounds.maximum, bounds.initial - recorded};
+  }
   return true;
+}
+
+/// Gives each chunk the anchor and inline direction of the span holding its first glyph.
+void ResolveChunkStyles(const std::vector<TextRun>& runs,
+                        std::vector<ChunkBoundary>& chunkBoundaries,
+                        const components::ComputedTextComponent& text) {
+  for (auto& chunk : chunkBoundaries) {
+    for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
+      const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
+      if (begin < runs[ri].glyphs.size()) {
+        chunk.textAnchor = text.spans[ri].textAnchor;
+        chunk.rightToLeft = text.spans[ri].rightToLeftInline;
+        break;
+      }
+    }
+  }
+}
+
+/// Returns the first-line indent for the first chunk with glyphs, and zero for every other.
+double TakeFirstLineIndent(std::vector<TextRun>& runs, const TextAnchorRange& range,
+                           double& pendingIndent) {
+  if (pendingIndent == 0.0) {
+    return 0.0;
+  }
+  bool hasGlyph = false;
+  ForEachAnchorGlyph(runs, range, [&](const TextGlyph&, size_t) { hasGlyph = true; });
+  if (!hasGlyph) {
+    return 0.0;
+  }
+  return std::exchange(pendingIndent, 0.0);
 }
 
 /// Retain original chunk indices until all groups are validated, then compact each run once.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical,
                      const AnchorExclusions& exclusions, double firstLineIndent) {
-  for (auto& chunk : chunkBoundaries) {
-    for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
-      const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
-      if (begin < runs[ri].glyphs.size()) {
-        chunk.textAnchor = text.spans[ri].textAnchor;
-        break;
-      }
-    }
-  }
+  ResolveChunkStyles(runs, chunkBoundaries, text);
   std::vector<std::vector<bool>> rejected;
-  bool indentPending = firstLineIndent != 0.0;
+  double pendingIndent = firstLineIndent;
+  // A chunk without an absolute x continues from the current text position the previous chunk
+  // left, which differs from the recorded left-to-right pen once a right-to-left chunk ran.
+  std::optional<PenContinuation> continuation;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
     const ChunkBoundary end =
         ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
     const TextAnchorRange range{chunkBoundaries[ci], end};
-    double indent = 0.0;
-    if (indentPending) {
-      ForEachAnchorGlyph(runs, range, [&](const TextGlyph&, size_t) {
-        indent = firstLineIndent;
-        indentPending = false;
-      });
-    }
-    if (!AnchorTextRange(runs, range, vertical, exclusions, indent)) {
+    const double indent = TakeFirstLineIndent(runs, range, pendingIndent);
+    const bool continues = !vertical && !range.begin.absoluteX;
+    std::optional<PenContinuation> next;
+    if (!AnchorTextRange(runs, range, vertical, exclusions, indent,
+                         continues ? continuation : std::nullopt, &next)) {
       MarkRejectedAnchorRange(runs, range, rejected);
     }
+    continuation = next;
   }
   CompactRejectedAnchorGlyphs(runs, rejected);
 }
@@ -3660,8 +3744,9 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
 
   if (resourceManager->fontFaces().empty()) {
     for (auto view = registry_.view<components::StylesheetComponent>(); auto entity : view) {
-      resourceManager->synchronizeStylesheetFontFaces(
-          entity, view.get<components::StylesheetComponent>(entity).stylesheet.fontFaces());
+      const auto& stylesheet = view.get<components::StylesheetComponent>(entity);
+      resourceManager->synchronizeStylesheetFontFaces(entity, stylesheet.cascadeFontFaces(),
+                                                      stylesheet.fontFaceRevision);
     }
   }
   resourceManager->loadResources(outWarnings);
@@ -4240,6 +4325,7 @@ public:
     if (!input) {
       return reject();
     }
+    resolveParagraphDirection(params);
     if (!enabled) {
       return true;
     }
@@ -4276,6 +4362,19 @@ public:
     enabled = false;
     return true;
 #endif
+  }
+
+  /// Takes the paragraph level and override from the `<text>` element. A right-to-left base or an
+  /// override reorders even text whose characters are all left-to-right, so either one needs the
+  /// paragraph plan. Vertical lines keep a left-to-right base: their right-to-left layout is not
+  /// implemented.
+  void resolveParagraphDirection(const TextLayoutParams& params) {
+    if (isVertical(params.writingMode)) {
+      return;
+    }
+    paragraphBase_ = params.direction == Direction::Rtl ? 1 : 0;
+    paragraphOverride_ = params.bidiOverride;
+    enabled |= paragraphBase_ != 0 || paragraphOverride_;
   }
 
   /// The returned view aliases immutable storage alive through this invocation.
@@ -4335,6 +4434,10 @@ public:
   BidiResourceBudget budget;
   TextBackend::ShapingContext::WorkBudget work{0, 0};
   bool enabled = false;
+  /// Explicit base level of every paragraph: 1 for an `rtl` horizontal `<text>`.
+  uint8_t paragraphBase_ = 0;
+  /// Whether the `<text>` element overrides every character to the base level.
+  bool paragraphOverride_ = false;
   std::string source;
   std::vector<Span> spans;
   std::vector<Character> characters;
@@ -4433,7 +4536,8 @@ private:
     for (size_t index = paragraph.first; index < paragraph.end; ++index) {
       codepoints.push_back(characters[index].codepoint);
     }
-    auto resolved = BidiParagraph::Analyze(std::move(codepoints), budget);
+    auto resolved = BidiParagraph::Analyze(std::move(codepoints), budget, paragraphBase_,
+                                           /*forceAnalysis=*/false, paragraphOverride_);
     if (!resolved) {
       return false;
     }
@@ -6445,6 +6549,7 @@ private:
       state.initialInlineDisplacement = spanStartInlineDisplacement(state);
       consumeSpanStartPositions(state);
       chunkBoundaries_.push_back({runs_.size(), 0, span.textAnchor, absoluteX, absoluteY});
+      chunkBoundaries_.back().authoredShift = state.initialInlineDisplacement;
     }
   }
 
@@ -7504,6 +7609,7 @@ private:
     });
     const auto& firstVisual = bidiPlacements_[order.front()];
     chunkBoundaries_.back().visualFirstGlyph = std::pair(firstVisual.run, firstVisual.glyph);
+    chunkBoundaries_.back().authoredShift = vertical ? initial.dy : initial.dx;
   }
 
   double bidiCrossSpanKern(const BidiPlacement& item, std::optional<size_t> previous) const {
@@ -7670,6 +7776,8 @@ private:
           {item.run, item.glyph, span.textAnchor, x.has_value(), y.has_value(),
            isVertical(params_.writingMode) ? pen.y + source.dy : pen.x + source.dx});
       chunkBoundaries_.back().visualFirstGlyph = std::pair(item.run, item.glyph);
+      chunkBoundaries_.back().authoredShift =
+          isVertical(params_.writingMode) ? source.dy : source.dx;
     }
     return {x.has_value(), y.has_value()};
   }

@@ -146,6 +146,48 @@ ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> component
   return err;
 }
 
+ParseResult<Direction> ParseDirection(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("ltr")) {
+        return Direction::Ltr;
+      } else if (ident->value.equalsLowercase("rtl")) {
+        return Direction::Rtl;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid direction value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<UnicodeBidi> ParseUnicodeBidi(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      constexpr std::pair<std::string_view, UnicodeBidi> kKeywords[] = {
+          {"normal", UnicodeBidi::Normal},
+          {"embed", UnicodeBidi::Embed},
+          {"isolate", UnicodeBidi::Isolate},
+          {"bidi-override", UnicodeBidi::BidiOverride},
+          {"isolate-override", UnicodeBidi::IsolateOverride},
+          {"plaintext", UnicodeBidi::Plaintext},
+      };
+      for (const auto& [keyword, value] : kKeywords) {
+        if (ident->value.equalsLowercase(keyword)) {
+          return value;
+        }
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid unicode-bidi value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -861,7 +903,7 @@ ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> com
   }
 
   ParseDiagnostic err;
-  err.reason = "Invalid display value";
+  err.reason = "Invalid visibility value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
@@ -2734,6 +2776,24 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.whiteSpace);
                  }},
+                {"direction",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseDirection(params.components());
+                       },
+                       &registry.direction);
+                 }},  //
+                {"unicode-bidi",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseUnicodeBidi(params.components());
+                       },
+                       &registry.unicodeBidi);
+                 }},  //
                 {"text-anchor",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
