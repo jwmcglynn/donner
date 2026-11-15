@@ -1389,8 +1389,8 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
   const uint64_t bufferPixels =
       static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
   const GeodeBackdropCapture backdrop = PlanGeodeBackdropCapture(filterGraph, result.plan);
-  result.captureBytes = bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes +
-                        backdrop.bytes;
+  result.captureBytes =
+      bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes + backdrop.bytes;
   uint64_t graphWork = 0;
   result.costKnown = components::FilterGraphExecutionCost(
       filterGraph, result.bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, graphWork,
@@ -1399,8 +1399,8 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
     components::GpuFilterWorkingSet layout;
     (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
     const bool tiled = result.bounds.executions > 1;
-    result.surfaces = layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0) +
-                      backdrop.surfaces;
+    result.surfaces =
+        layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0) + backdrop.surfaces;
     result.surfaces +=
         std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
           return std::holds_alternative<components::filter_primitive::Image>(node.primitive);

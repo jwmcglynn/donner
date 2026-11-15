@@ -1853,9 +1853,9 @@ std::string BackdropArtifactName(std::string_view prefix, std::string_view step)
 void ExpectComposedFrameMatchesFullRender(DualPathVerifier& verifier,
                                           const RenderViewport& viewport, std::string_view step) {
   (void)verifier.renderAndVerify(viewport);
-  editor::tests::CompareBitmapToBitmap(
-      verifier.compositorSnapshot(), verifier.referenceSnapshot(),
-      BackdropArtifactName("backdrop_frame", step), editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(verifier.compositorSnapshot(), verifier.referenceSnapshot(),
+                                       BackdropArtifactName("backdrop_frame", step),
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 struct BackdropFilterCase {
