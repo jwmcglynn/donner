@@ -1051,10 +1051,15 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
 }
 
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
+  return getShapeBoundsIn(handle, Transform2d());
+}
+
+std::optional<Box2d> ShapeSystem::getShapeBoundsIn(EntityHandle handle,
+                                                   const Transform2d& targetFromEntity) {
   const Transform2d outerEntityFromWorld =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
 
-  return getTransformedShapeBounds(handle, outerEntityFromWorld);
+  return getTransformedShapeBounds(handle, outerEntityFromWorld * targetFromEntity);
 }
 
 std::optional<Box2d> ShapeSystem::getStrokeBounds(EntityHandle handle) {
