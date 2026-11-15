@@ -1544,7 +1544,7 @@ jobs:
         run: |
           set -euo pipefail
           should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"
-          for target in chromium_remote_smoke catalog_font_loading_test browser_presentation_regression_test standalone_geode_browser_renderer_test; do
+          for target in standalone_geode_browser_renderer_test; do
             log="bazel-testlogs/donner/editor/wasm/tests/${target}/test.log"
             if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
               should_probe=true
