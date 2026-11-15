@@ -107,18 +107,50 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
   text = RcString(str);
   sourceMap = std::move(newSourceMap);
   stylesheet = donner::css::parser::StylesheetParser::Parse(str, warnings);
+  importedStylesheets.clear();
+  combinedFontFaces.clear();
+  importGeneration.reset();
+  ++fontFaceRevision;
 
   // Every path that loads or mutates a stylesheet ends here, so recomputing the cache alongside
   // the parse keeps it from going stale.
+  rebuildSelectorCaches();
+}
+
+void StylesheetComponent::setImportedStylesheets(std::vector<css::Stylesheet>&& imported,
+                                                 std::uint64_t generation) {
+  importedStylesheets = std::move(imported);
+  importGeneration = generation;
+  ++fontFaceRevision;
+
+  combinedFontFaces.clear();
+  for (const css::Stylesheet& sheet : importedStylesheets) {
+    combinedFontFaces.insert(combinedFontFaces.end(), sheet.fontFaces().begin(),
+                             sheet.fontFaces().end());
+  }
+  if (!combinedFontFaces.empty()) {
+    combinedFontFaces.insert(combinedFontFaces.end(), stylesheet.fontFaces().begin(),
+                             stylesheet.fontFaces().end());
+  }
+  rebuildSelectorCaches();
+}
+
+void StylesheetComponent::rebuildSelectorCaches() {
   attributeSelectorNames.clear();
   attributeSelectorMatchesAnyName = false;
   selectorsDependOnTextContent = false;
-  for (const css::SelectorRule& rule : stylesheet.rules()) {
-    rule.selector.collectAttributeSelectorNames(attributeSelectorNames,
-                                                attributeSelectorMatchesAnyName);
-    selectorsDependOnTextContent =
-        selectorsDependOnTextContent || rule.selector.dependsOnTextContent();
+  const auto addRules = [this](const css::Stylesheet& sheet) {
+    for (const css::SelectorRule& rule : sheet.rules()) {
+      rule.selector.collectAttributeSelectorNames(attributeSelectorNames,
+                                                  attributeSelectorMatchesAnyName);
+      selectorsDependOnTextContent =
+          selectorsDependOnTextContent || rule.selector.dependsOnTextContent();
+    }
+  };
+  for (const css::Stylesheet& sheet : importedStylesheets) {
+    addRules(sheet);
   }
+  addRules(stylesheet);
 }
 
 }  // namespace donner::svg::components

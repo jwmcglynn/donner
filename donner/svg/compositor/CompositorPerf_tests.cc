@@ -8,7 +8,6 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComplexityBucketer.h"
 #include "donner/svg/compositor/CompositorController.h"
-#include "donner/svg/compositor/DragSession.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
@@ -104,8 +103,7 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_1kNodes) {
   ASSERT_TRUE(target.has_value());
   const Entity entity = target->unsafeEntityHandle().entity();
 
-  auto drag = DragSession::begin(compositor, entity);
-  ASSERT_TRUE(drag.has_value());
+  ASSERT_TRUE(compositor.promoteEntity(entity));
 
   RenderViewport viewport;
   viewport.size = Vector2d(1000, 1000);
@@ -181,8 +179,7 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
   ASSERT_TRUE(target.has_value());
   const Entity entity = target->unsafeEntityHandle().entity();
 
-  auto drag = DragSession::begin(compositor, entity);
-  ASSERT_TRUE(drag.has_value());
+  ASSERT_TRUE(compositor.promoteEntity(entity));
 
   RenderViewport viewport;
   viewport.size = Vector2d(1000, 1000);

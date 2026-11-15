@@ -43,7 +43,6 @@ donner_perf_sensitive_cc_library(
         "CompositorControllerInternal.cc",
         "CompositorControllerRasterize.cc",
         "CompositorLayer.cc",
-        "DragSession.cc",
         "LayerResolver.cc",
         "MandatoryHintDetector.cc",
         "ScopedCompositorHint.cc",
@@ -55,7 +54,6 @@ donner_perf_sensitive_cc_library(
         "CompositorHintComponent.h",
         "CompositorLayer.h",
         "ComputedLayerAssignmentComponent.h",
-        "DragSession.h",
         "LayerResolver.h",
         "MandatoryHintDetector.h",
         "ScopedCompositorHint.h",
@@ -116,27 +114,6 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/resources:resource_loader_interface",
-        "//donner/svg/tests:parser_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "drag_session_tests",
-    srcs = [
-        "DragSession_tests.cc",
-    ],
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
-    variants = [
-        "tiny",
-        "text_full",
-        "geode",
-    ],
-    deps = [
-        ":compositor",
-        "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

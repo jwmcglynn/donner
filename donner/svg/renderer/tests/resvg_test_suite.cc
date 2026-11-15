@@ -516,8 +516,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"in=FillPaint.svg", Params::UndefinedBehavior("in=FillPaint")},
                 {"in=StrokePaint.svg", Params::UndefinedBehavior("in=StrokePaint")},
                 {"on-the-root-svg.svg", Params::UndefinedBehavior("Filter on the root `svg`")},
-                {"transform-on-shape-with-filter-region.svg",
-                 Params::Skip("Bug: We don't blur the right edge")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-1.svg",
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-2.svg",
@@ -1182,8 +1180,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/style",
                 {
-                    {"external-CSS.svg",
-                     Params::Skip("Not impl: CSS @import loading (diagnosed and ignored)")},
                     {"non-presentational-attribute.svg",
                      Params::DeprecatedInSVG2("<svg version=\"1.1\"> semantics (the version "
                                               "attribute is removed in SVG 2)")},
@@ -1339,8 +1335,11 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/direction",
                 {
                     {"rtl-with-vertical-writing-mode.svg",
-                     Params::Skip("Not impl: direction property (BiDi text shaping)")},
-                    {"rtl.svg", Params::Skip("Not impl: direction property (BiDi text shaping)")},
+                     Params::UndefinedBehavior("rtl with vertical writing-mode (svgwg#618)")},
+                    {"rtl.svg",
+                     Params::Skip("Reference disagreement: the reference shapes Arabic with Noto "
+                                  "Sans Arabic, which the test fonts lack; Donner falls back to "
+                                  "Amiri. Order, anchoring and the Latin run match")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1750,7 +1749,9 @@ INSTANTIATE_TEST_SUITE_P(
                      0.89f, kDefaultMismatchedPixels,
                      "Checkerboard exposes background convention; measured minimal")},
                 {"closed-path.svg", Params::WithThreshold(0.1f, 400, "Minor AA diffs")},
-                {"complex.svg", Params::Skip("Deferred: vertical + circular path")},
+                {"complex.svg",
+                 Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "
+                                           "on a circular path")},
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
@@ -1846,7 +1847,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // glyphs). The unfiltered comparisons pass because pixelmatch excludes
                 // anti-aliased edge pixels, while a Gaussian blur spreads the missing coverage
                 // into the glyph interiors, where it is counted.
-                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
+                {"with-filter.svg",
+                 Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
+                              "5% lighter than the reference's, which only a blur makes visible "
+                              "away from the glyph edges")},
                 {"with-invalid-path-and-xlink-href.svg",
                  Params::Skip("Reference disagrees with the corpus: after invalid `path` is "
                               "ignored, relative `xlink:href=\"path1\"` names an external "
@@ -1871,9 +1875,16 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
                      .withReason("Minor char")},
+                // Upright glyphs take the font's vmtx vertical origin, 860 units below the cell
+                // top; the reference centers the hhea ascent/descent box instead (877.5 units).
+                // Both text backends differ by 215-219 px. With the reference's origin the diff
+                // is 77 px, inside the default 100 px every row allows, so the extra allowance
+                // covers only the origin model.
                 {"writing-mode=tb.svg",
-                 Params::Skip("Vertical path frames are implemented; upright CJK glyph origins "
-                              "still differ between the simple/full backends and the reference")},
+                 Params::WithThreshold(kDefaultThreshold, 250,
+                                       "Larger threshold due to reference disagreement: vmtx "
+                                       "upright origin vs hhea-centered cell, 0.0175em per glyph")
+                     .setCanvasSize(300, 300)},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1917,7 +1928,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // Same cause as text/textPath/with-filter.svg: the span filter applies, but
                 // Donner's glyph coverage is about 5% lighter than the reference's, which only
                 // a blur makes visible away from the glyph edges.
-                {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
+                {"with-filter.svg",
+                 Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
+                              "5% lighter than the reference's, which only a blur makes visible "
+                              "away from the glyph edges")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1928,7 +1942,10 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params::Skip("Not impl: unicode-bidi property (BiDi override)")},
+                     Params::Skip("Override order, script runs and Arabic joining match the "
+                                  "reference; Latin glyphs sit up to 1.5 px from the reference "
+                                  "individually (not kerning), leaving 122 px on the full tier")
+                         .onlyTextFull()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1968,9 +1985,9 @@ INSTANTIATE_TEST_SUITE_P(
                      .onlyTextFull()},
                 {"mixed-languages-with-tb.svg", Params().setCanvasSize(300, 300).onlyTextFull()},
                 {"tb-and-punctuation.svg",
-                 Params::Skip("#1172: punctuation forms and spacing match; upright glyphs sit "
-                              "0.026em lower (vhea ascender origin vs resvg centering on "
-                              "hhea ascent/descent), 371 px")
+                 Params::Skip("Accepted difference (2026-11-13): punctuation forms and spacing "
+                              "match; upright glyphs sit 0.026em lower (vhea ascender origin vs "
+                              "resvg centering on hhea ascent/descent), 371 px")
                      .setCanvasSize(300, 300)
                      .onlyTextFull()},
                 {"tb-rl.svg", Params().setCanvasSize(300, 300)},
