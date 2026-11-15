@@ -12,7 +12,7 @@ The reader accepts only a subset of YAML whose values it never has to interpret,
 everything else, so logic cannot grow in a form it would measure as zero:
 - block mappings with plain keys, and block sequences;
 - one-line scalars: plain, single-quoted, or double-quoted without any backslash;
-- literal or folded block scalars with default indentation (`|`, `|-`, `>`, `>-`);
+- literal block scalars, and folded ones of plain lines, with default indentation (`|`, `>`);
 - flat flow sequences (and `{}`) only as the value of the keys in FLOW_KEYS, never naming
   `run`, `if` or `uses`. A test checks the extracted values against a YAML parser.
 """
@@ -110,14 +110,27 @@ def _block_body(lines, start, indent):
     return lines[start + 1:end], end
 
 
-def _decode_block(kind, body):
+def _fold(body, width, where):
+    """A folded block's lines joined as YAML folds plain text lines: with single spaces."""
+    if any(not line.strip() or _indent(line) != width or line != line.rstrip() for line in body):
+        raise ValueError("%s: folded block scalar with blank, more-indented or trailing-space "
+                         "lines" % where)
+    return " ".join(line[width:] for line in body)
+
+
+def _decode_block(kind, body, where):
+    """A `run:` or `if:` block scalar's value. A folded one is read only when every line is a
+    plain text line at the block's indentation."""
     content = [line for line in body if line.strip()]
     if not content:
         return ""
-    width = min(_indent(line) for line in content)
-    text = "\n".join(line[width:] for line in body)
+    width = _indent(content[0])
+    if any(_indent(line) < width for line in content):
+        raise ValueError("%s: block scalar line indented less than its first line" % where)
     if kind.startswith("block>"):
-        text = " ".join(text.split())
+        text = _fold(body, width, where)
+    else:
+        text = "\n".join(line[width:] for line in body)
     return text if kind.endswith("-") else text + "\n"
 
 
@@ -162,7 +175,7 @@ def entries(text):
         body, end = [], index + 1
         if kind.startswith("block"):
             body, end = _block_body(lines, index, column)
-            value = _decode_block(kind, body)
+            value = _decode_block(kind, body, where) if key in ("run", "if") else ""
         elif kind != "empty" and _continues(lines, index, column):
             raise ValueError("%s: value that continues on a following line" % where)
         yield Entry(key, kind, raw, value, body)
@@ -223,8 +236,8 @@ def _parsed_values(node):
 
 
 def _comparable(key, value):
-    """A value as both readers agree on it: `if:` expressions compare up to whitespace."""
-    return key, " ".join(value.split()) if key == "if" else value
+    """A value as both readers must agree on it: exactly."""
+    return key, value
 
 
 def measure_tree(root):
@@ -309,6 +322,11 @@ _STEP_FORMS = (
     ("- run: |-\n    echo ${{ a }}\n    echo \\\" b", {"multiline_runs": 1, "longest_run": 2,
                                                          "run_expressions": 1}),
     ("- if: >\n    a &&\n    b", {"longest_if": len("a && b")}),
+    ("- run: >-\n    echo \"a  b\"\n    echo c", {"multiline_runs": 1, "longest_run": 2}),
+    ("- run: >-\n    echo a\n\n    echo b", REJECTED),
+    ("- run: >\n    echo a\n      more\n    echo b", REJECTED),
+    ("- run: >\n    echo a \n    echo b", REJECTED),
+    ("- run: |\n      echo a\n    echo b", REJECTED),
     ("- run: |2\n    echo hi", REJECTED),
     ("- run: |+\n    echo hi", REJECTED),
     ("- run: >+\n    echo hi", REJECTED),
@@ -336,6 +354,8 @@ class _SnippetGenerator:
     """Small step snippets from a fixed seed, each with the run: and if: values it holds when it
     is in the reader's subset, or None when it uses a form outside it."""
 
+    # A form outside the subset only as a run: or if: value: other keys' block values are not read.
+    LOGIC_ONLY = object()
     _WORDS = ("echo", "a", "${{ inputs.x }}", "x{y}", "[z]", "a:b", "c#d", "'q'", "$HOME")
     _QUOTED_WORDS = ("${{ b }}", "' # '", "{run: x}", "[if: y]", "a: b", "#", "\\d")
 
@@ -357,14 +377,16 @@ class _SnippetGenerator:
             lambda: (['"%s"%s' % (quoted.replace("\\", ""), comment)], quoted.replace("\\", "")),
             lambda: (['"%s%s"' % (self._random.choice(_DOUBLE_QUOTE_ESCAPES), quoted)], None),
             lambda: (["|", "  " + words, "  " + quoted], words + "\n" + quoted + "\n"),
-            lambda: ([">-", "  " + words, "  " + more], words + " " + more),
+            lambda: ([">-", "  " + words, "  " + more.replace(" ", "  ")],
+                     words + " " + more.replace(" ", "  ")),
+            lambda: ([">", "  " + words, "", "  " + more], self.LOGIC_ONLY),
             lambda: (["|2", "  " + words], None),
             lambda: ([words, "    " + more], None),
             lambda: (["{a: %s}" % words.replace(",", "")], None),
             lambda: (["'%s" % quoted, "  end'"], None),
         )
         # Forms in the subset come up twice as often as each form outside it.
-        return forms[self._random.choice((0, 0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 7, 8, 9))]()
+        return forms[self._random.choice((0, 0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10))]()
 
     def snippet(self):
         """(text, [(key, value)] or None)."""
@@ -374,7 +396,9 @@ class _SnippetGenerator:
             value_lines, value = self._value()
             lines.append("      - %s: %s" % (key, value_lines[0]))
             lines += ["          " + line for line in value_lines[1:]]
-            if key[0] in "'\"" or value is None or values is None:
+            if value is self.LOGIC_ONLY and key in ("name",):
+                continue
+            if key[0] in "'\"" or value is None or value is self.LOGIC_ONLY or values is None:
                 values = None
             elif key in ("run", "if"):
                 values.append((key, value))
