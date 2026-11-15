@@ -2,8 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <ostream>
+#include <span>
 #include <string>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -164,6 +167,27 @@ TEST(BoxEq, Failure) {
                                            Box2d(Vector2d(1.0, 2.1), Vector2d(3.1, 4.1)),
                                            &resultListener));
   EXPECT_EQ(resultListener.str(), "");
+}
+
+TEST(BytesEqual, Success) {
+  const std::vector<uint8_t> bytes = {0, 1, 2, 255};
+  EXPECT_THAT(std::span<const uint8_t>(bytes), BytesEqual(bytes));
+  EXPECT_THAT(bytes, BytesEqual(std::vector<uint8_t>{0, 1, 2, 255}));
+  EXPECT_THAT(std::vector<uint8_t>(), BytesEqual(std::vector<uint8_t>()));
+  EXPECT_THAT(bytes, BytesEqual(std::span<const uint8_t>(bytes)));
+}
+
+TEST(BytesEqual, Failure) {
+  const std::vector<uint8_t> expected = {0, 1, 2, 255};
+  testing::StringMatchResultListener resultListener;
+  EXPECT_FALSE(testing::ExplainMatchResult(BytesEqual(expected), std::vector<uint8_t>{0, 1, 2},
+                                           &resultListener));
+  EXPECT_EQ(resultListener.str(), "has 3 bytes, expected 4");
+
+  resultListener.Clear();
+  EXPECT_FALSE(testing::ExplainMatchResult(BytesEqual(expected), std::vector<uint8_t>{0, 1, 7, 255},
+                                           &resultListener));
+  EXPECT_EQ(resultListener.str(), "first differs at byte 2: 7 vs expected 2");
 }
 
 }  // namespace donner

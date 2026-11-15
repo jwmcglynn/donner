@@ -133,8 +133,17 @@ common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 common:geode --//donner/svg/renderer:renderer_backend=geode
 common:geode --//donner/svg/renderer/geode:enable_geode=true
 # A local hardware adapter is process-global. Keep explicit Geode suites
-# serial so independent test processes cannot cascade one device loss.
+# serial so independent test processes cannot cascade one device loss. Under
+# this config every renderer test uses Geode, including tests that do not
+# declare the local GPU resource below, so the whole suite stays serial.
 test:geode --local_test_jobs=1
+# The local GPU resource. Each test that opens a GPU device takes one unit
+# (LOCAL_GPU_TEST_TAG in build_defs/rules.bzl), so with one unit at most one
+# GPU-opening test runs locally at a time, alongside CPU-only tests. Every
+# command needs it declared: Bazel fails a local test that requests a resource
+# it does not track. Do not raise it above 1 without a reviewed reason;
+# //build_defs:geode_test_scheduling_tests enforces this.
+build --local_resources=local_gpu=1
 common:dev --//build_defs:disable_backend_test_transition=true
 # Disable forced opt compilation of perf-sensitive deps to avoid
 # cross-configuration link conflicts.  Use: --config=no-perf-opt
@@ -266,6 +275,14 @@ test --test_env=DONNER_CI_XCODE_IDENTITY
 # affect action keys. //tools:macos_cache_key_parity_tests enforces this.
 build:ci-macos --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 build:ci-macos --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# Tests get a HOME that is the same in every test key. Passing the client's HOME through copied
+# each runner's own home directory into every test key, so runners of one lane with different
+# home directories never reused each other's cached test results. Bazel's test setup
+# (tools/test/test-setup.sh) replaces a HOME that is not an absolute path with the test's
+# TEST_TMPDIR, the value the Bazel test encyclopedia recommends, so every test still runs with
+# HOME set: to a writable directory private to that test. Declared on `build` so the build and
+# test commands keep one analysis cache (see the --test_env note below).
+build:ci-macos --test_env=HOME=
 
 # apple_support's clang wrapper expects DEVELOPER_DIR. The local Darwin
 # sandbox sets it implicitly; remote execution does not. SDKROOT must NOT be
@@ -627,13 +644,16 @@ common:ci --nobuild_event_text_file_path_conversion
 # only in the Fuzz workflow; the `{fuzzer}` corpus replay stays on the PR gate.
 test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak
 
-# Main's GitHub-hosted macOS CI job runs on a 3 CPU, 7168 MiB virtual machine, where Bazel's
-# defaults are --jobs=HOST_CPUS and a HOST_RAM*.67 memory budget, with --local_test_jobs following
-# the CPU budget. `hosted-macos` states those scheduling values for a faster host. They change no
-# action key.
-build:hosted-macos --jobs=3
-build:hosted-macos --local_resources=cpu=3
-build:hosted-macos --local_resources=memory=4802
+# The self-hosted macOS VM CI job (`macos-self-hosted`) bounds locally executed actions to 6 CPUs
+# and 6144 MiB. --jobs is deliberately higher: it caps every action in flight, and an action holds
+# its job slot through its remote cache lookup and input downloads, before it asks for local CPU
+# and memory. With --jobs equal to the CPU budget, a mostly cached build waits on cache round
+# trips six at a time. Local actions, tests included (--local_test_jobs defaults to following
+# --local_resources), still wait for the CPU and memory budget, so the higher --jobs runs no more
+# local work at once. They change no action key.
+build:macos-vm --jobs=32
+build:macos-vm --local_resources=cpu=6
+build:macos-vm --local_resources=memory=6144
 
 # Browser cases quarantined on main's hosted macOS job only (#1691, #1702): their GPU work can miss
 # its budget on that runner. Only the jobs that reproduce that job's test environment pass it;
@@ -644,24 +664,6 @@ test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1
 # Metal device tests run there with API validation only (docs/metal_validation.md). It changes
 # only those tests' environment, not any build action. Every other lane keeps shader validation.
 test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off
-
-# Runs tests at roughly main's hosted macOS speed on a faster self-hosted host: the hosted
-# scheduling values and a launcher that holds each test to roughly the hosted runner's CPU
-# capacity (//tools/ci:hosted_parity_throttle). `hosted-parity` adds the hosted-only quarantine,
-# for tests that read it. Trusted pull requests run them in the macos-hosted-parity CI job.
-# Not reproduced: the hosted runner's GPU, memory limit, disk and runner faults; the throttle
-# only stretches CPU time, by a factor calibrated on macOS.
-test:hosted-parity-runtime --config=hosted-macos
-test:hosted-parity-runtime --run_under=//tools/ci:hosted_parity_throttle
-test:hosted-parity --config=hosted-parity-runtime
-test:hosted-parity --config=hosted-macos-quarantine
-
-# The runner-sensitive subset: tests tagged `hosted_parity` (timing, frame, readiness and
-# display-scale tests and host-tool probes), with main's hosted macOS tag filters.
-# `bazel test --config=hosted-parity-subset //...` runs what the CI lane runs.
-test:hosted-parity-subset --config=hosted-parity
-test:hosted-parity-subset --build_tests_only
-test:hosted-parity-subset --test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled

@@ -1563,7 +1563,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGPatternElement>(SVGParserContex
       element.setPatternContentUnits(PatternContentUnits::ObjectBoundingBox);
     } else {
       ParseDiagnostic err;
-      err.reason = "Invalid patternUnits value '" + std::string(value) + "'";
+      err.reason = "Invalid patternContentUnits value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
   } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {

@@ -4,18 +4,15 @@ const { browserExecutablePaths } = require("./prepare-browser-archives.js");
 const { firefoxLaunchOptions } = require("./firefox-launch-env.cjs");
 const executables = browserExecutablePaths(process.env);
 
+// Firefox only: the Editor WASM workflow's chromium-default lane runs every Chromium case of
+// smoke.spec.ts, these included, so this lane runs the cases no other lane runs in Firefox.
 module.exports = {
   ...base,
   use: {},
+  // The archives prepare-browser-archives.js extracts before any case: only the browser run here.
+  metadata: { pinnedBrowsers: ["firefox"] },
   globalSetup: require.resolve("./prepare-browser-archives.js"),
   projects: [
-    {
-      name: "chromium-animation",
-      use: {
-        ...base.use,
-        launchOptions: { ...base.use.launchOptions, executablePath: executables.chromium },
-      },
-    },
     {
       name: "firefox-animation",
       timeout: 90000,

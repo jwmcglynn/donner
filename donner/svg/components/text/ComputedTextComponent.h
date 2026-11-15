@@ -307,6 +307,10 @@ struct ComputedTextComponent {
     /// each text chunk uses the text-anchor of its first rendered character's element.
     /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
     TextAnchor textAnchor = TextAnchor::Start;
+    /// Whether this span's inline progression runs right to left: `direction: rtl` on a
+    /// horizontal line that is not on a path. Its chunks anchor from their right edge, and the
+    /// current text position after them is their left edge.
+    bool rightToLeftInline = false;
 
     /// Whitespace policy resolved when source text is normalized.
     WhiteSpace whiteSpace = WhiteSpace::Normal;

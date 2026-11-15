@@ -75,6 +75,16 @@ type ProbeGlobal = typeof globalThis & {
   __donnerSurfaceFrameProbeGpuDelay?: CanvasGpuDelayState;
   /** Waits until the GPU has run every canvas write, with none submitted meanwhile. */
   __donnerSurfaceFrameProbeSettle?: () => Promise<CanvasSettleResult>;
+  /**
+   * Test-only fault injection: when set, the next self-check consumes it and writes one more canvas
+   * frame, inside that frame's own acquiring task, between the end of the self-check frame's task
+   * and its late write, as the editor's live frame loop can.
+   */
+  __donnerSurfaceFrameProbeSelfCheckConcurrentFrame?: true;
+  /** The probe's record of one canvas frame: its ordinal and its writes inside its own task. */
+  __donnerSurfaceFrameProbeFrameOf?: (
+    texture: GPUTexture,
+  ) => { frame: number; submitsBeforeTaskEnd: number } | null;
 };
 
 /** One wait for the GPU to finish the canvas writes submitted so far. */
@@ -158,6 +168,12 @@ function installInWorker(): boolean {
   };
   scope.__donnerSurfaceFrameProbeNextTask = () =>
     new Promise<void>((resolve) => afterThisTask(resolve));
+  scope.__donnerSurfaceFrameProbeFrameOf = (texture: GPUTexture) => {
+    const record = frames.get(texture);
+    return record === undefined
+      ? null
+      : { frame: record.frame, submitsBeforeTaskEnd: record.submitsBeforeTaskEnd };
+  };
 
   const getCurrentTexture = GPUCanvasContext.prototype.getCurrentTexture;
   GPUCanvasContext.prototype.getCurrentTexture = function(this: GPUCanvasContext) {
@@ -448,15 +464,28 @@ function installInWorker(): boolean {
   return true;
 }
 
+/**
+ * What a self-check reports: its frame's late and in-task writes, and how many concurrent frames it
+ * wrote when the injection was armed; or why it could not run.
+ */
+type SelfCheckAnswer = { late: number; inTask: number; written?: number } | string;
+
 // Runs inside a worker that already has the probe installed. Writes a scratch
 // canvas frame in the task that acquired it, again from a microtask of that
 // same task, and once more after that task has ended; reads it once late as
 // well. Only the third write is the ordering the probe exists to report.
-async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | string> {
+// The worker's own frame loop keeps running across the self-check's task
+// boundary, so only the scratch frame's own writes are counted: the worker-wide
+// counters would also count any editor frame that lands in that window.
+async function selfCheckInWorker(): Promise<SelfCheckAnswer> {
   const scope = globalThis as ProbeGlobal;
   const state = scope.__donnerSurfaceFrameProbe;
   const nextTask = scope.__donnerSurfaceFrameProbeNextTask;
-  if (!state?.installed || nextTask === undefined) {
+  const frameOf = scope.__donnerSurfaceFrameProbeFrameOf;
+  // Consumed here, so an answer that misses its bound cannot leave the next self-check armed.
+  const injectConcurrentFrame = scope.__donnerSurfaceFrameProbeSelfCheckConcurrentFrame === true;
+  delete scope.__donnerSurfaceFrameProbeSelfCheckConcurrentFrame;
+  if (!state?.installed || nextTask === undefined || frameOf === undefined) {
     return "probe not installed";
   }
   const adapter = await navigator.gpu?.requestAdapter();
@@ -464,18 +493,11 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
     return "no adapter";
   }
   const device = await adapter.requestDevice();
-  const canvas = new OffscreenCanvas(16, 16);
-  const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
-  if (context === null) {
-    return "no webgpu canvas context";
-  }
-  context.configure({
-    device,
-    format: navigator.gpu.getPreferredCanvasFormat(),
-    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-  });
-  const lateBefore = state.lateSubmits.length;
-  const inTaskBefore = state.inTaskSubmits;
+  const configureCanvas = (usage: number): GPUCanvasContext | null => {
+    const context = new OffscreenCanvas(16, 16).getContext("webgpu") as GPUCanvasContext | null;
+    context?.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), usage });
+    return context;
+  };
   const clear = (texture: GPUTexture) => {
     const encoder = device.createCommandEncoder();
     encoder.beginRenderPass({
@@ -489,18 +511,46 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
     encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, [16, 16]);
     device.queue.submit([encoder.finish()]);
   };
-  const frame = context.getCurrentTexture();
-  clear(frame);
-  await Promise.resolve();
-  clear(frame);
-  await nextTask();
-  clear(frame);
-  readBack(frame);
-  device.destroy();
-  return {
-    late: state.lateSubmits.length - lateBefore,
-    inTask: state.inTaskSubmits - inTaskBefore,
-  };
+  // Queued before the self-check's own next task, so its frame lands between the two: after the
+  // self-check frame's task has ended and before that frame's late write.
+  const writeConcurrentFrame = () =>
+    nextTask().then((): string | null => {
+      const other = configureCanvas(GPUTextureUsage.RENDER_ATTACHMENT);
+      if (other === null) {
+        return "no webgpu canvas context for the concurrent frame";
+      }
+      clear(other.getCurrentTexture());
+      return null;
+    });
+  try {
+    const context = configureCanvas(GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC);
+    if (context === null) {
+      return "no webgpu canvas context";
+    }
+    const frame = context.getCurrentTexture();
+    const ordinal = frameOf(frame)?.frame;
+    if (ordinal === undefined) {
+      return "the probe did not record the scratch frame";
+    }
+    clear(frame);
+    await Promise.resolve();
+    clear(frame);
+    const concurrentFrame = injectConcurrentFrame ? writeConcurrentFrame() : null;
+    await nextTask();
+    const concurrentFailure = await concurrentFrame;
+    if (concurrentFailure) {
+      return concurrentFailure;
+    }
+    clear(frame);
+    readBack(frame);
+    const counts = {
+      late: state.lateSubmits.filter((submit) => submit.frame === ordinal).length,
+      inTask: frameOf(frame)?.submitsBeforeTaskEnd ?? 0,
+    };
+    return injectConcurrentFrame ? { ...counts, written: 1 } : counts;
+  } finally {
+    device.destroy();
+  }
 }
 
 function readInWorker(): WorkerProbeState | null {
@@ -575,13 +625,48 @@ export async function expectSurfaceFrameProbeReady(page: Page): Promise<void> {
  * in-task, one write after the task ended counts as late, and a late read
  * counts as neither, so a working probe answers `{ late: 1, inTask: 2 }`. The
  * scratch canvas and device are the probe's own, so the editor's frames are
- * untouched.
+ * untouched, and the counts are the scratch frame's alone, so editor frames
+ * drawn while the self-check runs do not change them. Its own late write
+ * stays in the worker-wide `lateSubmits`, so a later check of that list must
+ * allow for it.
  */
 export async function selfCheckSurfaceFrameProbe(
   page: Page,
 ): Promise<Array<{ late: number; inTask: number } | string | null>> {
   // Requesting a scratch device takes longer than reading the probe's state.
   return evaluateInWorkers(probeRegistry.workers(page), selfCheckInWorker, 4 * kWorkerAnswerMs);
+}
+
+/**
+ * Run \ref selfCheckSurfaceFrameProbe in the editor's canvas owner with one more canvas frame
+ * written inside its window, the way the editor's live frame loop can write one. Only the owner is
+ * asked, so a parked worker that never answers cannot hold the call. Finding the owner, arming it
+ * and the self-check share one \p budgetMs; give it a stall guard below the case's own timeout, so
+ * a slow owner fails with this function's message. The answer includes the number of concurrent
+ * frames written, so a caller can tell an answer that saw the extra frame from one that never had
+ * it.
+ */
+export async function selfCheckSurfaceFrameProbeWithConcurrentFrame(
+  page: Page,
+  budgetMs: number,
+): Promise<SelfCheckAnswer | null> {
+  const deadline = Date.now() + budgetMs;
+  const remainingMs = () => Math.max(1, deadline - Date.now());
+  const found: { owner: Worker | null } = { owner: null };
+  await expect.poll(async () => (found.owner = await findProbedCanvasApplicationWorker(page)), {
+    message: "no probed canvas owner answered within the self-check budget",
+    timeout: remainingMs(),
+  }).not.toBeNull();
+  const owner = found.owner!;
+  const [armed] = await evaluateInWorkers([owner], () => {
+    (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeSelfCheckConcurrentFrame = true;
+    return true;
+  }, remainingMs());
+  if (armed !== true) {
+    return "the canvas owner did not arm the concurrent frame within the self-check budget";
+  }
+  const [answer] = await evaluateInWorkers([owner], selfCheckInWorker, remainingMs());
+  return answer ?? "the canvas owner did not answer the self-check within its budget";
 }
 
 // Control only the completion signal already returned to the app, for browser regressions that

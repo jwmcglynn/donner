@@ -3,6 +3,10 @@
 
 #include <gmock/gmock.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <span>
+
 namespace donner {
 
 /**
@@ -161,6 +165,42 @@ MATCHER_P2(BoxEq, topLeftMatcher, bottomRightMatcher, "") {
 MATCHER_P2(LengthIs, valueMatcher, unitMatcher, "") {
   return testing::ExplainMatchResult(valueMatcher, arg.value, result_listener) &&
          testing::ExplainMatchResult(unitMatcher, arg.unit, result_listener);
+}
+
+/**
+ * Matches a contiguous byte range holding exactly the bytes of \p expected, such as a whole font
+ * or image file.
+ *
+ * The ranges are compared in one pass. Prefer this to `testing::ElementsAreArray` for large
+ * buffers: that matcher builds and runs one gMock matcher per element, which costs seconds on a
+ * file of a few hundred kilobytes in sanitizer builds. On a mismatch the failure reports both
+ * sizes, or the first differing offset and the two byte values there.
+ *
+ * Example:
+ * ```
+ * EXPECT_THAT(fonts.fontData(handle), BytesEqual(fileBytes));
+ * ```
+ *
+ * @param expected The expected bytes: any range convertible to `std::span<const uint8_t>`, such as
+ *   `std::vector<uint8_t>`. The matcher stores a copy of its argument, so pass a `std::span` to
+ *   compare a large buffer repeatedly without copying it; the viewed bytes must outlive the
+ *   assertion.
+ */
+MATCHER_P(BytesEqual, expected, "has exactly the expected bytes") {
+  const std::span<const uint8_t> actual(arg);
+  const std::span<const uint8_t> wanted(expected);
+  if (actual.size() != wanted.size()) {
+    *result_listener << "has " << actual.size() << " bytes, expected " << wanted.size();
+    return false;
+  }
+  const auto difference = std::mismatch(actual.begin(), actual.end(), wanted.begin());
+  if (difference.first != actual.end()) {
+    *result_listener << "first differs at byte " << (difference.first - actual.begin()) << ": "
+                     << static_cast<int>(*difference.first) << " vs expected "
+                     << static_cast<int>(*difference.second);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace donner

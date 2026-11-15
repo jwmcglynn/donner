@@ -410,6 +410,9 @@ public:
    * Collect stylesheet rules that match \p handle using the same selector matching and specificity
    * adjustments used by \ref computeStyle.
    *
+   * Only rules of each `<style>` element's own stylesheet are reported; rules loaded through
+   * `@import` have no document source and are not indexed by \ref MatchedStyleRule::ruleIndex.
+   *
    * @param handle Entity handle to trace stylesheet matches for.
    * @return Matched stylesheet rules in cascade scan order.
    */
@@ -436,6 +439,16 @@ public:
    * @param handle Entity handle to invalidate
    */
   void invalidateComputed(EntityHandle handle);
+
+  /**
+   * Discard every cached computed style and its retained style budget, for changes that affect
+   * selector matching across the whole document, such as reloaded stylesheet imports. Unlike
+   * \ref RenderTreeState::needsFullStyleRecompute, this also covers styles computed by queries
+   * before the render tree was first built.
+   *
+   * @param registry Registry containing the document.
+   */
+  static void discardComputedStyles(Registry& registry);
 
   /// Inherit fallback values from an external-use computed parent without transferring specificity.
   /// Resolved ordinary host paint, retained only during the guarded occurrence.

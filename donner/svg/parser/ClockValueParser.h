@@ -14,9 +14,17 @@ namespace donner::svg::parser {
  * Supported formats per the SVG Animations spec:
  * - Full clock: `HH:MM:SS` or `HH:MM:SS.frac`
  * - Partial clock: `MM:SS` or `MM:SS.frac`
- * - Timecount: `<number>h`, `<number>min`, `<number>s`, `<number>ms`
- * - Bare number: interpreted as seconds
+ * - Timecount: digits with an optional `.` fraction and an optional metric, `h`, `min`, `s` or
+ *   `ms`; without a metric the value is in seconds
  * - `indefinite`
+ *
+ * Clock components are decimal digits only; the seconds component may carry a `.` fraction with at
+ * least one digit on each side. For offsets, one optional `+` or `-` sign may precede the value,
+ * and XML whitespace (space, tab, CR, LF) is allowed around the value and between the sign and the
+ * value, e.g. `- 01:00`.
+ *
+ * Beyond the strict SMIL grammar, a timecount may use an exponent (`1e-3s`) or a leading dot
+ * (`.5s`), the number forms of \ref donner::parser::NumberParser.
  */
 class ClockValueParser {
 public:

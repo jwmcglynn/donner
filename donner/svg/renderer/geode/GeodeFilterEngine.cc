@@ -3184,8 +3184,10 @@ FilterTexture GeodeFilterEngine::applySpecularLighting(
   const uint32_t height = input.height();
 
   // Per SVG spec, specularExponent must be in [1, 128]: values < 1 produce
-  // transparent output, values > 128 clamp to 128 (matches tiny-skia).
-  if (primitive.specularExponent < 1.0) {
+  // transparent output, values > 128 clamp to 128 (matches tiny-skia). Without a
+  // child light source there is no light, so the output is transparent black, as
+  // for feDiffuseLighting and on the CPU path.
+  if (primitive.specularExponent < 1.0 || !primitive.light.has_value()) {
     return createTransparentIntermediateTexture(arena, width, height,
                                                 "FilterSpecularLightingTransparent");
   }
@@ -3216,20 +3218,14 @@ FilterTexture GeodeFilterEngine::applySpecularLighting(
     params.lightB = srgbToLinearChannel(params.lightB);
   }
 
-  if (primitive.light.has_value()) {
-    fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
-                    &params.azimuthRad, &params.elevationRad, &params.lightX, &params.lightY,
-                    &params.lightZ, &params.userLightX, &params.userLightY, &params.userLightZ,
-                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.userPointsAtX,
-                    &params.userPointsAtY, &params.userPointsAtZ, &params.spotExponent,
-                    &params.coneAngleRad, &params.hasConeAngle, &params.pixelToUser0,
-                    &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
-                    &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
-  } else {
-    params.lightType = 0;
-    params.azimuthRad = 0.0f;
-    params.elevationRad = 0.0f;
-  }
+  fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
+                  &params.azimuthRad, &params.elevationRad, &params.lightX, &params.lightY,
+                  &params.lightZ, &params.userLightX, &params.userLightY, &params.userLightZ,
+                  &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.userPointsAtX,
+                  &params.userPointsAtY, &params.userPointsAtZ, &params.spotExponent,
+                  &params.coneAngleRad, &params.hasConeAngle, &params.pixelToUser0,
+                  &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
+                  &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
 
   const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
   params.sampleMinX = boundedFloorInt32(samplePixels.topLeft.x, 0, static_cast<int32_t>(width) - 1);

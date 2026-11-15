@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "donner/base/encoding/Base64.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -735,7 +736,7 @@ TEST(RendererAnimationPresentation, RtlTextLengthMatchesEquivalentStaticTarget) 
     }
     auto& fonts = context.get<FontManager>();
     fonts.addFontFace(face);
-    EXPECT_THAT(fonts.fontData(fonts.findFont("Amiri")), testing::ElementsAreArray(*fontData));
+    EXPECT_THAT(fonts.fontData(fonts.findFont("Amiri")), BytesEqual(*fontData));
     return document;
   };
   for (const std::string_view adjust : {"spacing", "spacingAndGlyphs"}) {

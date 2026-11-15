@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -74,8 +75,7 @@ std::optional<std::string> SerializeDasharray(const StrokeDasharray& value,
       !budget->reserveSourceBytes(value.size() * 64)) {
     return std::string{};
   }
-  std::ostringstream out;
-  out.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream out = MakeClassicNumberStream();
   out << value;
   return out.str();
 }
@@ -84,8 +84,7 @@ template <typename T>
 std::optional<std::string> SerializeValue(const T& value, const AnimationValueContext& context,
                                           AnimationResourceBudget* budget = nullptr) {
   if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, Lengthd> || std::is_enum_v<T>) {
-    std::ostringstream out;
-    out.precision(std::numeric_limits<double>::max_digits10);
+    std::ostringstream out = MakeClassicNumberStream();
     out << value;
     return out.str();
   } else if constexpr (std::is_same_v<T, css::Color>) {
@@ -446,8 +445,7 @@ bool ResourceUsesBoundingBoxUnits(Registry& registry, Entity target,
 }
 
 std::string NumberPair(double first, double second) {
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   output << first << ' ' << second;
   return output.str();
 }
@@ -478,8 +476,7 @@ std::string SerializeTextPositionBase(const Values& values, AnimationResourceBud
       !budget.reserveSourceBytes(values.size() * 64)) {
     return {};
   }
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   bool first = true;
   for (const auto& value : values) {
     if (!first) {
@@ -554,8 +551,7 @@ std::optional<std::string> TypedPresentationBaseValue(Registry& registry, Entity
   }
   if (const auto* box = registry.try_get<ViewBoxComponent>(target);
       box && box->viewBox && name == "viewBox") {
-    std::ostringstream output;
-    output.precision(std::numeric_limits<double>::max_digits10);
+    std::ostringstream output = MakeClassicNumberStream();
     output << box->viewBox->topLeft.x << ' ' << box->viewBox->topLeft.y << ' '
            << box->viewBox->width() << ' ' << box->viewBox->height();
     return output.str();

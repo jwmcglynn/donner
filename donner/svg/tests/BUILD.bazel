@@ -93,6 +93,11 @@ donner_cc_test(
         "//third_party/public-sans:public-sans_resource_files",
         "//third_party/resvg-test-suite:fonts",
     ],
+    # Bidi reordering is compiled out of the tier without the text engine.
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     opens_gpu_device = True,
     shard_count = 10,
     # Run these wrappers with the ordinary suite so `bazel test //...` exercises
