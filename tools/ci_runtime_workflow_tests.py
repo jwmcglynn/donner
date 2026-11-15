@@ -1195,7 +1195,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         determine = self._job_body("determine-targets")
         self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", determine)
         start = determine.index("          # The manual reference is removed")
-        end = determine.index('          manual_affected="', start)
+        # The reference selection ends where the macos-metal selection begins.
+        end = determine.index("          # BEGIN macos-metal selection", start)
+        self.assertLess(end, determine.index('          manual_affected="', start))
         impacted_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         impacted_script += textwrap.dedent(determine[start:end])
         self.assertIn("labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))", impacted_script)
