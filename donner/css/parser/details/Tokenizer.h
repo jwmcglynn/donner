@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/Utils.h"
 #include "donner/css/Token.h"
 
 namespace donner::css::parser::details {
@@ -26,9 +27,12 @@ public:
   /**
    * Create the tokenizer with a string to tokenize.
    *
+   * The tokenizer reads @p str in place without copying it, so the string must outlive the
+   * tokenizer. Returned tokens own their values.
+   *
    * @param str The string to tokenize.
    */
-  explicit Tokenizer(std::string_view str);
+  explicit Tokenizer(std::string_view str UTILS_LIFETIME_BOUND);
 
   /// Destructor.
   ~Tokenizer();
