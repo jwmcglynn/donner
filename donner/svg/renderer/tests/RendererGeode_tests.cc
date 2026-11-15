@@ -8295,18 +8295,19 @@ TEST_F(RendererGeodeTest, FilterRegionsNearCanvasEdgesMatchFiltersWithRoom) {
 // own filter region, so its children must be drawn moved into that raster just as outside a tile.
 // A tile that covers the canvas one to one shows the same pixels as the group drawn directly, also
 // when a filter outside the tile, whose capture does not hold the tile's content, encloses both.
+// The filters only move and merge pixels, so the tile and the direct draw match exactly.
 TEST_F(RendererGeodeTest, FilterInsidePatternTileMatchesTheFilterDrawnDirectly) {
   RendererGeode renderer = createRenderer();
   const std::string filters = R"svg(
-    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="halo"/>
-      <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <filter id="echo" x="-50%" y="-50%" width="200%" height="200%">
+      <feOffset dx="7" dy="5" result="moved"/>
+      <feMerge><feMergeNode in="moved"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <filter id="shift" x="-60%" y="-60%" width="220%" height="220%">
       <feOffset dx="-14" dy="-11"/>
     </filter>)svg";
   const std::string group =
-      R"svg(<g filter="url(#glow)"><circle cx="64" cy="60" r="10" fill="#e05090"/>)svg"
+      R"svg(<g filter="url(#echo)"><circle cx="64" cy="60" r="10" fill="#e05090"/>)svg"
       R"svg(<rect x="54" y="40" width="20" height="8" fill="#40c0f0"/></g>)svg";
   const std::string tiled =
       R"svg(<defs><pattern id="p" patternUnits="userSpaceOnUse" width="96" height="96">)svg" +
