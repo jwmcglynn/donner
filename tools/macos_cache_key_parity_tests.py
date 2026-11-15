@@ -7,8 +7,8 @@ carry in their environment. Both lanes configure the remote cache only through t
 action, so their build flags must be identical. Test-only flags and environment (--test_env)
 are deliberately left to each lane, and each lane names itself in its test environment: a test
 result depends on the runner's GPU, so it must not be shared across runners. Within a lane, no
-action or test environment may be copied from the runner: concurrent runners of one lane have
-different home directories, and a copied value would keep each from reusing the other's results.
+action or test environment may be copied from the runner: runners of one lane can have
+different home directories, and a copied value would keep each from reusing another's results.
 
 Every GitHub-hosted job is also kept off any private remote cache and remote
 execution configuration.
@@ -61,6 +61,13 @@ LANE_TEST_ENV = {"macos-browser": "--test_env=DONNER_CI_MACOS_LANE=native-deskto
 # test key it applies to.
 INHERITED_ENV_FLAG = re.compile(
     r"^--(?:test_env|action_env|host_action_env)=([A-Za-z_][A-Za-z0-9_]*)$")
+# A value with `$` is expanded from the runner's shell or a workflow expression, so it can differ
+# between runners just as an inherited value can.
+EXPANDED_ENV_FLAG = re.compile(
+    r"^--(?:test_env|action_env|host_action_env)=([A-Za-z_][A-Za-z0-9_]*)=.*\$")
+# Bazel applies the `macos` config on every macOS client (--enable_platform_specific_config), so
+# its flags reach every macOS lane without the lane naming it.
+IMPLICIT_MACOS_CONFIG = "--config=macos"
 # The only variables a macOS lane may copy from the runner, each with the same value on every
 # runner of a lane.
 RUNNER_INDEPENDENT_INHERITED = {
@@ -309,10 +316,10 @@ def _expand_configs(words, configs, seen=frozenset()):
 def inherited_env_problems(workflow, bazelrc):
     """Environment a macOS lane copies from its runner into action or test keys.
 
-    Concurrent runners of one lane differ in such values (their home directories in
-    particular), so a copied value keeps each runner from reusing the other's cached results.
-    Covers the lane's flag lists, every Bazel command of the job, every config those name and
-    the repository's unconditional build, test and common flags."""
+    Runners of one lane can differ in such values (their home directories in particular), so a
+    copied or shell-expanded value keeps each runner from reusing another's cached results.
+    Covers the lane's flag lists, every Bazel command of the job, every config those name, the
+    platform `macos` config and the repository's unconditional build, test and common flags."""
     jobs = _jobs(workflow)
     unconditional = [flag for line in bazelrc.splitlines()
                      if re.match(r"^(?:build|test|common)\s", line)
@@ -320,11 +327,16 @@ def inherited_env_problems(workflow, bazelrc):
     configs = _config_flags(bazelrc)
     problems = []
     for name in LANES:
-        words = unconditional + _lane_command_words(jobs[name])
-        inherited = sorted({match.group(1) for match in map(
-            INHERITED_ENV_FLAG.match, _expand_configs(words, configs)) if match})
+        words = _expand_configs(
+            unconditional + [IMPLICIT_MACOS_CONFIG] + _lane_command_words(jobs[name]), configs)
+        inherited = sorted({match.group(1) for match in map(INHERITED_ENV_FLAG.match, words)
+                            if match})
         problems += ["%s copies %s from the runner into its keys" % (name, variable)
                      for variable in inherited if variable not in RUNNER_INDEPENDENT_INHERITED]
+        expanded = sorted({match.group(1) for match in map(EXPANDED_ENV_FLAG.match, words)
+                           if match})
+        problems += ["%s sets %s from a shell or workflow expression" % (name, variable)
+                     for variable in expanded]
     return problems
 
 
@@ -635,6 +647,17 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.workflow, self.bazelrc.replace(
                     "build --test_env=LLM\n", "build --test_env=LLM\ntest --test_env=USER\n", 1),
                 "macos copies USER from the runner"),
+            "the implicit macos config copies a runner variable": (
+                self.workflow, self.bazelrc + "build:macos --test_env=FOO\n",
+                "macos-self-hosted copies FOO from the runner"),
+            "a lane sets HOME from a shell expansion": (self.workflow.replace(
+                LANE_TEST_ENV[SELF_HOSTED], "--test_env=HOME=$HOME " + LANE_TEST_ENV[SELF_HOSTED],
+                1), self.bazelrc,
+                "macos-self-hosted sets HOME from a shell or workflow expression"),
+            "a config sets a variable from a workflow expression": (
+                self.workflow,
+                self.bazelrc + "build:macos-vm --action_env=TMPDIR=${{ runner.temp }}\n",
+                "macos-self-hosted sets TMPDIR from a shell or workflow expression"),
             "ci-macos stops giving tests a fixed HOME": (self.workflow, self.bazelrc.replace(
                 "build:ci-macos %s\n" % CI_MACOS_HOME, "", 1),
                 "must set %s exactly once" % CI_MACOS_HOME),
