@@ -68,6 +68,10 @@ SVGDocument SpriteSheet(const ExternalUseSpriteScene& scene) {
   return SVGDocument::CreateFromHandle(*scene.host.resource);
 }
 
+SVGDocument SpriteSheetOf(const ExternalUseDocument& host) {
+  return SVGDocument::CreateFromHandle(*host.resource);
+}
+
 TEST(ExternalUseSpriteCorrectnessTest, MovingTheUseDoesNotRestyleTheSpriteSheet) {
   std::optional<ExternalUseSpriteScene> scene = MakeExternalUseSpriteScene(SpriteKind::Vector);
   ASSERT_TRUE(scene.has_value());
@@ -209,9 +213,10 @@ TEST(ExternalUseSpriteCorrectnessTest, EvictedTargetsInheritHostStyleWhenDrawnAg
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-TEST(ExternalUseSpriteCorrectnessTest, EvictingAnAncestorRestylesItsRetainedDescendant) {
-  // After the group and its child, these fill the remaining retention slots plus one, so the last
-  // filler evicts the group while the child stays retained.
+TEST(ExternalUseSpriteCorrectnessTest, EvictingADescendantForgetsItsRetainedAncestorsInputs) {
+  // Drawing the child and then the group retains both, the child without inputs. The fillers then
+  // take the remaining 30 of the 32 retention slots, and the last one evicts the least recently
+  // drawn entry, the child, while the group stays retained.
   constexpr int kFillers = 31;
   std::string resource = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
     <g id="group"><rect id="child" width="8" height="8"/></g>)svg";
@@ -221,28 +226,41 @@ TEST(ExternalUseSpriteCorrectnessTest, EvictingAnAncestorRestylesItsRetainedDesc
   resource += "</svg>";
   std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
-        <use id="tile-use" href="sprites.svg#group" fill="red"/>
+        <use id="tile-use" href="sprites.svg#child" fill="red"/>
       </svg>)svg",
       std::move(resource));
   ASSERT_TRUE(host.has_value());
   SVGUseElement use = host->document.querySelector("#tile-use")->cast<SVGUseElement>();
   Renderer renderer;
   renderer.draw(host->document);
-  use.setHref(RcString("sprites.svg#child"));
+  use.setHref(RcString("sprites.svg#group"));
   renderer.draw(host->document);
-  for (int filler = 0; filler < kFillers; ++filler) {
+  for (int filler = 0; filler + 1 < kFillers; ++filler) {
     use.setHref(RcString("sprites.svg#t" + std::to_string(filler)));
     renderer.draw(host->document);
   }
-  use.setHref(RcString("sprites.svg#child"));
-  renderer.draw(host->document);
+  {
+    RestyleCounter counter(SpriteSheetOf(*host));
+    use.setHref(RcString("sprites.svg#t" + std::to_string(kFillers - 1)));
+    renderer.draw(host->document);
+    EXPECT_EQ(counter.restyles(), 2u) << "the last filler and the child it evicts";
+  }
+  {
+    RestyleCounter counter(SpriteSheetOf(*host));
+    use.setHref(RcString("sprites.svg#group"));
+    renderer.draw(host->document);
+    // The eviction forgets the inputs of the overlapping group, so the group and its child restyle
+    // once more. The pixels do not depend on that restyle: the evicted child was restyled by
+    // inheriting from the group, which is still styled for its occurrence.
+    EXPECT_EQ(counter.restyles(), 2u) << "the group's restyle after its child's eviction";
+  }
 
   const RendererBitmap expected = RenderStandalone(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect width="8" height="8" fill="red"/>
       </svg>)svg");
   editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
-                                       "external-use-evicted-ancestor",
+                                       "external-use-evicted-descendant",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
@@ -746,6 +764,34 @@ TEST(ExternalUseSpriteCorrectnessTest, AlternatingTargetsWithCyclicUsesDoNotRest
     <g id="s0"><use id="a0" href="#b0"/><use id="b0" href="#a0"/><circle r="2"/></g>
     <g id="s1"><defs><circle id="c1" r="2"/></defs><use href="#c1" x="4" y="4"/></g></svg>)svg"),
             0u);
+}
+
+// Pins the cost of drawing a sheet's root and one of its descendants on every frame. Each draw of
+// the descendant restores the root, which is styled for its own occurrence, so the sheet's three
+// elements restyle twice per frame: for the root's occurrence, and again when the descendant's
+// draw restores the root. Eight moved frames measure 8 x (3 + 3) = 48 restyles. Keeping the root
+// styled for its occurrence would cost 8 x (3 + 1) = 32, but the descendant would then resolve rem
+// lengths against the root's occurrence font size.
+TEST(ExternalUseSpriteCorrectnessTest, RootAndDescendantDrawnEveryFrameRestyleTheSheetTwice) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use id="root-use" href="sprites.svg#sheet" fill="red"/>
+        <use href="sprites.svg#child" x="8" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg id="sheet" xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="child" width="8" height="8"/><rect id="other" width="4" height="4"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  RestyleCounter counter(SVGDocument::CreateFromHandle(*host->resource));
+  SVGGraphicsElement use = host->document.querySelector("#root-use")->cast<SVGGraphicsElement>();
+  for (int frame = 1; frame <= 8; ++frame) {
+    use.setTransform(Transform2d::Translate(Vector2d(frame * 1.0, 0)));
+    renderer.draw(host->document);
+  }
+  EXPECT_EQ(counter.restyles(), 48u);
 }
 
 }  // namespace
