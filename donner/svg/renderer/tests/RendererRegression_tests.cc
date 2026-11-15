@@ -3923,7 +3923,8 @@ void ExpectHslCurrentColorMatchesLime(std::string_view body, std::string_view la
   const auto actual = RenderColorDocument("color: " + std::string(kLimeHsl), body);
   const auto expected = RenderColorDocument("", limeBody);
   ExpectVisibleBitmap(expected, label);
-  ExpectBitmapsIdentical(actual, expected, label);
+  editor::tests::CompareBitmapToBitmap(actual, expected, label,
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, CurrentColorFromHslColorPaintsShapeFillAndStroke) {
@@ -3946,7 +3947,8 @@ TEST_F(RendererRegressionTests, HslColorDoesNotDisturbLiteralAndGradientPaint) {
   const auto actual = RenderColorDocument("color: " + std::string(kLimeHsl), kBody);
   const auto expected = RenderColorDocument("", kBody);
   ExpectVisibleBitmap(expected, "hsl_color_literal_paint");
-  ExpectBitmapsIdentical(actual, expected, "hsl_color_literal_paint");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "hsl_color_literal_paint",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, CurrentColorFromHslColorPaintsText) {
@@ -3959,7 +3961,9 @@ TEST_F(RendererRegressionTests, CurrentColorFromHslColorPaintsText) {
 TEST_F(RendererRegressionTests, CurrentColorKeywordOnColorPropertyInherits) {
   constexpr std::string_view kRect = R"svg(<rect width="64" height="64" fill="currentColor"/>)svg";
   const auto rootActual = RenderColorDocument("color: currentcolor", kRect);
-  ExpectBitmapsIdentical(rootActual, RenderColorDocument("", kRect), "root_currentcolor_initial");
+  editor::tests::CompareBitmapToBitmap(rootActual, RenderColorDocument("", kRect),
+                                       "root_currentcolor_initial",
+                                       editor::tests::PixelmatchIdentityParams());
   EXPECT_THAT(PixelAt(rootActual, 32, 32), testing::ElementsAre(0, 0, 0, 255));
 
   const auto lime = RenderColorDocument("", R"svg(<rect width="64" height="64" fill="lime"/>)svg");
@@ -3971,7 +3975,8 @@ TEST_F(RendererRegressionTests, CurrentColorKeywordOnColorPropertyInherits) {
        }) {
     SCOPED_TRACE(body);
     const auto actual = RenderColorDocument("color: red", body);
-    ExpectBitmapsIdentical(actual, lime, "child_currentcolor_inherits");
+    editor::tests::CompareBitmapToBitmap(actual, lime, "child_currentcolor_inherits",
+                                         editor::tests::PixelmatchIdentityParams());
     EXPECT_THAT(PixelAt(actual, 32, 32), testing::ElementsAre(0, 255, 0, 255));
   }
 }
