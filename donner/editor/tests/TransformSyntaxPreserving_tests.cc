@@ -58,7 +58,8 @@ TEST(TransformSyntaxPreserving, ReadsDecimalNumbersInACommaDecimalLocale) {
 // number parser.
 TEST(TransformSyntaxPreserving, ReadsNumbersSurroundedByWhitespace) {
   const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
-  EXPECT_TRUE(reserializeTransformPreservingSyntax("translate( \t1.5 ,\n2.5 )", target).has_value());
+  EXPECT_TRUE(
+      reserializeTransformPreservingSyntax("translate( \t1.5 ,\n2.5 )", target).has_value());
 }
 
 // `5.` is not a number token, and the document's transform parser rejects it as well, so

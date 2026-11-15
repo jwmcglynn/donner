@@ -212,10 +212,9 @@ TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
 TEST(ReproFileTest, IgnoresAScaleWithATrailingDecimalPoint) {
   const auto parsed = ParseReproFile(R"({"v":3,"wnd":[100,100],"scale":2.,"exp":0})"
                                      "\n");
-  EXPECT_THAT(parsed,
-              Optional(Field("metadata", &ReproFile::metadata,
-                             Field("displayScale", &ReproMetadata::displayScale,
-                                   DoubleEq(ReproMetadata{}.displayScale)))));
+  EXPECT_THAT(parsed, Optional(Field("metadata", &ReproFile::metadata,
+                                     Field("displayScale", &ReproMetadata::displayScale,
+                                           DoubleEq(ReproMetadata{}.displayScale)))));
 }
 
 // Numbers are written in the classic locale, so a global C++ locale with a decimal comma and
