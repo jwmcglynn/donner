@@ -25,8 +25,8 @@ _SOURCES = ("tools/ci/lane.py", "tools/ci/lanes.py", "tools/ci_bazel_test.sh")
 
 # One stand-in for every tool. It records its name and arguments, then answers from the JSON
 # configuration in STUB_CONFIG: a list of answers per tool (or per `bazelisk <command>`), used
-# in order, the last one repeating. An answer is [stdout, status], or [stdout, "signal"] to end
-# by SIGTERM.
+# in order, the last one repeating. An answer is [stdout, status] or [stdout, status, stderr], with
+# status "signal" to end by SIGTERM.
 _RECORDER = r'''
 import json, os, signal, sys
 from pathlib import Path
@@ -48,9 +48,11 @@ counts = json.loads(counts_path.read_text()) if counts_path.exists() else {}
 index = counts.get(key, 0)
 counts[key] = index + 1
 counts_path.write_text(json.dumps(counts))
-output, status = answers[min(index, len(answers) - 1)]
+output, status, *error = answers[min(index, len(answers) - 1)]
 sys.stdout.write(output)
 sys.stdout.flush()
+sys.stderr.write("".join(error))
+sys.stderr.flush()
 if status == "signal":
     os.kill(os.getpid(), signal.SIGTERM)
 sys.exit(status)
@@ -66,7 +68,7 @@ class LaneTest(unittest.TestCase):
         cls.stubs = ExecutableFixtureDirectory()
         cls.stubs.write_python3()
         recorder = cls.stubs.write("recorder.py", _RECORDER)
-        for tool in ("bazelisk", "jq"):
+        for tool in ("bazelisk", "jq", "df", "du"):
             write_python_stand_in(cls.stubs.path / tool, recorder, tool)
         cls.recorder = recorder
 
@@ -281,6 +283,10 @@ class LaneTest(unittest.TestCase):
         self.assertEqual(self.bazel_calls(calls), [[
             "bazelisk", "--nohome_rc", "--nosystem_rc", "query",
             "attr('tags', 'launches-browser', tests(set(//a:a //b:b)))"]])
+        # Each command is echoed as a shell reads it back: the query expression stays one word.
+        self.assertIn("+ bazelisk --nohome_rc --nosystem_rc query "
+                      "'attr('\"'\"'tags'\"'\"', '\"'\"'launches-browser'\"'\"', "
+                      "tests(set(//a:a //b:b)))'\n", result.stdout)
         self.reset()
         result, calls = self.run_phase("macos-self-hosted", "browser_preflight",
                                        {"bazelisk query": [["//a:a\n", 0]]},
@@ -319,12 +325,27 @@ class LaneTest(unittest.TestCase):
         kept = output_base / "external" / "other"
         kept.mkdir()
         config = {"bazelisk fetch": [["", 1], ["", 0]],
-                  "bazelisk info": [[str(output_base) + "\n", 0]]}
+                  "bazelisk info": [[str(output_base) + "\n", 0, "info-stderr\n"]],
+                  "bazelisk shutdown": [["", 3, "shutdown-stderr\n"]],
+                  "df": [["df-stdout\n", 1, "df-stderr\n"]],
+                  "du": [["du-stdout\n", 1, "du-stderr\n"]]}
         result, calls = self.run_phase("linux-self-hosted", "fetch", config,
                                        TARGETS_FALLBACK="true")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[1] for call in self.bazel_calls(calls)],
                          ["fetch", "info", "shutdown", "fetch"])
+        # Standard error is discarded only where the step script discarded it: `info` and `du`
+        # (and `find`); `shutdown` and `df` failures are ignored but still report.
+        for shown in ("shutdown-stderr", "df-stderr"):
+            self.assertIn(shown, result.stderr)
+        for hidden in ("info-stderr", "du-stderr"):
+            self.assertNotIn(hidden, result.stderr)
+        self.assertIn("df-stdout", result.stdout)
+        self.assertIn("du-stdout", result.stdout)
+        self.assertEqual(["df", "-h", "/var/cache/bazel", str(self.checkout)],
+                         next(call for call in calls if call[0] == "df"))
+        self.assertEqual(["du", "-sh", str(partial)],
+                         next(call for call in calls if call[0] == "du"))
         self.assertFalse(partial.exists())
         self.assertTrue(kept.exists())
         self.assertIn("::group::Bazel disk state before LLVM fetch retry", result.stdout)

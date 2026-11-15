@@ -25,6 +25,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -118,8 +119,9 @@ def _status(returncode):
 
 
 def _run(argv, **kwargs):
-    """Runs a command as the step's shell did and returns its exit status."""
-    print("+ " + " ".join(argv), flush=True)
+    """Runs a command as the step's shell did and returns its exit status. It is echoed first, in
+    a form a shell reads back as the same words; no secret reaches a phase's arguments."""
+    print("+ " + shlex.join(argv), flush=True)
     try:
         process = subprocess.Popen(argv, **kwargs)
     except OSError as error:
@@ -142,31 +144,35 @@ def _check(argv, **kwargs):
     return output
 
 
-def _quiet(argv, **kwargs):
-    """`command 2>/dev/null || true`: the output of a command whose failure is ignored."""
+def _ignoring_failure(argv, quiet=False, **kwargs):
+    """`command || true`, or with `quiet` `command 2>/dev/null || true`: the output of a command
+    whose failure is ignored."""
     try:
-        return subprocess.run(argv, stderr=subprocess.DEVNULL, check=False,
+        return subprocess.run(argv, stderr=subprocess.DEVNULL if quiet else None, check=False,
                               universal_newlines=True, **kwargs).stdout
-    except OSError:
+    except OSError as error:
+        if not quiet:
+            print("lane.py: %s: %s" % (argv[0], error.strerror), file=sys.stderr, flush=True)
         return None
 
 
 def _reset_repository(context, repository):
     """Removes a partially fetched repository from the output base before a retry."""
-    output_base = (_quiet(["bazelisk", "info", "output_base"], stdout=subprocess.PIPE)
-                   or "").rstrip("\n")
-    _quiet(["bazelisk", "shutdown"])
+    # As the step script did: only `info`, `du` and `find` ran with standard error discarded.
+    output_base = (_ignoring_failure(["bazelisk", "info", "output_base"], quiet=True,
+                                     stdout=subprocess.PIPE) or "").rstrip("\n")
+    _ignoring_failure(["bazelisk", "shutdown"])
     pattern = "*%s*" % repository
     external = os.path.join(output_base, "external")
     print("::group::Bazel disk state before LLVM fetch retry", flush=True)
-    _quiet(["df", "-h", "/var/cache/bazel", context.variable("GITHUB_WORKSPACE")])
+    _ignoring_failure(["df", "-h", "/var/cache/bazel", context.variable("GITHUB_WORKSPACE")])
     if output_base and os.path.isdir(external):
-        _quiet(["du", "-sh"] + (sorted(glob.glob(os.path.join(external, pattern)))
-                                or [os.path.join(external, pattern)]))
+        _ignoring_failure(["du", "-sh"] + (sorted(glob.glob(os.path.join(external, pattern)))
+                                           or [os.path.join(external, pattern)]), quiet=True)
     print("::endgroup::", flush=True)
     if output_base and os.path.isdir(external):
-        _quiet(["find", external, "-maxdepth", "1", "-name", pattern, "-print", "-exec",
-                "rm", "-rf", "{}", "+"])
+        _ignoring_failure(["find", external, "-maxdepth", "1", "-name", pattern, "-print",
+                           "-exec", "rm", "-rf", "{}", "+"], quiet=True)
 
 
 class _Done(Exception):
