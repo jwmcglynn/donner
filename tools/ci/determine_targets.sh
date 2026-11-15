@@ -14,7 +14,8 @@
 #                          `metal_affected` and the `wgpu_reference_*` outputs).
 #   select-wgpu-reference  Whether a pull request runs the Linux WebGPU resvg reference (`run`),
 #                          from the `determine` outputs passed in WGPU_REFERENCE_AFFECTED,
-#                          WGPU_REFERENCE_CHANGED, WGPU_REFERENCE_UNKNOWN and FULL_TEST.
+#                          WGPU_REFERENCE_CHANGED, WGPU_REFERENCE_UNKNOWN and FULL_TEST (each
+#                          may be unset, which reads as empty).
 #
 # Run from the workspace checkout. The subcommands read the GitHub Actions default environment
 # (GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_REF, GITHUB_SHA, GITHUB_WORKSPACE, RUNNER_TEMP).
@@ -390,12 +391,11 @@ determine() {
 
 select_wgpu_reference() {
   run_reference=false
-  # The workflow step passes the `determine` outputs in its env.
-  # shellcheck disable=SC2153
-  if [[ "$WGPU_REFERENCE_AFFECTED" == "true" ||
-        "$WGPU_REFERENCE_CHANGED" == "true" ||
-        "$WGPU_REFERENCE_UNKNOWN" == "true" ||
-        "$FULL_TEST" == "true" ]]; then
+  # The workflow step passes the `determine` outputs in its env; an unset one reads as empty.
+  if [[ "${WGPU_REFERENCE_AFFECTED:-}" == "true" ||
+        "${WGPU_REFERENCE_CHANGED:-}" == "true" ||
+        "${WGPU_REFERENCE_UNKNOWN:-}" == "true" ||
+        "${FULL_TEST:-}" == "true" ]]; then
     run_reference=true
   fi
   echo "run=$run_reference" >> "$GITHUB_OUTPUT"
@@ -407,6 +407,10 @@ usage() {
 }
 
 [[ $# -eq 1 ]] || usage
+if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
+  echo "determine_targets.sh writes step outputs to the file named by GITHUB_OUTPUT; set it." >&2
+  exit 2
+fi
 case "$1" in
   pr-meta) pr_meta ;;
   determine) determine ;;

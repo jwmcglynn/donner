@@ -396,9 +396,11 @@ sh_binary(
 )
 
 # The CI workflow's target selection and its bazel-diff download.
+# Each case runs the selection with many stand-in tool processes, so the suite takes longer than
+# a small test's timeout on a loaded host.
 py_test(
     name = "determine_targets_tests",
-    size = "small",
+    size = "medium",
     srcs = ["determine_targets_tests.py"],
     data = [
         "determine_targets.sh",

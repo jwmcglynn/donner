@@ -1259,6 +1259,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         start = job.index("          should_fallback=false\n")
         end = job.index('          work_dir="$(mktemp -d)"', start)
         script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        script += self._workflow_logic_function(job)
         script += textwrap.dedent(job[start:end])
         script += 'echo "incremental=true" >> "$GITHUB_OUTPUT"\n'
         for changed_files, expected in (
@@ -1411,7 +1412,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
         selector = self._step_body(job, "Select Linux WebGPU resvg reference")
         self.assertIn("if: github.event_name == 'pull_request'", selector)
-        path_start = determine.index("          # Direct renderer/GPU/image inputs")
+        path_start = determine.index(WORKFLOW_LOGIC_MARKER)
         path_end = determine.index("          should_fallback=false", path_start)
         path_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         path_script += textwrap.dedent(determine[path_start:path_end])

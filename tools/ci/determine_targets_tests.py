@@ -404,6 +404,16 @@ class DetermineTest(_ScriptTest):
                 self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set(cwd.read_text().splitlines()), {str(self.workspace.resolve())})
 
+    def test_runs_outside_a_workflow_step(self):
+        # Unset `determine` outputs read as empty, as a skipped step's outputs do.
+        result, _, outputs = self.run_script("select-wgpu-reference")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, "run=false")
+        result, calls, _ = self.run_script("pr-meta", GITHUB_OUTPUT="")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("set it.", result.stderr)
+        self.assertEqual(calls, [])
+
     def test_rejects_an_unknown_subcommand(self):
         for args in ((), ("select",), ("determine", "extra")):
             with self.subTest(args=args):
