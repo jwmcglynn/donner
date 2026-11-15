@@ -458,6 +458,51 @@ TEST(SubDocumentFiltersTest, ScaledRotatedUseUnderBoxEffects) {
           "<use href='{ref}sprite' transform='translate(16 4) rotate(30) scale(1.5)'/></g>");
 }
 
+/// Box effects on a host group keep the left quarter of the bounding box of the external content in
+/// the group's space. That box bounds the content's geometry through every transform between the
+/// two, not the box of its own box, so transforms that cancel leave the content's own size.
+TEST(SubDocumentFiltersTest, TransformedContentUnderBoxEffectsMatchesInDocument) {
+  constexpr std::string_view kEffects[] = {
+      "<clipPath id='quarter' clipPathUnits='objectBoundingBox'>"
+      "<rect width='0.25' height='1'/></clipPath>",
+      "<mask id='quarter' maskContentUnits='objectBoundingBox'>"
+      "<rect width='0.25' height='1' fill='#ffffff'/></mask>",
+      "<filter id='quarter' x='0' y='0' width='0.25' height='1'><feOffset/></filter>",
+  };
+  constexpr std::string_view kReferences[] = {"clip-path", "mask", "filter"};
+  struct Placement {
+    std::string_view label;
+    std::string_view sprite;
+    std::string_view useTransform;
+  };
+  constexpr std::string_view kSquare = "x='-5' y='-5' width='10' height='10' fill='#2050d0'";
+  const std::string square(kSquare);
+  const std::string rootRotated = "<rect id='sprite' " + square + " transform='rotate(45)'/>";
+  const std::string nestedRotated = "<g id='sprite'><g transform='rotate(30)'><rect " + square +
+                                    " transform='rotate(15)'/></g></g>";
+  const std::string skewed = "<g id='sprite'><rect " + square + " transform='skewX(30)'/></g>";
+  const std::string rotated = "<g id='sprite'><rect " + square + " transform='rotate(30)'/></g>";
+  const Placement kPlacements[] = {
+      {"cancelling-root-rotation", rootRotated, "rotate(-45)"},
+      {"cancelling-nested-rotation", nestedRotated, "rotate(-45)"},
+      {"cancelling-skew", skewed, "skewX(-30)"},
+      {"adding-rotation", rotated, "rotate(30)"},
+  };
+  for (size_t effect = 0; effect < std::size(kEffects); ++effect) {
+    for (const Placement& placement : kPlacements) {
+      SCOPED_TRACE(std::string(kReferences[effect]) + " " + std::string(placement.label));
+      ExpectExternalMatchesInDocument(
+          "sub-document-transformed-" + std::string(kReferences[effect]) + "-" +
+              std::string(placement.label),
+          placement.sprite,
+          "<defs>" + std::string(kEffects[effect]) +
+              "</defs><rect width='32' height='32' fill='#ffffff'/><g " +
+              std::string(kReferences[effect]) + "='url(#quarter)'><use href='{ref}sprite' " +
+              "transform='translate(16 16) " + std::string(placement.useTransform) + "'/></g>");
+    }
+  }
+}
+
 TEST(SubDocumentFiltersTest, SymbolTargetViewportUnderBoxClip) {
   ExpectExternalMatchesInDocument(
       "sub-document-symbol-viewport",

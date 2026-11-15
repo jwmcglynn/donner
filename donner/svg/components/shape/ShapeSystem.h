@@ -122,6 +122,15 @@ public:
    */
   std::optional<Box2d> getShapeBounds(EntityHandle handle);
 
+  /**
+   * Get the tight bounds of the given entity's geometry in a target space, if it has a shape
+   * component. Each shape is bounded after its transforms and @p targetFromEntity are composed.
+   *
+   * @param handle Entity handle to get the bounds for
+   * @param targetFromEntity Transform from the entity's local space to the target space
+   */
+  std::optional<Box2d> getShapeBoundsIn(EntityHandle handle, const Transform2d& targetFromEntity);
+
   /// Return the SVG stroke-shape bounds, including descendant object and stroke geometry.
   /// @param handle Element whose local reference box is required.
   std::optional<Box2d> getStrokeBounds(EntityHandle handle);

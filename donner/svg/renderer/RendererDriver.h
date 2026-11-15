@@ -479,6 +479,17 @@ private:
    * Results are kept for the frame, or until the registry's layout changes for another occurrence.
    */
   std::optional<Box2d> objectBoundingBox(Registry& registry, Entity entity);
+  /**
+   * \ref objectBoundingBox in a target space, bounding the geometry of @p entity and of the
+   * external content in its subtree after @p targetFromEntity maps it there. Not kept for the
+   * frame.
+   *
+   * @param registry Registry holding @p entity.
+   * @param entity Element to measure.
+   * @param targetFromEntity Transform from the element's space to the target space.
+   */
+  std::optional<Box2d> objectBoundingBoxIn(Registry& registry, Entity entity,
+                                           const Transform2d& targetFromEntity);
   /// The object bounding box for @p instance's filter, or nothing when no referenced filter uses
   /// objectBoundingBox units, so units that do not need it measure nothing.
   std::optional<Box2d> filterObjectBounds(Registry& registry, Entity entity,
@@ -500,11 +511,21 @@ private:
   /// elements in its subtree draw, which @p clip's own resolution cannot see.
   void applyExternalUseClipBounds(ResolvedClip& clip, Registry& registry,
                                   const components::RenderingInstanceComponent& instance);
-  /// Bounds of the fragment an external `<use>` draws, in the `<use>` element's user space, or
-  /// nothing when @p hostEntity is not an external fragment reference. Kept for the frame.
-  std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity);
+  /**
+   * Bounds of the geometry of the fragment an external `<use>` draws, after @p targetFromUse maps
+   * it from the `<use>` element's user space into a target space, or nothing when @p hostEntity is
+   * not an external fragment reference. Bounding after the transform keeps the box tight when the
+   * fragment's own transforms and @p targetFromUse combine. Kept for the frame per transform.
+   *
+   * @param hostRegistry Registry holding the `<use>`.
+   * @param hostEntity The `<use>` element's rendering instance.
+   * @param targetFromUse Transform from the `<use>` element's user space to the target space.
+   */
+  std::optional<Box2d> externalUseContentBounds(Registry& hostRegistry, Entity hostEntity,
+                                                const Transform2d& targetFromUse);
   /// Measure \ref externalUseContentBounds without the frame cache.
-  std::optional<Box2d> measureExternalUseContent(Registry& hostRegistry, Entity hostEntity);
+  std::optional<Box2d> measureExternalUseContent(Registry& hostRegistry, Entity hostEntity,
+                                                 const Transform2d& targetFromUse);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
@@ -635,8 +656,14 @@ private:
   /// Per-registry object bounding boxes measured this frame; see \ref objectBoundingBox.
   std::unordered_map<const Registry*, std::unordered_map<Entity, std::optional<Box2d>>>
       objectBoundsCache_;
-  /// Per-registry external `<use>` content bounds measured this frame.
-  std::unordered_map<const Registry*, std::unordered_map<Entity, std::optional<Box2d>>>
+  /// External `<use>` content bounds measured in one target space.
+  struct MeasuredExternalUseBounds {
+    Transform2d targetFromUse;    //!< Transform the bounds were measured through.
+    std::optional<Box2d> bounds;  //!< The measured bounds.
+  };
+  /// Per-registry external `<use>` content bounds measured this frame, per target space.
+  std::unordered_map<const Registry*,
+                     std::unordered_map<Entity, std::vector<MeasuredExternalUseBounds>>>
       externalUseBoundsCache_;
   /// Per-registry external `<use>` instances in draw order; see \ref externalUseInstances.
   std::unordered_map<const Registry*, std::vector<std::pair<int, Entity>>> externalUseInstances_;
