@@ -5,7 +5,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=latest_llvm --config=buildbuddy-re @selected_targets"
+      "argv": "bazelisk build --config=ci --config=latest_llvm --config=buildbuddy-re @selected_targets",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64 --platforms=//tools/ci:buildbuddy_linux_x86_64 --spawn_strategy=remote '--strategy_regexp=^Executing genrule //donner/editor:editor_build_info_txt$=local' --strategy=TestRunner=local --noremote_local_fallback --remote_timeout=600s --jobs=50 @selected_targets"
      }
     ],
     "scenarios": [
@@ -19,7 +20,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=latest_llvm @selected_targets"
+      "argv": "bazelisk build --config=ci --config=latest_llvm @selected_targets",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments @selected_targets"
      }
     ],
     "scenarios": [
@@ -41,7 +43,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=latest_llvm --config=buildbuddy-re --remote_accept_cached=false --disk_cache= '--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}' '--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json' //tools/ci:buildbuddy_compile_probe"
+      "argv": "bazelisk build --config=ci --config=latest_llvm --config=buildbuddy-re --remote_accept_cached=false --disk_cache= '--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}' '--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json' //tools/ci:buildbuddy_compile_probe",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64 --platforms=//tools/ci:buildbuddy_linux_x86_64 --spawn_strategy=remote '--strategy_regexp=^Executing genrule //donner/editor:editor_build_info_txt$=local' --strategy=TestRunner=local --noremote_local_fallback --remote_timeout=600s --jobs=50 --remote_accept_cached=false --disk_cache= '--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}' '--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json' //tools/ci:buildbuddy_compile_probe"
      },
      {
       "action": "run",
@@ -49,7 +52,8 @@
      },
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=latest_llvm --config=buildbuddy-re //..."
+      "argv": "bazelisk build --config=ci --config=latest_llvm --config=buildbuddy-re //...",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64 --platforms=//tools/ci:buildbuddy_linux_x86_64 --spawn_strategy=remote '--strategy_regexp=^Executing genrule //donner/editor:editor_build_info_txt$=local' --strategy=TestRunner=local --noremote_local_fallback --remote_timeout=600s --jobs=50 //..."
      }
     ],
     "scenarios": [
@@ -63,7 +67,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=latest_llvm --remote_accept_cached=false --disk_cache= '--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}' '--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json' //tools/ci:buildbuddy_compile_probe"
+      "argv": "bazelisk build --config=ci --config=latest_llvm --remote_accept_cached=false --disk_cache= '--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}' '--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json' //tools/ci:buildbuddy_compile_probe",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --remote_accept_cached=false --disk_cache= '--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}' '--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json' //tools/ci:buildbuddy_compile_probe"
      },
      {
       "action": "run",
@@ -71,7 +76,8 @@
      },
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=latest_llvm //..."
+      "argv": "bazelisk build --config=ci --config=latest_llvm //...",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments //..."
      }
     ],
     "scenarios": [
@@ -91,7 +97,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=all --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak"
+      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=all --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak",
+      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=all --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak"
      }
     ],
     "scenarios": [
@@ -117,7 +124,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --linkopt=-fuse-ld=gold //tools/ci:linker_canary"
+      "argv": "bazelisk build --config=ci --linkopt=-fuse-ld=gold //tools/ci:linker_canary",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --linkopt=-fuse-ld=gold //tools/ci:linker_canary"
      }
     ],
     "scenarios": [
@@ -147,7 +155,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --config=buildbuddy-re --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --config=buildbuddy-re --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64 --platforms=//tools/ci:buildbuddy_linux_x86_64 --spawn_strategy=remote '--strategy_regexp=^Executing genrule //donner/editor:editor_build_info_txt$=local' --strategy=TestRunner=local --noremote_local_fallback --remote_timeout=600s --jobs=50 --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets"
      }
     ],
     "scenarios": [
@@ -165,7 +174,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets"
      }
     ],
     "scenarios": [
@@ -187,7 +197,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp //tools/ci:linux_wgpu_resvg_reference"
+      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp //tools/ci:linux_wgpu_resvg_reference",
+      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp //tools/ci:linux_wgpu_resvg_reference"
      }
     ],
     "scenarios": [
@@ -209,7 +220,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --config=ci --config=latest_llvm --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets"
+      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --config=ci --config=latest_llvm --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets",
+      "expanded": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets"
      }
     ],
     "scenarios": [
@@ -235,7 +247,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=all --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak"
+      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=all --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak",
+      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=all --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak"
      }
     ],
     "scenarios": [
@@ -262,6 +275,7 @@
      {
       "action": "bazel",
       "argv": "bazelisk fetch --config=ci --config=latest_llvm --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s @selected_targets",
+      "expanded": "bazelisk fetch --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s @selected_targets",
       "retry_after_reset": "llvm_toolchain_linux_aarch64_llvm"
      }
     ],
@@ -292,7 +306,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --nocache_test_results --test_output=errors --test_env=PATH --test_tag_filters=requires_xvfb,-fuzz_soak --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --strategy=TestRunner=local @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --nocache_test_results --test_output=errors --test_env=PATH --test_tag_filters=requires_xvfb,-fuzz_soak --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --strategy=TestRunner=local @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --nocache_test_results --test_output=errors --test_env=PATH --test_tag_filters=requires_xvfb,-fuzz_soak --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --strategy=TestRunner=local @selected_targets"
      }
     ],
     "scenarios": [
@@ -326,7 +341,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' '$(python3 tools/ci_remote_gpu_targets.py @selected_targets)'"
+      "argv": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' '$(python3 tools/ci_remote_gpu_targets.py @selected_targets)'",
+      "expanded": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' '$(python3 tools/ci_remote_gpu_targets.py @selected_targets)'"
      }
     ],
     "scenarios": [
@@ -352,7 +368,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/test-wgpu/console.log' bazelisk test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp '--profile=$DIAG_DIR/test-wgpu/profile.gz' '--build_event_json_file=$DIAG_DIR/test-wgpu/bep.json' '--execution_log_compact_file=$DIAG_DIR/test-wgpu/exec.log.zst' //tools/ci:linux_wgpu_resvg_reference"
+      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/test-wgpu/console.log' bazelisk test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp '--profile=$DIAG_DIR/test-wgpu/profile.gz' '--build_event_json_file=$DIAG_DIR/test-wgpu/bep.json' '--execution_log_compact_file=$DIAG_DIR/test-wgpu/exec.log.zst' //tools/ci:linux_wgpu_resvg_reference",
+      "expanded": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/test-wgpu/console.log' bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp '--profile=$DIAG_DIR/test-wgpu/profile.gz' '--build_event_json_file=$DIAG_DIR/test-wgpu/bep.json' '--execution_log_compact_file=$DIAG_DIR/test-wgpu/exec.log.zst' //tools/ci:linux_wgpu_resvg_reference"
      }
     ],
     "scenarios": [
@@ -375,7 +392,8 @@
      {
       "action": "bazel",
       "argv": "bazelisk test --config=ci --test_output=errors --nocache_test_results --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going '--build_event_json_file=${RUNNER_TEMP}/browser-gpu-parallel.bep.json' --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 //tools/ci:browser_gpu_comparison",
-      "defer": true
+      "defer": true,
+      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --test_output=errors --nocache_test_results --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going '--build_event_json_file=${RUNNER_TEMP}/browser-gpu-parallel.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 //tools/ci:browser_gpu_comparison"
      },
      {
       "action": "run",
@@ -403,7 +421,8 @@
      {
       "action": "bazel",
       "argv": "bazelisk test --config=ci --test_output=errors --nocache_test_results --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going '--build_event_json_file=${RUNNER_TEMP}/browser-gpu-serial.bep.json' --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 //tools/ci:browser_gpu_comparison",
-      "defer": true
+      "defer": true,
+      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --test_output=errors --nocache_test_results --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going '--build_event_json_file=${RUNNER_TEMP}/browser-gpu-serial.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 //tools/ci:browser_gpu_comparison"
      },
      {
       "action": "run",
@@ -435,11 +454,13 @@
      {
       "action": "query",
       "argv": "bazelisk query 'attr('\"'\"'tags'\"'\"', '\"'\"'launches-browser'\"'\"', tests(set(@selected_targets)))'",
+      "expanded": "bazelisk query 'attr('\"'\"'tags'\"'\"', '\"'\"'launches-browser'\"'\"', tests(set(@selected_targets)))'",
       "when_empty": "No browser targets selected."
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted //tools/ci:mac_browser_archive"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted //tools/ci:mac_browser_archive",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --nocache_test_results --test_output=errors --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted //tools/ci:mac_browser_archive"
      }
     ],
     "scenarios": [
@@ -469,7 +490,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors --local_test_jobs=1 '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak --config=hosted-macos-quarantine --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors --local_test_jobs=1 '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak --config=hosted-macos-quarantine --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --test_output=errors --local_test_jobs=1 '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1 --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 @selected_targets"
      }
     ],
     "scenarios": [
@@ -495,7 +517,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk build --config=ci --config=ci-macos --macos_minimum_os=13.3 @selected_targets"
+      "argv": "bazelisk build --config=ci --config=ci-macos --macos_minimum_os=13.3 @selected_targets",
+      "expanded": "bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 @selected_targets"
      }
     ],
     "scenarios": [
@@ -521,7 +544,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=geode --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-geode_test.bep.json' --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted //tools/ci:editor_geode"
+      "argv": "bazelisk test --config=ci --config=geode --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-geode_test.bep.json' --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted //tools/ci:editor_geode",
+      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --//donner/svg/renderer:renderer_backend=geode --//donner/svg/renderer/geode:enable_geode=true --local_test_jobs=1 --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-geode_test.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted //tools/ci:editor_geode"
      }
     ],
     "scenarios": [
@@ -547,7 +571,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
+      "argv": "bazelisk fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains",
+      "expanded": "bazelisk fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
      }
     ],
     "scenarios": [
@@ -585,7 +610,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak --config=hosted-macos-quarantine --config=hosted-macos-unvalidated --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak --config=hosted-macos-quarantine --config=hosted-macos-unvalidated --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --test_output=errors --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1 --//build_defs:metal_shader_validation=off --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted --test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1 @selected_targets"
      }
     ],
     "scenarios": [
@@ -616,11 +642,13 @@
      {
       "action": "query",
       "argv": "bazelisk --nohome_rc --nosystem_rc query 'attr('\"'\"'tags'\"'\"', '\"'\"'requires_desktop_session'\"'\"', tests(set(@selected_targets)))'",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc query 'attr('\"'\"'tags'\"'\"', '\"'\"'requires_desktop_session'\"'\"', tests(set(@selected_targets)))'",
       "when_empty": "No browser targets selected."
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser //tools/ci:mac_browser_archive"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser //tools/ci:mac_browser_archive",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --nocache_test_results --test_output=errors --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser //tools/ci:mac_browser_archive"
      }
     ],
     "scenarios": [
@@ -649,7 +677,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors --local_test_jobs=1 --build_tests_only '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=requires_desktop_session,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors --local_test_jobs=1 --build_tests_only '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=requires_desktop_session,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --test_output=errors --local_test_jobs=1 --build_tests_only '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=requires_desktop_session,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser @selected_targets"
      }
     ],
     "scenarios": [
@@ -674,7 +703,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
+      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
      }
     ],
     "scenarios": [
@@ -699,7 +729,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_offline_compiler"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_offline_compiler",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_offline_compiler"
      }
     ],
     "scenarios": [
@@ -724,7 +755,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-metal_native.bep.json' --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_native"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-metal_native.bep.json' --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_native",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-metal_native.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_native"
      }
     ],
     "scenarios": [
@@ -749,7 +781,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_preflight"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_preflight",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_preflight"
      }
     ],
     "scenarios": [
@@ -774,7 +807,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_tag_filters= --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_full_validation"
+      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_tag_filters= --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_full_validation",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --nocache_test_results --noskip_incompatible_explicit_targets --test_tag_filters= --test_output=errors --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal //tools/ci:metal_full_validation"
      }
     ],
     "scenarios": [
@@ -799,7 +833,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
+      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
      }
     ],
     "scenarios": [
@@ -824,7 +859,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --nocache_test_results --test_output=errors --local_test_jobs=1 --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/browser-context-diagnostic.bep.json' --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm --test_timeout=60 //tools/ci:chromium_context_diagnostic"
+      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --nocache_test_results --test_output=errors --local_test_jobs=1 --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/browser-context-diagnostic.bep.json' --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm --test_timeout=60 //tools/ci:chromium_context_diagnostic",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --jobs=32 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_output=errors --local_test_jobs=1 --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/browser-context-diagnostic.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm --test_timeout=60 //tools/ci:chromium_context_diagnostic"
      }
     ],
     "scenarios": [
@@ -851,11 +887,13 @@
      {
       "action": "query",
       "argv": "bazelisk --nohome_rc --nosystem_rc query 'attr('\"'\"'tags'\"'\"', '\"'\"'launches-browser'\"'\"', tests(set(@selected_targets)))'",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc query 'attr('\"'\"'tags'\"'\"', '\"'\"'launches-browser'\"'\"', tests(set(@selected_targets)))'",
       "when_empty": "No browser targets selected."
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --nocache_test_results --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm //tools/ci:mac_browser_archive"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --nocache_test_results --test_output=errors --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm //tools/ci:mac_browser_archive",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --jobs=32 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_output=errors --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm //tools/ci:mac_browser_archive"
      }
     ],
     "scenarios": [
@@ -885,7 +923,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --test_output=errors --local_test_jobs=1 '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --test_output=errors --local_test_jobs=1 '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --jobs=32 --local_resources=cpu=6 --local_resources=memory=6144 --test_output=errors --local_test_jobs=1 '--build_event_json_file=$RUNNER_TEMP/coverage-browser_test.bep.json' --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm @selected_targets"
      }
     ],
     "scenarios": [
@@ -911,7 +950,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc build --config=ci --config=macos-vm --config=ci-macos --macos_minimum_os=13.3 @selected_targets"
+      "argv": "bazelisk --nohome_rc --nosystem_rc build --config=ci --config=macos-vm --config=ci-macos --macos_minimum_os=13.3 @selected_targets",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --jobs=32 --local_resources=cpu=6 --local_resources=memory=6144 --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 @selected_targets"
      }
     ],
     "scenarios": [
@@ -937,7 +977,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --config=geode --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-geode_test.bep.json' --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm //tools/ci:editor_geode"
+      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --config=geode --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-geode_test.bep.json' --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm //tools/ci:editor_geode",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --jobs=32 --local_resources=cpu=6 --local_resources=memory=6144 --//donner/svg/renderer:renderer_backend=geode --//donner/svg/renderer/geode:enable_geode=true --local_test_jobs=1 --test_output=errors '--build_event_json_file=$RUNNER_TEMP/coverage-geode_test.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm //tools/ci:editor_geode"
      }
     ],
     "scenarios": [
@@ -963,7 +1004,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
+      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
      }
     ],
     "scenarios": [
@@ -993,7 +1035,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --test_output=errors --test_tag_filters=-manual,-perf,-requires_shader_validation,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm --test_output=errors --test_tag_filters=-manual,-perf,-requires_shader_validation,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm @selected_targets",
+      "expanded": "tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --jobs=32 --local_resources=cpu=6 --local_resources=memory=6144 --test_output=errors --test_tag_filters=-manual,-perf,-requires_shader_validation,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm @selected_targets"
      }
     ],
     "scenarios": [
@@ -1019,7 +1062,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_tag_filters= --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-qualification.bep.json' --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=vm-qualification //tools/ci:macos_vm_qualification"
+      "argv": "bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_tag_filters= --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-qualification.bep.json' --config=ci-macos --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=vm-qualification //tools/ci:macos_vm_qualification",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --test_output=errors --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_tag_filters= --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-qualification.bep.json' --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin --test_env=HOME= --local_resources=local_gpu=4 --macos_minimum_os=13.3 --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=vm-qualification //tools/ci:macos_vm_qualification"
      }
     ],
     "scenarios": [
@@ -1041,7 +1085,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
+      "argv": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains",
+      "expanded": "bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains"
      }
     ],
     "scenarios": [

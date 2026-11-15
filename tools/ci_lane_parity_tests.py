@@ -14,6 +14,7 @@ that no longer matches a difference also fails, so the lists shrink as gaps clos
 import copy
 import functools
 import hashlib
+import itertools
 import json
 from pathlib import Path
 import re
@@ -937,13 +938,27 @@ def step_invocations(step, environment, scenario=None):
 
 
 # Every lane step's dry run in every scenario, reviewed: a change to the lane table, or to what a
-# job passes a phase, changes it. Regenerate with
+# job passes a phase, changes it. Each command is also recorded with the repository's configs
+# expanded, which a change that only moves flags into a config leaves as it is. Regenerate with
 # `python3 tools/ci_lane_parity_tests.py --update-lane-golden` and review the diff.
 LANE_GOLDEN = "tools/ci/lane_commands.golden.json"
 
 
+def _expanded(argv):
+    """A Bazel command line with each repository config replaced by its flags, so a change that
+    moves flags into a .bazelrc config shows as no change here."""
+    words = argv[argv.index("bazelisk") + 1:]
+    startup = [word for word in itertools.takewhile(lambda word: word.startswith("--"), words)]
+    command, options = words[len(startup)], words[len(startup) + 1:]
+    return shlex.join(argv[:argv.index("bazelisk") + 1] + startup + [command] + (
+        options if command == "query" else
+        bazelrc_configs.expand(command, options, _repository_configs())))
+
+
 def _golden_action(action):
     action = dict(action)
+    if action["action"] in ("bazel", "query"):
+        action["expanded"] = _expanded(action["argv"])
     if "argv" in action:
         action["argv"] = shlex.join(action["argv"])
     return action
