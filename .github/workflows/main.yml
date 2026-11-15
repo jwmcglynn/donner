@@ -448,13 +448,17 @@ jobs:
 
           # BEGIN macos-metal selection (metal_affected).
           # The native Metal job reruns fixed suites with test caching off, so it runs only when
-          # the affected set reaches one of their tests (bazel-diff marks a test affected when
-          # anything it depends on changed), or a script that job runs outside Bazel changed.
-          # It reads the selection before manual targets are filtered out, like the reference
-          # above. Fail closed: a failed or empty suite query selects the job.
+          # Bazel finds a test of those suites in the affected set (bazel-diff marks a test
+          # affected when anything it depends on changed), or a changed path is one bazel-diff
+          # cannot attribute or one the job runs outside Bazel. The dependency inputs are the
+          # WebGPU reference list's (non-registry dependency definitions, the module lockfile)
+          # plus every third-party BUILD overlay. It reads the selection before manual targets
+          # are filtered out, like the reference above. Fail closed: any query failure, or suites
+          # with no tests, selects the job.
           metal_affected=false
           while IFS= read -r path; do
             case "$path" in
+              third_party/bazel/non_bcr_deps.bzl|MODULE.bazel.lock|third_party/BUILD.*|third_party/*.BUILD|\
               tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|tools/ci_bazel_test.sh)
                 echo "Metal job input changed: $path"
                 metal_affected=true
@@ -463,18 +467,19 @@ jobs:
             esac
           done <<< "$changed_files"
           if [[ "$metal_affected" != "true" ]]; then
-            if metal_tests="$(
-              cd "$head_dir"
-              bazelisk query --keep_going \
-                'tests(//tools/ci:metal_full_validation + //tools/ci:metal_preflight + //tools/ci:metal_offline_compiler + //tools/ci:metal_native)'
-            )" && [[ -n "$metal_tests" ]]; then
-              for metal_test in $metal_tests; do
-                if [[ " $affected " == *" $metal_test "* ]]; then
-                  echo "Affected Metal suite test: $metal_test"
-                  metal_affected=true
-                  break
-                fi
-              done
+            metal_suites='tests(//tools/ci:metal_full_validation + //tools/ci:metal_preflight + //tools/ci:metal_offline_compiler + //tools/ci:metal_native)'
+            # Intentional word splitting: each affected label is one argument. Labels are quoted
+            # because npm package labels contain query operators.
+            # shellcheck disable=SC2086
+            metal_set="$(python3 -c 'import sys; print(" ".join("\"%s\"" % label for label in sys.argv[1:]))' $affected)"
+            if metal_tests="$(cd "$head_dir" && bazelisk query --keep_going "$metal_suites")" &&
+                [[ -n "$metal_tests" ]] &&
+                metal_targets="$(cd "$head_dir" && bazelisk query --keep_going "set($metal_set) intersect $metal_suites")"; then
+              if [[ -n "$metal_targets" ]]; then
+                echo "Affected Metal suite tests:"
+                printf '%s\n' "$metal_targets"
+                metal_affected=true
+              fi
             else
               echo "Metal suite query failed or found no tests; selecting the native Metal job."
               metal_affected=true
