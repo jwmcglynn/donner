@@ -13,6 +13,8 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/StringUtils.h"
+
 namespace donner::css {
 
 namespace {
@@ -38,18 +40,6 @@ void appendPointerField(std::string& key, const void* pointer) {
   // Formatted as a number rather than raw bytes so the key stays printable, and length-prefixed
   // like every other field so its width cannot shift the following fields.
   appendField(key, std::to_string(reinterpret_cast<uintptr_t>(pointer)));
-}
-
-/// ASCII-only lowercase, matching the case-insensitive family comparison used when selecting a
-/// face. Locale-sensitive lowercasing would make the key depend on the process locale.
-std::string toLowerAscii(std::string_view value) {
-  std::string lowered(value);
-  for (char& c : lowered) {
-    if (c >= 'A' && c <= 'Z') {
-      c = static_cast<char>(c - 'A' + 'a');
-    }
-  }
-  return lowered;
 }
 
 }  // namespace
@@ -80,7 +70,7 @@ std::pair<int, int> FontFace::normalizedFontWeightRange() const {
 
 std::string FontFaceIdentityKey(const FontFace& face) {
   std::string key;
-  appendField(key, toLowerAscii(std::string_view(face.familyName)));
+  appendField(key, StringUtils::ToLowerAscii(std::string_view(face.familyName)));
   const auto [minimumWeight, maximumWeight] = face.normalizedFontWeightRange();
   appendField(key, std::to_string(minimumWeight));
   appendField(key, std::to_string(maximumWeight));

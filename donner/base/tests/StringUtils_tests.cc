@@ -275,6 +275,25 @@ TEST(StringUtils, TrimWhitespace) {
             "hello world"sv);
 }
 
+TEST(StringUtils, ToLowerAscii) {
+  EXPECT_EQ(StringUtils::ToLowerAscii(""sv), "");
+  EXPECT_EQ(StringUtils::ToLowerAscii("Noto SANS Mono-42"sv), "noto sans mono-42");
+  EXPECT_EQ(StringUtils::ToLowerAscii(RcString("@[`{")), "@[`{");
+  const std::string capitalEAcuteUtf8 = "\xC3\x89";
+  EXPECT_EQ(StringUtils::ToLowerAscii(capitalEAcuteUtf8 + "COLE"), capitalEAcuteUtf8 + "cole");
+}
+
+TEST(StringUtils, ToLowerAsciiChangesOnlyUppercaseAsciiBytes) {
+  std::string allBytes;
+  std::string expected;
+  for (int byte = 0; byte < 256; ++byte) {
+    const char ch = static_cast<char>(byte);
+    allBytes.push_back(ch);
+    expected.push_back(byte >= 'A' && byte <= 'Z' ? static_cast<char>(byte - 'A' + 'a') : ch);
+  }
+  EXPECT_EQ(StringUtils::ToLowerAscii(allBytes), expected);
+}
+
 // Test multiple occurrences for Contains
 TEST(StringUtils, ContainsMultipleOccurrences) {
   EXPECT_TRUE(StringUtils::Contains("hello hello world"sv, "hello"sv))
