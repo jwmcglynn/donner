@@ -1260,22 +1260,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         start = job.index("          should_fallback=false\n")
         end = job.index('          work_dir="$(mktemp -d)"', start)
         script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        # A full selection still hashes the revision once, so a change that breaks the hashing
+        # fails its own pull request; //tools/ci:determine_targets_tests runs the real call.
+        script += 'generate_hashes() { echo "self_check=hashed" >> "$GITHUB_OUTPUT"; }\n'
         script += self._workflow_logic_function(job)
         script += textwrap.dedent(job[start:end])
         script += 'echo "incremental=true" >> "$GITHUB_OUTPUT"\n'
+        full = "self_check=hashed\nfallback=true\naffected=\n"
         for changed_files, expected in (
-            (".bazelversion\nexamples/.bazelversion", "fallback=true\naffected=\n"),
-            ("MODULE.bazel", "fallback=true\naffected=\n"),
+            (".bazelversion\nexamples/.bazelversion", full),
+            ("MODULE.bazel", full),
             ("donner/base/Utils.h", "incremental=true\n"),
             # A script that holds a workflow's step logic selects what a workflow change does;
             # the rest of tools/ci reaches the build graph and bazel-diff as usual.
-            *[(path, "fallback=true\naffected=\n") for path in WORKFLOW_LOGIC_SCRIPTS],
+            *[(path, full) for path in WORKFLOW_LOGIC_SCRIPTS],
             ("tools/ci/lane.sh", "incremental=true\n"),
             # Rule definitions under build_defs reach every target; its other files are ordinary
             # sources. Only this workflow and its base-change caller define these lanes.
-            ("build_defs/rules.bzl", "fallback=true\naffected=\n"),
+            ("build_defs/rules.bzl", full),
             ("build_defs/check_banned_patterns.py", "incremental=true\n"),
-            (".github/workflows/pr_base_change.yml", "fallback=true\naffected=\n"),
+            (".github/workflows/pr_base_change.yml", full),
             (".github/workflows/lint.yml", "incremental=true\n"),
         ):
             with self.subTest(changed_files=changed_files):
