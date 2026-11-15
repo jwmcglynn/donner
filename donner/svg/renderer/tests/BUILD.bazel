@@ -2198,6 +2198,7 @@ donner_perf_cc_test(
         "//donner/svg/components",
         "//donner/svg/parser",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:rendering_context",
         "@com_google_gtest//:gtest_main",
     ],
 )

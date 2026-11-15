@@ -366,12 +366,16 @@ std::optional<Box2d> DeviceDrawableBoundsWithStroke(const EntityHandle& dataHand
   return (worldFromEntity * surfaceFromCanvas).transformBox(box);
 }
 
-/// Return the SVG object bounding box used by objectBoundingBox effects.
+/// Return the SVG object bounding box used by objectBoundingBox effects, bounding the element's
+/// geometry after @p targetFromEntity maps it into a target space. Shape geometry is bounded after
+/// every transform is composed, so the box is tight however the transforms combine; a text box is
+/// mapped as a box.
 ///
 /// ShapeSystem covers path-backed elements and their path-backed descendants, but text geometry
 /// is produced by TextEngine instead of ComputedPathComponent. Falling back to an empty shape box
 /// for text collapses objectBoundingBox filter regions to zero and clips the entire filter output.
-std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
+std::optional<Box2d> RenderingObjectBoundingBoxIn(Registry& registry, EntityHandle handle,
+                                                  const Transform2d& targetFromEntity) {
 #ifdef DONNER_TEXT_ENABLED
   // Not `TextComponent`: `<a>` carries one unconditionally so that it can act as a text content
   // element when nested in text, but outside text it is an ordinary group whose box comes from its
@@ -379,14 +383,20 @@ std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle
   // a text root exists.
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     if (textEngine->textRootEntity(handle) != entt::null) {
-      return textEngine->computedObjectBoundingBox(handle);
+      const std::optional<Box2d> box = textEngine->computedObjectBoundingBox(handle);
+      return box ? std::optional<Box2d>(targetFromEntity.transformBox(*box)) : std::nullopt;
     }
   }
 #else
   (void)registry;
 #endif
 
-  return components::ShapeSystem().getShapeBounds(handle);
+  return components::ShapeSystem().getShapeBoundsIn(handle, targetFromEntity);
+}
+
+/// \ref RenderingObjectBoundingBoxIn in the element's own space.
+std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
+  return RenderingObjectBoundingBoxIn(registry, handle, Transform2d());
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -4641,12 +4651,23 @@ struct ReportedSubDocumentWarnings {
  * Warnings a sub-document found while no collecting host sink was installed, held for the next
  * draw with one. A retained render tree is not prepared again, so it does not find them again.
  * Held warnings are matched like \ref ReportedSubDocumentWarnings and bounded by the sink's limits.
+ * Present only while it holds a warning or a truncation mark.
  */
 struct PendingSubDocumentWarnings {
   ParseWarningSink warnings;
   std::unordered_set<std::string> keys;
   /// The sub-document's mutation revision when the warnings were found.
   std::uint64_t documentRevision = 0;
+};
+
+/// Marks a sub-document whose held warnings a mutation dropped, so the next draw with a collecting
+/// host sink restyles it to find its current warnings.
+struct RediscoverSubDocumentWarnings {};
+
+/// Fingerprint of the last warnings a preparation without a collecting host sink found, once each
+/// of them was delivered or held, so finding the same warnings again needs no matching.
+struct HeldSubDocumentWarningBatch {
+  std::size_t fingerprint = 0;
 };
 
 std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
@@ -4659,16 +4680,61 @@ std::uint64_t SubDocumentRevision(const Registry& registry) {
   return registry.ctx().get<components::SVGDocumentContext>().mutationRevision();
 }
 
-/// The sub-document's held warnings, emptied first if they predate its current mutation revision.
-PendingSubDocumentWarnings& CurrentHeldWarnings(Registry& registry) {
-  const std::uint64_t revision = SubDocumentRevision(registry);
-  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  if (pending != nullptr && pending->documentRevision == revision) {
-    return *pending;
+/// Order-sensitive fingerprint of @p warnings, computed without formatting them.
+std::size_t WarningBatchFingerprint(const ParseWarningSink& warnings) {
+  constexpr std::size_t kNoOffset = static_cast<std::size_t>(-1);
+  std::size_t fingerprint = warnings.resourceLimitExceeded() ? 1 : 0;
+  const auto mix = [&fingerprint](std::size_t value) {
+    fingerprint ^= value + 0x9e3779b97f4a7c15ULL + (fingerprint << 6) + (fingerprint >> 2);
+  };
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    mix(std::hash<std::string_view>()(std::string_view(warning.reason)));
+    mix(static_cast<std::size_t>(warning.severity));
+    mix(warning.range.start.offset.value_or(kNoOffset));
+    mix(warning.range.end.offset.value_or(kNoOffset));
   }
-  PendingSubDocumentWarnings fresh;
-  fresh.documentRevision = revision;
-  return registry.ctx().insert_or_assign(std::move(fresh));
+  return fingerprint;
+}
+
+/**
+ * Drop held warnings found before the sub-document was last mutated, and mark it so the next
+ * collecting draw restyles it to find its current warnings. A draw that does not collect never
+ * restyles for this. A document-level warning reported once per document is let through again,
+ * since the copy that reported it is dropped.
+ *
+ * @param registry The sub-document's registry.
+ */
+void DropStaleSubDocumentWarnings(Registry& registry) {
+  const auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  if (pending == nullptr || pending->documentRevision == SubDocumentRevision(registry)) {
+    return;
+  }
+  registry.ctx().erase<PendingSubDocumentWarnings>();
+  registry.ctx().erase<HeldSubDocumentWarningBatch>();
+  registry.ctx().insert_or_assign(RediscoverSubDocumentWarnings{});
+  components::ForgetMissingFallbackFontReport(registry);
+}
+
+/// The held set @p pending points to, created for the current revision if there is none yet.
+PendingSubDocumentWarnings& EnsureHeldWarnings(Registry& registry,
+                                               PendingSubDocumentWarnings*& pending) {
+  if (pending == nullptr) {
+    PendingSubDocumentWarnings fresh;
+    fresh.documentRevision = SubDocumentRevision(registry);
+    pending = &registry.ctx().insert_or_assign(std::move(fresh));
+  }
+  return *pending;
+}
+
+/// Hold @p warning under @p key, creating the held set on first use.
+void HoldSubDocumentWarning(Registry& registry, PendingSubDocumentWarnings*& pending,
+                            const ParseDiagnostic& warning, std::string&& key) {
+  PendingSubDocumentWarnings& held = EnsureHeldWarnings(registry, pending);
+  const std::size_t count = held.warnings.warnings().size();
+  held.warnings.add(ParseDiagnostic(warning));
+  if (held.warnings.warnings().size() > count) {
+    held.keys.insert(std::move(key));
+  }
 }
 
 /**
@@ -4683,40 +4749,29 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
   if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
     return;
   }
-  PendingSubDocumentWarnings& pending = CurrentHeldWarnings(registry);
+  DropStaleSubDocumentWarnings(registry);
+  const std::size_t fingerprint = WarningBatchFingerprint(warnings);
+  if (const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
+      last != nullptr && last->fingerprint == fingerprint) {
+    return;
+  }
   const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
+  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
   for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (pending.warnings.resourceLimitExceeded()) {
+    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
       break;
     }
     std::string key = SubDocumentWarningKey(warning);
-    if ((reported != nullptr && reported->keys.contains(key)) || pending.keys.contains(key)) {
-      continue;
-    }
-    const std::size_t held = pending.warnings.warnings().size();
-    pending.warnings.add(ParseDiagnostic(warning));
-    if (pending.warnings.warnings().size() > held) {
-      pending.keys.insert(std::move(key));
+    const bool known = (reported != nullptr && reported->keys.contains(key)) ||
+                       (pending != nullptr && pending->keys.contains(key));
+    if (!known) {
+      HoldSubDocumentWarning(registry, pending, warning, std::move(key));
     }
   }
   if (warnings.resourceLimitExceeded()) {
-    pending.warnings.markResourceLimitExceeded();
+    EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
   }
-}
-
-/**
- * Drop held warnings found before the sub-document was last mutated, and restyle the whole
- * document on its next preparation so that preparation finds every current warning again.
- *
- * @param registry The sub-document's registry.
- */
-void DropStaleSubDocumentWarnings(Registry& registry) {
-  const auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  if (pending == nullptr || pending->documentRevision == SubDocumentRevision(registry)) {
-    return;
-  }
-  registry.ctx().erase<PendingSubDocumentWarnings>();
-  components::ExternalUseStyleRetention::ScheduleFullRestyle(registry);
+  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{.fingerprint = fingerprint});
 }
 
 /**
@@ -4748,6 +4803,25 @@ void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warni
   }
 }
 
+/**
+ * Before a draw with a collecting host sink prepares a sub-document, deliver the warnings it holds,
+ * and restyle it on this preparation if a mutation dropped held warnings, so the preparation finds
+ * its current ones.
+ *
+ * @param registry The sub-document's registry.
+ * @param hostSink The host's collecting sink.
+ */
+void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSink) {
+  if (registry.ctx().erase<RediscoverSubDocumentWarnings>()) {
+    components::ExternalUseStyleRetention::ScheduleFullRestyle(registry);
+  }
+  if (auto* pending = registry.ctx().find<PendingSubDocumentWarnings>()) {
+    const PendingSubDocumentWarnings held = std::move(*pending);
+    registry.ctx().erase<PendingSubDocumentWarnings>();
+    ReportSubDocumentWarnings(registry, held.warnings, hostSink);
+  }
+}
+
 }  // namespace
 
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
@@ -4762,16 +4836,13 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   }
   // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
   // the host sink once. A warning dropped by a resource limit, here or in the collecting sink,
-  // marks the host sink truncated so it does not look complete. As with any sink limit, the host
-  // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
-  // again on every traversal, each later draw of it reports truncation too. Without a collecting
-  // host sink the warnings are held for a later draw with one, and not printed even when verbose,
-  // since printing would repeat them for every traversal.
+  // marks the host sink truncated so it does not look complete; as with any sink limit, the host
+  // sink then drops the rest of this draw's warnings. Without a collecting host sink the warnings
+  // are held for a later draw with one, and not printed even when verbose, since printing would
+  // repeat them for every traversal.
   const bool collecting = warningSink_ != nullptr && warningSink_->isEnabled();
-  if (auto* pending = registry.ctx().find<PendingSubDocumentWarnings>(); collecting && pending) {
-    const PendingSubDocumentWarnings held = std::move(*pending);
-    registry.ctx().erase<PendingSubDocumentWarnings>();
-    ReportSubDocumentWarnings(registry, held.warnings, *warningSink_);
+  if (collecting) {
+    DeliverHeldSubDocumentWarnings(registry, *warningSink_);
   }
   const auto deliver = [&](const ParseWarningSink& warnings) {
     if (collecting) {
@@ -4929,16 +5000,10 @@ public:
     }
     auto& context = registry_.ctx().get<components::ExternalUseStyleContext>();
     if (context.unsupportedResource && context.work->reportExternalResourceWarning()) {
-      ParseDiagnostic warning = ParseDiagnostic::Warning(
-          "External-use inherited cross-document URL resource is unsupported",
-          FileOffset::EndOfString());
-      if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
-        // A retained occurrence is not restyled again, so it does not raise this warning again.
-        ParseWarningSink held;
-        held.add(ParseDiagnostic(warning));
-        HoldSubDocumentWarnings(registry_, held);
-      }
-      ReportRenderWarning(warningSink_, verbose_, std::move(warning));
+      ReportRenderWarning(warningSink_, verbose_,
+                          ParseDiagnostic::Warning(
+                              "External-use inherited cross-document URL resource is unsupported",
+                              FileOffset::EndOfString()));
     }
     components::ExternalUseStyleRetention::FinishOccurrence(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
@@ -5177,25 +5242,30 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
       cached != objectBoundsCache_[&registry].end()) {
     return cached->second;
   }
+  const std::optional<Box2d> bounds = objectBoundingBoxIn(registry, entity, Transform2d());
+  objectBoundsCache_[&registry][entity] = bounds;
+  return bounds;
+}
+
+std::optional<Box2d> RendererDriver::objectBoundingBoxIn(Registry& registry, Entity entity,
+                                                         const Transform2d& targetFromEntity) {
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
   std::optional<Box2d> bounds =
-      RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+      RenderingObjectBoundingBoxIn(registry, instance.styleHandle(registry), targetFromEntity);
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
   const std::vector<std::pair<int, Entity>>& uses = externalUseInstances(registry);
   const int lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
   const auto firstUse =
       std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity()));
   for (auto it = firstUse; it != uses.end() && it->first <= lastDrawOrder; ++it) {
-    const std::optional<Box2d> content = externalUseContentBounds(registry, it->second);
-    if (!content) {
-      continue;
-    }
     const auto& useInstance = registry.get<components::RenderingInstanceComponent>(it->second);
-    const Box2d box =
-        (useInstance.worldFromEntityTransform * entityFromWorld).transformBox(*content);
-    bounds = bounds ? Box2d::Union(*bounds, box) : box;
+    const std::optional<Box2d> content = externalUseContentBounds(
+        registry, it->second,
+        useInstance.worldFromEntityTransform * entityFromWorld * targetFromEntity);
+    if (content) {
+      bounds = bounds ? Box2d::Union(*bounds, *content) : *content;
+    }
   }
-  objectBoundsCache_[&registry][entity] = bounds;
   return bounds;
 }
 
@@ -5272,18 +5342,26 @@ void RendererDriver::applyExternalUseClipBounds(
 }
 
 std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegistry,
-                                                              Entity hostEntity) {
-  if (const auto cached = externalUseBoundsCache_[&hostRegistry].find(hostEntity);
-      cached != externalUseBoundsCache_[&hostRegistry].end()) {
-    return cached->second;
+                                                              Entity hostEntity,
+                                                              const Transform2d& targetFromUse) {
+  std::vector<MeasuredExternalUseBounds>& measured =
+      externalUseBoundsCache_[&hostRegistry][hostEntity];
+  for (const MeasuredExternalUseBounds& entry : measured) {
+    if (entry.targetFromUse == targetFromUse) {
+      return entry.bounds;
+    }
   }
-  const std::optional<Box2d> bounds = measureExternalUseContent(hostRegistry, hostEntity);
-  externalUseBoundsCache_[&hostRegistry][hostEntity] = bounds;
+  const std::optional<Box2d> bounds =
+      measureExternalUseContent(hostRegistry, hostEntity, targetFromUse);
+  // Measuring can add entries for other registries, so look this one up again.
+  externalUseBoundsCache_[&hostRegistry][hostEntity].push_back(
+      MeasuredExternalUseBounds{.targetFromUse = targetFromUse, .bounds = bounds});
   return bounds;
 }
 
 std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostRegistry,
-                                                               Entity hostEntity) {
+                                                               Entity hostEntity,
+                                                               const Transform2d& targetFromUse) {
   const auto& instance = hostRegistry.get<components::RenderingInstanceComponent>(hostEntity);
   const auto* externalUse =
       instance.dataHandle(hostRegistry).try_get<components::ExternalUseComponent>();
@@ -5323,14 +5401,15 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
   // own external uses are measured in this layout too, then forgotten with it.
   forgetEffectBounds(child);
   const EntityHandle target(child, root);
-  const std::optional<Box2d> local = child.all_of<components::RenderingInstanceComponent>(root)
-                                         ? objectBoundingBox(child, root)
-                                         : components::ShapeSystem().getShapeBounds(target);
+  // The layout helper's result maps the root into the use's space.
+  const Transform2d targetFromRoot =
+      components::LayoutSystem().getEntityFromWorldTransform(target) * targetFromUse;
+  const std::optional<Box2d> bounds =
+      child.all_of<components::RenderingInstanceComponent>(root)
+          ? objectBoundingBoxIn(child, root, targetFromRoot)
+          : components::ShapeSystem().getShapeBoundsIn(target, targetFromRoot);
   forgetEffectBounds(child);
-  if (!local) {
-    return std::nullopt;
-  }
-  return components::LayoutSystem().getEntityFromWorldTransform(target).transformBox(*local);
+  return bounds;
 }
 
 void RendererDriver::traverseSubDocument(Registry& registry) {
