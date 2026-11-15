@@ -534,6 +534,7 @@ def preflight(reference: str, expected: str, prior: str | None, work: Path, api=
 
 def _preflight_record(record, prior, work, api, bootstrap=None):
     current = store.index(api, record["base_snapshot_commit"])
+    site.require("pending" not in current, "unfinished automatic publication must be reconciled first")
     site.require(prior == current["current"] and record["previous_composition"] == prior,
                  "approved prior composition differs")
     site.require(record.get("bootstrap") == bootstrap, "publication differs from signed bootstrap selection")
@@ -621,6 +622,8 @@ def _retain_and_deploy(record, plan, previous_id, work, api, *, candidate_id):
     durable, archive_record = _retain_composition(record, work)
     new_index = {**plan["current"], "releases": (plan["current"]["releases"]
                  if record.get("bootstrap") is not None else selected["releases"])}
+    if plan.get("automatic") is True:
+        new_index["pending"] = composition_id
     tip = store.commit(api, plan.get("snapshot", record["base_snapshot_commit"]), durable, new_index)
     store.restore(archive_record, work / "retained.tar", lambda path: api.file(tip, path))
     result = {"candidate": composition_id, "prior": plan["prior"], "snapshot_commit": tip}
@@ -629,30 +632,58 @@ def _retain_and_deploy(record, plan, previous_id, work, api, *, candidate_id):
                                          receipt=work / "candidate-deployment.json")
         _wait_for_live({"kind": "composition", "marker": site.read_json(work / "site/docs-site.json")})
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
-        result.update(_recover(record, plan["prior_identity"], previous_id, api, str(error),
-                               tip, _deployment_id(work), recovery_identity=plan.get("recovery_identity")))
-        if result["status"] == "restored" and record.get("bootstrap") is not None:
-            activation = work / "recovery-activation"
-            activation.mkdir()
-            new_index.update(current=record["bootstrap"]["recovery_archive_sha256"], previous=None)
-            try:
-                result["snapshot_commit"] = store.commit(api, tip, activation, new_index)
-                result["status"] = "recovered-to-bootstrap"
-            except (ValueError, OSError, subprocess.SubprocessError) as failure:
-                result.update(status="recovery-required", recovery_error=
-                              "Healthy bootstrap recovery; snapshot activation unconfirmed: " + str(failure))
+        _failed_publication(record, plan, previous_id, work, api, error, tip, new_index, result)
     else:
         activation = work / "activation"
         activation.mkdir()
         new_index.update(current=composition_id, previous=plan["prior"], releases=selected["releases"])
+        new_index.pop("pending", None)
         try:
-            result["snapshot_commit"] = store.commit(api, tip, activation, new_index)
+            result["snapshot_commit"] = _activate(api, tip, activation, new_index)
             result["status"] = "published"
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             result.update(status="recovery-required", error="Healthy candidate; snapshot activation unconfirmed: " + str(error))
     (work / "result.json").write_bytes(site.canonical(result))
     site.require(result["status"] == "published", "promotion did not publish; inspect result.json")
     return result
+
+
+def _failed_publication(record, plan, previous_id, work, api, error, tip, new_index, result):
+    result.update(_recover(record, plan["prior_identity"], previous_id, api, str(error),
+                           tip, _deployment_id(work), recovery_identity=plan.get("recovery_identity")))
+    if plan.get("automatic") is True and result["status"] in {"unchanged", "restored"}:
+        activation = work / "recovery-activation"
+        activation.mkdir()
+        try:
+            result["snapshot_commit"] = _activate(api, tip, activation, plan["current"])
+        except (ValueError, OSError, subprocess.SubprocessError) as failure:
+            result.update(status="recovery-required", recovery_error=
+                          "Healthy prior; pending publication cleanup unconfirmed: " + str(failure))
+    if result["status"] == "restored" and record.get("bootstrap") is not None:
+        activation = work / "recovery-activation"
+        activation.mkdir()
+        new_index.update(current=record["bootstrap"]["recovery_archive_sha256"], previous=None)
+        try:
+            result["snapshot_commit"] = store.commit(api, tip, activation, new_index)
+            result["status"] = "recovered-to-bootstrap"
+        except (ValueError, OSError, subprocess.SubprocessError) as failure:
+            result.update(status="recovery-required", recovery_error=
+                          "Healthy bootstrap recovery; snapshot activation unconfirmed: " + str(failure))
+
+
+def _activate(api, expected: str, work: Path, desired: dict) -> str:
+    try:
+        return store.commit(api, expected, work, desired)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        tip = api.tip()
+        if tip == expected:
+            raise
+        committed = github_json(f"{store.REPO}/commits/{tip}")
+        site.require([parent["sha"] for parent in committed["parents"]] == [expected]
+                     and len(committed["files"]) == 1 and committed["files"][0]["filename"] == "index.json"
+                     and store.read_index(api, tip) == desired,
+                     "activation outcome is unknown after an unrelated snapshot advance")
+        return tip
 
 
 def _request_timeout(deadline: float | None) -> float:
@@ -719,6 +750,7 @@ def rollback_preflight(target: str, snapshot: str, prior: str, work: Path, api=N
     site.require(site.DIGEST.fullmatch(target) and target != prior, "invalid rollback target")
     site.empty(work)
     current = store.index(api, snapshot)
+    site.require("pending" not in current, "unfinished automatic publication must be reconciled first")
     site.require(current["current"] == prior, "prior composition differs")
     record, _ = _restore_composition(api, snapshot, target, work / "target")
     shutil.copytree(work / "target/pages", work / "pages")
@@ -873,6 +905,51 @@ def _verify_auto_source(value: dict) -> None:
                      "automatic source is no longer on main")
 
 
+def _verify_retained_auto_source(value: dict) -> None:
+    run = github_json(f"{store.REPO}/actions/runs/{value['run_id']}/attempts/{value['attempt']}")
+    pages_artifact.verify_source_run(run, value)
+    site.require(run.get("head_repository", {}).get("full_name") == "jwmcglynn/donner",
+                 "retained automatic source repository differs")
+    head = github_json(f"{store.REPO}/git/ref/heads/main")["object"]["sha"]
+    site.require(head == value["source_commit"] or _source_order(value["source_commit"], head),
+                 "retained automatic source is no longer on main")
+
+
+def _reconcile_pending(api, snapshot: str, current: dict, work: Path) -> tuple[str, dict]:
+    if "pending" not in current:
+        return snapshot, current
+    site.empty(work)
+    pending = current["pending"]
+    record, selected = _restore_composition(api, snapshot, pending, work / "candidate")
+    _restore_composition(api, snapshot, current["current"], work / "prior")
+    manifest = site.read_json(work / "prior/site/_docs/versions.json")
+    origin = github_json(f"{store.REPO}/actions/runs/{record['run_id']}/attempts/{record['attempt']}")
+    site.require(origin.get("id") == record["run_id"] and origin.get("run_attempt") == record["attempt"]
+                 and origin.get("path") == WORKFLOW and origin.get("event") == "workflow_run"
+                 and origin.get("head_branch") == "main" and origin.get("head_sha") == record["workflow_commit"]
+                 and origin.get("repository", {}).get("full_name") == "jwmcglynn/donner"
+                 and origin.get("status") == "completed",
+                 "pending publication is not a completed trusted automatic run")
+    _automatic_scope(record, selected, current, manifest)
+    source = selected["source_inputs"]["main"]
+    _verify_retained_auto_source(source)
+    site.require(_source_order(manifest["versions"]["main"]["identity"]["source_commit"],
+                               source["source_commit"]), "pending source is not a forward update")
+    for version, entry in selected["releases"].items():
+        _verify_retained_release(api, snapshot, version, entry, work / "candidate")
+    marker = site.verify_site(work / "candidate/site", record["manifest_sha256"])
+    _verify_live(record["manifest_sha256"], marker)
+    site.require(store.index(api, snapshot) == current, "pending publication changed during recovery")
+    desired = {**current, "current": pending, "previous": current["current"]}
+    desired.pop("pending")
+    activation = work / "activation"
+    activation.mkdir()
+    tip = _activate(api, snapshot, activation, desired)
+    (work.parent / "recovery.json").write_bytes(site.canonical({"status": "activated",
+        "candidate": pending, "prior": current["current"], "snapshot_commit": tip}))
+    return tip, desired
+
+
 def _automatic_scope(record: dict, selected: dict, current: dict, manifest: dict) -> None:
     published = {key: value["identity"] for key, value in manifest["versions"].items() if key != "main"}
     site.require(published == {key: value["identity"] for key, value in current["releases"].items()},
@@ -973,6 +1050,7 @@ def preflight_auto(expected: str, work: Path, api=None) -> None:
     selected = site.read_json(work / "payload/selection.json")
     snapshot = api.tip()
     current = store.index(api, snapshot)
+    snapshot, current = _reconcile_pending(api, snapshot, current, work / "pending-recovery")
     site.require(current["current"] is not None, "automatic publication cannot initialize the site")
     prior = current["current"]
     _, prior_identity = _previous(api, snapshot, prior, work)
