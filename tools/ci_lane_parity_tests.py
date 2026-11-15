@@ -1914,6 +1914,17 @@ class CiLaneParityTest(unittest.TestCase):
                 self.assertEqual(golden[key], observed[key],
                                  "regenerate %s with --update-lane-golden" % LANE_GOLDEN)
 
+    def test_every_lane_config_is_used_by_the_lane_table(self):
+        # A `lane-*` config exists only for the lane table, so removing a lane or phase cannot
+        # leave its config behind, and the table names no lane config the .bazelrc lacks.
+        defined = {name for name in _repository_configs() if name.startswith("lane-")}
+        named = {word.split("=", 1)[1] for lane_name, entry in lanes.LANES.items()
+                 for phase in entry.phases for action in lane_entry.dry_run(
+                     lane_name, phase, {})["actions"]
+                 for word in action.get("argv", ()) if word.startswith("--config=lane-")}
+        self.assertTrue(defined)
+        self.assertEqual(defined, named)
+
     def test_every_lane_phase_runs_in_one_step_of_its_job(self):
         # A phase runs in the job of its lane's name, in the step its table entry names; a step
         # with an id runs the phase of that id.

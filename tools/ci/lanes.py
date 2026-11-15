@@ -100,7 +100,8 @@ BUILDBUDDY = Split("BUILDBUDDY_FLAGS")
 # CPU-capped runner executing the whole graph locally is the measured 2-3 h tail. 60 s, not 5 s:
 # a healthy but busy endpoint takes longer on bulk transfers under a burst of jobs, and 60 s
 # still fails a dead endpoint fast. These stay on the command line: a fallback flag anywhere in
-# .bazelrc could outrank the BuildBuddy fragment's on every lane.
+# .bazelrc could outrank the BuildBuddy fragment's on every lane, so //tools:security_workflow_
+# policy_tests (test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment) bans them there.
 SELF_HOSTED_REMOTE = ("--strategy=TestRunner=remote", "--remote_local_fallback=false",
                       "--incompatible_remote_local_fallback_for_remote_cache=false",
                       "--remote_timeout=60s")
