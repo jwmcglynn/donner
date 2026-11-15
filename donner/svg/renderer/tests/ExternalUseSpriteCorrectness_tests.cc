@@ -359,8 +359,8 @@ TEST(ExternalUseRetentionTest, OverlappingSubtrees) {
                "overlapping");
 }
 
-// A descendant's rem lengths resolve against the sheet root's own font size, not one an earlier
-// occurrence of the root inherited from its host.
+// A descendant's rem lengths resolve against the sheet root's own font size, the 12px initial
+// value here, not one an earlier occurrence of the root inherited from its host.
 TEST(ExternalUseRetentionTest, DescendantAfterRootOccurrenceResolvesRemAgainstSheetRoot) {
   std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64">
@@ -376,7 +376,7 @@ TEST(ExternalUseRetentionTest, DescendantAfterRootOccurrenceResolvesRemAgainstSh
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64">
         <rect width="64" height="64" fill="blue" clip-path="inset(8px) fill-box"/>
         <g transform="translate(64 0)">
-          <rect width="64" height="64" fill="blue" clip-path="inset(16px) fill-box"/>
+          <rect width="64" height="64" fill="blue" clip-path="inset(12px) fill-box"/>
         </g>
       </svg>)svg",
                "descendant-after-root-rem");
