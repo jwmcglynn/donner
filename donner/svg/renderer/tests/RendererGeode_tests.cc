@@ -8304,8 +8304,8 @@ TEST_F(RendererGeodeTest, FilterInsidePatternTileMatchesTheFilterDrawnDirectly) 
       <feOffset dx="7" dy="5" result="moved"/>
       <feMerge><feMergeNode in="moved"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
-    <filter id="shift" x="-60%" y="-60%" width="220%" height="220%">
-      <feOffset dx="-14" dy="-11"/>
+    <filter id="shift" filterUnits="userSpaceOnUse" x="-20" y="-20" width="136" height="136">
+      <feOffset dx="14" dy="11"/>
     </filter>)svg";
   const std::string group =
       R"svg(<g filter="url(#echo)"><rect x="54" y="50" width="20" height="20" fill="#e05090"/>)svg"
