@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -31,7 +32,9 @@ namespace {
 using testing::Contains;
 using testing::ElementsAre;
 using testing::ElementsAreArray;
+using testing::Ge;
 using testing::HasSubstr;
+using testing::Le;
 
 /// Rows of a texel copy are 256-byte aligned, so every extent below is a multiple of 64 texels
 /// wide and can be read back without a padded staging step.
@@ -438,6 +441,11 @@ TEST_F(MetalSurfaceTest, PresentingAFrameWhoseWorkFailedReportsTheLoss) {
 /// A frame whose own work never completes cannot be shown, and a queue that holds a frame's work
 /// for the whole present bound has stopped answering. The present that spends its bound declares
 /// the root lost, once, so the frame after it fails at once instead of spending the bound again.
+///
+/// The bound runs from the frame's last progress, the commit of its work, not from the start of
+/// the present's wait. The present itself therefore waits the bound less however long passed
+/// between drawing and presenting, so the case measures the bound from the device's last progress,
+/// and checks the recorded wait against the present's own duration.
 TEST_F(MetalSurfaceTest, APresentThatSpendsItsBoundDeclaresTheRootLostOnce) {
   const auto rootLoss = std::make_shared<DeviceLostState>();
   device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
@@ -449,24 +457,34 @@ TEST_F(MetalSurfaceTest, APresentThatSpendsItsBoundDeclaresTheRootLostOnce) {
   ASSERT_EQ(frame.status, SurfaceStatus::Success);
   ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
   (void)renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  // The frame's work is paused, so nothing completes before the present: this is the commit of
+  // that work, which the present's bound runs from.
+  const std::optional<std::chrono::steady_clock::time_point> frameProgress =
+      device_->lastProgress();
+  ASSERT_TRUE(frameProgress.has_value()) << "the Metal device reported no progress clock";
 
+  const auto presentStart = std::chrono::steady_clock::now();
   const Result<SurfaceStatus> presented = device_->presentSurface(surface);
+  const auto presentEnd = std::chrono::steady_clock::now();
   ASSERT_THAT(presented, HasResult())
       << "a present that spent its bound is a lost root the caller acts on, not a refusal";
   EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
   EXPECT_TRUE(device_->isLost()) << "the present spent its whole bound and declared nothing";
   EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::Present)
       << "the loss is not attributed to the present that declared it";
-  EXPECT_GE(rootLoss->timedOutElapsedMs.load(), kShortPresentBound.count());
+  EXPECT_THAT(MillisecondsBetween(*frameProgress, presentEnd), Ge(kShortPresentBound.count()))
+      << "the present gave up before the frame's work had made no progress for the bound";
+  EXPECT_THAT(rootLoss->timedOutElapsedMs.load(), Le(MillisecondsBetween(presentStart, presentEnd)))
+      << "the loss does not carry the time the present's own wait spent";
 
-  const auto nextStart = std::chrono::steady_clock::now();
+  // A lost root reports DeviceLost from acquire before asking the layer for a drawable or waiting
+  // on anything, and no other acquire path reports it, so the status and the missing texture
+  // show the next frame failed at once rather than spending the bound again.
   const SurfaceTexture next =
       unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
   EXPECT_EQ(next.status, SurfaceStatus::DeviceLost)
       << "a lost root handed out a frame that can never be shown";
   EXPECT_FALSE(next.texture.isValid());
-  EXPECT_LT(std::chrono::steady_clock::now() - nextStart, kShortPresentBound)
-      << "the frame after the loss spent the present bound again";
   device_->resumeSubmissionsForTest();
 }
 
