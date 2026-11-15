@@ -1,13 +1,12 @@
 # Design: v1.0 Release
 
-**Status:** Draft — superseded as the *next* release by
-[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md), which now targets **v0.8**
-(the editor/toolkit showcase, see
-[0047-v0_8_showcase.md](0047-v0_8_showcase.md)) as the immediate next release,
-with v1.0 following it. Several items this doc scoped into v1.0 — notably
-"Editor v1 (the app)" (Phase 8) — have since moved into the v0.8 milestone
-in the roadmap. The phase list below has not been re-sequenced to match;
-treat it as directional until reconciled with the roadmap.
+**Status:** Draft. v0.8 (the editor/toolkit showcase, see
+[0047-v0_8_showcase.md](0047-v0_8_showcase.md)) shipped first, and the
+[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md) v1.0 section is the authoritative v1.0 scope.
+Several items this doc scoped into v1.0, notably "Editor v1 (the app)" (Phase 8), moved into
+v0.8, and scripting (Phase 6) is now a planned direction that does not gate v1.0. The phase list
+below has not been re-sequenced to match; treat it as directional until reconciled with the
+roadmap.
 **Author:** Jeff McGlynn
 **Model:** Claude Opus 4.7
 **Created:** 2026-04-17
@@ -16,7 +15,7 @@ treat it as directional until reconciled with the roadmap.
 
 Release checklist and implementation plan for shipping Donner **v1.0** — the production release.
 This doc is the execution counterpart to the v1.0 section of
-[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md#v10-production-release-future), which
+[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md#v10-production-release-next-release), which
 remains the public-facing summary.
 
 v1.0 bundles every workstream that was deferred out of v0.5 plus the retrospective items captured
@@ -37,7 +36,7 @@ in [0011-v0_5_release.md](0011-v0_5_release.md#v05-retrospective):
   in [0025-2-editor_ux.md](0025-2-editor_ux.md). Extend beyond the MVP to include shape and text
   creation tools at minimum.
 - **Scripting** — `donner::script` (QuickJS-NG + IDL codegen) per
-  [0027-2-scripting.md](0027-2-scripting.md).
+  [0027-2-scripting.md](0027-2-scripting.md). A planned direction that does not gate v1.0.
 - **Conformance** — the manifest-driven SVG 1.1 + WPT + scripted conformance program in
   [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md), plus contributing Donner
   back to the upstream resvg test harness.
@@ -81,7 +80,7 @@ re-scoped down later if the schedule demands it.
 ## Goals
 
 - Ship v1.0 with every item listed in the [v1.0 ProjectRoadmap
-  section](../ProjectRoadmap.md#v10-production-release-future) closed or explicitly
+  section](../ProjectRoadmap.md#v10-production-release-next-release) closed or explicitly
   deferred with a follow-up tracking issue.
 - Meet all **Release Criteria** from the ProjectRoadmap v1.0 section:
   - Stable public API for rendering, editing, and authoring.
@@ -95,8 +94,8 @@ re-scoped down later if the schedule demands it.
   - Native GPU builds use the Donner-owned Metal/Vulkan runtime and the complete release build passes
     the no-Rust-dependency gate from [0053](0053-native_gpu_hal.md).
 - Close out every item from the [v0.5 retrospective](0011-v0_5_release.md#v05-retrospective).
-- Establish scripting and conformance as first-class Donner subsystems, so third-party parity
-  checks against browsers and resvg are a routine part of CI.
+- Establish conformance as a first-class Donner subsystem, so third-party parity checks against
+  browsers and resvg are a routine part of CI. Scripting does not gate v1.0.
 
 ## Non-Goals
 
@@ -137,7 +136,7 @@ this doc only tracks "is the v1.0-gating slice of that work done".
 - [ ] **Phase 4** — Animation (SMIL Phases 1–9) + animation test suite.
 - [ ] **Phase 5** — Interactivity (`EventSystem`, `SpatialGrid`, `DonnerController`).
 - [ ] **Phase 6** — Scripting (`donner::script`) per
-  [0027-2-scripting.md](0027-2-scripting.md).
+  [0027-2-scripting.md](0027-2-scripting.md). Non-gating for v1.0.
 - [ ] **Phase 7** — Interactive SVG editing API (structured API, partial re-parsing, reverse
   serialization, invalid-region tolerance). The library surface that Phase 8 consumes.
 - [ ] **Phase 8** — Editor v1 (the app): graduate `//donner/editor` from MVP to first-release
@@ -244,8 +243,8 @@ starts (currently only the top-level ProjectRoadmap entry exists).
 
 ### Phase 6: Scripting
 
-Owned by [0027-2-scripting.md](0027-2-scripting.md). This phase's v1.0 gate is completion of
-milestones **M1–M7** from that doc.
+Owned by [0027-2-scripting.md](0027-2-scripting.md). This phase does not gate v1.0; it remains a
+planned direction tracked by milestones **M1-M7** from that doc.
 
 - [ ] **M1** — QuickJS-NG runtime integration, sandbox, diagnostics, fuzz harness.
 - [ ] **M2** — `.donner_idl` compiler and first generated interface.
@@ -339,7 +338,10 @@ menu bar, multi-select, marquee, gestures).
 ### Phase 11: Conformance
 
 Owned by [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md). This phase's v1.0
-gate is completion of M1–M4 from that doc, plus the two roadmap items on resvg.
+gate is the conformance program in that doc (milestones tracked in
+[0057](0057-donner_svg2_test_suite.md)), plus the two roadmap items on resvg. Scripted conformance
+(M4 below) depends on scripting and does not gate v1.0; DOM and animation conformance that needs
+no scripting still gates through the native scenarios.
 
 - [ ] **M1** — Manifest format + Bazel overlays + SVG 1.1 filter pilot.
 - [ ] **M2** — Static SVG 2 / WPT reftest lane.
@@ -415,7 +417,7 @@ tagged commit.
 ## Release Criteria
 
 Copied verbatim from
-[ProjectRoadmap.md → v1.0 → Release Criteria](../ProjectRoadmap.md#release-criteria), so this
+[ProjectRoadmap.md → v1.0 → Release Criteria](../ProjectRoadmap.md#v10-release-criteria), so this
 doc is the single source of truth for execution:
 
 - All v1.0 issues closed.
@@ -465,8 +467,9 @@ serialization.
 
 v1.0 adds three major new trust boundaries beyond v0.5's parser / renderer surface:
 
-- **Scripting.** Untrusted JS running inside Donner. The threat model, sandbox, and fuzz
-  strategy are owned by [0027-2-scripting.md](0027-2-scripting.md) §Security / privacy.
+- **Scripting.** Untrusted JS running inside Donner, when the non-gating scripting work ships.
+  The threat model, sandbox, and fuzz strategy are owned by
+  [0027-2-scripting.md](0027-2-scripting.md) §Security / privacy.
 - **Editor sandbox.** Process isolation for editor parser/renderer work remains in scope for
   v1.0. The previous prototype was removed, so Phase 2 must define the replacement threat model,
   IPC boundary, and validation strategy before implementation.

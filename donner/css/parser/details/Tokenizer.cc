@@ -36,8 +36,8 @@ static bool isNameStartCodepoint(char ch) {
   // Also include \0, since this tokenizer postpones the preprocessing step at
   // https://www.w3.org/TR/css-syntax-3/#input-preprocessing which transforms \u0000 to \uFFFD,
   // which would pass this check.
-  return std::isalpha(static_cast<unsigned char>(ch)) || static_cast<unsigned char>(ch) >= 0x80 ||
-         ch == '_' || ch == '\0';
+  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+         static_cast<unsigned char>(ch) >= 0x80 || ch == '_' || ch == '\0';
 }
 
 static bool isNameCodepoint(char ch) {

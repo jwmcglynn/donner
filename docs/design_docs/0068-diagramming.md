@@ -152,7 +152,7 @@ text stay in sync without a full document reparse.
 Several existing editor paths replace the whole document, and diagram features must not route
 through them:
 
-- `EditorCommand::Kind::ReplaceDocument`, and `CutShapes` / `PasteShapes`, which reparse
+- `EditorCommand::Kind::ReplaceDocument` and `PasteShapes`, which reparse
   serialized bytes into a fresh document (`AsyncSVGDocument.cc`).
 - `UndoSnapshot::Kind::DocumentSource` undo entries, which restore by queuing a
   `ReplaceDocumentCommand` (`EditorApp.cc`).
@@ -455,7 +455,7 @@ committed replacement in `//donner/diagram:diagram_op_fuzzer`.
 
 `CommandQueue` coalescing (repeated `SetAttribute` of the same element and attribute collapses to
 the latest value) keeps a 60 fps node drag to one attribute write per element per frame. No plan
-contains `ReplaceDocument`, `CutShapes` or `PasteShapes`, and the reparse-free invariant is tested
+contains `ReplaceDocument` or `PasteShapes`, and the reparse-free invariant is tested
 (see [Testing and Validation](#testing-and-validation)).
 
 Mermaid text patches use the milestone 1 `ReplaceTextRange` command: a byte range plus replacement

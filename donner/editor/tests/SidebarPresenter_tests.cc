@@ -4151,6 +4151,99 @@ TEST(SidebarStrokePreviewIcons, PrewarmRequestsIncludeEveryStrokeSvg) {
   }
 }
 
+TEST_F(SidebarPresenterImGuiTest, MiterTypingWritesShortestNumberText) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##miter_typed_serialization";
+  constexpr float kHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight);
+  const auto field = presenter.strokeMiterLimitRectForTesting();
+  ASSERT_THAT(field, testing::Optional(testing::_));
+  const auto center = RectCenter(*field);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, center, true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight);
+  ASSERT_THAT(ImGui::GetIO().WantTextInput, testing::IsTrue());
+
+  // 2.3 has no exact binary form, so any detour through `float` shows up in the text.
+  EXPECT_THAT(ReplaceFocusedInput(presenter, &app, kWindow, "2.3", center, kHeight),
+              testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-miterlimit: 2.3"))));
+}
+
+TEST_F(SidebarPresenterImGuiTest, MiterIncrementFromNonBinaryValueWritesShortestNumberText) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" stroke-miterlimit="2.3"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char windowName[] = "##miter_increment_shortest_text";
+  RenderInspectorFrame(presenter, &app, windowName, ImVec2(-1.0f, -1.0f), false, 560.0f);
+  const auto increment = presenter.strokeMiterIncrementRectForTesting();
+  ASSERT_THAT(increment, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*increment), true, 560.0f);
+  ASSERT_THAT(
+      RenderInspectorFrame(presenter, &app, windowName, RectCenter(*increment), false, 560.0f),
+      testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-miterlimit: 3.3"))));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthTypingKeepsActiveWidthInDoublePrecision) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##stroke_width_active_double";
+  constexpr float kHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight);
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_THAT(field, testing::Optional(testing::_));
+  const auto center = RectCenter(*field);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, center, true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight);
+  ASSERT_THAT(ImGui::GetIO().WantTextInput, testing::IsTrue());
+
+  // 2.3 has no exact binary form, so a detour through `float` changes the stored width.
+  EXPECT_THAT(ReplaceFocusedInput(presenter, &app, kWindow, "2.3", center, kHeight),
+              testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 2.3"))));
+  EXPECT_THAT(app.activePaintStyle().strokeWidth, testing::Eq(Lengthd(2.3)));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthIncrementFromNonBinaryValueWritesShortestNumberText) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" stroke-width="2.3"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char windowName[] = "##stroke_width_increment_shortest_text";
+  RenderInspectorFrame(presenter, &app, windowName, ImVec2(-1.0f, -1.0f), false, 560.0f);
+  const auto increment = presenter.strokeIncrementRectForTesting();
+  ASSERT_THAT(increment, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*increment), true, 560.0f);
+  ASSERT_THAT(
+      RenderInspectorFrame(presenter, &app, windowName, RectCenter(*increment), false, 560.0f),
+      testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 3.3"))));
+}
+
 TEST_F(SidebarPresenterImGuiTest, MiterTypingRejectsSmallValuesAndRecoversOneUndoableEdit) {
   EditorApp app;
   SidebarPresenter presenter;

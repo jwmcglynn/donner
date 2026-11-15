@@ -18,6 +18,7 @@
 #include "donner/svg/core/ColorInterpolation.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/Cursor.h"
+#include "donner/svg/core/Direction.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FontKerning.h"
@@ -40,6 +41,7 @@
 #include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/TextTransform.h"
 #include "donner/svg/core/TransformOrigin.h"
+#include "donner/svg/core/UnicodeBidi.h"
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WhiteSpace.h"
@@ -137,6 +139,8 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `font-synthesis-small-caps` | \ref fontSynthesisSmallCaps | `auto` |
  * | `font-synthesis-style` | \ref fontSynthesisStyle | `auto` |
  * | `white-space` | \ref whiteSpace | `normal` |
+ * | `direction` | \ref direction | `ltr` |
+ * | `unicode-bidi` | \ref unicodeBidi | `normal` |
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | shorthand for the four longhands below | `none` |
  * | `text-decoration-line` | \ref textDecoration | `none` |
@@ -420,6 +424,16 @@ public:
   Property<WhiteSpace, PropertyCascade::Inherit> whiteSpace{
       "white-space", []() -> std::optional<WhiteSpace> { return WhiteSpace::Normal; }};
 
+  /// `direction` property, the base direction of text paragraphs and the edge `text-anchor`
+  /// measures from. Inherited. Defaults to \ref Direction::Ltr.
+  Property<Direction, PropertyCascade::Inherit> direction{
+      "direction", []() -> std::optional<Direction> { return Direction::Ltr; }};
+
+  /// `unicode-bidi` property, how this element's text takes part in bidirectional reordering.
+  /// Not inherited. Defaults to \ref UnicodeBidi::Normal.
+  Property<UnicodeBidi> unicodeBidi{
+      "unicode-bidi", []() -> std::optional<UnicodeBidi> { return UnicodeBidi::Normal; }};
+
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
@@ -556,10 +570,10 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
         fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, textTransform,
-        overflowWrap, whiteSpace, textAnchor, textDecoration, textDecorationStyle,
-        textDecorationColor, textDecorationThickness, dominantBaseline, writingMode,
-        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
-        mixBlendMode, isolation, imageRendering, paintOrder, textIndent);
+        overflowWrap, whiteSpace, direction, unicodeBidi, textAnchor, textDecoration,
+        textDecorationStyle, textDecorationColor, textDecorationThickness, dominantBaseline,
+        writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift,
+        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder, textIndent);
   }
 
   /**

@@ -104,8 +104,9 @@ check `LicenseEntry` candidates and the fallback tables in `generate_build_repor
 - Stamp `MODULE.bazel` first — bump `module(version = ...)` to the release string. There's a
   ReleaseBot-addressed comment at the top of `MODULE.bazel` marking this step (currently
   `0.8.0-pre` → final `0.8.0` at stamp time). Module version must match the git tag.
-- Qualify the exact main commit with `BCR Preflight` before release. The Release workflow attaches
-  its qualified source archive and CLI binaries by digest. It does not publish to BCR.
+- Qualify the exact main commit with `BCR Preflight` before release, dispatched on `main` (pushes
+  do not run it). The Release workflow attaches its qualified source archive and CLI binaries by
+  digest. It does not publish to BCR.
 - After the Release succeeds, obtain approval for the specific Release run and candidate record
   digest, then manually dispatch `.github/workflows/publish_bcr.yml`. It takes the approved
   archive digest from the record and submits the BCR entry that preflight admission-validated,

@@ -107,6 +107,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | 013-014 | Minor char advance diffs |
 | 015 | AA diffs |
 | 019-020 | Minor char advance diffs / AA diffs |
+| 021 | 250 px at 300x300: upright vmtx origin vs the reference's hhea-centered cell |
 | 022-023 | Minor char advance diffs |
 | 026-029 | Minor char advance diffs |
 | 032, 035-037 | Minor char advance diffs |
@@ -120,8 +121,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | 008 | `spacing=auto` not implemented |
 | 012 | Reference disagreement: SVG 2 geometric endpoint continuation |
 | 016 | Link to `<rect>` (SVG 2 feature) |
-| 021 | Vertical path frames supported; upright CJK origin parity remains |
-| 030 | Vertical text + circular path (deferred) |
+| 030 | UB: reference is the resvg UB marker image (vertical text on a circular path) |
 | 033 | UB: baseline-shift + rotate interaction |
 | 040 | Filter on textPath not implemented |
 | 041 | `side=right` (SVG 2 feature) |
@@ -159,4 +159,11 @@ Any golden or tolerance change requires explicit human approval after visual ret
   rotation, and textLength. `//donner/svg/renderer/tests:text_path_convergence_tests` and its
   `_geode` and `_text_full` variants compare the straight-path vertical layout and textLength
   against ordinary vertical text, with visible-ink negative controls.
-- [ ] Resolve upright CJK glyph-origin differences between text backends and the reference.
+- [x] Resolve upright CJK glyph-origin differences between text backends. Both backends place
+  upright glyphs at the font's vertical origin (glyph box top plus vmtx top side bearing) with the
+  vmtx advance, so each glyph's vertical advance cell is centered on the path at its advance
+  midpoint. `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and
+  `_text_full` variants compare flat and on-path upright CJK against horizontal text placed at
+  the vmtx-derived origins. The refreshed `writing-mode=tb.svg` reference (upstream quoted its
+  `'Mplus 1p'` family) centers the hhea ascent/descent box instead, 0.0175em from the vmtx
+  origin; that residual is the row's registered allowance.

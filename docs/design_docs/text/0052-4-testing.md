@@ -103,8 +103,7 @@ reasons — is the authoritative list; the categories below summarize it.
 - **SVG 2 text features** — `clipPath` on `<text>` and text children, `filter` on
   `<textPath>`, `<a>` as a text-content element, and the `<textPath>` `method="stretch"`,
   `spacing="auto"`, `side="right"`, and `path` attributes are not implemented.
-- **Vertical text on a path** — `writing-mode=tb` on `<textPath>` is deferred, as is
-  `transform-origin` on `textPath` (entangled with textPath layout).
+- **`transform-origin` on `textPath`** is deferred (entangled with textPath layout).
 
 ### Known rendering bugs (skipped pending fix)
 

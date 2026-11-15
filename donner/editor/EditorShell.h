@@ -453,10 +453,10 @@ private:
 
 #endif
 
-  // Shape clipboard. These run when the
-  // canvas selection - not the source pane - owns Cut/Copy/Paste. Each routes a
-  // single CutShapes/PasteShapes reparse so the operation is one undo step and
-  // the source pane stays coherent.
+  // Shape clipboard. These run when the canvas selection - not the source pane -
+  // owns Cut/Copy/Paste. Cut copies, then deletes the selection as one undo step;
+  // Paste routes a single PasteShapes reparse so it is one undo step and the
+  // source pane stays coherent.
   void copySelectedShapesToClipboard();
   void cutSelectedShapesToClipboard();
   void pasteShapesFromClipboard(bool inFront);

@@ -2,11 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <span>
 #include <type_traits>
 #include <utility>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/parser/NumberParser.h"
 
 namespace donner::svg::parser {
@@ -157,7 +157,7 @@ private:
     if constexpr (std::is_same_v<Builder, CommandRecorder>) {
       char letter = static_cast<char>(command.token);
       if (command.relative && command.token != Token::ClosePath) {
-        letter = static_cast<char>(std::tolower(static_cast<unsigned char>(letter)));
+        letter = StringUtils::ToLowerAscii(letter);
       }
       builder_.begin(letter);
     }
@@ -229,13 +229,9 @@ private:
   std::optional<TokenCommand> peekCommand() {
     assert(!remaining_.empty());
 
-    // Read one-character
-    char ch = remaining_[0];
-    bool relative = true;
-    if (std::isupper(static_cast<unsigned char>(ch))) {
-      relative = false;
-      ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
+    // Uppercase commands are absolute; folding leaves lowercase commands and other bytes as is.
+    const char ch = StringUtils::ToLowerAscii(remaining_[0]);
+    const bool relative = ch == remaining_[0];
 
     Token token;
     switch (ch) {
