@@ -83,8 +83,8 @@ SVGDocument Parse(std::string_view source, Documents documents = {}) {
   return std::move(parsed.result());
 }
 
-RendererBitmap Draw(Renderer& renderer, SVGDocument& document) {
-  renderer.draw(document);
+/// The renderer's current frame with tightly packed rows.
+RendererBitmap TightSnapshot(Renderer& renderer) {
   RendererBitmap snapshot = renderer.takeSnapshot();
   const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
   if (snapshot.rowBytes == tightRowBytes) {
@@ -101,6 +101,11 @@ RendererBitmap Draw(Renderer& renderer, SVGDocument& document) {
                 tight.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
   }
   return tight;
+}
+
+RendererBitmap Draw(Renderer& renderer, SVGDocument& document) {
+  renderer.draw(document);
+  return TightSnapshot(renderer);
 }
 
 /// Sprite frames inside a hidden container, the way generated sprite sheets keep their frames out
@@ -619,6 +624,79 @@ TEST(SubDocumentFiltersTest, BranchingExternalUseMeasurementStaysWithinItsAllowa
   ExternalInstanceWork(filtered, work);
   EXPECT_THAT(work->externalMeasureWork(),
               testing::AllOf(Gt(0u), testing::Le(limits.ruleElementMatches)));
+}
+
+/// Nested box-effect owners in different spaces measure each external occurrence once per frame,
+/// so they charge the measurement allowance what a single owner does. At an allowance that admits
+/// exactly that charge, both owners still bound all of the content, as they do in-document.
+TEST(SubDocumentFiltersTest, NestedBoxEffectOwnersMeasureEachExternalUseOnce) {
+  const std::string sprite =
+      "<rect id='sprite' x='-2' y='-2' width='4' height='4' fill='#2050d0' "
+      "transform='rotate(30)'/>";
+  std::string uses;
+  for (int x = 0; x < 4; ++x) {
+    uses += "<use href='{ref}sprite' transform='translate(" + std::to_string(4 + x * 8) +
+            " 16) rotate(-30)'/>";
+  }
+  const auto host = [&](std::string_view prefix, std::string_view owners,
+                        std::string_view closers, bool inlineSprite) {
+    std::string content = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+                          "<filter id='half' x='0' y='0' width='0.5' height='1'><feOffset/>"
+                          "</filter><clipPath id='most' clipPathUnits='objectBoundingBox'>"
+                          "<rect width='0.75' height='1'/></clipPath>" +
+                          (inlineSprite ? sprite : std::string()) +
+                          "</defs><rect width='32' height='32' fill='#ffffff'/>" +
+                          std::string(owners) + uses + std::string(closers) + "</svg>";
+    for (size_t at = content.find("{ref}"); at != std::string::npos; at = content.find("{ref}")) {
+      content.replace(at, 5, prefix);
+    }
+    return content;
+  };
+  const Documents documents = {
+      {"sheet.svg", "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>" +
+                        sprite + "</defs></svg>"}};
+  constexpr std::string_view kSingle = "<g filter='url(#half)'>";
+  constexpr std::string_view kNested =
+      "<g filter='url(#half)'><g clip-path='url(#most)' transform='translate(0 2)'>";
+  const auto measureWork = [&](std::string_view owners, std::string_view closers,
+                               components::StyleResourceBudget::Limits limits,
+                               RendererBitmap* bitmap) {
+    SVGDocument document = Parse(host("sheet.svg#", owners, closers, false), documents);
+    const auto work = std::make_shared<components::StyleResourceBudget>(limits);
+    Renderer renderer;
+    RendererDriver driver(renderer, false, nullptr, work);
+    driver.draw(document);
+    *bitmap = TightSnapshot(renderer);
+    return work->externalMeasureWork();
+  };
+
+  RendererBitmap single;
+  const std::size_t singleWork =
+      measureWork(kSingle, "</g>", components::StyleResourceBudget::Limits(), &single);
+  ASSERT_THAT(singleWork, Gt(0u));
+  RendererBitmap nested;
+  EXPECT_THAT(measureWork(kNested, "</g></g>", components::StyleResourceBudget::Limits(), &nested),
+              testing::Eq(singleWork));
+
+  components::StyleResourceBudget::Limits boundary;
+  boundary.ruleElementMatches = singleWork;
+  const struct {
+    std::string_view label;
+    std::string_view owners;
+    std::string_view closers;
+  } kScenes[] = {{"single", kSingle, "</g>"}, {"nested", kNested, "</g></g>"}};
+  for (const auto& scene : kScenes) {
+    SCOPED_TRACE(scene.label);
+    SVGDocument local = Parse(host("#", scene.owners, scene.closers, true));
+    Renderer localRenderer;
+    RendererBitmap actual;
+    EXPECT_THAT(measureWork(scene.owners, scene.closers, boundary, &actual),
+                testing::Eq(singleWork));
+    editor::tests::CompareBitmapToBitmap(
+        actual, Draw(localRenderer, local),
+        "sub-document-nested-owners-" + std::string(scene.label),
+        editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 }  // namespace
