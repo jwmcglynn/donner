@@ -402,6 +402,40 @@ sh_binary(
     srcs = ["determine_targets.sh"],
 )
 
+# The CI lane table and its entry point: each main.yml Bazel step runs
+# `python3 tools/ci/lane.py phase <lane> <phase>`, and
+# `bazel run //tools/ci:lane -- phase <lane> <phase> --dry-run` prints what it runs.
+py_library(
+    name = "lanes",
+    srcs = [
+        "lane.py",
+        "lanes.py",
+    ],
+)
+
+py_binary(
+    name = "lane",
+    srcs = ["lane.py"],
+    deps = [":lanes"],
+)
+
+# Runs lane phases against recording stand-ins for bazelisk and the helper scripts.
+py_test(
+    name = "lane_tests",
+    size = "small",
+    srcs = ["lane_tests.py"],
+    data = [
+        "lane.py",
+        "lanes.py",
+        "//tools:ci_bazel_test.sh",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 # The CI workflow's target selection and its bazel-diff download.
 # Each case runs the selection with many stand-in tool processes, so the suite takes longer than
 # a small test's timeout on a loaded host.

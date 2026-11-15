@@ -10,6 +10,7 @@ exports_files(
 )
 
 exports_files([
+    "ci_bazel_test.sh",
     "lint.sh",
     "run-browser-ci.sh",
 ])
