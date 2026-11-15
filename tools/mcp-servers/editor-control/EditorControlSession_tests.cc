@@ -2521,7 +2521,7 @@ TEST(EditorControlSessionInternalTest, ContentHashesIgnoreTheGlobalLocale) {
   const ScopedCommaDecimalGlobalLocale locale;
   // FNV-1a 64 of the empty string is its offset basis.
   EXPECT_EQ(ReproContentHash(""), "fnv1a64:cbf29ce484222325");
-  EXPECT_EQ(BitmapContentHash(bitmap), expectedBitmapHash);
+  EXPECT_THAT(BitmapContentHash(bitmap), ::testing::Optional(::testing::Eq(*expectedBitmapHash)));
 }
 
 }  // namespace

@@ -9,13 +9,17 @@
 #include <string_view>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Transform.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/svg/parser/TransformParser.h"
 
 namespace donner::editor {
 namespace {
 
+using ::testing::_;
+using ::testing::Eq;
 using ::testing::Optional;
 
 constexpr double kDeg = MathConstants<double>::kDegToRad;
@@ -51,23 +55,24 @@ TEST(TransformSyntaxPreserving, ReadsDecimalNumbersInACommaDecimalLocale) {
     GTEST_SKIP() << "No comma-decimal locale is installed";
   }
   const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
-  EXPECT_EQ(Reserialize("translate(1.5, 2.5)", target), "translate(15, 27)");
+  EXPECT_THAT(reserializeTransformPreservingSyntax("translate(1.5, 2.5)", target),
+              Optional(Eq(RcString("translate(15, 27)"))));
 }
 
 // Whitespace around arguments is skipped before each number is read, so it never reaches the
 // number parser.
 TEST(TransformSyntaxPreserving, ReadsNumbersSurroundedByWhitespace) {
   const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
-  EXPECT_TRUE(
-      reserializeTransformPreservingSyntax("translate( \t1.5 ,\n2.5 )", target).has_value());
+  EXPECT_THAT(reserializeTransformPreservingSyntax("translate( \t1.5 ,\n2.5 )", target),
+              Optional(Eq(RcString("translate(15, 27)"))));
 }
 
 // `5.` is not a number token, and the document's transform parser rejects it as well, so
 // preservation declines and the caller writes canonical syntax.
 TEST(TransformSyntaxPreserving, DeclinesANumberWithATrailingDecimalPoint) {
-  EXPECT_TRUE(svg::parser::TransformParser::Parse("translate(5., 3)").hasError());
+  EXPECT_THAT(svg::parser::TransformParser::Parse("translate(5., 3)"), ParseErrorIs(_));
   const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
-  EXPECT_FALSE(reserializeTransformPreservingSyntax("translate(5., 3)", target).has_value());
+  EXPECT_THAT(reserializeTransformPreservingSyntax("translate(5., 3)", target), Eq(std::nullopt));
 }
 
 // --- rotate-only ----------------------------------------------------------
