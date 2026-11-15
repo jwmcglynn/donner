@@ -18,6 +18,7 @@ import unittest
 from python.runfiles import runfiles
 from tools import bcr_preflight
 from tools import release_candidate
+from tools import release_macos_editor
 from tools import test_timing
 
 
@@ -1402,23 +1403,6 @@ def _labels(text):
     return [label.strip().strip("'\"") for label in text.split(",") if label.strip()]
 
 
-def _without_computed_exclusions(block):
-    """A matrix block without the computed values of its `exclude:` entries.
-
-    An exclusion can only remove a combination the literal entries already define, never add a
-    runner label, so its values may be computed from an earlier job's output. Every other line,
-    including literal exclusions, is kept and read: a superset of labels is the safe reading.
-    """
-    kept = []
-    excluding = False
-    for line in block:
-        if len(line) - len(line.lstrip()) <= 8:
-            excluding = re.match(r"^        exclude:\s*$", line) is not None
-        if not (excluding and "${{" in line):
-            kept.append(line)
-    return kept
-
-
 def _unreadable_matrix_line(line):
     """Expressions, flow mappings and YAML anchors or aliases can all supply a value this
     line-based reading would miss."""
@@ -1433,7 +1417,6 @@ def _matrix_values(job, key):
         return None
     block = [line for line in _indented_block(lines[starts[0] + 1:], 6)
              if line.strip() and not _is_comment(line)]
-    block = _without_computed_exclusions(block)
     if any(_unreadable_matrix_line(line) for line in block):
         return None
     values = []
@@ -2717,36 +2700,75 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         deploy = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[1]
         self.assertEqual([], _build_steps(deploy.replace("bazel-contrib", "")))
 
-    def test_bcr_preflight_pull_request_paths_cover_its_inputs(self):
-        """A pull request skips the preflight unless it changes an input the preflight reads."""
+    def test_bcr_preflight_runs_on_pull_requests_only_for_registry_inputs(self):
+        """A pull request runs the preflight only when it changes the registry entry or the
+        preflight itself; main pushes never run it, and the nightly full run covers the rest."""
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         matches = _bcr_pull_request_trigger(preflight)
+        self.assertEqual({"pull_request", "schedule", "workflow_dispatch"}, _triggers(preflight))
+        self.assertIn('  schedule:\n    # After the other nightly workflows (latest: Coverage at '
+                      '08:15 UTC).\n    - cron: "35 8 * * *"\n  workflow_dispatch:\n', preflight)
 
-        # Every input that selects the full matrix also starts the preflight.
-        for pattern in bcr_preflight.RELEASE_PATHS:
-            example = pattern.replace("*", "example")
-            self.assertTrue(matches(example), f"{pattern} ({example}) does not start it")
-        # So does every tool its steps run, and the build graph a consumer resolves.
+        # The tools the workflow's steps and lanes run. Those named tools/bcr_* belong to the
+        # preflight and start it; the rest are shared with other workflows, whose own pull
+        # request runs and tests cover them, and do not.
         steps = "\n".join(line for line in preflight.split("\n")
                           if not line.lstrip().startswith("#"))
-        tools = set(re.findall(r"tools/[\w/.-]+\.(?:py|sh|txt)", steps))
+        plans = [*bcr_preflight.admission_plan(_BCR_LAYOUT, "../upstream-bcr", _BCR_COMMIT),
+                 *_bcr_consumer_plan(),
+                 *(command for platform in bcr_preflight.PLATFORMS
+                   for command in bcr_preflight.cli_plan(_BCR_LAYOUT, platform, _BCR_COMMIT,
+                                                         "7", "2")),
+                 *bcr_preflight.verify_plan(_BCR_LAYOUT, _BCR_COMMIT, "7", "2", True)]
+        steps += "\n" + "\n".join(" ".join(command.argv) for command in plans)
+        tools = set(re.findall(r"(?<![\w.-])tools/[\w/.-]+\.(?:py|sh|txt)", steps))
         tools |= {"tools/%s.py" % module.replace(".", "/")
-                  for module in re.findall(r"python3 -B -m tools\.([\w.]+)", steps)}
-        tools |= {"tools/bcr_admission.py", "tools/bcr_dependency_closure.py",
-                  "tools/ci/github_rate_limit.py"}
-        for path in sorted(tools) + ["MODULE.bazel", "NOTICE", "donner/svg/BUILD.bazel",
-                                     "donner/svg/renderer/BUILD.bazel", "donner/base/BUILD.bazel",
-                                     "third_party/x/BUILD.bazel", "third_party/BUILD.stb",
-                                     "third_party/a.patch", "build_defs/x.bzl", "x/y/z.bzl",
-                                     "examples/bazel_consumer/MODULE.bazel", ".bcr/presubmit.yml"]:
+                  for module in re.findall(r"-m tools\.([\w.]+)", steps)}
+        own = {tool for tool in tools if tool.startswith("tools/bcr_")}
+        shared = tools - own
+        self.assertTrue({"tools/bcr_preflight.py", "tools/bcr_source.py",
+                         "tools/bcr_admission.py", "tools/bcr_dependency_closure.py"} <= own, own)
+        self.assertTrue({"tools/release_cli.py", "tools/release_macos_editor.py",
+                         "tools/ci_select_macos_xcode.sh"} <= shared, shared)
+        for path in sorted(own) + [
+                "tools/bcr_release.py", "tools/bcr_preflight_tests.py", ".bcr/presubmit.yml",
+                ".bcr/metadata.template.json", ".bcr/nested/source.template.json",
+                ".gitattributes", "MODULE.bazel", "examples/bazel_consumer/MODULE.bazel",
+                "examples/bazel_consumer/main.cc", ".github/workflows/bcr_preflight.yml",
+                ".github/workflows/publish_bcr.yml"]:
             self.assertTrue(matches(path), f"{path} does not start the preflight")
-        # A source or test change is left to CI on the pull request and the preflight on main.
-        for path in ("donner/svg/SVGElement.cc", "donner/svg/tests/BUILD.bazel",
-                     "donner/editor/tests/BUILD.bazel", "tools/ci/gatekeeper.py",
-                     "donner/svg/renderer/wasm/BUILD.bazel", "third_party/tiny-skia-cpp/a.cc",
-                     "third_party/resvg-test-suite/BUILD.bazel", "docs/building.md"):
+
+        # The rest of the build graph, packaging and release inputs, and sources and tests, are
+        # built and tested by CI on the pull request. What only the preflight checks of them runs nightly
+        # and before a release, so none of them starts it on a pull request.
+        general = [
+            "MODULE.bazel.lock", "donner/MODULE.bazel", "MODULE.bazel.orig", ".bazelrc", ".bazelversion", ".bazelignore",
+            "BUILD.bazel", "LICENSE", "NOTICE", "config/BUILD.bazel", "build_defs/x.bzl",
+            "x/y/z.bzl", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
+            "build_defs/packaged_resources.bzl", "build_defs/macos_app_bundle.bzl",
+            "donner/svg/BUILD.bazel", "donner/svg/renderer/BUILD.bazel",
+            "donner/base/BUILD.bazel", "donner/base/PackagedResource.cc",
+            "donner/editor/BUILD.bazel", "donner/editor/art/Info.plist",
+            "third_party/x/BUILD.bazel", "third_party/BUILD.stb", "third_party/a.patch",
+            "third_party/stb.bzl", "third_party/licenses/BUILD.bazel",
+            "third_party/bazel/non_bcr_deps.bzl", "third_party/patches/fixture.patch",
+            "third_party/roboto/Roboto.ttf", "examples/BUILD.bazel", "examples/svg_to_png.cc",
+            "examples/native_resource_delivery_tests.py", "tools/BUILD.bazel",
+            "tools/ci/BUILD.bazel", "tools/ci/release_compiler_identity.cc",
+            "tools/native_delivery.py", "tools/notice_coverage_check.py",
+            "tools/render_notice.py", "tools/default_notice_freshness_tests.py",
+            "tools/release_candidate.py", "tools/macos_editor_test_bundle.py",
+            "tools/ci/github_rate_limit.py", ".github/workflows/release.yml",
+            ".github/workflows/main.yml", "donner/svg/SVGElement.cc",
+            "donner/svg/tests/BUILD.bazel", "donner/editor/tests/BUILD.bazel",
+            "tools/ci/gatekeeper.py", "donner/svg/renderer/wasm/BUILD.bazel",
+            "third_party/tiny-skia-cpp/a.cc", "docs/building.md", "docs/release_candidate.md"]
+        # MODULE.bazel is also a native provenance input; it starts the preflight as the module
+        # file the registry entry copies, checked above.
+        provenance = [path for path in release_macos_editor.INPUTS if path != "MODULE.bazel"]
+        self.assertIn("MODULE.bazel", release_macos_editor.INPUTS)
+        for path in sorted(shared) + general + provenance:
             self.assertFalse(matches(path), f"{path} starts the preflight")
-        self.assertIn("\n  push:\n    branches: [main]\n", preflight)
 
     def test_bcr_preflight_has_no_publication_credentials(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
@@ -2757,7 +2779,6 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         jobs = _jobs(preflight)
         # Each step runs one tools/bcr_preflight.py subcommand, whose commands are pinned below.
         self.assertEqual(_bcr_preflight_commands(jobs["prepare"]), [
-            ("Select the preflight scope", "scope"),
             ("Validate registry admission against the candidate bytes",
              "admission --upstream ../upstream-bcr")])
         self.assertEqual(_bcr_preflight_commands(jobs["consumer"]), [
@@ -2834,15 +2855,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
 
-    def test_native_editor_packaging_inputs_trigger_preflight(self):
+    def test_native_editor_packaging_inputs_are_qualified_by_every_full_run(self):
+        # The native editor's provenance inputs are general build inputs: a change to one does
+        # not start the preflight on a pull request (MODULE.bazel does, as a registry input),
+        # and every preflight run, nightly included, builds and packages the editor from them in
+        # the macOS CLI job, which no run skips.
         workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         matches = _bcr_pull_request_trigger(workflow)
-        self.assertTrue(matches("LICENSE"))
-        self.assertTrue(matches("tools/release_macos_editor.py"))
-        self.assertTrue(matches("tools/ci_macos_xcode.txt"))
-        self.assertTrue(bcr_preflight.is_release_path("LICENSE"))
-        self.assertTrue(bcr_preflight.is_release_path("tools/release_macos_editor.py"))
-        self.assertTrue(bcr_preflight.is_release_path("tools/ci_macos_xcode.txt"))
+        for path in (*release_macos_editor.INPUTS, "LICENSE", "tools/release_macos_editor.py",
+                     "tools/ci_macos_xcode.txt"):
+            self.assertEqual(path == "MODULE.bazel", matches(path), path)
+        jobs = _jobs(workflow)
+        self.assertEqual("", _job_key(jobs["cli-macos"], "if"))
+        native = [command.argv for command in bcr_preflight.cli_plan(
+            _BCR_LAYOUT, "darwin-arm64", _BCR_COMMIT, "7", "2")]
+        self.assertTrue(any("//donner/editor:editor_macos_app" in argv for argv in native))
 
     def test_bcr_native_editor_producer_has_its_own_immutable_phases(self):
         native = [command.argv for command in bcr_preflight.cli_plan(
@@ -2999,123 +3026,24 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("os: [ubuntu-24.04, xcode-27]", consumer)
         self.assertIn("bazel: ['7.x', '8.x']", consumer)
 
-    def _bcr_scope(self, changed=(), event_name="pull_request", base=None, renamed=None,
-                   event=None):
-        """Run the preflight scope on a fixture repository; returns `full_matrix`."""
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            repo = root / "repo"
-            repo.mkdir()
-            env = {"PATH": os.environ.get("PATH", os.defpath), "HOME": directory,
-                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "fixture",
-                   "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-                   "GIT_COMMITTER_NAME": "fixture",
-                   "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
-
-            def git(*args):
-                return subprocess.run(["git", *args], cwd=repo, env=env, check=True,
-                                      text=True, capture_output=True).stdout.strip()
-
-            def write(path, text):
-                (repo / path).parent.mkdir(parents=True, exist_ok=True)
-                (repo / path).write_text(text, encoding="utf-8")
-                git("add", path)
-
-            git("init", "-q")
-            write("README.md", "base\n")
-            if renamed:
-                write(renamed[0], "a file long enough to be detected as a rename\n" * 8)
-            git("commit", "-q", "-m", "base")
-            base_sha = git("rev-parse", "HEAD")
-            if renamed:
-                (repo / renamed[1]).parent.mkdir(parents=True, exist_ok=True)
-                git("mv", *renamed)
-            for path in changed:
-                write(path, "change\n")
-            git("commit", "-q", "--allow-empty", "-m", "head")
-            output = root / "output"
-            event_path = root / "event.json"
-            if event is None:
-                event = {"pull_request": {"base": {"sha": base or base_sha},
-                                          "head": {"sha": git("rev-parse", "HEAD")}}}
-            event_path.write_text(json.dumps(event), encoding="utf-8")
-            result = _run_bcr_preflight(["scope"], dict(
-                env, GITHUB_EVENT_NAME=event_name, GITHUB_EVENT_PATH=str(event_path),
-                GITHUB_OUTPUT=str(output)), cwd=repo)
-            self.assertEqual(0, result.returncode, result.stderr)
-            values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-            return values["full_matrix"]
-
-    def test_bcr_ordinary_pull_requests_run_the_slim_check(self):
-        for changed in (["donner/svg/SVGElement.cc"], ["donner/base/Utils.h", "docs/notes.md"],
-                        ["donner/svg/BUILD.bazel"], ["build_defs/rules.bzl"],
-                        ["third_party/resvg-test-suite/fixture.svg"], ["tools/lint.sh"],
-                        ["tools/ci/test_with_exclusions.py"], [".github/workflows/main.yml"]):
-            with self.subTest(changed=changed):
-                self.assertEqual("false", self._bcr_scope(changed))
-
-    def test_native_delivery_module_triggers_the_full_package_preflight(self):
-        workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
-        trigger = workflow.split("permissions:", 1)[0]
-        self.assertIn("      - tools/native_delivery.py\n", trigger)
-        self.assertEqual("true", self._bcr_scope(["tools/native_delivery.py"]))
-
-    def test_bcr_release_path_pull_requests_run_the_full_matrix(self):
-        for changed in (["MODULE.bazel"], ["MODULE.bazel.lock"], [".bazelversion"],
-                        [".bazelrc"], [".bcr/presubmit.yml"], ["examples/bazel_consumer/main.cc"],
-                        ["third_party/licenses/BUILD.bazel"], ["tools/bcr_source.py"],
-                        ["tools/bcr_dependency_closure.py"], ["tools/release_cli.py"],
-                        ["tools/bcr_preflight.py"],
-                        ["tools/notice_coverage_check.py"], ["tools/render_notice.py"],
-                        ["tools/ci/BUILD.bazel"], ["tools/ci/release_compiler_identity.cc"],
-                        ["tools/BUILD.bazel"], ["tools/default_notice_freshness_tests.py"],
-                        ["build_defs/licenses.bzl"], ["build_defs/dep_audit.bzl"],
-                        ["third_party/bazel/non_bcr_deps.bzl"], ["third_party/BUILD.harfbuzz"],
-                        ["third_party/cmark-gfm.BUILD"], ["third_party/stb.bzl"],
-                        ["third_party/patches/fixture.patch"],
-                        [".github/workflows/bcr_preflight.yml"],
-                        [".github/workflows/publish_bcr.yml"],
-                        [".github/workflows/release.yml"],
-                        ["donner/svg/SVGElement.cc", "MODULE.bazel"]):
-            with self.subTest(changed=changed):
-                self.assertEqual("true", self._bcr_scope(changed))
-        # A rename out of a release path is a release-path change.
-        moved = ("third_party/licenses/fixture.LICENSE.txt", "donner/fixture.LICENSE.txt")
-        self.assertEqual("true", self._bcr_scope(renamed=moved))
-
-    def test_bcr_scope_keeps_main_slim_and_qualification_full(self):
-        # Pushes to main always run the slim check, whatever they change; the full matrix
-        # qualifies candidates on schedule and dispatch. A diff that cannot be read is full.
-        self.assertEqual("false", self._bcr_scope(["MODULE.bazel"], event_name="push"))
-        self.assertEqual("true", self._bcr_scope(event_name="schedule"))
-        self.assertEqual("true", self._bcr_scope(event_name="workflow_dispatch"))
-        self.assertEqual("true", self._bcr_scope(["donner/a.cc"], base="0" * 40))
-        self.assertEqual("true", self._bcr_scope([]))
-        self.assertEqual("true", self._bcr_scope(["donner/a.cc"], event={}))
+    def test_every_bcr_preflight_run_is_the_full_matrix(self):
+        # Every run qualifies a release candidate: nightly, dispatched, or on a pull request
+        # that changes a registry input. No step selects a narrower scope, no job is skipped
+        # for one, and the consumer matrix excludes nothing. Only main runs attest.
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
-        self.assertTrue({"push", "pull_request", "schedule", "workflow_dispatch"} <=
-                        _triggers(preflight))
+        self.assertNotIn("full_matrix", preflight)
+        self.assertNotIn("tools.bcr_preflight scope", preflight)
         jobs = _jobs(preflight)
-        full = "needs.prepare.outputs.full_matrix == 'true'"
-        self.assertIn("full_matrix: ${{ steps.scope.outputs.full_matrix }}", jobs["prepare"])
-        # The scope reads the event from the runner, so one step definition serves every event.
-        self.assertEqual("        id: scope\n        run: python3 -B -m tools.bcr_preflight scope\n",
-                         _step_body(jobs["prepare"], "Select the preflight scope").rstrip("\n")
-                         + "\n")
-        # The slim check always runs: prepare and the Ubuntu consumer on the newest Bazel.
-        self.assertEqual("", _job_key(jobs["prepare"], "if"))
-        self.assertEqual("", _job_key(jobs["consumer"], "if"))
+        self.assertEqual({"prepare", "consumer", "cli-linux", "cli-macos", "attest-artifacts",
+                          "qualify"}, set(jobs))
+        for job in ("prepare", "consumer", "cli-linux", "cli-macos", "qualify"):
+            self.assertEqual("", _job_key(jobs[job], "if"), job)
+        self.assertEqual("github.ref == 'refs/heads/main'",
+                         _job_key(jobs["attest-artifacts"], "if"))
         self.assertIn("        os: [ubuntu-24.04, xcode-27]\n", jobs["consumer"])
         self.assertIn("        bazel: ['7.x', '8.x']\n", jobs["consumer"])
-        exclusions = _indented_block(
-            jobs["consumer"].split("        exclude:\n", 1)[1].splitlines(), 8)
-        self.assertEqual(["          - os: ${{ %s && 'none' || 'xcode-27' }}" % full,
-                          "          - bazel: ${{ %s && 'none' || '7.x' }}" % full],
-                         [line for line in exclusions if line.strip() and not _is_comment(line)])
-        for job in ("cli-linux", "cli-macos", "qualify"):
-            self.assertEqual("${{ %s }}" % full, _job_key(jobs[job], "if"), job)
-        self.assertEqual("github.ref == 'refs/heads/main' && " + full,
-                         _job_key(jobs["attest-artifacts"], "if"))
+        self.assertNotIn("exclude:", jobs["consumer"])
+        self.assertNotIn("include:", jobs["consumer"])
         self.assertEqual("[prepare, consumer, cli-linux, cli-macos]",
                          _job_key(jobs["qualify"], "needs"))
 
@@ -3148,7 +3076,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 run, "        run: |\n          set +e\n          "
                 "python3 -B -m tools.bcr_preflight consumer\n", 1),
             "semicolon true": preflight.replace(run, run[:-1] + "; true\n", 1),
-            "other subcommand": preflight.replace(run, run.replace("consumer", "scope"), 1),
+            "other subcommand": preflight.replace(run, run.replace("consumer", "verify"), 1),
         }
         weakened_plans = {
             "no implicit deps": with_query("--noimplicit_deps"),
@@ -4605,6 +4533,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(2, files[main].count(gate + " }}"))
         self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
+        bazel = "        bazel: ['7.x', '8.x']\n"
+        self.assertEqual(1, files[bcr].count(bazel))
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
             "ungated": (main, files[main].replace(gate + " }}", "true }}", 1), ungated),
             "parity narrowing widened": (main, files[main].replace(
@@ -4635,21 +4565,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "computed matrix": (bcr, files[bcr].replace(
                 "        os: [ubuntu-24.04, xcode-27]\n", "        os: ${{ fromJSON(vars.OS) }}\n",
                 1), "non-literal matrix"),
-            "computed include beside exclusions": (bcr, files[bcr].replace(
-                "        exclude:\n",
-                "        include:\n          - os: ${{ vars.OS }}\n        exclude:\n", 1),
+            "computed include": (bcr, files[bcr].replace(
+                bazel, bazel + "        include:\n          - os: ${{ vars.OS }}\n", 1),
                 "non-literal matrix"),
-            "label after an exclusion": (bcr, files[bcr].replace(
-                "'7.x' }}\n", "'7.x' }}\n        include:\n          - os: arm64\n", 1),
-                ungated),
+            "computed exclusion": (bcr, files[bcr].replace(
+                bazel, bazel + "        exclude:\n          - os: ${{ vars.OS }}\n", 1),
+                "non-literal matrix"),
+            "included label": (bcr, files[bcr].replace(
+                bazel, bazel + "        include:\n          - os: arm64\n", 1), ungated),
             "literal label in an exclusion": (bcr, files[bcr].replace(
-                "'7.x' }}\n", "'7.x' }}\n          - os: arm64\n", 1), ungated),
+                bazel, bazel + "        exclude:\n          - os: arm64\n", 1), ungated),
             "anchored exclusion aliased into include": (bcr, files[bcr].replace(
-                "'7.x' }}\n", "'7.x' }}\n          - &extra\n            os: arm64\n"
+                bazel, bazel + "        exclude:\n          - &extra\n            os: arm64\n"
                 "        include:\n          - *extra\n", 1), "non-literal matrix"),
             "flow mapping include": (bcr, files[bcr].replace(
-                "'7.x' }}\n", "'7.x' }}\n        include: [{os: arm64}]\n", 1),
-                "non-literal matrix"),
+                bazel, bazel + "        include: [{os: arm64}]\n", 1), "non-literal matrix"),
             "changed expression": (codeql, files[codeql].replace(
                 "'ubuntu-latest' }}", "'arm64' }}", 1), "unreviewed expression"),
         })

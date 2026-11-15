@@ -391,6 +391,7 @@ py_test(
     deps = [
         ":bcr_preflight",
         ":release_candidate",
+        ":release_macos_editor",
         ":test_timing",
         "@rules_python//python/runfiles",
     ],
@@ -481,8 +482,8 @@ py_library(
     srcs = ["bcr_source.py"],
 )
 
-# The BCR Preflight workflow's step commands: scope selection, registry admission, the consumer
-# closure audit, the release CLI builds and their verification.
+# The BCR Preflight workflow's step commands: registry admission, the consumer closure audit,
+# the release CLI builds and their verification.
 py_library(
     name = "bcr_preflight",
     srcs = ["bcr_preflight.py"],

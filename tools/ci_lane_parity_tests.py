@@ -57,11 +57,6 @@ TRIGGER_ALLOWLIST = {
     ("build_docs.yaml", "push-only"):
         "Builds the documentation site from main for verified publication. Doxygen warnings "
         "are not errors, so a pull request cannot make it fail through source changes alone.",
-    ("bcr_preflight.yml", "pull-request-paths"):
-        "Pull requests run the BCR preflight only when they change what it consumes (the "
-        "module and its build graph, packaging and release inputs, and its own tools), to "
-        "save hosted capacity and API budget; source-only changes are built and tested by CI "
-        "on the pull request, and main runs the preflight on every push.",
 }
 
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
@@ -461,9 +456,8 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
 # Each scenario sets every job output a condition reads; an output not modelled here raises.
 # `trusted_pr` and `renovate_pr` are the .github/actions/pr-trust outputs, which both the
 # self-hosted routing and the remote cache wiring read; a push gets "false" for both. A PR here
-# touches no release inputs, so the BCR preflight runs its slim scope (`full_matrix`), it does
-# not reach the WebGPU reference corpus (`wgpu_reference`), and it does reach a browser test
-# (`browser_affected`) and a runner-sensitive test (`hosted_parity_affected`).
+# does not reach the WebGPU reference corpus (`wgpu_reference`), and it does reach a browser
+# test (`browser_affected`) and a runner-sensitive test (`hosted_parity_affected`).
 _PULL_REQUEST = {
     "github.event_name": "pull_request",
     "github.ref": "refs/pull/1/merge",
@@ -473,7 +467,6 @@ _PULL_REQUEST = {
     "hosted_parity_affected": "true",
     "hosted_parity_tests_affected": "true",
     "wgpu_reference": "false",
-    "full_matrix": "false",
 }
 
 # Steps that run a Bazel build or test and also contain a line that can turn a failure into
@@ -490,7 +483,6 @@ SCENARIOS = {
         "fallback": "true",
         "affected": "",
         "wgpu_reference": "",
-        "full_matrix": "false",
         "browser_affected": "",
         "hosted_parity_affected": "",
         "hosted_parity_tests_affected": "",
@@ -541,7 +533,6 @@ _MODELLED_OUTPUTS = {
     "needs.determine-targets.outputs.browser_affected": "browser_affected",
     "needs.determine-targets.outputs.hosted_parity_affected": "hosted_parity_affected",
     "needs.determine-targets.outputs.hosted_parity_tests_affected": "hosted_parity_tests_affected",
-    "needs.prepare.outputs.full_matrix": "full_matrix",
 }
 
 BAZEL_COMMANDS = ("build", "test")
