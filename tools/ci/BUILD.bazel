@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load(":remote_macos_xcode.bzl", "remote_macos_xcode_config")
 load(":shipped_product.bzl", "shipped_product")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
@@ -10,9 +11,11 @@ exports_files([
     "BUILD.bazel",
     "bazel_watchdog.sh",
     "coverage_contract.json",
+    "determine_targets.sh",
     "docs_lane.sh",
     "editor_wasm_lane.sh",
     "editor_wasm_stage.py",
+    "fetch_bazel_diff.sh",
     "github_rate_limit.py",
     "remote_macos_xcode.bzl",
     "test_with_exclusions.py",
@@ -377,6 +380,31 @@ py_test(
         "github_rate_limit.py",
         "//:.github/actions/pr-trust/action.yml",
         "//:.github/workflows/main.yml",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The CI workflow's target selection: `bazel run //tools/ci:plan -- <step>` runs the same
+# subcommands as the determine-targets job's steps.
+sh_binary(
+    name = "plan",
+    srcs = ["determine_targets.sh"],
+)
+
+# The CI workflow's target selection and its bazel-diff download.
+# Each case runs the selection with many stand-in tool processes, so the suite takes longer than
+# a small test's timeout on a loaded host.
+py_test(
+    name = "determine_targets_tests",
+    size = "medium",
+    srcs = ["determine_targets_tests.py"],
+    data = [
+        "determine_targets.sh",
+        "fetch_bazel_diff.sh",
     ],
     deps = [
         "//tools:test_executable_fixtures",
