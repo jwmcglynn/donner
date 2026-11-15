@@ -24,6 +24,15 @@ class ShadowTreeComponent;
 struct MissingFallbackFontReported {};
 
 /**
+ * Let the next render-tree preparation of the document report a missing packaged fallback font
+ * again, by removing its \ref MissingFallbackFontReported marker, for a caller that discarded the
+ * earlier report. The report is otherwise made once per document.
+ *
+ * @param registry Document registry.
+ */
+void ForgetMissingFallbackFontReport(Registry& registry);
+
+/**
  * Whether \p entity is a same-document `<use>` left unexpanded because it sits in a `<defs>`
  * reached only through `<g>` ancestors. Inside an external use's instance, the walk stops at the
  * installed instance root, so a definition use is expanded while that instance presents it.

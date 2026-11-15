@@ -2101,6 +2101,10 @@ void ReportMissingFallbackFontOnce(Registry& registry, FontManager& fontManager,
 
 }  // namespace
 
+void ForgetMissingFallbackFontReport(Registry& registry) {
+  registry.ctx().erase<MissingFallbackFontReported>();
+}
+
 void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   RestoreAnimationPresentation(registry_);
 

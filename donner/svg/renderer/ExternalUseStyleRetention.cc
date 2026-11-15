@@ -82,6 +82,8 @@ struct OccurrenceInputs {
   ResolvedPaintServer fill;
   ResolvedPaintServer stroke;
   RetainedStyleCharge charge;
+  /// Whether restyling the subtree for these inputs refused an inherited host resource.
+  bool unsupportedResource = false;
 
   bool matches(const ExternalUseStyleContext& occurrence) const {
     return occurrence.parent.properties && parent == *occurrence.parent.properties &&
@@ -507,7 +509,7 @@ bool HasUnexpandedUse(Registry& registry, Entity root) {
 }  // namespace
 
 void ExternalUseStyleRetention::PrepareOccurrence(Registry& registry) {
-  const auto& occurrence = registry.ctx().get<ExternalUseStyleContext>();
+  auto& occurrence = registry.ctx().get<ExternalUseStyleContext>();
   auto& state = GetOrEmplaceContext<ExternalUseRetainedState>(registry);
   auto& renderState = GetOrEmplaceContext<RenderTreeState>(registry);
   const bool retain = IsPlainPaint(occurrence.fill) && IsPlainPaint(occurrence.stroke);
@@ -521,6 +523,12 @@ void ExternalUseStyleRetention::PrepareOccurrence(Registry& registry) {
       matches ? *retained : RestyleForOccurrence(registry, state, occurrence, retain);
   entry.lastDrawn = ++state.draws;
   state.unretainedRoot = retain ? entt::null : occurrence.root;
+  // A retained subtree is not restyled, so it does not refuse its inherited resources again; a
+  // root that is restyled anyway finds the refusal itself.
+  const auto* rootDirty = registry.try_get<DirtyFlagsComponent>(occurrence.root);
+  occurrence.unsupportedResource = matches && entry.inputs->unsupportedResource &&
+                                   !renderState.needsFullStyleRecompute &&
+                                   !(rootDirty && rootDirty->test(DirtyFlagsComponent::Style));
 }
 
 void ExternalUseStyleRetention::PrepareInstance(Registry& registry) {
@@ -557,7 +565,11 @@ void ExternalUseStyleRetention::ScheduleFullRestyle(Registry& registry) {
   auto& renderState = GetOrEmplaceContext<RenderTreeState>(registry);
   renderState.needsFullStyleRecompute = true;
   renderState.needsFullRebuild = true;
-  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  if (occurrence != nullptr) {
+    // The restyle finds any refusal of the occurrence's inherited resources again.
+    occurrence->unsupportedResource = false;
+  }
   auto* state = registry.ctx().find<ExternalUseRetainedState>();
   if (occurrence != nullptr && state != nullptr) {
     ForgetInputsReachedByRestyle(registry, *state, renderState, occurrence->root,
@@ -590,6 +602,11 @@ void ExternalUseStyleRetention::FinishOccurrence(Registry& registry) {
   auto* state = registry.ctx().find<ExternalUseRetainedState>();
   if (state == nullptr) {
     return;
+  }
+  const auto entry = std::find_if(state->subtrees.begin(), state->subtrees.end(),
+                                  [&](const RetainedSubtree& s) { return s.root == occurrence.root; });
+  if (entry != state->subtrees.end() && entry->inputs) {
+    entry->inputs->unsupportedResource = occurrence.unsupportedResource;
   }
   const auto* budget = registry.ctx().find<StyleResourceBudget>();
   const bool limited = budget != nullptr && budget->rejected();
