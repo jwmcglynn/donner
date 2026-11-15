@@ -544,7 +544,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn('cd "$head_dir"', script.split(query, 1)[0].rsplit("if ", 1)[1])
         failed = script.split('echo "Browser target query failed', 1)[1].split("fi\n", 1)[0]
         self.assertIn('echo "browser_affected=true" >> "$GITHUB_OUTPUT"', failed)
-        self.assertEqual(script.count("browser_affected="), 3)
+        # The query's two results, its failure, and a proven empty selection.
+        self.assertEqual(script.count("browser_affected="), 4)
         # Dependency manifests reach Bazel through module extensions, which bazel-diff cannot
         # attribute, so a change to any of them adds every browser test to the selection.
         manifests = script.split("browser_inputs_changed=false\n", 1)[1].split("esac", 1)[0]
@@ -1270,6 +1271,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             # the rest of tools/ci reaches the build graph and bazel-diff as usual.
             *[(path, "fallback=true\naffected=\n") for path in WORKFLOW_LOGIC_SCRIPTS],
             ("tools/ci/lane.sh", "incremental=true\n"),
+            # Rule definitions under build_defs reach every target; its other files are ordinary
+            # sources. Only this workflow and its base-change caller define these lanes.
+            ("build_defs/rules.bzl", "fallback=true\naffected=\n"),
+            ("build_defs/check_banned_patterns.py", "incremental=true\n"),
+            (".github/workflows/pr_base_change.yml", "fallback=true\naffected=\n"),
+            (".github/workflows/lint.yml", "incremental=true\n"),
         ):
             with self.subTest(changed_files=changed_files):
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -1428,6 +1435,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             ("donner/base/Utils.h", "false"),
             *[(path, "true") for path in WORKFLOW_LOGIC_SCRIPTS],
             ("tools/ci/lane.sh", "false"),
+            # Like the full fallback, only build_defs' rule definitions and BUILD file.
+            ("build_defs/rules.bzl", "true"),
+            ("build_defs/BUILD.bazel", "true"),
+            ("build_defs/check_banned_patterns.py", "false"),
         ):
             with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "outputs"

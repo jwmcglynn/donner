@@ -56,7 +56,7 @@ determine() {
         echo "Pre-warming bazel-diff hash cache for $GITHUB_SHA."
         mkdir -p "$(dirname "$cached")"
         java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-    --includeTargetType \
+    --includeTargetType --no-keep_going \
           -w "$GITHUB_WORKSPACE" \
           -b bazelisk \
           "$cached" || rm -f "$cached"
@@ -141,7 +141,11 @@ determine() {
         wgpu_reference_changed=true
         break
         ;;
-      third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc|build_defs/*|.github/workflows/main.yml)
+      third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc)
+        wgpu_reference_changed=true
+        break
+        ;;
+      build_defs/*.bzl|build_defs/BUILD.bazel|.github/workflows/main.yml)
         wgpu_reference_changed=true
         break
         ;;
@@ -165,6 +169,10 @@ determine() {
     esac
   done <<< "$changed_files"
 
+  # Inputs bazel-diff cannot attribute to targets: Bazel's own configuration and module
+  # definition, the rule definitions and BUILD file of build_defs (its other files are ordinary
+  # sources the graph diff tracks), the composite actions, and this workflow and the one that
+  # calls it on a base change. Another workflow cannot change this workflow's Bazel commands.
   should_fallback=false
   while IFS= read -r path; do
     [[ -z "$path" ]] && continue
@@ -174,7 +182,12 @@ determine() {
       break
     fi
     case "$path" in
-      MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*)
+      MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*.bzl|build_defs/BUILD.bazel)
+        echo "Infra change requires full //... coverage: $path"
+        should_fallback=true
+        break
+        ;;
+      .github/actions/*|.github/workflows/main.yml|.github/workflows/pr_base_change.yml)
         echo "Infra change requires full //... coverage: $path"
         should_fallback=true
         break
@@ -187,6 +200,27 @@ determine() {
     echo "affected=" >> "$GITHUB_OUTPUT"
     exit 0
   fi
+
+  # Succeeds when a path on standard input reaches Bazel other than as a hashed graph file.
+  has_unhashed_input() {
+    local path
+    while IFS= read -r path; do
+      case "$path" in
+        BUILD|*/BUILD|BUILD.*|*/BUILD.*|*.BUILD|*.bzl|MODULE.bazel*|.bazel*|*/.bazel*|WORKSPACE*)
+          return 0
+          ;;
+        third_party/*|*package-lock.json|*pnpm-lock.yaml)
+          return 0
+          ;;
+        # The native Metal job's inputs that it runs outside Bazel.
+        tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|\
+        tools/ci_bazel_test.sh)
+          return 0
+          ;;
+      esac
+    done
+    return 1
+  }
 
   work_dir="$(mktemp -d)"
   base_dir="$work_dir/base"
@@ -222,7 +256,7 @@ determine() {
   else
     git worktree add --detach "$base_dir" "$BASE_SHA"
     java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-    --includeTargetType \
+    --includeTargetType --no-keep_going \
       -w "$base_dir" \
       -b bazelisk \
       "$work_dir/base-hashes.json"
@@ -232,7 +266,7 @@ determine() {
   fi
 
   java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-    --includeTargetType \
+    --includeTargetType --no-keep_going \
     -w "$head_dir" \
     -b bazelisk \
     "$work_dir/head-hashes.json"
@@ -249,6 +283,25 @@ determine() {
     python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$work_dir/affected.txt"
   )"
 
+  # An empty difference selects nothing only when it is proof that no target changed: both
+  # revisions were hashed completely and compared (the hashing runs its queries without
+  # --keep_going, so a query error fails it, and any failure ends this step with an error and no
+  # selection), and every changed path reaches Bazel only as a file of the hashed build graph.
+  # Inputs Bazel reads outside that graph fall back to //... instead: the browser tests'
+  # module extension manifests, lockfiles and Bazel configuration, BUILD and rule definition
+  # files, third_party, which holds the source trees of local repositories, and the files the
+  # native Metal job runs outside Bazel. The selection is then a target that builds and tests
+  # nothing, so every lane reports an empty test set and the gated lanes skip.
+  if [[ -z "$affected" && "$browser_inputs_changed" != "true" ]] &&
+      ! has_unhashed_input <<< "$changed_files"; then
+    echo "bazel-diff hashed both revisions and found no affected target, and every changed" \
+      "path is a file of the build graph; nothing to build or test."
+    echo "browser_affected=false" >> "$GITHUB_OUTPUT"
+    echo "metal_affected=false" >> "$GITHUB_OUTPUT"
+    echo "fallback=false" >> "$GITHUB_OUTPUT"
+    echo "affected=//tools/ci:no_affected_targets" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
   if [[ -z "$affected" ]]; then
     echo "bazel-diff produced no affected targets; falling back to //...."
     echo "fallback=true" >> "$GITHUB_OUTPUT"

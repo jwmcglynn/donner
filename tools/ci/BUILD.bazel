@@ -388,6 +388,13 @@ py_test(
     ],
 )
 
+# What the target selection selects when bazel-diff proves that no target is affected: it builds
+# and tests nothing, so each lane reports an empty test set instead of a missing selection.
+filegroup(
+    name = "no_affected_targets",
+    srcs = [],
+)
+
 # The CI workflow's target selection: `bazel run //tools/ci:plan -- <step>` runs the same
 # subcommands as the determine-targets job's steps.
 sh_binary(

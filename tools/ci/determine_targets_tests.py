@@ -33,14 +33,17 @@ _BROWSER_QUERY = '"launches-browser", set('
 # The Metal suite intersection comes first: its expression also names the suites.
 _METAL_INTERSECTION_QUERY = ") intersect tests(//tools/ci:metal_full_validation"
 _METAL_SUITE_QUERY = "tests(//tools/ci:metal_full_validation"
+# What the selection publishes when bazel-diff proves that no target is affected.
+_NO_AFFECTED_TARGETS = "//tools/ci:no_affected_targets"
 _JAR_URL = "https://github.com/Tinder/bazel-diff/releases/download/v0.0.0/bazel-diff_deploy.jar"
 
 # One stand-in for every tool. It records its name and arguments, then answers from the JSON
 # configuration in STUB_CONFIG:
 #   git: "merge_base" (null fails), "changed" (diff output), "head" (rev-parse HEAD); worktree
 #     add creates its directory.
-#   java: "affected" (get-impacted-targets output); generate-hashes writes "{}" unless
-#     "hashes_fail" is set.
+#   java: "affected" (get-impacted-targets output, which fails when "impacted_fail" is set);
+#     generate-hashes writes "{}" unless "hashes_fail" is set; with "query_error" it reports a
+#     query error and, unless given --no-keep_going, still writes partial hashes and exits 0.
 #   bazelisk: "queries", a list of [fragment, output, status]; the first fragment the query
 #     expression contains answers it.
 #   curl: "downloads", one [body, status] per call, in order.
@@ -77,8 +80,17 @@ if tool == "git":
     answer("")
 if tool == "java":
     output = Path(args[-1])
+    if "get-impacted-targets" in args and config.get("impacted_fail"):
+        answer("", 1)
     if "get-impacted-targets" in args:
         output.write_text(config.get("affected", ""), encoding="utf-8")
+        answer("")
+    if config.get("query_error"):
+        # bazel-diff's default --keep_going hashes what the query returned and exits 0.
+        sys.stderr.write("ERROR: no such package '//broken': BUILD file not found\n")
+        if "--no-keep_going" in args:
+            answer("", 1)
+        output.write_text('{"partial": 1}', encoding="utf-8")
         answer("")
     if config.get("hashes_fail"):
         output.write_text("partial", encoding="utf-8")
@@ -216,7 +228,7 @@ class DetermineTest(_ScriptTest):
         self.assert_outputs(outputs, "fallback=true", "affected=", "full_test=false")
         self.assertIn("Pre-warming bazel-diff hash cache for sha0.", result.stdout)
         self.assertEqual(calls, [["java", "-jar", str(self.runner_temp / "bazel-diff.jar"),
-                                  "generate-hashes", "--includeTargetType",
+                                  "generate-hashes", "--includeTargetType", "--no-keep_going",
                                   "-w", str(self.workspace), "-b", "bazelisk", str(cached)]])
         self.assertEqual(cached.read_text(), "{}")
         result, calls, _ = self.run_script("determine", GITHUB_EVENT_NAME="push",
@@ -264,6 +276,9 @@ class DetermineTest(_ScriptTest):
         for changed, wgpu in ((".bazelversion\n", "false"), (".github/actions/x/action.yml\n",
                                                             "false"),
                               ("MODULE.bazel\n", "true"), (".github/workflows/main.yml\n", "true"),
+                              (".github/workflows/pr_base_change.yml\n", "false"),
+                              ("build_defs/rules.bzl\n", "true"),
+                              ("build_defs/BUILD.bazel\n", "true"),
                               ("tools/ci/determine_targets.sh\n", "true"),
                               ("tools/ci/fetch_bazel_diff.sh\n", "true"),
                               ("tools/ci/bazel_watchdog.sh\n", "true")):
@@ -277,12 +292,64 @@ class DetermineTest(_ScriptTest):
                               result.stdout)
                 self.assertNotIn("java", [call[0] for call in calls])
 
-    def test_no_affected_targets_falls_back(self):
-        result, _, outputs = self.determine(affected="\n")
+    def test_every_hashing_runs_its_queries_without_keep_going(self):
+        result, calls, _ = self.determine()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
-                            "fallback=true", "affected=")
-        self.assertIn("bazel-diff produced no affected targets", result.stdout)
+        hashing = [call for call in calls if "generate-hashes" in call]
+        self.assertEqual(len(hashing), 2)
+        for call in hashing:
+            self.assertIn("--no-keep_going", call)
+
+    def test_graph_tracked_build_defs_and_other_workflows_select_incrementally(self):
+        # A lint script under build_defs is an ordinary source of its own tests, and another
+        # workflow cannot change what this one runs; bazel-diff attributes both.
+        for changed in ("build_defs/check_banned_patterns.py\n",
+                        "build_defs/testdata/fixture.txt\n",
+                        ".github/workflows/cmake.yml\n", ".github/workflows/editor_wasm.yml\n",
+                        ".github/workflows/bcr_preflight.yml\n", ".github/workflows/lint.yml\n",
+                        ".github/workflows/coverage.yml\n",
+                        ".github/workflows/deploy_docs.yaml\n"):
+            with self.subTest(changed=changed):
+                result, calls, outputs = self.determine(changed=changed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("Infra change", result.stdout)
+                self.assertIn("get-impacted-targets", [arg for call in calls for arg in call])
+                self.assertTrue(outputs.endswith("fallback=false\naffected=//a:b\n"), outputs)
+
+    def test_no_affected_targets_selects_nothing_when_bazel_diff_sees_every_change(self):
+        for changed in ("package.json\n", "donner/base/Utils.h\ndocs/a.md\n",
+                        ".github/workflows/lint.yml\n"):
+            with self.subTest(changed=changed):
+                result, calls, outputs = self.determine(changed=changed, affected="\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
+                                    "browser_affected=false", "metal_affected=false",
+                                    "fallback=false", "affected=" + _NO_AFFECTED_TARGETS)
+                self.assertIn("nothing to build or test", result.stdout)
+                self.assertEqual(self.queried(calls), [])
+
+    def test_no_affected_targets_falls_back_for_inputs_bazel_diff_cannot_see(self):
+        # Each reaches Bazel outside the hashed build graph: module extension manifests, build
+        # and rule definitions, and source trees of local repositories under third_party.
+        for changed in ("donner/editor/wasm/tests/pnpm-lock.yaml\n",
+                        "donner/editor/wasm/tests/package.json\n", "MODULE.bazel.lock\n",
+                        ".bazelignore\n", "donner/base/BUILD.bazel\n", "donner/BUILD\n",
+                        "tools/defs.bzl\n", "third_party/BUILD.stb\n",
+                        "third_party/entt/src/entt.hpp\n", "package.json\nexamples/x.BUILD\n",
+                        "tools/ci_metal_toolchain.py\n", "tools/ci_macos_xcode.txt\n"):
+            with self.subTest(changed=changed):
+                result, _, outputs = self.determine(changed=changed, affected="\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(outputs.endswith("fallback=true\naffected=\n"), outputs)
+                self.assertIn("bazel-diff produced no affected targets", result.stdout)
+
+    def test_a_failed_graph_diff_fails_instead_of_selecting_nothing(self):
+        for config in ({"hashes_fail": True}, {"impacted_fail": True}, {"query_error": True}):
+            with self.subTest(config=config):
+                result, _, outputs = self.determine(affected="\n", **config)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("fallback=false", outputs)
+                self.assertNotIn(_NO_AFFECTED_TARGETS, outputs)
 
     def test_a_reference_suite_without_tests_fails(self):
         result, _, _ = self.determine(queries=_queries(**{_REFERENCE_QUERY: ("", 0)}))
