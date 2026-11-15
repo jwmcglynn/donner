@@ -369,10 +369,17 @@ test("a frame account read that throws records the account as unavailable", asyn
 });
 
 test("failure canvas evidence stays within its bound when the page never answers", async () => {
+  // Every page and worker call records itself and never settles, so the capture can finish only
+  // through its own per-step bounds.
+  const calls = [];
+  const silent = (name) => (...args) => {
+    calls.push([name, ...args.filter((arg) => typeof arg !== "function")]);
+    return new Promise(() => {});
+  };
   const silentPage = {
-    evaluate: () => new Promise(() => {}),
-    screenshot: () => new Promise(() => {}),
-    workers: () => [{ evaluate: () => new Promise(() => {}) }],
+    evaluate: silent("page.evaluate"),
+    screenshot: silent("page.screenshot"),
+    workers: () => [{ evaluate: silent("worker.evaluate") }],
   };
   // The parts of Playwright's test info the evidence writer uses.
   const outputDirectory = mkdtempSync(path.join(scratchRoot, "failure-canvas-evidence-"));
@@ -386,10 +393,16 @@ test("failure canvas evidence stays within its bound when the page never answers
   const startedAt = Date.now();
   await captureFailureCanvasEvidence(silentPage, testInfo, stepMs);
   const elapsedMs = Date.now() - startedAt;
-  // The state read and the screenshot each time out; the readback is skipped because the page did
-  // not answer the state read, so the capture costs two steps here and never more than three.
-  assert.ok(elapsedMs < 3 * stepMs + 500, `capture took ${elapsedMs} ms`);
+  // The state read (page and worker together) and the screenshot each wait one bounded step; the
+  // readback is skipped because the page did not answer the state read. No call is retried.
+  assert.deepEqual(calls, [
+    ["worker.evaluate"],
+    ["page.evaluate"],
+    ["page.screenshot", { timeout: stepMs }],
+  ]);
+  // The whole capture is bounded: far inside the budget that three full steps would take.
   assert.ok(kFailureEvidenceBudgetMs <= 15_000);
+  assert.ok(elapsedMs < kFailureEvidenceBudgetMs, `capture took ${elapsedMs} ms`);
   const recordPath = testInfo.outputPath("failure-canvas-evidence.json");
   const record = JSON.parse(readFileSync(recordPath, "utf8"));
   assert.equal(record.presentation, "timeout");

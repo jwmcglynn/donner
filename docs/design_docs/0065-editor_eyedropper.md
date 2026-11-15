@@ -235,9 +235,10 @@ The current implementation passes `bazel test //...` with 689 passing Bazel test
 configuration- or platform-incompatible targets skipped by Bazel. The explicit
 `//tools/ci:editor_geode` matrix passes all five targets: 203 executed GTest cases pass, while
 seven existing wall-clock-sensitive cases are skipped inside the async renderer suite and belong
-to the manual `//donner/editor/tests:async_renderer_wallclock_tests` target. The Bazel-owned
-`//donner/editor/wasm/tests:browser_presentation_regression_test` passes 15 headed Chromium cases
-with three declared Firefox/WebKit skips; all four eyedropper journeys also pass headless. These
+to the manual `//donner/editor/tests:async_renderer_wallclock_tests` target. At the time,
+`browser-presentation-regression.spec.ts` (then also a Bazel target, now run in Chromium by the
+Editor WASM workflow's chromium-default lane) passed 15 headed Chromium cases with three declared
+Firefox/WebKit skips; all four eyedropper journeys also passed headless. These
 runs cover the same production implementation, including the document-only alpha and active-paint
 journeys. The pull request records the current hosted CI and review outcome.
 
@@ -247,8 +248,8 @@ cancellation, selected-style undo, and keyboard ownership. `//donner/editor/test
 covers new "SVG" text inheriting a translucent sampled fill.
 `//donner/editor/tests:render_coordinator_tests` covers idle and cancelled capture recovery and
 canvas-commit freshness; `//donner/editor/tests:document_pixel_sampler_tests` covers checked
-mapping, bitmap bounds, and alpha conversion. The Bazel-owned
-`//donner/editor/wasm/tests:browser_presentation_regression_test` covers the real toolbar and
+mapping, bitmap bounds, and alpha conversion. `browser-presentation-regression.spec.ts`, which
+the Editor WASM workflow's chromium-default lane runs in Chromium, covers the real toolbar and
 shortcut journey, active Stroke/Fill routing, cancellation, translucent alpha, visible loupe, and
 absence of opt-in state on an ordinary URL.
 
