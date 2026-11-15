@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -27,6 +28,7 @@
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/resources/SubDocumentAdmission.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -597,24 +599,34 @@ TEST(RetainedRenderTreeUpdateTest, ExternalUseRefusedReadmissionAfterResizeDraws
         label + "-admitted", editor::tests::PixelmatchIdentityParams());
     const RenderTreeState::Counters before = ReadCounters(host->document);
 
-    // A family member that allows a single entity tightens the shared limits below what the
-    // external document needs, whether or not binding the empty member itself succeeds.
+    // A family member that allows a single entity tightens the shared family limits below what the
+    // external document needs. Binding that empty member may itself be refused; what shows the
+    // tightened limits applied to the host is the family's rejection count rising during the next
+    // draw, together with the blank frame.
     Registry stricter;
+    std::shared_ptr<components::DocumentResourceFamilyBudget> family;
     {
       const DocumentReadAccess access = host->document.readAccess();
-      stricter.ctx().emplace<components::DocumentResourceFamilyContext>(
-          host->document.unsafeRegistry().ctx().get<components::DocumentResourceFamilyContext>());
+      const auto& context =
+          host->document.unsafeRegistry().ctx().get<components::DocumentResourceFamilyContext>();
+      family = context.budget;
+      stricter.ctx().emplace<components::DocumentResourceFamilyContext>(context);
     }
+    ASSERT_NE(family, nullptr);
     (void)stricter.ctx()
         .emplace<components::SubDocumentCache>(
             components::SubDocumentCache::Limits{.maximumAggregateEntities = 1})
         .bindFamily(stricter);
+    const std::size_t rejectionsBefore =
+        components::SubDocumentAdmission::GetStats(*family).rejections;
 
     host->document.querySelector("#use")->cast<SVGUseElement>().setWidth(Lengthd(12));
     renderer.draw(host->document);
     editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderFresh(kEmpty),
                                          label + "-refused",
                                          editor::tests::PixelmatchIdentityParams());
+    EXPECT_GT(components::SubDocumentAdmission::GetStats(*family).rejections, rejectionsBefore)
+        << label;
     const RenderTreeState::Counters after = ReadCounters(host->document);
     if (path == ExpectedPath::Retained) {
       EXPECT_EQ(after.retainedUpdates, before.retainedUpdates + 1) << label;
