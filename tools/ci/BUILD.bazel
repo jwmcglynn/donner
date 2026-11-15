@@ -345,6 +345,24 @@ py_test(
     deps = [":github_rate_limit"],
 )
 
+# The wall-clock stall guard tools/run-browser-ci.sh runs each browser lane under.
+py_library(
+    name = "lane_stall_guard",
+    srcs = ["lane_stall_guard.py"],
+)
+
+py_test(
+    name = "lane_stall_guard_tests",
+    size = "medium",
+    srcs = ["lane_stall_guard_tests.py"],
+    data = ["lane_stall_guard.py"],
+    deps = [
+        ":lane_stall_guard",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 # Run-admission decisions (duplicate push, docs-only pull request) for the workflows'
 # gatekeeper jobs.
 py_test(

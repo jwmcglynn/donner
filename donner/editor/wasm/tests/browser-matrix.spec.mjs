@@ -819,6 +819,17 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     /kFailureArchiveDir="\$\{kTestsDir\}\/playwright-failures"/,
   );
   assert.match(normalizedWorkflow, /path: donner\/editor\/wasm\/tests\/playwright-failures/);
+  // A hung lane must end in a recorded failure, not run into the job's own limit: every lane
+  // runs under the stall guard, which writes into that lane's archived evidence.
+  assert.match(normalizedBrowserCi, /guarded "\$\{name\}" "\$@" \|\| code=\$\?/);
+  assert.match(
+    normalizedBrowserCi,
+    /--diagnostics-dir "\$\{kFailureArchiveDir\}\/\$\{name\}\/stall-guard"/,
+  );
+  assert.match(
+    normalizedWorkflow,
+    /- name: Serve Geode package and run browser suites timeout-minutes: \d+ /,
+  );
 });
 
 test("composited probe evidence survives lane archival and the next lane", async () => {
@@ -2060,8 +2071,8 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
     lane.includes(
       "DONNER_BROWSER_QUARANTINE_REPORT=report"
         + " DONNER_QUARANTINE_REPORT_JSON=\"${kQuarantineReportDir}/quarantine-report.json\""
-        + " bash donner/editor/wasm/tests/run_tests.sh --headed"
-        + " --config=playwright.quarantine-report.config.js || report_lane_code=$?",
+        + " guarded \"${kQuarantineReportLane}\" bash donner/editor/wasm/tests/run_tests.sh"
+        + " --headed --config=playwright.quarantine-report.config.js || report_lane_code=$?",
     ),
     "the report lane must lift the quarantine for its own command only",
   );

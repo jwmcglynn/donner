@@ -1581,6 +1581,35 @@ def _bazel_commands(workflows):
                     yield name, job_name, _step_name(step), invocation
 
 
+# The editor build identity every non-release CI lane builds with (see `ci-test-lane` in
+# .bazelrc). A fixed commit keeps the editor binaries, its Wasm package and the tests built on them
+# cacheable across commits; release, BCR preflight and the Editor WASM package pass the real one.
+_RELEASE_COMMIT_FLAG = "--//build_defs:release_source_commit="
+TEST_LANE_EDITOR_COMMIT = _RELEASE_COMMIT_FLAG + "0" * 40
+# Workflows and scripts that build an artifact which ships or qualifies a release.
+RELEASE_IDENTITY_SOURCES = (
+    ".github/workflows/bcr_preflight.yml", ".github/workflows/editor_wasm.yml",
+    ".github/workflows/publish_bcr.yml", ".github/workflows/release.yml",
+    ".github/workflows/release_candidate.yml", ".github/workflows/sign_macos_release.yml",
+    "tools/bcr_preflight.py", "tools/ci/editor_wasm_lane.sh", "tools/ci/editor_wasm_stage.py",
+    "tools/release_candidate.py", "tools/run-browser-ci.sh",
+)
+_CI_CONFIG = re.compile(r"--config[= ]ci(?![\w-])")
+
+
+def editor_identity_problems(workflows):
+    """main.yml Bazel builds and tests that would not build the test-lane editor identity."""
+    problems = []
+    for _, job, step, invocation in _bazel_commands({"main.yml": workflows["main.yml"]}):
+        if invocation["command"] not in ("build", "test", "coverage"):
+            continue
+        commits = sorted(flag for flag in invocation["flags"]
+                         if flag.startswith(_RELEASE_COMMIT_FLAG))
+        if commits != [TEST_LANE_EDITOR_COMMIT]:
+            problems.append("%s %s: editor identity %s" % (job, step, commits))
+    return sorted(set(problems))
+
+
 def build_event_file_problems(workflows):
     """Bazel commands whose build event file would depend on the remote cache."""
     return sorted({"%s %s %s: %s" % (name, job, step, problem)
@@ -1752,6 +1781,46 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertEqual([], [line for line in rc_lines if not line.startswith("#") and any(
             _PATH_CONVERSION_ON.match(word) for word in line.split())])
         self.assertEqual([], build_event_file_problems(self.workflows))
+
+    def test_ci_lanes_build_one_constant_editor_identity(self):
+        commands = [invocation for _, _, _, invocation
+                    in _bazel_commands({"main.yml": self.workflows["main.yml"]})
+                    if invocation["command"] in ("build", "test", "coverage")]
+        self.assertGreater(len(commands), 20)
+        self.assertEqual([], editor_identity_problems(self.workflows))
+        # It comes from the one named config, which only `ci` applies.
+        rc = [line for line in _read(".bazelrc").splitlines() if not line.startswith("#")]
+        self.assertEqual([line for line in rc if "ci-test-lane" in line], [
+            "common:ci-test-lane " + TEST_LANE_EDITOR_COMMIT,
+            "common:ci --config=ci-test-lane",
+        ])
+        self.assertEqual([line for line in rc if _RELEASE_COMMIT_FLAG in line],
+                         ["common:ci-test-lane " + TEST_LANE_EDITOR_COMMIT])
+        # A lane that leaves `ci` out, or overrides the commit, is found.
+        main = next(path for path in _workflow_paths() if path.name == "main.yml")
+        text = main.read_text(encoding="utf-8")
+        command = "bazelisk test --config=ci --config=geode"
+        self.assertIn(command, text)
+        for replacement in ("bazelisk test --config=geode",
+                            command + " " + _RELEASE_COMMIT_FLAG + "1" * 40):
+            workflows = dict(self.workflows)
+            workflows["main.yml"] = parse_workflow(text.replace(command, replacement))
+            self.assertTrue(editor_identity_problems(workflows), replacement)
+
+    def test_release_builds_keep_their_real_editor_identity(self):
+        for path in RELEASE_IDENTITY_SOURCES:
+            with self.subTest(path=path):
+                self.assertNotRegex(_read(path), _CI_CONFIG)
+        # Each of these passes the commit it builds explicitly.
+        self.assertIn('source_args=("--//build_defs:release_source_commit=${GITHUB_SHA}")',
+                      _read("tools/ci/editor_wasm_lane.sh"))
+        self.assertIn('return ["--//build_defs:release_source_commit=" + commit]',
+                      _read("tools/ci/editor_wasm_stage.py"))
+        self.assertIn('f"--//build_defs:release_source_commit={commit}"',
+                      _read("tools/bcr_preflight.py"))
+        self.assertRegex("bazelisk test --config=ci //x", _CI_CONFIG)
+        self.assertRegex("bazelisk test --config ci //x", _CI_CONFIG)
+        self.assertNotRegex("bazelisk test --config=ci-macos //x", _CI_CONFIG)
 
     def test_build_event_file_problems_are_found(self):
         geode = "Test (Geode editor lane)"
