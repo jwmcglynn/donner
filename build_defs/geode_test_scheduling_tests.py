@@ -5,6 +5,8 @@ import subprocess
 import textwrap
 import unittest
 
+from build_defs import check_local_gpu_tags
+
 
 # The tag a GPU-opening test carries: one unit of the `local_gpu` resource.
 LOCAL_GPU_TAG = '"resources:local_gpu:1"'
@@ -36,6 +38,17 @@ def _logical_lines(text):
     return lines + ([current] if current else [])
 
 
+# --local_test_jobs in either the `=` or the space form. Bazel honours resource tags only at 0;
+# 1 runs every local test serially. Any other value, a variable or HOST_CPUS included, is parallel.
+_LOCAL_TEST_JOBS = re.compile(r"--local_test_jobs(?:=|\s+)([^\s\\]+)")
+_SERIAL_OR_RESOURCE_BOUND = {"0", "1"}
+
+
+def _parallel_local_test_jobs(line):
+    return any(value.strip("'\"") not in _SERIAL_OR_RESOURCE_BOUND
+               for value in _LOCAL_TEST_JOBS.findall(line))
+
+
 def _rc_problems(bazelrc):
     """Problems of the .bazelrc declaration of the local GPU resource."""
     lines = [line for line in bazelrc.splitlines() if not line.lstrip().startswith("#")]
@@ -45,7 +58,7 @@ def _rc_problems(bazelrc):
         problems.append(".bazelrc must declare exactly %r, found %r" % (
             LOCAL_GPU_DECLARATION, declarations))
     problems += [".bazelrc sets --local_test_jobs above 1: %s" % line
-                 for line in lines if re.search(r"--local_test_jobs=(?!1\b)", line)]
+                 for line in lines if _parallel_local_test_jobs(line)]
     return problems
 
 
@@ -56,10 +69,9 @@ def _command_problems(path, line):
         problems.append("%s skips the .bazelrc that declares local_gpu: %s" % (path, line))
     if "local_gpu" in line and line not in REVIEWED_LOCAL_GPU_OVERRIDES:
         problems.append("%s overrides the local_gpu count: %s" % (path, line))
-    jobs = [int(value) for value in re.findall(r"--local_test_jobs=(\d+)", line)]
     targets = set(re.findall(r"(?<!\S)//\S+", line))
     parallel_ok = bool(targets) and targets <= PARALLEL_LOCAL_TEST_JOBS_TARGETS
-    if any(value > 1 for value in jobs) and not parallel_ok:
+    if _parallel_local_test_jobs(line) and not parallel_ok:
         problems.append("%s runs tests with --local_test_jobs above 1, which ignores the "
                         "local_gpu resource: %s" % (path, line))
     return problems
@@ -114,12 +126,33 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertNotIn('"exclusive"', self.rules)
 
     def test_directly_tagged_gpu_tests_take_the_local_gpu_resource(self):
+        # The Lint lane runs the same check over every tracked BUILD file.
+        self.assertEqual([], check_local_gpu_tags.build_file_problems(self.direct_tag_builds))
         for path, expected in DIRECT_GPU_TAGS.items():
             with self.subTest(path=path):
-                build = self.direct_tag_builds[path]
-                self.assertNotIn('"exclusive-if-local"', build)
-                self.assertNotIn('"exclusive"', build)
-                self.assertEqual(expected, build.count(LOCAL_GPU_TAG))
+                self.assertEqual(expected, self.direct_tag_builds[path].count(LOCAL_GPU_TAG))
+
+    def test_build_file_check_rejects_whole_machine_and_multi_unit_tags(self):
+        rule = 'cc_test(\n    name = "gpu_tests",\n    tags = [%s],\n)\n'
+        cases = {
+            '"exclusive-if-local"': "exclusive-if-local",
+            '"exclusive"': "without a reviewed reason",
+            '"resources:local_gpu:2"': "exactly one unit",
+            '"resources:local_gpu:0.5"': "exactly one unit",
+        }
+        for tag, expected in cases.items():
+            with self.subTest(tag=tag):
+                problems = check_local_gpu_tags.build_file_problems(
+                    {"donner/x/BUILD.bazel": rule % tag})
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn(expected, problems[0])
+                self.assertIn("donner/x/BUILD.bazel:3: gpu_tests", problems[0])
+        reviewed = ('cc_test(\n    name = "dom_lifetime_perf_capture",\n'
+                    '    tags = ["exclusive"],\n)\n')
+        self.assertEqual([], check_local_gpu_tags.build_file_problems(
+            {"donner/benchmarks/BUILD.bazel": reviewed}))
+        self.assertEqual([], check_local_gpu_tags.build_file_problems(
+            {"donner/x/BUILD.bazel": rule % LOCAL_GPU_TAG}))
 
     def test_every_command_runs_at_most_one_gpu_opening_test_at_a_time(self):
         self.assertIn(".github/workflows/main.yml", self.workflows)
@@ -140,6 +173,17 @@ class GeodeTestSchedulingTest(unittest.TestCase):
                 "must declare exactly"),
             "a config sets parallel local test jobs": (
                 self.bazelrc + "test:ci --local_test_jobs=4\n", {}, "above 1"),
+            "a config sets parallel local test jobs in the space form": (
+                self.bazelrc + "test:ci --local_test_jobs HOST_CPUS\n", {}, "above 1"),
+            "a lane sets parallel local test jobs in the space form": (self.bazelrc, {
+                main: command.replace("$TARGETS", "--local_test_jobs 4 $TARGETS")},
+                "ignores the local_gpu resource"),
+            "a lane sets local test jobs from a variable": (self.bazelrc, {
+                main: command.replace("$TARGETS", "--local_test_jobs=$JOBS $TARGETS")},
+                "ignores the local_gpu resource"),
+            "a lane sets local test jobs from the host CPU count": (self.bazelrc, {
+                main: command.replace("$TARGETS", "--local_test_jobs=HOST_CPUS*.5 $TARGETS")},
+                "ignores the local_gpu resource"),
             "a lane raises the count": (self.bazelrc, {main: command.replace(
                 "$TARGETS", "--local_resources=local_gpu=2 $TARGETS")}, "overrides"),
             "a lane runs GPU tests with parallel local test jobs": (self.bazelrc, {
@@ -159,6 +203,12 @@ class GeodeTestSchedulingTest(unittest.TestCase):
                 self.assertTrue(any(expected in problem for problem in problems), problems)
         allowed = "          bazelisk test --local_test_jobs=4 //tools/ci:browser_gpu_comparison\n"
         self.assertEqual([], local_gpu_problems(self.bazelrc, {main: allowed}))
+        # 0 lets local resources bound the tests, so the resource tag applies.
+        for value in ("0", "1"):
+            with self.subTest(local_test_jobs=value):
+                self.assertEqual([], local_gpu_problems(
+                    self.bazelrc + "test:ci --local_test_jobs=%s\n" % value,
+                    {main: command.replace("$TARGETS", "--local_test_jobs %s $TARGETS" % value)}))
 
     def test_serialization_is_opt_in_not_implied_by_the_geode_backend(self):
         """The local GPU resource must be gated on opening a real GPU device.
