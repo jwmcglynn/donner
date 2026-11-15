@@ -235,12 +235,11 @@ The current implementation passes `bazel test //...` with 689 passing Bazel test
 configuration- or platform-incompatible targets skipped by Bazel. The explicit
 `//tools/ci:editor_geode` matrix passes all five targets: 203 executed GTest cases pass, while
 seven existing wall-clock-sensitive cases are skipped inside the async renderer suite and belong
-to the manual `//donner/editor/tests:async_renderer_wallclock_tests` target. At the time,
-`browser-presentation-regression.spec.ts` (then also a Bazel target, now run in Chromium by the
-Editor WASM workflow's chromium-default lane) passed 15 headed Chromium cases with three declared
-Firefox/WebKit skips; all four eyedropper journeys also passed headless. These
-runs cover the same production implementation, including the document-only alpha and active-paint
-journeys. The pull request records the current hosted CI and review outcome.
+to the manual `//donner/editor/tests:async_renderer_wallclock_tests` target. In the browser, the
+Editor WASM workflow's chromium-default lane runs `browser-presentation-regression.spec.ts` in
+headed Chromium against the production package, including all four eyedropper journeys, the
+document-only alpha and the active-paint journeys; the spec declares its Firefox and WebKit
+skips. The pull request records the current hosted CI and review outcome.
 
 `//donner/editor/tests:editor_shell_tests` and
 `//donner/editor/tests:tool_keybinding_tests` cover tool routing, active-paint selection,
