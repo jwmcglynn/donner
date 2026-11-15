@@ -1207,15 +1207,6 @@ bool IsInvisibleInstance(Registry& registry,
   return style.properties.has_value() && style.properties->opacity.get().value() <= 0.0;
 }
 
-/// The filtered instances among @p entities, in draw order, whose output can reach the frame.
-///
-/// Rendered but invisible content (anything drawn for a zero-opacity element, or for a hidden
-/// leaf) is left out, so its filters neither run nor spend the frame's filter budget; an
-/// unprepared filter hides its element, which was invisible anyway. A `<use>` copy is a separate
-/// instance under its referencing element and stays in. Marker, mask and pattern content is shared
-/// by every element that draws it, so content that a visible element draws stays in even when it
-/// was instantiated under a hidden one; within it, only instances that are themselves invisible
-/// are left out.
 /// Filtered instances that reach the frame in one pass over @p entities, and the shared content
 /// those reaching instances draw.
 struct VisibilityPass {
@@ -1268,6 +1259,15 @@ VisibilityPass ScanVisibleInstances(Registry& registry, std::span<const Entity> 
   return pass;
 }
 
+/// The filtered instances among @p entities, in draw order, whose output can reach the frame.
+///
+/// Rendered but invisible content (anything drawn for a zero-opacity element, or for a hidden
+/// leaf) is left out, so its filters neither run nor spend the frame's filter budget; an
+/// unprepared filter hides its element, which was invisible anyway. A `<use>` copy is a separate
+/// instance under its referencing element and stays in. Marker, mask and pattern content is shared
+/// by every element that draws it, so content that a visible element draws stays in even when it
+/// was instantiated under a hidden one; within it, only instances that are themselves invisible
+/// are left out.
 std::vector<Entity> VisibleFilteredEntities(Registry& registry, std::span<const Entity> entities) {
   const bool anyFilter = std::any_of(entities.begin(), entities.end(), [&](Entity entity) {
     const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
