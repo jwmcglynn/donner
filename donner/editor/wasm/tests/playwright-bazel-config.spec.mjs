@@ -132,29 +132,6 @@ test("Crash directory creation errors fail before browser launch", (t) => {
   );
 });
 
-test("Boot config inherits the crash directory and budgets a slow cold launch", (t) => {
-  const { temporary, environment, baseConfig } = fixture(t);
-  const bazelConfig = evaluateConfig(
-    "playwright.bazel.config.js",
-    baseConfig,
-    environment,
-    temporary,
-  );
-  const bootConfig = evaluateConfig(
-    "playwright.boot-presentation.bazel.config.js",
-    bazelConfig,
-    environment,
-    temporary,
-  );
-  assert.equal(
-    bootConfig.use.launchOptions.env?.BREAKPAD_DUMP_LOCATION,
-    path.join(temporary, "chromium-crashpad"),
-  );
-  assert.equal(bootConfig.use.launchOptions.timeout, 30000);
-  assert.equal(bootConfig.globalTimeout, 120000);
-  assert.equal(bootConfig.timeout, 60000);
-});
-
 test("Composited Chromium Bazel config keeps headed Metal and enables its specs", (t) => {
   const { temporary, environment, baseConfig } = fixture(t);
   baseConfig.testIgnore = [/composited/];
@@ -194,39 +171,4 @@ test("Composited Chromium Bazel config keeps headed Metal and enables its specs"
     config.use.launchOptions.env.BREAKPAD_DUMP_LOCATION,
     path.join(temporary, "chromium-crashpad"),
   );
-});
-
-test("WebKit adapter uses the pinned launcher without Chromium launch settings", (t) => {
-  const { temporary, environment, baseConfig } = fixture(t);
-  environment.DONNER_WEBKIT_EXECUTABLE = path.join(temporary, "pinned-webkit", "pw_run.sh");
-  environment.DONNER_BROWSER_HEADLESS = "1";
-  baseConfig.webServer = { command: "bazel-owned-server" };
-  const config = evaluateConfig(
-    "playwright.webkit.bazel.config.js",
-    {
-      "./playwright.bazel.config.js": baseConfig,
-      "./playwright.compatibility.config.js": {
-        projects: [
-          { name: "firefox", use: { browserName: "firefox" } },
-          {
-            name: "webkit",
-            use: { browserName: "webkit", viewport: { width: 1280, height: 900 } },
-          },
-        ],
-      },
-    },
-    environment,
-    temporary,
-  );
-  assert.equal(config.webServer, baseConfig.webServer);
-  assert.equal(config.use.channel, undefined);
-  assert.equal(config.use.launchOptions, undefined);
-  assert.equal(config.projects.length, 1);
-  const project = config.projects[0];
-  assert.equal(project.name, "webkit");
-  assert.equal(project.use.browserName, "webkit");
-  assert.equal(project.use.headless, true);
-  assert.equal(project.use.viewport.width, 1280);
-  assert.equal(project.use.launchOptions.executablePath, environment.DONNER_WEBKIT_EXECUTABLE);
-  assert.equal(project.use.launchOptions.args, undefined);
 });

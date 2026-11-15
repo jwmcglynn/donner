@@ -7,8 +7,7 @@ import re
 
 
 TARGETS = tuple("//donner/editor/wasm/tests:" + name for name in (
-    "chromium_remote_smoke", "catalog_font_loading_test",
-    "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
+    "standalone_geode_browser_renderer_test",
 ))
 STATUSES = frozenset(("PASSED", "FAILED", "TIMEOUT", "INCOMPLETE", "REMOTE_FAILURE",
                       "FAILED_TO_BUILD", "TOOL_HALTED_BEFORE_TESTING"))

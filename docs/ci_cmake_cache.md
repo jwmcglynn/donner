@@ -32,7 +32,9 @@ replace both archive and metadata. Executables and configuration are staged
 privately per job, outside the shared data directory.
 
 The optional `ci:cmake-cache-qualification` PR label enables trusted producer and
-consumer jobs on distinct runner capabilities. A new run/attempt namespace must
+consumer jobs on distinct runner capabilities. They belong to the CMake Build workflow, which a
+pull request runs only when it changes a CMake input listed in its `pull_request` paths (this
+cache client and `tools/ci/cmake_consumer.sh` among them). A new run/attempt namespace must
 start cold, then reuse at least 80 percent of cacheable compiler calls and at least
 one dependency download. Receipts bind the source/head and run/attempt; both jobs
 must run both CTests without failures or skips. Verify actual distinct runner
