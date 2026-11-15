@@ -10,10 +10,6 @@ $RUNNER_TEMP; see Layout), which the workflow's upload, download and attestation
 directly. The commit, run ID and attempt default to $SOURCE_COMMIT, $GITHUB_RUN_ID and
 $GITHUB_RUN_ATTEMPT. Permissions, attestation and artifact transfer stay in the workflow.
 
-  scope           `full_matrix=true|false` to $GITHUB_OUTPUT. A push runs the slim check; a pull
-                  request runs the full matrix when its diff since the merge base touches a
-                  release or packaging input (RELEASE_PATHS) or cannot be listed; schedule and
-                  manual dispatch run the full matrix.
   admission --upstream DIR
                   Install the upstream BCR validator's hash-locked requirements into a private
                   virtual environment and validate the candidate entry with tools.bcr_admission.
@@ -36,36 +32,10 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import fnmatch
-import json
 import os
-from pathlib import Path
 import shlex
 import subprocess
 import sys
-
-# Changed paths that select the full preflight matrix on a pull request: release and packaging
-# inputs, this tool and the workflows it serves. Matched as shell patterns, where `*` also
-# matches `/`.
-RELEASE_PATHS = (
-    "LICENSE", "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion", ".bazelrc", ".bcr/*",
-    "examples/bazel_consumer/*", "examples/BUILD.bazel", "examples/svg_to_png.cc",
-    "examples/svg_text_interaction.cc", "examples/svg_viewer.cc", "examples/geode_embed.cc",
-    "examples/native_resource_delivery_tests.py", "examples/native_no_text_resource_delivery_tests.py",
-    "third_party/licenses/*", "third_party/bazel/*",
-    "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
-    "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
-    "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/native_delivery.py", "tools/notice*",
-    "tools/render_notice*", "tools/default_notice*", "tools/macos_editor_test_bundle*", "tools/ci/BUILD.bazel",
-    "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl",
-    "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel", "build_defs/packaged_resources*",
-    "donner/base/PackagedResource*", "third_party/public-sans/*", "third_party/fira-code/*",
-    "third_party/roboto/*", "third_party/google_fonts/*", "donner/editor/art/*",
-    "donner/editor/write_build_info.sh", "tools/editor_build_info_tests.py", "donner/editor/BUILD.bazel",
-    "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
-    ".github/workflows/bcr_preflight.yml",
-    ".github/workflows/publish_bcr.yml", ".github/workflows/release.yml",
-)
 
 # The release CLI, its NOTICE and the compiler identity probe, built in one invocation so the
 # NOTICE and the provenance's compiler describe the CLI's own configuration.
@@ -158,59 +128,6 @@ class Command:
     cwd: str | None = None
     stdout: str | None = None
     expect_stdout: str | None = None
-
-
-def is_release_path(path: str) -> bool:
-    return any(fnmatch.fnmatchcase(path, pattern) for pattern in RELEASE_PATHS)
-
-
-def _git_output(args: Sequence[str]) -> str | None:
-    # Paths are bytes to Git. Bytes that are not UTF-8 decode to surrogate escapes, so such a
-    # path is still classified (as the shell `case` this replaced matched raw bytes) and prints
-    # back unchanged.
-    result = subprocess.run(["git", *args], stdout=subprocess.PIPE, encoding="utf-8",
-                            errors="surrogateescape", check=False)
-    return result.stdout.rstrip("\n") if result.returncode == 0 else None
-
-
-def _print_raw(text: str) -> None:
-    """Prints text that may hold surrogate-escaped path bytes, writing those bytes as they were."""
-    sys.stdout.flush()
-    sys.stdout.buffer.write(text.encode("utf-8", "surrogateescape") + b"\n")
-    sys.stdout.buffer.flush()
-
-
-def _pull_request_shas(environ: Mapping[str, str]) -> tuple[str, str]:
-    """The pull request's base and head SHAs from the event payload; empty when unreadable."""
-    try:
-        event = json.loads(Path(environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-        pull_request = event["pull_request"]
-        return str(pull_request["base"]["sha"] or ""), str(pull_request["head"]["sha"] or "")
-    except (KeyError, OSError, TypeError, ValueError):
-        return "", ""
-
-
-def full_matrix(environ: Mapping[str, str]) -> bool:
-    """Whether this run qualifies a release candidate with the full matrix."""
-    event_name = environ.get("GITHUB_EVENT_NAME", "")
-    if event_name == "push":
-        return False
-    if event_name != "pull_request":
-        return True
-    base_sha, head_sha = _pull_request_shas(environ)
-    diff_base = _git_output(["merge-base", base_sha, head_sha])
-    changed = None
-    if diff_base is not None:
-        changed = _git_output(["-c", "core.quotePath=false", "diff", "--no-renames",
-                               "--name-only", diff_base, head_sha])
-    if not changed:
-        print("Could not list the pull request's changes; selecting the full matrix.")
-        return True
-    for path in changed.split("\n"):
-        if is_release_path(path):
-            _print_raw(f"Full preflight matrix selected by {path}")
-            return True
-    return False
 
 
 def admission_plan(layout: Layout, upstream: str, commit: str) -> list[Command]:
@@ -424,7 +341,6 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     parser.add_argument("--run-id", default=environ.get("GITHUB_RUN_ID"))
     parser.add_argument("--attempt", default=environ.get("GITHUB_RUN_ATTEMPT"))
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("scope")
     admission = commands.add_parser("admission")
     admission.add_argument("--upstream", required=True,
                            help="checkout of the upstream Bazel Central Registry")
@@ -436,11 +352,6 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     commands.add_parser("explain-missing-cli")
     args = parser.parse_args(argv)
 
-    if args.command == "scope":
-        value = "true" if full_matrix(environ) else "false"
-        with open(environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-            output.write(f"full_matrix={value}\n")
-        return 0
     if args.command == "explain-missing-cli":
         return explain_missing_cli(environ)
 

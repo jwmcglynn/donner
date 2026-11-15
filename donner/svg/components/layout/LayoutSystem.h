@@ -18,6 +18,21 @@
 namespace donner::svg::components {
 
 /**
+ * Registry context installed on a referenced document while an external `<use>` draws the element
+ * it names. That element is the root of the instance: absolute transforms stop at it, as if its
+ * parent were the `<use>` element, and the render tree is built from it alone.
+ */
+struct ExternalUseInstanceContext {
+  Entity root;  //!< The referenced element.
+};
+
+/// The root an external `<use>` is instantiating from \p registry, or `entt::null`.
+inline Entity ExternalUseInstanceRoot(const Registry& registry) {
+  const auto* context = registry.ctx().find<ExternalUseInstanceContext>();
+  return context ? context->root : entt::null;
+}
+
+/**
  * Handles layout and bounds calculations for SVG elements. This system is responsible for
  * calculating the the document size, viewBoxes, and the bounds for elements.
  *
@@ -125,6 +140,15 @@ public:
   Transform2d getEntityContentFromEntityTransform(EntityHandle entity);
 
   /**
+   * Get the entityContent-from-parent transform: \ref getEntityContentFromEntityTransform composed
+   * with the entity's own transform, or with no transform for elements whose rendering behavior
+   * ignores it. Each ancestor contributes this factor to an absolute transform.
+   *
+   * @param entity Current entity.
+   */
+  Transform2d getEntityContentFromParentTransform(EntityHandle entity);
+
+  /**
    * Set the parentFromEntity transform for the current entity. This will be transformed with
    * modifiers such as transform-origin before being applied to the entity.
    *
@@ -158,6 +182,15 @@ public:
    * @param viewportChanged Also invalidate descendant viewport-dependent layout caches.
    */
   void invalidate(EntityHandle entity, bool viewportChanged = false);
+
+  /**
+   * Drop the cached absolute transforms of \p entity and its descendants, which depend on where
+   * the entity is placed, while keeping its computed size, viewBox and local transform. Marks
+   * nothing dirty.
+   *
+   * @param entity Root of the subtree.
+   */
+  void invalidateAbsoluteTransforms(EntityHandle entity);
 
   /// @}
 

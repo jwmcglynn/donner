@@ -250,13 +250,39 @@ Bazel 7 and 8, it builds `@donner//donner/base`, `@donner//donner/css`, `@donner
 checked-in consumer module against it. See \ref GettingStarted for the `MODULE.bazel`,
 `BUILD.bazel` and `.bazelrc` a consumer needs.
 
-A consumer module can build the same `Renderer` API on Geode by setting the two flags that
-`--config=geode` sets inside this repository:
+Depending on `@donner` links code only; it does not install Donner's packaged resources, and no
+supported way to package them for a consumer module exists yet. Documents without text render with
+none. Text that matches no `@font-face`, provider or system font needs the packaged Public Sans
+fallback font at run time. A native program looks for it in a resource directory: inside a macOS
+app bundle, `Contents/Resources/donner-assets`; otherwise `<executable>.assets` or `donner-assets`
+beside the executable. A program that ships the font file itself can install it at startup with
+`DonnerInstallPackagedResource()`, keyed by the SHA-256 that `DonnerPackagedResourceManifest()`
+lists. Call `donner::PreparePackagedResources()` at startup to report a missing installation.
+Rendering a document that contains text without the fallback font adds one warning per document
+to the rendering warnings; the font manager itself does not print.
+
+A consumer module can build the same `Renderer` API on Geode by selecting it in its
+`MODULE.bazel`, which sets both the backend and the Geode build flag:
+
+```py
+donner = use_extension("@donner//config:extensions.bzl", "donner")
+donner.configure(renderer = "geode")
+use_repo(donner, "donner_config")
+```
+
+Setting the two flags that `--config=geode` sets inside this repository is equivalent:
 
 ```sh
 bazel build --@donner//donner/svg/renderer:renderer_backend=geode \
   --@donner//donner/svg/renderer/geode:enable_geode=true //:my_app
 ```
+
+On macOS, to present frames to an application window rather than read pixels back, depend on
+`@donner//donner/svg/renderer:geode_surface_renderer` and use `donner::svg::GeodeSurfaceRenderer`,
+which draws each frame into a host-owned `CAMetalLayer` and presents it without leaving the GPU.
+In a WebAssembly build with the browser backend, `GeodeSurfaceRenderer::CreateForCanvas` presents
+to a `<canvas>` through WebGPU; see \ref EmbeddingGeodeWebAssembly for the build settings. Linux
+window presentation has no public entry point yet.
 
 Donner's build checks that the packages Geode adds load without Donner's development-only
 dependencies, but CI does not build Geode from an external module; BCR preflight covers only the
@@ -267,8 +293,8 @@ default tiny-skia configuration.
 The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:
 the `linux` and `macos` jobs in `main.yml`, the Editor WASM build, the Geode ASan
 pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. The self-hosted
-macOS lanes share it too: `macos-self-hosted`, `macos-hosted-parity`, `macos-metal` and the
-desktop-only `macos-browser` partition. They run only for trusted maintainer pull requests,
+macOS lanes share it too: `macos-self-hosted`, `macos-metal` and the desktop-only
+`macos-browser` partition. They run only for trusted maintainer pull requests,
 so the hosted and self-hosted macOS lanes reuse
 each other's build results. Trusted Linux writers also use cloud remote execution for the
 native build and test-build commands of the `linux` job in `main.yml`. Tests themselves run on
@@ -289,8 +315,8 @@ directory, and Bazel reads it through a small credential helper there that the f
 `--credential_helper`. The key is never a Bazel flag, because Bazel writes its rc options into its
 server log in the output base, and uploads of workspace paths cannot carry it. With no key the
 action writes nothing and the `try-import` is a silent no-op. The self-hosted runner is persistent,
-so `macos-self-hosted` and `macos-hosted-parity` each delete the key file and the fragment in a
-last step that runs whatever the job's outcome.
+so each self-hosted macOS lane deletes the key file and the fragment in a last step that runs
+whatever the job's outcome.
 
 **Linux remote execution.** Every Bazel build and test step of the hosted `linux` job except the
 linker canary selects the declared LLVM 21 toolchain with libc++ and the Linux sysroot

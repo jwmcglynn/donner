@@ -273,16 +273,19 @@ TEST(AsyncSVGDocumentTest, CapturedMouseBudgetRejectsTheWholeSnapshot) {
 
 TEST(AsyncSVGDocumentTest, SuccessfulParsePublishesWarnings) {
   constexpr std::string_view kSvgWithWarning = R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" xmlns:unused="urn:unexpected">
-      <rect width="10" height="10"/>
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect undeclared:attr="1" width="10" height="10"/>
     </svg>)svg";
   AsyncSVGDocument doc;
 
   ASSERT_TRUE(doc.loadFromString(kSvgWithWarning));
 
-  ASSERT_FALSE(doc.parseDiagnostics().empty());
-  EXPECT_EQ(doc.parseDiagnostics().front().severity, DiagnosticSeverity::Warning);
-  EXPECT_FALSE(doc.lastParseError().has_value());
+  EXPECT_THAT(doc.parseDiagnostics(),
+              testing::ElementsAre(testing::AllOf(
+                  testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
+                  testing::Field(&ParseDiagnostic::reason,
+                                 testing::HasSubstr("undeclared namespace prefix 'undeclared'")))));
+  EXPECT_EQ(doc.lastParseError(), std::nullopt);
   EXPECT_GT(doc.parseDiagnosticsRevision(), 0u);
 }
 

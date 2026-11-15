@@ -6,6 +6,8 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGCircleElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
@@ -143,6 +145,104 @@ TEST(SVGUseElementTests, SetHref) {
 
   fragment->setHref(RcString("#anotherTarget"));
   EXPECT_THAT(fragment->href(), Eq(RcString("#anotherTarget")));
+}
+
+constexpr std::string_view kTwoTargets =
+    R"(<defs><rect id="a" width="1" height="1"/><rect id="b" width="1" height="1"/></defs>)";
+
+/// Parse a document whose only `<use>` element carries \p useAttributes, and return that use.
+SVGUseElement ParseUse(SVGDocument& document, std::string_view useAttributes) {
+  document = instantiateSubtree(std::string(R"(<svg xmlns:xlink="http://www.w3.org/1999/xlink">)") +
+                                std::string(kTwoTargets) + "<use " + std::string(useAttributes) +
+                                "/></svg>");
+  return document.querySelector("use")->cast<SVGUseElement>();
+}
+
+/// SVG 2: `href` takes precedence over `xlink:href`, whichever comes first in the source.
+TEST(SVGUseElementTests, HrefWinsOverXlinkHrefInEitherOrder) {
+  SVGDocument document;
+  EXPECT_THAT(ParseUse(document, R"(href="#a" xlink:href="#b")"), HrefEq(RcString("#a")));
+  EXPECT_THAT(ParseUse(document, R"(xlink:href="#b" href="#a")"), HrefEq(RcString("#a")));
+}
+
+TEST(SVGUseElementTests, RemovingHrefFallsBackToXlinkHref) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a" xlink:href="#b")");
+  use.removeAttribute(xml::XMLQualifiedNameRef("href"));
+  EXPECT_THAT(use, HrefEq(RcString("#b")));
+  use.removeAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+  EXPECT_THAT(use, HrefEq(RcString()));
+}
+
+TEST(SVGUseElementTests, SettingXlinkHrefKeepsHrefTarget) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a")");
+  use.setAttribute(xml::XMLQualifiedNameRef("xlink", "href"), "#b");
+  EXPECT_THAT(use, HrefEq(RcString("#a")));
+  use.setAttribute(xml::XMLQualifiedNameRef("href"), "#b");
+  EXPECT_THAT(use, HrefEq(RcString("#b")));
+}
+
+/// `setHref` writes the `href` attribute, so a later attribute mutation keeps its target.
+TEST(SVGUseElementTests, SetHrefUpdatesAttributeForLaterMutations) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a")");
+  use.setHref(RcString("#b"));
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Optional(RcString("#b")));
+
+  use.removeAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+  EXPECT_THAT(use, HrefEq(RcString("#b")));
+
+  use.setHref(RcString());
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Optional(RcString()));
+  EXPECT_THAT(use, HrefEq(RcString()));
+}
+
+/// `setHref("")` stores an empty `href`, which wins over `xlink:href` and leaves no reference.
+TEST(SVGUseElementTests, SetEmptyHrefOverridesXlinkHref) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a" xlink:href="#b")");
+  use.setHref(RcString());
+  EXPECT_THAT(use.getAttribute(xml::XMLQualifiedNameRef("href")), Optional(RcString()));
+  EXPECT_THAT(use, HrefEq(RcString()));
+  EXPECT_THAT(use.entityHandle().all_of<components::ShadowTreeComponent>(), testing::IsFalse());
+}
+
+/// Like the other typed setters, `setHref` changes the DOM without editing the source text.
+TEST(SVGUseElementTests, SetHrefLeavesSourceTextUnchanged) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a")");
+  const std::string source(document.source());
+  use.setHref(RcString("#b"));
+  EXPECT_THAT(use, HrefEq(RcString("#b")));
+  EXPECT_EQ(document.source(), source);
+}
+
+/// An empty `href` still takes precedence over `xlink:href`, leaving no reference.
+TEST(SVGUseElementTests, EmptyHrefOverridesXlinkHref) {
+  SVGDocument document;
+  for (const std::string_view attributes :
+       {R"(href="" xlink:href="#b")", R"(xlink:href="#b" href="")"}) {
+    SCOPED_TRACE(attributes);
+    SVGUseElement use = ParseUse(document, attributes);
+    EXPECT_THAT(use, HrefEq(RcString()));
+    EXPECT_THAT(use.entityHandle().all_of<components::ShadowTreeComponent>(), testing::IsFalse());
+  }
+}
+
+/// An empty href removes the reference, so rendering reports no unresolved target.
+TEST(SVGUseElementTests, SetEmptyHrefRemovesReference) {
+  SVGDocument document;
+  SVGUseElement use = ParseUse(document, R"(href="#a")");
+  ASSERT_THAT(use.entityHandle().all_of<components::ShadowTreeComponent>(), testing::IsTrue());
+
+  use.setHref(RcString());
+  EXPECT_THAT(use, HrefEq(RcString()));
+  EXPECT_THAT(use.entityHandle().all_of<components::ShadowTreeComponent>(), testing::IsFalse());
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warnings);
+  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
 }
 
 /// Test that `<use>` is a graphics element, as in SVG 2, with an authored transform.

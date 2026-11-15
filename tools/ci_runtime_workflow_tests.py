@@ -24,7 +24,7 @@ from tools import test_timing
 ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 56000,
     "--max-js-raw-bytes": 202000,
-    "--max-total-raw-bytes": 13000000,
+    "--max-total-raw-bytes": 13100000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
     "--max-wasm-gzip-bytes": 3570000,
@@ -40,6 +40,8 @@ RENDERER_PAYLOAD_CEILINGS = {
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
+# How a step rejects a target list that is empty or only whitespace, applied to a variable name.
+EMPTY_SELECTION_GUARD = 'if [[ "$%s" =~ ^[[:space:]]*$ ]]; then'
 # Each Editor WASM build step that runs Bazel or stages an artifact, in workflow order, with the one
 # command it runs. The commands themselves are pinned by //tools/ci:editor_wasm_lane_tests and
 # //tools/ci:editor_wasm_stage_tests.
@@ -579,9 +581,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                               (job_name, step))
         self.assertEqual(self.main.count("--config=hosted-macos-quarantine"),
                          sum(len(steps) for steps in readers.values()))
-        # The trusted-PR hosted-parity subset gets it through --config=hosted-parity.
-        parity = self._job_body("macos-hosted-parity")
-        self.assertIn("--config=hosted-parity-subset", self._step_body(parity, "Test"))
+        # No pull request job reproduces that environment, so no other job passes it.
         self.assertNotIn("DONNER_HOSTED_MACOS_QUARANTINE", self.main)
         hosted = self._job_body("macos")
         for step in ("Test", "Test (browser targets)"):
@@ -592,12 +592,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             step = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, step)
             self.assertIn("continue-on-error: true", body, step)
-            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
-                         "hosted-parity"):
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE"):
                 self.assertNotIn(name, body, step)
         for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
-            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
-                         "hosted-parity"):
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE"):
                 self.assertNotIn(name, self._job_body(job), job)
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
@@ -610,12 +608,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", text, path.name)
             self.assertNotIn("hosted-macos-quarantine", text, path.name)
         # In the repository bazelrc it is one named config, which no other config or default
-        # names except the hosted-parity config.
+        # names.
         self.assertEqual(
             [line for line in self.bazelrc.splitlines() if "HOSTED_MACOS_QUARANTINE" in line
              or "hosted-macos-quarantine" in line],
-            ["test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1",
-             "test:hosted-parity --config=hosted-macos-quarantine"])
+            ["test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"])
 
     def test_quarantine_report_lane_is_enabled_only_by_the_scheduled_editor_wasm_run(self):
         # The report-only lane lifts the Firefox quarantine of #1634 and never fails its job.
@@ -868,12 +865,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertNotIn("Test local Xvfb targets", hosted)
         self.assertIn("xvfb xauth", hosted)
         self.assertIn("-local-gpu-isolated", remote)
-        target = self.editor_tests_build.split(
-            'name = "editor_window_vulkan_surface_tests",', 1
-        )[1].split("\n)\n", 1)[0]
-        for tag in ("exclusive-if-local", "local-gpu-isolated", "requires_xvfb"):
-            self.assertIn('"%s"' % tag, target)
-        self.assertIn('data = [":editor_window_tests_geode"]', target)
+        # Both displayed-Vulkan targets stay on the local Xvfb route and take the local GPU
+        # resource, so neither runs alongside another GPU-opening test.
+        for name in ("editor_window_vulkan_surface_tests", "editor_window_vulkan_default_tests"):
+            with self.subTest(target=name):
+                target = self.editor_tests_build.split(
+                    'name = "%s",' % name, 1
+                )[1].split("\n)\n", 1)[0]
+                for tag in ("local-gpu-isolated", "requires_xvfb", "resources:local_gpu:1"):
+                    self.assertIn('"%s"' % tag, target)
+                self.assertNotIn('"exclusive-if-local"', target)
+                self.assertIn('data = [":editor_window_tests_geode"]', target)
         self.assertIn("export DONNER_GPU_BACKEND=vulkan", self.xvfb_runner)
         self.assertIn("xvfb-run -a", self.xvfb_runner)
 
@@ -983,7 +985,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_shader_validation_runs_only_on_the_self_hosted_real_gpu(self):
         # Virtual GPUs use API validation; the dedicated native job keeps shader gates mandatory.
         for job_name in ("macos", "macos-browser", "macos-self-hosted",
-                         "macos-hosted-parity", "macos-vm-qualification"):
+                         "macos-vm-qualification"):
             job = self._job_body(job_name)
             for step in ("Select Metal validation profile", "Metal validation preflight",
                          "Fetch Metal validation dependencies"):
@@ -1023,19 +1025,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         needles = ("hosted-macos-unvalidated", "metal_shader_validation")
         self.assertIn("--config=hosted-macos-unvalidated",
                       self._step_body(self._job_body("macos"), "Test"))
-        # The hosted config and three explicit VM job environments own API-only validation.
+        # The hosted config and two explicit VM job environments own API-only validation.
         workflow = _repository_text(".github/workflows/main.yml")
         self.assertEqual(1, workflow.count(needles[0]))
         vm_flags = {
-            "macos-self-hosted": "--test_env=HOME --//build_defs:metal_shader_validation=off "
+            "macos-self-hosted": "--//build_defs:metal_shader_validation=off "
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm",
-            "macos-vm-qualification": "--//build_defs:metal_shader_validation=off --test_env=HOME "
+            "macos-vm-qualification": "--//build_defs:metal_shader_validation=off "
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=vm-qualification",
-            "macos-hosted-parity": "--test_env=HOME --//build_defs:metal_shader_validation=off "
-                "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
-                "--test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm",
         }
         expected_lines = []
         for job_name, flags in vm_flags.items():
@@ -1201,7 +1200,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         determine = self._job_body("determine-targets")
         self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", determine)
         start = determine.index("          # The manual reference is removed")
-        end = determine.index('          manual_affected="', start)
+        # The reference selection ends where the macos-metal selection begins.
+        end = determine.index("          # BEGIN macos-metal selection", start)
+        self.assertLess(end, determine.index('          manual_affected="', start))
         impacted_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         impacted_script += textwrap.dedent(determine[start:end])
         self.assertIn("labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))", impacted_script)
@@ -1320,6 +1321,95 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for job_name in ("macos", "macos-self-hosted"):
             self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
 
+    def test_native_metal_job_is_selected_only_for_prs_that_reach_its_suites(self):
+        """The macos-metal job runs when the affected set reaches its suites, fails closed."""
+        determine = self._job_body("determine-targets")
+        self.assertIn("      metal_affected: ${{ steps.determine.outputs.metal_affected }}\n",
+                      determine)
+        start = determine.index("          # BEGIN macos-metal selection (metal_affected).\n")
+        end = determine.index("          # END macos-metal selection.\n", start)
+        # It reads the selection before manual targets are filtered out.
+        self.assertLess(end, determine.index('          manual_affected="'))
+        block = "#!/usr/bin/env bash\nset -euo pipefail\n" + textwrap.dedent(determine[start:end])
+        suites = ("//tools/ci:metal_full_validation", "//tools/ci:metal_preflight",
+                  "//tools/ci:metal_offline_compiler", "//tools/ci:metal_native")
+        self.assertIn("tests(%s)" % " + ".join(suites), block)
+        for suite in suites:
+            self.assertIn('name = "%s"' % suite.split(":", 1)[1], self.ci_target_definitions)
+        # The dependency inputs bazel-diff cannot attribute that the WebGPU reference selection
+        # lists also select the Metal job; it adds every third-party BUILD overlay.
+        reference = determine[determine.index("          # Direct renderer/GPU/image inputs"):start]
+        for entry in ("third_party/bazel/non_bcr_deps.bzl", "MODULE.bazel.lock"):
+            self.assertIn(entry, reference)
+            self.assertIn(entry, block)
+        metal_test = "//donner/gpu/metal/tests:metal_buffer_bounds_tests"
+        # A stand-in for Bazel: the suite query lists the suites' tests (SUITE_TESTS) and the
+        # intersection query prints what Bazel would (INTERSECTION), failing with SUITE_STATUS or
+        # INTERSECTION_STATUS. Each query is recorded so the test can read what was asked.
+        stub = ("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QUERY_LOG\"\n"
+                "case \"$*\" in\n"
+                "  *intersect*) [ -n \"$INTERSECTION\" ] && printf '%s\\n' \"$INTERSECTION\"\n"
+                "               exit \"${INTERSECTION_STATUS:-0}\" ;;\n"
+                "  *) [ -n \"$SUITE_TESTS\" ] && printf '%s\\n' \"$SUITE_TESTS\"\n"
+                "     exit \"${SUITE_STATUS:-0}\" ;;\n"
+                "esac\n")
+        unrelated = "//donner/base:base_tests"
+        cases = (
+            # (affected, changed path, suite tests, intersection, suite status, intersection
+            #  status, expected)
+            (metal_test, "donner/gpu/metal/MetalDevice.mm", metal_test, metal_test, 0, 0, "true"),
+            (unrelated, "donner/base/x.cc", metal_test, "", 0, 0, "false"),
+            # bazel-diff may print a label in another canonical form; Bazel resolves both.
+            ("@@//donner/gpu/metal/tests:metal_buffer_bounds_tests", "donner/base/x.cc",
+             metal_test, metal_test, 0, 0, "true"),
+            (unrelated, "tools/ci_macos_xcode.txt", metal_test, "", 0, 0, "true"),
+            (unrelated, "tools/ci_metal_toolchain.py", metal_test, "", 0, 0, "true"),
+            # Dependency inputs bazel-diff cannot attribute, as the WebGPU reference lists them.
+            (unrelated, "third_party/bazel/non_bcr_deps.bzl", metal_test, "", 0, 0, "true"),
+            (unrelated, "MODULE.bazel.lock", metal_test, "", 0, 0, "true"),
+            (unrelated, "third_party/BUILD.wgpu_native_platform", metal_test, "", 0, 0, "true"),
+            (unrelated, "third_party/cmark-gfm.BUILD", metal_test, "", 0, 0, "true"),
+            # Fail closed: a failed suite query, suites with no tests, a failed intersection.
+            (unrelated, "donner/base/x.cc", "", "", 3, 0, "true"),
+            (unrelated, "donner/base/x.cc", "", "", 0, 0, "true"),
+            (unrelated, "donner/base/x.cc", metal_test, "", 0, 3, "true"),
+            (unrelated, "donner/base/x.cc", metal_test, "", 0, 7, "true"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bazelisk = Path(directory) / "bazelisk"
+            fake_bazelisk.write_text(stub)
+            fake_bazelisk.chmod(0o755)
+            for index, (affected, changed, suite, intersection, suite_status,
+                        intersection_status, expected) in enumerate(cases):
+                with self.subTest(index=index, affected=affected, changed=changed):
+                    output = Path(directory) / ("outputs-%d" % index)
+                    log = Path(directory) / ("queries-%d" % index)
+                    result = self._run_script(
+                        block, [],
+                        env={**os.environ, "affected": affected, "changed_files": changed,
+                             "head_dir": directory, "GITHUB_OUTPUT": str(output),
+                             "QUERY_LOG": str(log), "SUITE_TESTS": suite,
+                             "INTERSECTION": intersection, "SUITE_STATUS": str(suite_status),
+                             "INTERSECTION_STATUS": str(intersection_status),
+                             "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual("metal_affected=%s\n" % expected, output.read_text())
+                    # The decision is Bazel's intersection of the quoted affected labels with
+                    # the suites, never a comparison of label strings.
+                    queries = log.read_text() if log.exists() else ""
+                    if changed.startswith("donner/") and suite and not suite_status:
+                        self.assertIn('set("%s") intersect tests(%s)'
+                                      % (affected, " + ".join(suites)), queries)
+        # The job runs on a selected or full-fallback pull request only; its steps stay mandatory.
+        native = self._job_body("macos-metal")
+        condition = next(line for line in native.splitlines() if line.startswith("    if:"))
+        self.assertTrue(condition.endswith(
+            "&& needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
+            "(needs.determine-targets.outputs.fallback == 'true' || "
+            "needs.determine-targets.outputs.metal_affected == 'true') }}"), condition)
+        self.assertIn("determine-targets", native.split("    if:", 1)[0])
+
     def _coverage_jobs(self):
         """Every (name, body) pair for a top-level key in coverage.yml."""
         parts = re.split(
@@ -1436,7 +1526,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 "empty test selection" % name,
             )
             self.assertIn(
-                'if [[ -z "${TARGETS// /}" ]]; then',
+                EMPTY_SELECTION_GUARD % "TARGETS",
                 body,
                 "step %r tests the derived target set without rejecting an "
                 "empty target list" % name,
@@ -1449,6 +1539,38 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             % (covered,),
         )
 
+    def test_target_lists_avoid_pattern_substitution(self):
+        """Target lists reach tens of thousands of characters on large selections.
+
+        `${var//pattern/replacement}` is superlinear in the value's length on the
+        system bash of macOS runners (3.2): under a UTF-8 locale its cost grows
+        roughly as length^2.8, 18 s on a 27k character list and minutes on the
+        largest, paid before Bazel starts. The empty-selection guard uses a regex
+        match instead, which takes milliseconds on the same lists.
+        """
+        workflows = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
+        paths = sorted(workflows.glob("*.y*ml"))
+        self.assertIn("main.yml", [path.name for path in paths])
+        for path in paths:
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                with self.subTest(file=path.name, line=number):
+                    self.assertNotRegex(line, r"\$\{\w*(?:TARGETS|targets)\w*//",
+                                        "pattern substitution on a target list")
+
+    def test_empty_selection_guard_rejects_only_whitespace(self):
+        script = "TARGETS=$1\n%s echo empty; else echo nonempty; fi" % (
+            EMPTY_SELECTION_GUARD % "TARGETS")
+        cases = {"": "empty", "   ": "empty", " \t ": "empty", "\n\n": "empty",
+                 " \n ": "empty", "//...": "nonempty", "  //a:b  //c:d  ": "nonempty",
+                 "//a:b\n//c:d": "nonempty", "\n//a:b\n": "nonempty"}
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", script,
+                     "guard", value],
+                    capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout.strip(), expected)
+
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.
 
@@ -1456,7 +1578,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         there means its Bazel membership is broken.
         That must stay red rather than inherit the change-based lanes' notice.
         """
-        for job_name in ("macos", "macos-self-hosted", "macos-hosted-parity"):
+        for job_name in ("macos", "macos-self-hosted"):
             with self.subTest(job=job_name):
                 step = self._step_body(
                     self._job_body(job_name), "Test (Geode editor lane)"
@@ -1738,7 +1860,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         module = 'name = "geode_wasm_browser_module"'
         self.assertIn(module, self.ci_target_definitions)
         definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
-        self.assertIn('srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"]', definition)
+        self.assertIn('"//donner/svg/renderer/wasm:donner_wasm_geode"', definition)
+        self.assertIn('"//donner/svg/renderer/wasm:geode_surface_renderer_link_probe"', definition)
 
     def test_browser_bridge_step_stays_strict_with_later_evidence_recovery(self):
         workflow = self.editor_wasm

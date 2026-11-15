@@ -99,6 +99,8 @@ public:
   PackagedResourceSession(const PackagedResourceSession&) = delete;
   PackagedResourceSession& operator=(const PackagedResourceSession&) = delete;
   ResourceBytes load(const PackagedResource& resource);
+  /// Retain verified bytes. Invalid bytes return false and set \ref error(), but never mark a
+  /// resource whose verified bytes are already retained as failed.
   bool install(const PackagedResource& resource, std::span<const uint8_t> bytes);
   /// Dispatch one deferred request per identity. The callback runs immediately outside the lock.
   bool request(const PackagedResource& resource, const std::function<void()>& dispatch);
@@ -107,7 +109,9 @@ public:
   void markBorrowed();
   bool hasBorrowedViews() const;
   bool ready(const PackagedResource& resource) const;
+  /// True after a completed failure for a resource that is not ready; never true while ready.
   bool failed(const PackagedResource& resource) const;
+  /// Record a failure or cancellation; a no-op on the failure set when the resource is ready.
   void fail(const PackagedResource& resource);
   bool verify(const PackagedResource& resource);
   size_t retainedBytes() const;

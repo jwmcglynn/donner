@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <optional>
+#include <span>
 #include <utility>
 
 #include "donner/base/Utf8.h"
@@ -354,7 +357,7 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunInContext(
   }
   bool backward = false;
 #ifdef DONNER_TEXT_ENABLED
-  backward = !isVertical && context.rightToLeft.value_or(false);
+  backward = context.rightToLeft.value_or(false);
 #endif
   return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
                       textOrientation, fontVariant, kerning, false, backward);
@@ -389,38 +392,115 @@ Vector2d SimplePairKerning(const stbtt_fontinfo* info, int prevGlyph, int glyphI
   return Vector2d(kernX, kernY);
 }
 
-/// Sets the advance axis for horizontal, sideways Latin, or upright CJK text.
+/// Upright vertical metrics in design units, synthesized the way FreeType does for the full
+/// backend so both backends agree: with vertical metrics, the vmtx advance and the top side
+/// bearing above the glyph box; without them, an em cell from the OS/2 typographic (or else
+/// horizontal header) ascent and descent, with the glyph box centered in it. This matches FreeType
+/// for well-formed tables; truncated vmtx records are clamped, and an empty typographic cell
+/// falls back to the horizontal header.
+class SimpleVerticalMetrics {
+public:
+  /// Reads `vhea`, `vmtx` and the em cell for \p font.
+  static SimpleVerticalMetrics Read(const FontManager& manager, FontHandle font,
+                                    const stbtt_fontinfo* info) {
+    SimpleVerticalMetrics result;
+    const auto vhea = manager.sfntTable(font, "vhea");
+    const auto vmtx = manager.sfntTable(font, "vmtx");
+    if (vhea && vhea->size() >= 36 && vmtx) {
+      const size_t declared = static_cast<uint16_t>(ReadInt16Be(*vhea, 34));
+      result.longMetrics_ = std::min(declared, vmtx->size() / 4);
+      if (result.longMetrics_ > 0) {
+        result.vmtx_ = vmtx;
+      }
+    }
+    if (const auto os2 = manager.sfntTable(font, "OS/2"); os2 && os2->size() >= 78) {
+      result.cell_ = ReadInt16Be(*os2, 68) - ReadInt16Be(*os2, 70);
+    }
+    // An empty typographic cell (zeroed OS/2 fields) falls back to the horizontal header.
+    if (result.cell_ <= 0) {
+      int ascent = 0;
+      int descent = 0;
+      int lineGap = 0;
+      stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
+      result.cell_ = ascent - descent;
+    }
+    return result;
+  }
+
+  /// Returns the vertical advance of \p glyphIndex.
+  int advance(int glyphIndex) const {
+    if (!vmtx_) {
+      return std::abs(cell_);
+    }
+    const size_t index = std::min(static_cast<size_t>(glyphIndex), longMetrics_ - 1);
+    return static_cast<uint16_t>(ReadInt16Be(*vmtx_, index * 4));
+  }
+
+  /**
+   * Returns the vertical origin Y of a glyph; an empty glyph passes a zero-height box.
+   *
+   * @param glyphIndex Glyph to place.
+   * @param yMin Bottom of the glyph box.
+   * @param yMax Top of the glyph box.
+   */
+  int originY(int glyphIndex, int yMin, int yMax) const {
+    if (!vmtx_) {
+      // FreeType truncates the centered top side bearing to whole font units.
+      return yMax + (cell_ - (yMax - yMin)) / 2;
+    }
+    const size_t index = static_cast<size_t>(glyphIndex);
+    const size_t offset =
+        index < longMetrics_ ? index * 4 + 2 : longMetrics_ * 4 + (index - longMetrics_) * 2;
+    // Like FreeType, a glyph past the end of the bearing array has a zero top side bearing.
+    return yMax + (offset + 2 <= vmtx_->size() ? ReadInt16Be(*vmtx_, offset) : 0);
+  }
+
+private:
+  std::optional<std::span<const uint8_t>> vmtx_;
+  size_t longMetrics_ = 0;  //!< Clamped `numOfLongVerMetrics`; nonzero whenever vmtx_ is set.
+  int cell_ = 0;            //!< Ascent minus descent of the synthesized vertical em cell.
+};
+
+/// Sets the advance axis for horizontal, sideways, or upright vertical text.
+///
+/// Upright glyphs, including CJK in mixed orientation, are horizontally centered on the vertical
+/// origin from SimpleVerticalMetrics and advance by its vertical advance. \p uprightBase is the
+/// preceding glyph when it was placed upright too (upright runs are always in logical order); it
+/// anchors zero-advance marks.
 void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical,
                            TextOrientation textOrientation, uint32_t codepoint,
-                           const stbtt_fontinfo* info, int glyphIndex, int advanceWidth,
-                           float glyphScale, float fontSizePx) {
+                           const stbtt_fontinfo* info, const SimpleVerticalMetrics& verticalMetrics,
+                           const TextBackend::ShapedGlyph* uprightBase, int glyphIndex,
+                           int advanceWidth, float glyphScale) {
   const bool sideways = UsesSidewaysMetrics(textOrientation, codepoint);
   if (isVertical && sideways) {
     // Sideways Latin in vertical mode: horizontal advance becomes vertical.
     glyph.xAdvance = 0;
     glyph.yAdvance = static_cast<double>(advanceWidth) * glyphScale;
-  } else if (isVertical && textOrientation == TextOrientation::Upright) {
-    int ascent = 0;
-    int descent = 0;
-    int lineGap = 0;
-    stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
-    const double cellAdvance = static_cast<double>(ascent - descent) * glyphScale;
+  } else if (isVertical) {
+    const double cellAdvance =
+        static_cast<double>(verticalMetrics.advance(glyphIndex)) * glyphScale;
     glyph.xAdvance = 0;
     glyph.yAdvance = advanceWidth == 0 ? 0.0 : cellAdvance;
+    if (advanceWidth == 0 && uprightBase) {
+      // A zero-advance mark is drawn in its base glyph's horizontal frame, one cell back.
+      glyph.xOffset = uprightBase->xOffset;
+      glyph.yOffset = uprightBase->yOffset - uprightBase->yAdvance;
+      return;
+    }
     int xMin = 0;
     int yMin = 0;
     int xMax = 0;
     int yMax = 0;
-    if (stbtt_GetGlyphBox(info, glyphIndex, &xMin, &yMin, &xMax, &yMax)) {
-      glyph.xOffset = -static_cast<double>(advanceWidth) * glyphScale / 2.0;
-      glyph.yOffset = static_cast<double>(ascent) * glyphScale;
-      if (advanceWidth == 0) {
-        glyph.yOffset -= cellAdvance;
-      }
+    if (!stbtt_GetGlyphBox(info, glyphIndex, &xMin, &yMin, &xMax, &yMax)) {
+      yMin = yMax = 0;
     }
-  } else if (isVertical) {
-    glyph.xAdvance = 0;
-    glyph.yAdvance = advanceWidth == 0 ? 0.0 : static_cast<double>(fontSizePx);
+    glyph.xOffset = -static_cast<double>(advanceWidth) * glyphScale / 2.0;
+    glyph.yOffset =
+        static_cast<double>(verticalMetrics.originY(glyphIndex, yMin, yMax)) * glyphScale;
+    if (advanceWidth == 0) {
+      glyph.yOffset -= cellAdvance;
+    }
   } else {
     glyph.xAdvance = static_cast<double>(advanceWidth) * glyphScale;
     glyph.yAdvance = 0;
@@ -510,14 +590,15 @@ private:
 
 struct SimpleShapingMetrics {
   const stbtt_fontinfo* info;
-  float fontSizePx;
   float scale;
   bool vertical;
   TextOrientation orientation;
   FontVariant variant;
   bool kerning;
+  SimpleVerticalMetrics verticalMetrics;
 
-  TextBackend::ShapedGlyph glyph(SimpleScalar scalar, int previousGlyph) const {
+  TextBackend::ShapedGlyph glyph(SimpleScalar scalar, int previousGlyph,
+                                 const TextBackend::ShapedGlyph* uprightBase) const {
     const bool smallCap =
         variant == FontVariant::SmallCaps && scalar.codepoint >= 'a' && scalar.codepoint <= 'z';
     if (smallCap) {
@@ -536,11 +617,27 @@ struct SimpleShapingMetrics {
     result.fontSizeScale = smallCap ? kSmallCapScale : 1.0f;
     result.xKern = pair.x;
     result.yKern = pair.y;
-    SetSimpleGlyphAdvance(result, vertical, orientation, scalar.codepoint, info, index,
-                          advanceWidth, glyphScale, fontSizePx);
+    SetSimpleGlyphAdvance(result, vertical, orientation, scalar.codepoint, info, verticalMetrics,
+                          uprightBase, index, advanceWidth, glyphScale);
     return result;
   }
 };
+
+/// Keep upright ranges in their vertical shaping profile; sideways runs use horizontal ordering.
+bool SimpleRangeUsesSidewaysComposition(std::string_view text, TextOrientation orientation) {
+  if (orientation == TextOrientation::Sideways) {
+    return true;
+  }
+  if (orientation != TextOrientation::Mixed) {
+    return false;
+  }
+  for (size_t byte = 0; byte < text.size();) {
+    if (!UsesSidewaysMetrics(orientation, decodeUtf8(text, byte))) {
+      return false;
+    }
+  }
+  return true;
+}
 
 bool ValidSimpleShapingRange(float size, std::string_view text, size_t offset, size_t length) {
   return std::isfinite(size) && size > 0 && offset <= text.size() && length <= text.size() - offset;
@@ -555,6 +652,10 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
   if (!ValidSimpleShapingRange(fontSizePx, spanText, byteOffset, byteLength)) {
     return {};
   }
+  if (backward && isVertical) {
+    backward = SimpleRangeUsesSidewaysComposition(spanText.substr(byteOffset, byteLength),
+                                                  textOrientation);
+  }
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
@@ -563,15 +664,24 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
   if (scale == 0) {
     return {};
   }
-  const SimpleShapingMetrics metrics{info,        fontSizePx,   scale, isVertical, textOrientation,
-                                     fontVariant, enableKerning};
+  const SimpleShapingMetrics metrics{
+      info,
+      scale,
+      isVertical,
+      textOrientation,
+      fontVariant,
+      enableKerning,
+      isVertical ? SimpleVerticalMetrics::Read(fontManager_, font, info) : SimpleVerticalMetrics{}};
   SimpleScalarSequence sequence(spanText, byteOffset, byteLength, backward);
   ShapedRun result;
   result.backward = backward;
   int previousGlyph = 0;
+  bool previousUpright = false;
   while (const auto scalar = sequence.next()) {
-    result.glyphs.push_back(metrics.glyph(*scalar, previousGlyph));
+    result.glyphs.push_back(
+        metrics.glyph(*scalar, previousGlyph, previousUpright ? &result.glyphs.back() : nullptr));
     previousGlyph = result.glyphs.back().glyphIndex;
+    previousUpright = isVertical && !UsesSidewaysMetrics(textOrientation, scalar->codepoint);
   }
   return result;
 }

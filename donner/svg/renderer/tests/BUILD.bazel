@@ -181,6 +181,7 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":renderer_test_backend",
+        "//donner/base",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest",
@@ -841,6 +842,7 @@ donner_cc_test(
         "TextIndent_tests.cc",
     ],
     data = ["//third_party/resvg-test-suite:fonts"],
+    shard_count = 4,
     variants = ["text_full"],
     deps = [
         ":mock_renderer_interface",
@@ -862,6 +864,7 @@ donner_cc_test(
 donner_cc_test(
     name = "text_path_convergence_tests",
     srcs = ["TextPathConvergence_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
     opens_gpu_device = True,
     variants = [
         "text_full",
@@ -869,7 +872,10 @@ donner_cc_test(
     ],
     deps = [
         ":renderer_test_utils",
+        "//donner/base:runfiles",
+        "//donner/css",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -945,6 +951,54 @@ donner_cc_test(
 donner_variant_cc_test(
     name = "text_bidi_convergence_tests",
     dep = ":text_bidi_convergence_tests_impl",
+    named_variants = [
+        {
+            "name": "tiny_full",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "true",
+        },
+        {
+            "name": "geode_full",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "true",
+        },
+    ],
+    opens_gpu_device = True,
+)
+
+donner_cc_test(
+    name = "mixed_vertical_text_convergence_tests_impl",
+    srcs = ["MixedVerticalTextConvergence_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":decoration_test_scene",
+        ":renderer_test_backend",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/css",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/text:components",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_backend_full",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_variant_cc_test(
+    name = "mixed_vertical_text_convergence_tests",
+    dep = ":mixed_vertical_text_convergence_tests_impl",
     named_variants = [
         {
             "name": "tiny_full",
@@ -1278,6 +1332,51 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# The public GeodeSurfaceRenderer over real Core Animation layers: the layer configuration it
+# promises, presentation, resize and resize-needed handling, and argument validation.
+objc_library(
+    name = "geode_surface_renderer_tests_lib",
+    testonly = True,
+    srcs = ["GeodeSurfaceRenderer_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+        "QuartzCore",
+    ],
+    target_compatible_with = ["@platforms//os:macos"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:geode_surface_renderer",
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+donner_cc_test(
+    name = "geode_surface_renderer_tests_impl",
+    target_compatible_with = ["@platforms//os:macos"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":geode_surface_renderer_tests_lib",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_surface_renderer_tests",
+    testonly = 1,
+    dep = ":geode_surface_renderer_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_cc_test(
     name = "renderer_driver_tests",
     srcs = [
@@ -1305,6 +1404,28 @@ donner_cc_test(
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
         "//third_party/public-sans",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "css_import_tests",
+    srcs = [
+        "CssImport_tests.cc",
+    ],
+    # The tiny, text_full and geode wrappers run under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/resources:resource_loader_interface",
+        "//donner/svg/resources:url_loader",
         "@com_google_gtest//:gtest_main",
     ],
 )

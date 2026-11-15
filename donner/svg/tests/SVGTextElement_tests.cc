@@ -570,7 +570,7 @@ TEST(SVGTextElementPublicApiTests, SizeAdjustCharacterGeometryMatchesExplicitFon
   FontManager fontManager(document.registry());
   fontManager.addFontFace(face);
   const FontHandle font = fontManager.findFont("MetricNotoSans");
-  ASSERT_THAT(fontManager.fontData(font), testing::ElementsAreArray(*bytes));
+  ASSERT_THAT(fontManager.fontData(font), BytesEqual(*bytes));
   RecordProperty("font_fixture", "NotoSans-Regular.ttf");
   RecordProperty("font_units_per_em", 1000);
   RecordProperty("font_x_height", 536);
@@ -1076,6 +1076,126 @@ TEST(SVGTextElementPublicApiTests, TextAnchorEndShiftsStartPosition) {
   // With text-anchor:end, the text is shifted left by the full text length.
   const double textLen = textStart.getComputedTextLength();
   EXPECT_NEAR(startX - endX, textLen, 1.0);
+}
+
+// `start` and `end` name logical edges: an rtl chunk starts at its right edge, so its default
+// anchor places the text where an ltr `end` anchor does, and its `end` where an ltr `start` does.
+TEST(SVGTextElementPublicApiTests, RtlDirectionMirrorsStartAndEndAnchors) {
+  const auto firstCharacterX = [](std::string_view attributes) {
+    SVGDocument document =
+        instantiateSubtree(std::string(R"-(<svg viewBox="0 0 300 40">
+      <g )-") + std::string(attributes) +
+                           R"-(><text id="t" x="100" y="20" font-family="fallback-font"
+        font-size="12px">ABC</text></g>
+    </svg>)-");
+    return document.querySelector("#t")->cast<SVGTextElement>().getStartPositionOfChar(0).x;
+  };
+
+  const double ltrStart = firstCharacterX(R"(text-anchor="start")");
+  const double ltrMiddle = firstCharacterX(R"(text-anchor="middle")");
+  const double ltrEnd = firstCharacterX(R"(text-anchor="end")");
+  ASSERT_THAT(ltrStart - ltrEnd, testing::Gt(10.0)) << "the anchors must be distinguishable";
+
+  // Both properties inherit from the group into the text.
+  EXPECT_THAT(firstCharacterX(R"(direction="rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
+  EXPECT_THAT(firstCharacterX(R"(direction="rtl" text-anchor="end")"),
+              testing::DoubleNear(ltrStart, 1e-6));
+  EXPECT_THAT(firstCharacterX(R"(direction="rtl" text-anchor="middle")"),
+              testing::DoubleNear(ltrMiddle, 1e-6));
+  // The CSS declaration matches the presentation attribute.
+  EXPECT_THAT(firstCharacterX(R"(style="direction: rtl")"), testing::DoubleNear(ltrEnd, 1e-6));
+}
+
+// A chunk that starts without an absolute x continues from the current text position. A
+// right-to-left pen runs leftward from the chunk origin, so it ends one chunk width left of it;
+// anchoring applies afterwards and does not move that position. Trailing spacing lands on the
+// leftward side, while `dx` stays a physical shift.
+TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
+  struct Layout {
+    double aStart, bEnd, cStart, dEnd;
+  };
+  const auto layOut = [](std::string_view textAttributes, std::string_view tspanAttributes) {
+    SVGDocument document =
+        instantiateSubtree(std::string(R"-(<svg viewBox="0 0 300 60">
+      <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" )-") +
+                           std::string(textAttributes) + R"-(>AB<tspan y="40" )-" +
+                           std::string(tspanAttributes) + R"-(>CD</tspan></text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    return Layout{text.getStartPositionOfChar(0).x, text.getEndPositionOfChar(1).x,
+                  text.getStartPositionOfChar(2).x, text.getEndPositionOfChar(3).x};
+  };
+  const Layout ltr = layOut("", "");
+  const double widthAB = ltr.bEnd - ltr.aStart;
+  const double widthCD = ltr.dEnd - ltr.cStart;
+  EXPECT_THAT(ltr.cStart, testing::DoubleNear(ltr.bEnd, 1e-6)) << "ltr: CD starts where AB ends";
+
+  // start: AB ends at 200, so the pen ends at its left edge and CD ends there.
+  const Layout start = layOut(R"(direction="rtl")", "");
+  EXPECT_THAT(start.bEnd, testing::DoubleNear(200.0, 1e-6));
+  EXPECT_THAT(start.dEnd, testing::DoubleNear(200.0 - widthAB, 1e-6));
+  EXPECT_THAT(start.cStart, testing::Lt(start.aStart)) << "CD is left of AB";
+
+  // middle: the pen still ends one AB width left of 200, and CD centers there.
+  const Layout middle = layOut(R"(direction="rtl" text-anchor="middle")", "");
+  EXPECT_THAT((middle.cStart + middle.dEnd) / 2.0, testing::DoubleNear(200.0 - widthAB, 1e-6));
+
+  // end: AB starts at 200; CD starts at the pen end, one AB width left of 200.
+  const Layout endAnchor = layOut(R"(direction="rtl" text-anchor="end")", "");
+  EXPECT_THAT(endAnchor.aStart, testing::DoubleNear(200.0, 1e-6));
+  EXPECT_THAT(endAnchor.cStart, testing::DoubleNear(200.0 - widthAB, 1e-6));
+
+  // Trailing letter-spacing separates CD from AB on the left, by the gap ltr leaves on the right.
+  const Layout ltrSpaced = layOut(R"(letter-spacing="3")", "");
+  const Layout rtlSpaced = layOut(R"(direction="rtl" letter-spacing="3")", "");
+  const double gap = ltrSpaced.cStart - ltrSpaced.bEnd;
+  ASSERT_THAT(gap, testing::Gt(1.0)) << "letter-spacing must leave a visible gap";
+  EXPECT_THAT(rtlSpaced.aStart - rtlSpaced.dEnd, testing::DoubleNear(gap, 1e-6));
+
+  // Later left-to-right chunks keep continuing from the corrected position: EF follows CD.
+  {
+    SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 80">
+      <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" direction="rtl">AB<tspan
+        direction="ltr" y="40">CD</tspan><tspan direction="ltr" y="60">EF</tspan></text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    EXPECT_THAT(text.getStartPositionOfChar(2).x,
+                testing::DoubleNear(text.getStartPositionOfChar(0).x, 1e-6))
+        << "an ltr chunk after AB starts at AB's pen end, its left edge";
+    EXPECT_THAT(text.getStartPositionOfChar(4).x,
+                testing::DoubleNear(text.getEndPositionOfChar(3).x, 1e-6))
+        << "EF continues where CD ends";
+  }
+
+  // dx is a physical shift: it moves CD right even in an rtl paragraph.
+  const Layout shifted = layOut(R"(direction="rtl")", R"(dx="5")");
+  EXPECT_THAT(shifted.dEnd, testing::DoubleNear(start.dEnd + 5.0, 1e-6));
+  EXPECT_THAT(shifted.dEnd - shifted.cStart, testing::DoubleNear(widthCD, 1e-6));
+}
+
+// `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
+// the same override on an enclosing group leaves the text's normal reordering alone.
+TEST(SVGTextElementPublicApiTests, BidiOverrideAppliesOnlyToTheTextElementItself) {
+  const auto letterOrder = [](std::string_view groupAttributes, std::string_view textAttributes) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 40"><g )-") + std::string(groupAttributes) +
+        R"-(><text id="t" x="100" y="20" font-family="fallback-font" font-size="12px" )-" +
+        std::string(textAttributes) + R"-(>ab</text></g></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    return text.getStartPositionOfChar(1).x - text.getStartPositionOfChar(0).x;
+  };
+
+  // Normal rtl reordering keeps the Latin word in order: `b` stays right of `a`.
+  EXPECT_THAT(letterOrder(R"(direction="rtl")", ""), testing::Gt(0.0));
+#ifdef DONNER_TEXT_ENABLED
+  // The override on the text element runs every letter right to left.
+  EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="bidi-override")"),
+              testing::Lt(0.0));
+  EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="isolate-override")"),
+              testing::Lt(0.0));
+#endif
+  // On the group it does not reach the text.
+  EXPECT_THAT(letterOrder(R"(direction="rtl" unicode-bidi="bidi-override")", ""), testing::Gt(0.0));
+  // A left-to-right override leaves left-to-right text unchanged.
+  EXPECT_THAT(letterOrder("", R"(unicode-bidi="bidi-override")"), testing::Gt(0.0));
 }
 
 // ── Multiple tspan positioning tests ────────────────────────────────────────

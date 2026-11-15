@@ -10,6 +10,43 @@
     !/[\\\s%?#:]/.test(value) && !value.startsWith("/") &&
     value.split("/").every(part => part && part !== "." && part !== "..") &&
     Array.from(value).every(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127);
+  const mobileCode = matchMedia("(max-width: 767px)");
+  let codeWrapped = false;
+  function wrapCodeTokens() {
+    if (!mobileCode.matches || codeWrapped) return;
+    codeWrapped = true;
+    const selector = "#doc-content .fragment";
+    const nodes = [];
+    for (const element of document.querySelectorAll(selector)) {
+      if (element.parentElement.closest(selector)) continue;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (!walker.currentNode.parentElement.closest("script, style, textarea, svg, math")) {
+          nodes.push(walker.currentNode);
+        }
+      }
+    }
+    for (const node of nodes) {
+      const text = node.data;
+      const punctuation = /::|->\*?|<=>|<<=?|>>=?|[<>]=?|\/\/|\/=?|[(),;:\[\]{}]|\.(?=[A-Za-z_])/g;
+      const fragment = document.createDocumentFragment();
+      let offset = 0;
+      for (const match of text.matchAll(punctuation)) {
+        const end = match.index + match[0].length;
+        fragment.append(document.createTextNode(text.slice(offset, end)));
+        const opportunity = document.createElement("wbr");
+        opportunity.className = "docs-code-break";
+        fragment.append(opportunity);
+        offset = end;
+      }
+      if (offset) {
+        fragment.append(document.createTextNode(text.slice(offset)));
+        node.replaceWith(fragment);
+      }
+    }
+  }
+  wrapCodeTokens();
+  mobileCode.addEventListener("change", wrapCodeTokens);
   const hex = bytes => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join("");
   const sha = text => crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)).then(hex);
   async function read(path, limit, expected) {

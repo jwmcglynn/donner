@@ -18,6 +18,7 @@ from tools import bcr_dependency_closure as closure
 # Build files the query must report, so a broken query or package list cannot pass vacuously.
 REQUIRED_BUILD_FILES = {
     "//donner/gpu:BUILD.bazel",
+    "//donner/gpu/browser:BUILD.bazel",
     "//donner/gpu/metal:BUILD.bazel",
     "//donner/gpu/shader:BUILD.bazel",
     "//donner/gpu/shader/wgsl:BUILD.bazel",
@@ -28,7 +29,7 @@ REQUIRED_BUILD_FILES = {
 }
 
 # Development-only rule sets that Donner's test targets use, which the MODULE.bazel scan must find.
-EXPECTED_DEVELOPMENT_RULE_SETS = {"aspect_rules_js"}
+EXPECTED_DEVELOPMENT_RULE_SETS = {"aspect_rules_js", "emsdk"}
 
 
 def _argument(name):

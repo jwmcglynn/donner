@@ -734,11 +734,17 @@ Untrusted vertical metric callbacks charge validated glyph complexity before del
 FreeType. One synchronous shape call, or calls sharing a shaping context, share the expansion and
 work ceilings. Refusal suppresses origin fallback and discards the entire shaped result. Trusted
 application fonts retain their existing decoding authority; byte/context admission and later
-geometry materialization budgets still apply. The basic backend retains its em-height CJK
-fallback and does not acquire the full shaping dependency.
+geometry materialization budgets still apply. The basic backend does not acquire the full shaping
+dependency; it reads the upright metrics that FreeType gives the full backend directly from the
+font. With `vhea`/`vmtx`, the origin is the glyph box top plus the top side bearing and the
+advance is the `vmtx` advance. Without them, both come from an em cell spanning the OS/2
+typographic ascent and descent (or the horizontal header's), with the glyph box centered in it.
+Empty glyphs take a zero-height box, and a zero-advance mark after an upright glyph is drawn in
+that base glyph's frame. Mixed orientation uses these upright metrics for CJK as well.
 
-`//donner/svg/renderer/tests:text_backend_tests` and its `_text_full` variant cover independent
-vertical side bearings, untrusted mark positioning and small-cap scale changes, zero/nonzero
+`//donner/svg/renderer/tests:text_backend_tests` and its `_text_full` variant cover vmtx-derived
+and synthesized upright origins and advances and independent vertical side bearings for both
+backends, untrusted mark positioning and small-cap scale changes, zero/nonzero
 aggregate refusal, and trusted bitmap preservation. `//donner/svg/renderer/tests:text_engine_tests`
 covers pen-based anchors and textLength with distinct drawn origins.
 `//donner/svg/text:basic_text_engine_dependency_audit_test` checks the basic dependency closure.

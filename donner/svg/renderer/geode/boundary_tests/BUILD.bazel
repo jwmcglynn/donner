@@ -37,10 +37,12 @@ py_test(
     main = "GeodeProductionSourceBoundary_tests.py",
 )
 
-# One target from each package that the Geode production closure adds to the default renderer's.
-# `buildfiles` reports those packages' BUILD files and every .bzl file they load, transitively.
+# One target from each package that the Geode production closure adds to the default renderer's,
+# including the browser backend that WebAssembly builds link. `buildfiles` reports those packages'
+# BUILD files and every .bzl file they load, transitively.
 _GEODE_PRODUCTION_PACKAGE_ROOTS = [
     "//donner/gpu:gpu",
+    "//donner/gpu/browser:browser_device",
     "//donner/gpu/metal:metal_device",
     "//donner/gpu/shader:compiled_shader",
     "//donner/gpu/shader/wgsl:compiler",

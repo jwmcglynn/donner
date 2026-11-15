@@ -1135,6 +1135,21 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveVariantMatricesAndWarnings)
                                                testing::HasSubstr("Invalid patternUnits value"))));
 }
 
+TEST(AttributeParserTest, InvalidPatternContentUnitsNamesAttribute) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <pattern id="p" patternContentUnits="bad"/>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  EXPECT_THAT(warningSink.warnings(),
+              testing::ElementsAre(
+                  testing::Field(&ParseDiagnostic::reason,
+                                 testing::HasSubstr("Invalid patternContentUnits value 'bad'"))));
+}
+
 TEST(AttributeParserTest, ExperimentalWarningAndFallbackBranches) {
   ParseWarningSink warningSink;
   SVGParser::Options options;

@@ -11,6 +11,7 @@
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGQuerySelector.h"
+#include "donner/svg/UseReference.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -95,6 +96,13 @@ Lengthd components::LineComponent::* LineCoordinateField(std::string_view name) 
   return nullptr;
 }
 
+bool IsUseHrefAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& name) {
+  const auto* type = handle.try_get<components::ElementTypeComponent>();
+  return type && type->type() == ElementType::Use &&
+         (name == xml::XMLQualifiedNameRef("href") ||
+          name == xml::XMLQualifiedNameRef("xlink", "href"));
+}
+
 bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& name,
                          std::string_view value) {
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -103,6 +111,11 @@ bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& na
     element.setClassName(value);
   } else if (name == xml::XMLQualifiedNameRef("style")) {
     element.setStyle(value);
+  } else if (IsUseHrefAttribute(element.entityHandle(), name)) {
+    markNeedsFullStyleRecompute(element.entityHandle());
+    element.entityHandle().get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+        *element.entityHandle().registry(), name, RcString(value));
+    RetargetUseFromAttributes(element.entityHandle());
   } else {
     return false;
   }
@@ -839,6 +852,9 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   // Remove any storage for this attribute.
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).removeAttribute(
       *handle_.registry(), name);
+  if (IsUseHrefAttribute(handle_, name)) {
+    RetargetUseFromAttributes(handle_);
+  }
 }
 
 SVGDocument SVGElement::ownerDocument() {

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
@@ -480,6 +481,23 @@ TEST(SVGAnimateTransformElement, TypedTransformIsTheUnderlyingValue) {
   auto parsed = parser::TransformParser::Parse(*value);
   ASSERT_THAT(parsed, NoParseError());
   EXPECT_EQ(parsed.result().transformPosition(Vector2d()).x, 110);
+}
+
+// Animated values are serialized to text and parsed back by locale-independent parsers, so the
+// C++ global locale must not change their formatting.
+TEST(SVGAnimateTransformElement, SerializedValueIgnoresGlobalLocale) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateTransform attributeName="transform" type="translate" from="0" to="2001" dur="2s"/>
+    </rect></svg>)svg";
+  auto classicDocument = parseSVGWithExperimental(kSource);
+  ASSERT_THAT(getAnimatedTransform(classicDocument, "#r", 1),
+              testing::Optional(testing::StrEq("translate(1000.5)")));
+
+  const ScopedCommaDecimalGlobalLocale commaDecimalLocale;
+  auto document = parseSVGWithExperimental(kSource);
+  EXPECT_THAT(getAnimatedTransform(document, "#r", 1),
+              testing::Optional(testing::StrEq("translate(1000.5)")));
 }
 
 }  // namespace donner::svg
