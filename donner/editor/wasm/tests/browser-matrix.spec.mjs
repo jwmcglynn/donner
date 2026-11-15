@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -480,10 +480,27 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     assertBrowserLane(lane);
   }
-  const watchdog = [...buildFile.matchAll(/js_test\(([\s\S]*?)\n\)\n/g)]
-    .map(([, body]) => body)
-    .find((body) => body.includes("name = \"browser_responsiveness_perf_test\""));
-  assert.ok(watchdog, "the public responsiveness lane must own its watchdog");
+  // One watchdog test per responsiveness project, generated from one js_test body, so each
+  // project runs under the config's whole globalTimeout rather than all four sharing it.
+  const watchdogPattern =
+    /\n {4}js_test\(\n([\s\S]*?)\n {4}\)\n {4}for project in RESPONSIVENESS_PERF_PROJECTS\n/;
+  const watchdog = watchdogPattern.exec(buildFile)?.[1];
+  assert.ok(watchdog, "the public responsiveness lanes must own their watchdog");
+  assert.match(
+    watchdog,
+    /name = "browser_responsiveness_perf_test_" \+ project\.replace\("-", "_"\)/,
+  );
+  assert.match(watchdog, /args = \["--project=" \+ project\]/);
+  const buildProjects = responsivenessPerfProjects();
+  const responsivenessConfig = readFileSync(
+    path.join(testDirectory, "playwright.responsiveness.bazel.config.js"),
+    "utf8",
+  );
+  assert.deepEqual(
+    buildProjects,
+    [...responsivenessConfig.matchAll(/^ {6}name: "([^"]+)",$/gm)].map(([, project]) => project),
+    "every responsiveness project, and only those, must have its own watchdog test",
+  );
   assert.match(watchdog, /entry_point = "browser-watchdog\.mjs"/);
   assert.ok(
     watchdog.includes("\":_browser_responsiveness_perf_driver\""),
@@ -495,7 +512,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   const driver = lanes.find((lane) =>
     lane.includes("name = \"_browser_responsiveness_perf_driver\"")
   );
-  assertListsLoadedFiles("browser_responsiveness_perf_test", watchdog, {
+  assertListsLoadedFiles(responsivenessPerfTarget("<project>"), watchdog, {
     entryPoints: ["browser-watchdog.mjs"],
     runfilesFrom: [driver],
   });
@@ -508,7 +525,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     ...(/tags = \[([\s\S]*?)\]/.exec(watchdog)?.[1] ?? "").matchAll(/"([^"]+)"/g),
   ]
     .map(([, tag]) => tag).sort();
-  assert.deepEqual(watchdogTags, ["manual", "no-sandbox", "perf"]);
+  assert.deepEqual(watchdogTags, ["exclusive", "manual", "no-sandbox", "perf"]);
   // Every editor lane serves the one production browser-selected package. The standalone
   // renderer has its own page and package, verified separately below.
   const editorPackage = "//donner/editor/wasm:_wasm_web_package_for_serve";
@@ -1442,6 +1459,18 @@ function perfMatrixSetting(workflow, key) {
   ]);
 }
 
+// The Playwright projects that BUILD.bazel gives one watchdog test each, in declaration order.
+function responsivenessPerfProjects() {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const list = /\nRESPONSIVENESS_PERF_PROJECTS = \[([\s\S]*?)\]/.exec(buildFile)?.[1] ?? "";
+  return [...list.matchAll(/"([^"]+)"/g)].map(([, project]) => project);
+}
+
+// The Bazel test name BUILD.bazel generates for a responsiveness project.
+function responsivenessPerfTarget(project) {
+  return `browser_responsiveness_perf_test_${project.replaceAll("-", "_")}`;
+}
+
 // The body of the Perf workflow step named `name`, up to the next step.
 function perfStep(workflow, name) {
   const start = workflow.indexOf(`- name: ${name}`);
@@ -1468,13 +1497,26 @@ test("only the hosted macOS Perf job reports latency gates without enforcing the
     ),
     "the summary must also follow a failed test step",
   );
-  const testLog =
-    "bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log";
+  assert.ok(summaryStep.includes("PERF_OUTCOME: ${{ steps.perf.outcome }}\n"));
   assert.ok(
     summaryStep.includes(
-      `node donner/editor/wasm/tests/latency-gate-summary.mjs ${testLog} >> "$GITHUB_STEP_SUMMARY"`,
+      "if [[ \"$PERF_OUTCOME\" == \"success\" ]]; then\n            require=(--require-all)\n",
     ),
-    "the summary must come from the browser lane's own test log",
+    "after a passing test step a missing project log must fail the summary",
+  );
+  assert.ok(summaryStep.includes("logs=bazel-testlogs/donner/editor/wasm/tests\n"));
+  // One command reads every project's log and writes the job summary.
+  const command = new RegExp(
+    String.raw`\n {10}node donner/editor/wasm/tests/latency-gate-summary\.mjs `
+      + String.raw`\$\{require\[@\]\+"\$\{require\[@\]\}"\} \\\n`
+      + String.raw`((?: {12}"\$logs/\w+/test\.log" \\\n)+)`
+      + String.raw` {12}>> "\$GITHUB_STEP_SUMMARY"\n`,
+  ).exec(summaryStep);
+  assert.ok(command, "the summary command must append its output to the job summary");
+  assert.deepEqual(
+    [...command[1].matchAll(/"\$logs\/(\w+)\/test\.log"/g)].map(([, target]) => target),
+    responsivenessPerfProjects().map(responsivenessPerfTarget),
+    "the summary must read the log of every responsiveness project, and only those",
   );
 });
 
@@ -1508,13 +1550,42 @@ test("the latency gate summary command prints the gates recorded in a test log",
       execFileSync(process.execPath, [command, log], { encoding: "utf8" }),
       /\| firefox \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| missed \(reported\) \|/,
     );
-    assert.equal(
-      execFileSync(process.execPath, [command, path.join(directory, "missing.log")], {
-        encoding: "utf8",
-      }),
-      "No latency gate results were recorded.\n",
-      "a test that did not run leaves no log",
+    const secondLog = path.join(directory, "second.log");
+    writeFileSync(
+      secondLog,
+      `latency-gate ${JSON.stringify({ ...record, browser: "chromium", met: true })}\n`,
     );
+    const combined = execFileSync(
+      process.execPath,
+      [command, log, path.join(directory, "missing.log"), secondLog],
+      { encoding: "utf8" },
+    );
+    assert.match(combined, /\| firefox \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| missed/);
+    assert.match(
+      combined,
+      /\| chromium \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| met \|/,
+      "every project's log is summarized, skipping one that did not run",
+    );
+    // A test that did not run leaves no log, named by its target directory.
+    const missing = path.join(directory, "browser_responsiveness_perf_test_firefox", "test.log");
+    const notice = "Missing test log for browser_responsiveness_perf_test_firefox: "
+      + "that test did not run.\n";
+    assert.equal(
+      execFileSync(process.execPath, [command, missing], { encoding: "utf8" }),
+      `No latency gate results were recorded.\n${notice}`,
+      "without --require-all a missing log is reported and the command still succeeds",
+    );
+    const required = spawnSync(process.execPath, [command, "--require-all", log, missing], {
+      encoding: "utf8",
+    });
+    assert.equal(required.status, 1, "with --require-all a missing log fails the command");
+    assert.ok(required.stdout.endsWith(notice), "the failing summary still names the missing log");
+    assert.match(required.stdout, /\| firefox \| first-drag-193 \| inputP95 \|/);
+    const complete = spawnSync(process.execPath, [command, "--require-all", log, secondLog], {
+      encoding: "utf8",
+    });
+    assert.equal(complete.status, 0, "with every log present --require-all succeeds");
+    assert.doesNotMatch(complete.stdout, /Missing test log/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

@@ -312,6 +312,11 @@ if (warnings.hasWarnings()) {
 }
 ```
 
+References that fail to resolve, such as a `<use>` whose `href` names no element, and the parse
+warnings of an external document loaded through `<use href="other.svg#id">`, are reported while
+the document is prepared for rendering. Collect them with
+`renderer.draw(document, renderWarnings)`; see \ref ParserDiagnostics.
+
 One more case to check if your CSS is not applying: `SVGParser::Options::disableUserAttributes`
 defaults to `false`, so non-presentation (user-defined) attributes are retained and attribute
 selectors like `rect[data-role="status"]` match. If you set it to `true` to skip them for

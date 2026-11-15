@@ -434,12 +434,24 @@ private:
   std::string resourceUrl_;
 };
 
+/// Reasons of every warning in @p sink, in report order.
+std::vector<std::string> WarningReasons(const ParseWarningSink& sink) {
+  std::vector<std::string> reasons;
+  for (const ParseDiagnostic& warning : sink.warnings()) {
+    reasons.emplace_back(warning.reason.str());
+  }
+  return reasons;
+}
+
 struct ExternalUseRenderResult {
   RendererBitmap bitmap;
   std::vector<std::string> requests;
+  /// Reasons of the warnings reported by the host draw.
+  std::vector<std::string> renderWarnings;
 };
 
-/// Renders an external-use fixture through the public API and captures its resource requests.
+/// Renders an external-use fixture through the public API and captures its resource requests and
+/// render warnings.
 ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
                                           std::string_view externalSource,
                                           ProcessingMode childMode = ProcessingMode::SecureStatic,
@@ -472,8 +484,10 @@ ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
   }
   SVGDocument document = std::move(parsed.result());
   Renderer renderer;
-  renderer.draw(document);
-  return {NormalizeSnapshot(renderer.takeSnapshot()), observedLoader->requests()};
+  ParseWarningSink renderWarnings;
+  renderer.draw(document, renderWarnings);
+  return {NormalizeSnapshot(renderer.takeSnapshot()), observedLoader->requests(),
+          WarningReasons(renderWarnings)};
 }
 
 constexpr std::string_view kAnalyticRedPngDataUrl =
@@ -2282,7 +2296,6 @@ TEST(RendererPublicApiTest, ExternalUseExplicitChildPatternOverridesHostFallback
 }
 
 TEST(RendererPublicApiTest, ExternalUseHostPatternsFailClosedDespiteChildIdCollision) {
-  testing::internal::CaptureStderr();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
@@ -2294,9 +2307,9 @@ TEST(RendererPublicApiTest, ExternalUseHostPatternsFailClosedDespiteChildIdColli
           <rect width="8" height="8" fill="red"/></pattern></defs>
         <rect id="tile" width="8" height="8"/>
       </svg>)svg");
-  const std::string diagnostic = testing::internal::GetCapturedStderr();
-  EXPECT_THAT(diagnostic, testing::HasSubstr(
-                              "External-use inherited cross-document URL resource is unsupported"));
+  EXPECT_THAT(
+      actual.renderWarnings,
+      testing::Contains("External-use inherited cross-document URL resource is unsupported"));
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
   EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::IsTransparent());
   const RendererBitmap expected = RenderInlineDocument(
@@ -2309,7 +2322,6 @@ TEST(RendererPublicApiTest, ExternalUseHostPatternsFailClosedDespiteChildIdColli
 }
 
 TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLookup) {
-  testing::internal::CaptureStderr();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
         <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6"
@@ -2321,11 +2333,254 @@ TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLoo
           refX="3" refY="3"><rect width="6" height="6" fill="red"/></marker></defs>
         <path id="path" d="M4,4 L12,4"/>
       </svg>)svg");
-  const std::string diagnostic = testing::internal::GetCapturedStderr();
-  EXPECT_THAT(diagnostic, testing::HasSubstr(
-                              "External-use inherited cross-document URL resource is unsupported"));
+  EXPECT_THAT(
+      actual.renderWarnings,
+      testing::Contains("External-use inherited cross-document URL resource is unsupported"));
   EXPECT_THAT(PixelAt(actual.bitmap, 4, 2), test::IsTransparent());
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+}
+
+constexpr std::string_view kExternalUseHostSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile"/>
+      </svg>)svg";
+
+/// The `x="bad"` attribute makes the referenced sub-document emit a parse warning when it is loaded
+/// while the host is prepared for rendering.
+constexpr std::string_view kExternalUseChildWithParseWarningSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="tile" x="bad" width="8" height="8" fill="lime"/>
+      </svg>)svg";
+
+constexpr std::string_view kUnresolvedUseSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="#missing"/>
+      </svg>)svg";
+
+/// Parses kExternalUseHostSvg with a loader serving kExternalUseChildWithParseWarningSvg.
+SVGDocument ParseExternalUseHostWithChildWarning() {
+  SVGDocument::Settings settings;
+  settings.resourceLoader =
+      std::make_unique<ExternalUseResourceLoader>(kExternalUseChildWithParseWarningSvg);
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(kExternalUseHostSvg, warnings,
+                                            parser::SVGParser::Options(), std::move(settings));
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+constexpr std::string_view kChildParseWarning = "Invalid length or percentage";
+constexpr std::string_view kUnresolvedUseWarning =
+    "Warning: Failed to resolve shadow tree target with href '#missing'";
+
+TEST(RendererPublicApiTest, DrawWithoutWarningSinkKeepsExternalUseWarningsOffStderr) {
+  SVGDocument document = ParseExternalUseHostWithChildWarning();
+  Renderer renderer;
+  testing::internal::CaptureStderr();
+  renderer.draw(document);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kChildParseWarning)));
+}
+
+TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentWarningsToSink) {
+  SVGDocument document = ParseExternalUseHostWithChildWarning();
+  Renderer renderer;
+  ParseWarningSink warnings;
+  testing::internal::CaptureStderr();
+  renderer.draw(document, warnings);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kChildParseWarning)));
+  EXPECT_THAT(WarningReasons(warnings), ElementsAre(kChildParseWarning));
+}
+
+/// Parses a host with two occurrences of an external subtree that itself holds an unresolved
+/// `<use>`, which is only found when the sub-document is prepared for rendering, not when it is
+/// loaded.
+SVGDocument ParseExternalUseHostWithChildPreparationWarning() {
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="tile"><use href="#missing"/></g>
+      </svg>)svg");
+  ParseWarningSink parseWarnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile"/>
+        <use href="external.svg#tile" x="4"/>
+      </svg>)svg",
+      parseWarnings, parser::SVGParser::Options(), std::move(settings));
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+TEST(RendererPublicApiTest, DrawReportsExternalUseSubDocumentPreparationWarningsToSink) {
+  // The child is prepared again for each of the two occurrences and on every draw, but the warning
+  // is delivered once.
+  SVGDocument document = ParseExternalUseHostWithChildPreparationWarning();
+  // Verbose, so the stderr check shows the sink takes precedence over printing.
+  Renderer renderer(/*verbose=*/true);
+  ParseWarningSink firstDraw;
+  testing::internal::CaptureStderr();
+  renderer.draw(document, firstDraw);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
+  EXPECT_THAT(WarningReasons(firstDraw), ElementsAre(kUnresolvedUseWarning));
+  ParseWarningSink secondDraw;
+  renderer.draw(document, secondDraw);
+  EXPECT_THAT(WarningReasons(secondDraw), testing::IsEmpty());
+}
+
+TEST(RendererPublicApiTest, DisabledSinkLeavesSubDocumentPreparationWarningsForALaterSink) {
+  SVGDocument document = ParseExternalUseHostWithChildPreparationWarning();
+  Renderer renderer;
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  renderer.draw(document, disabled);
+  ParseWarningSink collecting;
+  renderer.draw(document, collecting);
+  EXPECT_THAT(WarningReasons(collecting), ElementsAre(kUnresolvedUseWarning));
+}
+
+TEST(RendererPublicApiTest, TruncatedSubDocumentPreparationWarningsMarkTheHostSinkIncomplete) {
+  // More distinct unresolved references than one sink retains, all found while the sub-document is
+  // prepared for rendering.
+  std::string child =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><g id="tile">)svg";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    child += "<use href=\"#missing" + std::to_string(i) + "\"/>";
+  }
+  child += "</g></svg>";
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(child);
+  ParseWarningSink parseWarnings;
+  auto parsed = parser::SVGParser::ParseSVG(kExternalUseHostSvg, parseWarnings,
+                                            parser::SVGParser::Options(), std::move(settings));
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  Renderer renderer;
+  ParseWarningSink warnings;
+  renderer.draw(document, warnings);
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_TRUE(warnings.resourceLimitExceeded());
+}
+
+TEST(RendererPublicApiTest, DrawReportsSameDocumentWarningsToSink) {
+  SVGDocument document = ParseDocument(kUnresolvedUseSvg);
+  Renderer renderer;
+  ParseWarningSink warnings;
+  renderer.draw(document, warnings);
+  EXPECT_THAT(WarningReasons(warnings), ElementsAre(kUnresolvedUseWarning));
+}
+
+TEST(RendererPublicApiTest, RedrawOfUnchangedDocumentReportsNoRepeatedWarnings) {
+  SVGDocument document = ParseExternalUseHostWithChildWarning();
+  Renderer renderer;
+  ParseWarningSink firstDraw;
+  renderer.draw(document, firstDraw);
+  ParseWarningSink secondDraw;
+  renderer.draw(document, secondDraw);
+  EXPECT_THAT(WarningReasons(firstDraw), ElementsAre(kChildParseWarning));
+  EXPECT_THAT(WarningReasons(secondDraw), testing::IsEmpty());
+}
+
+TEST(RendererPublicApiTest, VerboseDrawWithoutWarningSinkPrintsWarnings) {
+  SVGDocument document = ParseDocument(kUnresolvedUseSvg);
+  Renderer renderer(/*verbose=*/true);
+  testing::internal::CaptureStderr();
+  renderer.draw(document);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(), testing::HasSubstr(kUnresolvedUseWarning));
+}
+
+TEST(RendererPublicApiTest, VerboseDrawWithWarningSinkDoesNotPrintWarnings) {
+  for (const bool disabled : {false, true}) {
+    SCOPED_TRACE(disabled ? "disabled sink" : "collecting sink");
+    SVGDocument document = ParseDocument(kUnresolvedUseSvg);
+    Renderer renderer(/*verbose=*/true);
+    ParseWarningSink warnings = disabled ? ParseWarningSink::Disabled() : ParseWarningSink();
+    testing::internal::CaptureStderr();
+    renderer.draw(document, warnings);
+    EXPECT_THAT(testing::internal::GetCapturedStderr(),
+                testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
+    if (disabled) {
+      EXPECT_THAT(WarningReasons(warnings), testing::IsEmpty());
+    } else {
+      EXPECT_THAT(WarningReasons(warnings), ElementsAre(kUnresolvedUseWarning));
+    }
+  }
+}
+
+/// One RendererDriver entry point that prepares a document.
+struct DriverEntryPoint {
+  std::string_view name;
+  ThreadingMode threadingMode = ThreadingMode::SingleThreaded;
+  std::function<void(RendererDriver&, RendererInterface&, SVGDocument&)> run;
+};
+
+TEST(RendererPublicApiTest, DriverReportsWarningsToSinkFromEveryEntryPoint) {
+  RenderViewport viewport;
+  viewport.size = Vector2d(8, 8);
+  const auto drawDocument = [](RendererDriver& driver, RendererInterface& /*renderer*/,
+                               SVGDocument& document) { driver.draw(document); };
+  const auto drawViewport = [viewport](RendererDriver& driver, RendererInterface& /*renderer*/,
+                                       SVGDocument& document) {
+    driver.draw(document, viewport, Transform2d());
+  };
+  const std::vector<DriverEntryPoint> entryPoints = {
+      {"draw", ThreadingMode::SingleThreaded, drawDocument},
+      {"draw concurrent", ThreadingMode::ConcurrentDom, drawDocument},
+      {"draw viewport", ThreadingMode::SingleThreaded, drawViewport},
+      {"draw viewport concurrent", ThreadingMode::ConcurrentDom, drawViewport},
+      {"drawInterruptibly", ThreadingMode::SingleThreaded,
+       [viewport](RendererDriver& driver, RendererInterface& /*renderer*/, SVGDocument& document) {
+         EXPECT_TRUE(
+             driver.drawInterruptibly(document, viewport, Transform2d(), [] { return false; }));
+       }},
+      {"captureRenderSnapshot", ThreadingMode::SingleThreaded,
+       [](RendererDriver& driver, RendererInterface& /*renderer*/, SVGDocument& document) {
+         (void)driver.captureRenderSnapshot(document);
+       }},
+      {"drawDocumentIntoCurrentFrame", ThreadingMode::SingleThreaded,
+       [viewport](RendererDriver& driver, RendererInterface& renderer, SVGDocument& document) {
+         DocumentWriteAccess access = document.writeAccess();
+         renderer.beginFrame(viewport);
+         driver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+         renderer.endFrame();
+       }},
+  };
+  for (const DriverEntryPoint& entryPoint : entryPoints) {
+    SCOPED_TRACE(entryPoint.name);
+    SVGDocument document = ParseDocument(kUnresolvedUseSvg);
+    document.setThreadingMode(entryPoint.threadingMode);
+    Renderer renderer;
+    ParseWarningSink warnings;
+    RendererDriver driver(renderer, /*verbose=*/true, nullptr, nullptr, &warnings);
+    testing::internal::CaptureStderr();
+    entryPoint.run(driver, renderer, document);
+    EXPECT_THAT(testing::internal::GetCapturedStderr(),
+                testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
+    EXPECT_THAT(WarningReasons(warnings), ElementsAre(kUnresolvedUseWarning));
+  }
+}
+
+TEST(RendererPublicApiTest, ConcurrentDomDrawWithoutWarningSinkKeepsStderrClean) {
+  SVGDocument document = ParseDocument(kUnresolvedUseSvg);
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  testing::internal::CaptureStderr();
+  driver.draw(document);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
+}
+
+TEST(RendererPublicApiTest, DriverSnapshotCaptureWithoutWarningSinkKeepsStderrClean) {
+  SVGDocument document = ParseDocument(kUnresolvedUseSvg);
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  testing::internal::CaptureStderr();
+  const RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+  EXPECT_THAT(testing::internal::GetCapturedStderr(),
+              testing::Not(testing::HasSubstr(kUnresolvedUseWarning)));
+  (void)snapshot;
 }
 
 #ifdef DONNER_TEXT_ENABLED
@@ -4082,7 +4337,10 @@ MATCHER(IsBlueish, "pixel has dominant blue channel") {
 
 class DefaultMethodRenderer final : public RendererInterface {
 public:
-  void draw(SVGDocument&) override {}
+  void draw(SVGDocument& document) override { RendererDriver(*this).draw(document); }
+  void draw(SVGDocument& document, ParseWarningSink& warningSink) override {
+    RendererDriver(*this, /*verbose=*/false, nullptr, nullptr, &warningSink).draw(document);
+  }
   int width() const override { return 0; }
   int height() const override { return 0; }
   void beginFrame(const RenderViewport&) override {}

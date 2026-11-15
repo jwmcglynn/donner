@@ -349,6 +349,10 @@ bool GeodeSurfaceRenderer::isDeviceLost() const {
   return impl_->device->isDeviceLost();
 }
 
+void GeodeSurfaceRenderer::trimTexturePool(RendererGeodeTexturePoolTrim level) {
+  impl_->renderer->trimTexturePool(level);
+}
+
 GeodeSurfaceRenderer::FrameStatus GeodeSurfaceRenderer::draw(SVGDocument& document) {
   if (isDeviceLost()) {
     return FrameStatus::Failed;

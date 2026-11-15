@@ -3845,25 +3845,29 @@ TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachTheirRoundedDistanc
       << "the offset content must land inside the canvas";
 }
 
-// A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom a
-// large blur's margin would need a raster over the frame's filter memory, so the layer falls back
-// to a viewport-sized capture; it still renders, and so does a later filtered element.
+// A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom
+// the blur reaches the largest blur radius, whose margin adds 769 pixels on every side. Around a
+// 1536x16 canvas that makes a 3074x1554 raster, whose GPU filter intermediates exceed
+// `kMaximumFilterIntermediateBytes` by about a fifth, so the layer falls back to a viewport-sized
+// capture; it still renders, and so does a later filtered element. The canvas is a thin strip
+// because the margin alone decides the fallback, while the fallback blur's cost grows with the
+// canvas area.
 TEST_F(RendererRegressionTests, LargeBlurMarginFallsBackWithinFrameFilterBudget) {
   SVGDocument document = ParseSvg(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 128 128">
+    <svg xmlns="http://www.w3.org/2000/svg" width="1536" height="16" viewBox="0 0 192 2">
       <filter id="f" filterUnits="userSpaceOnUse" x="-2000" y="-2000" width="4256" height="4256">
         <feGaussianBlur stdDeviation="40"/>
       </filter>
       <filter id="g"><feFlood flood-color="blue"/></filter>
       <rect x="-1000" y="-1000" width="2128" height="2128" fill="lime" filter="url(#f)"/>
-      <rect x="120" y="2" width="6" height="6" filter="url(#g)"/>
+      <rect x="184" y="0.5" width="6" height="1" filter="url(#g)"/>
     </svg>)svg");
   const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
-  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(1024, 1024)));
-  EXPECT_THAT(PixelAt(actual, 512, 512),
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(1536, 16)));
+  EXPECT_THAT(PixelAt(actual, 768, 8),
               test::Rgba(testing::Eq(0), testing::Gt(0), testing::Eq(0), testing::Gt(0)))
       << "the blurred element must render";
-  EXPECT_THAT(PixelAt(actual, 984, 40), test::RgbaEq(0, 0, 255, 255))
+  EXPECT_THAT(PixelAt(actual, 1496, 8), test::RgbaEq(0, 0, 255, 255))
       << "a later filtered element must still render";
 }
 

@@ -1418,6 +1418,14 @@ RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
 RendererTinySkia& RendererTinySkia::operator=(RendererTinySkia&&) noexcept = default;
 
 void RendererTinySkia::draw(SVGDocument& document) {
+  drawDocument(document, nullptr);
+}
+
+void RendererTinySkia::draw(SVGDocument& document, ParseWarningSink& warningSink) {
+  drawDocument(document, &warningSink);
+}
+
+void RendererTinySkia::drawDocument(SVGDocument& document, ParseWarningSink* warningSink) {
   if (retainedSpansEnabled_) {
     // Connect the geometry-invalidation listener before the driver instantiates the render
     // tree, so a shape whose outline changed between draws drops its recording before this
@@ -1430,7 +1438,7 @@ void RendererTinySkia::draw(SVGDocument& document) {
     ClearRetainedSpans(document.registry());
   }
 
-  RendererDriver driver(*this, verbose_);
+  RendererDriver driver(*this, verbose_, nullptr, nullptr, warningSink);
   driver.draw(document);
 }
 
@@ -1869,7 +1877,7 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
                               FilterInputBuffer{viewportWidth, viewportHeight, 0, 0}, surfaceCount);
   }
   if (!plan.has_value()) {
-    filterExecutionBudget_->reject();
+    filterExecutionBudget_->refuseOversizedGraph();
     return std::nullopt;
   }
 
@@ -2212,6 +2220,9 @@ void RendererTinySkia::popFilterLayer() {
     return;
   }
   if (frame.localRasterRequiredForBudget) {
+    // The graph was admitted for a local raster that could not be allocated or run. That is a
+    // renderer failure, not a graph too large for the frame's remaining work, so it latches the
+    // frame like other external failures rather than counting as a per-graph refusal.
     filterExecutionBudget_->reject();
     filterExecutionBudget_->release(frame.filterReservation);
     return;
@@ -3470,10 +3481,11 @@ void RendererTinySkia::setTextMaterializationBudgetForTesting(
 }
 
 RendererResourceStats RendererTinySkia::resourceStats() const {
-  return RendererResourceStats{
+  RendererResourceStats stats{
       .surfaceBudgetSupported = true,
       .surfaceCount = surfaceBudget_->surfaces(),
       .surfaceBytes = surfaceBudget_->bytes(),
+      .surfacePeakBytes = surfaceBudget_->peakBytes(),
       .surfaceBudgetRejected = surfaceBudget_->rejected(),
       .drawBudgetSupported = true,
       .drawCalls = drawBudget_->drawCalls(),
@@ -3493,6 +3505,17 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .textGlyphOccurrences = textMaterializationBudget_->glyphOccurrences(),
       .textMaterializationBudgetRejected = textMaterializationBudget_->rejected(),
   };
+#ifdef DONNER_FILTERS_ENABLED
+  stats.filterBudgetSupported = true;
+  stats.filterExecutions = filterExecutionBudget_->executions();
+  stats.filterWorkUnits = filterExecutionBudget_->workUnits();
+  stats.filterRetainedBytes = filterExecutionBudget_->retainedBytes();
+  stats.filterCaptureBytesReserved = filterExecutionBudget_->captureBytesReserved();
+  stats.filterGraphsRefused = filterExecutionBudget_->refusedGraphs();
+  stats.filterBudgetRejected =
+      filterExecutionBudget_->rejected() || filterExecutionBudget_->refusedGraphs() != 0;
+#endif
+  return stats;
 }
 
 int RendererTinySkia::width() const {
