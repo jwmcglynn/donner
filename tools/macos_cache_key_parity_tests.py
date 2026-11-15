@@ -1189,19 +1189,21 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             "DEVELOPER_DIR=%s/Xcode-any-name.app/Contents/Developer" % root,
             "DONNER_CI_XCODE_IDENTITY=%s-%s" % (version, build),
             "CCACHE_NAMESPACE=donner-xcode-%s-%s" % (version, build),
-            "BAZEL_MACOS_BUILD_FLAGS=--config=ci-macos --xcode_version=%s" % version])
+            "BAZEL_MACOS_BUILD_FLAGS=--xcode_version=%s" % version])
         self.assertEqual(output, "cache_partition=macos-ARM64-xcode-%s-%s\n" % (version, build))
         self.assertIn("Selected the approved Xcode %s (%s)." % (version, build), log)
         self.assertNotIn("simulated noise", log)
 
     def test_lanes_append_the_selected_xcode_to_the_lane_flags(self):
         # main.yml's macOS jobs set no BAZEL_MACOS_BUILD_FLAGS; the selection writes only the
-        # flag it adds, and each lane phase passes it after the table's key-affecting flags,
-        # where the job's flags variable used to put it.
-        code, env, _, log, version, _, _ = self._select(build_flags=None)
-        self.assertEqual(0, code, log)
-        written = env.splitlines()[-1]
-        self.assertEqual(written, "BAZEL_MACOS_BUILD_FLAGS= --xcode_version=%s" % version)
+        # flag it adds, whatever the runner's environment holds, and each lane phase passes it
+        # after the table's key-affecting flags, where the job's flags variable used to put it.
+        for inherited in (None, "--config=stale --copt=-O0"):
+            with self.subTest(inherited=inherited):
+                code, env, _, log, version, _, _ = self._select(build_flags=inherited)
+                self.assertEqual(0, code, log)
+                written = env.splitlines()[-1]
+                self.assertEqual(written, "BAZEL_MACOS_BUILD_FLAGS=--xcode_version=%s" % version)
         description = lane.dry_run("macos-self-hosted", "build",
                                    {RUNTIME_FLAGS: written.split("=", 1)[1]})
         self.assertEqual(description["actions"][0]["argv"][-4:], [

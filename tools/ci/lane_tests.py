@@ -131,7 +131,7 @@ class LaneTest(unittest.TestCase):
     def test_selection_is_the_affected_labels_or_everything_on_a_fallback(self):
         result, calls = self.run_phase("macos", "build", TARGETS_FALLBACK="false",
                                        TARGETS_AFFECTED="//a:a  //b:b\n//c:c\n",
-                                       BAZEL_MACOS_BUILD_FLAGS=" --xcode_version=26.1")
+                                       BAZEL_MACOS_BUILD_FLAGS="--xcode_version=26.1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.bazel_calls(calls), [[
             "bazelisk", "build", "--config=ci", "--config=ci-macos", "--macos_minimum_os=13.3",
