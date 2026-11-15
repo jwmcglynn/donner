@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
 #include <algorithm>
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -7054,6 +7055,10 @@ void RendererGeode::endPatternTile(bool forStroke) {
 
   Impl::PatternStackFrame frame = std::move(impl_->patternStack.back());
   impl_->patternStack.pop_back();
+  // Filter captures nest inside tiles, so every capture the tile opened has closed by now and the
+  // offsets setTransform applies inside the tile counted only those captures.
+  assert(impl_->filterStack.size() == frame.filterStackDepth &&
+         "A pattern tile must close every filter capture opened inside it");
 
   // Finish the tile's render pass so the texture contents are available
   // for sampling by subsequent draws.
