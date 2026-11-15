@@ -18,6 +18,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStopElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -1152,6 +1153,28 @@ TEST(ExternalUseWarningReplayTest, HeldWarningsKeepTheSinkLimit) {
   renderer.draw(host->document, later);
   EXPECT_THAT(later.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
   EXPECT_TRUE(later.resourceLimitExceeded());
+}
+
+// A sheet whose warning is held keeps the retained update path while frames that collect nothing
+// move one of its elements: dropping the held warning does not force a full rebuild.
+TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdates) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  SVGDocument sheet = SpriteSheetOf(*host);
+  const auto counters = [&] { return sheet.registry().ctx().get<components::RenderTreeState>().counters; };
+  const auto before = counters();
+  constexpr int kFrames = 6;
+  for (int frame = 0; frame < kFrames; ++frame) {
+    MutateSheet(sheet, SheetMutation::OtherTransform, frame);
+    renderer.draw(host->document);
+  }
+  const auto after = counters();
+  EXPECT_EQ(after.fullRebuilds, before.fullRebuilds);
+  EXPECT_EQ(after.retainedUpdates - before.retainedUpdates, static_cast<uint64_t>(kFrames));
 }
 
 }  // namespace
