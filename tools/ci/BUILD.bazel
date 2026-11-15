@@ -8,6 +8,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "BUILD.bazel",
+    "bazel_watchdog.sh",
     "coverage_contract.json",
     "docs_lane.sh",
     "editor_wasm_lane.sh",

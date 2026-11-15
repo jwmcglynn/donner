@@ -40,6 +40,32 @@ RENDERER_PAYLOAD_CEILINGS = {
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
+# Scripts that hold step bodies moved out of a workflow. The target selection treats a change to
+# one exactly as a change to the CI workflow.
+WORKFLOW_LOGIC_SCRIPTS = ("tools/ci/bazel_watchdog.sh",)
+# Other repository scripts the CI workflow and its composite actions run, each with the test
+# target whose data lists it, so bazel-diff selects that test when the script changes. None marks
+# a script no target lists yet; the reason says why that is accepted.
+TRACKED_CI_SCRIPTS = {
+    "tools/browser_gpu_test_summary.py": "//tools:browser_gpu_test_summary_tests",
+    "tools/ci/cmake_consumer.sh": "//tools/ci:cmake_consumer_tests",
+    "tools/ci/free_hosted_macos_disk.sh": "//tools/ci:free_hosted_macos_disk_tests",
+    "tools/ci/gatekeeper.py": "//tools/ci:gatekeeper_tests",
+    "tools/ci_bazel_test.sh": "//tools:ci_bazel_test_tests",
+    "tools/ci_coverage_contract.py": "//tools:ci_coverage_contract_tests",
+    "tools/ci_diagnostics_report.py": "//tools:ci_diagnostics_report_tests",
+    "tools/ci_disk_cache.py": "//tools:ci_disk_cache_tests",
+    "tools/ci_metal_toolchain.py": "//tools:ci_metal_toolchain_tests",
+    "tools/ci_remote_gpu_targets.py": "//tools:ci_remote_gpu_targets",
+    "tools/ci_select_macos_xcode.sh": "//tools:macos_cache_key_parity_tests",
+}
+UNTRACKED_CI_SCRIPTS = {
+    "tools/ci_check_runner_disk.sh":
+        "Fails a step early when the runner's disk is short; no test lists it yet, so a change "
+        "to it is covered only by the runs that use it.",
+}
+_RUN = re.compile(r"^(?P<indent> *)(?P<item>- )?run: *(?P<value>.*)$")
+_SCRIPT_PATH = re.compile(r"(?<![\w/.-])((?:tools|build_defs)/[\w./-]+\.(?:sh|py))\b")
 # How a step rejects a target list that is empty or only whitespace, applied to a variable name.
 EMPTY_SELECTION_GUARD = 'if [[ "$%s" =~ ^[[:space:]]*$ ]]; then'
 # Each Editor WASM build step that runs Bazel or stages an artifact, in workflow order, with the one
@@ -89,6 +115,41 @@ def _declared_payload_ceilings(size_test_arguments, enforced=ENFORCED_PAYLOAD_CE
     return ceilings
 
 
+_HEREDOC_COMMAND = re.compile(r"^\s*(?:cat|tee)\b[^\n]*<<[^\n]*$", re.MULTILINE)
+_FILE_WRITE = re.compile(r"(?:^|\s)(?:>>?|tee)\s*[^\s|&;<>]")
+
+
+def _heredoc_file_writes(text):
+    """Lines that write a heredoc to a file with `cat` or `tee`."""
+    return [line.strip() for line in _HEREDOC_COMMAND.findall(text)
+            if _FILE_WRITE.search(re.sub(r"<<-?\s*\S+", "", line))]
+
+
+def _block_lines(lines, indent):
+    """The leading lines indented past `indent`, as a block scalar's content, without comments."""
+    body = []
+    for line in lines:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        body.append(line)
+    return [line for line in body if not line.lstrip().startswith("#")]
+
+
+def _run_bodies(text):
+    """The commands of every `run:` step in a workflow or action, without comment lines."""
+    lines = text.splitlines()
+    bodies = []
+    for index, line in enumerate(lines):
+        match = _RUN.match(line)
+        value = match.group("value") if match else ""
+        if value in ("|", ">", "|-", ">-"):
+            indent = len(match.group("indent")) + (2 if match.group("item") else 0)
+            bodies.append("\n".join(_block_lines(lines[index + 1:], indent)).rstrip("\n"))
+        elif value:
+            bodies.append(value)
+    return bodies
+
+
 class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_executable_stubs_are_shared_for_the_test_class(self):
         stub = self.fixture_bin / "python3"
@@ -128,6 +189,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/tests/RunEditorWindowVulkanSurfaceTests.sh"
         )
         cls.ci_bazel_test = _repository_text("tools/ci_bazel_test.sh")
+        cls.bazel_watchdog = _repository_text("tools/ci/bazel_watchdog.sh")
 
     def _job_body(self, job, workflow=None):
         workflow = self.main if workflow is None else workflow
@@ -720,14 +782,50 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(list(root.glob("browser-stall-window-*.raw")), [])
 
     def _heartbeat_script(self):
-        match = re.search(
-            r"cat > \"\$DIAG_DIR/run_bazel_with_heartbeat\.sh\" <<'EOF'\n"
-            r"(?P<body>.*?)^\s+EOF$",
-            self.main,
-            re.MULTILINE | re.DOTALL,
-        )
-        self.assertIsNotNone(match, "heartbeat wrapper heredoc not found")
-        return textwrap.dedent(match.group("body"))
+        return self.bazel_watchdog
+
+    def test_workflows_do_not_write_scripts_from_heredocs(self):
+        """Step logic lives in tested scripts, not in files a step writes from a heredoc."""
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        paths = (sorted(workflows.glob("*.y*ml"))
+                 + sorted((workflows.parent / "actions").glob("*/action.y*ml")))
+        self.assertGreater(len(paths), 10)
+        for path in paths:
+            self.assertEqual([], _heredoc_file_writes(path.read_text(encoding="utf-8")),
+                             path.name)
+        for line in ('cat > "$DIR/run.sh" <<\'EOF\'', "cat <<EOF > run.sh", "tee run.sh <<EOF",
+                     "cat >>run.sh <<-EOF"):
+            self.assertEqual([line], _heredoc_file_writes("  " + line + "\n"), line)
+        for line in ("python3 - <<'PY'", "echo 'cat > /dev/null'", "cat <<EOF | sort",
+                     "cat run.sh"):
+            self.assertEqual([], _heredoc_file_writes("  " + line + "\n"), line)
+
+    def test_every_script_the_ci_workflow_runs_is_tracked(self):
+        """A script the CI workflow runs must reach the target selection some way.
+
+        Either it holds workflow logic and selects full coverage like a workflow change, or a test
+        target lists it as data, so bazel-diff selects that test when it changes.
+        """
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        texts = [self.main, (workflows / "pr_base_change.yml").read_text(encoding="utf-8")]
+        texts += [path.read_text(encoding="utf-8")
+                  for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
+        invoked = {path for text in texts for body in _run_bodies(text)
+                   for path in _SCRIPT_PATH.findall(body)}
+        self.assertEqual(sorted(invoked), sorted(set(WORKFLOW_LOGIC_SCRIPTS)
+                                                 | set(TRACKED_CI_SCRIPTS)
+                                                 | set(UNTRACKED_CI_SCRIPTS)))
+        builds = {"//tools": _repository_text("tools/BUILD.bazel"),
+                  "//tools/ci": self.ci_target_definitions}
+        for path, target in TRACKED_CI_SCRIPTS.items():
+            with self.subTest(path=path):
+                package, name = target.split(":")
+                self.assertIn('"%s"' % path.rsplit("/", 1)[1], _rule_text(builds[package], name))
+        self.assertEqual(_run_bodies("      - run: tools/a.sh\n        run: |\n          # x\n"
+                                     "          tools/b.sh\n      - name: c\n"),
+                         ["tools/a.sh", "          tools/b.sh"])
 
     def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1136,6 +1234,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             (".bazelversion\nexamples/.bazelversion", "fallback=true\naffected=\n"),
             ("MODULE.bazel", "fallback=true\naffected=\n"),
             ("donner/base/Utils.h", "incremental=true\n"),
+            # A script that holds a workflow's step logic selects what a workflow change does;
+            # the rest of tools/ci reaches the build graph and bazel-diff as usual.
+            *[(path, "fallback=true\naffected=\n") for path in WORKFLOW_LOGIC_SCRIPTS],
+            ("tools/ci/lane.sh", "incremental=true\n"),
         ):
             with self.subTest(changed_files=changed_files):
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -1291,6 +1393,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             (".github/workflows/main.yml", "true"),
             (".github/workflows/lint.yml", "false"),
             ("donner/base/Utils.h", "false"),
+            *[(path, "true") for path in WORKFLOW_LOGIC_SCRIPTS],
+            ("tools/ci/lane.sh", "false"),
         ):
             with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "outputs"
