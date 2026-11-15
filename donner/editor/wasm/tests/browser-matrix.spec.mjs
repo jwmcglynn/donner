@@ -751,6 +751,17 @@ test("every Bazel browser lane probes its browser launch before the first case",
   }
 });
 
+// The probe launches every project of a lane's config. That matches what the lane runs only while
+// no Bazel lane narrows its config with a project filter.
+test("no Bazel browser lane passes a project filter", () => {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const lanes = [...buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)];
+  assert.ok(lanes.length > 0);
+  for (const [, body] of lanes) {
+    assert.doesNotMatch(body, /--project\b/, parseBrowserLane(body).laneName);
+  }
+});
+
 test("default browser discovery excludes the manual font reference probe", () => {
   const defaultConfig = require("./playwright.config.js");
   const referenceConfig = readFileSync(
