@@ -297,8 +297,8 @@ void AdapterBase::drawFill(const Path& path, FillRule fillRule, const Box2d& bou
     // The accepted tile is the paint; no fallback color is substituted for it.
     fill.kind = PaintDesc::Kind::Pattern;
   } else {
-    fill = ResolvePaint(paint_.fill, paint_.fillOpacity, paint_.currentColor, bounds,
-                        paint_.viewBox);
+    fill =
+        ResolvePaint(paint_.fill, paint_.fillOpacity, paint_.currentColor, bounds, paint_.viewBox);
   }
   if (fill.kind == PaintDesc::Kind::None) {
     return;
