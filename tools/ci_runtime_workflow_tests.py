@@ -1024,10 +1024,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         workflow = _repository_text(".github/workflows/main.yml")
         self.assertEqual(1, workflow.count(needles[0]))
         vm_flags = {
-            "macos-self-hosted": "--test_env=HOME --//build_defs:metal_shader_validation=off "
+            "macos-self-hosted": "--//build_defs:metal_shader_validation=off "
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm",
-            "macos-vm-qualification": "--//build_defs:metal_shader_validation=off --test_env=HOME "
+            "macos-vm-qualification": "--//build_defs:metal_shader_validation=off "
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=vm-qualification",
         }
