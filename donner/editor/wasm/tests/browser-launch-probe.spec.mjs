@@ -113,13 +113,27 @@ test("a probed browser that does not close fails setup within its own bound", as
 });
 
 test("a browser that cannot launch fails the lane once, naming the browser and its error", async () => {
-  const { launches, types } = fakeBrowserTypes({
-    chromium: new Error("browserType.launch: Timeout 30000ms exceeded.\nCall log:\n  - launching"),
-  });
-  await assert.rejects(probeBrowserLaunch(kConfig, types), {
-    message: "chromium did not launch (Playwright's default launch timeout) for project "
+  const launchError = new Error([
+    "browserType.launch: Timeout 30000ms exceeded.",
+    "Call log:",
+    "  - <launching> /browsers/chromium/chrome --headless",
+    "  - [pid=4242][err] No usable sandbox! Update your kernel or see the sandbox docs.",
+  ].join("\n"));
+  const { launches, types } = fakeBrowserTypes({ chromium: launchError });
+  const failure = await probeBrowserLaunch(kConfig, types).then(
+    () => assert.fail("setup should have failed"),
+    (error) => error,
+  );
+  const [headline, ...launchLog] = failure.message.split("\n");
+  assert.equal(
+    headline,
+    "chromium did not launch (Playwright's default launch timeout) for project "
       + "chromium-animation, so no case ran: browserType.launch: Timeout 30000ms exceeded.",
-  });
+  );
+  // No case runs after this, so the launch log in the error is the only evidence of why.
+  assert.deepEqual(launchLog, launchError.message.split("\n").slice(1),
+    "the call log and the browser's own output reach the test log uncut");
+  assert.equal(failure.cause, launchError, "the original launch error is kept as the cause");
   assert.equal(launches.length, 1, "the first failed launch ends setup");
 });
 

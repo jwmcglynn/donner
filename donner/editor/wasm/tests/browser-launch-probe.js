@@ -54,8 +54,14 @@ function launchProbes(config) {
   return [...probes.values()];
 }
 
-function firstLine(error) {
-  return String(error?.message ?? error).split("\n", 1)[0];
+/**
+ * The launch error's full text. Playwright puts the useful part after the first line: the "Call
+ * log" of the launch steps and the browser's own output (a sandbox refusal, a crash, a missing
+ * library). Setup ends before any case runs, so this message is the only place that evidence
+ * reaches the test log; none of it is cut.
+ */
+function launchErrorText(error) {
+  return String(error?.message ?? error);
 }
 
 function describeTimeout(timeout) {
@@ -100,9 +106,12 @@ async function probeBrowserLaunch(
     try {
       browser = await browserType.launch(options);
     } catch (error) {
+      // The first line stays a one-line summary; the launch log follows it, and the original error
+      // is kept as the cause.
       throw new Error(
         `${browserName} did not launch (${describeTimeout(options.timeout)}) for ${project}, `
-          + `so no case ran: ${firstLine(error)}`,
+          + `so no case ran: ${launchErrorText(error)}`,
+        { cause: error },
       );
     }
     // A browser that launched but cannot close would hold global setup with no bound of its own.
