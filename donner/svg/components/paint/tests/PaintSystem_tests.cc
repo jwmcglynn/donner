@@ -28,7 +28,6 @@
 
 using testing::Gt;
 using testing::IsEmpty;
-using testing::Not;
 using testing::NotNull;
 using testing::SizeIs;
 
@@ -363,7 +362,9 @@ TEST_F(PaintSystemTest, GradientHrefToNonGradientWarns) {
   paintSystem.createShadowTrees(document.registry(), warningSink);
   paintSystem.instantiateAllComputedComponents(document.registry(), warningSink);
 
-  EXPECT_THAT(warningSink.warnings(), Not(IsEmpty()));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(Field(&ParseDiagnostic::reason,
+                                      testing::HasSubstr("points to a non-gradient element"))));
 }
 
 // --- Pattern ---
@@ -424,7 +425,9 @@ TEST_F(PaintSystemTest, PatternHrefToNonPatternWarns) {
   paintSystem.createShadowTrees(document.registry(), warningSink);
   paintSystem.instantiateAllComputedComponents(document.registry(), warningSink);
 
-  EXPECT_THAT(warningSink.warnings(), Not(IsEmpty()));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(Field(&ParseDiagnostic::reason,
+                                      testing::HasSubstr("points to a non-pattern element"))));
 }
 
 // --- Gradient spread method ---

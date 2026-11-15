@@ -1119,7 +1119,6 @@ playwright_bin.playwright_test(
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright-firefox-mac14-arm64//file",
-        "@playwright_chromium_mac_arm64//file",
     ],
     env = {
         "CI": "1",
@@ -1129,22 +1128,12 @@ playwright_bin.playwright_test(
         # The repo-wide remote Emscripten workaround disables Node's WebAssembly
         # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
         "NODE_OPTIONS": "",
-        "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
         "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
-    # macOS-only: the selected smoke test asserts on presented WebGPU canvas
-    # pixels, and headless Chromium on Linux cannot present a WebGPU
-    # OffscreenCanvas swapchain with the SwiftShader WebGPU adapter. The GPU
-    # service finds no SharedImageBackingFactory for the swapchain allocation
-    # (usage WebgpuSwapChainTexture|DisplayRead|...), fails the first present,
-    # and destroys the device, after which every WebGPU call rejects with "A
-    # valid external Instance reference no longer exists". A browser-only
-    # probe (worker + transferred OffscreenCanvas + clear + present) fails the
-    # same way with no Donner code involved, on both Chromium 147 and 151 and
-    # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
-    # this is an environment capability boundary, not a flag or timing gap.
-    # macOS headless Chromium presents through the real GPU and passes.
-    # Headed Firefox requires a desktop session. Both engines remain in the native desktop browser gate.
+    # macOS-only: the selected cases assert on presented WebGPU canvas pixels, which the pinned
+    # macOS Firefox archive presents through the GPU. Headed Firefox requires a desktop session.
+    # Firefox only (playwright.animation.bazel.config.js): the Editor WASM workflow's
+    # chromium-default lane runs the same cases in Chromium.
     tags = [
         "launches-browser",
         "no-sandbox",
@@ -1209,7 +1198,6 @@ playwright_bin.playwright_test(
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright-firefox-mac14-arm64//file",
-        "@playwright_chromium_mac_arm64//file",
     ],
     env = {
         "CI": "1",
@@ -1219,7 +1207,6 @@ playwright_bin.playwright_test(
         # The repo-wide remote Emscripten workaround disables Node's WebAssembly
         # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
         "NODE_OPTIONS": "",
-        "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
         "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
     # Same platform and desktop-session boundary as animation_preview_browser_test.

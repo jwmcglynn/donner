@@ -184,70 +184,6 @@ MATCHER_P(HasPreviewTileGenerationSignature, expected, "") {
   return true;
 }
 
-MATCHER(IsPixelmatchIdentitySummary, "") {
-  if (!arg.value("available", false)) {
-    *result_listener << "diff unavailable: " << arg.dump();
-    return false;
-  }
-  if (arg.value("comparison", "") != "pixelmatch") {
-    *result_listener << "comparison=" << arg.value("comparison", "");
-    return false;
-  }
-  if (arg.value("differing_pixels", -1) != 0) {
-    *result_listener << "differing_pixels=" << arg.value("differing_pixels", -1)
-                     << " artifacts=" << arg.value("artifacts", json::object()).dump();
-    return false;
-  }
-  return true;
-}
-
-MATCHER(IsTilesPresentedFrameForActiveDrag, "") {
-  if (!arg["active_drag_preview"].is_object()) {
-    *result_listener << "active_drag_preview missing: " << arg.dump();
-    return false;
-  }
-  const std::uint32_t activeEntity =
-      arg["active_drag_preview"].value("entity", static_cast<std::uint32_t>(0));
-  if (activeEntity == 0u) {
-    *result_listener << "active drag entity is null";
-    return false;
-  }
-  if (arg.value("path", "") == "tiles") {
-    const std::uint32_t displayedEntity =
-        arg.value("displayed_entity", static_cast<std::uint32_t>(0));
-    if (displayedEntity != activeEntity) {
-      *result_listener << "displayed_entity=" << displayedEntity
-                       << " active_entity=" << activeEntity
-                       << " tile generations=" << json(PreviewTileGenerationSignature(arg)).dump();
-      return false;
-    }
-  }
-  return true;
-}
-
-bool HasLeftMouseDownEvent(const json& frame) {
-  if (!frame.contains("events")) {
-    return false;
-  }
-  for (const json& event : frame["events"]) {
-    if (event.value("kind", "") == "mdown" && event.value("mouse_button", -1) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-repro::ReproExpectation LoadFixtureExpectation(std::string_view rnrPath) {
-  std::optional<repro::ReproFile> file =
-      repro::ReadReproFile(std::filesystem::path(std::string(rnrPath)));
-  EXPECT_TRUE(file.has_value()) << rnrPath;
-  EXPECT_TRUE(file.has_value() && file->metadata.expect.has_value()) << rnrPath;
-  if (!file.has_value() || !file->metadata.expect.has_value()) {
-    return {};
-  }
-  return *file->metadata.expect;
-}
-
 std::vector<std::string> StageTileSignature(const json& stage, std::string_view previewKey) {
   const std::string key(previewKey);
   if (!stage.contains(key) || stage[key].is_null()) {
@@ -316,37 +252,6 @@ void ExpectBeforeRenderDisplayHandoff(
     EXPECT_THAT(display, HasPreviewTileSignature(expectedAfterFirstRender))
         << label << " frame " << i;
   }
-}
-
-void ExpectPresentedFrameMatchesFinalAfterClick(const json& frames,
-                                                const repro::ReproExpectation& expect) {
-  const json* targetFrame = nullptr;
-  for (const json& frame : frames) {
-    const auto offsetIt = frame.find("left_mouse_down_compare_offset");
-    if (offsetIt == frame.end() || !offsetIt->is_number_integer() ||
-        offsetIt->get<int>() != expect.frameOffsetAfterLeftMouseDown) {
-      continue;
-    }
-    const int ordinal = frame.value("left_mouse_down_ordinal", 0);
-    if (ordinal == 0 || ordinal == expect.leftMouseDownOrdinal) {
-      targetFrame = &frame;
-      break;
-    }
-  }
-
-  ASSERT_NE(targetFrame, nullptr)
-      << "GUI-scheduled replay did not store the expected presented frame. Stored frames: "
-      << frames.dump(2);
-  EXPECT_GE(targetFrame->value("frame_index", 0), expect.minFrameIndex);
-  EXPECT_LE(targetFrame->value("frame_index", 0), expect.maxFrameIndex);
-
-  EXPECT_THAT((*targetFrame)["presented_frame"], IsTilesPresentedFrameForActiveDrag());
-  EXPECT_THAT((*targetFrame)["presented_frame_diff_from_eventual_final"],
-              IsPixelmatchIdentitySummary())
-      << "Frame " << targetFrame->value("frame_index", 0)
-      << ", display path=" << (*targetFrame)["presented_frame"].value("path", "")
-      << ", tile generations="
-      << json(PreviewTileGenerationSignature((*targetFrame)["presented_frame"])).dump();
 }
 
 TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
@@ -1769,88 +1674,6 @@ TEST(EditorControlSessionTest, SplashOThenRDragKeepsStableSplitLayerPaintOrder) 
                                expectedRDragOrder);
   ExpectBeforeRenderDisplayHandoff("O drag before render", oDrag, expectedODragOrder);
   ExpectBeforeRenderDisplayHandoff("R drag after O drag before render", rDrag, expectedRDragOrder);
-}
-
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. This replay drives
-// the async render worker, so the document is transiently `ThreadingMode::ConcurrentDom` while the
-// UI thread performs unguarded live-document reads. Their timing relative to the worker's render
-// window is nondeterministic, so the test either serializes the UI against the worker's write-held
-// render phases (observed >70s here) or aborts on
-// `ElementAnchor::assertScopedEntityHandleAccessAllowed` (`SVGElement.cc:253`). Tracked by the
-// determinism-framework task (#601).
-TEST(EditorControlSessionTest,
-     DISABLED_ReplayFilteredElementFlashAfterDragsNeverReportsFlatDisplayPath) {
-  EditorControlSession session;
-  ToolCallResult replay = session.handleToolCall(
-      "replay_rnr",
-      json{{"rnr_path", "donner/editor/tests/filtered-element-flash-after-drags-2.rnr"},
-           {"include_frame_results", true},
-           {"include_display_diff", true},
-           {"max_frame_results", 200},
-           {"include_final_frame", false}});
-  ASSERT_TRUE(replay.body.value("ok", false)) << replay.body.dump(2);
-
-  const json& frames = replay.body["frames"];
-  ASSERT_FALSE(frames.empty());
-
-  const json* secondMouseDownFrame = nullptr;
-  int mouseDownCount = 0;
-  for (const json& frame : frames) {
-    if (!HasLeftMouseDownEvent(frame)) {
-      continue;
-    }
-    ++mouseDownCount;
-    if (mouseDownCount == 2) {
-      secondMouseDownFrame = &frame;
-      break;
-    }
-  }
-
-  ASSERT_NE(secondMouseDownFrame, nullptr)
-      << "Replay did not store the second left-button mouse-down frame. Stored frames: "
-      << frames.dump(2);
-
-  for (const json& frame : frames) {
-    if (!frame.contains("display_before_render")) {
-      continue;
-    }
-    const json& display = frame["display_before_render"];
-    const std::string displayPath = display.value("path", "");
-    EXPECT_TRUE(displayPath == "tiles" || displayPath == "empty")
-        << "Unexpected display path at frame " << frame.value("frame_index", 0) << ": "
-        << displayPath << "\n"
-        << frame.dump(2);
-  }
-}
-
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. Same worker-race
-// nondeterminism as DISABLED_ReplayFilteredElementFlashAfterDragsNeverReportsFlatDisplayPath: an
-// unguarded UI-thread live-document read landing inside the worker's ConcurrentDom render window
-// intermittently aborts on `ElementAnchor::assertScopedEntityHandleAccessAllowed`
-// (`SVGElement.cc:253`). Tracked by the determinism-framework task (#601).
-TEST(EditorControlSessionTest,
-     DISABLED_ReplayFilteredElementFlashAfterDragsGuiScheduleDoesNotFlashOnSecondClick) {
-  constexpr std::string_view kRnrPath =
-      "donner/editor/tests/filtered-element-flash-after-drags-2.rnr";
-  const repro::ReproExpectation expect = LoadFixtureExpectation(kRnrPath);
-
-  EditorControlSession session;
-  ToolCallResult replay = session.handleToolCall(
-      "replay_rnr", json{{"rnr_path", std::string(kRnrPath)},
-                         {"simulate_editor_shell_frame_loop", true},
-                         {"include_frame_results", true},
-                         {"include_display_diff", true},
-                         {"compare_presented_after_left_mouse_down", expect.leftMouseDownOrdinal},
-                         {"compare_presented_frame_offset_after_left_mouse_down",
-                          expect.frameOffsetAfterLeftMouseDown},
-                         {"max_frame_results", 240},
-                         {"include_final_frame", false}});
-  ASSERT_TRUE(replay.body.value("ok", false)) << replay.body.dump(2);
-
-  const json& frames = replay.body["frames"];
-  ASSERT_FALSE(frames.empty());
-
-  ExpectPresentedFrameMatchesFinalAfterClick(frames, expect);
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {

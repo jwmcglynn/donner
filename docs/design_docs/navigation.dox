@@ -26,6 +26,7 @@ and summary.
 - \subpage md_docs_2design__docs_20027-2-scripting
 - \subpage md_docs_2design__docs_20033-multithreading__and__dom__lifetime
 - \subpage md_docs_2design__docs_2animation
+- \subpage md_docs_2design__docs_20070-app__framework
 */
 
 /**
@@ -50,6 +51,8 @@ investigations.
 - \subpage md_docs_2design__docs_20053-native__gpu__hal
 - \subpage md_docs_2design__docs_20060-tinyskia__retained__raster__cache
 - \subpage md_docs_2design__docs_20061-multithreaded__rendering
+- \subpage md_docs_2design__docs_20062-svg__parity__completion
+- \subpage md_docs_2design__docs_20066-renderer__bakeoff
 - \subpage md_docs_2design__docs_20067-donner__tiny
 */
 
@@ -118,6 +121,7 @@ planning.
 - \subpage md_docs_2design__docs_20043-deterministic__replay__testing
 - \subpage md_docs_2design__docs_20044-coverage__improvement__2026q2
 - \subpage md_docs_2design__docs_20057-donner__svg2__test__suite
+- \subpage md_docs_2design__docs_20071-w3c__spec__audit
 */
 
 /**
@@ -131,6 +135,7 @@ planning.
 - \subpage md_docs_2design__docs_20028-v1__0__release
 - \subpage md_docs_2design__docs_20047-v0__8__showcase
 - \subpage md_docs_2design__docs_20058-svg__static__subset__roadmap
+- \subpage md_docs_2design__docs_20064-gpu__release__matrix
 */
 
 /**
@@ -144,4 +149,5 @@ planning.
 - \subpage md_docs_2design__docs_20048-design__doc__hygiene
 - \subpage md_docs_2design__docs_20055-binary__size
 - \subpage md_docs_2design__docs_20059-v0__8__showcase__retrospective
+- \subpage md_docs_2design__docs_20063-parse__string__finalization
 */

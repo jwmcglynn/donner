@@ -2,19 +2,24 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
+#include "donner/base/PackagedResource.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/fonts/SfntUtils.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/css/parser/StylesheetParser.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
@@ -46,6 +51,11 @@ struct FontManagerTestAccess {
 };
 
 namespace {
+
+/// Write \p text to the stderr file descriptor unbuffered, for death-test output matching.
+void WriteStderr(std::string_view text) {
+  (void)write(STDERR_FILENO, text.data(), text.size());
+}
 
 bool SameFontDomainOwner(const std::weak_ptr<const void>& first,
                          const std::weak_ptr<const void>& second) {
@@ -383,6 +393,75 @@ TEST(FontManagerTest, FallbackFontIsCached) {
   EXPECT_EQ(h1, h2);
 }
 
+TEST(FontManagerTest, MissingPackagedFallbackFontIsSilentAndRetried) {
+  // A re-executed child has no borrowed resource views, so it can install its own session. Any
+  // diagnostic printed between the two markers breaks the expected adjacent text.
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        const ResourceBytes packagedBytes = embedded::kPublicSansMediumOtf.load();
+        int providerQueries = 0;
+        auto session = std::make_shared<PackagedResourceSession>(
+            [&providerQueries](const PackagedResource&) -> ResourceBytes {
+              ++providerQueries;
+              return {};
+            });
+        if (!packagedBytes || !SetPackagedResourceSession(session)) {
+          WriteStderr("setup failed: packaged font unreadable or session not replaceable\n");
+          std::_Exit(3);
+        }
+
+        Registry registry;
+        FontManager mgr(registry);
+        WriteStderr("[missing]");
+        const bool loadedWhileMissing =
+            static_cast<bool>(mgr.fallbackFont()) || static_cast<bool>(mgr.fallbackFont());
+        WriteStderr("[/missing] loaded while missing: " + std::to_string(loadedWhileMissing) +
+                    ", provider queries: " + std::to_string(providerQueries));
+        if (!session->install(embedded::kPublicSansMediumOtf, *packagedBytes)) {
+          WriteStderr("setup failed: packaged font install rejected\n");
+          std::_Exit(4);
+        }
+        WriteStderr(", loaded after install: " +
+                    std::to_string(static_cast<bool>(mgr.fallbackFont())));
+        std::_Exit(0);
+      },
+      testing::ExitedWithCode(0),
+      "\\[missing\\]\\[/missing\\] loaded while missing: 0, provider queries: 1, loaded after "
+      "install: 1$");
+}
+
+TEST(FontManagerTest, CorruptReinstallKeepsInstalledFallbackFontLoadable) {
+  // A re-executed child has no borrowed resource views, so it can install its own session.
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        const ResourceBytes packagedBytes = embedded::kPublicSansMediumOtf.load();
+        auto session = std::make_shared<PackagedResourceSession>(
+            [](const PackagedResource&) -> ResourceBytes { return {}; });
+        if (!packagedBytes || packagedBytes->empty() || !SetPackagedResourceSession(session) ||
+            !session->install(embedded::kPublicSansMediumOtf, *packagedBytes)) {
+          WriteStderr("setup failed: packaged font unreadable or not installable\n");
+          std::_Exit(3);
+        }
+        std::vector<uint8_t> corrupt(packagedBytes->begin(), packagedBytes->end());
+        corrupt.back() ^= 0xFF;
+        const bool corruptAccepted = session->install(embedded::kPublicSansMediumOtf, corrupt);
+
+        Registry registry;
+        FontManager mgr(registry);
+        const FontHandle handle = mgr.fallbackFont();
+        WriteStderr("corrupt accepted: " + std::to_string(corruptAccepted) +
+                    ", ready: " + std::to_string(embedded::kPublicSansMediumOtf.ready()) +
+                    ", failed: " + std::to_string(embedded::kPublicSansMediumOtf.failed()) +
+                    ", fallback loaded: " + std::to_string(static_cast<bool>(handle)) +
+                    ", has data: " + std::to_string(!mgr.fontData(handle).empty()));
+        std::_Exit(0);
+      },
+      testing::ExitedWithCode(0),
+      "corrupt accepted: 0, ready: 1, failed: 0, fallback loaded: 1, has data: 1$");
+}
+
 TEST(FontManagerTest, LoadRawOtfData) {
   Registry registry;
   FontManager mgr(registry);
@@ -482,7 +561,7 @@ TEST(FontManagerTest, ExhaustedCffWorkBudgetPreservesReplacementAndAllowsTrueTyp
                                       manager.fontData(handle).end());
   EXPECT_FALSE(FontManagerTestAccess::ReplaceFontData(manager, handle, cff));
   ASSERT_EQ(manager.fontData(handle).size(), original.size());
-  EXPECT_THAT(manager.fontData(handle), testing::ElementsAreArray(original));
+  EXPECT_THAT(manager.fontData(handle), BytesEqual(original));
   EXPECT_EQ(manager.fontValidationWork(), 0u);
 
   EXPECT_TRUE(FontManagerTestAccess::ReplaceFontData(manager, handle, trueType));

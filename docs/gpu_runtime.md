@@ -202,6 +202,12 @@ readback delta with that explicit lane and requires zero document-stage readback
 
 ### Surfaces {#GpuRuntimeSurfaces}
 
+Applications outside Donner present through `donner::svg::GeodeSurfaceRenderer`
+(`//donner/svg/renderer:geode_surface_renderer`), which owns the root, context, runtime surface and
+renderer for one host-owned `CAMetalLayer` on macOS or one `<canvas>` in a browser-backend
+WebAssembly build, and follows the retirement order below. The runtime surface API described here
+is internal to Donner's own hosts; Linux presentation has no public entry point yet.
+
 - `Device::createSurface()` makes a runtime surface on one runtime device from a
   `gpu::NativeSurfaceHandle`. The platform object stays the host's: a `CAMetalLayer`
   (`NativeSurfaceKind::MetalLayer`), a `VkSurfaceKHR` the host created against the root's instance
@@ -575,8 +581,9 @@ test-time check of the backends underneath it:
   `donner/gpu/metal/tests/BUILD.bazel`), so a validation fault fails the test on a real GPU. The
   hosted macOS image's virtual GPU cannot run shader validation, so hosted CI, including `main`,
   runs these tests with API validation only (no shader validation) and skips the ones that assert
-  validation. The self-hosted macOS lane is the only CI shader-validation gate; a PR that did not
-  run it at its head needs full validation on capable hardware before merge. See
+  validation. The self-hosted macOS lane is the only CI shader-validation gate; a PR that reaches
+  the Metal suites but did not run it at its head needs full validation on capable hardware
+  before merge. See
   [Metal validation](metal_validation.md).
 - **Vulkan.** `VulkanDevice` enables `VK_LAYER_KHRONOS_validation` whenever the loader enumerates
   it, with a debug-utils messenger that latches every error-severity message into the device's

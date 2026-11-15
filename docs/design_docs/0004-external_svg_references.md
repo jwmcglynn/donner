@@ -41,7 +41,7 @@ flowchart TD
     H -->|use| J[ExternalUseComponent]
     E --> K[LoadedImageComponent]
     I --> L[RendererDriver::drawSubDocument]
-    J --> M[RendererDriver: drawSubDocument or drawSubDocumentElement]
+    J --> M[RendererDriver: drawSubDocument or drawExternalUseInstance]
     K --> N[RendererDriver::drawImage]
 ```
 

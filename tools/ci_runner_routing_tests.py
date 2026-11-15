@@ -237,9 +237,10 @@ class CiRunnerRoutingTest(unittest.TestCase):
 
         self.assertIn("outputs.use_self_hosted_macos != 'true'", hosted)
         self.assertIn("outputs.use_self_hosted_macos == 'true'", self_hosted)
-        # The hosted-parity subset runs on the same runner, behind the same gate.
-        self.assertIn("outputs.use_self_hosted_macos == 'true'",
-                      self._job_body("macos-hosted-parity"))
+        # No self-hosted job reruns tests under main's hosted configuration: the hosted `macos`
+        # job on main pushes owns hosted-configuration failures, so the scarce macOS pool serves
+        # only the fast lane, the native Metal job and the desktop browser partition.
+        self.assertNotIn("\n  macos-hosted-parity:\n", self.text)
 
     def test_native_browser_subset_follows_the_macos_runner_gate(self):
         subset = self._job_body("macos-browser")

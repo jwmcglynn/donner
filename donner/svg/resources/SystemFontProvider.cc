@@ -17,23 +17,12 @@
 #include <optional>
 #include <span>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/fonts/SfntUtils.h"
 
 namespace donner::svg {
 
 namespace {
-
-/// Locale-independent ASCII lowercasing, matching how the family index is keyed. A locale-sensitive
-/// fold would make the keys depend on the process locale while the names they index do not.
-std::string ToLowerAscii(std::string_view value) {
-  std::string lowered(value);
-  for (char& c : lowered) {
-    if (c >= 'A' && c <= 'Z') {
-      c = static_cast<char>(c - 'A' + 'a');
-    }
-  }
-  return lowered;
-}
 
 /// RAII wrapper that CFRelease()s a CoreFoundation object on scope exit.
 template <typename T>
@@ -334,7 +323,7 @@ const std::vector<std::string>& SystemFontProvider::enumeratedFamilies() const {
     std::sort(familyNames_.begin(), familyNames_.end());
     familyNamesLower_.reserve(familyNames_.size());
     for (const std::string& name : familyNames_) {
-      familyNamesLower_.insert(ToLowerAscii(name));
+      familyNamesLower_.insert(StringUtils::ToLowerAscii(name));
     }
   });
   return familyNames_;
@@ -350,7 +339,7 @@ std::vector<FontFamilyInfo> SystemFontProvider::families() const {
 
 bool SystemFontProvider::hasFamily(std::string_view family) const {
   enumeratedFamilies();
-  return familyNamesLower_.count(ToLowerAscii(family)) != 0;
+  return familyNamesLower_.count(StringUtils::ToLowerAscii(family)) != 0;
 }
 
 std::vector<uint8_t> SystemFontProvider::loadFamilyData(std::string_view family,

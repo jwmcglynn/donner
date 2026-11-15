@@ -545,20 +545,14 @@ protected:
     return editor.visualLines_[visualIndex].hiddenRange;
   }
 
-  [[nodiscard]] bool HorizontalScrollEnabled() const { return editor.horizontalScroll_; }
   [[nodiscard]] bool HighlightLineEnabled() const { return editor.highlightLine_; }
   [[nodiscard]] bool SidebarVisible() const { return editor.sidebar_; }
-  [[nodiscard]] bool SearchEnabled() const { return editor.hasSearch_; }
-  [[nodiscard]] bool HighlightBracketsEnabled() const { return editor.highlightBrackets_; }
   [[nodiscard]] bool FoldEnabled() const { return editor.foldEnabled_; }
-  [[nodiscard]] bool SmartPredictionsEnabled() const { return editor.autocomplete_; }
   [[nodiscard]] bool FunctionDeclarationTooltipEnabled() const {
     return editor.functionDeclarationTooltipEnabled_;
   }
-  [[nodiscard]] bool FunctionTooltipsEnabled() const { return editor.funcTooltips_; }
   [[nodiscard]] float UiScale() const { return editor.uiScale_; }
   [[nodiscard]] float UiFontSize() const { return editor.uiFontSize_; }
-  [[nodiscard]] float EditorFontSize() const { return editor.editorFontSize_; }
   [[nodiscard]] bool ScrollbarMarkersEnabled() const { return editor.scrollbarMarkers_; }
   [[nodiscard]] bool AutoIndentOnPasteEnabled() const { return editor.autoIndentOnPaste_; }
 
@@ -3044,17 +3038,6 @@ TEST_F(TextEditorTests, RenderBuildsWrappedVisualRowsForLongXmlLine) {
   EXPECT_EQ(VisualLineIndentColumns(continuationIndex), 8);
   EXPECT_FALSE(editor.isImGuiChildIgnored());
   EXPECT_TRUE(editor.wordWrapEnabled());
-  EXPECT_FALSE(HorizontalScrollEnabled());
-  EXPECT_FLOAT_EQ(LastScrollX(), 0.0f);
-}
-
-TEST_F(TextEditorTests, HorizontalScrollSetterDoesNotEnableTextViewHorizontalScroll) {
-  editor.setText(R"(  <rect id="target" x="10" y="20" width="30" height="40" fill="red"/>)");
-  editor.setHorizontalScroll(true);
-
-  RenderEditorFrame(ImVec2(180.0f, 180.0f));
-
-  EXPECT_FALSE(HorizontalScrollEnabled());
   EXPECT_FLOAT_EQ(LastScrollX(), 0.0f);
 }
 
@@ -3063,36 +3046,24 @@ TEST_F(TextEditorTests, InlineSettingsSetExpectedEditorState) {
   editor.setAutoIndentOnPaste(true);
   editor.setHighlightLine(false);
   editor.setCompleteBraces(false);
-  editor.setHorizontalScroll(true);
-  editor.setSmartPredictions(false);
   editor.setFunctionDeclarationTooltip(false);
-  editor.setFunctionTooltips(false);
   editor.setActiveAutocomplete(true);
   editor.setScrollbarMarkers(true);
   editor.setSidebarVisible(false);
-  editor.setSearchEnabled(false);
-  editor.setHighlightBrackets(false);
   editor.setFoldEnabled(true);
   editor.setWordWrapEnabled(false);
   editor.setUIScale(1.25f);
   editor.setUIFontSize(14.0f);
-  editor.setEditorFontSize(15.0f);
 
   EXPECT_TRUE(AutoIndentOnPasteEnabled());
   EXPECT_FALSE(HighlightLineEnabled());
-  EXPECT_FALSE(HorizontalScrollEnabled());
-  EXPECT_FALSE(SmartPredictionsEnabled());
   EXPECT_FALSE(FunctionDeclarationTooltipEnabled());
-  EXPECT_FALSE(FunctionTooltipsEnabled());
   EXPECT_TRUE(ScrollbarMarkersEnabled());
   EXPECT_FALSE(SidebarVisible());
-  EXPECT_FALSE(SearchEnabled());
-  EXPECT_FALSE(HighlightBracketsEnabled());
   EXPECT_TRUE(FoldEnabled());
   EXPECT_FALSE(editor.wordWrapEnabled());
   EXPECT_FLOAT_EQ(UiScale(), 1.25f);
   EXPECT_FLOAT_EQ(UiFontSize(), 14.0f);
-  EXPECT_FLOAT_EQ(EditorFontSize(), 15.0f);
 }
 
 TEST_F(TextEditorTests, WrappedHitTestingMapsContinuationRowToLogicalColumn) {

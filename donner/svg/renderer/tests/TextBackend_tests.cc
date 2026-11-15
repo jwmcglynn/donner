@@ -4,12 +4,14 @@
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <limits>
 #include <span>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
@@ -80,6 +82,17 @@ uint32_t ReadBe32(std::span<const uint8_t> data, size_t offset) {
   return (static_cast<uint32_t>(data[offset]) << 24) |
          (static_cast<uint32_t>(data[offset + 1]) << 16) |
          (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
+}
+
+/// Byte offset of a glyph's advance height in `vmtx`, whose last long metric repeats. Requires
+/// \p longMetrics > 0.
+size_t VmtxAdvanceOffset(size_t glyph, size_t longMetrics) {
+  return std::min(glyph, longMetrics - 1) * 4;
+}
+
+/// Byte offset of a glyph's top side bearing in `vmtx`, including the trailing bearing array.
+size_t VmtxTopSideBearingOffset(size_t glyph, size_t longMetrics) {
+  return glyph < longMetrics ? glyph * 4 + 2 : longMetrics * 4 + (glyph - longMetrics) * 2;
 }
 
 void WriteBe16(std::vector<uint8_t>* data, size_t offset, uint16_t value) {
@@ -201,6 +214,10 @@ auto GlyphXAdvanceIs(auto matcher) {
 
 auto GlyphYAdvanceIs(auto matcher) {
   return Field("yAdvance", &TextBackend::ShapedGlyph::yAdvance, matcher);
+}
+
+auto GlyphXOffsetIs(auto matcher) {
+  return Field("xOffset", &TextBackend::ShapedGlyph::xOffset, matcher);
 }
 
 auto GlyphYOffsetIs(auto matcher) {
@@ -569,23 +586,117 @@ TEST_P(TextBackendTest, ShapeRunVerticalLatinUsesSidewaysAdvances) {
               AllOf(SizeIs(4), Each(AllOf(GlyphIndexIs(Gt(0)), HasPositiveAdvanceInEitherAxis()))));
 }
 
-TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
+TEST_P(TextBackendTest, ShapeRunVerticalCjkUsesFontVerticalMetrics) {
   const FontHandle font = loadFont("MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(font));
+  const auto vhea = fontManager_.sfntTable(font, "vhea");
+  const auto vmtx = fontManager_.sfntTable(font, "vmtx");
+  ASSERT_THAT(vhea.has_value(), testing::IsTrue());
+  ASSERT_THAT(vmtx.has_value(), testing::IsTrue());
+  ASSERT_GE(vhea->size(), 36u);
+  const size_t longMetrics = ReadBe16(*vhea, 34);
+  ASSERT_THAT(longMetrics, Gt(0u));
+
+  ASSERT_THAT(backend().fontVMetrics(font).unitsPerEm, testing::Eq(1000));
+  const double scale = 64.0 / 1000.0;
+  // HarfBuzz positions are 26.6 fixed point, so the full backend rounds to 1/64 px.
+  constexpr double kPositionTolerance = 1.0 / 64.0;
 
   const char* text = "\xE6\x97\xA5\xE6\x9C\xAC";  // 日本
-  const auto shaped = backend().shapeRun(font, 64.0f, text, 0, 6, true, FontVariant::Normal, false);
-  ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  const auto horizontal =
+      backend().shapeRun(font, 1000.0f, text, 0, 6, false, FontVariant::Normal, false);
+  ASSERT_THAT(horizontal.glyphs, AllOf(SizeIs(2), Each(GlyphXAdvanceIs(DoubleEq(1000.0)))));
+  for (const TextOrientation orientation : {TextOrientation::Mixed, TextOrientation::Upright}) {
+    SCOPED_TRACE(orientation == TextOrientation::Mixed ? "mixed" : "upright");
+    const auto shaped =
+        backend().shapeRun(font, 64.0f, text, 0, 6, true, orientation, FontVariant::Normal, false);
+    ASSERT_THAT(shaped.glyphs, SizeIs(2));
+    for (const auto& glyph : shaped.glyphs) {
+      ASSERT_THAT(glyph.glyphIndex, Gt(0));
+      // The vertical origin is the vmtx top side bearing above the glyph box (OpenType's top
+      // phantom point), horizontally centered on the glyph's 1000-unit horizontal advance.
+      const size_t index = static_cast<size_t>(glyph.glyphIndex);
+      const size_t advanceOffset = VmtxAdvanceOffset(index, longMetrics);
+      const size_t bearingOffset = VmtxTopSideBearingOffset(index, longMetrics);
+      ASSERT_LE(advanceOffset + 2, vmtx->size());
+      ASSERT_LE(bearingOffset + 2, vmtx->size());
+      // The tested ideographs have on-curve extrema, so the outline box is the glyph box.
+      const Path outline = backend().glyphOutline(font, glyph.glyphIndex, 1.0f);
+      ASSERT_THAT(outline.commands(), Not(IsEmpty()));
+      const double origin =
+          -outline.bounds().topLeft.y + static_cast<int16_t>(ReadBe16(*vmtx, bearingOffset));
+      EXPECT_THAT(glyph, AllOf(GlyphXAdvanceIs(DoubleEq(0.0)),
+                               GlyphYAdvanceIs(DoubleNear(ReadBe16(*vmtx, advanceOffset) * scale,
+                                                          kPositionTolerance)),
+                               GlyphXOffsetIs(DoubleNear(-500.0 * scale, kPositionTolerance)),
+                               GlyphYOffsetIs(DoubleNear(origin * scale, kPositionTolerance))));
+    }
+  }
+}
 
-  EXPECT_THAT(shaped.glyphs, Each(AllOf(GlyphIndexIs(Gt(0)), GlyphYAdvanceIs(Gt(0.0)))));
+TEST_P(TextBackendTest, UprightWithoutVerticalMetricsCentersInTypographicCell) {
+  const FontHandle font = loadFont("NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(font));
+  ASSERT_THAT(fontManager_.sfntTable(font, "vmtx").has_value(), testing::IsFalse());
+  const auto os2 = fontManager_.sfntTable(font, "OS/2");
+  ASSERT_THAT(os2.has_value(), testing::IsTrue());
+  ASSERT_GE(os2->size(), 78u);
+  const int unitsPerEm = backend().fontVMetrics(font).unitsPerEm;
+  ASSERT_THAT(unitsPerEm, Gt(0));
+  // Without vmtx, FreeType synthesizes an advance from the OS/2 typographic ascent and descent
+  // and centers the glyph box in it, truncating the top side bearing to whole font units. An
+  // empty glyph (the space) has a zero-height box.
+  const int cell =
+      static_cast<int16_t>(ReadBe16(*os2, 68)) - static_cast<int16_t>(ReadBe16(*os2, 70));
+  // FreeType scales vertical metrics at an integer ppem, so use an integral size.
+  constexpr float kFontSizePx = 64.0f;
+  const double scale = kFontSizePx / unitsPerEm;
+  // FreeType rounds the bearing and the box top to 26.6 separately before HarfBuzz adds them.
+  constexpr double kPositionTolerance = 2.0 / 64.0;
+  const std::string text = "HE ";
+  const auto horizontal = backend().shapeRun(font, kFontSizePx, text, 0, text.size(), false,
+                                             FontVariant::Normal, false);
+  const auto shaped = backend().shapeRun(font, kFontSizePx, text, 0, text.size(), true,
+                                         TextOrientation::Upright, FontVariant::Normal, false);
+  ASSERT_THAT(horizontal.glyphs, SizeIs(3));
+  ASSERT_THAT(shaped.glyphs, SizeIs(3));
+  for (size_t i = 0; i < shaped.glyphs.size(); ++i) {
+    const auto& glyph = shaped.glyphs[i];
+    SCOPED_TRACE(text.substr(i, 1));
+    ASSERT_THAT(glyph.glyphIndex, Gt(0));
+    // H and E have straight edges, so the outline box is the glyph box.
+    const Path outline = backend().glyphOutline(font, glyph.glyphIndex, 1.0f);
+    const int yMax =
+        outline.empty() ? 0 : static_cast<int>(std::lround(-outline.bounds().topLeft.y));
+    const int height =
+        outline.empty() ? 0 : static_cast<int>(std::lround(outline.bounds().height()));
+    const double origin = yMax + (cell - height) / 2;
+    EXPECT_THAT(
+        glyph,
+        AllOf(GlyphYAdvanceIs(DoubleNear(cell * scale, kPositionTolerance)),
+              GlyphXOffsetIs(DoubleNear(-horizontal.glyphs[i].xAdvance / 2.0, kPositionTolerance)),
+              GlyphYOffsetIs(DoubleNear(origin * scale, kPositionTolerance))));
+  }
+}
 
-  if (isSimple()) {
-    // Simple backend: CJK vertical advance = font size (em height fallback).
-    EXPECT_THAT(shaped.glyphs,
-                Each(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(64.0)))));
-  } else {
-    // Full backend: CJK vertical advance from font's vmtx/vhea tables, with y offsets.
-    EXPECT_THAT(shaped.glyphs, Each(GlyphYOffsetIs(Gt(0.0))));
+TEST(TextBackendSimpleVerticalOrigin, UprightMarksUseTheirUprightBaseFrame) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendSimple backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  // U+0301 has no advance; after an inked base and after an empty one it is drawn at the base's
+  // origin: the same cross offset and one base advance back along the inline axis.
+  for (const std::string_view base : {"x", " "}) {
+    SCOPED_TRACE(base);
+    const std::string text = std::string(base) + "\xCC\x81";
+    const auto shaped = backend.shapeRun(font, 32.0f, text, 0, text.size(), true,
+                                         TextOrientation::Upright, FontVariant::Normal, false);
+    ASSERT_THAT(shaped.glyphs, SizeIs(2));
+    const auto& baseGlyph = shaped.glyphs[0];
+    EXPECT_THAT(shaped.glyphs[1],
+                AllOf(GlyphYAdvanceIs(DoubleEq(0.0)), GlyphXOffsetIs(DoubleEq(baseGlyph.xOffset)),
+                      GlyphYOffsetIs(DoubleEq(baseGlyph.yOffset - baseGlyph.yAdvance))));
   }
 }
 
@@ -679,9 +790,8 @@ TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrig
     EXPECT_THAT(glyph.xOffset, DoubleEq(-500));
     const size_t index = static_cast<size_t>(glyph.glyphIndex);
     ASSERT_THAT(longMetrics, Gt(0u));
-    const size_t advanceOffset = std::min(index, longMetrics - 1) * 4;
-    const size_t bearingOffset =
-        index < longMetrics ? index * 4 + 2 : longMetrics * 4 + (index - longMetrics) * 2;
+    const size_t advanceOffset = VmtxAdvanceOffset(index, longMetrics);
+    const size_t bearingOffset = VmtxTopSideBearingOffset(index, longMetrics);
     ASSERT_LE(advanceOffset + 2, vmtx->size());
     ASSERT_LE(bearingOffset + 2, vmtx->size());
     EXPECT_THAT(ReadBe16(*vmtx, advanceOffset), testing::Eq(1000));
@@ -838,10 +948,9 @@ TEST(TextBackendFullVerticalOrigin, MixedSmallCapsRangesKeepTheUprightParentScal
   EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), Gt(0u));
 }
 
-TEST(TextBackendFullVerticalOrigin, MixedUsesEachGlyphVerticalSideBearing) {
-  Registry registry;
-  FontManager manager(registry);
-  TextBackendFull backend(manager, registry);
+TEST_P(TextBackendTest, MixedUsesEachGlyphVerticalSideBearing) {
+  FontManager& manager = fontManager_;
+  TextBackend& backend = this->backend();
   const FontHandle original = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_THAT(static_cast<bool>(original), testing::IsTrue());
   const std::string text = "\xe6\x97\xa5\xe6\x9c\xac";
@@ -870,8 +979,7 @@ TEST(TextBackendFullVerticalOrigin, MixedUsesEachGlyphVerticalSideBearing) {
   std::array<double, 2> expectedOrigins{};
   for (size_t i = 0; i < 2; ++i) {
     const size_t glyph = originalRun.glyphs[i].glyphIndex;
-    const size_t bearingOffset =
-        glyph < longMetrics ? glyph * 4 + 2 : longMetrics * 4 + (glyph - longMetrics) * 2;
+    const size_t bearingOffset = VmtxTopSideBearingOffset(glyph, longMetrics);
     ASSERT_LE(bearingOffset + 2, vmtxSize);
     WriteBe16(&bytes, vmtxOffset + bearingOffset, kSideBearings[i]);
     const Path outline = backend.glyphOutline(original, static_cast<int>(glyph), 1.0f);

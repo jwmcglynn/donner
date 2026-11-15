@@ -6,25 +6,71 @@ Donner implements CSS3 in its own CSS library, \ref donner::css. The library has
 
 \ref donner::css::CSS provides a high-level API for parsing CSS constructs. It is implemented on top of lower-level parser APIs that give finer-grained control over parsing and more detailed error handling.
 
-## Unsupported Stylesheet Imports
+## Stylesheet Imports
 
-CSS `@import` is unsupported. The stylesheet parser emits a warning at the import keyword and
-ignores the import. It does not request the target stylesheet or follow import chains. Import
-keywords are recognized after CSS escape decoding and without regard to ASCII case. The diagnostic
-uses static text and does not repeat the target URL.
+CSS `@import` is supported in SVG `<style>` elements. Loading is split between the CSS library and
+the SVG document:
 
-Local rules following a semicolon-terminated import still apply. An import reaching EOF is also
-reported as unsupported; this does not promise recovery of a following rule when its preceding
-import lacks a semicolon.
+- \ref donner::css::parser::StylesheetParser only parses. It retains unconditional imports in
+  \ref donner::css::Stylesheet::imports, in source order and with the URL exactly as authored, and
+  never resolves or fetches anything.
+- The SVG document loads imports when it is first prepared for rendering, through the
+  application's \ref donner::svg::ResourceLoaderInterface. Imported rules precede the importing
+  sheet's own rules in the cascade, and each imported sheet follows the sheets it imports.
 
-Enabled warning sinks retain diagnostics within their existing count and text limits. A refused
-diagnostic sets the sink's refusal flag; it does not mean an imported resource was requested.
-Stylesheet rule and payload admission limits remain separate.
+### Grammar
 
-SVG parsing maps warnings to document source when a text or CDATA source segment is available.
-Without source provenance, offsets remain local to the concatenated CSS text. Programmatic style
-setters ignore imports but do not expose a warning sink; callers needing diagnostics can parse CSS
-with `css::parser::StylesheetParser` before assigning it.
+Import keywords are recognized after CSS escape decoding and without regard to ASCII case. The
+target is a `<string>`, an unquoted `url()`, or `url(<string>)`; an import may end at EOF without a
+semicolon. Following CSS Cascade 5, an import is valid only before every other rule except `@layer`
+statements (`@charset` is consumed first). Unknown at-rules and style rules that fail to parse are
+dropped and do not end that leading section.
+
+Conditions are decided as follows:
+
+| Import | Behavior |
+| --- | --- |
+| No condition, or the media query `all` | Loaded |
+| Other media query lists | Ignored with a warning, matching how `@media` blocks are ignored |
+| `supports(...)` | Ignored with a warning, matching how `@supports` blocks are ignored |
+| `layer` or `layer(name)` | Ignored with a warning: cascade layers are unsupported, and loading the sheet unlayered would give it the wrong precedence |
+| After another rule, malformed, or with an empty target | Ignored with a warning |
+
+Diagnostics use static text and never repeat the target URL.
+
+### Loading and trust boundary
+
+Imports never add a network capability. They are fetched only through the resource loader the
+application configured for the document, sharing the external-fetch cache, the per-document fetch
+attempt limit and the aggregate resource byte budget used by `<image>`, `@font-face` and external
+`<use>` references. The loader decides what a URL may reach; for example,
+\ref donner::svg::SandboxedFileResourceLoader rejects paths outside its root, including after `..`
+resolution.
+
+- Without a resource loader (the default, and the editor), and in the secure processing modes,
+  external imports are diagnosed and ignored without any fetch. `data:` URLs with a `text/css` (or
+  absent) media type decode without the loader.
+- Top-level import URLs are passed to the loader as document-relative URLs, after dot-segment
+  normalization. Imports inside an imported sheet resolve against that sheet's URL, as CSS
+  specifies; a relative import inside a `data:` sheet cannot be resolved and is ignored. Relative
+  `@font-face` source URLs in an imported sheet also resolve against that sheet's URL. An import
+  that resolves to the document itself (such as `@import "."`) is ignored.
+- One document-wide pass is bounded to a nesting depth of 16, 64 import loads (counting repeats of
+  one URL), 2 MiB of imported CSS text, and one stylesheet's worth of parsed rules and component
+  values across all imported sheets. Imports that would re-enter a stylesheet already being loaded
+  on the current path are reported as cycles and skipped.
+- Imported text must be valid UTF-8, and a target whose type is known to be something other than
+  `text/css` (for example an image extension) is rejected.
+
+Imports load when the document is prepared for rendering, so a computed-style query made before
+the first render does not yet include imported rules; the first render discards such styles and
+recomputes them with the imports in place.
+
+Warnings are reported at the top-level import that led to them, mapped to document source when the
+`<style>` text has source provenance. Diagnostics from parsing imported text are not reported,
+since their offsets refer to another resource. Rules loaded through `@import` have no document
+source, so editor queries that map rules back to source consider only each `<style>` element's own
+rules.
 
 ## Anatomy of CSS Strings
 

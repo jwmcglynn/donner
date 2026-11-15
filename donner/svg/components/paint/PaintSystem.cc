@@ -65,18 +65,6 @@ bool HasNoStructuralChildren(EntityHandle handle) {
   return true;
 }
 
-// Helper to call the callback on each entt::type_list element
-template <typename TypeList, typename F, std::size_t... Indices>
-constexpr void ForEachShapeImpl(const F& f, std::index_sequence<Indices...>) {
-  (f.template operator()<typename entt::type_list_element<Indices, TypeList>::type>(), ...);
-}
-
-// Main function to iterate over the tuple
-template <typename TypeList, typename F>
-constexpr void ForEachShape(const F& f) {
-  ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
-}
-
 }  // namespace
 
 const ComputedStopComponent& PaintSystem::createComputedStop(EntityHandle handle,
@@ -394,7 +382,7 @@ void PaintSystem::createPatternShadowTrees(Registry& registry, ParseWarningSink&
         } else {
           ParseDiagnostic err;
           err.reason = "Pattern element href=\"" + pattern.href.value().href +
-                       "\" attribute points to a non-gradient element, inheritance "
+                       "\" attribute points to a non-pattern element, inheritance "
                        "ignored";
           warningSink.add(std::move(err));
         }
