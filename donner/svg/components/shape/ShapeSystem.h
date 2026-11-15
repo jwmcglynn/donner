@@ -2,6 +2,8 @@
 /// @file
 
 #include <span>
+#include <variant>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
@@ -43,6 +45,26 @@ struct CircleClipGeometryBudget {
   std::size_t remainingWork = kMaximumWork;  ///< Work still available to this preparation.
   bool rejected = false;                     ///< Whether this budget has rejected any reservation.
 };
+
+/**
+ * One piece of an element's geometry and the transform that places it in a measurement space. A
+ * path is bounded after a later transform is composed with \ref spaceFromPiece, so its bounds stay
+ * tight however the transforms combine; a box, such as an image's or a text's, is mapped as a box.
+ */
+struct BoundsGeometryPiece {
+  Transform2d spaceFromPiece;          //!< Transform from the piece into the measurement space.
+  std::variant<Path, Box2d> geometry;  //!< The piece's path, or its box.
+};
+
+/**
+ * Bounds of @p pieces after @p targetFromSpace maps their measurement space into a target space, or
+ * nothing when there are no pieces or a bound is not finite.
+ *
+ * @param pieces Geometry collected in one measurement space.
+ * @param targetFromSpace Transform from the measurement space to the target space.
+ */
+std::optional<Box2d> BoundGeometryPieces(std::span<const BoundsGeometryPiece> pieces,
+                                         const Transform2d& targetFromSpace);
 
 /**
  * Creates computed path for shapes such as \ref xml_circle, \ref xml_line, and \ref xml_path.
@@ -123,13 +145,17 @@ public:
   std::optional<Box2d> getShapeBounds(EntityHandle handle);
 
   /**
-   * Get the tight bounds of the given entity's geometry in a target space, if it has a shape
-   * component. Each shape is bounded after its transforms and @p targetFromEntity are composed.
+   * Collect the geometry \ref getShapeBounds bounds, placed in a measurement space, so that its
+   * bounds in any later target space follow from \ref BoundGeometryPieces without visiting the
+   * entity again.
    *
-   * @param handle Entity handle to get the bounds for
-   * @param targetFromEntity Transform from the entity's local space to the target space
+   * @param handle Entity handle to collect the geometry of
+   * @param spaceFromEntity Transform from the entity's local space to the measurement space
+   * @param pieces Receives the geometry
+   * @return False, leaving @p pieces unchanged, when the geometry cannot be bounded
    */
-  std::optional<Box2d> getShapeBoundsIn(EntityHandle handle, const Transform2d& targetFromEntity);
+  bool collectShapeGeometry(EntityHandle handle, const Transform2d& spaceFromEntity,
+                            std::vector<BoundsGeometryPiece>& pieces);
 
   /// Return the SVG stroke-shape bounds, including descendant object and stroke geometry.
   /// @param handle Element whose local reference box is required.

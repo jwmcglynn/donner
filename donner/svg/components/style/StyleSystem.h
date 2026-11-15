@@ -49,6 +49,8 @@ public:
     std::size_t complexPropertyBytes = kMaximumComplexPropertyBytes;
     /// Maximum selector traversal steps.
     std::size_t selectorTraversalSteps = css::SelectorTraversalBudget::kMaximumSteps;
+    /// Maximum entities laid out per frame to measure external-use content for host effects.
+    std::size_t externalMeasureEntities = kMaximumRuleElementMatches;
   };
 
   /**
@@ -179,7 +181,7 @@ public:
    * @return True when the work fits the remaining measurement allowance.
    */
   bool reserveExternalMeasureWork(std::size_t entities) {
-    if (entities > limits_.ruleElementMatches - externalMeasureWork_) {
+    if (entities > limits_.externalMeasureEntities - externalMeasureWork_) {
       return false;
     }
     externalMeasureWork_ += entities;
