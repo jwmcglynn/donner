@@ -20,6 +20,11 @@ namespace details {
 template <typename T>
 concept IsCStr = std::is_same_v<T, const char*> || std::is_same_v<T, char*>;
 
+/// Maps ASCII `A`-`Z` to `a`-`z` and returns every other byte unchanged, whatever the C locale.
+constexpr char AsciiToLower(char ch) {
+  return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
+}
+
 }  // namespace details
 
 /**
@@ -44,9 +49,10 @@ enum class StringComparison : uint8_t {
  * `std::char_traits`.
  */
 struct CaseInsensitiveCharTraits : public std::char_traits<char> {
-  /// Convert an unsigned-byte character to its lowercase comparison value.
-  /// @param ch Character to lowercase using the current C locale.
-  static int lower(char ch) { return std::tolower(static_cast<unsigned char>(ch)); }
+  /// Convert a character to its lowercase comparison value, folding only ASCII letters so the
+  /// result does not depend on the process C locale.
+  /// @param ch Character to lowercase.
+  static int lower(char ch) { return static_cast<unsigned char>(details::AsciiToLower(ch)); }
 
   /**
    * Compare two characters for equality.
@@ -82,8 +88,8 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    */
   static int compare(const char* lhs, const char* rhs, size_t sizeToCompare) {
     for (size_t i = 0; i < sizeToCompare; ++i) {
-      const char lhsCh = static_cast<char>(lower(lhs[i]));
-      const char rhsCh = static_cast<char>(lower(rhs[i]));
+      const int lhsCh = lower(lhs[i]);
+      const int rhsCh = lower(rhs[i]);
       if (lhsCh < rhsCh) {
         return -1;
       } else if (lhsCh > rhsCh) {
@@ -145,8 +151,7 @@ public:
     const char* lhsData = lhs.data();
     const char* rhsData = lowercaseRhs.data();
     for (size_t i = 0; i < lowercaseRhs.size(); ++i) {
-      if (std::tolower(static_cast<unsigned char>(lhsData[i])) !=
-          static_cast<unsigned char>(rhsData[i])) {
+      if (details::AsciiToLower(lhsData[i]) != rhsData[i]) {
         return false;
       }
     }
@@ -335,7 +340,8 @@ public:
   }
 
   /**
-   * Split at ASCII whitespace: space, tab, line feed, form feed and carriage return.
+   * Split at ASCII whitespace: space, tab, line feed, form feed and carriage return (not vertical
+   * tab, which \ref IsAsciiWhitespace includes).
    * Empty tokens are omitted and the returned views alias the input.
    * @param str String to split, which must outlive the returned views.
    * @return Non-empty whitespace-separated tokens.
@@ -355,6 +361,53 @@ public:
   }
 
   /**
+   * Returns a copy of \p str with ASCII `A`-`Z` mapped to `a`-`z` and every other byte unchanged.
+   *
+   * Unlike `std::tolower`, the result does not depend on the process C locale, so it is safe for
+   * lookup keys that must compare equal across locales and for UTF-8 text.
+   *
+   * ```
+   * std::string result = StringUtils::ToLowerAscii("Noto SANS");
+   * // result is "noto sans"
+   * ```
+   *
+   * @param str The string to lowercase.
+   * @tparam T The type of the string, must be \c StringLike (have `size()` and `data()` methods).
+   * @return The ASCII-lowercased copy.
+   */
+  template <StringLike T>
+  static std::string ToLowerAscii(const T& str) {
+    std::string result(str.data(), str.size());
+    for (char& ch : result) {
+      ch = details::AsciiToLower(ch);
+    }
+    return result;
+  }
+
+  /**
+   * Returns \p ch with ASCII `A`-`Z` mapped to `a`-`z`; every other byte is returned unchanged,
+   * whatever the process C locale.
+   *
+   * @param ch The character to lowercase.
+   */
+  static constexpr char ToLowerAscii(char ch) { return details::AsciiToLower(ch); }
+
+  /**
+   * Returns true for the bytes `std::isspace` accepts in the "C" locale: space, tab, line feed,
+   * vertical tab, form feed and carriage return. Unlike `std::isspace`, bytes above 0x7F are never
+   * whitespace, whatever the process locale.
+   *
+   * This set includes vertical tab, unlike the WHATWG ASCII whitespace that \ref
+   * SplitAsciiWhitespace splits on. Grammars with their own whitespace set, such as CSS or XML,
+   * need their own check.
+   *
+   * @param ch The character to classify.
+   */
+  static constexpr bool IsAsciiWhitespace(char ch) {
+    return ch == ' ' || (ch >= '\t' && ch <= '\r');
+  }
+
+  /**
    * Trims leading and trailing whitespace from a string, returning a view of the trimmed string.
    *
    * The returned view aliases \p str, so \p str must outlive it.
@@ -370,16 +423,14 @@ public:
    */
   template <StringLike T>
   static std::string_view TrimWhitespace(const T& str) {
-    constexpr const char* kWhitespaceChars = " \t\n\r\f\v";
-
-    const std::string_view strView(str.data(), str.size());
-    const size_t start = strView.find_first_not_of(kWhitespaceChars);
-    if (start == std::string_view::npos) {
-      return {};  // String is all whitespace.
+    std::string_view strView(str.data(), str.size());
+    while (!strView.empty() && IsAsciiWhitespace(strView.front())) {
+      strView.remove_prefix(1);
     }
-
-    const size_t end = strView.find_last_not_of(kWhitespaceChars);
-    return strView.substr(start, end - start + 1);
+    while (!strView.empty() && IsAsciiWhitespace(strView.back())) {
+      strView.remove_suffix(1);
+    }
+    return strView;
   }
 
 private:

@@ -59,8 +59,32 @@ scaling profile cannot represent arbitrary overlapping child extents and logical
 negative positioning, spacing parents and ordinary nested scaling remain in the new path.
 
 Wrapped text, preserved line layout, vertical writing and textPath retain their existing placement.
-Typed `direction` and `unicode-bidi` cascade support, visual caret movement and the remaining
-milestones below are separate work. The simple tier gains ordering and mirroring, not Arabic
+
+A second slice adds the typed inherited `direction` and non-inherited `unicode-bidi` properties.
+
+- A horizontal `<text>` element's `direction` sets the explicit level of each of its paragraphs.
+- `start` and `end` anchors name logical edges, so a chunk whose first span is `rtl` anchors at
+  its right edge on a horizontal line. This applies to all horizontal text that is not on a path,
+  including wrapped and preserved-line text, which still keep left-to-right visual order.
+- The `<text>` element's own `bidi-override` or `isolate-override` gives every character the
+  paragraph level, split into script runs so each shapes with its own script. Explicit bidi
+  controls in the source are ignored under the override.
+- A right-to-left chunk's pen runs leftward from its origin, so the current text position after
+  it is one chunk width left of that origin; anchoring applies afterwards and does not move it. A
+  following unwrapped chunk without an absolute `x`, for example after a `tspan` that sets only
+  `y`, continues from there, with trailing spacing on the left and `dx` kept as a physical shift.
+  The continuation follows the direction of the previous chunk's first span, not the paragraph.
+  Wrapped text lays out its own lines and does not use it.
+- The paragraph level comes from the `<text>` element. A `tspan` with a different `direction`
+  mirrors its own chunk's anchor but does not change the paragraph level.
+
+Known gaps of this slice:
+
+- `unicode-bidi: plaintext` on the `<text>` element behaves as `normal`; it should detect the base
+  direction from the first strong character.
+- `unicode-bidi` on a `tspan` (control injection, Milestone 3), right-to-left vertical text and
+  textPath, direction-aware `dx` and `textLength` carry, and visual caret movement remain separate
+  work. The simple tier gains ordering and mirroring, not Arabic
 joining. The three normal mixed-script resvg cases are the initial convergence target; this slice
 does not complete the full design or tracking issue. Existing package and module limits remain
 unchanged and must be checked on the actual configured products.

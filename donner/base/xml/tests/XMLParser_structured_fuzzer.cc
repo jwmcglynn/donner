@@ -501,7 +501,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         std::cout << "\\\\";
       } else if (c == '\"') {
         std::cout << "\\\"";
-      } else if (!std::isprint(uc)) {
+      } else if (uc < 0x20 || uc >= 0x7F) {
         std::cout << "\\x" << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(uc);
       } else {
         std::cout << c;

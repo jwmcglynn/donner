@@ -53,11 +53,12 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
    ordinary CI qualification on the final source commit.
 2. Set the same version in `MODULE.bazel` and `examples/bazel_consumer/MODULE.bazel`. Review any
    compatibility-level change against all supported Bazel versions, including older resolvers.
-3. Require a full `BCR Preflight` run on that exact commit. Pushes to main run only the slim
-   check (source archive, registry admission and one Ubuntu consumer), which cannot qualify a
-   release. The full matrix runs nightly on `main` and on manual dispatch; the release tooling
-   currently accepts only a dispatched run, so while main still points to the intended commit,
-   dispatch the workflow on `main`. A branch or tag dispatch cannot attest or supply release
+3. Require a full `BCR Preflight` run on that exact commit. Pushes to main do not run the
+   preflight, and a pull request runs it only when it changes the registry templates,
+   `MODULE.bazel`, `.gitattributes`, the example consumer, the preflight's own tools or its
+   workflows. Every run is the full matrix; it runs nightly on `main` and on manual dispatch.
+   Both candidate assembly and registry publication accept only a run dispatched on `main`, so
+   while main still points to the intended commit, dispatch the workflow on `main`. A branch or tag dispatch cannot attest or supply release
    artifacts. An empty source commit is unnecessary.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
@@ -66,7 +67,7 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
    `donner-svg-<platform>-<commit>-<attempt>` artifacts, including each generated Bazel lockfile,
    are retained. Artifact retention is 90 days; run a fresh preflight before approval if
    any expires. Use a successful manually dispatched full preflight on main for the exact source
-   commit, never a slim push run, a PR or a feature-branch run.
+   commit, never a PR or a feature-branch run.
 6. While `main` still points at the candidate commit, dispatch `Assemble release candidate` with
    that commit, the preflight, Editor WASM, docs build, CI, coverage, fuzz and sanitizer run IDs
    and attempts, and the issue comment IDs of the security and supply-chain review reports
@@ -141,7 +142,7 @@ one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `
 `//tools:default_notice_freshness_tests`, `//tools:release_cli_tests`,
 `//tools:cli_notice_coverage_tests`, and `//tools:bcr_admission_tests` cover archive, binary,
 notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` covers the consumer closure audit.
-Most of the workflow's run steps call `tools/bcr_preflight.py` subcommands (scope, admission,
+Most of the workflow's run steps call `tools/bcr_preflight.py` subcommands (admission,
 consumer, CLI build, verification and explain-missing-cli), whose command sequences
 `//tools:bcr_preflight_tests` pins; the archive, registry and qualify steps call
 `tools.bcr_source` directly.

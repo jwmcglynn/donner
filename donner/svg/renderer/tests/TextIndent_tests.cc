@@ -119,7 +119,7 @@ IndentObservation ReadIndentGeometry(EntityHandle handle, FontManager& fonts, Te
     const auto& run = geometry.runs[ri];
     const auto& span = text.spans[ri];
     if (!run.glyphs.empty()) {
-      EXPECT_THAT(fonts.fontData(run.font), ElementsAreArray(bytes));
+      EXPECT_THAT(fonts.fontData(run.font), BytesEqual(bytes));
     }
     const std::string_view sourceText(span.text.data() + span.start, span.end - span.start);
     for (const auto& glyph : run.glyphs) {

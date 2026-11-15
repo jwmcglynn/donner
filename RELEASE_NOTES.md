@@ -2,9 +2,7 @@
 
 ## v0.8: Donner SVG Editor & Engine
 
-_Date: <unreleased>_
-
-These notes describe the upcoming v0.8 release, which has not been published yet.
+_Date: 2026-10-23_
 
 v0.8 makes Donner both an SVG editor and an engine you can embed. The editor runs on the desktop
 and in the browser on Donner's own GPU renderer, and the engine adds declarative animation, a
@@ -77,7 +75,7 @@ See `SECURITY.md`.
 - The Donner SVG Editor as a native desktop application and a WebAssembly edition.
 - `donner-editor_darwin_arm64.zip` for Apple silicon Macs, containing `Donner SVG Editor.app`,
   `LICENSE` and `NOTICE.txt`, with a checksum sidecar. The application is
-  ad-hoc signed; it is not Developer ID signed or notarized.
+  Developer ID-signed and Apple-notarized as of the October 26, 2026 signing update.
 - `donner-svg`, a CLI tool that renders SVG files to PNG or animated GIF and previews them in the
   terminal.
 - An embeddable C++20 API for parsing, inspecting, modifying, animating and rendering SVGs.
@@ -124,7 +122,7 @@ if (!renderer.save("output.png")) {
 The complete program is `examples/svg_quickstart.cc`; run it with
 `bazel run //examples:svg_quickstart`.
 
-**Full Changelog:** generated when the `v0.8.0` tag is cut.
+**Full Changelog:** [v0.5.0...v0.8.0](https://github.com/jwmcglynn/donner/compare/v0.5.0...v0.8.0)
 
 ## v0.5.0
 

@@ -58,14 +58,6 @@
             }
           ]
         },
-        "hosted-parity": {
-          "when": "hosted_parity_tests_affected",
-          "exception": {
-            "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-31",
-            "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
-          }
-        },
         "hosted-toolchain": {
           "when": "always",
           "exception": {
@@ -141,26 +133,16 @@
             }
           ]
         },
-        "hosted-parity": {
-          "when": "hosted_parity_affected",
-          "description": "`hosted_parity` tests, rerun under the hosted runner's constraints.",
-          "counterparts": [
-            {
-              "job": "macos-hosted-parity",
-              "step": "test"
-            }
-          ]
-        },
         "hosted-equivalent": {
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-19, #1911",
-            "reason": "To keep pull request runtime short, only the `hosted_parity` subset and the Geode editor lane rerun with main's hosted Bazel scheduling configuration; every other test runs only at the fast lane's full width. No pull request lane reproduces the hosted runner's CPU speed, GPU, memory or disk."
+            "decision": "Maintainer decision 2026-11-14",
+            "reason": "Trusted pull requests run every macOS test only at the self-hosted fast lane's full width and speed; no pull request lane reruns tests under main's hosted runner configuration or reproduces the hosted runner's CPU speed, GPU, memory or disk. A failure specific to that configuration first shows on main's hosted macOS job, which runs on every push to main."
           }
         },
         "shader-validation": {
-          "when": "always",
+          "when": "metal_affected",
           "pr_only": true,
           "description": "Full Metal shader validation on a real GPU. The native Metal job is independent of the virtual macOS build and test pool.",
           "counterparts": [
@@ -171,7 +153,7 @@
           ]
         },
         "shader-memory-canary": {
-          "when": "always",
+          "when": "metal_affected",
           "pr_only": true,
           "description": "The Metal preflight, including the deliberate out-of-bounds read that shader validation must abort, on a real GPU.",
           "counterparts": [
@@ -185,12 +167,12 @@
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-20, #1952",
-            "reason": "Main's hosted macOS lane runs its Metal tests without shader validation and skips the tests that assert it: on the xcode-27 image (macOS 27.0.1, 26A434) the virtual GPU reports pipeline validation disabled and does not abort a deliberate out-of-bounds read (https://github.com/jwmcglynn/donner/actions/runs/39381507143). Shader validation runs only on the self-hosted real GPU, for trusted pull requests routed to it; any other pull request needs a local verifier receipt before merge."
+            "decision": "Maintainer decisions 2026-10-20, #1952, and 2026-11-14",
+            "reason": "Main's hosted macOS lane runs its Metal tests without shader validation and skips the tests that assert it: on the xcode-27 image (macOS 27.0.1, 26A434) the virtual GPU reports pipeline validation disabled and does not abort a deliberate out-of-bounds read (https://github.com/jwmcglynn/donner/actions/runs/39381507143). Shader validation runs only on the self-hosted real GPU, for trusted pull requests routed to it whose changes reach the Metal suites; any other pull request that reaches them needs a local verifier receipt before merge, and one that does not reach them needs none (docs/metal_validation.md)."
           }
         },
         "native-metal": {
-          "when": "always",
+          "when": "metal_affected",
           "pr_only": true,
           "description": "The complete native Metal device suite keeps shader validation enabled alongside the virtual pool.",
           "counterparts": [
@@ -256,15 +238,13 @@
             }
           ]
         },
-        "hosted-parity": {
-          "when": "hosted_parity_affected",
-          "counterparts": [
-            {
-              "job": "macos-hosted-parity",
-              "step": "geode_test",
-              "min_tests": 1
-            }
-          ]
+        "hosted-equivalent": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-11-14",
+            "reason": "Trusted pull requests run every macOS test only at the self-hosted fast lane's full width and speed; no pull request lane reruns tests under main's hosted runner configuration or reproduces the hosted runner's CPU speed, GPU, memory or disk. A failure specific to that configuration first shows on main's hosted macOS job, which runs on every push to main."
+          }
         }
       }
     }

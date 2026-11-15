@@ -51,11 +51,14 @@ public:
   /// Analyze Donner-decoded scalars. Base 0/1 is explicit; 2 requests first-strong detection.
   /// @param codepoints Owned scalars, which remain pinned throughout analysis and line queries.
   /// @param budget Cumulative admission shared by the caller's layout.
-  /// @param base Paragraph base direction; normal SVG uses 0.
+  /// @param base Paragraph base direction: 0 for `direction: ltr`, 1 for `rtl`.
   /// @param forceAnalysis Whether to bypass the equivalent all-left-to-right fast path.
+  /// @param override Whether every scalar takes the explicit base level without reordering by
+  ///   bidi type, as `unicode-bidi: bidi-override` on the paragraph's block container. Requires
+  ///   base 0 or 1.
   static std::optional<BidiParagraph> Analyze(std::vector<char32_t> codepoints,
                                               BidiResourceBudget& budget, uint8_t base = 0,
-                                              bool forceAnalysis = false);
+                                              bool forceAnalysis = false, bool override = false);
   ~BidiParagraph();
   BidiParagraph(BidiParagraph&&) noexcept;
   BidiParagraph& operator=(BidiParagraph&&) noexcept;

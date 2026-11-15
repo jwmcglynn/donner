@@ -53,6 +53,8 @@ fallback face.
   tests/text/writing-mode/tb-and-punctuation.png
   tests/text/letter-spacing/non-ASCII-character.svg
   tests/text/letter-spacing/non-ASCII-character.png
+  tests/text/textPath/writing-mode=tb.svg
+  tests/text/textPath/writing-mode=tb.png
 
 From the same revision and license, these PNGs were replaced with their 300x300
 versions because the snapshot's references were drawn in faces outside the

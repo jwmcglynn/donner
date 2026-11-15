@@ -211,7 +211,6 @@ bool InvalidatesExistingCompositedPixels(const EditorCommand& command) {
     case EditorCommand::Kind::InsertElement:
     case EditorCommand::Kind::ReplaceElements:
     case EditorCommand::Kind::DeleteElement:
-    case EditorCommand::Kind::CutShapes:
     case EditorCommand::Kind::PasteShapes:
     case EditorCommand::Kind::InsertText: return false;
   }
@@ -414,7 +413,6 @@ bool AsyncSVGDocument::applyQueuedCommand(
     return true;
   }
   if (command.kind == EditorCommand::Kind::ReplaceDocument ||
-      command.kind == EditorCommand::Kind::CutShapes ||
       command.kind == EditorCommand::Kind::PasteShapes) {
     activeStructuralRemap = pendingStructuralRemap_;
   }
@@ -732,9 +730,8 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       break;
     }
 
-    case EditorCommand::Kind::CutShapes:
     case EditorCommand::Kind::PasteShapes: {
-      // Shape-clipboard structural replaces reparse `bytes` into a fresh
+      // Shape-clipboard paste reparses `bytes` into a fresh
       // document, exactly like ReplaceDocument(preserveUndoOnReparse=true).
       // The kind discriminator is preserved at this layer purely for
       // labelling - undo entries are recorded by the orchestrator

@@ -23,12 +23,24 @@ function browserExecutablePaths(environment) {
   };
 }
 
-function prepareBrowserArchives(environment) {
+// Each pinned browser and the variable its Bazel target names its archive with.
+const kArchiveVariables = {
+  chromium: "DONNER_CHROMIUM_ARCHIVE",
+  firefox: "DONNER_FIREFOX_ARCHIVE",
+};
+
+/**
+ * Extract the pinned browser archives into a fresh directory under TEST_TMPDIR.
+ *
+ * @param {Record<string, string | undefined>} environment The test environment.
+ * @param {string[]} browsers The pinned browsers the caller launches; every one by default.
+ */
+function prepareBrowserArchives(environment, browsers = Object.keys(kArchiveVariables)) {
   const root = browserRoot(environment);
-  const archives = [
-    ["chromium", requireEnvironment(environment, "DONNER_CHROMIUM_ARCHIVE")],
-    ["firefox", requireEnvironment(environment, "DONNER_FIREFOX_ARCHIVE")],
-  ].map(([name, archive]) => [name, path.resolve(archive)]);
+  const archives = browsers.map((name) => {
+    if (!(name in kArchiveVariables)) throw new Error(`no pinned browser archive named ${name}`);
+    return [name, path.resolve(requireEnvironment(environment, kArchiveVariables[name]))];
+  });
   for (const [name, archive] of archives) {
     if (!statSync(archive).isFile()) throw new Error(`${name} archive must be a file`);
   }
@@ -48,8 +60,10 @@ function prepareBrowserArchives(environment) {
   }
 }
 
-module.exports = function setup() {
-  prepareBrowserArchives(process.env);
+// As a Playwright global setup, extracts the browsers the config lists in
+// `metadata.pinnedBrowsers`, or every pinned browser when it lists none.
+module.exports = function setup(config) {
+  prepareBrowserArchives(process.env, config?.metadata?.pinnedBrowsers);
 };
 module.exports.browserExecutablePaths = browserExecutablePaths;
 module.exports.prepareBrowserArchives = prepareBrowserArchives;

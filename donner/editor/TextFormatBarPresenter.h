@@ -100,7 +100,7 @@ struct FormatBarState {
   /// editor lacks; preserved verbatim as free text.
   std::string fontFamily;
   /// Current `font-size` value (document units) shown in the size combo.
-  float fontSize = 0.0f;
+  double fontSize = 0.0;
   /// True when a numeric `font-size` was resolved for the current element.
   bool hasFontSize = false;
   /// Current `font-weight: bold` state.
@@ -124,7 +124,7 @@ struct FormatBarActions {
 
   /// The user committed a new font size (drag release, typed entry, or preset).
   bool setFontSize = false;
-  float fontSize = 0.0f;         //!< Selected font size for a size change.
+  double fontSize = 0.0;         //!< Selected font size for a size change.
   bool toggleBold = false;       //!< Request toggling bold at the active text selection.
   bool toggleItalic = false;     //!< Request toggling italic at the active text selection.
   bool toggleUnderline = false;  //!< Request toggling underline at the active text selection.
@@ -226,7 +226,7 @@ private:
   /// Filter text for the searchable family dropdown.
   std::array<char, 64> familySearchBuffer_{};
   /// Working size edit, re-seeded from state only while the input is idle.
-  float sizeEditValue_ = 0.0f;
+  double sizeEditValue_ = 0.0;
   bool sizeControlActive_ = false;
   std::array<std::optional<Box2d>, kFormatBarFontSizePresets.size()> fontSizePresetRects_{};
 };

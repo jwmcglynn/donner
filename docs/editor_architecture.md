@@ -291,7 +291,7 @@ Attached live-DOM writes enter through two explicit, guarded paths:
   through `donner/base/xml` for structured editing.
 - **`CommandQueue`** (`donner/editor/CommandQueue.h`) is UI-thread-only and
   coalesces on flush: `ReplaceDocument` is exclusive and drops earlier commands, and
-  `CutShapes` and `PasteShapes` are exclusive the same way; repeated `SetTransform` on the
+  `PasteShapes` is exclusive the same way; repeated `SetTransform` on the
   same entity collapse to the latest (a 60 fps drag flushes as a single `setTransform`);
   repeated `SetAttribute` on the same element and attribute collapses to the latest value until
   a `RemoveAttribute` of that attribute; structural `Insert`/`Delete` never coalesce; commands

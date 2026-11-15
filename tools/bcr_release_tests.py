@@ -169,12 +169,17 @@ class PublishedSourceTest(unittest.TestCase):
             mock.patch.object(release.bcr_source, "git", return_value='module(name="donner", version="1.0.0")'),
             mock.patch.object(release.bcr_source, "verify_archive", return_value=self.receipt),
             mock.patch.object(release.subprocess, "run", side_effect=self.write_download),
-            mock.patch.object(release, "gh_json", return_value=run_record()),
+            mock.patch.object(release, "gh_json", return_value=self.preflight_run()),
             mock.patch.object(release.release_candidate, "fetch_role", return_value=self.retained),
         ]
         self.git, self.verify, self.download, self.gh, self.fetch = [patch.start() for patch in patches]
         for patch in patches:
             self.addCleanup(patch.stop)
+
+    @staticmethod
+    def preflight_run(**changes):
+        # A release's preflight is dispatched on main; pushes to main do not run it.
+        return run_record(**{"event": "workflow_dispatch", **changes})
 
     def write_download(self, args, check):
         name = args[args.index("--pattern") + 1]
@@ -206,9 +211,12 @@ class PublishedSourceTest(unittest.TestCase):
         self.gh.assert_not_called()
         for change, message in (({"head_branch": "feature"}, "run on main"),
                                 ({"head_branch": None}, "run on main"),
-                                ({"id": 13}, "does not match provenance")):
+                                ({"id": 13}, "does not match provenance"),
+                                ({"event": "push"}, "successful build"),
+                                ({"event": "pull_request"}, "successful build"),
+                                ({"event": "schedule"}, "successful build")):
             with self.subTest(change=change):
-                self.gh.return_value = run_record(**change)
+                self.gh.return_value = self.preflight_run(**change)
                 with self.assertRaisesRegex(ValueError, message):
                     self.check()
 
@@ -227,7 +235,7 @@ class PublishedSourceTest(unittest.TestCase):
                 self.check()
         self.verify.return_value = self.receipt
         for changes in [{"conclusion": "failure"}, {"run_attempt": 3}, {"head_sha": "d" * 40}]:
-            self.gh.return_value = run_record(**changes)
+            self.gh.return_value = self.preflight_run(**changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.check()
 

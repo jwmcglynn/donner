@@ -44,7 +44,7 @@ std::optional<css::RGBA> SolidFillColor(const PaintParams& paint) {
     return std::nullopt;
   }
 
-  return solid->color.resolve(paint.currentColor.rgba(), paint.fillOpacity);
+  return solid->color.resolve(paint.currentColor, paint.fillOpacity);
 }
 
 const components::PaintResolvedReference* PaintReference(

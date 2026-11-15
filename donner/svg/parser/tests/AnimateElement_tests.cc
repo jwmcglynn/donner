@@ -7,6 +7,7 @@
 #include <string>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
@@ -1829,6 +1830,22 @@ TEST(SVGAnimateElement, ReplacementPathValuesDoNotReadAnUnusedTypedBase) {
   }
   document.querySelector("#p")->cast<SVGPathElement>().setSpline(oversized.build());
   EXPECT_THAT(getAnimatedValue(document, "#p", "d", 1), testing::Optional(std::string("M0 0L6 0")));
+}
+
+// Interpolated number lists are serialized to text and parsed back, so the C++ global locale must
+// not change their formatting.
+TEST(SVGAnimateElement, SerializedNumberListIgnoresGlobalLocale) {
+  constexpr const char* kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" width="10" height="10">
+      <animate attributeName="stroke-dasharray" from="0 10" to="2001 10" dur="2s"/>
+    </rect></svg>)svg";
+  auto classicDocument = parseSVGWithExperimental(kSource);
+  const auto classicValue = getAnimatedValue(classicDocument, "#r", "stroke-dasharray", 1);
+  ASSERT_THAT(classicValue, testing::Optional(testing::HasSubstr("1000.5")));
+
+  const ScopedCommaDecimalGlobalLocale commaDecimalLocale;
+  auto document = parseSVGWithExperimental(kSource);
+  EXPECT_THAT(getAnimatedValue(document, "#r", "stroke-dasharray", 1), testing::Eq(classicValue));
 }
 
 }  // namespace donner::svg

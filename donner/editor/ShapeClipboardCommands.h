@@ -19,9 +19,9 @@
 ///   selected after the paste. It fails (returning an error, leaving its inputs
 ///   untouched) when a reference cannot be repaired safely.
 ///
-/// The editor wires the merged source through `EditorCommand::Kind::PasteShapes`
-/// / `Kind::CutShapes` so the resulting reparse is a single undo step that keeps
-/// the source pane coherent.
+/// The editor wires the merged paste source through `EditorCommand::Kind::PasteShapes`
+/// so the resulting reparse is a single undo step that keeps the source pane
+/// coherent. Cut is a copy followed by `EditorApp::deleteSelectionWithUndo`.
 
 #include <cstdint>
 #include <optional>

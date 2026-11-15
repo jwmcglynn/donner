@@ -391,6 +391,7 @@ py_test(
     deps = [
         ":bcr_preflight",
         ":release_candidate",
+        ":release_macos_editor",
         ":test_timing",
         "@rules_python//python/runfiles",
     ],
@@ -412,10 +413,6 @@ py_test(
         "//build_defs:macos_app_bundle.bzl",
         "//donner/gpu/metal/tests:BUILD.bazel",
     ],
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
-    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
-    # job's parity step).
-    tags = ["hosted_parity"],
     deps = [
         ":test_timing",
         "@rules_python//python/runfiles",
@@ -481,8 +478,8 @@ py_library(
     srcs = ["bcr_source.py"],
 )
 
-# The BCR Preflight workflow's step commands: scope selection, registry admission, the consumer
-# closure audit, the release CLI builds and their verification.
+# The BCR Preflight workflow's step commands: registry admission, the consumer closure audit,
+# the release CLI builds and their verification.
 py_library(
     name = "bcr_preflight",
     srcs = ["bcr_preflight.py"],
@@ -710,7 +707,6 @@ py_test(
     size = "small",
     srcs = ["native_delivery_elf_tests.py"],
     data = [":native_delivery_elf_fixture"],
-    tags = ["hosted_parity"],
     target_compatible_with = [
         "@platforms//os:linux",
         "@platforms//cpu:x86_64",
@@ -977,10 +973,8 @@ py_test(
         "ci_lane_parity_tests.py",
     ],
     data = [
-        "BUILD.bazel",
         "//:.bazelrc",
         "//:github_action_definitions",
-        "//donner/editor/tests:BUILD.bazel",
         "//tools/ci:coverage_contract.json",
     ],
     main = "ci_lane_parity_tests.py",
@@ -1082,6 +1076,26 @@ py_test(
     main = "check_design_doc_provenance.py",
 )
 
+py_test(
+    name = "check_design_doc_index_tests",
+    size = "small",
+    srcs = [
+        "check_design_doc_index.py",
+        "check_design_doc_index_tests.py",
+    ],
+)
+
+# The repository's design-document index and navigation, checked as the Lint workflow does. The
+# test runs from the runfiles root.
+py_test(
+    name = "design_doc_index_test",
+    size = "small",
+    srcs = ["check_design_doc_index.py"],
+    args = ["--root=."],
+    data = ["//:design_doc_index_inputs"],
+    main = "check_design_doc_index.py",
+)
+
 py_binary(
     name = "check_private_details",
     srcs = ["check_private_details.py"],
@@ -1113,6 +1127,7 @@ py_test(
     size = "small",
     srcs = ["ci_workflow_targets_tests.py"],
     data = [
+        "//:.bazelrc",
         "//:github_action_definitions",
         "//donner/gpu/metal/tests:BUILD.bazel",
         "//tools/ci:BUILD.bazel",

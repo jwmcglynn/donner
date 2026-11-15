@@ -412,13 +412,11 @@ void PublishWgpuReadbackFailure(int requestId) {
 void PublishWgpuReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
                               int renderMaxChannel, int layerSamples, int layerColored,
                               int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
-                              int requestId) {
-  whole_app_worker::PublishReadbackStats(
-      renderSamples, renderColored, renderNonBlack, renderMaxChannel, layerSamples, layerColored,
-      layerNonBlack, layerMaxChannel, selectionChromePixels, requestId);
-}
-void PublishWgpuCarouselThumbnailStats(const int* values, int count) {
-  whole_app_worker::PublishCarouselThumbnailStats(values, count);
+                              int requestId, const int* thumbnailValues, int thumbnailCount) {
+  whole_app_worker::PublishReadbackStats(renderSamples, renderColored, renderNonBlack,
+                                         renderMaxChannel, layerSamples, layerColored,
+                                         layerNonBlack, layerMaxChannel, selectionChromePixels,
+                                         requestId, thumbnailValues, thumbnailCount);
 }
 
 double CurrentDisplayScale() {
@@ -573,10 +571,6 @@ void PublishWgpuReadbackStatsForSmokeTests(const WgpuReadbackView& view, int req
       std::max(1.0, cssHeight * 0.42));
   const int selectionChromePixels = CountWgpuSelectionChromePixelsForCssRegion(
       view, 0.0, 100.0, std::max(1.0, cssWidth - 420.0), std::max(1.0, cssHeight - 100.0));
-  PublishWgpuReadbackStats(renderStats.samples, renderStats.coloredPixels,
-                           renderStats.nonBlackPixels, renderStats.maxChannel, layerStats.samples,
-                           layerStats.coloredPixels, layerStats.nonBlackPixels,
-                           layerStats.maxChannel, selectionChromePixels, requestId);
 
   constexpr double kPickerMaxContentWidth = 920.0;
   constexpr double kPickerHorizontalPadding = 32.0;
@@ -619,8 +613,12 @@ void PublishWgpuReadbackStatsForSmokeTests(const WgpuReadbackView& view, int req
     packedCarouselStats[offset + 5] = stats.backgroundPixels;
     packedCarouselStats[offset + 6] = stats.glyphPixels;
   }
-  PublishWgpuCarouselThumbnailStats(packedCarouselStats.data(),
-                                    static_cast<int>(carouselStats.size()));
+  // One publication carries the thumbnails with the request they belong to.
+  PublishWgpuReadbackStats(renderStats.samples, renderStats.coloredPixels,
+                           renderStats.nonBlackPixels, renderStats.maxChannel, layerStats.samples,
+                           layerStats.coloredPixels, layerStats.nonBlackPixels,
+                           layerStats.maxChannel, selectionChromePixels, requestId,
+                           packedCarouselStats.data(), static_cast<int>(carouselStats.size()));
 }
 
 void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap, int requestId = 0) {
@@ -2539,10 +2537,13 @@ bool EditorWindow::observePresentationCompletion() {
   const bool deviceLost = wgpuState_->framebufferGeodeDevice->isDeviceLost();
   observePresentationDeviceLoss(device);
   const auto frame = presentationSubmissions_.completed();
+  // The replacement object carries the timeout fields forward and the next call refreshes them, so
+  // a page read between the two main-thread tasks never sees a snapshot without them.
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerPresentationQueueStats'];
+        const carried = previous ?? {};
         window['__donnerPresentationQueueStats'] = ({
           'completedSerial' : $0,
           'submittedSerial' : $1,
@@ -2560,6 +2561,9 @@ bool EditorWindow::observePresentationCompletion() {
           'inputRepresented' : Boolean($9), 'viewportZoom' : $10,
           'completedAtMs' : previous &&
               Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
+          'timeoutSerial' : carried['timeoutSerial'] ?? 0,
+          'timeoutAgeMs' : carried['timeoutAgeMs'] ?? 0,
+          'completionConfirmations' : carried['completionConfirmations'] ?? 0,
         });
         // Bounded admission timeline for failure diagnostics: time, admission, frames in flight,
         // device completed serial, submitted serial, oldest pending serial.
