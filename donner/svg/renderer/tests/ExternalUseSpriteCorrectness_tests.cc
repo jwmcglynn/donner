@@ -896,10 +896,10 @@ constexpr std::string_view kHostRefusal =
     "External-use inherited cross-document URL resource is unsupported";
 
 TEST(ExternalUseWarningReplayTest, InheritedResourceRefusalReachesALaterSink) {
-  EXPECT_THAT(FirstCollectingDrawWarnings(kMarkerHost, kMarkerSheet),
-              testing::IsSupersetOf(
-                  {std::string("External-use inherited URL resources are unsupported"),
-                   std::string(kHostRefusal)}));
+  EXPECT_THAT(
+      FirstCollectingDrawWarnings(kMarkerHost, kMarkerSheet),
+      testing::IsSupersetOf({std::string("External-use inherited URL resources are unsupported"),
+                             std::string(kHostRefusal)}));
   ExpectLaterSinkReceivesFirstDrawWarnings(kMarkerHost, kMarkerSheet);
 }
 
@@ -942,8 +942,7 @@ struct SheetCost {
   bool operator==(const SheetCost&) const = default;
 
   friend std::ostream& operator<<(std::ostream& os, const SheetCost& cost) {
-    return os << "{restyles=" << cost.restyles << ", instanceBuilds=" << cost.instanceBuilds
-              << "}";
+    return os << "{restyles=" << cost.restyles << ", instanceBuilds=" << cost.instanceBuilds << "}";
   }
 };
 
@@ -998,17 +997,18 @@ SheetCost MutatedFramesCost(std::string_view hostSource, bool firstDrawCollects,
 }
 
 // Mutating a sheet whose warning is held, or was delivered, costs a sinkless draw only what the
-// mutation dirtied, the same as a collecting draw: dropping a held warning never restyles the sheet.
-// Two uses of the target with different fills restyle it, and find its warning, on every draw.
+// mutation dirtied, the same as a collecting draw: dropping a held warning never restyles the
+// sheet. Two uses of the target with different fills restyle it, and find its warning, on every
+// draw.
 TEST(ExternalUseWarningReplayTest, SinklessDrawsOfAMutatedSheetCostOnlyTheMutation) {
   constexpr std::string_view kRestyledEveryDraw =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
         <use href="sprites.svg#a" fill="red"/><use href="sprites.svg#a" x="8" fill="blue"/>
       </svg>)svg";
   for (const std::string_view hostSource : {kStyleWarningHost, kRestyledEveryDraw}) {
-    for (const SheetMutation mutation : {SheetMutation::OtherTransform,
-                                         SheetMutation::WarningTransform,
-                                         SheetMutation::WarningStyle}) {
+    for (const SheetMutation mutation :
+         {SheetMutation::OtherTransform, SheetMutation::WarningTransform,
+          SheetMutation::WarningStyle}) {
       const SheetCost collecting = MutatedFramesCost(hostSource, true, true, mutation);
       for (const bool delivered : {false, true}) {
         SCOPED_TRACE(testing::Message()
@@ -1019,8 +1019,8 @@ TEST(ExternalUseWarningReplayTest, SinklessDrawsOfAMutatedSheetCostOnlyTheMutati
       }
     }
   }
-  EXPECT_EQ(MutatedFramesCost(kStyleWarningHost, true, true, SheetMutation::OtherTransform).restyles,
-            0u)
+  EXPECT_EQ(
+      MutatedFramesCost(kStyleWarningHost, true, true, SheetMutation::OtherTransform).restyles, 0u)
       << "a transform restyles nothing";
 }
 

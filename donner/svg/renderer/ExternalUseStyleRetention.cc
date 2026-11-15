@@ -603,8 +603,9 @@ void ExternalUseStyleRetention::FinishOccurrence(Registry& registry) {
   if (state == nullptr) {
     return;
   }
-  const auto entry = std::find_if(state->subtrees.begin(), state->subtrees.end(),
-                                  [&](const RetainedSubtree& s) { return s.root == occurrence.root; });
+  const auto entry =
+      std::find_if(state->subtrees.begin(), state->subtrees.end(),
+                   [&](const RetainedSubtree& s) { return s.root == occurrence.root; });
   if (entry != state->subtrees.end() && entry->inputs) {
     entry->inputs->unsupportedResource = occurrence.unsupportedResource;
   }
