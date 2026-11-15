@@ -359,6 +359,29 @@ TEST(ExternalUseRetentionTest, OverlappingSubtrees) {
                "overlapping");
 }
 
+// A descendant's rem lengths resolve against the sheet root's own font size, not one an earlier
+// occurrence of the root inherited from its host.
+TEST(ExternalUseRetentionTest, DescendantAfterRootOccurrenceResolvesRemAgainstSheetRoot) {
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64">
+        <use href="sprites.svg#sheet" font-size="8"/>
+        <use href="sprites.svg#child" x="64"/>
+      </svg>)svg",
+      R"svg(<svg id="sheet" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect id="child" width="64" height="64" fill="blue" clip-path="inset(1rem) fill-box"/>
+      </svg>)svg");
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ExpectFrames(host->document, renderer, 3,
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64">
+        <rect width="64" height="64" fill="blue" clip-path="inset(8px) fill-box"/>
+        <g transform="translate(64 0)">
+          <rect width="64" height="64" fill="blue" clip-path="inset(16px) fill-box"/>
+        </g>
+      </svg>)svg",
+               "descendant-after-root-rem");
+}
+
 TEST(ExternalUseRetentionTest, ImageInterleavedWithUse) {
   std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
