@@ -8317,11 +8317,17 @@ TEST_F(RendererGeodeTest, FilterInsidePatternTileMatchesTheFilterDrawnDirectly) 
     return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">)svg" + filters +
            content + "</svg>";
   };
-  const std::array<std::pair<std::string_view, std::string_view>, 2> wrappers{{
-      {"alone", ""},
-      {"inside_outer_filter", R"svg(filter="url(#shift)")svg"},
+  struct Wrapper {
+    std::string_view label;
+    std::string_view attributes;
+    /// Where the outer filter moves the group's content.
+    Vector2i shift;
+  };
+  const std::array<Wrapper, 2> wrappers{{
+      {"alone", "", Vector2i(0, 0)},
+      {"inside_outer_filter", R"svg(filter="url(#shift)")svg", Vector2i(14, 11)},
   }};
-  for (const auto& [label, wrapper] : wrappers) {
+  for (const auto& [label, wrapper, shift] : wrappers) {
     SCOPED_TRACE(label);
     const auto wrap = [&](const std::string& content) {
       return "<g " + std::string(wrapper) + ">" + content + "</g>";
@@ -8334,6 +8340,9 @@ TEST_F(RendererGeodeTest, FilterInsidePatternTileMatchesTheFilterDrawnDirectly) 
     const RendererBitmap directBitmap = renderer.takeSnapshot();
     ASSERT_FALSE(patternBitmap.empty());
     ASSERT_FALSE(directBitmap.empty());
+    // The direct render holds the echo's moved copy where only that copy reaches, so two renders
+    // that both lost the filtered content cannot match vacuously.
+    EXPECT_THAT(PixelAt(directBitmap, 78 + shift.x, 72 + shift.y), RgbaEq(224, 80, 144, 255));
     editor::tests::CompareBitmapToBitmap(patternBitmap, directBitmap,
                                          "filter_inside_pattern_tile_" + std::string(label),
                                          editor::tests::PixelmatchIdentityParams());
