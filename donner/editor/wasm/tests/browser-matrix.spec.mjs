@@ -664,6 +664,27 @@ test("the Editor WASM chromium-default lane owns the Chromium editor specs", () 
   }
 });
 
+// A browser lane pays for a browser and a served package; a case that never takes a page pays
+// for neither. Page-free presentation cases run under Node with the unit tests instead.
+test("browser presentation cases that take no page run under Node", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-presentation-regression.spec.ts"), "utf8");
+  const nodeTests = readFileSync(path.join(testDirectory, "presentation-evidence_tests.mjs"), "utf8");
+  const pageFree = [
+    ...spec.matchAll(/^test\(\s*"([^"]+)",\s*(?:async\s*)?\(\s*\)\s*=>/gm),
+  ].map(([, title]) => title);
+  assert.deepEqual(pageFree, [], "move page-free cases to presentation-evidence_tests.mjs");
+  const nodeTitles = [...nodeTests.matchAll(/^test\("([^"]+)"/gm)].map(([, title]) => title);
+  assert.equal(nodeTitles.length, 13, "the page-free presentation cases keep running");
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const target = buildFile
+    .split("js_test(\n")
+    .find((body) => body.startsWith("    name = \"presentation_evidence_tests\","))
+    ?.split("\n)\n")[0];
+  assert.ok(target, "the Node presentation cases need their own target");
+  assert.match(target, /entry_point = "presentation-evidence_tests\.mjs"/);
+  assert.doesNotMatch(target, /tags = |@playwright\/\/:|target_compatible_with/);
+});
+
 test("every Bazel Playwright config is loaded by a Bazel lane", () => {
   const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
   const bazelConfigs = readdirSync(testDirectory)

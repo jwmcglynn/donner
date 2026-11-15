@@ -377,6 +377,67 @@ js_test(
     node_options = ["--test"],
 )
 
+# The capture, evidence and diagnosis helpers of browser-presentation-regression.spec.ts, bundled
+# for Node with Playwright and pngjs left to the test's own node_modules.
+js_run_binary(
+    name = "presentation_evidence_node",
+    testonly = True,
+    srcs = [
+        "basic-shapes-capture-gate.ts",
+        "browser-bitmap-comparator.ts",
+        "browser-runtime-diagnostics.ts",
+        "canvas-capture-fault.ts",
+        "canvas-color-stats.ts",
+        "canvas-quiescent-capture.mjs",
+        "failure-canvas-evidence.ts",
+        "flat-capture-retake.mjs",
+        "overlay-bitmap-compare.ts",
+        "png-crop.ts",
+        "png-crop-core.mjs",
+        "presentation-evidence.ts",
+        "presentation-evidence-node.ts",
+        "startup-phases.mjs",
+        "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
+        "test-timing.cjs",
+        "test-timing.ts",
+    ],
+    outs = ["presentation-evidence-node.cjs"],
+    args = [
+        "presentation-evidence-node.ts",
+        "--bundle",
+        "--platform=node",
+        "--format=cjs",
+        "--external:@playwright/test",
+        "--external:pngjs",
+        "--outfile=presentation-evidence-node.cjs",
+    ],
+    chdir = package_name(),
+    tool = ":esbuild",
+)
+
+# The page-free cases of browser-presentation-regression.spec.ts: fake pages, synthetic PNGs and
+# fixed records drive its helpers under Node, so they run with the unit tests on every platform
+# instead of needing a browser lane.
+js_test(
+    name = "presentation_evidence_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-presentation-regression.spec.ts-snapshots/basic-shapes-compositor-tile-overlay-darwin.png",
+        ":node_modules/@playwright/test",
+        ":node_modules/pngjs",
+        ":presentation_evidence_node",
+        "//donner/editor/tests:standalone_geode_browser_png_compare",
+    ],
+    entry_point = "presentation-evidence_tests.mjs",
+    env = {
+        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
+        "DONNER_PRESENTATION_EVIDENCE": "$(rootpath :presentation_evidence_node)",
+    },
+    node_options = ["--test"],
+)
+
 # Drives the canvas surface path of the GPU bridge's JavaScript library against a stub canvas and
 # a stub GPU device, so the library's own code runs under the normal test gate rather than only in
 # a browser. The C++ half of the bridge is covered separately by //donner/gpu/browser:browser_tests.
