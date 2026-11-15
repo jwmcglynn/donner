@@ -2142,6 +2142,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // active, mapping pattern-tile units to tile-texture pixels so the
     // encoder's viewport math works out.
     Vector2d rasterScale = Vector2d(1.0, 1.0);
+    /// Filter captures open when the tile began. They hold the target the tile interrupted, not
+    /// the tile, so only captures opened inside the tile move what is drawn into it.
+    std::size_t filterStackDepth = 0;
 
     // Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
     // consume the outer element's pattern slots (e.g. a `context-fill` pattern shared between
@@ -2758,11 +2761,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// A capture with an input margin holds the content its region reaches above or left of its
   /// outer target, moved by that margin, and a capture nested in another is moved within it, so
   /// the margins of every capture on the stack add up.
-  [[nodiscard]] Vector2i filterCaptureOffset() const {
+  /// @param firstFrame Index of the first capture counted; captures below it draw into another
+  ///   target, such as the one a pattern tile interrupted.
+  [[nodiscard]] Vector2i filterCaptureOffset(std::size_t firstFrame = 0) const {
     Vector2i offset = Vector2i::Zero();
-    for (const FilterStackFrame& frame : filterStack) {
-      offset.x += frame.filterBufferOffsetX;
-      offset.y += frame.filterBufferOffsetY;
+    for (std::size_t index = firstFrame; index < filterStack.size(); ++index) {
+      offset.x += filterStack[index].filterBufferOffsetX;
+      offset.y += filterStack[index].filterBufferOffsetY;
     }
     return offset;
   }
@@ -6309,8 +6314,12 @@ void RendererGeode::setTransform(const Transform2d& transform) {
   // raster scale onto the transform so draws submitted to the tile encoder
   // map 1:1 onto the tile texture's pixel grid. (Matches
   // `RendererTinySkia::setTransform`'s `scaleTransformOutput` path.)
+  //
+  // Filter captures opened inside the tile move what is drawn into them, in tile pixels, as they
+  // do outside a tile; captures opened before the tile hold the interrupted target instead.
   if (!impl_->patternStack.empty()) {
-    const Vector2d& scale = impl_->patternStack.back().rasterScale;
+    const Impl::PatternStackFrame& pattern = impl_->patternStack.back();
+    const Vector2d& scale = pattern.rasterScale;
     Transform2d scaled = transform;
     scaled.data[0] *= scale.x;
     scaled.data[2] *= scale.x;
@@ -6318,6 +6327,10 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     scaled.data[1] *= scale.y;
     scaled.data[3] *= scale.y;
     scaled.data[5] *= scale.y;
+    const Vector2i tileCaptureOffset = impl_->filterCaptureOffset(pattern.filterStackDepth);
+    if (tileCaptureOffset.x != 0 || tileCaptureOffset.y != 0) {
+      scaled = scaled * Transform2d::Translate(tileCaptureOffset.x, tileCaptureOffset.y);
+    }
     impl_->deviceFromLocalTransform = scaled;
     return;
   }
@@ -6997,6 +7010,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // encoder's pixelWidth/pixelHeight-based MVP renders the tile at its
   // native resolution.
   frame.rasterScale = rasterMetrics->rasterFromPatternScale;
+  frame.filterStackDepth = impl_->filterStack.size();
   impl_->patternStack.push_back(std::move(frame));
 
   // Redirect all subsequent draw calls into the new tile texture. The new
