@@ -625,7 +625,7 @@ test("the Editor WASM chromium-default lane owns the Chromium editor specs", () 
   // A committed test.only would otherwise narrow the lane to one case and still pass.
   assert.match(
     readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8"),
-    /\n  forbidOnly: Boolean\(process\.env\.CI\),\n/,
+    /\n {2}forbidOnly: Boolean\(process\.env\.CI\),\n/,
   );
   for (const spec of kChromiumDefaultLaneSpecs) assertDefaultLaneDiscovers(spec);
 
