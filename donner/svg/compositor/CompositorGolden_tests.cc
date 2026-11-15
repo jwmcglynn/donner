@@ -1866,8 +1866,7 @@ protected:
     std::string label = std::string("backdrop_tiles_") +
                         ::testing::UnitTest::GetInstance()->current_test_info()->name() + "_" +
                         when;
-    std::ranges::replace_if(
-        label, [](char c) { return c == '/' || c == ' '; }, '_');
+    std::ranges::replace_if(label, [](char c) { return c == '/' || c == ' '; }, '_');
     editor::tests::CompareBitmapToBitmap(ComposedTiles(compositor, reference), reference, label,
                                          editor::tests::PixelmatchIdentityParams());
   }
