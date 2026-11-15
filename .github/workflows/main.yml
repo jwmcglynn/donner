@@ -1252,13 +1252,13 @@ jobs:
       # --xcode_version. Self-hosted lanes pass these same key-affecting flags
       # (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
-      # sandbox; Homebrew's tool wrappers require HOME. The hosted image's virtual
+      # Tests get HOME from --config=ci-macos, never from the runner: a copied
+      # runner home would split test cache keys between runners. The hosted image's virtual
       # GPU cannot run Metal shader validation (docs/metal_validation.md): with the
       # texture check on, validated pipelines fail to compile, so it stays off here.
       # The Metal device tests request API validation only, through the config the
       # Test step passes.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
       # Free space, in GiB, required after the caches are restored: a cold build of the tree
       # peaked near 27 GiB on this image, before tests and browser trees.
       MIN_FREE_DISK_GIB: "45"
@@ -1641,7 +1641,7 @@ jobs:
       deployment: false
     env:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser"
       MIN_FREE_DISK_GIB: "30"
     steps:
       - name: Checkout
@@ -1778,7 +1778,7 @@ jobs:
       # Each build and test command also passes --config=macos-vm, this runner's
       # scheduling budget (.bazelrc), which changes no action key.
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm"
+      BAZEL_MACOS_TEST_FLAGS: "--//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
       # targets need an explicit invocation.
@@ -1987,7 +1987,7 @@ jobs:
     timeout-minutes: 60
     env:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--//build_defs:metal_shader_validation=off --test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=vm-qualification"
+      BAZEL_MACOS_TEST_FLAGS: "--//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=vm-qualification"
       MIN_FREE_DISK_GIB: "30"
     steps:
       - name: Checkout
@@ -2078,7 +2078,7 @@ jobs:
       # --config=ci-macos and --macos_minimum_os=13.3 are the key-affecting
       # flags, identical to the `macos` job's (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal"
       # Free space, in GiB, required on every filesystem this job writes. It
       # bounds the job's working set: infrastructure PRs and full-graph
       # fallbacks build and test all of //... with locally executed actions.
