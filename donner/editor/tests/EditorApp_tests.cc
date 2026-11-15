@@ -1173,6 +1173,19 @@ TEST(EditorAppTest, SetActiveStrokeWidthFromTextReadsTheLeadingNumber) {
   EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
 }
 
+// Style values from replayed actions and the editor-control tool can carry whitespace before the
+// number, which CSS ignores, so the active width must follow the value the selection receives.
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextSkipsLeadingWhitespace) {
+  EditorApp app;
+
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText(" 2.5px"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText("\t\n\f\r 3"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(3.0));
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText(" \t"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(3.0));
+}
+
 // Replayed stroke widths read with the locale-independent parser, so a comma-decimal C locale does
 // not truncate "2.5" to 2.
 TEST(EditorAppTest, SetActiveStrokeWidthFromTextIgnoresACommaDecimalCLocale) {

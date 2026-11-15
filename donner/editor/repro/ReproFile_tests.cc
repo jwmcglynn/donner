@@ -207,6 +207,17 @@ TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
                              Field("displayScale", &ReproMetadata::displayScale, DoubleEq(1.5)))));
 }
 
+// JSON has no number with a trailing decimal point, and the writer never emits one, so `2.` is
+// not a scale and the default stays.
+TEST(ReproFileTest, IgnoresAScaleWithATrailingDecimalPoint) {
+  const auto parsed = ParseReproFile(R"({"v":3,"wnd":[100,100],"scale":2.,"exp":0})"
+                                     "\n");
+  EXPECT_THAT(parsed,
+              Optional(Field("metadata", &ReproFile::metadata,
+                             Field("displayScale", &ReproMetadata::displayScale,
+                                   DoubleEq(ReproMetadata{}.displayScale)))));
+}
+
 // Numbers are written in the classic locale, so a global C++ locale with a decimal comma and
 // grouped thousands does not change what a written file reads back as.
 TEST(ReproFileTest, RoundTripsNumbersUnderACommaDecimalGlobalLocale) {

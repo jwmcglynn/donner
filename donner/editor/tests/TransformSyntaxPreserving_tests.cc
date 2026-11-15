@@ -54,6 +54,21 @@ TEST(TransformSyntaxPreserving, ReadsDecimalNumbersInACommaDecimalLocale) {
   EXPECT_EQ(Reserialize("translate(1.5, 2.5)", target), "translate(15, 27)");
 }
 
+// Whitespace around arguments is skipped before each number is read, so it never reaches the
+// number parser.
+TEST(TransformSyntaxPreserving, ReadsNumbersSurroundedByWhitespace) {
+  const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
+  EXPECT_TRUE(reserializeTransformPreservingSyntax("translate( \t1.5 ,\n2.5 )", target).has_value());
+}
+
+// `5.` is not a number token, and the document's transform parser rejects it as well, so
+// preservation declines and the caller writes canonical syntax.
+TEST(TransformSyntaxPreserving, DeclinesANumberWithATrailingDecimalPoint) {
+  EXPECT_TRUE(svg::parser::TransformParser::Parse("translate(5., 3)").hasError());
+  const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
+  EXPECT_FALSE(reserializeTransformPreservingSyntax("translate(5., 3)", target).has_value());
+}
+
 // --- rotate-only ----------------------------------------------------------
 
 TEST(TransformSyntaxPreserving, RotateOnlyKeepsRotateAtOrigin) {
