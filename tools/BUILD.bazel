@@ -420,6 +420,26 @@ py_test(
     ],
 )
 
+# Keeps `--config=remote-macos` (remote macOS execution from a client on any host OS) complete,
+# free of private runner configuration, identical for Linux and macOS clients, and on the Xcode
+# tuples of tools/ci_macos_xcode.txt.
+py_test(
+    name = "remote_macos_config_tests",
+    size = "small",
+    srcs = ["remote_macos_config_tests.py"],
+    data = [
+        "ci_macos_xcode.txt",
+        "//:.bazelrc",
+        "//:BUILD.bazel",
+        "//tools/ci:BUILD.bazel",
+        "//tools/ci:remote_macos_xcode.bzl",
+    ],
+    deps = [
+        ":bazelrc_configs",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 py_library(
     name = "test_executable_fixtures",
     testonly = 1,

@@ -18,6 +18,8 @@
 ##   --config=clang-tidy        - Build with clang-tidy checks.
 ##   --config=dev               - Disable renderer backend test transitions.
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
+##   --config=remote-macos      - Build and test for macOS arm64 with every action on a remote
+##                                macOS executor, from a client on any host OS.
 ##
 
 # Opt out of usage reporting by third-party Bazel modules. aspect_tools_telemetry, which
@@ -697,6 +699,42 @@ build:buildbuddy-re --strategy=TestRunner=local
 build:buildbuddy-re --noremote_local_fallback
 build:buildbuddy-re --remote_timeout=600s
 build:buildbuddy-re --jobs=50
+
+# Remote macOS execution from a client on any host OS, Linux included: builds and tests for
+# macOS arm64 with every action, tests too, on a remote macOS executor. Usage:
+#   bazel test --config=remote-macos //donner/base/...
+# The executor endpoint, TLS credentials and queue priority are private runner configuration and
+# belong in an untracked rc file, as for `re` (under `build:re` when one endpoint serves both, or
+# under `build:remote-macos-base`). See "Remote macOS execution" in docs/building.md.
+#
+# A client that is not a Mac discovers no Xcode, so the build selects the static configuration of
+# //tools/ci:remote_macos_xcodes, built from tools/ci_macos_xcode.txt, and its default Xcode;
+# //tools:remote_macos_config_tests keeps --xcode_version on the most preferred pinned Xcode with
+# confirmed SDK versions. The executor must have that Xcode at the standard path (`re` sets
+# DEVELOPER_DIR). As on the CI lanes, DONNER_CI_XCODE_IDENTITY comes from the caller's environment,
+# because only the caller knows which Xcode the executor really has: export
+# `<version>-<build>` of the selected tuple, the same value on every client that shares keys.
+#
+# Host-OS configs are off: `build:linux` (and `build:macos`, applied explicitly below) would
+# otherwise be chosen by the client's OS, so a Linux client would pass -fno-modules to the macOS
+# compiles and get different action keys from a macOS client. Other rc lines for the client's OS
+# in a user or system rc are skipped for the same reason.
+build:remote-macos-base --noenable_platform_specific_config
+build:remote-macos-base --config=macos --config=ci-macos --config=re
+build:remote-macos-base --platforms=//:macos_aarch64
+build:remote-macos-base --xcode_version_config=//tools/ci:remote_macos_xcodes
+build:remote-macos-base --xcode_version=27.2
+build:remote-macos-base --spawn_strategy=remote
+build:remote-macos-base --strategy=CppCompile=remote
+build:remote-macos-base --strategy=CppLink=remote
+build:remote-macos-base --strategy=TestRunner=remote
+build:remote-macos-base --noremote_local_fallback
+# Execution platforms accumulate and the first compatible one wins, so each variant names exactly
+# one. The GPU variant sends every action, not only tests, to executors that have a GPU.
+build:remote-macos --config=remote-macos-base
+build:remote-macos --extra_execution_platforms=//tools/ci:remote_macos_aarch64
+build:remote-macos-gpu --config=remote-macos-base
+build:remote-macos-gpu --extra_execution_platforms=//tools/ci:remote_macos_aarch64_gpu
 
 # CI lanes on the BuildBuddy remote cache (the GitHub-hosted lanes and the
 # self-hosted macOS lane) may write a remote-cache fragment here via the
