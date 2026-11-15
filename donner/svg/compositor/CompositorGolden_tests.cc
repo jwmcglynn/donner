@@ -1774,20 +1774,28 @@ public:
     }
   }
 
-  /// Largest channel difference from @p reference, in 8-bit units.
-  [[nodiscard]] int maxDifference(const RendererBitmap& reference) {
-    int maxDiff = 0;
-    for (int y = 0; y < size_.y; ++y) {
-      for (int x = 0; x < size_.x; ++x) {
-        const std::array<float, 4> want = PremultipliedPixel(reference, x, y);
-        const std::array<float, 4>& got = *at(x, y);
-        for (int c = 0; c < 4; ++c) {
-          maxDiff =
-              std::max(maxDiff, static_cast<int>(std::lround(std::abs(want[c] - got[c]) * 255.0f)));
-        }
+  /// The canvas as an RGBA8 bitmap with @p alphaType, for the canonical bitmap comparison.
+  [[nodiscard]] RendererBitmap toBitmap(AlphaType alphaType) const {
+    RendererBitmap bitmap;
+    bitmap.dimensions = size_;
+    bitmap.rowBytes = static_cast<size_t>(size_.x) * 4u;
+    bitmap.alphaType = alphaType;
+    bitmap.pixels.resize(bitmap.rowBytes * static_cast<size_t>(size_.y));
+    const auto toByte = [](float value) {
+      return static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+    };
+    for (size_t i = 0; i < pixels_.size(); ++i) {
+      const std::array<float, 4>& pixel = pixels_[i];
+      const float alpha = pixel[3];
+      // Unpremultiplied color is undefined at zero alpha; write transparent black there.
+      const float scale =
+          alphaType == AlphaType::Premultiplied ? 1.0f : (alpha > 0.0f ? 1.0f / alpha : 0.0f);
+      for (int c = 0; c < 3; ++c) {
+        bitmap.pixels[i * 4u + c] = toByte(pixel[c] * scale);
       }
+      bitmap.pixels[i * 4u + 3] = toByte(alpha);
     }
-    return maxDiff;
+    return bitmap;
   }
 
 private:
@@ -1811,10 +1819,10 @@ RendererBitmap TilePixels(const CompositorTile& tile) {
 }
 
 /// Lays the upload tiles over a transparent canvas in paint order, source-over at their canvas
-/// positions, as the editor presents them, and returns the largest channel difference from
-/// @p reference.
-int MaxDifferenceOfComposedTiles(const CompositorController& compositor,
-                                 const RendererBitmap& reference) {
+/// positions, as the editor presents them, and returns the result in @p reference's size and alpha
+/// type.
+RendererBitmap ComposedTiles(const CompositorController& compositor,
+                             const RendererBitmap& reference) {
   TileCanvas canvas(reference.dimensions);
   std::vector<CompositorTile> tiles = compositor.snapshotTilesForUpload();
   std::ranges::sort(tiles, {}, &CompositorTile::paintOrderIndex);
@@ -1828,7 +1836,7 @@ int MaxDifferenceOfComposedTiles(const CompositorController& compositor,
     canvas.drawSourceOver(bitmap, Vector2i(static_cast<int>(std::lround(origin.x)),
                                            static_cast<int>(std::lround(origin.y))));
   }
-  return canvas.maxDifference(reference);
+  return canvas.toBitmap(reference.alphaType);
 }
 
 struct BackdropFilterCase {
@@ -1855,7 +1863,13 @@ protected:
     svg::Renderer referenceRenderer;
     referenceRenderer.draw(document);
     const RendererBitmap reference = referenceRenderer.takeSnapshot();
-    EXPECT_LE(MaxDifferenceOfComposedTiles(compositor, reference), 2) << when;
+    std::string label = std::string("backdrop_tiles_") +
+                        ::testing::UnitTest::GetInstance()->current_test_info()->name() + "_" +
+                        when;
+    std::ranges::replace_if(
+        label, [](char c) { return c == '/' || c == ' '; }, '_');
+    editor::tests::CompareBitmapToBitmap(ComposedTiles(compositor, reference), reference, label,
+                                         editor::tests::PixelmatchIdentityParams());
   }
 };
 
