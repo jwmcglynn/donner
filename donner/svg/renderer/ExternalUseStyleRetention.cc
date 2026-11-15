@@ -285,14 +285,31 @@ void ForgetInputsReachedByRestyle(Registry& registry, ExternalUseRetainedState& 
   }
 }
 
-/// Restyle \p occurrence's subtree for its inputs, forgetting the inputs of every retained subtree
-/// the restyle overlaps. Returns the occurrence's entry, which records the inputs only when
-/// \p retain is set.
+/**
+ * Restyle \p occurrence's subtree for its inputs. Every retained ancestor subtree is restored to
+ * the document's own styles first, since the subtree reads its ancestors, such as the root's font
+ * size for rem lengths. Forgets the inputs of every retained subtree the restyle overlaps. Returns
+ * the occurrence's entry, which records the inputs only when \p retain is set.
+ */
 RetainedSubtree& RestyleForOccurrence(Registry& registry, ExternalUseRetainedState& state,
                                       const ExternalUseStyleContext& occurrence, bool retain) {
-  InvalidateSubtree(registry, occurrence.root);
+  std::vector<Entity> restored{occurrence.root};
+  for (const RetainedSubtree& other : state.subtrees) {
+    if (other.root != occurrence.root && IsAncestorOrSelf(registry, other.root, occurrence.root)) {
+      restored.push_back(other.root);
+    }
+  }
+  for (const Entity root : restored) {
+    InvalidateSubtree(registry, root);
+  }
+  std::erase_if(state.subtrees, [&](const RetainedSubtree& s) {
+    return s.root != occurrence.root &&
+           std::find(restored.begin(), restored.end(), s.root) != restored.end();
+  });
   for (RetainedSubtree& other : state.subtrees) {
-    if (other.root != occurrence.root && Overlaps(registry, other.root, occurrence.root)) {
+    if (other.root != occurrence.root &&
+        std::any_of(restored.begin(), restored.end(),
+                    [&](Entity root) { return Overlaps(registry, other.root, root); })) {
       other.inputs.reset();
     }
   }

@@ -26,6 +26,8 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -560,6 +562,67 @@ TEST(RetainedRenderTreeUpdateTest, ExternalUseViewportSettersMatchFreshDocuments
 TEST(RetainedRenderTreeUpdateTest, ExternalUseViewportAttributesMatchFreshDocuments) {
   ExpectUseViewportEditsMatchFreshDocuments(MakeExternalViewportHost, GeometryWrite::Attributes,
                                             "external-use-viewport-attributes");
+}
+
+RendererBitmap RenderFresh(std::string_view source) {
+  SVGDocument document = Parse(source);
+  Renderer renderer;
+  renderer.draw(document);
+  return renderer.takeSnapshot();
+}
+
+// A geometry write on a presented external use admits its document again; when that admission is
+// refused, the use stops drawing the document, on the retained path as on the full rebuild.
+TEST(RetainedRenderTreeUpdateTest, ExternalUseRefusedReadmissionAfterResizeDrawsNothing) {
+  constexpr std::string_view kEmpty =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>)";
+  for (const ExpectedPath path : {ExpectedPath::Retained, ExpectedPath::FullRebuild}) {
+    const std::string label = path == ExpectedPath::Retained ? "refused-readmission-retained"
+                                                             : "refused-readmission-full";
+    std::optional<ExternalUseDocument> host = MakeExternalUseDocument(
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)"
+        R"(<use id="use" href="sprites.svg#a" width="8" height="8"/></svg>)",
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)"
+        R"(<rect id="a" width="16" height="16" fill="red"/></svg>)");
+    ASSERT_TRUE(host.has_value());
+    if (path == ExpectedPath::FullRebuild) {
+      DisableRetainedUpdates(host->document);
+    }
+    Renderer renderer;
+    renderer.draw(host->document);
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(),
+        RenderFresh(R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)"
+                    R"(<rect width="16" height="16" fill="red"/></svg>)"),
+        label + "-admitted", editor::tests::PixelmatchIdentityParams());
+    const RenderTreeState::Counters before = ReadCounters(host->document);
+
+    // A family member that allows a single entity tightens the shared limits below what the
+    // external document needs, whether or not binding the empty member itself succeeds.
+    Registry stricter;
+    {
+      const DocumentReadAccess access = host->document.readAccess();
+      stricter.ctx().emplace<components::DocumentResourceFamilyContext>(
+          host->document.unsafeRegistry().ctx().get<components::DocumentResourceFamilyContext>());
+    }
+    (void)stricter.ctx()
+        .emplace<components::SubDocumentCache>(
+            components::SubDocumentCache::Limits{.maximumAggregateEntities = 1})
+        .bindFamily(stricter);
+
+    host->document.querySelector("#use")->cast<SVGUseElement>().setWidth(Lengthd(12));
+    renderer.draw(host->document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderFresh(kEmpty),
+                                         label + "-refused",
+                                         editor::tests::PixelmatchIdentityParams());
+    const RenderTreeState::Counters after = ReadCounters(host->document);
+    if (path == ExpectedPath::Retained) {
+      EXPECT_EQ(after.retainedUpdates, before.retainedUpdates + 1) << label;
+      EXPECT_EQ(after.fullRebuilds, before.fullRebuilds) << label;
+    } else {
+      EXPECT_EQ(after.fullRebuilds, before.fullRebuilds + 1) << label;
+    }
+  }
 }
 
 FrameEdit SetTransformAttribute(std::string selector) {

@@ -103,13 +103,6 @@ RendererBitmap Draw(Renderer& renderer, SVGDocument& document) {
   return tight;
 }
 
-void ExpectSameBitmap(const RendererBitmap& actual, const RendererBitmap& expected,
-                      const std::string& label) {
-  ASSERT_FALSE(expected.empty());
-  editor::tests::CompareBitmapToBitmap(actual, expected, label,
-                                       editor::tests::PixelmatchIdentityParams());
-}
-
 /// Sprite frames inside a hidden container, the way generated sprite sheets keep their frames out
 /// of the sheet's own rendering. `sprite-blur` blurs a group that holds a translucent group, and
 /// `sprite-glow` filters a single shape.
@@ -177,7 +170,9 @@ void ExpectSpriteMatchesInDocument(std::string_view sprite) {
   const RendererBitmap expected = Draw(localRenderer, local);
   ExpectDimmedBackdrop(expected);
   ExpectDimmedBackdrop(actual);
-  ExpectSameBitmap(actual, expected, "sub-document-filters-" + std::string(sprite));
+  editor::tests::CompareBitmapToBitmap(actual, expected,
+                                       "sub-document-filters-" + std::string(sprite),
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(SubDocumentFiltersTest, FilteredGroupInExternalTargetMatchesInDocument) {
@@ -205,7 +200,9 @@ TEST(SubDocumentFiltersTest, RetargetedFilteredFramesMatchInDocument) {
     const RendererBitmap actual = Draw(externalRenderer, external);
     const RendererBitmap expected = Draw(localRenderer, local);
     ExpectDimmedBackdrop(actual);
-    ExpectSameBitmap(actual, expected, "sub-document-filters-frame-" + std::to_string(frame));
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "sub-document-filters-frame-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -243,7 +240,8 @@ TEST(SubDocumentFiltersTest, WholeDocumentUseKeepsHostGroupLayerAndFilters) {
     Renderer externalRenderer;
     const RendererBitmap actual = Draw(externalRenderer, external);
     EXPECT_THAT(PixelAt(actual, 24, 8), test::Rgba(Gt(100), Gt(100), Gt(100), 255));
-    ExpectSameBitmap(actual, expected, "sub-document-filters-whole-document");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "sub-document-filters-whole-document",
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -275,7 +273,8 @@ TEST(SubDocumentFiltersTest, ReferencedContentUnderHostFilterIsNotCulled) {
     Renderer externalRenderer;
     const RendererBitmap actual = Draw(externalRenderer, external);
     EXPECT_THAT(PixelAt(actual, 8, 8), test::Rgba(Lt(60), Lt(100), Gt(180), 255));
-    ExpectSameBitmap(actual, expected, "sub-document-filters-host-filter");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "sub-document-filters-host-filter",
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -300,7 +299,9 @@ TEST(SubDocumentFiltersTest, HostGroupFilterAroundExternalUseMatchesInDocument) 
   const RendererBitmap expected = Draw(localRenderer, local);
   // The tint paints the occurrence red.
   EXPECT_THAT(PixelAt(expected, 16, 12), test::Rgba(Gt(200), Lt(30), Lt(30), 255));
-  ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-filters-host-tint");
+  editor::tests::CompareBitmapToBitmap(Draw(externalRenderer, external), expected,
+                                       "sub-document-filters-host-tint",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Masks and objectBoundingBox clip paths on a host group around an external `<use>` resolve
@@ -328,8 +329,9 @@ TEST(SubDocumentFiltersTest, HostMaskAndBoxClipAroundExternalUseMatchInDocument)
     const RendererBitmap expected = Draw(localRenderer, local);
     // The effect keeps the occurrence's top-left quarter.
     EXPECT_THAT(PixelAt(expected, 9, 7), test::Rgba(Lt(60), Lt(120), Gt(180), 255));
-    ExpectSameBitmap(Draw(externalRenderer, external), expected,
-                     "sub-document-host-effect-" + std::to_string(i));
+    editor::tests::CompareBitmapToBitmap(Draw(externalRenderer, external), expected,
+                                         "sub-document-host-effect-" + std::to_string(i),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -417,7 +419,8 @@ void ExpectExternalMatchesInDocument(const std::string& label, std::string_view 
             documents);
   Renderer externalRenderer;
   Renderer localRenderer;
-  ExpectSameBitmap(Draw(externalRenderer, external), Draw(localRenderer, local), label);
+  editor::tests::CompareBitmapToBitmap(Draw(externalRenderer, external), Draw(localRenderer, local),
+                                       label, editor::tests::PixelmatchIdentityParams());
 }
 
 constexpr std::string_view kTint =
@@ -496,7 +499,9 @@ TEST(SubDocumentFiltersTest, NestedExternalUsesUnderBoxEffects) {
   const RendererBitmap expected = Draw(localRenderer, local);
   // The box spans both levels, so its left half keeps part of the leaf, tinted red.
   EXPECT_THAT(PixelAt(expected, 12, 18), test::Rgba(Gt(120), Lt(80), Lt(80), 255));
-  ExpectSameBitmap(Draw(externalRenderer, external), expected, "sub-document-nested");
+  editor::tests::CompareBitmapToBitmap(Draw(externalRenderer, external), expected,
+                                       "sub-document-nested",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Measuring an occurrence in the filter pre-pass, while the referenced document's render tree was
@@ -534,8 +539,9 @@ TEST(SubDocumentFiltersTest, MeasuredOccurrenceAfterAnotherMatchesFreshRender) {
       SCOPED_TRACE(frame);
       SVGDocument fresh = Parse(source, documents);
       Renderer freshRenderer;
-      ExpectSameBitmap(Draw(renderer, document), Draw(freshRenderer, fresh),
-                       "sub-document-measured-after-other");
+      editor::tests::CompareBitmapToBitmap(Draw(renderer, document), Draw(freshRenderer, fresh),
+                                           "sub-document-measured-after-other",
+                                           editor::tests::PixelmatchIdentityParams());
     }
   }
 }
@@ -575,8 +581,10 @@ TEST(SubDocumentFiltersTest, FeImageExternalContentStaysOutOfOtherBoxes) {
     const auto leftHalf = [](const RendererBitmap& bitmap) {
       return editor::tests::CropBitmap(bitmap, Vector2i(0, 0), Vector2i(16, 32));
     };
-    ExpectSameBitmap(leftHalf(actual), leftHalf(expected),
-                     "feimage_external_left_half_frame_" + std::to_string(frame));
+    editor::tests::CompareBitmapToBitmap(
+        leftHalf(actual), leftHalf(expected),
+        "feimage_external_left_half_frame_" + std::to_string(frame),
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 

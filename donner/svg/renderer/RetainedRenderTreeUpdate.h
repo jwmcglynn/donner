@@ -57,7 +57,8 @@ void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
 /**
  * Give an external `<use>` the document its reference names, as an \ref ExternalUseComponent.
  * The document is admitted to the resource family once per full rebuild, and again when the
- * document's families change, see \ref ResourceManagerContext::loadAdmittedExternalSVG.
+ * document's families change, see \ref ResourceManagerContext::loadAdmittedExternalSVG. A refused
+ * admission removes any instance the use already had.
  *
  * @param registry Document registry.
  * @param entity The `<use>` element.
