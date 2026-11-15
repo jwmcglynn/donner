@@ -1999,8 +1999,11 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
   const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
                                 Vector2d(geometry->blurPadding + frame.filterRegion->width(),
                                          geometry->blurPadding + frame.filterRegion->height()));
+  // The padded local raster holds source content beyond the filter region. The filter region
+  // bounds SourceGraphic, so crop it before the blur reads that padding. In this local space the
+  // region is axis-aligned even when the device transform skews or rotates it.
   ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localFromFilter, localFilterRegion,
-                           false);
+                           /*clipSourceToFilterRegion=*/true);
   ClipFilterOutputToRegion(localPixmap, localFilterRegion, localFromFilter);
 
   const Transform2d deviceFromLocal =
@@ -2990,7 +2993,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       const auto& span = text.spans[runIndex];
       spanPaintOrder = span.paintOrder;
       spanOpacity = span.opacity;
-      const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+      const css::RGBA spanCurrentColor = paint_.currentColor;
       const float spanFillOpacity = NarrowToFloat(span.fillOpacity);
       const float spanStrokeOpacity = NarrowToFloat(span.strokeOpacity);
 
@@ -3091,13 +3094,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             // Resolve paint from the element that originated this decoration.
             std::optional<tiny_skia::Paint> decoFillPaint;
             if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.fill)) {
-              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const css::RGBA spanCurrentColor = paint_.currentColor;
               const float fillOpacity = NarrowToFloat(decoration.fillOpacity);
               decoFillPaint = makeSolidPaint(
                   css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
             } else if (const auto* ref =
                            std::get_if<components::PaintResolvedReference>(&decoration.fill)) {
-              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const css::RGBA spanCurrentColor = paint_.currentColor;
               const float combinedOpacity =
                   NarrowToFloat(decoration.fillOpacity) * static_cast<float>(span.opacity);
               if (auto shader =
@@ -3126,13 +3129,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
             std::optional<tiny_skia::Paint> decoStrokePaint;
             if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.stroke)) {
-              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const css::RGBA spanCurrentColor = paint_.currentColor;
               const float strokeOpacity = NarrowToFloat(decoration.strokeOpacity);
               decoStrokePaint = makeSolidPaint(
                   css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
             } else if (const auto* ref =
                            std::get_if<components::PaintResolvedReference>(&decoration.stroke)) {
-              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const css::RGBA spanCurrentColor = paint_.currentColor;
               const float combinedOpacity =
                   NarrowToFloat(decoration.strokeOpacity) * static_cast<float>(span.opacity);
               if (auto shader =
@@ -3485,7 +3488,7 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeFillPaint(const Box2d& bou
     return paint;
   }
 
-  const css::RGBA currentColor = paint_.currentColor.rgba();
+  const css::RGBA currentColor = paint_.currentColor;
   const float fillOpacity = NarrowToFloat(paint_.fillOpacity);
 
   if (const auto* solid = std::get_if<PaintServer::Solid>(&paint_.fill)) {
@@ -3525,7 +3528,7 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeStrokePaint(const Box2d& b
     return paint;
   }
 
-  const css::RGBA currentColor = paint_.currentColor.rgba();
+  const css::RGBA currentColor = paint_.currentColor;
   const float strokeOpacity = NarrowToFloat(paint_.strokeOpacity);
 
   if (const auto* solid = std::get_if<PaintServer::Solid>(&paint_.stroke)) {

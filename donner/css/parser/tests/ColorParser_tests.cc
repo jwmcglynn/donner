@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/css/Color.h"
 
 using testing::ElementsAre;
@@ -485,6 +486,14 @@ TEST(ColorParser, LargeFractionPercentage) {
                                        "98.431372549019607843137254901961%,"
                                        "59.60784313725490196078431372549%)"),
               ParseResultIs(Color(RGBA(152, 251, 152, 255))));
+}
+
+// Color names are lowercased with ASCII-only folding, so the diagnostic shows the authored bytes.
+TEST(ColorParser, InvalidNameDiagnosticKeepsNonAsciiBytesInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    EXPECT_THAT(ColorParser::ParseString("\xC3\x89RED"),
+                ParseErrorIs("Invalid color '\xC3\x89red'"));
+  });
 }
 
 }  // namespace donner::css::parser

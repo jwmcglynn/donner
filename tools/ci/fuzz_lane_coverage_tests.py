@@ -26,7 +26,7 @@ def _graph():
         "//donner/svg/text:font_decoder_fuzzer_soak": {"fuzz_target", "fuzz_soak",
                                                        "fuzz_text_full"},
         "//donner/svg/renderer/geode:budget_fuzzer_soak": {"fuzz_target", "fuzz_soak",
-                                                           "fuzz_geode", "exclusive-if-local"},
+                                                           "fuzz_geode", "resources:local_gpu:1"},
         "//donner/svg/renderer/tests:text_geode_fuzzer_soak": {"fuzz_target", "fuzz_soak",
                                                                "fuzz_geode", "fuzz_text_full"},
         _PRODUCTION_SOAK: {"fuzz_target", "fuzz_soak", "manual"},

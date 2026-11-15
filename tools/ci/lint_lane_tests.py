@@ -16,10 +16,12 @@ _CHECKS = [
     ["tools/lint.sh"],
     ["python3", "tools/lint_braces_tests.py"],
     ["python3", "tools/check_design_doc_provenance.py"],
+    ["python3", "tools/check_design_doc_index.py"],
     ["python3", "tools/check_private_details.py"],
     ["python3", "tools/check_js_lint_coverage.py"],
     ["python3", "tools/rust_boundary/check_no_rust_dependencies.py", "--blocking", "default"],
     ["python3", "tools/ci/fuzz_lane_coverage.py"],
+    ["python3", "build_defs/check_local_gpu_tags.py"],
 ]
 
 

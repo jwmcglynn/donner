@@ -8,6 +8,7 @@
 #include <sstream>
 #include <utility>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Path.h"
 #include "donner/base/parser/NumberParser.h"
@@ -397,8 +398,7 @@ bool AccumulateMotion(const AnimateMotionComponent& motion, const Path& path, do
 }
 
 std::string FormatMotionTransform(const Vector2d& point, double angle) {
-  std::ostringstream result;
-  result.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream result = MakeClassicNumberStream();
   result << "translate(" << point.x << ", " << point.y << ")";
   if (angle != 0) {
     result << " rotate(" << angle << ")";

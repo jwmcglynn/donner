@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/RcString.h"
+#include "donner/base/tests/ScopedCtypeLocale.h"
 
 using namespace std::string_view_literals;
 using testing::ElementsAre;
@@ -48,6 +49,14 @@ TEST(CaseInsensitiveCharTraits, Compare) {
   EXPECT_EQ(CaseInsensitiveCharTraits::compare("AbC", "aBc", 3), 0);
   EXPECT_EQ(CaseInsensitiveCharTraits::compare("abc", "abd", 3), -1);
   EXPECT_EQ(CaseInsensitiveCharTraits::compare("xyz", "abc", 3), 1);
+}
+
+// compare() orders bytes the same way lt() does, as unsigned values, including bytes above 0x7F.
+TEST(CaseInsensitiveCharTraits, CompareOrdersHighBytesLikeLt) {
+  EXPECT_TRUE(CaseInsensitiveCharTraits::lt('a', '\x80'));
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("a", "\x80", 1), -1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("\xFF", "Z", 1), 1);
+  EXPECT_EQ(CaseInsensitiveCharTraits::compare("\x80", "\x80", 1), 0);
 }
 
 TEST(CaseInsensitiveCharTraits, Find) {
@@ -273,6 +282,38 @@ TEST(StringUtils, TrimWhitespace) {
   EXPECT_EQ(StringUtils::TrimWhitespace("  \t\n\r\v\f  "sv), ""sv);
   EXPECT_EQ(StringUtils::TrimWhitespace("  \t\n\r\v\f  hello world  \t\n\r\v\f  "sv),
             "hello world"sv);
+}
+
+TEST(StringUtils, ToLowerAscii) {
+  EXPECT_EQ(StringUtils::ToLowerAscii(""sv), "");
+  EXPECT_EQ(StringUtils::ToLowerAscii("Noto SANS Mono-42"sv), "noto sans mono-42");
+  EXPECT_EQ(StringUtils::ToLowerAscii(RcString("@[`{")), "@[`{");
+  const std::string capitalEAcuteUtf8 = "\xC3\x89";
+  EXPECT_EQ(StringUtils::ToLowerAscii(capitalEAcuteUtf8 + "COLE"), capitalEAcuteUtf8 + "cole");
+}
+
+// Case-insensitive comparisons fold only ASCII letters, so their result does not depend on the
+// process locale; in a Latin-1 locale `tolower(0xC3)` is 0xE3.
+TEST(StringUtils, IgnoreCaseFoldsOnlyAsciiInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    EXPECT_FALSE(StringUtils::Equals<StringComparison::IgnoreCase>("\xC3\x89"sv, "\xE3\x89"sv));
+    EXPECT_TRUE(StringUtils::Equals<StringComparison::IgnoreCase>("Noto SANS"sv, "noto sans"sv));
+    EXPECT_FALSE(StringUtils::EqualsLowercase("\xC3"sv, "\xE3"sv));
+    EXPECT_TRUE(StringUtils::EqualsLowercase("SANS"sv, "sans"sv));
+    EXPECT_FALSE(StringUtils::Contains<StringComparison::IgnoreCase>("a\xC3z"sv, "\xE3"sv));
+    EXPECT_EQ(StringUtils::Find<StringComparison::IgnoreCase>("a\xC3\xE3"sv, "\xE3"sv), 2u);
+  });
+}
+
+TEST(StringUtils, ToLowerAsciiChangesOnlyUppercaseAsciiBytes) {
+  std::string allBytes;
+  std::string expected;
+  for (int byte = 0; byte < 256; ++byte) {
+    const char ch = static_cast<char>(byte);
+    allBytes.push_back(ch);
+    expected.push_back(byte >= 'A' && byte <= 'Z' ? static_cast<char>(byte - 'A' + 'a') : ch);
+  }
+  EXPECT_EQ(StringUtils::ToLowerAscii(allBytes), expected);
 }
 
 // Test multiple occurrences for Contains

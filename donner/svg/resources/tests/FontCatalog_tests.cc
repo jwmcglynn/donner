@@ -9,6 +9,8 @@
 #include <ranges>
 #include <string>
 
+#include "donner/base/StringUtils.h"
+#include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/resources/FontManager.h"
@@ -206,6 +208,20 @@ TEST(FontCatalogTest, EmbeddedShadowsSystemForDuplicateFamily) {
   EXPECT_EQ(data[0], 0xAB);
 }
 
+// Family keys fold only ASCII case, matching FontManager's family keys, so distinct non-ASCII bytes
+// stay distinct under a C locale whose `tolower` remaps bytes above 0x7F (for example Latin-1).
+TEST(FontCatalogTest, FamilyDedupFoldsOnlyAsciiCase) {
+  std::vector<std::unique_ptr<FontFamilyProvider>> providers;
+  providers.push_back(std::make_unique<MarkerProvider>(
+      std::vector<std::string>{"\xC3\xA9", "\xE3\xA9", "Inter", "INTER"}, FontSource::System,
+      0x01));
+  FontCatalog catalog(std::move(providers));
+
+  ForEachCtypeLocaleForTesting([&] {
+    EXPECT_THAT(familyNames(catalog.families()), ElementsAre("INTER", "\xC3\xA9", "\xE3\xA9"));
+  });
+}
+
 TEST(FontCatalogTest, FamiliesBySourceFilters) {
   std::vector<std::unique_ptr<FontFamilyProvider>> providers;
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"E1", "E2"},
@@ -334,11 +350,10 @@ TEST(SystemFontProviderTest, FamilyLookupMatchesPresentAbsentAndCaseVariants) {
 
   // Layout folds family names when it indexes them, so the provider has to agree on casing.
   std::string upper = present;
-  std::transform(upper.begin(), upper.end(), upper.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-  std::string lower = present;
-  std::transform(lower.begin(), lower.end(), lower.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(upper.begin(), upper.end(), upper.begin(), [](char c) {
+    return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c;
+  });
+  const std::string lower = StringUtils::ToLowerAscii(present);
   EXPECT_TRUE(provider.hasFamily(upper));
   EXPECT_TRUE(provider.hasFamily(lower));
 

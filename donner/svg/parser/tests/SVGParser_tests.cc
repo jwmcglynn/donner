@@ -152,29 +152,30 @@ TEST(SVGParser, Style) {
   EXPECT_THAT(warnings.warnings(), ElementsAre());
 }
 
+// Imports that are diagnosed and ignored at parse time (here, media-conditional ones) report their
+// warnings at the import's position in the SVG document source.
+constexpr std::string_view kIgnoredMediaImport =
+    "CSS @import media conditions other than 'all' are unsupported; this import is ignored";
+
 TEST(SVGParser, CssImportWarningUsesDocumentSourceOffset) {
   const std::string source =
       "<svg xmlns='http://www.w3.org/2000/svg'><style>\n "
-      "@import 'hidden.css'; rect { fill: green; }</style><rect/></svg>";
+      "@import 'hidden.css' screen; rect { fill: green; }</style><rect/></svg>";
   ParseWarningSink warnings;
   EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
   ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
   EXPECT_THAT(warnings.warnings()[0].severity, testing::Eq(DiagnosticSeverity::Warning));
-  EXPECT_THAT(warnings.warnings()[0].reason,
-              testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded"));
+  EXPECT_THAT(warnings.warnings()[0].reason, testing::Eq(kIgnoredMediaImport));
   EXPECT_THAT(warnings.warnings()[0].range.start.offset, testing::Eq(source.find("@import")));
-  EXPECT_THAT(
-      warnings.warnings()[0],
-      ParseWarningIs(
-          2, 1, testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded")));
+  EXPECT_THAT(warnings.warnings()[0], ParseWarningIs(2, 1, testing::Eq(kIgnoredMediaImport)));
 }
 
 TEST(SVGParser, CssImportWarningsMapTextCdataAndSplitKeywords) {
   const std::array<std::string_view, 4> bodies = {
-      "  @import 'hidden.css'; rect { fill: green; }",
-      "<![CDATA[@import 'hidden.css'; rect { fill: green; }]]>",
-      " \n <![CDATA[@import 'hidden.css'; rect { fill: green; }]]>",
-      "  @<![CDATA[import 'hidden.css'; rect { fill: green; }]]>"};
+      "  @import 'hidden.css' screen; rect { fill: green; }",
+      "<![CDATA[@import 'hidden.css' screen; rect { fill: green; }]]>",
+      " \n <![CDATA[@import 'hidden.css' screen; rect { fill: green; }]]>",
+      "  @<![CDATA[import 'hidden.css' screen; rect { fill: green; }]]>"};
   for (const std::string_view body : bodies) {
     SCOPED_TRACE(body);
     const std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>" +
@@ -189,15 +190,14 @@ TEST(SVGParser, CssImportWarningsMapTextCdataAndSplitKeywords) {
 
 TEST(SVGParser, CssImportSourceOffsetCountsUtf8Bytes) {
   const std::string source =
-      "<svg xmlns='http://www.w3.org/2000/svg'><style>/* \xc3\xa9 */ @import 'hidden.css';"
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>/* \xc3\xa9 */ @import 'hidden.css' screen;"
       "rect { fill: green; }</style><rect/></svg>";
   ParseWarningSink warnings;
   EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
   ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
   EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(source.find("@import")));
-  EXPECT_THAT(
-      warnings.warnings().front(),
-      ParseWarningIs(1, source.find("@import"), testing::HasSubstr("@import is unsupported")));
+  EXPECT_THAT(warnings.warnings().front(),
+              ParseWarningIs(1, source.find("@import"), testing::HasSubstr("media conditions")));
 }
 
 TEST(SVGParser, SourceLessCssImportWarningKeepsCssLocalOffset) {
@@ -207,7 +207,7 @@ TEST(SVGParser, SourceLessCssImportWarningKeepsCssLocalOffset) {
   xmlDocument.root().appendChild(svg);
   auto style = xml::XMLNode::CreateElementNode(xmlDocument, "style");
   svg.appendChild(style);
-  auto data = xml::XMLNode::CreateDataNode(xmlDocument, "  @import 'hidden.css';");
+  auto data = xml::XMLNode::CreateDataNode(xmlDocument, "  @import 'hidden.css' screen;");
   style.appendChild(data);
   ParseWarningSink warnings;
   EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlDocument), warnings), NoParseError());
@@ -221,7 +221,8 @@ TEST(SVGParser, CssImportAfterUnmappedChunkBoundaryKeepsCssLocalOffset) {
   // CDATA chunk is mapped. The import starts exactly where that mapped chunk ends, which is not
   // the end of the stylesheet, so it must not be mapped to the end of the CDATA content.
   const std::string source =
-      "<svg xmlns='http://www.w3.org/2000/svg'><style><![CDATA[/*x*/]]>@import 'hidden.css'; "
+      "<svg xmlns='http://www.w3.org/2000/svg'><style><![CDATA[/*x*/]]>@import 'hidden.css' "
+      "screen; "
       "/* &amp; */</style><rect/></svg>";
   ParseWarningSink warnings;
   EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
@@ -248,7 +249,7 @@ TEST(SVGParser, StylesheetPointMappingUsesSegmentEndOnlyAtStylesheetEnd) {
 TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
   std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>";
   for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
-    source += "@import 'hidden.css';";
+    source += "@import 'hidden.css' screen;";
   }
   source += "rect { fill: green; }</style><rect/></svg>";
   ParseWarningSink warnings;
@@ -261,7 +262,7 @@ TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
 TEST(SVGParser, CssImportDiagnosticsDoNotBypassStylesheetPayloadAdmission) {
   constexpr std::string_view source =
       "<svg xmlns='http://www.w3.org/2000/svg'><style>"
-      "@import 'hidden.css'; rect { fill: green; }</style></svg>";
+      "@import 'hidden.css' screen; rect { fill: green; }</style></svg>";
   SVGParser::Options options;
   options.maximumParsedPayloadSize = 4096;
   ParseWarningSink warnings;

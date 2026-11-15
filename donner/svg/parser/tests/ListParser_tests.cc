@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
+
 namespace donner::svg::parser {
 
 using testing::ElementsAre;
@@ -62,6 +64,21 @@ TEST(ListParser, CommaSeparated) {
   EXPECT_THAT(ParseToList("  item1  ,  item2  "), ElementsAre("item1", "item2"));
   EXPECT_THAT(ParseToList("0.0, 0.0"), ElementsAre("0.0", "0.0"));
   EXPECT_THAT(ParseToList("1,2,3"), ElementsAre("1", "2", "3"));
+}
+
+// Separators do not depend on the process locale: a no-break space byte (0xA0), which a UTF-8
+// locale on macOS classifies as space, is part of the item.
+TEST(ListParser, SeparatorsDoNotDependOnLocale) {
+  ForEachCtypeLocaleForTesting(
+      [] { EXPECT_THAT(ParseToList("a\xA0z c"), ElementsAre("a\xA0z", "c")); });
+}
+
+// Items are separated by CSS whitespace (space, tab, line feed, carriage return, form feed) and
+// commas, as in the SVG 2 value syntax of the text positioning attributes; a vertical tab is part
+// of an item.
+TEST(ListParser, VerticalTabDoesNotSeparate) {
+  EXPECT_THAT(ParseToList("a\vb c"), ElementsAre("a\vb", "c"));
+  EXPECT_THAT(ParseToList("a\fb\rc"), ElementsAre("a", "b", "c"));
 }
 
 TEST(ListParser, SpaceSeparated) {

@@ -1,8 +1,8 @@
 #include "donner/css/Declaration.h"
 
-#include <algorithm>
-#include <cctype>
 #include <unordered_map>
+
+#include "donner/base/StringUtils.h"
 
 namespace donner::css {
 
@@ -42,12 +42,13 @@ std::ostream& operator<<(std::ostream& os, const Declaration& declaration) {
 
 namespace {
 
-std::string toLower(std::string_view str) {
-  std::string result(str);
-  for (char& ch : result) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+/// Key that identifies a property for merging. Custom property names (`--*`) are case-sensitive;
+/// other property names match ASCII case-insensitively.
+std::string PropertyKey(const RcString& name) {
+  if (std::string_view(name).starts_with("--")) {
+    return std::string(name);
   }
-  return result;
+  return StringUtils::ToLowerAscii(name);
 }
 
 }  // namespace
@@ -59,7 +60,7 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   updateIndexByName.reserve(updates.size());
   for (size_t i = 0; i < updates.size(); ++i) {
     // Keep the last occurrence of each property name in the updates.
-    updateIndexByName[toLower(updates[i].name)] = i;
+    updateIndexByName[PropertyKey(updates[i].name)] = i;
   }
 
   // Collect existing declarations not overridden by updates.
@@ -67,7 +68,7 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   merged.reserve(existing.size() + updateIndexByName.size());
 
   for (const auto& decl : existing) {
-    if (!updateIndexByName.contains(toLower(decl.name))) {
+    if (!updateIndexByName.contains(PropertyKey(decl.name))) {
       merged.push_back(&decl);
     }
   }
@@ -76,8 +77,8 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   // We need to preserve insertion order, so iterate updates and only emit if this index is the
   // last for its name.
   for (size_t i = 0; i < updates.size(); ++i) {
-    const std::string lowerName = toLower(updates[i].name);
-    if (updateIndexByName[lowerName] == i) {
+    const std::string key = PropertyKey(updates[i].name);
+    if (updateIndexByName[key] == i) {
       merged.push_back(&updates[i]);
     }
   }

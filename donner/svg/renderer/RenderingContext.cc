@@ -2111,6 +2111,15 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
     registry_.ctx().emplace<AnimationStyleContext>();
   }
   registry_.ctx().get<AnimationStyleContext>().enabled = false;
+
+  // Stylesheet imports must be in place before any style is computed. Reloading them changes
+  // which rules match anywhere in the document, so every cached style is discarded, including
+  // styles that queries computed before the first render.
+  if (registry_.ctx().get<components::ResourceManagerContext>().loadStylesheetImports(
+          warningSink)) {
+    StyleSystem::discardComputedStyles(registry_);
+    getRenderTreeState(registry_).needsFullStyleRecompute = true;
+  }
   StyleSystem().computeAllStyles(registry_, warningSink);
 
   // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,

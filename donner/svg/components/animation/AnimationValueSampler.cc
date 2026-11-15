@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/svg/components/animation/AnimationPathValue.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
@@ -157,8 +158,7 @@ void padToExpected(std::vector<double>& nums, TransformAnimationType type) {
 
 /// Format a transform string from type and interpolated values.
 std::string formatTransform(TransformAnimationType type, const std::vector<double>& values) {
-  std::ostringstream oss;
-  oss.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream oss = MakeClassicNumberStream();
 
   switch (type) {
     case TransformAnimationType::Translate:
@@ -317,8 +317,7 @@ std::string RoundAnimationIntegers(const std::string& input) {
   if (!numbers) {
     return {};
   }
-  std::ostringstream output;
-  output.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream output = MakeClassicNumberStream();
   for (std::size_t i = 0; i < numbers->size(); ++i) {
     if ((*numbers)[i].unit != Lengthd::Unit::None) {
       return {};

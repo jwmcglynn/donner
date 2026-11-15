@@ -427,6 +427,15 @@ _donner_multi_transitioned_test = rule(
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
+# Tag for a test that opens a GPU device. It takes one unit of the `local_gpu` resource, which
+# .bazelrc declares with one unit, while the test runs locally: GPU-opening tests run one at a
+# time, alongside CPU-only tests. A hardware adapter is process-global, so this keeps a device
+# loss in one test process from cascading into another. Remote execution does not use local
+# resources. Bazel ignores resource tags when --local_test_jobs is set, so a command that sets it
+# uses 1, which runs every local test serially, or runs no GPU-opening test.
+# //build_defs:geode_test_scheduling_tests enforces this.
+LOCAL_GPU_TEST_TAG = "resources:local_gpu:1"
+
 def donner_multi_transitioned_test(
         name,
         dep,
@@ -441,18 +450,21 @@ def donner_multi_transitioned_test(
       dep: The underlying test target to transition.
       renderer_backend: "tiny_skia", "geode", or "inherit" to preserve the caller backend.
       opens_gpu_device: True when the test actually instantiates a GPU
-        device/adapter. Only those tests get `exclusive-if-local`, which makes
-        Bazel drain them one at a time so a device loss in one process cannot
-        cascade into its neighbours. Selecting the geode BACKEND is not the
-        same thing as opening a device: most variant targets link wgpu-native
-        and never touch it (they use MockRendererInterface, or assert on
-        parsing/ECS/CSS/text-shaping), and tagging those serialized every
-        geode-configured target in the repo into a single-file queue at the
-        end of the test phase.
+        device/adapter. Only those tests get `LOCAL_GPU_TEST_TAG`, which takes
+        the machine's single `local_gpu` resource (.bazelrc) while the test
+        runs locally, so at most one GPU-opening test runs at a time and a
+        device loss in one process cannot cascade into another. Unlike
+        `exclusive-if-local`, the resource does not stop CPU-only tests from
+        running alongside, so these tests overlap the parallel part of the
+        test phase instead of draining one at a time after it. Selecting the
+        geode BACKEND is not the same thing as opening a device: most variant
+        targets link wgpu-native and never touch it (they use
+        MockRendererInterface, or assert on parsing/ECS/CSS/text-shaping), and
+        they need no resource.
       remote_parallel_ci: Emit a second `no-local` wrapper for remote CI. The
         ordinary wrapper keeps local device-loss isolation; the remote wrapper
-        shares its transitioned executable and test attributes but does not
-        enter Bazel's pre-spawn exclusive queue.
+        shares its transitioned executable and test attributes but carries
+        `ci-remote-gpu` and `no-local` instead of the local GPU tags.
       **kwargs: Additional arguments for the underlying test rule.
     """
     if "size" not in kwargs and "timeout" not in kwargs:
@@ -461,8 +473,8 @@ def donner_multi_transitioned_test(
         tags = kwargs.get("tags", [])
         if remote_parallel_ci and "local-gpu-isolated" not in tags:
             tags = tags + ["local-gpu-isolated"]
-        if "exclusive-if-local" not in tags:
-            tags = tags + ["exclusive-if-local"]
+        if LOCAL_GPU_TEST_TAG not in tags:
+            tags = tags + [LOCAL_GPU_TEST_TAG]
         kwargs["tags"] = tags
 
     _donner_multi_transitioned_test(
@@ -477,7 +489,7 @@ def donner_multi_transitioned_test(
         remote_tags = [
             tag
             for tag in remote_kwargs.get("tags", [])
-            if tag not in ["exclusive-if-local", "local-gpu-isolated"]
+            if tag not in [LOCAL_GPU_TEST_TAG, "local-gpu-isolated"]
         ]
         remote_kwargs["tags"] = remote_tags + ["ci-remote-gpu", "no-local"]
         _donner_multi_transitioned_test(
@@ -709,7 +721,8 @@ def donner_cc_test(
         opt-in mechanism that lets `bazel test //...` cover variant lanes
         without per-test `--config=` flags. See doc 0031 M2.3.
       opens_gpu_device: True when this test instantiates a real GPU
-        device/adapter, so its geode-backed variants must be drained serially.
+        device/adapter, so its geode-backed variants must never run alongside
+        another GPU-opening test.
         Forwarded to donner_multi_transitioned_test; see there for why it is
         opt-in rather than implied by the geode backend.
       remote_parallel_ci: Forwarded to donner_multi_transitioned_test for
