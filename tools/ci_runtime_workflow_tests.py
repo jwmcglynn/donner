@@ -1705,19 +1705,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                             "cmake-cache-consumer-%s" % attempt])
         self.assertNotIn("pattern:", download)
 
-    def test_macos_cmake_runs_nightly_on_demand_and_for_cmake_inputs(self):
+    def test_macos_cmake_runs_on_main_pushes_on_demand_and_for_cmake_inputs(self):
         """macOS CMake builds left pull requests that cannot change the CMake build.
 
-        They run nightly on main, on manual dispatch, and on a pull request only when its paths
-        reach a CMake input. A push never runs them, and the Linux consumer in main.yml still
-        builds the generated CMake tree on every pull request and main push.
+        The hosted build runs on every push to main, on manual dispatch, and on a pull request
+        only when its paths reach a CMake input; a branch push does not run it. The per-push run
+        on main makes a nightly run redundant. The Linux consumer in main.yml still builds the
+        generated CMake tree on every pull request and main push.
         """
         trigger = self.cmake.split("\non:\n", 1)[1].split("\n\n", 1)[0]
-        self.assertIn('  push:\n    branches: ["*", "!main"]\n', trigger)
-        self.assertIn("  schedule:\n    - cron: ", trigger)
+        self.assertIn('  push:\n    branches: ["*"]\n', trigger)
+        self.assertNotIn("schedule:", trigger)
         self.assertIn("  workflow_dispatch:", trigger)
         paths = re.findall(r"(?m)^      - (.+)$", trigger.split("  pull_request:\n", 1)[1]
-                           .split("  schedule:", 1)[0])
+                           .split("  workflow_dispatch:", 1)[0])
         self.assertEqual(paths, [
             ".github/workflows/cmake.yml", "CMakePresets.json", '"**/CMakeLists.txt"',
             '"**/*.cmake"', '"**/*.cmake.in"', "examples/cmake_consumer/**", "tools/cmake/**",
@@ -1727,7 +1728,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             condition = next(line for line in self._job_body(job, self.cmake).splitlines()
                              if line.startswith("    if:"))
             if job == "macos":
-                self.assertIn("github.event_name != 'push'", condition)
+                self.assertIn("(github.event_name != 'push' || github.ref == 'refs/heads/main')",
+                              condition)
             else:
                 # The self-hosted build runs only for trusted pull requests.
                 self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'",

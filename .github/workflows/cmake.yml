@@ -6,15 +6,15 @@ env:
   ASPECT_TOOLS_TELEMETRY: "-all"
 
 # The generated CMake build is validated and built on Linux by every CI run of a pull request and
-# of main (main.yml's CMake consumer step). This workflow adds the macOS CMake builds, which run
-# nightly on main and on demand, and on a pull request only when it changes an input that only the
+# of main (main.yml's CMake consumer step). This workflow adds the macOS CMake build, which runs on
+# every push to main, on demand, and on a pull request only when it changes an input that only the
 # CMake build reads: the generator and its dependency map, CMake files, the example consumer, the
 # CMake lane scripts, this workflow, and the module versions the generator turns into FetchContent
 # downloads. Branch pushes before a pull request exists still build and validate the Linux
 # consumer here.
 on:
   push:
-    branches: ["*", "!main"]
+    branches: ["*"]
   pull_request:
     paths:
       - .github/workflows/cmake.yml
@@ -28,8 +28,6 @@ on:
       - tools/ci/cmake_consumer.sh
       - MODULE.bazel
       - third_party/bazel/non_bcr_deps.bzl
-  schedule:
-    - cron: "50 6 * * *"
   workflow_dispatch:
 
 # A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
@@ -166,13 +164,13 @@ jobs:
       - name: Build with CMake (tiny_skia)
         run: tools/ci/cmake_consumer.sh build --check --ccache
 
-  # Nightly on main, on demand, and on pull requests that change a CMake input (the trigger's
-  # paths). A push never runs it.
+  # On every push to main, on demand, and on pull requests that change a CMake input (the
+  # trigger's paths). A branch push does not run it.
   macos:
     runs-on: xcode-27
     timeout-minutes: 60
     needs: gatekeeper
-    if: ${{ github.event_name != 'push' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
+    if: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M

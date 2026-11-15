@@ -58,12 +58,19 @@ TRIGGER_ALLOWLIST = {
     ("build_docs.yaml", "push-only"):
         "Builds the documentation site from main for verified publication. Doxygen warnings "
         "are not errors, so a pull request cannot make it fail through source changes alone.",
+    ("cmake.yml", "pull-request-paths"):
+        "Pull requests run the macOS CMake build only when they change a CMake input (the "
+        "generator, its dependency map, CMake files, the example consumer, the CMake lane "
+        "scripts, the workflow and the FetchContent module versions), to save scarce macOS "
+        "capacity. The Linux CMake consumer in main.yml builds the generated tree on every pull "
+        "request, and main runs the macOS build on every push.",
 }
 
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
     ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
+    ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
     ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
@@ -121,6 +128,16 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
+    ("cmake.yml", "macos", "macos-self-hosted", "Build with CMake (tiny_skia)",
+     "step-changed", "e04392c28e167107"):
+        "The same consumer configure/build/CTest runs with two build tasks and persistent ccache; "
+        "native tool provisioning is checked rather than installed during a PR.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Install build tools", "step-main-only", ""):
+        "The persistent runner must already provide CMake and Ninja; CI does not install host tools.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Restore CMake dependencies", "step-main-only", ""):
+        "Native builds extract verified source archives into fresh build directories.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Restore compiler outputs", "step-main-only", ""):
+        "The bounded native consumer uses persistent ccache instead of hosted snapshots.",
     ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
         "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
@@ -407,7 +424,7 @@ _CACHE_HIT = ("", "A cache restore result only gates that cache's save step; a m
 
 STEP_OUTPUTS = {
     **{"steps.%s.outputs.cache-hit" % step_id: _CACHE_HIT
-       for step_id in ("base-hashes", "bazel-cache", "npm-cache")},
+       for step_id in ("base-hashes", "bazel-cache", "ccache", "cmake-deps", "npm-cache")},
     "steps.browser_gpu_failure.outputs.run_probe": (
         "", "Gates the advisory browser GPU comparisons, which run only after a failure and "
             "cannot fail the job."),
@@ -2363,6 +2380,14 @@ class CiLaneParityTest(unittest.TestCase):
             for scenario, owner in expected.items():
                 with self.subTest(scenario=scenario):
                     self.assertEqual({owner}, generator_check_jobs(self.workflows, scenario))
+        # Main pushes still run the hosted macOS CMake build, which validates nothing a second
+        # time; branch pushes and pull requests that start the CMake workflow without a trusted
+        # route run it only for a pull request (its trigger's paths).
+        cmake = self.workflows["cmake.yml"]
+        self.assertTrue(_event_starts(cmake, "main-push"))
+        self.assertTrue(job_gates(cmake, "macos", "main-push"))
+        with mock.patch.dict(SCENARIOS, {"branch-push": branch_push}):
+            self.assertFalse(job_gates(cmake, "macos", "branch-push"))
         # The pattern sees both ways of running the check.
         for line in ("python3 tools/cmake/gen_cmakelists.py --check",
                      "tools/ci/cmake_consumer.sh build --check --ccache"):
