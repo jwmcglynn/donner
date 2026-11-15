@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
@@ -173,18 +174,41 @@ public:
 [[maybe_unused]] const ::testing::Environment* const geodeBackendEnvironment =
     ::testing::AddGlobalTestEnvironment(new GeodeBackendEnvironment);
 
+/// Longest a test frame's GPU work may go without finishing a command buffer before the device is
+/// treated as hung. It matches the per-case watchdog of `gtest_timeout_main`, which already bounds
+/// every test case. The production default is shorter, but on a software rasterizer one command
+/// buffer of an admissible filter can run longer than it: a frame-sized blur at the largest blur
+/// radius reads several hundred input pixels for every output pixel in a single pass.
+constexpr std::chrono::seconds kTestFrameStallBound{60};
+
+/// Reads back the frame `renderer` just drew, once its GPU work has finished.
+///
+/// The snapshot's deadline is a latency budget that also counts the time spent waiting for the
+/// frame's own GPU work. A heavy frame on a slow or busy software rasterizer can take longer than
+/// that budget while it is still making progress, and the snapshot would then come back empty even
+/// though nothing is wrong. Waiting for the submitted work first, bounded only by lack of progress,
+/// leaves the snapshot budget for the readback itself; a device that really stops is still caught
+/// by the stall bound.
+RendererBitmap SnapshotAfterSubmittedWork(RendererGeode& renderer) {
+  const geode::GpuWaitResult wait = renderer.waitForSubmittedWork(kTestFrameStallBound);
+  if (wait == geode::GpuWaitResult::TimedOut) {
+    ADD_FAILURE() << "the frame's GPU work stopped making progress before it finished";
+  }
+  return renderer.takeSnapshot();
+}
+
 RendererBitmap GeodeRender(SVGDocument& document, bool verbose) {
   RendererGeode& renderer = SharedTestRenderer(verbose);
   renderer.setAntialias(true);
   renderer.draw(document);
-  return renderer.takeSnapshot();
+  return SnapshotAfterSubmittedWork(renderer);
 }
 
 RendererBitmap GeodeRenderForAscii(SVGDocument& document) {
   RendererGeode& renderer = SharedTestRenderer();
   renderer.setAntialias(false);
   renderer.draw(document);
-  return renderer.takeSnapshot();
+  return SnapshotAfterSubmittedWork(renderer);
 }
 
 }  // namespace
