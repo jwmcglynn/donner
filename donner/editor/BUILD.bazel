@@ -1577,7 +1577,8 @@ embed_resources(
     },
 )
 
-# Explicit release identity participates in the action key; ordinary builds use local Git.
+# Explicit release identity participates in the action key; ordinary builds use local Git. CI
+# test lanes pass a fixed placeholder commit (`ci-test-lane` in .bazelrc) to keep it cached.
 donner_editor_build_info(
     name = "editor_build_info_txt",
     out = "editor_build_info.txt",

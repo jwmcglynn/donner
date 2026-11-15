@@ -26,6 +26,7 @@ import textwrap
 import unittest
 
 from python.runfiles import runfiles
+from tools import bazelrc_configs
 from tools import test_timing
 
 
@@ -548,6 +549,38 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
+
+    def test_macos_lanes_build_one_editor_identity(self):
+        # `--config=ci` names the test-lane editor commit (`ci-test-lane` in .bazelrc). It is a
+        # key-affecting build setting, so every macOS lane must take it from that one config for
+        # the editor actions, its Wasm package and the tests built on them to share keys.
+        for command in ("build", "test", "coverage"):
+            self.assertIn("--//build_defs:release_source_commit=" + "0" * 40,
+                          bazelrc_configs.expand(command, ["--config=ci"],
+                                                 bazelrc_configs.parse(self.bazelrc)))
+        neutral = neutral_configs(self.bazelrc)
+        self.assertNotIn("ci-test-lane", neutral)
+        self.assertNotIn("ci", neutral)
+        jobs = _jobs(self.workflow)
+        built = 0
+        for name in LANES:
+            for step_name, command in _bazel_commands(jobs[name]):
+                if BAZEL_INVOCATION.search(command).group(1) not in ("build", "test", "coverage"):
+                    continue
+                built += 1
+                words = command.split()
+                with self.subTest(lane=name, step=step_name):
+                    self.assertIn("--config=ci", words)
+                    self.assertEqual(
+                        [], [word for word in words
+                             if word.startswith("--//build_defs:release_source_commit=")])
+        self.assertGreater(built, 10)
+        # An editor identity set in one lane only is a key divergence the parity check reports.
+        command = "bazelisk --nohome_rc --nosystem_rc build --config=ci --config=macos-vm"
+        self.assertIn(command, self.workflow)
+        diverged = self.workflow.replace(
+            command, command + " --//build_defs:release_source_commit=" + "1" * 40)
+        self.assertTrue(key_parity_problems(diverged, self.bazelrc))
 
     def test_metal_shader_validation_setting_selects_only_test_environment(self):
         build_defs = _read("build_defs/BUILD.bazel")

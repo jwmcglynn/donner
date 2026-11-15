@@ -62,5 +62,26 @@ class EditorBuildInfoTest(unittest.TestCase):
                 self.assertEqual(output.read_text(), "0.8.0\n" + "b" * 40 + "\n")
 
 
+    def test_ci_test_lane_identity_is_a_valid_explicit_commit(self):
+        # Non-release CI lanes build with this fixed commit (`ci-test-lane` in .bazelrc), so the
+        # identity action keeps one key across commits instead of reading the checkout.
+        resolver = runfiles.Create()
+        script = resolver.Rlocation("_main/donner/editor/write_build_info.sh")
+        bazelrc = Path(resolver.Rlocation("_main/.bazelrc")).read_text()
+        lines = [line for line in bazelrc.splitlines() if line.startswith("common:ci-test-lane ")]
+        self.assertEqual(len(lines), 1, lines)
+        flag = lines[0].split(None, 1)[1]
+        prefix = "--//build_defs:release_source_commit="
+        self.assertTrue(flag.startswith(prefix), flag)
+        commit = flag[len(prefix):]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = root / "MODULE.bazel"
+            module.write_text('module(\n    name = "donner",\n    version = "0.8.0",\n)\n')
+            output = root / "identity.txt"
+            subprocess.run([self.tools["bash"], script, str(module), str(output), commit],
+                           env=self.environment, check=True)
+            self.assertEqual(output.read_text(), "0.8.0\n" + "0" * 40 + "\n")
+
 if __name__ == "__main__":
     unittest.main()
