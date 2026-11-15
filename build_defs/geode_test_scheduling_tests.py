@@ -97,12 +97,24 @@ def _command_problems(path, line):
     return problems
 
 
-def _macos_config_problems(path, text):
+def _macos_configs(bazelrc):
+    """The macOS CI config and every repository config that composes it, such as the lane
+    configs of tools/ci/lanes.py."""
+    names = {MACOS_CI_CONFIG}
+    lines = re.findall(r"(?m)^[a-z]+:([A-Za-z0-9_.+-]+)\s+--config=([A-Za-z0-9_.+-]+)\s*$", bazelrc)
+    while True:
+        more = {name for name, used in lines if used in names} - names
+        if not more:
+            return names
+        names |= more
+
+
+def _macos_config_problems(path, text, configs=(MACOS_CI_CONFIG,)):
     """Jobs that pass the macOS CI config, and with it four local_gpu units, off macOS.
 
-    YAML comment lines are ignored, so a job may describe the config without passing it. Not
-    covered: a workflow-level env variable, a composite action or another config that composes
-    the macOS CI config."""
+    YAML comment lines are ignored, so a job may describe the config without passing it.
+    `configs` names the macOS CI config and the repository configs that compose it. Not covered:
+    a workflow-level env variable or a composite action."""
     if "\njobs:\n" not in text:
         return []
     body = "\n".join(line for line in text.split("\njobs:\n", 1)[1].splitlines()
@@ -111,10 +123,11 @@ def _macos_config_problems(path, text):
     for match in re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n((?:(?:    .*|[ \t]*)\n)*)", body):
         job = match.group(2)
         runs_on = re.search(r"(?m)^    runs-on: (.+)$", job)
-        if ("--config=%s" % MACOS_CI_CONFIG in job and
-                not (runs_on and _MACOS_RUNNER.search(runs_on.group(1)))):
+        passed = sorted(name for name in configs if re.search(
+            r"--config=%s(?![\w.+-])" % re.escape(name), job))
+        if passed and not (runs_on and _MACOS_RUNNER.search(runs_on.group(1))):
             problems.append("%s job %s passes --config=%s off a macOS runner" % (
-                path, match.group(1), MACOS_CI_CONFIG))
+                path, match.group(1), passed[0]))
     return problems
 
 
@@ -125,7 +138,7 @@ def local_gpu_problems(bazelrc, workflows):
         problems += [problem for line in _logical_lines(text)
                      if not line.lstrip().startswith("#")
                      for problem in _command_problems(path, line.strip())]
-        problems += _macos_config_problems(path, text)
+        problems += _macos_config_problems(path, text, _macos_configs(bazelrc))
     return problems
 
 
@@ -205,6 +218,16 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn(".github/workflows/main.yml", self.workflows)
         self.assertIn("--local_test_jobs=1", self.workflows[".github/workflows/main.yml"])
         self.assertEqual([], local_gpu_problems(self.bazelrc, self.workflows))
+
+    def test_macos_ci_config_policy_reads_lane_configs(self):
+        # A lane config that composes the macOS CI config carries its GPU units too.
+        runfiles = Path(os.environ["TEST_SRCDIR"]) / os.environ["TEST_WORKSPACE"]
+        self.assertIn("lane-macos", _macos_configs(self.bazelrc))
+        with lane_view.edited_lane("linux", lane_view.replacing(
+                "--config=ci", "--config=ci", "--config=lane-macos"), ("build",)):
+            problems = local_gpu_problems(self.bazelrc, self._workflow_texts(runfiles))
+        self.assertIn(".github/workflows/main.yml job linux passes --config=lane-macos off a "
+                      "macOS runner", problems)
 
     def test_local_gpu_policy_reads_the_lane_table(self):
         # The lane phases' commands live in tools/ci/lanes.py; an edit there must fail like an

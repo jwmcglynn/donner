@@ -229,13 +229,20 @@ def _runs_self_hosted(job):
     return bool(match) and "self-hosted" in match.group(1)
 
 
-def _flag_problems(flags, commands):
-    """Problems of the lanes' shared key-affecting flags and of every macOS lane command."""
+def _expanded_words(command, words, configs):
+    return bazelrc_configs.expand(command, words, configs)
+
+
+def _flag_problems(flags, commands, configs):
+    """Problems of the lanes' shared key-affecting flags and of every macOS lane command, with
+    the repository's configs expanded."""
     problems = []
-    words = flags.split() + [word for _, command in commands for word in command.split()]
+    flags = " ".join(_expanded_words("build", flags.split(), configs))
+    words = flags.split() + [word for _, command in commands
+                             for word in _expanded_words("test", command.split(), configs)]
     if [flag for flag in words if REMOTE_FLAG.match(flag)]:
         problems.append("a macOS lane sets remote cache flags outside BuildBuddy")
-    if "--config=ci-macos" not in flags.split():
+    if not set(_expanded_words("build", ["--config=ci-macos"], configs)) <= set(flags.split()):
         problems.append("the macOS lanes do not pass --config=ci-macos")
     return problems
 
@@ -247,16 +254,18 @@ def _flag_list_problems(owner, values, pattern, kind):
             if value is not None and not all(pattern.match(flag) for flag in shlex.split(value))]
 
 
-def _test_list_problems(name, commands):
-    """Problems of a lane's test-only environment lists (the lane table's), and of its test
-    commands, each of which names the lane."""
-    lists = {"MACOS_TEST[%r]" % name: " ".join(lanes.MACOS_TEST.get(name, ()))}
+def _test_list_problems(name, commands, configs):
+    """Problems of a lane's test-only environment lists (the lane table's, with their configs
+    expanded), and of its test commands, each of which names the lane."""
+    lists = {"MACOS_TEST[%r]" % name: " ".join(
+        _expanded_words("test", list(lanes.MACOS_TEST.get(name, ())), configs))}
     if name == HOSTED:
         lists["BROWSER_STALL"] = " ".join(lanes.BROWSER_STALL)
     problems = _flag_list_problems(name, lists, TEST_ONLY_FLAG, "test-only")
     tests = [command for _, command in commands
              if [match.group(1) for match in BAZEL_INVOCATION.finditer(command)] == ["test"]]
-    if not tests or any(LANE_TEST_ENV[name] not in command.split() for command in tests):
+    if not tests or any(LANE_TEST_ENV[name] not in _expanded_words("test", command.split(), configs)
+                        for command in tests):
         problems.append("%s does not name its lane with %s" % (name, LANE_TEST_ENV[name]))
     return problems
 
@@ -445,8 +454,9 @@ def key_parity_problems(workflow, bazelrc):
     """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
     jobs = _jobs(workflow)
     problems = _xcode_override_problems(workflow)
+    configs = bazelrc_configs.parse(bazelrc)
     problems += _flag_problems(LANE_FLAGS, [command for name in LANES
-                                            for command in _bazel_commands(jobs[name])])
+                                            for command in _bazel_commands(jobs[name])], configs)
     problems += _flag_list_problems(
         "main.yml", {variable: _workflow_env(workflow, variable)
                      for variable in TEST_ONLY_VARIABLES}, TEST_ONLY_FLAG, "test-only")
@@ -456,7 +466,7 @@ def key_parity_problems(workflow, bazelrc):
         job = jobs[name]
         commands = _bazel_commands(job)
         problems += _record_commands(name, commands, by_step, neutral)
-        problems += _test_list_problems(name, commands)
+        problems += _test_list_problems(name, commands, configs)
         problems += _select_problems(name, _steps(job), commands)
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
@@ -681,20 +691,20 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         before, after = self.workflow[:index], self.workflow[index:]
         rc_line = "build:ci-macos --host_action_env=PATH="
         source = _read(".github/workflows/main.yml")
-        minimum = "--macos_minimum_os=13.3"
+        lane_config = "--config=lane-macos"
 
         def lane(name, edit, *phases):
             return lane_view.edited_lane(name, edit, phases or None)
 
         def adds(*words):
-            return lane_view.replacing(minimum, minimum, *words)
+            return lane_view.replacing(lane_config, lane_config, *words)
 
         build = lane_view.replacing("--config=ci", "--config=ci", "--copt=-O0")
         drop_lane_flags = (lambda args: [arg for arg in args if arg not in lanes.MACOS_BUILD])
         # (workflow, bazelrc, lane table edit, expected problem)
         cases = {
             "self-hosted drops the config": (
-                None, None, lane(SELF_HOSTED, lane_view.replacing("--config=ci-macos")),
+                None, None, lane(SELF_HOSTED, lane_view.replacing(lane_config)),
                 "runs Bazel without"),
             "hosted adds a key-affecting flag": (
                 None, None, lane(HOSTED, adds("--copt=-O1")), "step 'Build' differs"),
@@ -725,13 +735,13 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                     "      - name: Checkout\n", 1), None, None,
                 "macos-self-hosted sets an Xcode selection override"),
             "a lane shares its test results": (
-                None, None, lane(SELF_HOSTED, lane_view.replacing(LANE_TEST_ENV[SELF_HOSTED]),
-                                 "test"),
+                None, None, lane(SELF_HOSTED, lane_view.replacing(
+                    lanes.MACOS_TEST[SELF_HOSTED][0]), "test"),
                 "does not name its lane"),
             "a lane copies HOME from the runner into test keys": (
                 None, None, lane(SELF_HOSTED, lane_view.replacing(
-                    LANE_TEST_ENV[SELF_HOSTED], "--test_env=HOME", LANE_TEST_ENV[SELF_HOSTED]),
-                    "test"),
+                    lanes.MACOS_TEST[SELF_HOSTED][0], "--test_env=HOME",
+                    lanes.MACOS_TEST[SELF_HOSTED][0]), "test"),
                 "macos-self-hosted copies HOME from the runner"),
             "a step copies a runner variable into action keys": (
                 None, None, lane(SELF_HOSTED, lane_view.replacing(
@@ -749,21 +759,21 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "macos-self-hosted copies FOO from the runner"),
             "a lane sets HOME from a shell expansion": (
                 None, None, lane(SELF_HOSTED, lane_view.replacing(
-                    LANE_TEST_ENV[SELF_HOSTED], "--test_env=HOME=$HOME",
-                    LANE_TEST_ENV[SELF_HOSTED]), "test"),
+                    lanes.MACOS_TEST[SELF_HOSTED][0], "--test_env=HOME=$HOME",
+                    lanes.MACOS_TEST[SELF_HOSTED][0]), "test"),
                 "macos-self-hosted sets HOME from a shell or workflow expression"),
             "a config sets a variable from a workflow expression": (
                 None, self.bazelrc + "build:macos-vm --action_env=TMPDIR=${{ runner.temp }}\n",
                 None, "macos-self-hosted sets TMPDIR from a shell or workflow expression"),
             "a macOS lane dropping ci-macos goes back to one GPU test at a time": (
-                None, None, lane(SELF_HOSTED, lane_view.replacing("--config=ci-macos")),
+                None, None, lane(SELF_HOSTED, lane_view.replacing(lanes.MACOS_BUILD[0])),
                 "macos-self-hosted step 'Test' runs GPU tests with local_gpu=1"),
             "ci-macos stops raising the GPU test count": (None, self.bazelrc.replace(
                 "build:ci-macos %s\n" % MACOS_CI_LOCAL_GPU, "", 1), None,
                 "runs GPU tests with local_gpu=1"),
             "a lane lowers the GPU test count after ci-macos": (
                 None, None, lane(SELF_HOSTED, lane_view.replacing(
-                    LANE_TEST_ENV[SELF_HOSTED], LANE_TEST_ENV[SELF_HOSTED],
+                    lanes.MACOS_TEST[SELF_HOSTED][0], lanes.MACOS_TEST[SELF_HOSTED][0],
                     "--local_resources=local_gpu=1"), "test"),
                 "macos-self-hosted step 'Test' runs GPU tests with local_gpu=1"),
             "ci-macos stops giving tests a fixed HOME": (None, self.bazelrc.replace(
@@ -1206,9 +1216,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertEqual(written, "BAZEL_MACOS_BUILD_FLAGS=--xcode_version=%s" % version)
         description = lane.dry_run("macos-self-hosted", "build",
                                    {RUNTIME_FLAGS: written.split("=", 1)[1]})
-        self.assertEqual(description["actions"][0]["argv"][-4:], [
-            "--config=ci-macos", "--macos_minimum_os=13.3", "--xcode_version=" + version,
-            "@selected_targets"])
+        self.assertEqual(description["actions"][0]["argv"][-3:], [
+            "--config=lane-macos", "--xcode_version=" + version, "@selected_targets"])
+        self.assertEqual(bazelrc_configs.expand("build", ["--config=lane-macos"],
+                                                bazelrc_configs.parse(self.bazelrc))[-1],
+                         "--macos_minimum_os=13.3")
         self.assertNotIn(RUNTIME_FLAGS, self.workflow.split("\njobs:\n", 1)[0])
         for name in LANES:
             self.assertNotIn(RUNTIME_FLAGS + ":", _jobs(self.workflow)[name], name)

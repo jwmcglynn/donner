@@ -99,12 +99,14 @@ BUILDBUDDY = Split("BUILDBUDDY_FLAGS")
 # healthy, but never fall back to local execution when remote execution is down or degraded: a
 # CPU-capped runner executing the whole graph locally is the measured 2-3 h tail. 60 s, not 5 s:
 # a healthy but busy endpoint takes longer on bulk transfers under a burst of jobs, and 60 s
-# still fails a dead endpoint fast.
+# still fails a dead endpoint fast. These stay on the command line: a fallback flag anywhere in
+# .bazelrc could outrank the BuildBuddy fragment's on every lane.
 SELF_HOSTED_REMOTE = ("--strategy=TestRunner=remote", "--remote_local_fallback=false",
                       "--incompatible_remote_local_fallback_for_remote_cache=false",
                       "--remote_timeout=60s")
 # Build without the Bytes: the self-hosted runner is a thin remote-execution client, and tests run
-# remotely, so only test logs and XML come back.
+# remotely, so only test logs and XML come back. These stay on the command line: an rc file would
+# read the regular expression's backslashes as escapes.
 DIAG_BUILD = ("--remote_download_outputs=minimal",)
 DIAG_TEST = DIAG_BUILD + (r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$",)
 
@@ -185,30 +187,17 @@ LINUX_LANES = {
 # Persistent self-hosted runners may have user or system Bazel rc files; their commands read only
 # the settings declared in this repository.
 NO_HOST_RC = ("--nohome_rc", "--nosystem_rc")
-# The key-affecting flags of every macOS lane, identical in each (//tools:macos_cache_key_parity_
-# tests). Xcode's libc++ marks std::format floating-point support as macOS 13.3+, so the
-# deployment target is explicit; --config=ci-macos pins the action PATH. The Xcode selection
-# appends --xcode_version through BAZEL_MACOS_BUILD_FLAGS.
-MACOS_BUILD = ("--config=ci-macos", "--macos_minimum_os=13.3", Split("BAZEL_MACOS_BUILD_FLAGS"))
-# Each macOS lane's test environment, which names the lane so test results, which depend on the
-# runner's GPU, are never shared between lanes. Tests get HOME from --config=ci-macos, never from
-# the runner. MTL_SHADER_VALIDATION_TEXTURE_USAGE: the hosted image's virtual GPU
-# cannot run Metal shader validation (docs/metal_validation.md), so only the native Metal lane
-# turns the texture check on; the VM lanes use API validation only.
-MACOS_TEST = {
-    "macos": ("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0",
-              "--test_env=DONNER_CI_MACOS_LANE=hosted"),
-    "macos-browser": ("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0",
-                      "--test_env=DONNER_CI_MACOS_LANE=native-desktop-browser"),
-    "macos-self-hosted": ("--//build_defs:metal_shader_validation=off",
-                          "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0",
-                          "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm"),
-    "macos-vm-qualification": ("--//build_defs:metal_shader_validation=off",
-                               "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0",
-                               "--test_env=DONNER_CI_MACOS_LANE=vm-qualification"),
-    "macos-metal": ("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1",
-                    "--test_env=DONNER_CI_MACOS_LANE=native-metal"),
-}
+# The key-affecting flags of every macOS lane, identical in each (--config=lane-macos in .bazelrc,
+# //tools:macos_cache_key_parity_tests). Xcode's libc++ marks std::format floating-point support
+# as macOS 13.3+, so the deployment target is explicit; --config=ci-macos pins the action PATH.
+# The Xcode selection appends --xcode_version through BAZEL_MACOS_BUILD_FLAGS.
+MACOS_BUILD = ("--config=lane-macos", Split("BAZEL_MACOS_BUILD_FLAGS"))
+# Each macOS lane's test environment, a .bazelrc config per lane that names the lane, so test
+# results, which depend on the runner's GPU, are never shared between lanes.
+MACOS_TEST = {lane: ("--config=lane-%s" % config,) for lane, config in (
+    ("macos", "macos-hosted"), ("macos-browser", "macos-browser"),
+    ("macos-self-hosted", "macos-vm"), ("macos-vm-qualification", "macos-vm-qualification"),
+    ("macos-metal", "macos-metal"))}
 # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It records host
 # load, memory and process call graphs, so only the ephemeral hosted job sets it; a persistent
 # self-hosted runner never publishes them.
@@ -366,9 +355,9 @@ MACOS_LANES = {
     "macos-vm-qualification": Lane(startup=NO_HOST_RC, phases={
         "refresh_xcode": _REFRESH_XCODE,
         "qualification": Phase("Qualify concurrent VM workload", (
-            bazel("test", "--config=ci", "--test_output=errors", "--jobs=6",
-                  "--local_resources=cpu=6", "--local_resources=memory=6144",
-                  "--nocache_test_results", NO_TAG_FILTER, "--noskip_incompatible_explicit_targets",
+            bazel("test", "--config=ci", "--test_output=errors",
+                  "--config=macos-vm-qualification", "--nocache_test_results", NO_TAG_FILTER,
+                  "--noskip_incompatible_explicit_targets",
                   bep("qualification"), *_macos("macos-vm-qualification"),
                   "//tools/ci:macos_vm_qualification"),
         )),

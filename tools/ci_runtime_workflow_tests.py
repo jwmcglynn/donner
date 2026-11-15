@@ -242,15 +242,24 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     @staticmethod
     def _phase_commands(lane, phase):
         """The argv of each command a lane phase runs, from its dry run."""
-        return [action["argv"] for action in lane_entry.dry_run(lane, phase, {})["actions"]
-                if "argv" in action]
+        return lane_view.phase_commands(lane, phase)
 
-    @staticmethod
-    def _phases_with(word):
-        """(lane, phase) of every lane table phase with a command that passes `word`."""
+    def _expanded_commands(self, lane, phase):
+        """A phase's commands with each repository config replaced by its flags."""
+        return lane_view.phase_commands(lane, phase, self.configs)
+
+    def _lane_test_commands(self, lane):
+        """Every expanded `bazel test` command of a lane's phases."""
+        return [command for phase in lanes.LANES[lane].phases
+                for command in self._expanded_commands(lane, phase)
+                if "bazelisk" in command and "test" in command[:command.index("bazelisk") + 4]]
+
+    def _phases_with(self, word):
+        """(lane, phase) of every lane table phase with a command that passes `word`, as written
+        or from a repository config."""
         return {(lane, phase) for lane, entry in lanes.LANES.items() for phase in entry.phases
-                if any(word in argv for argv in
-                       CiRuntimeWorkflowTest._phase_commands(lane, phase))}
+                if any(word in argv for argv in self._phase_commands(lane, phase)
+                       + self._expanded_commands(lane, phase))}
 
     def test_self_hosted_lint_isolates_both_nested_bazel_commands(self):
         job = self._job_body("lint-self-hosted", self.lint)
@@ -410,8 +419,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("continue-on-error: true", body)
             self.assertIn("--nocache_test_results", body)
             self.assertIn("--local_test_jobs=%d" % jobs, body)
-            [command, summary] = self._phase_commands("macos", "browser_gpu_" + mode)
-            for flag in lanes.MACOS_BUILD[:2] + lanes.MACOS_TEST["macos"]:
+            [command, summary] = self._expanded_commands("macos", "browser_gpu_" + mode)
+            for flag in bazelrc_configs.expand(
+                    "test", ["--config=lane-macos", "--config=lane-macos-hosted"], self.configs):
                 self.assertIn(flag, command)
             self.assertEqual("//tools/ci:browser_gpu_comparison", command[-1])
             self.assertEqual(["python3", "tools/browser_gpu_test_summary.py"], summary[:2])
@@ -509,9 +519,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
         for phase in ("test", "browser_test"):
             [command] = self._phase_commands("macos-self-hosted", phase)
-            self.assertEqual(command[-6:], list(lanes.MACOS_BUILD[:2]
-                                                + lanes.MACOS_TEST["macos-self-hosted"])
-                             + ["@selected_targets"])
+            self.assertEqual(command[-3:], ["--config=lane-macos", "--config=lane-macos-vm",
+                                            "@selected_targets"])
+            [command] = self._expanded_commands("macos-self-hosted", phase)
+            lane_flags = bazelrc_configs.expand(
+                "test", ["--config=lane-macos", "--config=lane-macos-vm"], self.configs)
+            self.assertEqual(command[-len(lane_flags) - 1:], lane_flags + ["@selected_targets"])
+            self.assertIn("--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm", lane_flags)
         archive = self._step_body(job, "Upload Bazel test failure artifacts")
         self.assertIn("steps.browser_test.outcome == 'failure'", archive)
 
@@ -1157,14 +1171,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                          "Fetch Metal validation dependencies"):
                 self.assertNotIn("- name: %s\n" % step, job, job_name)
             self.assertNotIn("metal_profile", job, job_name)
-            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", job, job_name)
-            self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", job, job_name)
+            tests = self._lane_test_commands(job_name)
+            self.assertTrue(tests, job_name)
+            for command in tests:
+                self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", command)
+                self.assertNotIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
         hosted_test = self._step_body(self._job_body("macos"), "Test")
         self.assertIn("-requires_shader_validation", hosted_test)
         trusted = self._job_body("macos-metal")
         native = self._step_body(trusted, "Test remaining native Metal suite")
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
         self.assertNotIn("metal_shader_validation=off", trusted)
+        for command in self._lane_test_commands("macos-metal"):
+            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
+            self.assertNotIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", command)
+            self.assertNotIn("--//build_defs:metal_shader_validation=off", command)
         self.assertNotIn("requires_shader_validation", native)
         required = self._step_body(trusted, "Require full Metal shader validation")
         preflight = self._step_body(trusted, "Metal validation preflight")
@@ -1202,16 +1223,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=vm-qualification",
         }
+        expanded = {lane: " ".join(bazelrc_configs.expand("test", list(flags), self.configs))
+                    for lane, flags in lanes.MACOS_TEST.items()}
         for job_name, flags in vm_flags.items():
-            self.assertEqual(" ".join(lanes.MACOS_TEST[job_name]), flags)
+            self.assertEqual(expanded[job_name], flags)
         self.assertEqual(sorted(vm_flags), sorted(
-            lane for lane, flags in lanes.MACOS_TEST.items()
-            if any(needles[1] in flag for flag in flags)))
+            lane for lane, flags in expanded.items() if needles[1] in flags))
         off = "--//build_defs:metal_shader_validation=off"
-        self.assertEqual({lane for lane, _ in self._phases_with(off)}, set(vm_flags))
+        self.assertEqual({lane for lane, _ in self._phases_with(off)} - set(vm_flags),
+                         {"macos"})
+        self.assertEqual({phase for lane, phase in self._phases_with(off) if lane == "macos"},
+                         {"test"})
         lane_table = _repository_text("tools/ci/lanes.py")
         self.assertEqual(1, lane_table.count(needles[0]))
-        self.assertEqual(2, lane_table.count(off))
+        self.assertNotIn(off, lane_table)
         workflow = _repository_text(".github/workflows/main.yml")
         self.assertNotIn(needles[0], workflow)
         self.assertNotIn(needles[1], workflow)
@@ -1228,13 +1253,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(len(others) + len(actions) + 2, len({name for name, _ in texts}))
         for (name, text), needle in itertools.product(texts, needles):
             self.assertNotIn(needle, text, name)
-        # The config's definition is the only .bazelrc line that names it or the setting, so no
-        # other config (qualified or not, `--config=x` or `--config x`) can pull it in.
+        self._assert_api_only_validation_rc_scope(needles)
+
+
+    def _assert_api_only_validation_rc_scope(self, needles):
+        # The config's definition is the only .bazelrc line that names it, and only it and the
+        # two VM lanes' test environment configs name the setting, so no other config
+        # (qualified or not, `--config=x` or `--config x`) can pull either in.
         bazelrc = [line for line in _repository_text(".bazelrc").splitlines()
                    if not line.lstrip().startswith("#")]
-        definition = ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"]
-        for needle in needles:
-            self.assertEqual(definition, [line for line in bazelrc if needle in line], needle)
+        self.assertEqual(
+            ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"],
+            [line for line in bazelrc if needles[0] in line])
+        self.assertEqual(
+            sorted(["test:lane-macos-%s --//build_defs:metal_shader_validation=off" % config
+                    for config in ("vm", "vm-qualification")]
+                   + ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"]),
+            sorted(line for line in bazelrc if needles[1] in line))
+        for name, flags in self.configs.items():
+            names = [flag for _, words in flags for flag in words if needles[0] in flag]
+            self.assertEqual([], names, name)
 
     def test_metal_device_tests_default_to_full_shader_validation(self):
         metal = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
