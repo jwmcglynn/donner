@@ -366,12 +366,16 @@ std::optional<Box2d> DeviceDrawableBoundsWithStroke(const EntityHandle& dataHand
   return (worldFromEntity * surfaceFromCanvas).transformBox(box);
 }
 
-/// Return the SVG object bounding box used by objectBoundingBox effects.
+/// Return the SVG object bounding box used by objectBoundingBox effects, bounding the element's
+/// geometry after @p targetFromEntity maps it into a target space. Shape geometry is bounded after
+/// every transform is composed, so the box is tight however the transforms combine; a text box is
+/// mapped as a box.
 ///
 /// ShapeSystem covers path-backed elements and their path-backed descendants, but text geometry
 /// is produced by TextEngine instead of ComputedPathComponent. Falling back to an empty shape box
 /// for text collapses objectBoundingBox filter regions to zero and clips the entire filter output.
-std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
+std::optional<Box2d> RenderingObjectBoundingBoxIn(Registry& registry, EntityHandle handle,
+                                                  const Transform2d& targetFromEntity) {
 #ifdef DONNER_TEXT_ENABLED
   // Not `TextComponent`: `<a>` carries one unconditionally so that it can act as a text content
   // element when nested in text, but outside text it is an ordinary group whose box comes from its
@@ -379,14 +383,20 @@ std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle
   // a text root exists.
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     if (textEngine->textRootEntity(handle) != entt::null) {
-      return textEngine->computedObjectBoundingBox(handle);
+      const std::optional<Box2d> box = textEngine->computedObjectBoundingBox(handle);
+      return box ? std::optional<Box2d>(targetFromEntity.transformBox(*box)) : std::nullopt;
     }
   }
 #else
   (void)registry;
 #endif
 
-  return components::ShapeSystem().getShapeBounds(handle);
+  return components::ShapeSystem().getShapeBoundsIn(handle, targetFromEntity);
+}
+
+/// \ref RenderingObjectBoundingBoxIn in the element's own space.
+std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
+  return RenderingObjectBoundingBoxIn(registry, handle, Transform2d());
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -5232,25 +5242,30 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
       cached != objectBoundsCache_[&registry].end()) {
     return cached->second;
   }
+  const std::optional<Box2d> bounds = objectBoundingBoxIn(registry, entity, Transform2d());
+  objectBoundsCache_[&registry][entity] = bounds;
+  return bounds;
+}
+
+std::optional<Box2d> RendererDriver::objectBoundingBoxIn(Registry& registry, Entity entity,
+                                                         const Transform2d& targetFromEntity) {
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
   std::optional<Box2d> bounds =
-      RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
+      RenderingObjectBoundingBoxIn(registry, instance.styleHandle(registry), targetFromEntity);
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
   const std::vector<std::pair<int, Entity>>& uses = externalUseInstances(registry);
   const int lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
   const auto firstUse =
       std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity()));
   for (auto it = firstUse; it != uses.end() && it->first <= lastDrawOrder; ++it) {
-    const std::optional<Box2d> content = externalUseContentBounds(registry, it->second);
-    if (!content) {
-      continue;
-    }
     const auto& useInstance = registry.get<components::RenderingInstanceComponent>(it->second);
-    const Box2d box =
-        (useInstance.worldFromEntityTransform * entityFromWorld).transformBox(*content);
-    bounds = bounds ? Box2d::Union(*bounds, box) : box;
+    const std::optional<Box2d> content = externalUseContentBounds(
+        registry, it->second,
+        useInstance.worldFromEntityTransform * entityFromWorld * targetFromEntity);
+    if (content) {
+      bounds = bounds ? Box2d::Union(*bounds, *content) : *content;
+    }
   }
-  objectBoundsCache_[&registry][entity] = bounds;
   return bounds;
 }
 
@@ -5327,18 +5342,26 @@ void RendererDriver::applyExternalUseClipBounds(
 }
 
 std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegistry,
-                                                              Entity hostEntity) {
-  if (const auto cached = externalUseBoundsCache_[&hostRegistry].find(hostEntity);
-      cached != externalUseBoundsCache_[&hostRegistry].end()) {
-    return cached->second;
+                                                              Entity hostEntity,
+                                                              const Transform2d& targetFromUse) {
+  std::vector<MeasuredExternalUseBounds>& measured =
+      externalUseBoundsCache_[&hostRegistry][hostEntity];
+  for (const MeasuredExternalUseBounds& entry : measured) {
+    if (entry.targetFromUse == targetFromUse) {
+      return entry.bounds;
+    }
   }
-  const std::optional<Box2d> bounds = measureExternalUseContent(hostRegistry, hostEntity);
-  externalUseBoundsCache_[&hostRegistry][hostEntity] = bounds;
+  const std::optional<Box2d> bounds =
+      measureExternalUseContent(hostRegistry, hostEntity, targetFromUse);
+  // Measuring can add entries for other registries, so look this one up again.
+  externalUseBoundsCache_[&hostRegistry][hostEntity].push_back(
+      MeasuredExternalUseBounds{.targetFromUse = targetFromUse, .bounds = bounds});
   return bounds;
 }
 
 std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostRegistry,
-                                                               Entity hostEntity) {
+                                                               Entity hostEntity,
+                                                               const Transform2d& targetFromUse) {
   const auto& instance = hostRegistry.get<components::RenderingInstanceComponent>(hostEntity);
   const auto* externalUse =
       instance.dataHandle(hostRegistry).try_get<components::ExternalUseComponent>();
@@ -5378,14 +5401,15 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
   // own external uses are measured in this layout too, then forgotten with it.
   forgetEffectBounds(child);
   const EntityHandle target(child, root);
-  const std::optional<Box2d> local = child.all_of<components::RenderingInstanceComponent>(root)
-                                         ? objectBoundingBox(child, root)
-                                         : components::ShapeSystem().getShapeBounds(target);
+  // The layout helper's result maps the root into the use's space.
+  const Transform2d targetFromRoot =
+      components::LayoutSystem().getEntityFromWorldTransform(target) * targetFromUse;
+  const std::optional<Box2d> bounds =
+      child.all_of<components::RenderingInstanceComponent>(root)
+          ? objectBoundingBoxIn(child, root, targetFromRoot)
+          : components::ShapeSystem().getShapeBoundsIn(target, targetFromRoot);
   forgetEffectBounds(child);
-  if (!local) {
-    return std::nullopt;
-  }
-  return components::LayoutSystem().getEntityFromWorldTransform(target).transformBox(*local);
+  return bounds;
 }
 
 void RendererDriver::traverseSubDocument(Registry& registry) {
