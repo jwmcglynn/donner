@@ -4162,6 +4162,11 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   return static_cast<int>(chain.size());
 }
 
+bool RendererDriver::isActivePatternTile(Entity pattern) const {
+  return std::find(activePatternTiles_.begin(), activePatternTiles_.end(), pattern) !=
+         activePatternTiles_.end();
+}
+
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
                                    const components::RenderingInstanceComponent& instance,
                                    const components::PaintResolvedReference& refIn,
@@ -4214,8 +4219,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   }
 
   // A pattern already being rendered further up closes a cycle: this layer paints nothing.
-  if (std::find(activePatternTiles_.begin(), activePatternTiles_.end(), target.entity()) !=
-      activePatternTiles_.end()) {
+  if (isActivePatternTile(target.entity())) {
     skipSubtree();
     return;
   }
