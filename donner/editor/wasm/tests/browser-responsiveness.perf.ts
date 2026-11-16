@@ -29,6 +29,7 @@ import {
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
+import { summarizeMaskedDragResults } from "./masked-drag-counters.mjs";
 import { pickerPresentationSettled } from "./presentation-baseline.mjs";
 import {
   kHeldDragPresentationBounds,
@@ -154,10 +155,14 @@ interface Diagnostics extends Window {
   __donnerWorkerResultCounters?: WorkerResultCounters[];
 }
 
-/** One published worker result's compositor and browser GPU owner counters. */
+/**
+ * One published worker result's compositor and browser GPU owner counters. A bundle that predates
+ * them publishes none: `countersPublished` is then false and the counts are null.
+ */
 interface WorkerResultCounters {
   completedResults: number;
-  activeDragResult: boolean;
+  countersPublished: boolean;
+  activeDragResult: boolean | null;
   fastPathFrames: number;
   slowPathFramesWithDirty: number;
   noDirtyFrames: number;
@@ -1851,10 +1856,12 @@ async function startWorkerResultCounters(page: Page) {
       set: (stats: Diagnostics["__donnerWorkerStats"]) => {
         current = stats;
         if (stats?.publishReason !== "render-result") return;
-        const count = (name: string) => Number(stats[name]);
+        const countersPublished = Object.hasOwn(stats, "activeDragResult");
+        const count = (name: string) => (countersPublished ? Number(stats[name]) : null) as number;
         records.push({
           completedResults: stats.completedResults,
-          activeDragResult: stats.activeDragResult === true,
+          countersPublished,
+          activeDragResult: countersPublished ? stats.activeDragResult === true : null,
           fastPathFrames: count("fastPathFrames"),
           slowPathFramesWithDirty: count("slowPathFramesWithDirty"),
           noDirtyFrames: count("noDirtyFrames"),
@@ -1890,18 +1897,6 @@ async function stopWorkerResultCounters(page: Page) {
   });
 }
 
-/**
- * Split recorded results into those rendered for active drag requests and the release results
- * published after the last of them.
- */
-function splitMaskedDragResults(results: WorkerResultCounters[]) {
-  const lastHeld = results.findLastIndex((result) => result.activeDragResult);
-  return {
-    held: results.filter((result) => result.activeDragResult),
-    release: results.slice(lastHeld + 1),
-  };
-}
-
 /** Tiles a result rasterized other than by a damage patch. */
 function unpatchedTileCount(result: WorkerResultCounters) {
   return result.cachedTileCount + result.immediateTileCount - result.damagePatchTileCount;
@@ -1913,7 +1908,11 @@ function unpatchedTileCount(result: WorkerResultCounters) {
  * by patching only the damaged part of its owner. A drag-start result finds nothing dirty and
  * rasterizes no tile, so it needs no exception.
  */
-function expectHeldMaskedDragDamagePatch(held: WorkerResultCounters[]) {
+function expectHeldMaskedDragDamagePatch(summary: MaskedDragSummary) {
+  expect(summary.countersPublished, "the candidate bundle must publish per-result counters").toBe(
+    true,
+  );
+  const held = summary.held;
   expect(
     held.filter((result) => result.fastPathFrames > 0).length,
     "the held drag must produce fast-path results",
@@ -1940,10 +1939,19 @@ function expectHeldMaskedDragDamagePatch(held: WorkerResultCounters[]) {
   );
 }
 
+type MaskedDragSummary = {
+  countersPublished: boolean;
+  resultCount: number;
+  held: WorkerResultCounters[];
+  release: WorkerResultCounters[];
+  checkHeldResults: boolean;
+};
+
 /**
  * Drag the selected masked crown face while recording every worker result's counters. The counters
- * are printed as the held-drag and release baseline, and the held results are checked even when
- * the drag itself misses a check, so a run reports both.
+ * are printed as the held-drag and release baseline, or reported absent for a bundle that predates
+ * them. A candidate run checks the held results even when the drag itself misses a check, so it
+ * reports both; a baseline run only measures.
  */
 async function maskedCrownDragWithCounters(
   page: Page,
@@ -1959,7 +1967,9 @@ async function maskedCrownDragWithCounters(
   } catch (error) {
     dragFailure = error;
   }
-  const results = splitMaskedDragResults(await stopWorkerResultCounters(page));
+  const results = summarizeMaskedDragResults(await stopWorkerResultCounters(page), {
+    baselineOnly: process.env.DONNER_BROWSER_BASELINE === "1",
+  }) as MaskedDragSummary;
   const baseline = {
     project: test.info().project.name,
     raster: await rasterIdentity(page),
@@ -1970,14 +1980,16 @@ async function maskedCrownDragWithCounters(
   const unpatched = results.held.filter((result) => unpatchedTileCount(result) > 0).length;
   const slowPath = results.held.filter((result) => result.slowPathFramesWithDirty > 0).length;
   let checkFailure: unknown;
-  await completionCheck(
-    "heldMaskedDragDamagePatch",
-    phase,
-    `${results.held.length} held results, ${slowPath} slow path, ${unpatched} rasterized unpatched`,
-    () => expectHeldMaskedDragDamagePatch(results.held),
-  ).catch((error) => {
-    checkFailure = error;
-  });
+  if (results.checkHeldResults) {
+    await completionCheck(
+      "heldMaskedDragDamagePatch",
+      phase,
+      `${results.held.length} held results, ${slowPath} slow path, ${unpatched} rasterized unpatched`,
+      () => expectHeldMaskedDragDamagePatch(results),
+    ).catch((error) => {
+      checkFailure = error;
+    });
+  }
   if (dragFailure !== undefined) throw dragFailure;
   if (checkFailure !== undefined) throw checkFailure;
   return { drag, workerResults: results };

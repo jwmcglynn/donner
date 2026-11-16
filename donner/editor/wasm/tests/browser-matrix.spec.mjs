@@ -1835,6 +1835,43 @@ test("only the hosted macOS Perf job reports the completion checks without enfor
   );
 });
 
+test("the masked drag counters are checked in candidate runs and only measured in baseline runs", async () => {
+  const { summarizeMaskedDragResults } = await import("./masked-drag-counters.mjs");
+  const published = (completedResults, activeDragResult) => ({
+    completedResults,
+    countersPublished: true,
+    activeDragResult,
+  });
+  const records = [published(8, true), published(9, true), published(10, false), published(11, false)];
+  for (const baselineOnly of [false, true]) {
+    assert.deepEqual(summarizeMaskedDragResults(records, { baselineOnly }), {
+      countersPublished: true,
+      resultCount: 4,
+      held: records.slice(0, 2),
+      release: records.slice(2),
+      checkHeldResults: !baselineOnly,
+    });
+  }
+  // A historical bundle publishes no per-result counters; its results are not idle results.
+  const historical = [8, 9, 10].map((completedResults) => ({
+    completedResults,
+    countersPublished: false,
+    activeDragResult: null,
+  }));
+  assert.deepEqual(summarizeMaskedDragResults(historical, { baselineOnly: true }), {
+    countersPublished: false,
+    resultCount: 3,
+    held: [],
+    release: [],
+    checkHeldResults: false,
+  });
+  assert.equal(
+    summarizeMaskedDragResults(historical, { baselineOnly: false }).checkHeldResults,
+    true,
+    "a candidate bundle without the counters must still be checked, and fail",
+  );
+});
+
 test("only the tracked responsiveness checks go through the completion check helper", () => {
   const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
   assert.match(spec, /completionCheckMode\(\)/, "the mode must come from the run's environment");
@@ -1844,7 +1881,17 @@ test("only the tracked responsiveness checks go through the completion check hel
     ["heldDragPositions", "dragInputsComplete", "coldZoomPresents", "heldMaskedDragDamagePatch"],
   );
   const [held, drag, coldZoom, damagePatch] = calls.map(({ index }) => index);
-  const damagePatchAssertion = spec.indexOf("() => expectHeldMaskedDragDamagePatch(results.held)");
+  const damagePatchAssertion = spec.indexOf("() => expectHeldMaskedDragDamagePatch(results)");
+  assert.match(
+    spec.slice(damagePatch - 60, damagePatch),
+    /if \(results\.checkHeldResults\) \{\s*await $/,
+    "the damage patch check must run only when the summary asks for it",
+  );
+  assert.equal(
+    spec.split('baselineOnly: process.env.DONNER_BROWSER_BASELINE === "1"').length,
+    2,
+    "the masked drag summary must take baseline mode from the run's environment",
+  );
   assert.ok(
     damagePatchAssertion > damagePatch && damagePatchAssertion - damagePatch < 300,
     "the damage patch check must run its assertion through the helper",
