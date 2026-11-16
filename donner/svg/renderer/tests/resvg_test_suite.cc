@@ -1253,13 +1253,12 @@ INSTANTIATE_TEST_SUITE_P(StructureTransform, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform-origin",
-                {
-                    // The 300x300 resvg v0.49.0 renderings.
-                    {"on-text-path.svg", ResvgV049Reference()},
-                    {"on-text.svg", ResvgV049Reference()},
-                })),
+    Combine(ValuesIn(getTestsInCategory("structure/transform-origin",
+                                        {
+                                            // The 300x300 resvg v0.49.0 renderings.
+                                            {"on-text-path.svg", ResvgV049Reference()},
+                                            {"on-text.svg", ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
