@@ -1910,16 +1910,16 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
     const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
 
     // One path made of every glyph outline of the run.
-    SVGDocument pathDocument = instantiateSubtree(
-        TextStrokePaintDefs(paint) + "<path d=\"" + GlyphOutlinePathData(textDocument, "#text") +
-            "\" " + stroke + "/>",
-        parser::SVGParser::Options(), Vector2i(200, 200));
+    SVGDocument pathDocument =
+        instantiateSubtree(TextStrokePaintDefs(paint) + "<path d=\"" +
+                               GlyphOutlinePathData(textDocument, "#text") + "\" " + stroke + "/>",
+                           parser::SVGParser::Options(), Vector2i(200, 200));
     const RendererBitmap expected =
         RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
     AssertVisibleFixture(expected, "text_stroke_run_outline_visible");
-    editor::tests::CompareBitmapToBitmap(
-        actual, expected, "text_stroke_run_outline_" + std::string(paint.label),
-        editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_run_outline_" + std::string(paint.label),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -1928,17 +1928,16 @@ TEST_F(RendererRegressionTests, TextStrokeCoversOverlapsOfNonAdjacentGlyphsOnce)
   // onto "T" while "e" touches neither, and in a mixed-direction run the right-to-left glyphs are
   // drawn in the reverse of their order in the text. Each chunk is still one shape.
   constexpr std::array<std::pair<std::string_view, std::string_view>, 2> kCases = {{
-      {"moved_back",
-       R"svg(font-family="Noto Sans" dx="0 0 -60" dy="0 100 -100">Tex)svg"},
+      {"moved_back", R"svg(font-family="Noto Sans" dx="0 0 -60" dy="0 100 -100">Tex)svg"},
       {"mixed_direction", R"svg(font-family="Amiri">AB&#x628;&#x62A;&#x646;)svg"},
   }};
   const std::string stroke = TranslucentTextStroke(kTextStrokePaints[0]);
   for (const auto& [label, text] : kCases) {
     SCOPED_TRACE(label);
-    SVGDocument textDocument = instantiateSubtree(
-        R"svg(<text id="text" x="20" y="120" font-size="60" )svg" + stroke + " " +
-            std::string(text) + "</text>",
-        parser::SVGParser::Options(), Vector2i(200, 200));
+    SVGDocument textDocument =
+        instantiateSubtree(R"svg(<text id="text" x="20" y="120" font-size="60" )svg" + stroke +
+                               " " + std::string(text) + "</text>",
+                           parser::SVGParser::Options(), Vector2i(200, 200));
     RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
     const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
 
@@ -1978,9 +1977,9 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesEachChunkAsItsOwnShape) {
     const RendererBitmap expected =
         RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
     AssertVisibleFixture(expected, "text_stroke_chunk_outlines_visible");
-    editor::tests::CompareBitmapToBitmap(
-        actual, expected, "text_stroke_chunk_outlines_" + std::string(paint.label),
-        editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_chunk_outlines_" + std::string(paint.label),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 

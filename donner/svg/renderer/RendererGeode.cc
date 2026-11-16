@@ -1,7 +1,6 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
 #include <algorithm>
-#include <numeric>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -13,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <thread>
@@ -4167,9 +4167,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// share no pixel.
   std::vector<Box2d> grownTextStrokeBounds(std::span<const Path> outlines) const {
     const Transform2d localFromDevice = deviceFromLocalTransform.inverse();
-    const double margin =
-        std::max(localFromDevice.transformVector(Vector2d(1.0, 0.0)).length(),
-                 localFromDevice.transformVector(Vector2d(0.0, 1.0)).length());
+    const double margin = std::max(localFromDevice.transformVector(Vector2d(1.0, 0.0)).length(),
+                                   localFromDevice.transformVector(Vector2d(0.0, 1.0)).length());
     std::vector<Box2d> bounds;
     bounds.reserve(outlines.size());
     for (const Path& outline : outlines) {
@@ -4202,9 +4201,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::vector<std::size_t> open;
     for (const std::size_t index : byLeft) {
       const Box2d& box = boxes[index];
-      std::erase_if(open, [&](std::size_t other) { return boxes[other].bottomRight.x < box.topLeft.x; });
+      std::erase_if(open,
+                    [&](std::size_t other) { return boxes[other].bottomRight.x < box.topLeft.x; });
       for (const std::size_t other : open) {
-        if (boxes[other].topLeft.y <= box.bottomRight.y && box.topLeft.y <= boxes[other].bottomRight.y) {
+        if (boxes[other].topLeft.y <= box.bottomRight.y &&
+            box.topLeft.y <= boxes[other].bottomRight.y) {
           parent[find(index)] = find(other);
         }
       }
@@ -6466,8 +6467,7 @@ void RendererGeode::setPathEncoderItemLimitForTesting(std::size_t maximumItems) 
 }
 
 void RendererGeode::setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints) {
-  impl_->textStrokeGroupPointLimit =
-      std::min(Impl::kMaximumTextStrokeGroupPoints, maximumPoints);
+  impl_->textStrokeGroupPointLimit = std::min(Impl::kMaximumTextStrokeGroupPoints, maximumPoints);
 }
 
 void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,

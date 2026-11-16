@@ -159,7 +159,8 @@ public:
    * @param collected Number of outlines collected from the run so far.
    */
   void noteGlyph(const TextGlyph& glyph, std::size_t collected) {
-    if (glyph.startsTextChunk && collected > 0 && (starts_.empty() || starts_.back() != collected)) {
+    if (glyph.startsTextChunk && collected > 0 &&
+        (starts_.empty() || starts_.back() != collected)) {
       starts_.push_back(collected);
     }
   }
