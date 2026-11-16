@@ -112,7 +112,7 @@ void ExpectOnlyRetainedUpdates(const WorkCounters& before, const WorkCounters& a
 TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
@@ -127,7 +127,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
 TEST(SpriteFieldPrepareCorrectnessTest, OpacityFramesRestyleOnlyTheFadedUses) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
@@ -145,7 +145,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, OpacityFramesRestyleOnlyTheFadedUses) {
 TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUses) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
@@ -164,7 +164,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUse
 TEST(SpriteFieldPrepareCorrectnessTest, GameFramesCombineAllThreeChanges) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
@@ -181,7 +181,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, GameFramesCombineAllThreeChanges) {
 TEST(SpriteFieldPrepareCorrectnessTest, FullRebuildAdmitsEachSheetOnce) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   scene->document.registry().ctx().get<RenderTreeState>().retainedUpdatesEnabled = false;
   const WorkCounters before = ReadCounters(scene->document);
