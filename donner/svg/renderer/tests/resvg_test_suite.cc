@@ -96,6 +96,12 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
   return testPlan;
 }
 
+/// Params for a drop-shadow() row compared against the Donner golden at \p path for \p reason
+/// (see testdata/golden/README.md). The params keep views of both, so they must be string literals.
+ImageComparisonParams DropShadowFunctionGolden(std::string_view path, std::string_view reason) {
+  return Params::WithGoldenOverride(path, kDefaultThreshold, reason);
+}
+
 /// Params for the feColorMatrix identity rows, whose references posterize through 8-bit linearRGB;
 /// they share one Donner golden (see testdata/golden/README.md).
 ImageComparisonParams ColorMatrixIdentityGolden() {
@@ -596,22 +602,25 @@ INSTANTIATE_TEST_SUITE_P(
                                "residual confined to the three label bands; analytic residual "
                                "375 px, supersampled 302 px; filtered squares compare exactly "
                                "(#1167, #1169)")},
+                // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip(
-                     "Reference disagreement: resvg truncates the fractional shadow "
-                     "offset (CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
+                 DropShadowFunctionGolden(
+                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                     "Reference disagreement: resvg truncates the fractional shadow offset")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip(
-                     "Reference disagreement: resvg truncates the shadow's user lengths and "
-                     "offset (CssFilterContractEmShadowUsesComputedNondefaultFontSize)")},
+                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-drop-shadow-function-em-values.png",
+                                          "Reference disagreement: the reference places the "
+                                          "shadow at truncated lengths")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip(
-                     "Reference disagreement: resvg truncates the shadow's user lengths and "
-                     "offset (CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
+                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-drop-shadow-function-mm-values.png",
+                                          "Reference disagreement: the reference places the "
+                                          "shadow at truncated lengths")},
                 {"drop-shadow-function.svg",
-                 Params::Skip(
-                     "Reference disagreement: resvg truncates the fractional shadow "
-                     "offset (CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
+                 DropShadowFunctionGolden(
+                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                     "Reference disagreement: resvg truncates the fractional shadow offset")},
                 {"two-exact-urls.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; the valid "

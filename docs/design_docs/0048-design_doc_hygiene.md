@@ -153,13 +153,8 @@ new designs and rejects stale debt entries after a historical record is correcte
           reasons in `resvg_test_suite.cc` (BiDi/RTL, `<tref>`, `textLength`+`lengthAdjust`,
           font shorthand/kerning, SVG 2 text features, plus the catalogued known bugs).
           Kept the intro + refreshed Current Snapshot; no dangling anchors.
-  - [x] `0009-resvg_test_suite_bugs.md`: reconciled — **the doc's "34 active overrides"
-        is correct; the audit's "off by one (35)" was itself a miscount.** Verified by
-        extracting every `resvg-*.png` string fragment (including the `=`-containing and
-        concatenated ones a naive grep misses) from `resvg_test_suite.cc`: 34 distinct
-        goldens are referenced, and exactly 2 (`resvg-drop-shadow-function-{mm,em}-values.png`)
-        are unreferenced on disk — the parked pair. 34 active + 2 parked = the 36
-        `resvg-*.png` files present. No change to `0009`.
+  - [x] `0009-resvg_test_suite_bugs.md`: reconciled; its override count matches the goldens
+        `resvg_test_suite.cc` references, and every golden on disk is referenced.
   - [x] `0013-coverage_improvement.md`: confirmed superseded and finalized into a short
         stub. 7 of 8 proposed test files now exist (`TextEngine_tests.cc`,
         `SVGSVGElement_tests.cc`, `SVGImageElement_tests.cc`, `SVGUseElement_tests.cc`,

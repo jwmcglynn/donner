@@ -1518,8 +1518,9 @@ needed. Details are in the coverage ledger.
   let the affected cases compare was not established; each needs its own look.
 - **RC7, RC8.** `textPath` continuation after the path, and a `method=stretch` reference that is
   identical to the `align` reference.
-- **RC9.** Four `drop-shadow()` cases are skipped as reference disagreements: their references
-  truncate fractional device offsets that Donner resamples; the others run (`val:filter/drop-shadow()` in [filters_core](../spec_audit/filters_core.md)).
+- **RC9.** Four `drop-shadow()` references truncate fractional device offsets that Donner
+  resamples; those cases compare against Donner goldens and the others against their references
+  (`val:filter/drop-shadow()` in [filters_core](../spec_audit/filters_core.md)).
 
 ## Proposed Architecture
 
