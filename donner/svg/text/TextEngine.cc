@@ -6296,7 +6296,7 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
   span.fontStyle = properties.fontStyle.get().value();
   span.fontStretch = static_cast<FontStretch>(properties.fontStretch.get().value());
   FontHandle font =
-      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.fallbackFont());
+      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.defaultFont());
   font = selectBackendSafeFont(*backend_, fontManager_, font);
   const float size = CheckedFontSizePx(
       properties.fontSize.get().value().toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
@@ -6418,7 +6418,7 @@ private:
   void resolveBaseFont() {
     baseFont_ = FindFirstAvailableFont(fontManager_, params_.fontFamilies);
     if (!baseFont_) {
-      baseFont_ = fontManager_.fallbackFont();
+      baseFont_ = fontManager_.defaultFont();
     }
     baseFontSizePx_ = CheckedFontSizePx(
         params_.fontSize.toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Mixed));
@@ -7993,7 +7993,7 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
     const auto capture = fontManager_.captureDependencies(dependencies);
     FontHandle font = FindFirstAvailableFont(fontManager_, fontFamilies);
     if (!font) {
-      font = fontManager_.fallbackFont();
+      font = fontManager_.defaultFont();
     }
 
     TextBackendSimple measurementBackend(fontManager_, registry_);

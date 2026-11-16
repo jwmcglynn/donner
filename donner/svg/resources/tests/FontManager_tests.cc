@@ -1841,4 +1841,34 @@ TEST(FontManagerTest, FamilyAvailabilityResolvesGenericNames) {
   EXPECT_FALSE(manager.hasFamily("cursive"));
 }
 
+TEST(FontManagerTest, DefaultFontIsTheEmbeddedFallbackWithoutADefaultFamily) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Mapped Family"));
+
+  EXPECT_EQ(manager.defaultFont(), manager.fallbackFont());
+}
+
+TEST(FontManagerTest, DefaultFontResolvesTheDefaultFamilyThroughGenericNames) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Mapped Family"));
+  manager.setGenericFamilyMapping("serif", "Mapped Family");
+  manager.setDefaultFamily("serif");
+
+  const FontHandle font = manager.defaultFont();
+  EXPECT_EQ(font, manager.findFont("Mapped Family"));
+  EXPECT_NE(font, manager.fallbackFont());
+}
+
+TEST(FontManagerTest, DefaultFontFallsBackWhenTheDefaultFamilyIsUnavailable) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.setDefaultFamily("Missing Family");
+  EXPECT_EQ(manager.defaultFont(), manager.fallbackFont());
+
+  manager.setDefaultFamily("");
+  EXPECT_EQ(manager.defaultFont(), manager.fallbackFont());
+}
+
 }  // namespace donner::svg

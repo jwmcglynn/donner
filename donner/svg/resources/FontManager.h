@@ -223,6 +223,25 @@ public:
   void setGenericFamilyMapping(std::string_view genericName, std::string_view realFamily);
 
   /**
+   * Set the user agent's default family, used when no family in a `font-family` list is
+   * available. CSS leaves this face to the user agent. Without a default family, or while the
+   * named family is unavailable, \ref defaultFont answers with \ref fallbackFont.
+   *
+   * @param family A family name or CSS generic family name; empty clears the default.
+   */
+  void setDefaultFamily(std::string_view family);
+
+  /**
+   * Returns the best face of the default family set by \ref setDefaultFamily for the requested
+   * attributes, or \ref fallbackFont when no default family is set or it is unavailable.
+   *
+   * @param weight The requested CSS font weight.
+   * @param style The requested font style, as passed to \ref findFont.
+   * @param stretch The requested font stretch, as passed to \ref findFont.
+   */
+  FontHandle defaultFont(int weight = 400, int style = 0, int stretch = 5);
+
+  /**
    * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
    * after resolving CSS generic names.
    *
@@ -664,6 +683,10 @@ private:
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;
+
+  /// Family used when no family in a `font-family` list is available; empty selects the embedded
+  /// fallback face.
+  std::string defaultFamily_;
 
   /// Lowercased family names claimed by the `@font-face` rules this instance knows about, so
   /// \ref hasFamily answers without rescanning them. Seeded from the registry at construction and

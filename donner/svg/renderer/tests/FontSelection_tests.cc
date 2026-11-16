@@ -294,6 +294,12 @@ TEST(FontSelection, DocumentBoldGenericFamilyResolvesToTheBoldFace) {
               FaceFrom("NotoSans-Bold.ttf"));
 }
 
+// The suite sets serif as the user agent's default family, as resvg's harness does, so a family
+// list that matches nothing renders in the serif face rather than the product's embedded face.
+TEST(FontSelection, UnmatchedFamilyListUsesTheSuiteDefaultFamily) {
+  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid")), FaceFrom("NotoSerif-Regular.ttf"));
+}
+
 TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {
   EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid, Noto Sans")),
               FaceFrom("NotoSans-Regular.ttf"));
@@ -302,10 +308,6 @@ TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {
 TEST(FontSelection, FamilyListPrefersTheFirstAvailableFamily) {
   EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("'Source Sans Pro', Noto Sans, serif")),
               FaceFrom("SourceSansPro-Regular.ttf"));
-}
-
-TEST(FontSelection, FullyUnknownFamilyListFallsBackToTheEmbeddedFace) {
-  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid")), FaceFrom(kEmbeddedFallback));
 }
 
 TEST(FontSelection, QuotedFamilyNameContainingADigitResolves) {
