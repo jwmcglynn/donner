@@ -3102,6 +3102,15 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   ASSERT_TRUE(oldPresentation.has_value());
   completedSerial = 0;
   ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+  // Fill the presentation queue with old-document frames before the sample load, so no frame that
+  // draws the adopted capture is admitted however soon the CPU result arrives.
+  for (int frame = 0; frame < 3; ++frame) {
+    RunShellFrame(window, shell);
+  }
+  const std::uint64_t blockedAdmission = window.presentationAdmissionSequence();
+  RunShellFrame(window, shell);
+  ASSERT_EQ(window.presentationAdmissionSequence(), blockedAdmission)
+      << "presentation admission must be blocked before the sample load";
 
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
   EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
@@ -3125,6 +3134,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   ASSERT_TRUE(adopted) << "The CPU result did not adopt while presentation admission was blocked";
+  ASSERT_EQ(window.presentationAdmissionSequence(), blockedAdmission)
+      << "a frame drawing the adopted capture was admitted for presentation";
   ASSERT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
 
   const auto acceptedFrame = EditorShellTestAccess::Coordinator(shell).framePresentation();
