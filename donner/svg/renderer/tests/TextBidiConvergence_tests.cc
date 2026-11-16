@@ -226,6 +226,31 @@ TEST_F(TextBidiConvergence, ArabicJoiningAcrossPaintSpansPreservesSourceColors) 
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// An inline right-to-left override over Latin and Arabic reverses every character, and the
+// Arabic letters still shape as their own joined run rather than inside the Latin run. A leading
+// left-to-right letter keeps the chunk anchored at its left edge.
+TEST_F(TextBidiConvergence, InlineOverrideKeepsArabicJoiningInMixedScripts) {
+  appendRun("X");
+  appendRun("\u0645\u0631");
+  appendRun(" ba");
+  const auto expected = renderOutlines();
+  const auto empty = renderEmpty();
+  SCOPED_TRACE(ActiveRendererBackendName());
+  ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, empty, "bidi_inline_override_visible",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  for (const std::string_view unicodeBidi : {"bidi-override", "isolate-override"}) {
+    SCOPED_TRACE(unicodeBidi);
+    const auto actual = renderText("X<tspan direction='rtl' unicode-bidi='" +
+                                   std::string(unicodeBidi) + "'>ab \u0645\u0631</tspan>");
+    ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(260, 100)));
+    editor::tests::CompareBitmapToBitmap(actual, expected, "bidi_inline_override",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(TextBidiConvergence, PositionOnJoinerDoesNotDiscardFollowingVisibleGlyphs) {
   expectHebrewFontSupport();
   const auto actual =
