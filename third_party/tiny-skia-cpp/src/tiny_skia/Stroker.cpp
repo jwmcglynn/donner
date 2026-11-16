@@ -648,8 +648,11 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
   }
 
   radius_ = width * 0.5f;
-  pathResScale_ = resScale;
-  setResolutionScale(resScale);
+  resScale_ = resScale;
+  setCurveTolerance(resScale);
+  // Donner addition: the zero-length line test keeps the tolerance of the caller's resolution;
+  // the precision floor coarsens only the curve approximation.
+  teenyLineTolerance_ = kScalarNearlyZero * invResScale_;
   invMiterLimit_ = invMiterLimit;
 
   firstNormal_ = Point::zero();
@@ -742,8 +745,7 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
   return finish(lastSegmentIsLine);
 }
 
-void PathStroker::setResolutionScale(float resScale) {
-  resScale_ = resScale;
+void PathStroker::setCurveTolerance(float resScale) {
   // The '4' below matches the fill scan converter's error term.
   float baseInvResScale = 1.0f / (resScale * 4.0f);
   // For thin strokes (radius < 2px), loosen tolerance proportionally.
@@ -757,15 +759,21 @@ void PathStroker::setResolutionScale(float resScale) {
   invResScaleSquared_ = invResScale_ * invResScale_;
 }
 
-// Donner addition: the stroke's tolerances are distances in the path's own coordinates, the
-// device tolerance divided by the resolution scale. Each segment keeps its tolerance at least one
-// float step of the coordinates its offsetting works in: its own points, grown by the stroke
-// radius, which bounds every offset point. Miter tips and caps are placed directly, without this
-// tolerance. A segment far from the origin therefore cannot coarsen another segment of the path.
+// Donner addition: the stroke's curve tolerances are distances in the path's own coordinates,
+// the device tolerance divided by the resolution scale. Each segment keeps its curve tolerance at
+// least one float step of the coordinates its offsetting works in: its own points, grown by the
+// stroke radius, which bounds every offset point. Miter tips and caps are placed directly,
+// without this tolerance. A segment far from the origin therefore cannot coarsen another segment
+// of the path.
+//
+// Only the curve approximation takes the floored tolerance (invResScale_ and invResScaleSquared_:
+// how close an offset quad must come to the offset curve, and when a piece of curve is close
+// enough to a straight line to be emitted as one, both errors bounded by that tolerance). The
+// tests that decide whether a segment exists at all keep the caller's resolution: the zero-length
+// line test (teenyLineTolerance_) and the zero-length direction test of the normals (resScale_).
 void PathStroker::limitSegmentResolution(std::initializer_list<Point> points) {
-  setResolutionScale(PrecisionLimitedResScale(
-      pathResScale_,
-      MaxAbsCoordinate(std::span<const Point>(points.begin(), points.size()), radius_),
+  setCurveTolerance(PrecisionLimitedResScale(
+      resScale_, MaxAbsCoordinate(std::span<const Point>(points.begin(), points.size()), radius_),
       kStrokeToleranceAtUnitScale));
 }
 
@@ -808,7 +816,7 @@ void PathStroker::moveTo(Point p) {
 }
 
 void PathStroker::lineTo(Point p, const PathSegmentsIter* iter) {
-  bool teenyLine = prevPt_.equalsWithinTolerance(p, kScalarNearlyZero * invResScale_);
+  bool teenyLine = prevPt_.equalsWithinTolerance(p, teenyLineTolerance_);
   if (capper_ == buttCapper && teenyLine) {
     return;
   }

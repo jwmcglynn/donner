@@ -131,7 +131,7 @@ class PathStroker {
 
   std::optional<Path> finish(bool isLine);
   bool exceedsOutputLimit();
-  void setResolutionScale(float resScale);
+  void setCurveTolerance(float resScale);
   void limitSegmentResolution(std::initializer_list<Point> points);
   std::size_t pendingPoints() const;
   bool passesOutlineLimit(std::size_t emitted) const;
@@ -170,9 +170,9 @@ class PathStroker {
   bool foundTangents_ = false;
   bool joinCompleted_ = false;
 
-  // Donner addition: the resolution scale the caller asked for, before each segment's precision
-  // floor (see limitSegmentResolution).
-  float pathResScale_ = 1.0f;
+  // Donner addition: the zero-length line tolerance at the caller's resolution, which the
+  // precision floor does not change (see limitSegmentResolution).
+  float teenyLineTolerance_ = 0.0f;
 
   // Donner addition: the caller's bounds, if any (see StrokeLimits).
   StrokeLimits* limits_ = nullptr;
