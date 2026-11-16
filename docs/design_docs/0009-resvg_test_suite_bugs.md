@@ -61,7 +61,7 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (38)
+## Active overrides (45)
 
 ### resvg golden is wrong per spec
 
@@ -70,6 +70,7 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
 | filters/feImage            | svg                                   | We render higher quality                                       |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
+| filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
@@ -77,6 +78,11 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
+
+The seven feColorMatrix identity forms (without-attributes, type=matrix without values or with
+empty, short or long value lists, and type=saturate and type=hueRotate without a value) share
+`donner-feColorMatrix-identity.png`; the evidence that the 8-bit tables posterize the references
+is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.

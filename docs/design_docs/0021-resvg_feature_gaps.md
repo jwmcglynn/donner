@@ -339,7 +339,7 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   harness mismatch: resvg's harness falls back to Noto Serif for an unknown
   family and Donner to its embedded Public Sans (445 simple, 444 full pixels).
 
-> The remaining sub-1000-px CPU thresholds (feColorMatrix matrix/saturate variants,
+> The remaining sub-1000-px CPU thresholds (feColorMatrix saturate and non-normalized values,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
 > plausible coverage-geometry differences; audit opportunistically but they are not
 > promoted bugs.
