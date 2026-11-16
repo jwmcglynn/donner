@@ -17,6 +17,13 @@
 const kStallGuardMs = 30_000;
 
 /**
+ * How long one browser launch may take before it fails. A cold Chrome for Testing launch can take
+ * more than 15 s on a healthy host (the first exec pays macOS code-sign validation), so this is
+ * the stall guard for a launch, not a latency budget.
+ */
+const kBrowserLaunchTimeoutMs = 30_000;
+
+/**
  * Multiplier applied to the suites' remaining wall-clock bounds when `CI` is set. Shared CI
  * runners execute the suites several times slower than local development hardware.
  *
@@ -48,4 +55,4 @@ function stallGuardFor(testTimeoutMs) {
   return Math.min(kStallGuardMs, Math.floor((testTimeoutMs * 2) / 3));
 }
 
-module.exports = { kCiTimeScale, kStallGuardMs, scaledMs, stallGuardFor };
+module.exports = { kBrowserLaunchTimeoutMs, kCiTimeScale, kStallGuardMs, scaledMs, stallGuardFor };

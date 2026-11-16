@@ -3,14 +3,14 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const prepare = require("./prepare-browser-archives.js");
 const { refreshIdleHeartbeat } = require("./browser-heartbeat.cjs");
-module.exports = async function setup(config) {
+module.exports = async function setup() {
   const heartbeat = process.env.DONNER_WATCHDOG_HEARTBEAT;
   if (!heartbeat) throw new Error("browser timing tests require their external watchdog");
   const beat = () => refreshIdleHeartbeat(heartbeat);
   beat();
   const timer = setInterval(beat, 1000);
   timer.unref();
-  await prepare(config);
+  prepare.prepareBrowserArchives(process.env);
   if (process.env.DONNER_FIREFOX_GUI_BOOTSTRAP === "1") {
     const uid = process.getuid();
     execFileSync("/bin/launchctl", ["print", `gui/${uid}`], { stdio: "ignore", timeout: 1000 });

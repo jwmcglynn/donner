@@ -1,7 +1,6 @@
 #include "donner/editor/repro/ReproFile.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
@@ -9,12 +8,15 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/FileUtils.h"
 #include "donner/base/Utf8.h"
+#include "donner/base/parser/NumberParser.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -468,13 +470,13 @@ std::optional<double> ReadNumber(std::string_view& cursor, ReproParseBudget& bud
   if (!budget.chargeScan(i)) {
     return std::nullopt;
   }
-  const std::string token(cursor.substr(start, i - start));
-  char* endPtr = nullptr;
-  errno = 0;
-  const double value = std::strtod(token.c_str(), &endPtr);
-  if (endPtr != token.c_str() + token.size() || errno != 0 || !std::isfinite(value)) {
+  const std::string_view token = cursor.substr(start, i - start);
+  const auto parsed = parser::NumberParser::Parse(token);
+  if (!parsed.hasResult() || parsed.result().consumedChars != token.size() ||
+      !std::isfinite(parsed.result().number)) {
     return std::nullopt;
   }
+  const double value = parsed.result().number;
   cursor.remove_prefix(i);
   return value;
 }
@@ -1426,15 +1428,19 @@ std::optional<ReproSvgFile> ReadReproSvgFile(const std::filesystem::path& rnrPat
 bool WriteReproFile(const std::filesystem::path& path, const ReproFile& file) {
   const auto tmp = path.string() + ".tmp";
   {
+    // Lines are formatted in the classic locale so a global C++ locale cannot change the decimal
+    // point or group digits; six significant digits is the format's existing precision.
+    std::ostringstream lines = MakeClassicNumberStream(6);
+    WriteMetadataLine(lines, file.metadata);
+    for (const auto& frame : file.frames) {
+      WriteFrameLine(lines, frame);
+    }
     std::ofstream os(tmp, std::ios::binary);
     if (!os) {
       std::fprintf(stderr, "ReproFile: failed to open %s for write\n", tmp.c_str());
       return false;
     }
-    WriteMetadataLine(os, file.metadata);
-    for (const auto& frame : file.frames) {
-      WriteFrameLine(os, frame);
-    }
+    os << lines.view();
     if (!os) {
       std::fprintf(stderr, "ReproFile: failed to write to %s\n", tmp.c_str());
       return false;

@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/xml/XMLNode.h"
@@ -954,7 +955,9 @@ void SidebarPresenter::captureStrokeSnapshot(const EditorApp& app,
   inspector.strokeLinejoin = static_cast<int>(stroke.strokeLinejoin.get().value());
   inspector.strokeMiterlimit = stroke.strokeMiterlimit.get().value();
   if (const auto dasharray = stroke.strokeDasharray.get(); dasharray.has_value()) {
-    std::ostringstream stream;
+    // This text is written back as `stroke-dasharray`, so it must not follow the global locale.
+    // Six significant digits keep the inspector text short.
+    std::ostringstream stream = MakeClassicNumberStream(6);
     stream << *dasharray;
     inspector.strokeDasharray = stream.str();
   }

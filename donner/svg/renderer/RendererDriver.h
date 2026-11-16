@@ -360,7 +360,10 @@ private:
   /// Return prepared stages whose storage remains valid until the next preparation pass.
   /// A missing entry indicates preparation failed; an empty vector disables filtering.
   const std::vector<components::FilterGraph>* preparedFilterStagesFor(Entity entity) const;
-  void pushFilterStages(const std::vector<components::FilterGraph>* stages);
+  /// Pushes \p entity's prepared filter stages, outermost first. \p elementLayers counts the
+  /// isolated and mask layers \p entity pushed before them, which a stage reading the backdrop
+  /// skips together with the stages that wrap it.
+  void pushFilterStages(Entity entity, std::uint32_t elementLayers);
   void popFilterStages(std::size_t count);
 
   void drawPreparedDocument(SVGDocument& document);

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -293,6 +294,26 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
       tools, [](const json& tool) { return tool.value("name", "") == "edit_svg_source"; });
   ASSERT_NE(editTool, tools.end());
   EXPECT_TRUE((*editTool)["inputSchema"]["properties"].contains("dispatch"));
+}
+
+// The tool's value reaches the active stroke width as typed, so whitespace before the number must
+// not leave the width unchanged.
+TEST(EditorControlSessionTest, SetStylePropertyStrokeWidthSkipsLeadingWhitespace) {
+  EditorControlSession session;
+  const ToolCallResult load = session.handleToolCall(
+      "load_svg",
+      json{{"svg_source", R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>)svg"},
+           {"canvas_width", 10},
+           {"canvas_height", 10},
+           {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  const ToolCallResult changed = session.handleToolCall(
+      "set_style_property",
+      json{{"property", "stroke-width"}, {"value", " 2.5px"}, {"render_after_set", false}});
+  ASSERT_TRUE(changed.body.value("ok", false)) << changed.body.dump(2);
+  EXPECT_EQ(EditorControlSessionTestAccess::app(session).activePaintStyle().strokeWidth,
+            Lengthd(2.5));
 }
 
 TEST(EditorControlSessionTest, CatalogFontFamilyMutationChangesRenderedGlyphs) {
@@ -2485,6 +2506,22 @@ TEST(EditorControlSessionTest, PointerGestureDragReportsSourceWithItsWriteback) 
   EXPECT_THAT(ElementStartTag(afterGesture.value("text", ""), "free"),
               ::testing::HasSubstr("transform=\"translate(20"))
       << afterGesture.dump(2);
+}
+
+// Content hashes are plain hex digits whatever the global C++ locale is; a grouping locale would
+// otherwise put separators between them.
+TEST(EditorControlSessionInternalTest, ContentHashesIgnoreTheGlobalLocale) {
+  svg::RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(1, 1);
+  bitmap.pixels = {1, 2, 3, 4};
+  bitmap.rowBytes = 4;
+  const std::optional<std::string> expectedBitmapHash = BitmapContentHash(bitmap);
+  ASSERT_THAT(expectedBitmapHash, ::testing::Optional(::testing::MatchesRegex("0x[0-9a-f]{16}")));
+
+  const ScopedCommaDecimalGlobalLocale locale;
+  // FNV-1a 64 of the empty string is its offset basis.
+  EXPECT_EQ(ReproContentHash(""), "fnv1a64:cbf29ce484222325");
+  EXPECT_THAT(BitmapContentHash(bitmap), ::testing::Optional(::testing::Eq(*expectedBitmapHash)));
 }
 
 }  // namespace

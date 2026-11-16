@@ -82,6 +82,7 @@ playwright_bin.playwright_test(
         "browser-bitmap-comparator.ts",
         "browser-gpu-residency.ts",
         "browser-heartbeat.cjs",
+        "browser-launch-probe.js",
         "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
         "browser-runtime-diagnostics.ts",
@@ -226,6 +227,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "canvas-color-stats.ts",
         "chromium-launch-env.cjs",
         "composited-drag-invariants.spec.ts",
@@ -279,6 +281,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "canvas-color-stats.ts",
         "chromium-launch-env.cjs",
         "composited-drag-invariants.spec.ts",
@@ -581,11 +584,26 @@ js_test(
     node_options = ["--test"],
 )
 
+# The launch probe every Bazel browser lane runs before its first case, against fake browsers.
+js_test(
+    name = "browser_launch_probe_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-launch-probe.js",
+        "prepare-browser-archives.js",
+        "test-timing.cjs",
+    ],
+    entry_point = "browser-launch-probe.spec.mjs",
+    node_options = ["--test"],
+)
+
 js_test(
     name = "playwright_bazel_config_tests",
     size = "small",
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "chromium-launch-env.cjs",
         "playwright.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
@@ -823,6 +841,7 @@ playwright_bin.playwright_test(
     data = [
         "browser-diagnostic-policy.js",
         "browser-bitmap-comparator.ts",
+        "browser-launch-probe.js",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -914,6 +933,7 @@ playwright_bin.playwright_test(
         "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
+        "browser-launch-probe.js",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -993,6 +1013,7 @@ playwright_bin.playwright_test(
         "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
+        "browser-launch-probe.js",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -1160,6 +1181,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "chromium-launch-env.cjs",
         "docs-selector.spec.ts",
         "playwright.docs.config.js",

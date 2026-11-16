@@ -266,8 +266,10 @@ produce transparent pixels (no edge clamping) to prevent images from bleeding be
 
 - `feImage` fragment references render through an 8-bit intermediate buffer; rendering directly
   into the float filter buffer would eliminate minor edge-pixel differences.
-- `BackgroundImage` / `BackgroundAlpha` standard inputs are not implemented (require CSS
-  compositing isolation groups).
+- `BackgroundImage` / `BackgroundAlpha` read the isolation-group backdrop; the SVG 1.1
+  `enable-background` snapshot is not implemented. The editor's compositor keeps no cached layers
+  while the document contains a `<filter>` that reads either input (used or not), so every edit or
+  drag re-rasterizes the whole document in paint order; large documents become slow to edit.
 - Filter application on the root `<svg>` element is not supported.
 - CSS `backdrop-filter` is not supported.
 - Filter parameter animation is not supported (separate animation milestone).

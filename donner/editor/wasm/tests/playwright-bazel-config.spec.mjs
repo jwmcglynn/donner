@@ -12,12 +12,14 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 
 function evaluateConfig(filename, baseConfig, environment, temporary) {
   const module = { exports: {} };
+  const configRequire = (specifier) =>
+    specifier.startsWith("./playwright.")
+      ? (baseConfig[specifier] ?? baseConfig)
+      : require(specifier);
+  configRequire.resolve = (specifier) => path.join(directory, specifier);
   const context = {
     module,
-    require: (specifier) =>
-      specifier.startsWith("./playwright.")
-        ? (baseConfig[specifier] ?? baseConfig)
-        : require(specifier),
+    require: configRequire,
     process: { env: environment, cwd: () => temporary, execPath: process.execPath, pid: 4242 },
   };
   vm.runInNewContext(readFileSync(path.join(directory, filename), "utf8"), context, {
@@ -60,6 +62,15 @@ test("Bazel config supplies a writable per-test Chromium crash database", (t) =>
   writeFileSync(probe, "writable");
   assert.equal(readFileSync(probe, "utf8"), "writable");
   assert.equal(environment.BREAKPAD_DUMP_LOCATION, "/unwritable-caller-home/crashes");
+});
+
+test("Bazel config probes one launch of each browser before any case", (t) => {
+  const { temporary, environment, baseConfig } = fixture(t);
+  const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
+  assert.equal(config.globalSetup, path.join(directory, "browser-launch-probe.js"));
+  // The probe launches with the cases' own options; it adds no per-case timeout of its own.
+  assert.equal(config.timeout, baseConfig.timeout);
+  assert.equal(config.use.launchOptions.timeout, 1234);
 });
 
 test("Bazel web server binds an OS-selected port and exports its URL", (t) => {

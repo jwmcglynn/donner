@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/tests/ScopedCtypeLocale.h"
+
 namespace donner::editor {
 
 void PrintTo(const Coordinates& coords, std::ostream* os) {
@@ -701,6 +703,72 @@ TEST_F(TextEditorCoreTests, FindWordStartTreatsUtf8ContinuationBytesAsWordCharac
   editor_.setColorizerEnabled(false);
 
   EXPECT_EQ(editor_.findWordStart(Coordinates(0, 1)), Coordinates(0, 0));
+}
+
+// Word classification is ASCII-only and treats every byte of a multi-byte UTF-8 character as a
+// word byte, so a word is never split inside a character and the result does not depend on the
+// process locale.
+TEST_F(TextEditorCoreTests, GetWordAtKeepsMultiByteCharactersInsideTheWordInEveryLocale) {
+  ForEachCtypeLocaleForTesting([this] {
+    editor_.setText("caf\xC3\xA9 x");
+    editor_.setColorizerEnabled(false);
+    EXPECT_THAT(editor_.getWordAt(Coordinates(0, 1)), Eq("caf\xC3\xA9"));
+    EXPECT_THAT(editor_.getWordAt(Coordinates(0, 3)), Eq("caf\xC3\xA9"));
+  });
+}
+
+TEST_F(TextEditorCoreTests, FindNextWordStopsAtMultiByteWordsInEveryLocale) {
+  ForEachCtypeLocaleForTesting([this] {
+    editor_.setText("a \xC3\xA9 b");
+    EXPECT_EQ(editor_.findNextWord(Coordinates(0, 0)), Coordinates(0, 2));
+  });
+}
+
+// The source pane keeps raw bytes, so a byte that cannot start a UTF-8 sequence (a stray
+// continuation byte or 0xF8-0xFF) still counts as one glyph and every walk advances past it. A
+// regression here hangs, which the per-case watchdog of this target turns into a failure.
+TEST_F(TextEditorCoreTests, FindWordEndStepsOverBytesThatCannotStartASequence) {
+  struct Case {
+    std::string_view text;
+    Coordinates from;
+    Coordinates end;
+  };
+  for (const Case& item : {Case{"s\374d", Coordinates(0, 0), Coordinates(0, 3)},
+                           Case{"ab\377", Coordinates(0, 0), Coordinates(0, 3)},
+                           Case{"a\260", Coordinates(0, 0), Coordinates(0, 2)},
+                           Case{"\200b", Coordinates(0, 0), Coordinates(0, 2)},
+                           Case{"b\200", Coordinates(0, 0), Coordinates(0, 2)},
+                           Case{"a\342", Coordinates(0, 0), Coordinates(0, 2)}}) {
+    SCOPED_TRACE(testing::PrintToString(std::string(item.text)));
+    editor_.setText(std::string(item.text));
+    editor_.setColorizerEnabled(false);
+    EXPECT_EQ(editor_.findWordEnd(item.from), item.end);
+    EXPECT_THAT(editor_.getWordAt(item.from), Eq(std::string(item.text)));
+  }
+}
+
+TEST_F(TextEditorCoreTests, CursorAndDeletionStepOverBytesThatCannotStartASequence) {
+  editor_.setText("a\377b");
+  editor_.setCursorPosition(Coordinates(0, 1));
+  editor_.moveRight(1, /*select=*/false, /*wordMode=*/false);
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 2));
+
+  editor_.setCursorPosition(Coordinates(0, 1));
+  editor_.delete_();
+  EXPECT_THAT(editor_.getText(), Eq("ab"));
+
+  editor_.setText("a\200b");
+  editor_.setCursorPosition(Coordinates(0, 2));
+  editor_.backspace();
+  EXPECT_THAT(editor_.getText(), Eq("ab"));
+}
+
+TEST_F(TextEditorCoreTests, ColorizerStepsOverBytesThatCannotStartASequence) {
+  editor_.setText("<!-- \377 -->\n<rect/>");
+  editor_.setLanguageDefinition(LanguageDefinition::SVG());
+  editor_.setColorizerEnabled(true);
+  editor_.colorizeInternal();
+  EXPECT_THAT(editor_.getText(), Eq("<!-- \377 -->\n<rect/>"));
 }
 
 TEST_F(TextEditorCoreTests, SelectWordUnderCursorSelectsWholeWord) {
