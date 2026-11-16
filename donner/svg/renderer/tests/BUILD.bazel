@@ -733,6 +733,7 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/components/text:components",

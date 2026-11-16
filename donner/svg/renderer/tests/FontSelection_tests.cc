@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
@@ -415,6 +416,40 @@ TEST(FontSelection, DefaultFamilyChangeRecomputesChUnitShapes) {
   document.registry().ctx().get<FontManager>().setDefaultFamily("monospace");
   EXPECT_TRUE(document.refreshFontResources());
   EXPECT_THAT(FirstRectWidth(document), testing::DoubleEq(monoWidth));
+}
+
+/// Supplies one family from the hermetic Noto Mono bytes.
+class SingleFamilyProvider final : public FontFamilyProvider {
+public:
+  explicit SingleFamilyProvider(std::string family) : family_(std::move(family)) {}
+
+  std::vector<FontFamilyInfo> families() const override { return {{family_}}; }
+
+  bool hasFamily(std::string_view family) const override {
+    return StringUtils::Equals<StringComparison::IgnoreCase>(family, family_);
+  }
+
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest&) const override {
+    return hasFamily(family) ? bytes_ : std::vector<uint8_t>();
+  }
+
+private:
+  std::string family_;
+  std::vector<uint8_t> bytes_ = ReadFile(TestFontsDir() / "NotoMono-Regular.ttf");
+};
+
+TEST(FontSelection, FontProviderChangeLaysOutPreparedTextAgain) {
+  const SingleFamilyProvider provider("Provided Mono");
+  SVGDocument document = ParseWithHermeticFonts(TextSvgWithFamily("Provided Mono"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(TextSvgWithFamily("Noto Mono"), "");
+  const double fallbackLength = FirstTextLength(document);
+  const double monoLength = FirstTextLength(monoDocument);
+  ASSERT_THAT(fallbackLength, testing::Ne(monoLength));
+
+  document.registry().ctx().get<FontManager>().setFontProvider(&provider);
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstTextLength(document), testing::DoubleEq(monoLength));
 }
 
 TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {
