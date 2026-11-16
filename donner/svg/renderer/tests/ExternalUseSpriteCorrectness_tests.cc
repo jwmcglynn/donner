@@ -1174,9 +1174,12 @@ TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdate
     MutateSheet(sheet, SheetMutation::OtherTransform, frame);
     renderer.draw(host->document);
   }
-  const auto after = counters();
-  EXPECT_EQ(after.fullRebuilds, before.fullRebuilds);
-  EXPECT_EQ(after.retainedUpdates - before.retainedUpdates, static_cast<uint64_t>(kFrames));
+  using Counters = components::RenderTreeState::Counters;
+  EXPECT_THAT(counters(),
+              testing::AllOf(testing::Field("fullRebuilds", &Counters::fullRebuilds,
+                                            before.fullRebuilds),
+                             testing::Field("retainedUpdates", &Counters::retainedUpdates,
+                                            before.retainedUpdates + kFrames)));
 }
 
 // Once a sheet over the sink limit has delivered its warnings and the truncation, finding them
