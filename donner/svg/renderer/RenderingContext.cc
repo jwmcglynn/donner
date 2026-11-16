@@ -295,6 +295,15 @@ public:
                 << "\n";
     }
   }
+  /// Instantiate an feImage fragment: draw orders continue after every existing instance, so the
+  /// fragment's instances never interleave with the main tree's, and each new instance is marked
+  /// as fragment content.
+  void beginFeImageFragment() {
+    feImageFragment_ = true;
+    for (auto view = registry_.view<RenderingInstanceComponent>(); const Entity entity : view) {
+      drawOrder_ = std::max(drawOrder_, view.get<RenderingInstanceComponent>(entity).drawOrder + 1);
+    }
+  }
 
   /**
    * @brief Whether this instance paints a group of text spans rather than one element.
@@ -470,6 +479,7 @@ public:
 
     auto& instance = registry_.emplace<RenderingInstanceComponent>(styleEntity);
     instance.drawOrder = drawOrder_++;
+    instance.feImageFragment = feImageFragment_;
 
     const auto& absoluteTransformComponent =
         LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry_, treeEntity));
@@ -1435,7 +1445,8 @@ private:
   bool verbose_;                               //!< If true, enable verbose logging.
   bool ignoreNonrenderable_;                   //!< If true, skip the Nonrenderable behavior check.
 
-  int drawOrder_ = 0;  //!< The current draw order index.
+  int drawOrder_ = 0;             //!< The current draw order index.
+  bool feImageFragment_ = false;  //!< Whether this traversal instantiates an feImage fragment.
   /// Root \ref xml_text entity for the one effect-carrying span about to be instantiated. Cleared
   /// by \ref prepareTraversalNode as soon as that span consumes it.
   Entity currentTextSpanRoot_ = entt::null;
@@ -2145,10 +2156,53 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   FilterSystem().instantiateAllComputedComponents(registry_, warningSink);
 }
 
+namespace {
+
+/// An feImage fragment shadow tree that an earlier frame instantiated for \p targetEntity on this
+/// host. The render tree survives frames in which nothing is dirty, and so do these trees and their
+/// rendering instances; a full rebuild tears them down.
+std::optional<RenderingContext::FeImageSubtreeResult> FindRetainedFeImageShadowTree(
+    const Registry& registry, const ComputedShadowTreeComponent& computedShadow,
+    Entity targetEntity) {
+  for (size_t index = 0; index < computedShadow.offscreenShadowCount(); ++index) {
+    const auto& branch = computedShadow.branches[index];
+    if (branch.branchType != ShadowBranchType::OffscreenFeImage ||
+        branch.lightTarget != targetEntity) {
+      continue;
+    }
+    // The subtree's last rendered entity is the branch entity drawn last.
+    Entity lastEntity = entt::null;
+    int lastDrawOrder = 0;
+    for (const Entity entity : branch.shadowEntities) {
+      const auto* instance = registry.try_get<RenderingInstanceComponent>(entity);
+      if (instance != nullptr &&
+          (lastEntity == entt::null || instance->drawOrder > lastDrawOrder)) {
+        lastEntity = entity;
+        lastDrawOrder = instance->drawOrder;
+      }
+    }
+    const Entity root = computedShadow.offscreenShadowRoot(index);
+    if (root == entt::null || lastEntity == entt::null) {
+      return std::nullopt;
+    }
+    return RenderingContext::FeImageSubtreeResult{root, lastEntity};
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFeImageShadowTree(
     Entity hostEntity, Entity targetEntity, bool verbose) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(hostEntity);
+  // Reuse the tree an earlier frame built for this fragment. Building another would leave the old
+  // one's instances in the pool and add a new branch every frame, so later frames would render the
+  // fragment from different shared subtrees than the first did.
+  if (std::optional<FeImageSubtreeResult> retained =
+          FindRetainedFeImageShadowTree(registry_, computedShadow, targetEntity)) {
+    return retained;
+  }
   const std::optional<size_t> maybeIndex = createShadowTreeSystem().populateInstance(
       EntityHandle(registry_, hostEntity), computedShadow, ShadowBranchType::OffscreenFeImage,
       targetEntity, RcString(), disabledSink);
@@ -2168,6 +2222,7 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
   }
 
   RenderingContextImpl impl(registry_, verbose);
+  impl.beginFeImageFragment();
   Entity lastEntity = entt::null;
   impl.traverseTree(shadowRoot, &lastEntity);
 

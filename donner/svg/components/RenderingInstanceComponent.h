@@ -182,6 +182,11 @@ struct RenderingInstanceComponent {
   /// True if this instance establishes a new rendering layer, such as if there is opacity.
   bool isolatedLayer = false;
 
+  /// True for instances created while instantiating an feImage fragment, including the paint,
+  /// mask and marker content they draw. They are drawn only into the fragment, never by the main
+  /// traversal.
+  bool feImageFragment = false;
+
   /// Cascaded transform mapping entity-local coords to canvas coords.
   /// Applying this to a `<circle>`'s `(cx, cy)` yields that circle's canvas
   /// position. Composed with `RendererDriver::surfaceFromCanvasTransform_` as

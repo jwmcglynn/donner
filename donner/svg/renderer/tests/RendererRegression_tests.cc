@@ -28,6 +28,8 @@
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
@@ -4542,6 +4544,112 @@ TEST(ClipContourClosure, NormalOpenStrokeKeepsItsEndpoints) {
   const auto expected = RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
   editor::tests::CompareBitmapToBitmap(actual, expected, "clip_closure_preserves_open_stroke",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// An feImage fragment whose content is filled with the pattern that draws the filtered element: the
+// fragment cycle is bounded by the feImage fragment guard. The document must render the same way
+// on every draw through one renderer.
+constexpr std::string_view kFeImagePatternCycle = R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="#r" />
+    </filter>
+    <rect id="r" width="8" height="8" fill="url(#a)" stroke="black" stroke-width="2" />
+  </defs>
+  <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+    <rect width="8" height="8" fill="black" filter="url(#f)" />
+  </pattern>
+  <rect width="16" height="16" fill="url(#a)" />)svg";
+
+TEST_F(RendererRegressionTests, FeImagePatternCycleDrawsTheSameEachTime) {
+  SVGDocument document = instantiateSubtree(kFeImagePatternCycle, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  renderer->draw(document);
+  const RendererBitmap second = renderer->takeSnapshot();
+  renderer->draw(document);
+  const RendererBitmap third = renderer->takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(second, first, "feimage_pattern_cycle_second_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(third, first, "feimage_pattern_cycle_third_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A plain feImage fragment whose target is not in the render tree (it is in `<defs>`).
+constexpr std::string_view kFeImageFragment = R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="#r" />
+    </filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect width="16" height="16" fill="black" filter="url(#f)" />)svg";
+
+// Drawing an feImage fragment again without a render-tree rebuild reuses the fragment's shadow
+// tree: it must not add another shadow branch and more rendering instances on every frame.
+TEST_F(RendererRegressionTests, FeImageFragmentRedrawKeepsOneShadowTree) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  const auto feImageBranchCount = [&]() {
+    std::size_t count = 0;
+    for (auto view = document.registry().view<const components::ComputedShadowTreeComponent>();
+         const Entity host : view) {
+      for (const auto& branch :
+           view.get<const components::ComputedShadowTreeComponent>(host).branches) {
+        count += branch.branchType == components::ShadowBranchType::OffscreenFeImage ? 1 : 0;
+      }
+    }
+    return count;
+  };
+  const auto instanceCount = [&]() {
+    return document.registry().view<components::RenderingInstanceComponent>().size();
+  };
+
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  const std::size_t firstInstances = instanceCount();
+  EXPECT_EQ(feImageBranchCount(), 1u);
+  for (int draw = 2; draw <= 3; ++draw) {
+    renderer->draw(document);
+    EXPECT_EQ(feImageBranchCount(), 1u) << "draw " << draw;
+    EXPECT_EQ(instanceCount(), firstInstances) << "draw " << draw;
+    editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
+                                         "feimage_fragment_redraw_" + std::to_string(draw),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// A plain feImage fragment drawn repeatedly renders the same way each time, and after its target
+// changes it renders the new target, as a fresh document does.
+TEST_F(RendererRegressionTests, FeImageFragmentRedrawFollowsItsTarget) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  renderer->draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
+                                       "feimage_fragment_second_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  auto target = document.querySelector("#r");
+  ASSERT_TRUE(target.has_value());
+  target->setAttribute("fill", "blue");
+  renderer->draw(document);
+  const RendererBitmap mutated = renderer->takeSnapshot();
+
+  std::string blueMarkup(kFeImageFragment);
+  blueMarkup.replace(blueMarkup.find("fill=\"red\""), std::string_view("fill=\"red\"").size(),
+                     "fill=\"blue\"");
+  SVGDocument fresh = instantiateSubtree(blueMarkup, {}, Vector2i(16, 16));
+  const RendererBitmap expected = RenderDocumentWithBackend(fresh, ActiveRendererBackend());
+  ExpectBitmapsDiffer(expected, first, "feimage_fragment_target_mutation_control");
+  ExpectBitmapsIdentical(mutated, expected, "feimage_fragment_target_mutation");
 }
 
 }  // namespace
