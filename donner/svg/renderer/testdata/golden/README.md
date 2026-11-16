@@ -147,15 +147,27 @@ pixel, 0-255):
 | Vendored PNG | 89, 242, 242, 90 | 12, 165, 255, 166, 13 |
 | Chromium 147, self-recursive | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
 | Firefox 153, self-recursive | 59, 255, 255, 64 | 28, 148, 255, 160, 33 |
-| Chromium 147, recursive-on-child | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
-| Firefox 153, recursive-on-child | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
+| Vendored PNG, recursive-on-child lower rect (`rect4`) | 134, 248, 248, 135 | 18, 210, 255, 210, 19 |
+| Chromium 147, recursive-on-child upper rect (`rect3`) | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
+| Chromium 151, recursive-on-child lower rect (`rect4`) | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
+| Firefox 153, recursive-on-child, both rects | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
+
+The vendored PNG row above it is the self-recursive rows and the upper rect of
+recursive-on-child.
 
 Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it falls
 mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG does
-everywhere. Keeping the exact seams is a maintainer decision. On `recursive-on-child` they also
-paint the mutually recursive fill one level deep before treating it as an error: a second copy of
-the stroke raises the partial columns to about 1 - (1 - 0.25)^2 = 0.44 (alpha 112). Neither Donner
-nor the vendored PNG draws that layer.
+everywhere. Keeping the exact seams is a maintainer decision.
+
+On `recursive-on-child`, `rect3` is filled with `patt1` and `rect4` with `patt2`, and the two
+patterns fill their tiles with each other. Painting the mutually recursive fill one level deep
+before treating it as an error adds a second copy of the tile stroke, which raises the partial
+columns to about 1 - (1 - 0.25)^2 = 0.44 (alpha 112). Firefox 153 draws that second layer in both
+rects, Chromium (147 and 151) in `rect3` only, the vendored PNG in `rect4` only, and Donner in
+neither. SVG 2 makes a reference that directly or indirectly references itself an invalid
+circular reference, and an invalid paint server reference paints nothing, but it does not say
+which reference of a two-pattern cycle is the circular one. Which reading to follow is a
+maintainer decision; this golden encodes Donner's current output.
 
 resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
 per unit, the horizontal seam at y = 50 units (device y 75) covers device y 74.25 to 75.75, which
