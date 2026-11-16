@@ -130,3 +130,48 @@ To regenerate, delete the file and run from the repository root:
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=FiltersFeColorMatrix*without_attributes*'
 ```
+
+### `filters/filter-functions/drop-shadow-function*`
+
+Disposition: reference disagreement; whether to carry Donner renderings for these rows rests on
+the weakest evidence among these goldens and is a maintainer decision. `donner-drop-shadow-function.png`
+(shared by `drop-shadow-function.svg` and `drop-shadow-function-color-last.svg`, which render
+identically), `donner-drop-shadow-function-em-values.png` and
+`donner-drop-shadow-function-mm-values.png` are Donner CPU renderings of the unchanged corpus files,
+at the 500x500 size of the vendored references, rendered by the resvg suite harness at the commit
+that adds them.
+
+Filter Effects 1 (feOffset) says a high quality viewer should interpolate when an offset is a
+fraction of a device pixel, and the drop-shadow() function is defined through feOffset.
+
+- `drop-shadow-function` and `color-last` (`blue 4 5 6`): the device offset is (10, 12.5). resvg
+  converts the scaled offset to an integer (`dx as i32` in `apply_drop_shadow`), so the vendored
+  references, and resvg v0.49.0's renderings, place the shadow at (10, 12), where Donner resamples
+  the half pixel.
+- `em-values` (`blue 0.2em 0.3em 0.1em` at font-size 64) and `mm-values` (`blue 3mm 4mm 1mm`):
+  the device offsets are (32, 48) and (28.35, 37.80). The vendored references place the shadows
+  at (30, 47) and (27, 37), consistent with the user lengths truncated to whole units before
+  scaling (12.8 19.2 to 12 19, and 11.34 15.12 to 11 15) and the scaled offset truncated; the usvg
+  source does not show the length truncation. resvg v0.49.0 renders these two rows differently from
+  the vendored references but does not compare with Donner either (1,247 and 1,131 differing pixels
+  on the software backend, 1,240 and 1,140 on Geode); for em-values, whose offset is whole, its
+  shadow profile across the circle's center row agrees with Donner's within two levels, and the
+  remaining differences are in the blur halo.
+
+results.csv records Chrome, Firefox and resvg passing all four vendored references and Safari
+failing them. A visual grade sees whether a blurred shadow sits beside the circle; a shift of a
+half pixel to two pixels under a blur of 15 device pixels (9.6 for em-values) is not visible to it,
+so the browsers passing these references does not show that they truncate.
+
+| Golden | PNG SHA-256 |
+| --- | --- |
+| `donner-drop-shadow-function.png` | `b5f628d66da78e36f887fedd444eeb9bcd0111b0d62a01ba79ceed9f53405c3c` |
+| `donner-drop-shadow-function-em-values.png` | `3bc724817809d4ed92c53c1b655a45f9f3a5a2a031efd4f0f99e48100abd9020` |
+| `donner-drop-shadow-function-mm-values.png` | `044fe3cb0fe0176ab7dcbe86831dd49998e68e55d0b77143c2a4ce5a4b04aa3f` |
+
+To regenerate, delete the files and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*drop_shadow_function*'
+```
