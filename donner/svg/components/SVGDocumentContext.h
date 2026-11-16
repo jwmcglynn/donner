@@ -13,6 +13,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
@@ -50,6 +51,14 @@ class XMLNode;
 namespace donner::svg::components {
 
 class TreeMutation;
+
+/// Result of \ref SVGDocumentContext::reapplyTypedFilterAttributes.
+struct TypedFilterAttributeEdit {
+  /// Whether the edited attribute is one of the element's type-specific attributes.
+  bool typed = false;
+  /// The edited attribute's parse error or warning, if its value did not parse.
+  std::optional<ParseDiagnostic> diagnostic;
+};
 
 /**
  * Holds global state of an SVG document, such as the root element, id-to-element mapping, and the
@@ -135,6 +144,22 @@ public:
   std::function<std::optional<ParseDiagnostic>(std::string_view, const SVGElement&,
                                                const xml::XMLNode&)>
       parseEditedElementContents;
+
+  /**
+   * Re-derives the state of one type-specific attribute of a filter element (`filter`, a filter
+   * primitive, or a light source, transfer function or merge node inside one) after a mutation set
+   * or removed it, the way the parser that built this document does: a removed or invalid value
+   * takes its default exactly as a fresh parse gives. Every other attribute's state, including
+   * values set through the typed setters, is untouched. Unset for documents the parser did not
+   * build.
+   *
+   * Takes the current document source, the element and the edited attribute's name, and returns
+   * whether that attribute is one of the element's type-specific attributes and, if its new value
+   * did not parse, the error or warning.
+   */
+  std::function<TypedFilterAttributeEdit(std::string_view, const SVGElement&,
+                                         const xml::XMLQualifiedNameRef&)>
+      reapplyTypedFilterAttributes;
 
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.
