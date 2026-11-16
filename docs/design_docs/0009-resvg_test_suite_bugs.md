@@ -63,7 +63,7 @@ Gaussian of the clipped input. The row is a reference-disagreement skip; a raise
 would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (37)
+## Active overrides (36)
 
 ### resvg golden is wrong per spec
 
@@ -74,7 +74,6 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
-| painting/marker            | with-an-image-child                   | We (correctly) render the image child                          |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
@@ -198,8 +197,8 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds exactly 39 `resvg-*.png`: 37 active + the 2 parked drop-shadow
-goldens above.
+`golden/` dir holds 38 `resvg-*.png`: 36 active, counted by distinct file
+(`resvg-simple-case.png` serves two textPath rows), and the 2 parked drop-shadow goldens above.
 
 ## Maintenance
 

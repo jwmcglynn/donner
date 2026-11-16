@@ -247,7 +247,7 @@ belongs to a later milestone (1b, 1c, or 2).
         boundaries.
   - [ ] Shape items with the level run as HarfBuzz context so joining continues across `tspan`
         boundaries, and prove the context is pixel-neutral for left-to-right scripts.
-  - [ ] Remove the skips for `text/unicode-bidi/bidi-override` and `text/tspan/bidi-reordering`.
+  - [x] Remove the skips for `text/unicode-bidi/bidi-override` and `text/tspan/bidi-reordering`.
 - [ ] Milestone 4: DOM geometry and editor (medium, about 500 lines)
   - [ ] Report start and end edges in each character's resolved direction.
   - [ ] Add an editor-control MCP repro for caret placement, caret drawing, and selection in
@@ -890,7 +890,7 @@ covered by layout-level tests.
 | `text/text/bidi-reordering`                               | Skip            | pass, pass, pass | pass    | Compare, full text (Milestone 2)                           |
 | `text/letter-spacing/mixed-scripts`                       | Skip            | fail, fail, fail | pass    | Compare, full text (Milestone 2)                           |
 | `text/direction/rtl`                                      | Skip            | pass, pass, pass | fail    | Order and anchor edge match; reference face not vendored   |
-| `text/unicode-bidi/bidi-override`                         | Skip            | pass, pass, pass | fail    | Compare, full text (Milestone 3)                           |
+| `text/unicode-bidi/bidi-override`                         | Compare, full   | pass, pass, pass | fail    | Compare, full text (Milestone 3)                           |
 | `text/tspan/bidi-reordering`                              | Skip            | pass, fail, fail | pass    | Compare, full text (Milestone 3)                           |
 | `text/writing-mode/mixed-languages-with-tb`               | Skip, full text | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172) |
 | `text/writing-mode/mixed-languages-with-tb-and-underline` | Skip, full text | pass, pass, fail | pass    | Remaining difference is the vertical underline (#1172)     |
