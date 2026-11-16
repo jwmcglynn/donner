@@ -12,6 +12,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGFEOffsetElement.h"
+#include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -194,6 +195,47 @@ TEST(FilterAttributeEditInvalidation, GenericAttributeKeepsTheRenderTree) {
 
   offset->setAttribute("dx", "4");
   EXPECT_THAT(renderState.needsFullRebuild, testing::IsTrue());
+}
+
+// The typed setters and attribute edits are both supported ways to edit a filter. An attribute
+// edit changes only that attribute's state, so a value set through a setter survives an edit of
+// another attribute.
+TEST(FilterAttributeEditKeepsSetterState, OffsetSetterSurvivesAnotherOffsetEdit) {
+  SVGDocument document =
+      FilteredDocument(FilterOf("<feOffset id='p' in='SourceGraphic' dx='1' dy='2'/>"));
+  std::optional<SVGElement> target = document.querySelector("#p");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  SVGFEOffsetElement offset = target->cast<SVGFEOffsetElement>();
+  offset.setOffset(3, 4);
+  offset.setAttribute("dx", "5");
+  EXPECT_EQ(offset.dx(), 5.0);
+  EXPECT_EQ(offset.dy(), 4.0);
+  offset.removeAttribute("dx");
+  EXPECT_EQ(offset.dx(), 0.0);
+  EXPECT_EQ(offset.dy(), 4.0);
+}
+
+TEST(FilterAttributeEditKeepsSetterState, SubregionSetterSurvivesAPrimitiveEdit) {
+  SVGDocument document =
+      FilteredDocument(FilterOf("<feOffset id='p' in='SourceGraphic' x='1' dx='1'/>"));
+  std::optional<SVGElement> target = document.querySelector("#p");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  SVGFEOffsetElement offset = target->cast<SVGFEOffsetElement>();
+  offset.setX(Lengthd(6, Lengthd::Unit::None));
+  offset.setAttribute("dx", "2");
+  EXPECT_EQ(offset.x(), Lengthd(6, Lengthd::Unit::None));
+  EXPECT_EQ(offset.dx(), 2.0);
+}
+
+TEST(FilterAttributeEditKeepsSetterState, FilterRegionSetterSurvivesARegionEdit) {
+  SVGDocument document = FilteredDocument(FilterOf("<feFlood flood-color='blue'/>"));
+  std::optional<SVGElement> target = document.querySelector("#f");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  SVGFilterElement filter = target->cast<SVGFilterElement>();
+  filter.setX(Lengthd(4, Lengthd::Unit::None));
+  filter.setAttribute("width", "8");
+  EXPECT_EQ(filter.x(), Lengthd(4, Lengthd::Unit::None));
+  EXPECT_EQ(filter.width(), Lengthd(8, Lengthd::Unit::None));
 }
 
 // A value the parser rejects with a warning keeps the attribute's default, as a fresh parse does,
