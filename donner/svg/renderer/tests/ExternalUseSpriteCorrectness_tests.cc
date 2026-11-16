@@ -91,7 +91,7 @@ SVGDocument SpriteSheetOf(const ExternalUseDocument& host) {
 
 TEST(ExternalUseSpriteCorrectnessTest, MovingTheUseDoesNotRestyleTheSpriteSheet) {
   std::optional<ExternalUseSpriteScene> scene = MakeExternalUseSpriteScene(SpriteKind::Vector);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(scene->host.document);
   ASSERT_THAT(*scene->host.resource, testing::NotNull());
@@ -106,7 +106,7 @@ TEST(ExternalUseSpriteCorrectnessTest, MovingTheUseDoesNotRestyleTheSpriteSheet)
 
 TEST(ExternalUseSpriteCorrectnessTest, ReturningToDrawnSpritesDoesNotRestyleTheSpriteSheet) {
   std::optional<ExternalUseSpriteScene> scene = MakeExternalUseSpriteScene(SpriteKind::Vector);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
   Renderer renderer;
   for (int sprite = 0; sprite < kSpriteSheetSpriteCount; ++sprite) {
     SetExternalUseSprite(*scene, sprite);
@@ -125,7 +125,7 @@ TEST(ExternalUseSpriteCorrectnessTest, ReturningToDrawnSpritesDoesNotRestyleTheS
 TEST(ExternalUseSpriteCorrectnessTest, AnimatedFramesMatchAFreshRenderOfTheSameState) {
   constexpr int kFrames = 3 * kFramesPerSpriteChange + 1;
   std::optional<ExternalUseSpriteScene> animated = MakeExternalUseSpriteScene(SpriteKind::Vector);
-  ASSERT_TRUE(animated.has_value());
+  ASSERT_THAT(animated, testing::Optional(testing::_));
   Renderer animatedRenderer;
   for (int frame = 0; frame < kFrames; ++frame) {
     AdvanceExternalUseSpriteFrame(*animated, frame);
@@ -133,7 +133,7 @@ TEST(ExternalUseSpriteCorrectnessTest, AnimatedFramesMatchAFreshRenderOfTheSameS
   }
 
   std::optional<ExternalUseSpriteScene> fresh = MakeExternalUseSpriteScene(SpriteKind::Vector);
-  ASSERT_TRUE(fresh.has_value());
+  ASSERT_THAT(fresh, testing::Optional(testing::_));
   MoveExternalUseSprite(*fresh, kFrames - 1);
   SetExternalUseSprite(*fresh, (kFrames - 1) / kFramesPerSpriteChange);
   Renderer freshRenderer;
@@ -152,7 +152,7 @@ TEST(ExternalUseSpriteCorrectnessTest, HostStyleChangeRestylesTheRetainedTarget)
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="tile" width="8" height="8"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -180,7 +180,7 @@ TEST(ExternalUseSpriteCorrectnessTest, TargetMutationRestylesEveryRetainedTarget
         <rect id="a" width="8" height="8"/>
         <rect id="b" width="8" height="8"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -211,7 +211,7 @@ TEST(ExternalUseSpriteCorrectnessTest, EvictedTargetsInheritHostStyleWhenDrawnAg
         <use id="tile-use" href="sprites.svg#t0" fill="red"/>
       </svg>)svg",
       std::move(resource));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   SVGUseElement use = host->document.querySelector("#tile-use")->cast<SVGUseElement>();
   Renderer renderer;
   for (int target = 0; target < kTargets; ++target) {
@@ -246,7 +246,7 @@ TEST(ExternalUseSpriteCorrectnessTest, EvictingADescendantForgetsItsRetainedAnce
         <use id="tile-use" href="sprites.svg#child" fill="red"/>
       </svg>)svg",
       std::move(resource));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   SVGUseElement use = host->document.querySelector("#tile-use")->cast<SVGUseElement>();
   Renderer renderer;
   renderer.draw(host->document);
@@ -306,7 +306,7 @@ TEST(ExternalUseRetentionTest, CrossSubtreeGradientKeepsDocumentStyle) {
         </g>
         <rect id="a" width="8" height="8" fill="url(#g)"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -326,7 +326,7 @@ TEST(ExternalUseRetentionTest, OutOfDrawComputedStyleOnRetainedRoot) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="a" width="8" height="8"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -348,7 +348,7 @@ TEST(ExternalUseRetentionTest, OutOfDrawComputedStyleObservesHostStyle) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="a" width="8" height="8"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   SVGDocument resource = SVGDocument::CreateFromHandle(*host->resource);
@@ -367,7 +367,7 @@ TEST(ExternalUseRetentionTest, SameTargetTwoStylesOneFrame) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="a" width="8" height="8"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -385,7 +385,7 @@ TEST(ExternalUseRetentionTest, OverlappingSubtrees) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <g id="p"><rect id="c" width="8" height="8"/></g>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -405,7 +405,7 @@ TEST(ExternalUseRetentionTest, DescendantAfterRootOccurrenceResolvesRemAgainstSh
       R"svg(<svg id="sheet" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
         <rect id="child" width="64" height="64" fill="blue" clip-path="inset(1rem) fill-box"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64">
@@ -427,7 +427,7 @@ TEST(ExternalUseRetentionTest, ImageInterleavedWithUse) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="a" width="8" height="8" fill-opacity="0.5"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
@@ -447,7 +447,7 @@ TEST(ExternalUseRetentionTest, ContextFillFollowsHost) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <g id="a"><rect width="8" height="8" fill="context-fill"/></g>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 2,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -473,7 +473,7 @@ TEST(ExternalUseRetentionTest, ReadsAfterHostDestructionSeeOnlyTheTargetDocument
         <rect id="a" width="8" height="8"/>
         <rect id="b" width="8" height="8" fill="context-fill"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -535,7 +535,7 @@ TEST(ExternalUseRetentionTest, PatternContentReadsGradientInOtherSubtree) {
   constexpr std::string_view kA = R"svg(<rect id="a" width="8" height="8" fill="url(#p)"/>)svg";
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kCrossSubtreeHost, Sheet(std::string(kDefs) + std::string(kA)));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                Expected(kDefs, R"svg(<rect width="8" height="8" fill="url(#p)"/>)svg"),
@@ -549,7 +549,7 @@ TEST(ExternalUseRetentionTest, MarkerContentReadsGradientInOtherSubtree) {
       R"svg(<path id="a" d="M0,0 L1,0" stroke="none" marker-start="url(#m)"/>)svg";
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kCrossSubtreeHost, Sheet(std::string(kDefs) + std::string(kA)));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(
       host->document, renderer, 3,
@@ -564,7 +564,7 @@ TEST(ExternalUseRetentionTest, MaskContentReadsGradientInOtherSubtree) {
       R"svg(<rect id="a" width="8" height="8" fill="green" mask="url(#k)"/>)svg";
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kCrossSubtreeHost, Sheet(std::string(kDefs) + std::string(kA)));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                Expected(kDefs, R"svg(<rect width="8" height="8" fill="green" mask="url(#k)"/>)svg"),
@@ -579,7 +579,7 @@ TEST(ExternalUseRetentionTest, TextMetricsAfterDrawUseDocumentStyle) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
         <use href="sprites.svg#a" font-size="40"/></svg>)svg",
       std::string(kSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -605,7 +605,7 @@ TEST(ExternalUseRetentionTest, LayoutAndGeometryReadsAfterDrawUseDocumentStyle) 
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
         <use href="sprites.svg#a" font-size="40"/></svg>)svg",
       std::string(kSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -637,7 +637,7 @@ TEST(ExternalUseRetentionTest, StylesheetRuleReadsGradientInOtherSubtree) {
         </g>
         <rect id="a" width="8" height="8"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   const RendererBitmap want = RenderStandalone(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -665,7 +665,7 @@ TEST(ExternalUseRetentionTest, StopColorAfterDrawUsesDocumentStyle) {
           <rect width="8" height="8" fill="url(#g)"/>
         </g>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -684,7 +684,7 @@ TEST(ExternalUseRetentionTest, SymbolAtTwoSizesWithOnePaintKeepsEachViewport) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <symbol id="sym" viewBox="0 0 4 4"><rect width="4" height="4" fill="blue"/></symbol>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -705,7 +705,7 @@ TEST(ExternalUseRetentionTest, RetainedTargetWithUseInsideDefsKeepsItsExpansion)
         </g></defs>
         <rect id="b" width="8" height="8" fill="red"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -725,7 +725,7 @@ TEST(ExternalUseRetentionTest, UseTargetRootSurvivesInstanceOnlyRebuilds) {
         <use id="t" href="#r"/>
         <rect id="b" width="8" height="8" fill="red"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ExpectFrames(host->document, renderer, 3,
                R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
@@ -798,7 +798,7 @@ TEST(ExternalUseSpriteCorrectnessTest, RootAndDescendantDrawnEveryFrameRestyleTh
       R"svg(<svg id="sheet" xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="child" width="8" height="8"/><rect id="other" width="4" height="4"/>
       </svg>)svg");
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
@@ -869,7 +869,7 @@ void ExpectLaterSinkReceivesFirstDrawWarnings(std::string_view hostSource, std::
     SCOPED_TRACE(draw == SinklessDraw::NoSink ? "no sink" : "disabled sink");
     std::optional<ExternalUseDocument> host =
         MakeExternalUseDocument(hostSource, std::string(sheet));
-    ASSERT_TRUE(host.has_value());
+    ASSERT_THAT(host, testing::Optional(testing::_));
     Renderer renderer;
     DrawWithoutCollecting(renderer, host->document, draw);
     ParseWarningSink later;
@@ -915,7 +915,7 @@ TEST(ExternalUseWarningReplayTest, HostRefusalReachesACollectingDrawOnce) {
       </svg>)svg";
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kHost, std::string(kMarkerSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   ParseWarningSink later;
@@ -926,7 +926,7 @@ TEST(ExternalUseWarningReplayTest, HostRefusalReachesACollectingDrawOnce) {
 TEST(ExternalUseWarningReplayTest, HostMutationDropsTheHostRefusal) {
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kMarkerHost, std::string(kMarkerSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   host->document.querySelector("#u")->removeAttribute(xml::XMLQualifiedNameRef("marker-start"));
@@ -1033,7 +1033,7 @@ TEST(ExternalUseWarningReplayTest, DroppingHeldWarningsLetsTheFallbackFontReport
     SCOPED_TRACE(mutate ? "mutated" : "not mutated");
     std::optional<ExternalUseDocument> host =
         MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
-    ASSERT_TRUE(host.has_value());
+    ASSERT_THAT(host, testing::Optional(testing::_));
     Renderer renderer;
     renderer.draw(host->document);
     SVGDocument sheet = SpriteSheetOf(*host);
@@ -1051,7 +1051,7 @@ TEST(ExternalUseWarningReplayTest, DroppingHeldWarningsLetsTheFallbackFontReport
 TEST(ExternalUseWarningReplayTest, TogglingTheSinkDoesNotRestyleOrRebuildTheSheet) {
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ParseWarningSink first;
   renderer.draw(host->document, first);
@@ -1080,7 +1080,7 @@ TEST(ExternalUseWarningReplayTest, MutationDropsWarningsHeldFromBeforeIt) {
                                            : "collecting draw right after the mutation");
     std::optional<ExternalUseDocument> host =
         MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
-    ASSERT_TRUE(host.has_value());
+    ASSERT_THAT(host, testing::Optional(testing::_));
     Renderer renderer;
     renderer.draw(host->document);
     SpriteSheetOf(*host).querySelector(".bad")->setAttribute(xml::XMLQualifiedNameRef("class"),
@@ -1100,7 +1100,7 @@ TEST(ExternalUseWarningReplayTest, UnrelatedMutationKeepsCurrentWarningsForALate
   ASSERT_THAT(expected, testing::Not(testing::IsEmpty()));
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   // A transform change restyles nothing, so only a restyle the mutation forces finds the
@@ -1124,7 +1124,7 @@ TEST(ExternalUseWarningReplayTest, CollectingSinkReceivesEachWarningOnce) {
   ASSERT_THAT(expected, testing::Not(testing::IsEmpty()));
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kHost, std::string(kStyleWarningSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   SVGGraphicsElement use = host->document.querySelector("#u")->cast<SVGGraphicsElement>();
   std::vector<std::string> received;
@@ -1146,7 +1146,7 @@ TEST(ExternalUseWarningReplayTest, HeldWarningsKeepTheSinkLimit) {
   }
   sheet += "</g></svg>";
   std::optional<ExternalUseDocument> host = MakeExternalUseDocument(kStyleWarningHost, sheet);
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   ParseWarningSink later;
@@ -1180,7 +1180,7 @@ void InsertNewUnresolvedUse(SVGDocument sprites) {
 TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kStyleWarningHost, SheetPastTheSinkLimit());
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ParseWarningSink first;
   renderer.draw(host->document, first);
@@ -1205,7 +1205,7 @@ TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
 TEST(ExternalUseWarningReplayTest, NewWarningPastADeliveredTruncationMarksTheLaterSink) {
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kStyleWarningHost, SheetPastTheSinkLimit());
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ParseWarningSink first;
   renderer.draw(host->document, first);
@@ -1224,7 +1224,7 @@ TEST(ExternalUseWarningReplayTest, NewWarningPastADeliveredTruncationMarksTheLat
 TEST(ExternalUseWarningReplayTest, NewWarningDroppedByADeliveredTruncationIsNotHeldAgain) {
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kStyleWarningHost, SheetPastTheSinkLimit());
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   ParseWarningSink first;
   renderer.draw(host->document, first);
