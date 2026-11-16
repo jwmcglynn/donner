@@ -1775,12 +1775,31 @@ test("completion checks enforce by default and report only tracked misses", asyn
   assert.equal(gates.completionCheckTracks("dragInputsComplete", "firefox", "any-phase"), true);
   assert.equal(gates.completionCheckTracks("heldDragPositions", "chromium", "geode-crown"), true);
   assert.equal(
-    gates.completionCheckTracks("heldMaskedDragDamagePatch", "firefox", "geode-crown"),
+    gates.completionCheckTracks("heldMaskedDragDamagePatch", "firefox", "geode-crown", "firefox-dpr1"),
     true,
   );
+  for (const [browserName, project] of [["firefox", "firefox"], ["chromium", "chromium-dpr1"]]) {
+    assert.equal(
+      gates.completionCheckTracks("heldMaskedDragDamagePatch", browserName, "geode-crown", project),
+      false,
+      `${project} runs the geode-crown phase at device pixel ratio 2 and stays enforced`,
+    );
+  }
+  const damagePatchMiss = new Error("every held masked-child result must take the fast path");
+  const runDamagePatch = (project) =>
+    gates.runCompletionCheck("heldMaskedDragDamagePatch", () => Promise.reject(damagePatchMiss), {
+      browserName: "firefox",
+      project,
+      phase: "geode-crown",
+      detail: "8 held results, 0 slow path, 6 rasterized unpatched",
+      mode: "report",
+      log: () => {},
+    }).then((result) => ({ result }), (error) => ({ error }));
+  assert.equal((await runDamagePatch("firefox-dpr1")).result?.mode, "report");
   assert.equal(
-    gates.completionCheckTracks("heldMaskedDragDamagePatch", "chromium", "geode-crown"),
-    false,
+    (await runDamagePatch("firefox")).error,
+    damagePatchMiss,
+    "a damage patch miss in the firefox project stays enforced in report mode",
   );
   assert.equal(
     gates.completionCheckTracks("heldDragPositions", "chromium", "first-drag-193"),
@@ -1824,7 +1843,21 @@ test("only the tracked responsiveness checks go through the completion check hel
     calls.map(([, check]) => check),
     ["heldDragPositions", "dragInputsComplete", "coldZoomPresents", "heldMaskedDragDamagePatch"],
   );
-  const [held, drag, coldZoom] = calls.map(({ index }) => index);
+  const [held, drag, coldZoom, damagePatch] = calls.map(({ index }) => index);
+  const damagePatchAssertion = spec.indexOf("() => expectHeldMaskedDragDamagePatch(results.held)");
+  assert.ok(
+    damagePatchAssertion > damagePatch && damagePatchAssertion - damagePatch < 300,
+    "the damage patch check must run its assertion through the helper",
+  );
+  const damagePatchMessage =
+    "every held masked-child result must take the fast path and only patch its owning tile";
+  assert.equal(spec.split(damagePatchMessage).length, 2, "the damage patch check must appear once");
+  const assertionDefinition = spec.indexOf("function expectHeldMaskedDragDamagePatch(");
+  assert.ok(
+    assertionDefinition >= 0 && spec.indexOf(damagePatchMessage) > assertionDefinition
+      && spec.indexOf(damagePatchMessage) - assertionDefinition < 1500,
+    "the damage patch message must belong to the helper the check runs",
+  );
   assert.equal(
     spec.split('"geode-crown"').length,
     2,

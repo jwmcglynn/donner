@@ -170,6 +170,7 @@ interface WorkerResultCounters {
   gpuOwnerDispatchCount: number;
   gpuOwnerWaitSliceTimeouts: number;
   gpuOwnerDispatchWaitMs: number;
+  compositorRenderCount: number;
   workerMs: number;
   renderFrameMs: number;
 }
@@ -1866,6 +1867,7 @@ async function startWorkerResultCounters(page: Page) {
           gpuOwnerDispatchCount: count("gpuOwnerDispatchCount"),
           gpuOwnerWaitSliceTimeouts: count("gpuOwnerWaitSliceTimeouts"),
           gpuOwnerDispatchWaitMs: count("gpuOwnerDispatchWaitMs"),
+          compositorRenderCount: count("compositorRenderCount"),
           workerMs: stats.workerMs,
           renderFrameMs: count("renderFrameMs"),
         });
@@ -1908,7 +1910,8 @@ function unpatchedTileCount(result: WorkerResultCounters) {
 /**
  * As in the native compositor, every result rendered while the masked child is held takes the
  * fast path (or finds nothing dirty) without a slow-path frame, and rasterizes at most one tile,
- * by patching only the damaged part of its owner.
+ * by patching only the damaged part of its owner. A drag-start result finds nothing dirty and
+ * rasterizes no tile, so it needs no exception.
  */
 function expectHeldMaskedDragDamagePatch(held: WorkerResultCounters[]) {
   expect(
