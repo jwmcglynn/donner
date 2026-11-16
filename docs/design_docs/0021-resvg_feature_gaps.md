@@ -822,8 +822,10 @@ goldens, all now fixed/closed:
 **Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
 problem — inspect whether a coverage change actually moves it before attributing it.
 No active resvg case is backend-disabled. Verified analytic-vs-finite-sample edge
-residuals, including `feGaussianBlur/complex-transform`, paint-order text, and the
-rotated pattern case, use exact Geode goldens so the backend remains fully gated.
+residuals, including `feGaussianBlur/complex-transform`, use exact Geode goldens so the
+backend remains fully gated. paint-order `on-text` and the rotated pattern case
+(`transform-and-patternTransform`) no longer need theirs: Geode now matches their vendored
+references within the default allowance (42 and 55 pixels on Metal and on Linux lavapipe).
 
 ---
 
