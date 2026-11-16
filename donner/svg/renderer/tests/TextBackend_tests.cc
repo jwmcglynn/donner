@@ -1203,9 +1203,9 @@ std::vector<double> HmtxAdvances(const FontManager& fontManager, FontHandle font
                                  double sizePx) {
   std::vector<double> advances;
   for (const auto& glyph : glyphs) {
-    advances.push_back(HmtxAdvancePx(fontManager, font, glyph.glyphIndex,
-                                     sizePx * glyph.fontSizeScale)
-                           .value_or(-1.0));
+    advances.push_back(
+        HmtxAdvancePx(fontManager, font, glyph.glyphIndex, sizePx * glyph.fontSizeScale)
+            .value_or(-1.0));
   }
   return advances;
 }
@@ -1224,9 +1224,18 @@ MATCHER_P2(BoxNear, expected, tolerance,
          std::abs(arg.bottomRight.y - expected.bottomRight.y) <= tolerance;
 }
 
+/// Bound on the full tier's error for one advance or outline coordinate at \p sizePx, with
+/// margin. FreeType rounds to 1/64 pixel of the face, which is 16 times text up to 128 px (an
+/// error of at most 1/2048 px), and otherwise at least 2048 px or the text size, whichever is
+/// larger (at most 1/128 px).
+double FullTierPrecisionPx(double sizePx) {
+  return sizePx <= 128.0 ? 1.0 / 512.0 : 1.0 / 64.0;
+}
+
 // Unkerned advances are the font's `hmtx` widths scaled linearly to the requested size, including
-// fractional sizes and sizes too large to oversample. Amiri rounds its scaled size to whole pixels
-// per em (head flags bit 3) and Noto Sans does not, so both FreeType scaling paths are covered.
+// fractional sizes, large sizes whose advances exceed 2048 px, and sizes past 4096 px. Amiri rounds
+// its scaled size to whole pixels per em (head flags bit 3) and Noto Sans does not, so both
+// FreeType scaling paths are covered.
 TEST(TextBackendFullCapabilities, AdvancesKeepFontUnitPrecision) {
   Registry registry;
   FontManager fontManager(registry);
@@ -1240,24 +1249,20 @@ TEST(TextBackendFullCapabilities, AdvancesKeepFontUnitPrecision) {
   for (const auto& [file, family] : kFonts) {
     const FontHandle font = LoadResvgFont(fontManager, file, family);
     ASSERT_TRUE(static_cast<bool>(font)) << family;
-    for (float size : {14.0f, 14.3f, 4095.0f, 4096.0f, 4500.7f}) {
+    for (float size : {14.0f, 14.3f, 300.3f, 3000.3f, 4096.0f, 4500.7f}) {
       SCOPED_TRACE(testing::Message() << family << " at " << size << " px");
       const auto shaped = fullBackend.shapeRunNoKerning(font, size, kText, 0, kText.size(), false,
                                                         FontVariant::Normal, false);
       ASSERT_THAT(shaped.glyphs, SizeIs(kText.size()));
-      // Positions are quantized to 1/64 pixel of the face size, which is 16 times the text size
-      // below 4096 px and the text size itself above it.
-      const double tolerance = size < 4096.0f ? 1.0 / 512.0 : 1.0 / 64.0;
-      EXPECT_THAT(shaped.glyphs,
-                  Pointwise(XAdvanceNear(tolerance), HmtxAdvances(fontManager, font, shaped.glyphs,
-                                                                  size)));
+      EXPECT_THAT(shaped.glyphs, Pointwise(XAdvanceNear(FullTierPrecisionPx(size)),
+                                           HmtxAdvances(fontManager, font, shaped.glyphs, size)));
     }
   }
 }
 
 // Synthesized small caps shape at 0.8 of the text size on the same face scale as the full-size
-// glyphs, so their advances stay the scaled `hmtx` widths, including where the text size is too
-// large to oversample but the reduced size is not.
+// glyphs, so their advances stay the scaled `hmtx` widths, including where the text size is
+// oversampled less than the reduced size could be.
 TEST(TextBackendFullCapabilities, SynthesizedSmallCapsShareTheTextFaceScale) {
   Registry registry;
   FontManager fontManager(registry);
@@ -1267,15 +1272,14 @@ TEST(TextBackendFullCapabilities, SynthesizedSmallCapsShareTheTextFaceScale) {
   const FontHandle font = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(font));
   ASSERT_FALSE(backend.hasSmallCapsFeature(font));
-  for (float size : {14.3f, 4500.7f}) {
+  for (float size : {14.3f, 150.3f, 4500.7f}) {
     SCOPED_TRACE(testing::Message() << size << " px");
     const auto shaped =
         backend.shapeRunNoKerning(font, size, "aBc", 0, 3, false, FontVariant::SmallCaps, false);
     ASSERT_THAT(shaped.glyphs,
                 ElementsAre(GlyphFontSizeScaleIs(Lt(1.0f)), GlyphFontSizeScaleIs(FloatEq(1.0f)),
                             GlyphFontSizeScaleIs(Lt(1.0f))));
-    const double tolerance = size < 4096.0f ? 1.0 / 512.0 : 1.0 / 64.0;
-    EXPECT_THAT(shaped.glyphs, Pointwise(XAdvanceNear(tolerance),
+    EXPECT_THAT(shaped.glyphs, Pointwise(XAdvanceNear(FullTierPrecisionPx(size)),
                                          HmtxAdvances(fontManager, font, shaped.glyphs, size)));
   }
 }
@@ -1293,15 +1297,14 @@ TEST(TextBackendFullCapabilities, FractionalSizeOutlinesKeepFontUnitPrecision) {
   const auto shaped =
       simpleBackend.shapeRunNoKerning(font, 16.0f, "Hgo", 0, 3, false, FontVariant::Normal, false);
   ASSERT_THAT(shaped.glyphs, SizeIs(3));
-  for (float size : {14.3f, 4500.7f}) {
+  for (float size : {14.3f, 3000.3f, 4500.7f}) {
     const float scale = simpleBackend.scaleForEmToPixels(font, size);
     for (const auto& glyph : shaped.glyphs) {
       SCOPED_TRACE(testing::Message() << "glyph " << glyph.glyphIndex << " at " << size << " px");
       const Box2d expected = simpleBackend.glyphOutline(font, glyph.glyphIndex, scale).bounds();
       ASSERT_THAT(expected.width(), Gt(1.0));
-      const double tolerance = size < 4096.0f ? 1.0 / 512.0 : 1.0 / 64.0;
       EXPECT_THAT(fullBackend.glyphOutline(font, glyph.glyphIndex, scale).bounds(),
-                  BoxNear(expected, tolerance));
+                  BoxNear(expected, FullTierPrecisionPx(size)));
     }
   }
 }
