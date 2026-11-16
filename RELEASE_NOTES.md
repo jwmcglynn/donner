@@ -1,14 +1,5 @@
 # Donner
 
-## Unreleased
-
-### Behavior Changes
-
-- **`font` is no longer a presentation attribute**, matching SVG 2 and browsers. A
-  `font="..."` attribute, or a `<set>` or `<animate>` targeting `font`, no longer changes the
-  font; set the shorthand in a `style` attribute or style sheet, or use the `font-family`,
-  `font-size`, `font-style` and `font-weight` attributes.
-
 ## v0.8: Donner SVG Editor & Engine
 
 _Date: 2026-10-23_
