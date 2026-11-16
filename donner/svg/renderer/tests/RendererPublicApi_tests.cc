@@ -4271,16 +4271,21 @@ TEST(RendererTinySkiaStrokeAccuracyTest, PrecisionFloorKeepsShortLinesOfWideStro
   // A line 0.01 long stroked 10^10 wide under matrix(1000 0 0 1e-8 0 50) covers the device
   // rectangle from (0, 0) to (10, 100). The stroke radius puts the precision floor's coordinate
   // at 5 x 10^9, which coarsens the curve tolerance, but the test for a zero-length line keeps the
-  // caller's resolution, so the line is still stroked.
-  SVGDocument document = HundredSquareDocument(
-      R"svg(<path transform="matrix(1000 0 0 1e-8 0 50)" d="M0 0 L0.01 0" fill="none"
-              stroke="black" stroke-width="1e10"/>)svg");
-  RendererTinySkia renderer;
-  renderer.draw(document);
-  EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
-  const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_THAT(CoveredPixels(snapshot, 0, 0, 10, 100), testing::AllOf(Gt(900u), testing::Le(1000u)));
-  EXPECT_EQ(CoveredPixels(snapshot, 11, 0, 100, 100), 0u);
+  // caller's resolution, so the line is still stroked: it renders as that rectangle does.
+  const auto render = [](std::string_view body) {
+    SVGDocument document = HundredSquareDocument(body);
+    RendererTinySkia renderer;
+    renderer.draw(document);
+    EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
+    return renderer.takeSnapshot();
+  };
+  const RendererBitmap line =
+      render(R"svg(<path transform="matrix(1000 0 0 1e-8 0 50)" d="M0 0 L0.01 0" fill="none"
+                      stroke="black" stroke-width="1e10"/>)svg");
+  const RendererBitmap rect =
+      render(R"svg(<rect x="0" y="0" width="10" height="100" fill="black"/>)svg");
+  editor::tests::CompareBitmapToBitmap(line, rect, "short_line_of_wide_stroke",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererTinySkiaStrokeAccuracyTest, LargeCoordinateCurvesMatchTheirGoldenAtModestZoom) {
@@ -4307,8 +4312,15 @@ TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
   // curves to the same tolerance. The dashes start near the origin, where float steps are finest,
   // so every segment is past its floor only above a scale of about 2 x 10^6: magnified 10^9
   // times, the solid and the dashed circle fit the default limits with the same work as at 10^7.
-  // At 10^7 they draw. At 10^9 the outline's device bounds pass the 32-bit integer range the
-  // rasterizer rounds them to, so it fills nothing, as it would without the floor.
+  // At 10^7 the canvas lies inside the stroke band (and, dashed, inside one dash) around the
+  // circle's point at the origin, so they cover it as a black square does. At 10^9 the outline's
+  // device bounds pass the 32-bit integer range the rasterizer rounds them to, so it fills
+  // nothing, as it would without the floor.
+  SVGDocument squareDocument =
+      HundredSquareDocument(R"svg(<rect width="100" height="100" fill="black"/>)svg");
+  RendererTinySkia squareRenderer;
+  squareRenderer.draw(squareDocument);
+  const RendererBitmap square = squareRenderer.takeSnapshot();
   for (const std::string_view dash :
        {std::string_view(),
         std::string_view(R"svg(stroke-dasharray="4 4" stroke-dashoffset="4")svg")}) {
@@ -4322,7 +4334,9 @@ TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
       renderer.draw(document);
       EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
       if (i == 0) {
-        EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 0, 0, 100, 100), Gt(0u));
+        editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), square,
+                                             "magnified_circle_covers_the_canvas",
+                                             editor::tests::PixelmatchIdentityParams());
       }
       work[i] = {renderer.resourceStats().strokeOutputPoints,
                  renderer.resourceStats().dashMeasureSteps};
