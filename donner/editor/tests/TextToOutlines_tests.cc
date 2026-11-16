@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/FillRule.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/editor/AsyncSVGDocument.h"
@@ -215,16 +216,19 @@ void ExpectPaintRetained(std::string_view svg, std::string_view label) {
                                OutlineConversionParams());
 }
 
-/// Renders \p svg, and the same document with its first `<text>` converted to outlines; returns
-/// {text render, outline render}.
-std::pair<svg::RendererBitmap, svg::RendererBitmap> RenderTextAndOutlines(std::string_view svg) {
+/// Renders \p svg into \p textRender, and the same document with its first `<text>` converted to
+/// outlines into \p outlineRender. Fails fatally if the conversion fails; call it under
+/// `ASSERT_NO_FATAL_FAILURE`.
+void RenderTextAndOutlines(std::string_view svg, svg::RendererBitmap& textRender,
+                           svg::RendererBitmap& outlineRender) {
   svg::SVGDocument converted = Parse(svg);
   svg::SVGElement text = TextElement(converted);
   ConvertTextToOutlinesResult result = convertTextToOutlines(converted, text);
-  EXPECT_TRUE(result.ok) << result.error;
+  ASSERT_TRUE(result.ok) << result.error;
   svg::SVGDocument after = Parse(ApplyConversion(converted, text, result));
   svg::SVGDocument before = Parse(svg);
-  return {RenderToBitmap(before), RenderToBitmap(after)};
+  textRender = RenderToBitmap(before);
+  outlineRender = RenderToBitmap(after);
 }
 
 }  // namespace
@@ -1123,11 +1127,14 @@ TEST(TextToOutlinesPaint, StrokeViaCss) {
 // fill, over two runs (the tspan's `x` starts the second, also a new text chunk). The text strokes
 // each chunk as one shape, so an overlap is covered once; the outlines paint the same pixels.
 TEST(TextToOutlinesPaint, OverlappingStrokesPerChunkAndPaintOrder) {
-  const auto [text, outlines] = RenderTextAndOutlines(
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect x="0" y="0" width="200" height="200" fill="white"/>
 <text x="10" y="120" font-size="64" fill="#0033aa" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5" style="paint-order: stroke">SV<tspan x="110">G</tspan></text>
-</svg>)");
+</svg>)",
+      text, outlines));
   tests::CompareBitmapToBitmap(outlines, text, "stroke_chunks_paint_order",
                                tests::PixelmatchIdentityParams());
 }
@@ -1144,7 +1151,9 @@ TEST(TextToOutlinesPaint, ChunkInsideOneRunIsStrokedAsItsOwnShape) {
 <rect x="0" y="0" width="200" height="200" fill="white"/>
 <text id="t" x="10 40" y="120" font-size="64" fill="none" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5">SV</text>
 </svg>)";
-  const auto [text, outlines] = RenderTextAndOutlines(kSvg);
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(kSvg, text, outlines));
   tests::CompareBitmapToBitmap(outlines, text, "stroke_chunk_inside_run",
                                tests::PixelmatchIdentityParams());
 
@@ -1161,7 +1170,9 @@ TEST(TextToOutlinesPaint, ChunkInsideOneRunIsStrokedAsItsOwnShape) {
   const std::optional<Box2d> second = PathBounds(reparsed, "#t_outlines_1");
   ASSERT_TRUE(first.has_value());
   ASSERT_TRUE(second.has_value());
-  EXPECT_THAT(second->topLeft.x - 4.0, Lt(first->bottomRight.x + 4.0));
+  EXPECT_THAT(second->topLeft.x - 4.0, Lt(first->bottomRight.x + 4.0))
+      << "the 8-wide strokes of \"S\" and \"V\" do not overlap, so the case cannot tell one stroke "
+         "per chunk from one per run";
 }
 
 // A translucent stroked span whose glyphs overlap. The renderer folds the span's opacity into each
@@ -1174,13 +1185,91 @@ TEST(TextToOutlinesPaint, ChunkInsideOneRunIsStrokedAsItsOwnShape) {
 // `opacity` to 8-bit alpha but truncates `fill-opacity` and `stroke-opacity`, so at 0.5 the text
 // paints alpha 128 and its outlines alpha 127, one step apart everywhere they paint.
 TEST(TextToOutlinesPaint, TranslucentStrokedSpanOfOverlappingGlyphs) {
-  const auto [text, outlines] = RenderTextAndOutlines(
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect x="0" y="0" width="200" height="200" fill="white"/>
 <text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.6" stroke="#aa0000" stroke-width="3" letter-spacing="-20">AV</tspan></text>
-</svg>)");
+</svg>)",
+      text, outlines));
   tests::CompareBitmapToBitmap(outlines, text, "translucent_stroked_overlapping_span",
                                tests::PixelmatchIdentityParams());
+}
+
+// Paint the outline group must write even at its default, so it is not inherited from the
+// `<text>`'s ancestors: the group replaces the `<text>` under the same parent. Each case was
+// converted to outlines that took a paint the text never had.
+//
+// On Geode, an unstroked glyph fill and the same outline drawn as a path differ by one step in a
+// few anti-aliased edge pixels, so the stroke cases leave the fill off and the fill case strokes
+// over its glyph edges; the paint each case is about is unaffected.
+
+// A zero-width stroke under a stroked ancestor paints nothing on the text.
+TEST(TextToOutlinesPaint, ZeroWidthStrokeUnderAStrokedAncestor) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g stroke="red"><text x="10" y="120" font-size="64" fill="none" stroke-width="0">SVG</text></g>
+</svg>)",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "zero_width_stroke_under_stroked_ancestor",
+                               tests::PixelmatchIdentityParams());
+}
+
+// A tspan stroke at the text's width, under an ancestor with another width.
+TEST(TextToOutlinesPaint, SpanStrokeWidthUnderAnAncestorWidth) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g stroke-width="5"><text x="10" y="120" font-size="64" fill="none" stroke-width="1"><tspan stroke="red">SV</tspan>G</text></g>
+</svg>)",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "span_stroke_width_under_ancestor_width",
+                               tests::PixelmatchIdentityParams());
+}
+
+// An authored `stroke="none"` on the text under a stroked ancestor.
+TEST(TextToOutlinesPaint, NoStrokeUnderAStrokedAncestor) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g stroke="red" stroke-width="4"><text x="10" y="120" font-size="64" fill="none" stroke="none">SVG</text></g>
+</svg>)",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "no_stroke_under_stroked_ancestor",
+                               tests::PixelmatchIdentityParams());
+}
+
+// The text resets an inherited `fill-rule` and `fill-opacity` to their defaults.
+TEST(TextToOutlinesPaint, DefaultFillRuleAndOpacityUnderAnAncestor) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g fill-rule="evenodd" fill-opacity="0.4"><text id="t" x="10" y="120" font-size="64" fill="#0033aa" fill-rule="nonzero" fill-opacity="1" stroke="#0033aa" stroke-width="2">SVG</text></g>
+</svg>)";
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(kSvg, text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "default_fill_rule_and_opacity_under_ancestor",
+                               tests::PixelmatchIdentityParams());
+
+  // The glyphs' contours do not overlap, so `fill-rule` does not change their pixels; assert the
+  // group resolves it as the text did.
+  svg::SVGDocument document = Parse(kSvg);
+  svg::SVGElement textElement = TextElement(document);
+  ConvertTextToOutlinesResult result = convertTextToOutlines(document, textElement);
+  ASSERT_TRUE(result.ok) << result.error;
+  svg::SVGDocument reparsed = Parse(ApplyConversion(document, textElement, result));
+  const std::optional<svg::SVGElement> group = reparsed.querySelector("#t_outlines");
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->getComputedStyle().fillRule.getOr(FillRule::EvenOdd), FillRule::NonZero);
 }
 
 }  // namespace donner::editor

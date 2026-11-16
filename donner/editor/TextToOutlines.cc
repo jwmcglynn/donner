@@ -239,25 +239,32 @@ void applyPaintOverrides(svg::SVGElement& pathElement, const ResolvedPaint& runP
   }
 }
 
+/// The paint of the outline group: the converted `<text>`'s own computed paint, with a stroke the
+/// renderer does not paint (a zero width) written as `stroke="none"`, so the paths compare their
+/// runs' strokes against what the group actually paints.
+ResolvedPaint resolveGroupPaint(const svg::SVGElement& textElement) {
+  ResolvedPaint paint = resolvePaint(textElement, 1.0);
+  if (!paint.hasStroke()) {
+    paint.stroke = "none";
+  }
+  return paint;
+}
+
 /// Writes \p groupPaint onto the outline group, with \p opacity, the converted `<text>`'s own
 /// `opacity`. Unlike a span's, the text's opacity stays a group property: it composites the whole
 /// outline set as one layer, as it did on the `<text>`.
+///
+/// Every paint attribute \ref applyPaintOverrides compares against is written, defaults included:
+/// the group takes the `<text>`'s place under the same parent, so an attribute left off would be
+/// inherited from the `<text>`'s ancestors instead of from its computed style.
 void applyGroupPaint(svg::SVGElement& groupElement, const ResolvedPaint& groupPaint,
                      double opacity) {
   groupElement.setAttribute("fill", groupPaint.fill);
-  if (groupPaint.fillRule != "nonzero") {
-    groupElement.setAttribute("fill-rule", groupPaint.fillRule);
-  }
-  if (groupPaint.fillOpacity != "1") {
-    groupElement.setAttribute("fill-opacity", groupPaint.fillOpacity);
-  }
-  if (groupPaint.hasStroke()) {
-    groupElement.setAttribute("stroke", groupPaint.stroke);
-    groupElement.setAttribute("stroke-width", groupPaint.strokeWidth);
-    if (groupPaint.strokeOpacity != "1") {
-      groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
-    }
-  }
+  groupElement.setAttribute("fill-rule", groupPaint.fillRule);
+  groupElement.setAttribute("fill-opacity", groupPaint.fillOpacity);
+  groupElement.setAttribute("stroke", groupPaint.stroke);
+  groupElement.setAttribute("stroke-width", groupPaint.strokeWidth);
+  groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
   if (opacity != 1.0) {
     groupElement.setAttribute("opacity", detail::FormatNumberForSVG(opacity));
   }
@@ -410,7 +417,7 @@ ConvertTextToOutlinesResult buildDetachedTextOutlines(svg::SVGDocument& document
   // The text element's own `opacity` composites the whole run set as one layer, exactly as it did
   // on the `<text>`; `transform` positions the outlined geometry. Carry both onto the group so it
   // sits and composites where the text did.
-  const ResolvedPaint groupPaint = resolvePaint(textElement, 1.0);
+  const ResolvedPaint groupPaint = resolveGroupPaint(textElement);
   applyGroupPaint(groupElement, groupPaint, ownOpacity(textElement));
   copyAttributeIfPresent(textElement, "transform", groupElement);
 

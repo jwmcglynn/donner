@@ -8420,18 +8420,20 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& 
   // The cached outlines are the ones the renderers draw: every glyph of the run but `.notdef` (see
   // PopulateCachedGlyph), whether or not it maps to an addressable character. A glyph that maps to
   // none still gets its outline, against character geometry that is not kept.
-  components::ComputedTextGeometryComponent::CharacterGeometry unaddressed;
   for (const auto& glyph : run.glyphs) {
     tagger.noteGlyph(glyph);
     const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
                                       ? apiMappings.byteToFirstUnit[glyph.cluster]
                                       : 0;
-    auto& charGeom = localCharIndex < localCharCount
-                         ? cache.characters[charBaseIndex + localCharIndex]
-                         : (unaddressed = {});
+    // Character geometry for a glyph that maps to no addressable character, which is not kept.
+    components::ComputedTextGeometryComponent::CharacterGeometry unaddressedScratch;
+    components::ComputedTextGeometryComponent::CharacterGeometry* charGeom = &unaddressedScratch;
+    if (localCharIndex < localCharCount) {
+      charGeom = &cache.characters[charBaseIndex + localCharIndex];
+    }
     const std::size_t outlinesBefore = cache.glyphs.size();
     PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
-                        runFontSizePx, hasPaintedGlyphs, vertical, charGeom, cache, hasInkBounds,
+                        runFontSizePx, hasPaintedGlyphs, vertical, *charGeom, cache, hasInkBounds,
                         stretchedCacheReservation);
     tagger.tagNewOutline(cache, outlinesBefore);
   }
