@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -20,6 +21,8 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/encoding/Base64.h"
+#include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGPathElement.h"
@@ -3306,6 +3309,65 @@ TEST(RendererPublicApiTest, ExternalUseTextFragmentUsesHostStyleAndTransparentCa
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
   editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external_text_host_style",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+/// A `data:` URL for one face from the hermetic resvg test font set, so a document can declare it
+/// in a stylesheet. Yellowtail is a script face that looks nothing like the packaged fallback.
+std::string HermeticFontDataUrl(std::string_view file) {
+  const std::filesystem::path path(Runfiles::instance().Rlocation(
+      "third_party/resvg-test-suite/fonts/" + std::string(file)));
+  std::ifstream stream(path, std::ios::binary);
+  const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stream)),
+                                   std::istreambuf_iterator<char>());
+  EXPECT_THAT(bytes, testing::Not(testing::IsEmpty())) << path;
+  return "data:font/ttf;base64," + EncodeBase64Data(bytes);
+}
+
+/// The host document's `@font-face` rule for `HostFace`, as a `<style>` element.
+std::string HostFaceStyle() {
+  return "<style>@font-face { font-family: HostFace; src: url(" +
+         HermeticFontDataUrl("Yellowtail-Regular.ttf") + "); }</style>";
+}
+
+// A family the host declares with `@font-face` resolves for text in the referenced document,
+// whether the text inherits the family from the referencing `<use>` or names it itself. The
+// referenced document declares no faces, so without the host's faces both fall back.
+TEST(RendererPublicApiTest, ExternalUseTextResolvesHostFontFace) {
+  const std::string inheritedHost =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
+      R"svg(<use href="external.svg#label" fill="green" font-size="24" font-family="HostFace"/>
+      </svg>)svg";
+  const std::string namedHost =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
+      R"svg(<use href="external.svg#named" fill="green" font-size="24"/></svg>)svg";
+  constexpr std::string_view kResource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40" font-family="Arial">
+        <text id="label" x="4" y="28">Map</text>
+        <text id="named" x="4" y="28" font-family="HostFace">Map</text>
+      </svg>)svg";
+  const std::string expectedSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
+      R"svg(<text x="4" y="28" fill="green" font-size="24" font-family="HostFace">Map</text>
+      </svg>)svg";
+  const RendererBitmap expected = RenderInlineDocument(expectedSource);
+  const RendererBitmap fallback = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
+        <text x="4" y="28" fill="green" font-size="24" font-family="HostFace">Map</text>
+      </svg>)svg");
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  // The comparison below can only fail when the host face is lost if the face changes the pixels.
+  ASSERT_THAT(expected.pixels, testing::Ne(fallback.pixels));
+
+  for (const auto& [name, host] : {std::pair{"inherited", std::string_view(inheritedHost)},
+                                   std::pair{"named", std::string_view(namedHost)}}) {
+    SCOPED_TRACE(name);
+    const auto actual = RenderExternalUse(host, kResource);
+    EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+    editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                         std::string("external_text_host_font_") + name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
