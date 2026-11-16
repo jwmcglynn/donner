@@ -4282,7 +4282,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /**
-   * Expands each glyph outline's stroke, skipping glyphs whose stroke is empty.
+   * Expands each glyph outline's stroke, skipping glyphs whose stroke is empty. Each expanded
+   * outline's storage is charged to the frame geometry budget as it is produced, so a chunk is
+   * never expanded past the budget before its strokes are encoded: once a charge fails, the frame
+   * is rejected, nothing more is expanded, and no outlines are returned. Release the returned
+   * outlines' charges with \ref releaseTextStrokeOutlines once they are drawn.
    *
    * @param glyphs Placed glyph outlines, in order.
    * @param style Stroke to expand.
@@ -4291,13 +4295,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::vector<Path> outlines;
     outlines.reserve(glyphs.size());
     for (const Path& glyph : glyphs) {
-      Path stroked = glyph.strokeToFill(style, strokeFlattenTolerance());
-      if (!stroked.empty()) {
-        countStrokeOutline(stroked);
-        outlines.push_back(std::move(stroked));
+      if (geometryBudget->rejected()) {
+        break;
       }
+      Path stroked = glyph.strokeToFill(style, strokeFlattenTolerance());
+      if (stroked.empty()) {
+        continue;
+      }
+      countStrokeOutline(stroked);
+      const std::optional<std::size_t> bytes = stroked.retainedBytes();
+      if (!bytes.has_value() || !geometryBudget->reserve(0u, 0u, *bytes)) {
+        geometryBudget->reject();
+        break;
+      }
+      outlines.push_back(std::move(stroked));
+    }
+    if (geometryBudget->rejected()) {
+      releaseTextStrokeOutlines(outlines);
+      return {};
     }
     return outlines;
+  }
+
+  /// Releases the frame geometry charges \ref strokeGlyphOutlines made for \p outlines.
+  void releaseTextStrokeOutlines(std::span<const Path> outlines) {
+    for (const Path& outline : outlines) {
+      geometryBudget->release(0u, 0u, outline.retainedBytes().value_or(0u));
+    }
   }
 
   /// Most stroke outline points joined into one text stroke shape: far below the path encoder's
@@ -8352,6 +8376,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         const std::vector<Path> outlines =
             impl_->strokeGlyphOutlines(paths.subspan(begin, end - begin), *strokeStyle);
         impl_->drawTextStrokeOutlines(outlines, drawStrokeShape);
+        impl_->releaseTextStrokeOutlines(outlines);
       }
     };
 
