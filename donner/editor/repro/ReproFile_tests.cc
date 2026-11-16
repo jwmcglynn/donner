@@ -11,6 +11,8 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
+#include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproRecorder.h"
@@ -186,6 +188,78 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
                                 Field("mouseDocY", &ReproFrame::mouseDocY, Eq(std::nullopt)),
                                 Field("viewport", &ReproFrame::viewport, Eq(std::nullopt)))));
   EXPECT_FALSE(loaded->metadata.expect.has_value());
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+// Numbers are read with the locale-independent parser, so a comma-decimal process locale does not
+// reject `1.5`.
+TEST(ReproFileTest, ReadsDecimalNumbersInACommaDecimalLocale) {
+  const ScopedCommaDecimalNumericLocale locale;
+  if (!locale.applied()) {
+    GTEST_SKIP() << "No comma-decimal locale is installed";
+  }
+  const auto parsed = ParseReproFile(R"({"v":3,"wnd":[100,100],"scale":1.5,"exp":0})"
+                                     "\n");
+  EXPECT_THAT(parsed,
+              Optional(Field("metadata", &ReproFile::metadata,
+                             Field("displayScale", &ReproMetadata::displayScale, DoubleEq(1.5)))));
+}
+
+// JSON has no number with a trailing decimal point, and the writer never emits one, so `2.` is
+// not a scale and the default stays.
+TEST(ReproFileTest, IgnoresAScaleWithATrailingDecimalPoint) {
+  const auto parsed = ParseReproFile(R"({"v":3,"wnd":[100,100],"scale":2.,"exp":0})"
+                                     "\n");
+  EXPECT_THAT(parsed, Optional(Field("metadata", &ReproFile::metadata,
+                                     Field("displayScale", &ReproMetadata::displayScale,
+                                           DoubleEq(ReproMetadata{}.displayScale)))));
+}
+
+// Numbers are written in the classic locale, so a global C++ locale with a decimal comma and
+// grouped thousands does not change what a written file reads back as.
+TEST(ReproFileTest, RoundTripsNumbersUnderACommaDecimalGlobalLocale) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.frames.front().index = 1234;
+  const auto path = TempFile("comma_decimal_global_locale");
+  {
+    const ScopedCommaDecimalGlobalLocale locale;
+    ASSERT_TRUE(WriteReproFile(path, file));
+  }
+
+  EXPECT_THAT(
+      ReadReproFile(path),
+      Optional(AllOf(
+          Field("metadata", &ReproFile::metadata,
+                AllOf(Field("windowWidth", &ReproMetadata::windowWidth, Eq(1600)),
+                      Field("displayScale", &ReproMetadata::displayScale, DoubleEq(2.0)))),
+          Field("frames", &ReproFile::frames,
+                ElementsAre(AllOf(Field("index", &ReproFrame::index, Eq(1234)),
+                                  Field("deltaMs", &ReproFrame::deltaMs, DoubleEq(16.667)),
+                                  Field("mouseX", &ReproFrame::mouseX, DoubleEq(123.25))))))));
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+// The recorded content hash is plain hex digits under a grouping global locale.
+TEST(ReproFileTest, ReproRecorderContentHashIgnoresTheGlobalLocale) {
+  const auto path = TempFile("recorder_hash_global_locale");
+  {
+    const ScopedCommaDecimalGlobalLocale locale;
+    ReproRecorderOptions options;
+    options.outputPath = path;
+    options.svgSource = "a";
+    ReproRecorder recorder(std::move(options));
+    ASSERT_TRUE(recorder.flush());
+  }
+
+  // The published FNV-1a 64 test vector for "a".
+  EXPECT_THAT(ReadReproFile(path),
+              Optional(Field("metadata", &ReproFile::metadata,
+                             Field("svgContentHash", &ReproMetadata::svgContentHash,
+                                   Eq("fnv1a64:af63dc4c8601ec8c")))));
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -16,6 +15,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/EditorSymbolGlyphs.h"
@@ -293,9 +293,9 @@ std::pair<int, int> calculateColumnPosition(const Line& line, float localX, floa
       columnIndex++;
     } else {
       char buf[7];
-      auto d = Utf8::SequenceLength(line[columnIndex].character);
+      auto d = TextBuffer::glyphByteLength(line[columnIndex].character);
       int i = 0;
-      while (i < 6 && d-- > 0) {
+      while (i < 6 && d-- > 0 && columnIndex < static_cast<int>(line.size())) {
         buf[i++] = line[columnIndex++].character;
       }
       buf[i] = '\0';
@@ -1619,10 +1619,12 @@ ImVec2 NormalizeVec(const ImVec2& value) {
   return length > 0.001f ? MulVec(value, 1.0f / length) : ImVec2(0.0f, 0.0f);
 }
 
+/// Whether \p value can sit inside a reference token. Bytes of a non-ASCII character are token
+/// bytes, so an id such as `caf\u00e9` underlines whole.
 bool IsReferenceSourceChar(char value) {
-  const unsigned char ch = static_cast<unsigned char>(value);
-  return std::isalnum(ch) != 0 || value == '_' || value == '-' || value == '#' || value == '.' ||
-         value == ':' || value == '%';
+  return StringUtils::IsAsciiAlnum(value) || static_cast<unsigned char>(value) >= 0x80 ||
+         value == '_' || value == '-' || value == '#' || value == '.' || value == ':' ||
+         value == '%';
 }
 
 enum class EditBoundaryBias {
@@ -2198,7 +2200,7 @@ bool TextEditor::referenceAttributeHasAssignment(int lineIndex, int quoteIndex,
       return false;
     }
     const char ch = line[index].character;
-    if (!std::isspace(static_cast<unsigned char>(ch))) {
+    if (!StringUtils::IsAsciiWhitespace(ch)) {
       return ch == '=';
     }
   }
@@ -3240,7 +3242,7 @@ void TextEditor::renderText(const Line& line, const ImVec2& pos, ImDrawList* dra
     } else {
       // Regular character
       char buf[7];
-      auto d = Utf8::SequenceLength(glyph.character);
+      auto d = TextBuffer::glyphByteLength(glyph.character);
       int charCount = 0;
       while (charCount < d && i < line.size()) {
         buf[charCount++] = line[i++].character;
@@ -3323,10 +3325,7 @@ void TextEditor::renderText(const VisualLine& visualLine, const Line& line, cons
       ++glyphIndex;
     } else {
       char buf[7];
-      int sequenceLength = Utf8::SequenceLength(glyph.character);
-      if (sequenceLength <= 0) {
-        sequenceLength = 1;
-      }
+      const int sequenceLength = TextBuffer::glyphByteLength(glyph.character);
       int charCount = 0;
       while (charCount < sequenceLength && glyphIndex < endIndex &&
              glyphIndex < static_cast<int>(line.size())) {
@@ -3840,15 +3839,7 @@ struct AutocompleteEntry {
 };
 
 bool isValidAutocompleteWord(std::string_view word) {
-  return std::any_of(word.begin(), word.end(),
-                     [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); });
-}
-
-std::string toLowercase(std::string_view str) {
-  std::string result(str);
-  std::transform(result.begin(), result.end(), result.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return result;
+  return std::any_of(word.begin(), word.end(), StringUtils::IsAsciiAlpha);
 }
 
 }  // namespace
@@ -3909,12 +3900,12 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
   autocompleteIndex_ = 0;
   autocompleteSwitched_ = false;
 
-  const std::string searchWord = toLowercase(autocompleteWord_);
+  const std::string searchWord = StringUtils::ToLowerAscii(autocompleteWord_);
   std::vector<AutocompleteEntry> matches;
 
   // Match against stored entries
   for (size_t i = 0; i < autocompleteSearchTerms_.size(); i++) {
-    const std::string lowerEntry = toLowercase(autocompleteSearchTerms_[i]);
+    const std::string lowerEntry = StringUtils::ToLowerAscii(autocompleteSearchTerms_[i]);
     if (size_t loc = lowerEntry.find(searchWord); loc != std::string::npos) {
       matches.emplace_back(autocompleteEntries_[i].first, autocompleteEntries_[i].second,
                            static_cast<int>(loc));
@@ -3923,7 +3914,7 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
 
   // Match against language keywords
   for (const auto& keyword : languageDefinition_.keywords) {
-    const std::string lowerKeyword = toLowercase(keyword);
+    const std::string lowerKeyword = StringUtils::ToLowerAscii(keyword);
     if (size_t loc = lowerKeyword.find(searchWord); loc != std::string::npos) {
       matches.emplace_back(keyword, keyword, static_cast<int>(loc));
     }
@@ -3931,7 +3922,7 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
 
   // Match against language identifiers
   for (const auto& [identifier, _] : languageDefinition_.identifiers) {
-    const std::string lowerIdentifier = toLowercase(identifier);
+    const std::string lowerIdentifier = StringUtils::ToLowerAscii(identifier);
     if (size_t loc = lowerIdentifier.find(searchWord); loc != std::string::npos) {
       matches.emplace_back(identifier, identifier, static_cast<int>(loc));
     }
@@ -4671,7 +4662,7 @@ float TextEditor::getTextDistanceToLineStart(const Coordinates& pos) const {
       ++i;
     } else {
       std::array<char, 7> tempBuffer;
-      auto seqLen = Utf8::SequenceLength(line[i].character);
+      auto seqLen = TextBuffer::glyphByteLength(line[i].character);
       int bufPos = 0;
 
       while (bufPos < 6 && seqLen-- > 0 && i < line.size()) {

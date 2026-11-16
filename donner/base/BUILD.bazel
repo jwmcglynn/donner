@@ -147,6 +147,7 @@ donner_cc_library(
         "tests/ScopedCtypeLocale.h",
         "tests/ScopedEnvironmentVariable.h",
         "tests/ScopedCommaDecimalGlobalLocale.h",
+        "tests/ScopedCommaDecimalNumericLocale.h",
         "tests/TestTempDir.h",
     ],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene

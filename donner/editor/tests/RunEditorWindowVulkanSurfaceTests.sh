@@ -18,6 +18,10 @@ fi
 
 export VK_ICD_FILENAMES="$icd"
 export XDG_RUNTIME_DIR="${TEST_TMPDIR:-/tmp}"
+# An X server resets itself when its last client disconnects and drops connections that arrive
+# during the reset. Each case releases GLFW, closing the only connection, and the next case
+# reconnects within milliseconds, so the server must not reset between cases.
+xvfb_server_args='-screen 0 1280x720x24 -noreset'
 
 if [[ $# -eq 2 ]]; then
   # Each run is a fresh process so an empty request cannot inherit a cached selection from the
@@ -30,7 +34,7 @@ if [[ $# -eq 2 ]]; then
     else
       export DONNER_GPU_BACKEND=
     fi
-    if ! output="$(xvfb-run -a -s '-screen 0 1280x720x24' "$1" "--gtest_filter=$filter" 2>&1)"; then
+    if ! output="$(xvfb-run -a -s "$xvfb_server_args" "$1" "--gtest_filter=$filter" 2>&1)"; then
       printf '%s\n' "$output" >&2
       exit 1
     fi
@@ -51,4 +55,4 @@ filter+=':EditorWindowDeathTest.UnprovenNativeRetirementQuarantinesTheWindowAndG
 filter+=':*EditorWindowLifecycleTest.AResizedWindowDrawsAtItsNewExtent/WindowSurface'
 filter+=':EditorWindowTest.AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen'
 
-exec xvfb-run -a -s '-screen 0 1280x720x24' "$1" "--gtest_filter=$filter"
+exec xvfb-run -a -s "$xvfb_server_args" "$1" "--gtest_filter=$filter"

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
 
@@ -317,8 +318,9 @@ public:
 
         if (indent) {
           // Check if the next line is already indented
-          bool lineIsAlreadyIndented = (i + 1 < text.length() && std::isspace(text[i + 1]) &&
-                                        text[i + 1] != '\n' && text[i + 1] != '\r');
+          bool lineIsAlreadyIndented =
+              (i + 1 < text.length() && StringUtils::IsAsciiWhitespace(text[i + 1]) &&
+               text[i + 1] != '\n' && text[i + 1] != '\r');
 
           // Check for unindent on closing brace
           auto nextNonSpace = text.find_first_not_of(" \t", i + 1);
@@ -331,8 +333,8 @@ public:
             actualAutoIndent = autoIndentStart;
 
             size_t pos = i + 1;
-            while (pos < text.length() && std::isspace(text[pos]) && text[pos] != '\n' &&
-                   text[pos] != '\r') {
+            while (pos < text.length() && StringUtils::IsAsciiWhitespace(text[pos]) &&
+                   text[pos] != '\n' && text[pos] != '\r') {
               actualAutoIndent = std::max(0, actualAutoIndent - tabSize_);
               pos++;
             }
@@ -529,6 +531,15 @@ public:
   }
 
   /**
+   * Byte length of the glyph that starts with \p c: its UTF-8 sequence length, or 1 for a byte
+   * that cannot start a sequence (a stray continuation byte or 0xF8-0xFF), so every walk over
+   * glyph bytes advances.
+   *
+   * @param c First byte of the glyph.
+   */
+  static int glyphByteLength(char c) { return std::max(1, Utf8::SequenceLength(c)); }
+
+  /**
    * Query how many characters (glyphs) are on a given line.
    */
   int getLineCharacterCount(int line) const {
@@ -681,8 +692,6 @@ private:
     }
     return line;
   }
-
-  static int glyphByteLength(char c) { return std::max(1, Utf8::SequenceLength(c)); }
 
   Line& insertLineAfterSplit(int index, int charIndex) {
     if (index < 0) {

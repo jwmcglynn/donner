@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -12,6 +11,7 @@
 #include "donner/base/PackagedResource.h"
 #endif
 
+#include "donner/base/StringUtils.h"
 #include "nlohmann/json.hpp"
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
@@ -20,20 +20,14 @@ namespace {
 
 using nlohmann::json;
 
-std::string LowerAscii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
 bool ParseContentLength(std::string_view value, size_t* out) {
   size_t result = 0;
   bool sawDigit = false;
   for (const char c : value) {
-    if (std::isspace(static_cast<unsigned char>(c))) {
+    if (StringUtils::IsAsciiWhitespace(c)) {
       continue;
     }
-    if (!std::isdigit(static_cast<unsigned char>(c))) {
+    if (c < '0' || c > '9') {
       return false;
     }
     sawDigit = true;
@@ -97,9 +91,9 @@ std::optional<json> ReadMessage(std::istream& in) {
     if (colon == std::string::npos) {
       continue;
     }
-    const std::string key = LowerAscii(line.substr(0, colon));
+    const std::string key = StringUtils::ToLowerAscii(line.substr(0, colon));
     std::string value = line.substr(colon + 1);
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+    while (!value.empty() && StringUtils::IsAsciiWhitespace(value.front())) {
       value.erase(value.begin());
     }
     if (key == "content-length") {

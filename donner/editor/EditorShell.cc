@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -803,7 +802,7 @@ std::string FontPreviewSvg(std::string_view family) {
 std::uint64_t FontPreviewKey(std::string_view family) {
   std::uint64_t hash = 14695981039346656037ULL;
   for (unsigned char c : family) {
-    hash ^= static_cast<unsigned char>(std::tolower(c));
+    hash ^= static_cast<unsigned char>(StringUtils::ToLowerAscii(static_cast<char>(c)));
     hash *= 1099511628211ULL;
   }
   return hash;
@@ -1367,7 +1366,7 @@ std::string CanonicalizeForTextEditor(std::string_view source) {
 std::size_t FirstSourceContentOffset(std::string_view source, std::size_t lineStart) {
   std::size_t offset = std::min(lineStart, source.size());
   while (offset < source.size() && source[offset] != '\n' && source[offset] != '\r' &&
-         std::isspace(static_cast<unsigned char>(source[offset]))) {
+         StringUtils::IsAsciiWhitespace(source[offset])) {
     ++offset;
   }
   return offset;
@@ -1965,11 +1964,7 @@ void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) 
       } else if (action.propertyName == "stroke") {
         app_.setActiveStroke(action.propertyValue);
       } else if (action.propertyName == "stroke-width") {
-        char* end = nullptr;
-        const double strokeWidth = std::strtod(action.propertyValue.c_str(), &end);
-        if (end != action.propertyValue.c_str()) {
-          app_.setActiveStrokeWidth(strokeWidth);
-        }
+        (void)app_.setActiveStrokeWidthFromText(action.propertyValue);
       }
       if (app_.setStylePropertyOnSelection(action.propertyName, action.propertyValue)) {
         flushQueuedMutationAndRefreshOverlay();

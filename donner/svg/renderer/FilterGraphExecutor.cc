@@ -711,7 +711,8 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::SpecularLighting& p
 tiny_skia::filter::FilterGraph CreateExecutableGraph(const FilterConversionContext& context,
                                                      bool clipSourceToFilterRegion,
                                                      const tiny_skia::Pixmap* fillPaintInput,
-                                                     const tiny_skia::Pixmap* strokePaintInput) {
+                                                     const tiny_skia::Pixmap* strokePaintInput,
+                                                     const tiny_skia::Pixmap* backgroundInput) {
   tiny_skia::filter::FilterGraph graph;
   graph.useLinearRGB =
       context.filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
@@ -721,6 +722,9 @@ tiny_skia::filter::FilterGraph CreateExecutableGraph(const FilterConversionConte
   }
   if (strokePaintInput != nullptr) {
     graph.strokePaintInput = *strokePaintInput;
+  }
+  if (backgroundInput != nullptr) {
+    graph.backgroundInput = *backgroundInput;
   }
 
   if (context.filterRegion.has_value()) {
@@ -813,7 +817,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                               bool clipSourceToFilterRegion,
                               const tiny_skia::Pixmap* fillPaintInput,
                               const tiny_skia::Pixmap* strokePaintInput,
-                              components::FilterExecutionBudget* executionBudget) {
+                              components::FilterExecutionBudget* executionBudget,
+                              const tiny_skia::Pixmap* backgroundInput) {
   const std::uint64_t width = pixmap.width();
   const std::uint64_t height = pixmap.height();
   const std::uint64_t pixelCount = width * height;
@@ -842,8 +847,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   const FilterConversionContext context(filterGraph, deviceFromFilter, filterRegion,
                                         static_cast<int>(pixmap.width()),
                                         static_cast<int>(pixmap.height()));
-  tiny_skia::filter::FilterGraph graph =
-      CreateExecutableGraph(context, clipSourceToFilterRegion, fillPaintInput, strokePaintInput);
+  tiny_skia::filter::FilterGraph graph = CreateExecutableGraph(
+      context, clipSourceToFilterRegion, fillPaintInput, strokePaintInput, backgroundInput);
   graph.nodes.reserve(filterGraph.nodes.size());
   const Box2d rasterRegion = graph.filterRegion
                                  ? Box2d::FromXYWH(graph.filterRegion->x, graph.filterRegion->y,
