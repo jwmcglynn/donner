@@ -1177,23 +1177,35 @@ TEST(TextToOutlinesPaint, ChunkInsideOneRunIsStrokedAsItsOwnShape) {
 
 // A translucent stroked span whose glyphs overlap. The renderer folds the span's opacity into each
 // glyph's fill alpha and each chunk's stroke alpha, so where "A" and "V" overlap the fills
-// composite twice (0.84 coverage for `opacity="0.6"`, not 0.6); the outlines fold it into each
+// composite twice (0.75 coverage for `opacity="0.5"`, not 0.5); the outlines fold it into each
 // path's `fill-opacity` and `stroke-opacity` and paint the same pixels. A per-run `<g opacity>`
-// (0.6 in the overlap) or an `opacity` on each path (a layer, which rounds differently) does not.
-//
-// The opacity is 0.6 because 255 * 0.6 is a whole alpha. The CPU renderer rounds a span's
-// `opacity` to 8-bit alpha but truncates `fill-opacity` and `stroke-opacity`, so at 0.5 the text
-// paints alpha 128 and its outlines alpha 127, one step apart everywhere they paint.
+// (0.5 in the overlap) or an `opacity` on each path (a layer, which rounds differently) does not.
 TEST(TextToOutlinesPaint, TranslucentStrokedSpanOfOverlappingGlyphs) {
   svg::RendererBitmap text;
   svg::RendererBitmap outlines;
   ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect x="0" y="0" width="200" height="200" fill="white"/>
-<text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.6" stroke="#aa0000" stroke-width="3" letter-spacing="-20">AV</tspan></text>
+<text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.5" stroke="#aa0000" stroke-width="3" letter-spacing="-20">AV</tspan></text>
 </svg>)",
       text, outlines));
   tests::CompareBitmapToBitmap(outlines, text, "translucent_stroked_overlapping_span",
+                               tests::PixelmatchIdentityParams());
+}
+
+// A span whose `fill-opacity`, `stroke-opacity` and `opacity` are all 0.948. The renderer
+// applies the product to the paint alpha once, as the outlines' folded opacities of 0.898704 do
+// (alpha 229). Quantizing each factor on its own gave alpha 228.
+TEST(TextToOutlinesPaint, SpanOpacityAndFillOpacityApplyOnce) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa" stroke="#0033aa" stroke-width="2"><tspan opacity="0.948" fill-opacity="0.948" stroke-opacity="0.948">SVG</tspan></text>
+</svg>)",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "span_opacity_and_fill_opacity_apply_once",
                                tests::PixelmatchIdentityParams());
 }
 
