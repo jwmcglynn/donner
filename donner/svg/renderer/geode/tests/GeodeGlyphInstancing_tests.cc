@@ -651,12 +651,17 @@ TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
   const std::size_t itemsPerGlyph = measure.resourceStats().geometryItems;
   ASSERT_GT(itemsPerGlyph, 0u);
 
+  const std::uint64_t drawsPerGlyph = measure.lastFrameTimings().counters.drawCalls;
+
   SVGDocument run = parse(TouchingStrokeRun(4));
   RendererGeode renderer(sharedDevice());
-  // Each glyph's stroke fits; the four joined do not.
+  // The limit counts encoded geometry items, as `geometryItems` does: each glyph's stroke fits, the
+  // four joined do not.
   renderer.setPathEncoderItemLimitForTesting(itemsPerGlyph + itemsPerGlyph / 2);
   const Frame frame = render(renderer, run);
   EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(frame.counters.drawCalls, testing::Eq(drawsPerGlyph + 3))
+      << "The rejected group is drawn glyph by glyph.";
   EXPECT_THAT(CountNonTransparentPixels(frame.bitmap), testing::Gt(0u));
 }
 
