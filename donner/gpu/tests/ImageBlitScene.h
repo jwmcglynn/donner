@@ -139,19 +139,19 @@ inline void SetAnchoredPlacement(const Scenario& scenario,
   // The quad is the source's texel rectangle placed by TargetFromTexel; the mapping back is
   // split at the anchor in double precision into a float linear part, the anchor's fractional
   // texel coordinate and its whole texel coordinate.
-  const Transform2d placement = TargetFromTexel(scenario.kind);
+  const Transform2d targetFromTexel = TargetFromTexel(scenario.kind);
   const float w = float(scenario.width()), h = float(scenario.height());
   std::fill(std::begin(result.mvp), std::end(result.mvp), 0.0f);
-  result.mvp[0] = float(2.0 * placement.data[0] / w);
-  result.mvp[1] = float(-2.0 * placement.data[1] / h);
-  result.mvp[4] = float(2.0 * placement.data[2] / w);
-  result.mvp[5] = float(-2.0 * placement.data[3] / h);
+  result.mvp[0] = float(2.0 * targetFromTexel.data[0] / w);
+  result.mvp[1] = float(-2.0 * targetFromTexel.data[1] / h);
+  result.mvp[4] = float(2.0 * targetFromTexel.data[2] / w);
+  result.mvp[5] = float(-2.0 * targetFromTexel.data[3] / h);
   result.mvp[10] = result.mvp[15] = 1.0f;
-  result.mvp[12] = float(2.0 * placement.data[4] / w - 1.0);
-  result.mvp[13] = float(-2.0 * placement.data[5] / h + 1.0);
+  result.mvp[12] = float(2.0 * targetFromTexel.data[4] / w - 1.0);
+  result.mvp[13] = float(-2.0 * targetFromTexel.data[5] / h + 1.0);
   result.destRect[0] = result.destRect[1] = 0.0f;
   result.destRect[2] = result.destRect[3] = kSourceTexels;
-  const Transform2d texelFromTarget = placement.inverse();
+  const Transform2d texelFromTarget = targetFromTexel.inverse();
   const Vector2d anchorTexel = texelFromTarget.transformPosition(Vector2d(kAnchor[0], kAnchor[1]));
   const Vector2d whole(std::floor(anchorTexel.x), std::floor(anchorTexel.y));
   result.texelFromTargetX[0] = float(texelFromTarget.data[0]);
