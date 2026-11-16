@@ -480,6 +480,49 @@ TEST_F(RendererGeodeTest, TiledBlurNearRasterEdgeMatchesBlurWithRoom) {
   }
 }
 
+// Under a skew the filter runs on a local raster aligned to the filter region and resampled from
+// the device capture. Moving the content by whole device pixels must move the result by the same
+// pixels and change nothing else, so the resample's weights cannot depend on where the capture
+// sits.
+TEST_F(RendererGeodeTest, SkewedLocalRasterFilterIsUnchangedByWholePixelMoves) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 0.01, .stdDeviationY = 0.01};
+  graph.nodes.push_back(node);
+  const auto render = [&](int width, double moveX) {
+    RendererGeode renderer(sharedDevice());
+    RenderViewport viewport;
+    viewport.size = Vector2d(width, 64);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    Transform2d skew;
+    skew.data[2] = 1.0;
+    renderer.setTransform(skew * Transform2d::Translate(moveX, 0));
+    renderer.pushFilterLayer(graph, Box2d({-100, 0}, {100, 64}));
+    renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+    renderer.drawRect(Box2d({4, 8}, {14, 30}), StrokeParams{});
+    renderer.popFilterLayer();
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+  // Placements at the canvas origin and with room on both sides: the resample into the local
+  // raster and the composite back to the device each varied with some of them.
+  constexpr int kBase = 32;
+  const RendererBitmap base = render(128, kBase);
+  ASSERT_FALSE(base.empty());
+  const RendererBitmap baseCrop =
+      editor::tests::CropBitmap(base, Vector2i(kBase, 0), Vector2i(63, 64));
+  for (const int at : {0, kBase + 1, 2 * kBase}) {
+    SCOPED_TRACE(at);
+    const RendererBitmap moved = render(128, at);
+    ASSERT_FALSE(moved.empty());
+    editor::tests::CompareBitmapToBitmap(
+        editor::tests::CropBitmap(moved, Vector2i(at, 0), Vector2i(63, 64)), baseCrop,
+        "skewed_local_raster_at_" + std::to_string(at), editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 // A tiled execution copies each tile of the backdrop alongside the source graphic, so it must read
 // the same BackgroundImage and BackgroundAlpha as one execution over the whole raster.
 TEST_F(RendererGeodeTest, TiledFilterReadsTheSameBackdropAsUntiled) {
