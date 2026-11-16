@@ -4264,6 +4264,44 @@ TEST(RendererTinySkiaSecurityTest, MiterLimitLeavesCurvedStrokesUnchanged) {
   EXPECT_TRUE(render("1e9").pixels == expected.pixels);
 }
 
+/// A document far from the origin, as projected map coordinates are: 50 solid and 50 dashed cubic
+/// curves, stroked 20 wide, in a 10,000-unit region whose corner is at (4,000,000, 4,000,000),
+/// viewed at \p zoom about the region's center on a 500 x 500 canvas.
+std::string LargeCoordinateCurves(int zoom) {
+  constexpr double kOrigin = 4.0e6;
+  constexpr double kExtent = 10000.0;
+  const double view = kExtent / zoom;
+  const double corner = kOrigin + kExtent / 2 - view / 2;
+  std::ostringstream svg;
+  svg.precision(17);
+  svg << R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox=")" << corner
+      << " " << corner << " " << view << " " << view << R"(">)";
+  for (int i = 0; i < 100; ++i) {
+    const double x = kOrigin + 100.0 * i;
+    const double y = kOrigin + 1000.0 + 80.0 * i;
+    svg << R"(<path fill="none" stroke="black" stroke-width="20" )"
+        << (i % 2 == 1 ? R"(stroke-dasharray="150 60" )" : "") << R"(d="M)" << x << " " << y << " C"
+        << (x + 3000) << " " << (y - 2500) << " " << (x + 6000) << " " << (y + 2500) << " "
+        << (x + 9000) << " " << y << R"("/>)";
+  }
+  svg << "</svg>";
+  return svg.str();
+}
+
+TEST(RendererTinySkiaSecurityTest, LargeCoordinateCurvesMatchTheUnflooredRenderAtModestZoom) {
+  // At 8x the stroke and dash tolerances of these curves stay above one float step of their
+  // coordinates, so the precision floor leaves the render as it was before the floor existed. The
+  // golden is the CPU render from before the floor.
+  SVGDocument document = ParseDocument(LargeCoordinateCurves(8));
+  RendererTinySkia renderer;
+  renderer.draw(document);
+  ASSERT_FALSE(renderer.resourceStats().drawBudgetRejected);
+  editor::tests::CompareBitmapToGolden(
+      renderer.takeSnapshot(),
+      "donner/svg/renderer/testdata/golden/tiny_skia_large_coordinate_curves_8x.png",
+      "large_coordinate_curves_8x", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
   // Past the precision of the circle's coordinates, a larger magnification no longer subdivides
   // its curves further: magnified 10^7 times, the solid and the dashed circle fit the default

@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -411,6 +413,63 @@ TEST(PathTest, ResolutionScaleStaysAboveCoordinatePrecision) {
   EXPECT_EQ(tiny_skia::PrecisionLimitedResScale(1.0e12f, 100.0f, 0.25f), limited);
   // Larger coordinates have coarser precision and a lower bound.
   EXPECT_THAT(tiny_skia::PrecisionLimitedResScale(1.0e9f, 10000.0f, 0.25f), testing::Lt(limited));
+}
+
+TEST(PathTest, StrokeStaysWithinOneFloatStepWhenTheFloorEngages) {
+  // A circle of radius 40 around (4,000,000, 4,000,000), where a float step is 0.25, stroked 10
+  // wide at a resolution scale of 100, which is past where the floor engages. The outline's
+  // on-curve points still lie on the two circles 35 and 45 from the center, within the floor's
+  // tolerance of one float step plus the rounding of the control points to floats and the error
+  // of the cubic circle: two float steps.
+  constexpr double kCenter = 4.0e6;
+  constexpr float kStep = 0.25f;
+  constexpr float kScale = 100.0f;
+  ASSERT_EQ(std::nextafter(static_cast<float>(kCenter), 5.0e6f) - static_cast<float>(kCenter),
+            kStep);
+  ASSERT_THAT(
+      tiny_skia::PrecisionLimitedResScale(kScale, static_cast<float>(kCenter) + 60.0f, 0.25f),
+      testing::Lt(kScale));
+
+  const tiny_skia::Path circle = *CubicCircle().transform(tiny_skia::Transform::fromTranslate(
+      static_cast<float>(kCenter - 50.0), static_cast<float>(kCenter - 50.0)));
+  tiny_skia::Stroke stroke;
+  stroke.width = 10.0f;
+  const std::optional<tiny_skia::Path> outline = circle.stroke(stroke, kScale);
+  ASSERT_THAT(outline, Optional(testing::_));
+
+  // Every on-curve point, and the midpoint of every quad, of the outline.
+  std::vector<tiny_skia::Point> onCurve;
+  const auto points = outline->points();
+  std::size_t index = 0;
+  for (const tiny_skia::PathVerb verb : outline->verbs()) {
+    switch (verb) {
+      case tiny_skia::PathVerb::Move:
+      case tiny_skia::PathVerb::Line: onCurve.push_back(points[index++]); break;
+      case tiny_skia::PathVerb::Quad: {
+        const tiny_skia::Point start = points[index - 1];
+        const tiny_skia::Point control = points[index];
+        const tiny_skia::Point end = points[index + 1];
+        onCurve.push_back(
+            tiny_skia::Point::fromXY(0.25f * start.x + 0.5f * control.x + 0.25f * end.x,
+                                     0.25f * start.y + 0.5f * control.y + 0.25f * end.y));
+        onCurve.push_back(end);
+        index += 2;
+        break;
+      }
+      case tiny_skia::PathVerb::Cubic:
+        onCurve.push_back(points[index + 2]);
+        index += 3;
+        break;
+      case tiny_skia::PathVerb::Close: break;
+    }
+  }
+  ASSERT_THAT(onCurve, testing::SizeIs(testing::Gt(8u)));
+  for (const tiny_skia::Point point : onCurve) {
+    const double radius = std::hypot(point.x - kCenter, point.y - kCenter);
+    EXPECT_THAT(std::min(std::abs(radius - 35.0), std::abs(radius - 45.0)),
+                testing::Le(2.0 * kStep))
+        << point.x << ", " << point.y;
+  }
 }
 
 TEST(PathTest, StrokeAndDashWorkStaysBoundedAtExtremeScales) {
