@@ -1456,17 +1456,16 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontSizeAdjust, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/font-size-adjust",
-            {{"simple-case.svg",
-              Params::Skip(
-                  "Reference places the adjusted text about 4 device px left of center. Both "
-                  "renderings use the same adjusted size, 64 * 0.3 / (536/1000) = 35.8, and the "
-                  "same glyph advances; only the anchor origin differs, and Donner's text-anchor "
-                  "placement for this string and face is exact where font-size-adjust is absent "
-                  "(#1173)")}})),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/font-size-adjust",
+                // The PNG centers the kerned text on its unkerned advance (4.03 device px left), so
+                // the golden is Donner's rendering; testdata/golden/README.md has the evidence.
+                {{"simple-case.svg",
+                  Params::WithGoldenOverride(
+                      "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png")
+                      .withReason("Reference disagreement: text-anchor centers the shaped "
+                                  "(kerned) advance (#1173)")}})),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextFontStretch, ImageComparisonTestFixture,
