@@ -288,7 +288,7 @@ TEST(BidiParagraphTest, OverrideWithInjectedControlsStillSplitsScriptRuns) {
 // not an element also injects controls, as UAX #9 resolves them after the override's own RLO.
 TEST(BidiParagraphTest, SourceControlsInsideParagraphOverrideOpenTheirLevels) {
   // x LRO a b PDF y, overridden right to left: the source LRO keeps "ab" in order.
-  const std::u32string_view source = U"x‭ab‬y";
+  const std::u32string_view source = U"x\u202dab\u202cy";
   const std::vector<BidiParagraph::InjectedControl> none;
   // An isolate after the last scalar encloses nothing, but still takes the injected path.
   const std::vector<BidiParagraph::InjectedControl> trailing{{6, bidi_control::kRli},
@@ -308,7 +308,7 @@ TEST(BidiParagraphTest, SourceControlsInsideParagraphOverrideOpenTheirLevels) {
 // An element's injected isolate leaves the source controls inside it in effect.
 TEST(BidiParagraphTest, SourceControlsInsideAnInjectedIsolateOpenTheirLevels) {
   // a [LRI] RLO b c PDF [PDI] d: the source override reverses "bc" inside the isolate.
-  const std::u32string_view source = U"a‮bc‬d";
+  const std::u32string_view source = U"a\u202ebc\u202cd";
   const std::vector<BidiParagraph::InjectedControl> isolate{{1, bidi_control::kLri},
                                                             {5, bidi_control::kPdi}};
   BidiResourceBudget budget;

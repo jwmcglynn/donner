@@ -74,7 +74,9 @@ A second slice adds the typed inherited `direction` and non-inherited `unicode-b
   `y`, continues from there, with trailing spacing on the left and `dx` kept as a physical shift.
   Wrapped text lays out its own lines and does not use it.
 - The paragraph level comes from the `<text>` element. A `tspan` with a different `direction`
-  mirrors its own chunk's anchor but does not change the paragraph level.
+  mirrors its own chunk's anchor but does not change the paragraph level. Under
+  `unicode-bidi: plaintext` (below) each chunk anchors in its paragraph's detected direction
+  instead, whatever the `tspan`'s `direction`.
 
 A third slice injects controls for inline elements and adds `plaintext`.
 
@@ -88,7 +90,13 @@ A third slice injects controls for inline elements and adds `plaintext`.
   honored in the same way, with or without injected controls.
 - `unicode-bidi: plaintext` on the `<text>` element detects each paragraph's base direction from
   its first strong character (UAX #9 P2 and P3). `start` and `end` anchors and the continuation of
-  unpositioned chunks then follow that detected direction instead of `direction`.
+  unpositioned chunks then follow that detected direction instead of `direction`. A paragraph
+  with no strong character is left to right (P3 gives level 0), even under `direction: rtl`.
+- SVG does not define how an unpositioned chunk continues from a paragraph of the opposite
+  direction, which only `plaintext` produces. Donner leaves the pen where the previous paragraph's
+  direction ends it and starts the next chunk there at its own start edge, so the two chunks share
+  that edge; `SVGTextElementPublicApiTests.PlaintextChunksOfOppositeDirectionsShareAnEdge` pins
+  it.
 - Unpositioned chunks follow one another in their paragraph's direction rather than the previous
   chunk's: the pen leaves a chunk at its right edge in a left-to-right paragraph and at its left
   edge in a right-to-left one, and a chunk against that direction ends at the current text

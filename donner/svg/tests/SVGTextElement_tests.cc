@@ -1355,6 +1355,86 @@ TEST(SVGTextElementPublicApiTests, PlaintextAnchorsAndContinuesInTheDetectedDire
     EXPECT_THAT(*right, testing::DoubleNear(100.0, 1e-6)) << "the word's right edge is at x";
   }
 }
+
+/// The leftmost and rightmost start or end position of characters [first, first + count) of the
+/// `#t` element.
+std::pair<double, double> HorizontalSpan(SVGDocument& document, long first, long count) {
+  const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+  std::vector<double> edges;
+  for (long index = first; index < first + count; ++index) {
+    edges.push_back(text.getStartPositionOfChar(index).x);
+    edges.push_back(text.getEndPositionOfChar(index).x);
+  }
+  const auto [left, right] = std::minmax_element(edges.begin(), edges.end());
+  return {*left, *right};
+}
+
+/// Lays out \p content in a `<text>` at x = 100 with `unicode-bidi: plaintext` and \p attributes.
+SVGDocument LayOutPlaintext(std::string_view attributes, std::string_view content) {
+  return instantiateSubtree(
+      std::string(R"-(<svg viewBox="0 0 300 80"><text id="t" x="100" y="20" )-") +
+      R"-(font-family="fallback-font" font-size="12px" unicode-bidi="plaintext" )-" +
+      std::string(attributes) + ">" + std::string(content) + "</text></svg>");
+}
+
+// With no strong character, UAX #9 rule P3 gives a plaintext paragraph level 0, left to right,
+// whatever `direction` says: the neutral text starts at x as a left-to-right chunk does.
+TEST(SVGTextElementPublicApiTests, PlaintextWithoutStrongCharactersIsLeftToRight) {
+  SVGDocument plaintext = LayOutPlaintext(R"(direction="rtl")", "!?");
+  const auto [left, right] = HorizontalSpan(plaintext, 0, 2);
+  ASSERT_THAT(right - left, testing::Gt(1.0)) << "the characters have advances";
+  EXPECT_THAT(left, testing::DoubleNear(100.0, 1e-6)) << "the text starts at x";
+
+  SVGDocument rtl = instantiateSubtree(R"-(<svg viewBox="0 0 300 40"><text id="t" x="100"
+    y="20" font-family="fallback-font" font-size="12px" direction="rtl">!?</text></svg>)-");
+  EXPECT_THAT(HorizontalSpan(rtl, 0, 2).second, testing::DoubleNear(100.0, 1e-6))
+      << "without plaintext the rtl base ends the text at x";
+}
+
+// `middle` centers a chunk on x in either detected direction, and `end` names the edge opposite
+// the detected start: the left edge of a right-to-left paragraph, the right edge of a
+// left-to-right one, whatever `direction` says.
+TEST(SVGTextElementPublicApiTests, PlaintextMiddleAndEndAnchorsFollowTheDetectedDirection) {
+  {
+    SVGDocument document = LayOutPlaintext(R"(text-anchor="end")", "&#x5d0;&#x5d1;");
+    const auto [left, right] = HorizontalSpan(document, 0, 2);
+    ASSERT_THAT(right - left, testing::Gt(1.0));
+    EXPECT_THAT(left, testing::DoubleNear(100.0, 1e-6)) << "an rtl paragraph ends at its left";
+  }
+  {
+    SVGDocument document = LayOutPlaintext(R"(text-anchor="end" direction="rtl")", "ab");
+    EXPECT_THAT(HorizontalSpan(document, 0, 2).second, testing::DoubleNear(100.0, 1e-6))
+        << "an ltr paragraph ends at its right";
+  }
+  for (const std::string_view content : {"ab", "&#x5d0;&#x5d1;"}) {
+    SCOPED_TRACE(content);
+    SVGDocument document = LayOutPlaintext(R"(text-anchor="middle" direction="rtl")", content);
+    const auto [left, right] = HorizontalSpan(document, 0, 2);
+    EXPECT_THAT((left + right) / 2.0, testing::DoubleNear(100.0, 1e-6)) << "centered on x";
+  }
+}
+
+// SVG does not define how an unpositioned chunk continues from a paragraph of the opposite
+// direction. Donner leaves the pen where the previous paragraph's direction ends it and starts
+// the next chunk there at its own start edge, so the two chunks share that edge.
+TEST(SVGTextElementPublicApiTests, PlaintextChunksOfOppositeDirectionsShareAnEdge) {
+  {
+    // "ab" ends at its right edge; the Hebrew chunk starts there with its right edge.
+    SVGDocument document = LayOutPlaintext("", R"(ab<tspan y="40">&#x5d0;&#x5d1;</tspan>)");
+    const auto latin = HorizontalSpan(document, 0, 2);
+    const auto hebrew = HorizontalSpan(document, 2, 2);
+    EXPECT_THAT(latin.first, testing::DoubleNear(100.0, 1e-6));
+    EXPECT_THAT(hebrew.second, testing::DoubleNear(latin.second, 1e-6));
+  }
+  {
+    // The Hebrew chunk ends at its left edge; "ab" starts there with its left edge.
+    SVGDocument document = LayOutPlaintext("", R"(&#x5d0;&#x5d1;<tspan y="40">ab</tspan>)");
+    const auto hebrew = HorizontalSpan(document, 0, 2);
+    const auto latin = HorizontalSpan(document, 2, 2);
+    EXPECT_THAT(hebrew.second, testing::DoubleNear(100.0, 1e-6));
+    EXPECT_THAT(latin.first, testing::DoubleNear(hebrew.first, 1e-6));
+  }
+}
 #endif
 
 // `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
