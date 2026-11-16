@@ -129,18 +129,9 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
-                "filters/enable-background",
-                {
-                    // With enable-background ignored (SVG 2), these match the reference.
-                    {"accumulate.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"new-with-invalid-region-1.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"new-with-invalid-region-2.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"new-with-invalid-region-3.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                },
+                "filters/enable-background", {},
+                // The references take BackgroundImage from an enable-background snapshot, which
+                // SVG 2 removed; Donner reads the Filter Effects isolation-group backdrop instead.
                 Params::DeprecatedInSVG2("enable-background / BackgroundImage (SVG 1.1, removed "
                                          "in SVG 2)"))),
             ValuesIn(ActiveComparisonModes())),
@@ -522,9 +513,18 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
+                // The backdrop square and the filtered square coincide, so this row's alpha must
+                // equal in=BackgroundImage's, which compares with default parameters. Donner's two
+                // renders do share one alpha; the two references do not. This one reaches full
+                // alpha about 2 px further inside the blurred edge, so a ring 3 px wide, 25 px
+                // inside each edge, reads 254 where Donner and the BackgroundImage reference read
+                // 255. Near black that one level exceeds the perceptual threshold: 1,176 px on
+                // every backend, none differing by more than 4 levels (#1185).
                 {"in=BackgroundAlpha.svg",
-                 Params::Skip("Not impl: Filter Effects BackgroundAlpha from the isolation-group "
-                              "backdrop")},
+                 WithMaxPixels(1200,
+                               "Reference blur reaches full alpha 2 px later than the "
+                               "identical-alpha in=BackgroundImage reference; 1,176 px "
+                               "ring of one alpha level near black (#1185)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -734,8 +734,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"self-recursive.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
+                    // The reference resamples a rasterized pattern tile, so only the tile's thin
+                    // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
-                     Params::WithThreshold(0.5f, 1150, "AA artifacts + quad glyph outlines")},
+                     Params::WithThreshold(0.5f, 1150,
+                                           "Reference resamples a rasterized pattern tile")},
                     {"transform-and-patternTransform.svg",
                      Params{}.withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/geode/"
@@ -876,14 +879,7 @@ INSTANTIATE_TEST_SUITE_P(
                          .withReason("Nearest sampling at destination pixel centers")},
                     // The 300x300 resvg v0.49.0 rendering; the superseded reference was flattened
                     // onto white and resolved nearest-neighbor ties toward the lower texel.
-                    {"optimizeSpeed.svg",
-                     ResvgV049Reference().disableBackend(
-                         RendererBackend::Geode,
-                         "Bug: at 3.75 device pixels per texel, every second texel boundary falls "
-                         "on a pixel center; Geode's interpolated texture coordinate lands just "
-                         "below it where tiny-skia's float inverse transform lands on it, so "
-                         "nearest sampling picks the previous texel (564 px against resvg "
-                         "v0.49.0, all inside the image; TinySkia matches)")},
+                    {"optimizeSpeed.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -998,8 +994,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                            "Reference uses text ink extents for stroke paint")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
-                    {"pattern-on-text.svg",
-                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
                      Params::Skip("Reference disagreement: appears to use ink extents; "
                                   "SVG2 text paint uses glyph-cell bounds")},
@@ -1388,15 +1382,14 @@ INSTANTIATE_TEST_SUITE_P(
                      "Reference rasterizer generation: 4x4 supersampled coverage on the 1.25 px "
                      "crosshair; the text under the shorthand matches; analytic residual 386 px, "
                      "supersampled 0 px (#1173)")},
-                // `font="bold italic 64 Noto Sans"` resolves to Noto Sans Italic, the only italic
-                // face in the test font set (FontSelection_tests.cc). The vendored 400x400 PNG
-                // draws a synthesized bold over it with wider advances, which neither CPU text
-                // tier synthesizes for document fonts, while resvg v0.49.0 rejects the unitless
-                // size in the shorthand and draws 12px default serif text instead.
+                // SVG 2 has no `font` presentation attribute, so the case draws the initial
+                // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
+                // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail it
+                // in results.csv.
                 {"simple-case.svg",
-                 Params::Skip("Reference disagreement: the PNG synthesizes bold over Noto Sans "
-                              "Italic and resvg v0.49.0 ignores the unitless shorthand; Donner "
-                              "applies it and draws the Italic face (#1167, #1173, #1186)")
+                 Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
+                              "which SVG 2 does not list as a presentation attribute (#1167, "
+                              "#1173, #1186)")
                      .setCanvasSize(400, 400)},
             })),
         ValuesIn(ActiveComparisonModes())),

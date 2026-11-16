@@ -82,6 +82,7 @@ playwright_bin.playwright_test(
         "browser-bitmap-comparator.ts",
         "browser-gpu-residency.ts",
         "browser-heartbeat.cjs",
+        "browser-launch-probe.js",
         "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
         "browser-runtime-diagnostics.ts",
@@ -195,9 +196,11 @@ RESPONSIVENESS_PERF_PROJECTS = [
     for project in RESPONSIVENESS_PERF_PROJECTS
 ]
 
+# Medium: the suite takes 20 to 35 s, and a case whose 30 s stall guard fires must still report its
+# reason inside the Bazel timeout rather than end as a target TIMEOUT.
 js_test(
     name = "browser_watchdog_tests",
-    size = "small",
+    size = "medium",
     copy_data_to_bin = False,
     data = [
         "browser-application-heartbeat.mjs",
@@ -226,6 +229,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "canvas-color-stats.ts",
         "chromium-launch-env.cjs",
         "composited-drag-invariants.spec.ts",
@@ -279,6 +283,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "canvas-color-stats.ts",
         "chromium-launch-env.cjs",
         "composited-drag-invariants.spec.ts",
@@ -389,6 +394,7 @@ js_test(
         "pipeline-compile-readiness.mjs",
         "smoke.spec.ts",
         "standalone-geode-browser-renderer.spec.ts",
+        "test-timing.cjs",
     ],
     entry_point = "browser-stall-diagnostics.spec.mjs",
     node_options = ["--test"],
@@ -581,11 +587,26 @@ js_test(
     node_options = ["--test"],
 )
 
+# The launch probe every Bazel browser lane runs before its first case, against fake browsers.
+js_test(
+    name = "browser_launch_probe_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-launch-probe.js",
+        "prepare-browser-archives.js",
+        "test-timing.cjs",
+    ],
+    entry_point = "browser-launch-probe.spec.mjs",
+    node_options = ["--test"],
+)
+
 js_test(
     name = "playwright_bazel_config_tests",
     size = "small",
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "chromium-launch-env.cjs",
         "playwright.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
@@ -823,6 +844,7 @@ playwright_bin.playwright_test(
     data = [
         "browser-diagnostic-policy.js",
         "browser-bitmap-comparator.ts",
+        "browser-launch-probe.js",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -914,6 +936,7 @@ playwright_bin.playwright_test(
         "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
+        "browser-launch-probe.js",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -993,6 +1016,7 @@ playwright_bin.playwright_test(
         "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
+        "browser-launch-probe.js",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -1160,6 +1184,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-launch-probe.js",
         "chromium-launch-env.cjs",
         "docs-selector.spec.ts",
         "playwright.docs.config.js",

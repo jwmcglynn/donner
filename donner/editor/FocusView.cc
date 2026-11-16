@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <limits>
 #include <optional>
 #include <span>
@@ -14,6 +13,7 @@
 #include <vector>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/ReferenceFanout.h"
 #include "donner/svg/ElementType.h"
@@ -277,10 +277,6 @@ std::optional<svg::SVGElement> SafeParentElement(const svg::SVGElement& element)
   return parent;
 }
 
-bool IsAsciiSpace(char ch) {
-  return std::isspace(static_cast<unsigned char>(ch)) != 0;
-}
-
 void AppendFragmentReference(std::vector<FragmentReference>* references,
                              std::string_view fragmentId, std::optional<std::size_t> sourceOffset) {
   if (fragmentId.empty() || references->size() >= kMaximumFocusReferenceLinks) {
@@ -303,7 +299,7 @@ void AppendUrlFragmentReferences(std::string_view value, std::optional<std::size
     }
 
     std::size_t index = urlPos + 4;
-    while (index < value.size() && IsAsciiSpace(value[index])) {
+    while (index < value.size() && StringUtils::IsAsciiWhitespace(value[index])) {
       ++index;
     }
 
@@ -311,7 +307,7 @@ void AppendUrlFragmentReferences(std::string_view value, std::optional<std::size
     if (index < value.size() && (value[index] == '\'' || value[index] == '"')) {
       quote = value[index];
       ++index;
-      while (index < value.size() && IsAsciiSpace(value[index])) {
+      while (index < value.size() && StringUtils::IsAsciiWhitespace(value[index])) {
         ++index;
       }
     }
@@ -325,7 +321,8 @@ void AppendUrlFragmentReferences(std::string_view value, std::optional<std::size
     std::size_t fragmentEnd = fragmentStart;
     while (fragmentEnd < value.size()) {
       const char ch = value[fragmentEnd];
-      if ((quote != '\0' && ch == quote) || (quote == '\0' && (ch == ')' || IsAsciiSpace(ch)))) {
+      if ((quote != '\0' && ch == quote) ||
+          (quote == '\0' && (ch == ')' || StringUtils::IsAsciiWhitespace(ch)))) {
         break;
       }
       ++fragmentEnd;
@@ -345,7 +342,7 @@ void AppendUrlFragmentReferences(std::string_view value, std::optional<std::size
 void AppendHrefFragmentReference(std::string_view value, std::optional<std::size_t> valueOffset,
                                  std::vector<FragmentReference>* references) {
   std::size_t start = 0;
-  while (start < value.size() && IsAsciiSpace(value[start])) {
+  while (start < value.size() && StringUtils::IsAsciiWhitespace(value[start])) {
     ++start;
   }
 
@@ -354,7 +351,7 @@ void AppendHrefFragmentReference(std::string_view value, std::optional<std::size
   }
 
   std::size_t end = value.size();
-  while (end > start + 1 && IsAsciiSpace(value[end - 1])) {
+  while (end > start + 1 && StringUtils::IsAsciiWhitespace(value[end - 1])) {
     --end;
   }
 

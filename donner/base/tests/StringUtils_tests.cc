@@ -305,6 +305,28 @@ TEST(StringUtils, IgnoreCaseFoldsOnlyAsciiInEveryLocale) {
   });
 }
 
+TEST(StringUtils, IsAsciiAlnumAcceptsOnlyAsciiLettersAndDigitsInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    for (int byte = 0; byte < 256; ++byte) {
+      const bool expected = (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'z') ||
+                            (byte >= 'A' && byte <= 'Z');
+      EXPECT_EQ(StringUtils::IsAsciiAlnum(static_cast<char>(byte)), expected) << "byte " << byte;
+    }
+  });
+}
+
+TEST(StringUtils, IsAsciiAlphaAndIsAsciiDigitSplitAsciiAlnumInEveryLocale) {
+  ForEachCtypeLocaleForTesting([] {
+    for (int byte = 0; byte < 256; ++byte) {
+      const char ch = static_cast<char>(byte);
+      EXPECT_EQ(StringUtils::IsAsciiDigit(ch), byte >= '0' && byte <= '9') << "byte " << byte;
+      EXPECT_EQ(StringUtils::IsAsciiAlpha(ch),
+                (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z'))
+          << "byte " << byte;
+    }
+  });
+}
+
 TEST(StringUtils, ToLowerAsciiChangesOnlyUppercaseAsciiBytes) {
   std::string allBytes;
   std::string expected;

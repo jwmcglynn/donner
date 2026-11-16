@@ -7,6 +7,8 @@ module.exports = {
   timeout: 10000,
   expect: { timeout: stallGuardFor(10000) },
   globalTimeout: 120000,
+  // Fails the lane once if Chromium cannot launch at all (browser-launch-probe.js).
+  globalSetup: require.resolve("./browser-launch-probe.js"),
   retries: 0,
   workers: 1,
   reporter: [['list']],

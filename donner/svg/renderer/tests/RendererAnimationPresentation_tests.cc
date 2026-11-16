@@ -154,6 +154,19 @@ TEST(RendererAnimationPresentation, MixedFontUnitsUseTheSameSampledFont) {
   }
 }
 
+// `font` is not a presentation attribute, so a `set` targeting it leaves the font size alone.
+TEST(RendererAnimationPresentation, SetOfTheFontAttributeIsIgnored) {
+  auto document = ParsePresentation(
+      "<rect width='2' height='16' font-size='12'>"
+      "<set attributeName='font' to='24px serif' dur='2s'/>"
+      "<animate attributeName='x' from='0' to='1em' dur='2s'/></rect>");
+  document.setTime(1.0);
+  auto expected = ParsePresentation("<rect x='6' width='2' height='16'/>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "font-attribute-set-ignored", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererAnimationPresentation, MarkerAngleUnitsInterpolateContinuously) {
   const std::string prefix =
       "<defs><marker id='m' markerUnits='userSpaceOnUse' markerWidth='16' markerHeight='16' "

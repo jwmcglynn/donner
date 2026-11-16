@@ -805,7 +805,7 @@ class RealTreeParityReportTests(unittest.TestCase):
         self.assertNotIn("compare", summary["gap_by_state"])
         # Known rows pin the column that is read: resvg failed the first and passed the second.
         self.assertIn(
-            {"engine_result": "failed", "path": "filters/enable-background/accumulate.svg"},
+            {"engine_result": "failed", "path": "structure/style/important.svg"},
             head_to_head["donner_only"],
         )
         self.assertIn("filters/feGaussianBlur/huge-stdDeviation.svg",

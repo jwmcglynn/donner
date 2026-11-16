@@ -44,6 +44,9 @@ _JAR_URL = "https://github.com/Tinder/bazel-diff/releases/download/v0.0.0/bazel-
 #   java: "affected" (get-impacted-targets output, which fails when "impacted_fail" is set);
 #     generate-hashes writes "{}" unless "hashes_fail" is set; with "query_error" it reports a
 #     query error and, unless given --no-keep_going, still writes partial hashes and exits 0.
+#     Like the real bazel-diff on this workspace, generate-hashes without
+#     --excludeExternalTargets also queries //external:all-targets, which fails because
+#     WORKSPACE is disabled: fatal with --no-keep_going, ignored otherwise.
 #   bazelisk: "queries", a list of [fragment, output, status]; the first fragment the query
 #     expression contains answers it.
 #   curl: "downloads", one [body, status] per call, in order.
@@ -85,6 +88,12 @@ if tool == "java":
     if "get-impacted-targets" in args:
         output.write_text(config.get("affected", ""), encoding="utf-8")
         answer("")
+    if "--excludeExternalTargets" not in args:
+        # bazel-diff skips //external only when `bazel mod graph` succeeds, and it fails here.
+        sys.stderr.write("ERROR: no such package 'external': //external package is not "
+                         "available since the WORKSPACE file is disabled\n")
+        if "--no-keep_going" in args:
+            answer("", 1)
     if config.get("query_error"):
         # bazel-diff's default --keep_going hashes what the query returned and exits 0.
         sys.stderr.write("ERROR: no such package '//broken': BUILD file not found\n")
@@ -115,6 +124,13 @@ if tool == "sha256sum":
     answer("", 0 if hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest else 1)
 answer("")
 '''
+
+
+def _hashing(runner_temp, workspace, output):
+    """The bazel-diff call that hashes `workspace` into `output`, as every hashing runs it."""
+    return ["java", "-jar", str(runner_temp / "bazel-diff.jar"), "generate-hashes",
+            "--includeTargetType", "--no-keep_going", "--excludeExternalTargets",
+            "-w", str(workspace), "-b", "bazelisk", str(output)]
 
 
 class _ScriptTest(unittest.TestCase):
@@ -227,22 +243,24 @@ class DetermineTest(_ScriptTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_outputs(outputs, "fallback=true", "affected=", "full_test=false")
         self.assertIn("Pre-warming bazel-diff hash cache for sha0.", result.stdout)
-        self.assertEqual(calls, [["java", "-jar", str(self.runner_temp / "bazel-diff.jar"),
-                                  "generate-hashes", "--includeTargetType", "--no-keep_going",
-                                  "-w", str(self.workspace), "-b", "bazelisk", str(cached)]])
+        self.assertEqual(calls, [_hashing(self.runner_temp, self.workspace, cached)])
         self.assertEqual(cached.read_text(), "{}")
         result, calls, _ = self.run_script("determine", GITHUB_EVENT_NAME="push",
                                            GITHUB_REF="refs/heads/main")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [])
 
-    def test_a_failed_prewarm_removes_its_partial_file(self):
-        result, _, outputs = self.run_script("determine", config={"hashes_fail": True},
-                                             GITHUB_EVENT_NAME="workflow_dispatch",
-                                             GITHUB_REF="refs/heads/main")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_outputs(outputs, "fallback=true", "affected=", "full_test=false")
-        self.assertEqual(list((self.home / ".cache/bazel-diff-base-hashes").iterdir()), [])
+    def test_a_failed_prewarm_fails_the_job_and_removes_its_partial_file(self):
+        # Every pull request against this commit would fail the same way, so main turns red.
+        for config in ({"hashes_fail": True}, {"query_error": True}):
+            with self.subTest(config=config):
+                result, _, _ = self.run_script("determine", config=config,
+                                               GITHUB_EVENT_NAME="workflow_dispatch",
+                                               GITHUB_REF="refs/heads/main")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("::error::bazel-diff could not hash sha0", result.stdout)
+                self.assertEqual(list((self.home / ".cache/bazel-diff-base-hashes").iterdir()),
+                                 [])
 
     def test_a_pull_request_without_its_revisions_falls_back(self):
         result, calls, outputs = self.run_script("determine", event=_pull_request(head=""))
@@ -272,7 +290,7 @@ class DetermineTest(_ScriptTest):
         self.assertIn("git merge-base failed; using base tip base0", result.stdout)
         self.assertIn(["git", "diff", "--name-only", "base0", "head0"], calls)
 
-    def test_infra_and_workflow_logic_changes_fall_back_before_hashing(self):
+    def test_infra_and_workflow_logic_changes_fall_back_after_a_hashing_self_check(self):
         for changed, wgpu in ((".bazelversion\n", "false"), (".github/actions/x/action.yml\n",
                                                             "false"),
                               ("MODULE.bazel\n", "true"), (".github/workflows/main.yml\n", "true"),
@@ -290,15 +308,34 @@ class DetermineTest(_ScriptTest):
                                     "affected=")
                 self.assertIn("Infra change requires full //... coverage: " + changed.strip(),
                               result.stdout)
-                self.assertNotIn("java", [call[0] for call in calls])
+                # The checkout is hashed once, the hashes are discarded and nothing is compared.
+                java = [call for call in calls if call[0] == "java"]
+                self.assertEqual(len(java), 1, java)
+                self.assertEqual(java[0], _hashing(self.runner_temp, self.workspace.resolve(),
+                                                   java[0][-1]))
+                self.assertFalse(Path(java[0][-1]).exists())
+                self.assertNotIn(["git", "worktree", "add"], [call[:3] for call in calls])
 
-    def test_every_hashing_runs_its_queries_without_keep_going(self):
+    def test_a_broken_hashing_fails_a_change_that_selects_full_coverage(self):
+        # A change to the selection itself selects full coverage, so it must not skip the
+        # hashing that every later pull request runs.
+        for config in ({"hashes_fail": True}, {"query_error": True}):
+            with self.subTest(config=config):
+                result, _, outputs = self.determine(
+                    changed="tools/ci/determine_targets.sh\n", **config)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("::error::bazel-diff could not hash this revision", result.stdout)
+                self.assertNotIn("fallback=", outputs)
+
+    def test_every_hashing_is_strict_and_skips_the_external_package(self):
         result, calls, _ = self.determine()
         self.assertEqual(result.returncode, 0, result.stderr)
         hashing = [call for call in calls if "generate-hashes" in call]
-        self.assertEqual(len(hashing), 2)
+        self.assertEqual([Path(call[-1]).name for call in hashing],
+                         ["base-hashes.json", "head-hashes.json"])
         for call in hashing:
-            self.assertIn("--no-keep_going", call)
+            self.assertEqual(call, _hashing(self.runner_temp, call[call.index("-w") + 1],
+                                            call[-1]))
 
     def test_graph_tracked_build_defs_and_other_workflows_select_incrementally(self):
         # A lint script under build_defs is an ordinary source of its own tests, and another

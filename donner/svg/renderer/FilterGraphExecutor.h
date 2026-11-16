@@ -27,6 +27,9 @@ namespace donner::svg {
  * @param strokePaintInput Optional `StrokePaint` input pixmap, or nullptr if unused.
  * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
  *   only the graph-local limit.
+ * @param backgroundInput Optional `BackgroundImage` input pixmap with \p pixmap's dimensions, or
+ *   nullptr when the graph reads no backdrop. `BackgroundImage` and `BackgroundAlpha` read
+ *   transparent black without it.
  */
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transform2d& deviceFromFilter,
@@ -34,7 +37,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                               bool clipSourceToFilterRegion = false,
                               const tiny_skia::Pixmap* fillPaintInput = nullptr,
                               const tiny_skia::Pixmap* strokePaintInput = nullptr,
-                              components::FilterExecutionBudget* executionBudget = nullptr);
+                              components::FilterExecutionBudget* executionBudget = nullptr,
+                              const tiny_skia::Pixmap* backgroundInput = nullptr);
 
 /**
  * Clears pixels outside the transformed filter region.

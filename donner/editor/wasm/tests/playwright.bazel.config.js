@@ -23,6 +23,9 @@ const outputRoot = process.env.TEST_UNDECLARED_OUTPUTS_DIR || requireEnvironment
 module.exports = {
   ...baseConfig,
   forbidOnly: true,
+  // One launch of each project's browser before any case: a browser that cannot start fails the
+  // lane once, with its launch error, instead of once per case (browser-launch-probe.js).
+  globalSetup: require.resolve("./browser-launch-probe.js"),
   outputDir: path.join(outputRoot, "playwright"),
   reporter: "list",
   retries: 0,

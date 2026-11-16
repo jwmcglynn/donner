@@ -344,7 +344,7 @@ std::optional<CompositorController::PromoteResult> CompositorController::classif
       std::any_of(activeHints_.begin(), activeHints_.end(), [&](const auto& entry) {
         return entry.first != entity && !pendingDemotions_.contains(entry.first);
       });
-  if (HasCompositingBreakingAncestor(registry, entity) ||
+  if (HasCompositingBreakingAncestor(registry, entity) || documentReadsFilterBackdrop(registry) ||
       (hasAssignedAncestor && !*suspendBucketAncestors) ||
       (*suspendBucketAncestors &&
        (otherLiveInteraction ||
@@ -2963,7 +2963,20 @@ void CompositorController::refreshLayerMetadata() {
   }
 }
 
+bool CompositorController::documentReadsFilterBackdrop(Registry& registry) {
+  return DocumentReadsFilterBackdrop(registry,
+                                     document().svgElement().unsafeEntityHandle().entity());
+}
+
 void CompositorController::resolveLayerAssignments(Registry& registry, ResolveOptions options) {
+  if (documentReadsFilterBackdrop(registry)) {
+    // A layer rasterizes its subtree against transparency, and a tile composes source-over onto
+    // whatever lies below it. Neither gives a BackgroundImage or BackgroundAlpha reader the
+    // content painted before it, so such a document keeps no layers: its one static span
+    // rasterizes in paint order, exactly as a full render does.
+    registry.clear<ComputedLayerAssignmentComponent>();
+    return;
+  }
   options.exclusiveInteractionRoot = exclusiveInteractionRoot_;
   options.selectedInteractionDescendant = selectedBucketDescendant_;
   resolver_.resolve(registry, kMaxCompositorLayers, options);
