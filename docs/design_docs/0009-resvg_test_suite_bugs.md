@@ -63,7 +63,7 @@ Gaussian of the clipped input. The row is a reference-disagreement skip; a raise
 would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (37)
+## Active overrides (40)
 
 ### resvg golden is wrong per spec
 
@@ -78,6 +78,9 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
+| paint-servers/pattern      | recursive-on-child                    | Exact tile-edge stroke; the PNG resamples a raster tile        |
+| paint-servers/pattern      | self-recursive-on-child               | Exact tile-edge stroke; the PNG resamples a raster tile        |
+| paint-servers/pattern      | self-recursive                        | Exact tile-edge stroke; the PNG resamples a raster tile        |
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.

@@ -57,3 +57,35 @@ This reference qualifies the full-text CPU rendering path. Geode currently skips
 bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
+
+## Donner renderings of recursive pattern references
+
+`paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.
+`self-recursive` and `self-recursive-on-child` render identically and share
+`donner-pattern-self-recursive.png`. All three are 500x500 renderings by the software renderer
+at commit `21c59c75`, at default settings. Full text and Geode render all three identically.
+
+Each tile is a 40 x 25 unit rect whose 1-unit stroke straddles the tile edge, so each tile
+clips half of its stroke and two neighboring tiles draw the two halves. A recursive fill
+reference is an error, so the rect's fill is not painted. At 2.5 device pixels per unit, the
+vertical seam at x = 40 units covers device x 98.75 to 101.25. The exact coverage of columns
+98 to 101 is therefore 0.25, 1, 1 and 0.25, which is alpha 64, 255, 255 and 64. Donner draws
+exactly that. The vendored PNGs read 89, 242, 242 and 90, the profile of a rasterized tile
+resampled with a filter. At the default threshold the rows differ from those PNGs by 4,053
+(recursive-on-child) and 5,503 pixels, and by 0 pixels under a 0.2 color threshold.
+
+resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
+per unit, the horizontal seam at y = 75 should cover rows 74 and 75 at alpha 192 each, but
+those references read 63, 255 and 192 over rows 74 to 76. That is the stroke moved half a
+pixel by a tile rasterized on whole pixels; Donner reads 192, 192 and 0.
+
+PNG SHA-256:
+- `donner-pattern-recursive-on-child.png`: `22d1398ccf3aa7f32351977ef0e284fe193e67ed670a5d4cb424448d317659f3`
+- `donner-pattern-self-recursive.png`: `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17`
+
+To regenerate, delete the files and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*PaintServersPattern*recursive*'
+```
