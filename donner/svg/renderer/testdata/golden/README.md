@@ -81,9 +81,11 @@ half a raster pixel (98.75 device = 197.5 raster). Each device pixel center then
 raster pixel boundary, so bilinear sampling averages exactly two raster pixels per axis. That
 2x box filter reproduces the exact coverage of edges at those positions. Content whose edges fall
 elsewhere in the tile is not reproduced exactly; `paint-servers/pattern/text-child` is reported
-to read 57 on a glyph edge whose exact coverage is 64. The vendored PNGs read 89, 242, 242 and 90, the profile of a rasterized tile
-resampled with a filter. At the default threshold the rows differ from those PNGs by 4,053
-(recursive-on-child) and 5,503 pixels, and by 0 pixels under a 0.2 color threshold.
+to read 57 on a glyph edge whose exact coverage is 64.
+
+The vendored PNGs read 89, 242, 242 and 90, the profile of a rasterized tile resampled with a
+filter. At the default threshold the rows differ from those PNGs by 4,053 (recursive-on-child) and
+5,503 pixels, and by 0 pixels under a 0.2 color threshold.
 
 `results.csv` records Chrome, Firefox and resvg passing all three vendored PNGs (Safari fails).
 That is a visual verdict, and it cannot separate the two profiles: they differ by 25 of 255
