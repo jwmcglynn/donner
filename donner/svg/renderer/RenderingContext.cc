@@ -2209,7 +2209,8 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
     if (root == entt::null || registry_.all_of<FeImageFragmentWithoutContentTag>(root)) {
       return std::nullopt;  // The fragment has no rendered content.
     }
-    if (std::optional<FeImageSubtreeResult> retained = FeImageBranchRange(registry_, branch, root)) {
+    if (std::optional<FeImageSubtreeResult> retained =
+            FeImageBranchRange(registry_, branch, root)) {
       return retained;
     }
     // The rendering instances were cleared while the shadow tree survived: tear the branch down
