@@ -252,6 +252,39 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
   }
 }
 
+/// Dirty flags for an element whose compositing properties changed, see \ref markCompositingDirty.
+constexpr uint16_t kCompositingDirtyFlags = components::DirtyFlagsComponent::Style |
+                                            components::DirtyFlagsComponent::Compositing |
+                                            components::DirtyFlagsComponent::RenderInstance;
+
+/**
+ * Mark a change to `opacity`, which only decides how the element's subtree is composited: the
+ * element and its descendants are restyled (a descendant may say `opacity: inherit`) and the
+ * render instances rebuilt, but no geometry, paint, filter or shadow-tree input changed.
+ */
+void markCompositingDirty(EntityHandle handle) {
+  invalidateComputedStyle(handle);
+  markDirty(handle, kCompositingDirtyFlags);
+  // Text layout memoizes span styles; dropping it sends the frame through the full rebuild.
+  (void)components::InvalidateTextLayout(handle);
+
+  auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (entt::entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    donner::components::ForAllChildrenRecursive(
+        EntityHandle(registry, child), [](EntityHandle desc) {
+          components::StyleSystem().invalidateComputed(desc);
+          markDirty(desc, kCompositingDirtyFlags);
+          // Text below the written element memoizes each span's opacity, which `opacity: inherit`
+          // ties to this element, so its layout is dropped too (taking the full rebuild).
+          if (desc.all_of<components::TextRootComponent>()) {
+            (void)components::InvalidateTextLayout(desc);
+          }
+        });
+  }
+}
+
 /// Propagate world-transform-related dirty flags to all descendants of the given entity.
 void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
   auto& tree = handle.get<donner::components::TreeComponent>();
@@ -311,9 +344,14 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
     components::LayoutSystem().invalidate(handle);
     markDirty(handle, components::DirtyFlagsComponent::RenderInstance);
     propagateWorldTransformDirtyToDescendants(handle);
+  } else if (actualName == "opacity" && elementType != ElementType::Stop) {
+    // Like `transform`, the stored attribute only needs the whole-tree restyle when a stylesheet
+    // selects on it.
+    markFullStyleRecomputeIfSelected(handle, name);
+    markCompositingDirty(handle);
   } else {
-    // For CSS properties (fill, stroke, opacity, etc.) and element-specific attributes (cx, cy,
-    // r, d, etc.), mark style cascade + shape dirty.
+    // For CSS properties (fill, stroke, etc.) and element-specific attributes (cx, cy, r, d,
+    // etc.), mark style cascade + shape dirty.
     markNeedsFullStyleRecompute(handle);
     invalidateComputedStyle(handle);
     markStyleCascadeDirty(handle, components::DirtyFlagsComponent::Shape);
