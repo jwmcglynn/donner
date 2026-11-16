@@ -109,7 +109,9 @@ fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 These vendored PNGs are opaque white, while Donner's canvas and the other references are
 transparent, and resvg v0.49.0 has no usable replacement. They are not wrong per spec: the
-glyphs agree with Donner. `testdata/golden/README.md` has the evidence.
+glyphs agree with Donner. Chromium 151 draws all three rows within 47 pixels of the goldens,
+and Firefox 153 draws the two `path` rows within 38 pixels but anchors the `y`-only chunk of
+coordinates-list differently. `testdata/golden/README.md` has the evidence.
 
 | Category | Test | Reason |
 | --- | --- | --- |

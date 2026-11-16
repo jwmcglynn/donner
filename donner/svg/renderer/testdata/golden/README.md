@@ -122,10 +122,14 @@ covered by the black `Text` with `y="100 120"`. In both texts, `ext` starts a ne
 because a `y` value alone starts one (SVG 2, Text layout algorithm, "Resolve character
 positioning": the chunk count is the larger of the `x` and `y` list lengths). Anchoring is
 applied after positioning ("Apply anchoring"), so `ext` is centered on its unanchored start,
-the end of the unshifted `T`. Two pieces of evidence agree with Donner:
+the end of the unshifted `T`. Three pieces of evidence agree with Donner:
 - Glyph placement. Flattened onto white, Donner's rendering matches the vendored PNG's glyph
   placement: the `T` ink centroid is identical, and the `ext` centroid is 0.36 px to the right.
   results.csv records Chrome and Safari passing that reference.
+- Browsers. Rendered headless at 500x500 with the suite fonts, Chromium 151 differs from the
+  golden by 5 pixels at the suite's default settings, all on glyph edges. Firefox 153 differs by
+  735 pixels: it places the black `T` and `ext` so that the red text shows beside them, so it
+  anchors the `y`-only chunk differently (results.csv also records Firefox failing the row).
 - Glyph edges. Flattened, Donner's analytic rendering still differs by 406 pixels (simple text)
   and 408 (full text), all on the glyph edges of `T` and `ext`, where the red text shows through
   the anti-aliased edges of the black text. That is edge coverage only: Donner rendered at 4x
@@ -143,10 +147,13 @@ Both rows compare against `donner-textPath-with-path.png` (500x500). Their text 
 SVG 2 `path` attribute of `textPath`, which takes precedence over `href` (SVG 2, Text,
 "The 'path' attribute"), so the two files draw the same picture. Flattened onto white, Donner's
 rendering differs from each vendored PNG by 38 pixels (simple text) and 33 (full text), inside
-the default allowance. results.csv records Firefox passing the vendored PNGs, and Chrome and
-Safari failing them: they do not implement the `path` attribute. resvg v0.49.0
-does not implement the attribute: its references draw only the guide path and frame, and
-results.csv records resvg failing both rows.
+the default allowance. Rendered headless at 500x500 with the suite fonts, Chromium 151 and
+Firefox 153 both follow the `path` attribute over `href`, and differ from the golden by 47 and
+38 pixels at the suite's default settings, all on glyph edges (15 pixels between the two
+browsers). results.csv records Firefox passing the vendored PNGs and Chrome and Safari failing
+them; Chromium 151 passes, so the Chrome grade predates its `path` support. resvg v0.49.0 does
+not implement the attribute: its references draw only the guide path and frame, and results.csv
+records resvg failing both rows.
 
 PNG SHA-256: `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7`.
 
