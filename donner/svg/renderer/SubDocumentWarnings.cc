@@ -83,15 +83,21 @@ PendingSubDocumentWarnings& EnsureHeldWarnings(Registry& registry,
   return *pending;
 }
 
-/// Hold @p warning unless it was already delivered or held, or delivering it would only drop it,
-/// creating the held set on first use.
-void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
+/**
+ * Hold @p warning unless it was already delivered or held, or delivering it would only drop it,
+ * creating the held set on first use.
+ *
+ * @return True when @p warning is new but delivering it would only drop it.
+ */
+bool HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
                             PendingSubDocumentWarnings*& pending, const ParseDiagnostic& warning) {
   std::string key = SubDocumentWarningKey(warning);
-  if ((reported != nullptr &&
-       (reported->keys.contains(key) || reported->dropsAfterTruncation(key))) ||
+  if (reported != nullptr && reported->dropsAfterTruncation(key)) {
+    return true;
+  }
+  if ((reported != nullptr && reported->keys.contains(key)) ||
       (pending != nullptr && pending->keys.contains(key))) {
-    return;
+    return false;
   }
   PendingSubDocumentWarnings& held = EnsureHeldWarnings(registry, pending);
   const std::size_t count = held.warnings.warnings().size();
@@ -99,6 +105,7 @@ void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarning
   if (held.warnings.warnings().size() > count) {
     held.keys.insert(std::move(key));
   }
+  return false;
 }
 
 }  // namespace
@@ -149,13 +156,17 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
   }
   const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
   auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  bool dropsNewWarning = false;
   for (const ParseDiagnostic& warning : warnings.warnings()) {
     if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
       break;
     }
-    HoldSubDocumentWarning(registry, reported, pending, warning);
+    dropsNewWarning |= HoldSubDocumentWarning(registry, reported, pending, warning);
   }
-  if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
+  // A truncation the host already received is held again only when this batch found a warning it
+  // has not received, which the next collecting sink would otherwise look complete without.
+  const bool truncationDelivered = reported != nullptr && reported->truncationReported;
+  if ((warnings.resourceLimitExceeded() && !truncationDelivered) || dropsNewWarning) {
     EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
   }
   registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{
