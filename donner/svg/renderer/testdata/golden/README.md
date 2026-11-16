@@ -103,3 +103,44 @@ committing it:
 rm donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=*TextFontSizeAdjust*'
 ```
+
+## Donner-rendered textPath/method=stretch reference
+
+`resvg-method=stretch.png` is Donner's own rendering of the unchanged corpus
+`text/textPath/method=stretch.svg`. It is used because the vendored PNG does not depict
+the feature: it is byte-identical to `text/textPath/simple-case.png`, which is
+`method="align"` placement, and the suite's `results.csv` flags every engine except svgnet
+as failing the case. [SVG 2 `method="stretch"`](https://www.w3.org/TR/SVG2/text.html#TextPathElementMethodAttribute)
+converts glyph outlines into paths whose points are moved along the path's normals, so
+glyphs bend with the path.
+
+This reference is a regression guard for Donner's warp, not an independent oracle. It
+differs from the vendored align image in 4664 pixels. The warp is pinned by geometry
+and renderer tests: `TextEngineTest.TextPathStretchFollowsEachGlyphChord`,
+`TextPathStretchKeepsCombiningMarkInBaseClusterFrame` and
+`TextPathStretchMappingStopsAtItsOwningRunRange` pin the per-glyph frame;
+`TextEngineScriptedTest.StretchTextPathRotatesShapedOffsetsLikeAlign` pins shaped
+offsets against align; and `TextPathStretchCurvedGeometryDiffersFromAlign` and the other
+`RendererPublicApiTest.TextPathStretch*` cases pin the curved outlines. The independent
+check is `RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`,
+which requires stretch on a straight path to equal ordinary rotated text.
+
+The image was created from the simple text tier on TinySkia with the suite's
+golden-creation path, with the renderer sources of main at
+`630d99965cc3d65f05a5c1819b334bbf30cbf133`. The simple text tier matches it with no
+differing pixels and the full text tier differs in 3 pixels, within the default
+100-pixel budget; the Geode resvg lane skips `text/*` rows through its backend
+feature gate.
+
+Corpus SVG SHA-256: `bcd6cbd182b1055635b780924dd32e2021f3a5994177fd616ebd0f98d0c7fc28`.
+
+Reference PNG SHA-256: `ba6c92599b34f0327da5a06536fa4b2f36d8487b83cab4138caa6be03f0e7626`.
+
+To regenerate after an intended rendering change, delete the image, run the
+command below from the repository root, and review the new image before
+committing it:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-method=stretch.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*method_stretch'
+```

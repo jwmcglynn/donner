@@ -63,7 +63,7 @@ Gaussian of the clipped input. The row is a reference-disagreement skip; a raise
 would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (38)
+## Active overrides (39)
 
 ### resvg golden is wrong per spec
 
@@ -104,6 +104,21 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 `with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
+
+### Reference does not depict the feature
+
+| Category      | Test           | Reason (`withReason`)                                       |
+| ------------- | -------------- | ----------------------------------------------------------- |
+| text/textPath | method=stretch | Reference disagreement: the vendored PNG is align placement |
+
+`textPath/method=stretch` runs against a committed Donner render
+(`resvg-method=stretch.png`). The vendored PNG is byte-identical to `simple-case.png`,
+which is align placement, so it cannot assert the stretch warp. The golden is a
+regression guard for the warp rather than an independent oracle;
+`RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`, which
+requires stretch on a straight path to equal ordinary rotated text, is the independent
+check. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 ### Allowed nearest-neighbor reference differences
 

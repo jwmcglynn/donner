@@ -58,7 +58,7 @@ the other ledgers in this directory.
   these to SVG/PNG pairs with independently reasoned references is the cheapest coverage win.
 - Where resvg does cover an SVG 2 feature, Donner usually runs it, but several SVG 2 rows rest on
   skipped or render-only cases: radialGradient `fr=0.7` (skipped, reference disagreement) and
-  `fr=0.5`/`fr=-1` (render-only UB), textPath `method=stretch` (skipped), `with-invalid-path-and-xlink-href`
+  `fr=0.5`/`fr=-1` (render-only UB), `with-invalid-path-and-xlink-href`
   (skipped), `mixed-children-2` (skipped), clip-path `circle()` with `stroke-box`/`view-box`
   (skipped, harness background mismatch), `structure/use/xlink-to-an-external-file` (skipped),
   7 filter-function cases (skipped; count re-read at `b39a524a2`), `text/font-size-adjust`,
@@ -77,8 +77,8 @@ the other ledgers in this directory.
   `icc-color`, `dominant-baseline: reset-size/use-script`, `requiredFeatures`) are correctly
   render-only or ignored in Donner and need no new cases.
 
-Counts (148 matrix rows): covered 53 (of which 6 are covered only by the Donner extension corpus or
-Donner native scenarios), resvg-only-skipped 10, needs-new-suite-case 71 (several of which have
+Counts (148 matrix rows): covered 54 (of which 6 are covered only by the Donner extension corpus or
+Donner native scenarios), resvg-only-skipped 9, needs-new-suite-case 71 (several of which have
 Donner unit or renderer-golden coverage but no portable SVG/PNG pair; see column 6),
 removed-from-CR 14.
 
@@ -168,7 +168,7 @@ relative to the checkout.
 | TC59 | `textPath` referencing basic shapes (start point and direction of circle, ellipse, rect, line, polygon) | CR/text.html#TextPathElementHrefAttribute                                  | 1: text/textPath/link-to-rect.svg                                                                                                             | thresholded (0.89)                                                                           | `TextSystem_tests.cc:633` (circle, layout unit)                                                                             | needs-new-suite-case (circle, ellipse, polygon, line)          |
 | TC60 | Single closed subpath: one loop only, `text-anchor=middle` runs both ways, overflowing glyphs hidden    | CR/text.html#TextpathLayoutRules                                           | 1: text/textPath/closed-path.svg                                                                                                              | thresholded (0.1, 400 px)                                                                    | `PlacedTextGeometry_tests.cc` closed mapping                                                                                | needs-new-suite-case (middle anchor at seam; overflow cut-off) |
 | TC61 | `startOffset` negative or > 100%                                                                        | CR/text.html#TextPathElementStartOffsetAttribute                           | 3: text/textPath/startOffset=-100.svg, text/textPath/startOffset=9999.svg, text/textPath/startOffset=10percent.svg                            | golden-override (-100, 10percent); 9999 default                                              | none needed                                                                                                                 | covered                                                        |
-| TC62 | `textPath` `method="stretch"`                                                                           | CR/text.html#TextPathElementMethodAttribute                                | 1: text/textPath/method=stretch.svg (reference identical to align)                                                                            | skipped                                                                                      | unit geometry tests (per skip note)                                                                                         | resvg-only-skipped                                             |
+| TC62 | `textPath` `method="stretch"`                                                                           | CR/text.html#TextPathElementMethodAttribute                                | 1: text/textPath/method=stretch.svg (reference identical to align)                                                                            | golden-override (Donner regression guard; reference identical to align)                      | unit geometry tests; straight-path invariant (RendererPublicApi_tests.cc)                                                   | covered                                                        |
 | TC63 | `textPath` `spacing="auto"`                                                                             | CR/text.html#TextPathElementSpacingAttribute                               | 1: text/textPath/spacing=auto.svg                                                                                                             | golden-override                                                                              | none                                                                                                                        | covered                                                        |
 | TC64 | `textLength`/`lengthAdjust` on `textPath`                                                               | CR/text.html#TextPathAttributes                                            | none (lengthAdjust and textLength directories test `text`/`tspan`)                                                                            | n-a                                                                                          | parser `AttributeParser_tests.cc`                                                                                           | needs-new-suite-case                                           |
 | TC65 | Text after a `textPath` continues from the path end point                                               | CR/text.html#TextpathLayoutRules                                           | 2: text/textPath/mixed-children-1.svg, text/textPath/mixed-children-2.svg                                                                     | golden-override (1); skipped (2)                                                             | none                                                                                                                        | resvg-only-skipped                                             |
@@ -529,8 +529,11 @@ rationale.
 - RC7 `text/textPath/mixed-children-2.svg` (skipped): SVG 2 continues text after a `textPath` from
   the path end point; the reference continues from the occupied text extent. Donner cites
   CR/text.html#TextpathLayoutRules behavior in its skip; not re-verified here.
-- RC8 `text/textPath/method=stretch.svg` (skipped): the reference is byte-identical to the `align`
-  case, so it cannot assert stretch. Needs a Donner case with a visibly warped glyph.
+- RC8 `text/textPath/method=stretch.svg` (golden-override): the vendored reference is byte-identical
+  to the `align` case, so it cannot assert stretch. The row compares against a Donner rendering with
+  visibly warped glyphs, a regression guard rather than an independent oracle;
+  `RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText` is the
+  independent check.
 - RC9 Filter Effects drop-shadow references (five `drop-shadow-function*.svg` cases are skipped,
   the others run): Donner records that the skipped references use offsets that differ from the
   specified lengths. See `val:filter/drop-shadow()` in [filters_core.md](filters_core.md); listed

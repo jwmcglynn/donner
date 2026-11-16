@@ -92,8 +92,8 @@ textLength checks.
 
 ## Test Coverage
 
-The `e-textPath-*` resvg test suite remains enabled, but custom goldens are now restricted to
-the human-approved pre-existing set only.
+The `e-textPath-*` resvg test suite remains enabled, and custom goldens are restricted to the
+human-approved set.
 
 ### Custom goldens and thresholds
 
@@ -102,6 +102,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | Tests | Reason |
 |-------|--------|
 | 001-005 | Minor char advance diffs |
+| 007 | Donner regression golden: the vendored PNG is byte-identical to the align case |
 | 009-010 | Minor char advance diffs |
 | 011 | AA diffs |
 | 013-014 | Minor char advance diffs |
@@ -117,7 +118,6 @@ Any golden or tolerance change requires explicit human approval after visual ret
 
 | Test | Reason |
 |------|--------|
-| 007 | `method=stretch` not implemented |
 | 008 | `spacing=auto` not implemented |
 | 012 | Reference disagreement: SVG 2 geometric endpoint continuation |
 | 016 | Link to `<rect>` (SVG 2 feature) |
@@ -149,7 +149,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
   `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and `_text_full` variants.
 
 ### Deferred Features
-- [ ] Implement `method=stretch` for glyph stretching along path curvature.
+- [x] Implement `method=stretch` for glyph stretching along path curvature.
 - [ ] Implement `spacing=auto` for automatic inter-character spacing on path.
 - [ ] Support `side=right` (SVG 2) for text on the opposite side of the path.
 - [ ] Support `path` attribute (SVG 2) for inline path data.
