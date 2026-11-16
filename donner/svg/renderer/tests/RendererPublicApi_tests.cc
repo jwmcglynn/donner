@@ -4288,8 +4288,10 @@ TEST(RendererTinySkiaStrokeAccuracyTest, LargeCoordinateCurvesMatchTheirGoldenAt
 
 TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
   // Past the precision of the circle's coordinates, every larger magnification subdivides its
-  // curves to the same tolerance: magnified 10^7 times, the solid and the dashed circle fit the
-  // default limits with the same work as at 10^5, and draw.
+  // curves to the same tolerance. The dashes start near the origin, where float steps are finest,
+  // so every segment is past its floor only above a scale of about 2 x 10^6: magnified 2 x 10^7
+  // times, the solid and the dashed circle fit the default limits with the same work as at 10^7,
+  // and draw.
   for (const std::string_view dash :
        {std::string_view(),
         std::string_view(R"svg(stroke-dasharray="4 4" stroke-dashoffset="4")svg")}) {
@@ -4297,7 +4299,7 @@ TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
     std::array<std::pair<std::size_t, std::size_t>, 2> work;
     for (std::size_t i = 0; i < 2; ++i) {
       const std::string transform = std::string(R"svg(transform="translate(50 50) scale()svg") +
-                                    (i == 0 ? "1e5" : "1e7") + R"svg()")svg";
+                                    (i == 0 ? "1e7" : "2e7") + R"svg()")svg";
       SVGDocument document = HundredSquareDocument(StrokedCircleElement(transform, dash));
       RendererTinySkia renderer;
       renderer.draw(document);

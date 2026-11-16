@@ -417,10 +417,11 @@ TEST(PathTest, ResolutionScaleStaysAboveCoordinatePrecision) {
 
 TEST(PathTest, StrokeStaysWithinOneFloatStepWhenTheFloorEngages) {
   // A circle of radius 40 around (4,000,000, 4,000,000), where a float step is 0.25, stroked 10
-  // wide at a resolution scale of 100, which is past where the floor engages. The outline's
-  // on-curve points still lie on the two circles 35 and 45 from the center, within the floor's
-  // tolerance of one float step plus the rounding of the control points to floats and the error
-  // of the cubic circle: two float steps.
+  // wide at a resolution scale of 100, past where the floor engages. The floor's tolerance is the
+  // error allowed where the outline's quads bend away from the circles 35 and 45 from the center,
+  // so their midpoints stay within one float step of those circles; with a tolerance of four
+  // steps they would not. The quads' end points, which also carry the rounding of the circle's
+  // control points to floats, stay within two steps.
   constexpr double kCenter = 4.0e6;
   constexpr float kStep = 0.25f;
   constexpr float kScale = 100.0f;
@@ -437,39 +438,39 @@ TEST(PathTest, StrokeStaysWithinOneFloatStepWhenTheFloorEngages) {
   const std::optional<tiny_skia::Path> outline = circle.stroke(stroke, kScale);
   ASSERT_THAT(outline, Optional(testing::_));
 
-  // Every on-curve point, and the midpoint of every quad, of the outline.
-  std::vector<tiny_skia::Point> onCurve;
+  // Distance from the nearer of the two circles the outline follows.
+  const auto offCircle = [&](double x, double y) {
+    const double radius = std::hypot(x - kCenter, y - kCenter);
+    return std::min(std::abs(radius - 35.0), std::abs(radius - 45.0));
+  };
   const auto points = outline->points();
   std::size_t index = 0;
+  std::size_t quads = 0;
   for (const tiny_skia::PathVerb verb : outline->verbs()) {
     switch (verb) {
       case tiny_skia::PathVerb::Move:
-      case tiny_skia::PathVerb::Line: onCurve.push_back(points[index++]); break;
+      case tiny_skia::PathVerb::Line:
+        EXPECT_THAT(offCircle(points[index].x, points[index].y), testing::Le(2.0 * kStep));
+        index += 1;
+        break;
       case tiny_skia::PathVerb::Quad: {
         const tiny_skia::Point start = points[index - 1];
         const tiny_skia::Point control = points[index];
         const tiny_skia::Point end = points[index + 1];
-        onCurve.push_back(
-            tiny_skia::Point::fromXY(0.25f * start.x + 0.5f * control.x + 0.25f * end.x,
-                                     0.25f * start.y + 0.5f * control.y + 0.25f * end.y));
-        onCurve.push_back(end);
+        EXPECT_THAT(offCircle(0.25 * start.x + 0.5 * control.x + 0.25 * end.x,
+                              0.25 * start.y + 0.5 * control.y + 0.25 * end.y),
+                    testing::Le(kStep))
+            << "quad ending at " << end.x << ", " << end.y;
+        EXPECT_THAT(offCircle(end.x, end.y), testing::Le(2.0 * kStep));
         index += 2;
+        ++quads;
         break;
       }
-      case tiny_skia::PathVerb::Cubic:
-        onCurve.push_back(points[index + 2]);
-        index += 3;
-        break;
+      case tiny_skia::PathVerb::Cubic: index += 3; break;
       case tiny_skia::PathVerb::Close: break;
     }
   }
-  ASSERT_THAT(onCurve, testing::SizeIs(testing::Gt(8u)));
-  for (const tiny_skia::Point point : onCurve) {
-    const double radius = std::hypot(point.x - kCenter, point.y - kCenter);
-    EXPECT_THAT(std::min(std::abs(radius - 35.0), std::abs(radius - 45.0)),
-                testing::Le(2.0 * kStep))
-        << point.x << ", " << point.y;
-  }
+  EXPECT_THAT(quads, testing::Gt(8u));
 }
 
 TEST(PathTest, PrecisionFloorIsPerSegment) {
