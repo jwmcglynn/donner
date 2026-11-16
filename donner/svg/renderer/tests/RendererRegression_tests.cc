@@ -12,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <source_location>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -1826,9 +1827,9 @@ TEST_F(RendererRegressionTests, MixedScriptSpanMatchesSpansNamingEachFace) {
   }
 }
 
-/// Path data of every glyph outline of the rendered text element matching \p selector, in the
-/// element's user space, as one path.
-std::string GlyphOutlinePathData(SVGDocument& document, std::string_view selector) {
+/// Every glyph outline of the rendered text element matching \p selector, in the element's user
+/// space, in glyph order.
+std::vector<Path> GlyphOutlines(SVGDocument& document, std::string_view selector) {
   auto access = document.writeAccess();
   const std::optional<SVGElement> text = document.querySelector(selector);
   EXPECT_THAT(text, testing::Ne(std::nullopt)) << selector;
@@ -1839,33 +1840,116 @@ std::string GlyphOutlinePathData(SVGDocument& document, std::string_view selecto
   const components::ComputedTextGeometryComponent& geometry =
       engine.ensureComputedTextGeometryComponent(text->entityHandle());
   EXPECT_THAT(geometry.glyphs, testing::Not(testing::IsEmpty())) << selector;
-  PathBuilder outline;
+  std::vector<Path> outlines;
   for (const components::ComputedTextGeometryComponent::GlyphGeometry& glyph : geometry.glyphs) {
-    outline.addPath(glyph.path);
+    outlines.push_back(glyph.path);
   }
-  return std::string(outline.build().toSVGPathData());
+  return outlines;
+}
+
+/// Path data of \p outlines joined into one path.
+std::string JoinedPathData(std::span<const Path> outlines) {
+  PathBuilder joined;
+  for (const Path& outline : outlines) {
+    joined.addPath(outline);
+  }
+  return std::string(joined.build().toSVGPathData());
+}
+
+/// Path data of every glyph outline of the rendered text element matching \p selector, in the
+/// element's user space, as one path.
+std::string GlyphOutlinePathData(SVGDocument& document, std::string_view selector) {
+  return JoinedPathData(GlyphOutlines(document, selector));
+}
+
+/// A text stroke paint, with the definitions it needs. Gradients and patterns use user space units,
+/// so the text and a path drawn from its outlines resolve them identically.
+struct TextStrokePaintCase {
+  std::string_view label;  ///< Name of the comparison.
+  std::string_view defs;   ///< Paint server definitions, or empty.
+  std::string_view paint;  ///< `stroke` attribute value.
+};
+
+constexpr std::array<TextStrokePaintCase, 3> kTextStrokePaints = {{
+    {"solid", "", "rgb(0,0,255)"},
+    {"linear_gradient",
+     R"svg(<linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="20" x2="180">)svg"
+     R"svg(<stop offset="0" stop-color="blue"/><stop offset="1" stop-color="red"/>)svg"
+     R"svg(</linearGradient>)svg",
+     "url(#paint)"},
+    {"pattern",
+     R"svg(<pattern id="paint" patternUnits="userSpaceOnUse" width="10" height="10">)svg"
+     R"svg(<rect width="5" height="10" fill="blue"/><rect x="5" width="5" height="10")svg"
+     R"svg( fill="red"/></pattern>)svg",
+     "url(#paint)"},
+}};
+
+/// The stroke attributes of the stroke-overlap comparisons: at this width the strokes of adjacent
+/// glyphs overlap, and the translucent stroke shows how often an overlap is painted.
+std::string TranslucentTextStroke(const TextStrokePaintCase& paint) {
+  return R"svg(fill="none" stroke=")svg" + std::string(paint.paint) +
+         R"svg(" stroke-opacity="0.5" stroke-width="8")svg";
+}
+
+/// `<defs>` holding \p paint's definitions, or nothing when it has none.
+std::string TextStrokePaintDefs(const TextStrokePaintCase& paint) {
+  return paint.defs.empty() ? std::string() : "<defs>" + std::string(paint.defs) + "</defs>";
 }
 
 TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
-  // The strokes of adjacent glyphs overlap at this width, so a translucent stroke shows whether
-  // the overlap is covered once, as a single path made of every glyph outline of the run is.
-  constexpr std::string_view kStroke =
-      R"svg(fill="none" stroke="rgb(0,0,255)" stroke-opacity="0.5" stroke-width="8")svg";
-  SVGDocument textDocument = instantiateSubtree(
-      R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
-          std::string(kStroke) + ">Text</text>",
-      parser::SVGParser::Options(), Vector2i(200, 200));
-  RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
-  const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+  for (const TextStrokePaintCase& paint : kTextStrokePaints) {
+    SCOPED_TRACE(paint.label);
+    const std::string stroke = TranslucentTextStroke(paint);
+    SVGDocument textDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) +
+            R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
+            stroke + ">Text</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
 
-  SVGDocument pathDocument =
-      instantiateSubtree("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " +
-                             std::string(kStroke) + "/>",
-                         parser::SVGParser::Options(), Vector2i(200, 200));
-  const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
-  AssertVisibleFixture(expected, "text_stroke_run_outline_visible");
-  editor::tests::CompareBitmapToBitmap(actual, expected, "text_stroke_run_outline",
-                                       editor::tests::PixelmatchIdentityParams());
+    // One path made of every glyph outline of the run.
+    SVGDocument pathDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) + "<path d=\"" + GlyphOutlinePathData(textDocument, "#text") +
+            "\" " + stroke + "/>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_run_outline_visible");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, "text_stroke_run_outline_" + std::string(paint.label),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, TextStrokeOutlinesEachChunkAsItsOwnShape) {
+  // The second x starts a new text chunk at "ext", moved left so its stroke overlaps the stroke of
+  // "T". Each chunk is one shape, so that overlap is painted once per chunk: twice.
+  for (const TextStrokePaintCase& paint : kTextStrokePaints) {
+    SCOPED_TRACE(paint.label);
+    const std::string stroke = TranslucentTextStroke(paint);
+    SVGDocument textDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) +
+            R"svg(<text id="text" x="20 42" y="120" font-family="Noto Sans" font-size="60" )svg" +
+            stroke + ">Text</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
+    ASSERT_THAT(outlines, testing::SizeIs(4));
+    const std::span<const Path> glyphs(outlines);
+    SVGDocument pathDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) + "<path d=\"" + JoinedPathData(glyphs.first(1)) + "\" " +
+            stroke + "/><path d=\"" + JoinedPathData(glyphs.subspan(1)) + "\" " + stroke + "/>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_chunk_outlines_visible");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, "text_stroke_chunk_outlines_" + std::string(paint.label),
+        editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {

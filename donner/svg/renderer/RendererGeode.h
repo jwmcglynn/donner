@@ -586,6 +586,9 @@ public:
                                    std::uint64_t maximumFrameBytes, std::uint64_t maximumCacheBytes,
                                    std::uint64_t maximumResidentBytes);
 
+  /// Lower the path encoder's per-path item limit for boundary tests.
+  void setPathEncoderItemLimitForTesting(std::size_t maximumItems);
+
   /// Shrink the aggregate frame-surface budget for boundary tests.
   void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes);
 

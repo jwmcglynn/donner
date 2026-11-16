@@ -633,6 +633,33 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesStillCountTheirItems) {
       << "Nine occurrences must be charged nine times their outline's items.";
 }
 
+/// Strokes wide enough that every glyph's stroke overlaps its neighbours', so a run's strokes form
+/// one connected shape.
+std::string TouchingStrokeRun(std::size_t glyphs) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+      font-family="Noto Sans" font-size="40"><text x="10" y="120" fill="none" stroke="black"
+      stroke-width="8">)svg") +
+         std::string(glyphs, 'e') + "</text></svg>";
+}
+
+/// When the path encoder cannot take a run's joined stroke, the stroke is still drawn and the frame
+/// is not rejected, as long as each glyph's own stroke fits.
+TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
+  SVGDocument one = parse(TouchingStrokeRun(1));
+  RendererGeode measure(sharedDevice());
+  ASSERT_GT(CountNonTransparentPixels(render(measure, one).bitmap), 0u);
+  const std::size_t itemsPerGlyph = measure.resourceStats().geometryItems;
+  ASSERT_GT(itemsPerGlyph, 0u);
+
+  SVGDocument run = parse(TouchingStrokeRun(4));
+  RendererGeode renderer(sharedDevice());
+  // Each glyph's stroke fits; the four joined do not.
+  renderer.setPathEncoderItemLimitForTesting(itemsPerGlyph + itemsPerGlyph / 2);
+  const Frame frame = render(renderer, run);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(CountNonTransparentPixels(frame.bitmap), testing::Gt(0u));
+}
+
 /// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
 /// lower cap rejects all of that frame's text before any glyph is looked up.
 TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejectsTheText) {

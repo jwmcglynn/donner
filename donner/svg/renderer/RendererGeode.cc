@@ -1576,6 +1576,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::shared_ptr<RendererFilterPreparationBudget> filterPreparationBudget =
       std::make_shared<RendererFilterPreparationBudget>();
   bool ownsFilterPreparationBudget = true;
+  /// Per-path encoder limits; tests lower them to reach the limit with small paths.
+  geode::GeodePathEncoder::Limits pathEncoderLimits;
   std::shared_ptr<geode::GeodeFrameGeometryBudget> geometryBudget =
       std::make_shared<geode::GeodeFrameGeometryBudget>();
   bool ownsGeometryBudget = true;
@@ -4097,7 +4099,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     device->countPathEncode();
     geode::EncodedPath encoded = geode::GeodePathEncoder::encode(
-        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform));
+        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform), pathEncoderLimits);
     if (encoded.rejected()) {
       geometryBudget->reject();
       return std::nullopt;
@@ -6292,6 +6294,10 @@ void RendererGeode::setGeometryBudgetForTesting(std::size_t maximumDraws, std::s
        impl_->touchedDocumentBudgets) {
     document->setLimitsForTesting(*impl_->documentGeometryLimits);
   }
+}
+
+void RendererGeode::setPathEncoderItemLimitForTesting(std::size_t maximumItems) {
+  impl_->pathEncoderLimits.maximumEncodedGeometryItems = maximumItems;
 }
 
 void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
