@@ -613,8 +613,15 @@ std::optional<Path> PathStroker::stroke(const Path& path, const Stroke& stroke,
     return std::nullopt;
   }
   outputLimit_ = limit;
-  return strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap, stroke.lineJoin,
-                     resolutionScale);
+  std::optional<Path> outline = strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap,
+                                            stroke.lineJoin, resolutionScale);
+  if (limit != nullptr) {
+    limit->emittedPoints = outline.has_value() ? outline->points().size()
+                                               : outer_.points().size() + inner_.points().size() +
+                                                     cusper_.points().size();
+  }
+  outputLimit_ = nullptr;
+  return outline;
 }
 
 std::optional<Path> PathStroker::strokeInner(const Path& path, float width, float miterLimit,

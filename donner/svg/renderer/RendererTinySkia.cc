@@ -234,8 +234,9 @@ void ReserveEstimatedDashWork(const std::optional<tiny_skia::StrokeDash>& dash,
 }
 
 /**
- * Captures a stroke with its expansion bounded by \p maxPoints. A stroke past the bound draws and
- * records nothing and rejects \p drawBudget.
+ * Captures a stroke with its expansion bounded by \p maxPoints and by what \p drawBudget's frame
+ * stroke output allows, charging what it emits. A stroke past either bound draws and records
+ * nothing and rejects \p drawBudget; nothing is stroked once the budget is rejected.
  *
  * @return Whether the stroke was captured.
  */
@@ -245,9 +246,13 @@ bool CaptureTinyStrokeWithinOutputLimit(tiny_skia::SpanCapture& capture,
                                         const tiny_skia::Stroke& stroke,
                                         tiny_skia::Transform transform, const tiny_skia::Mask* mask,
                                         std::size_t maxPoints, RendererDrawBudget& drawBudget) {
-  tiny_skia::StrokeOutputLimit limit{.maxPoints = maxPoints};
+  if (drawBudget.rejected()) {
+    return false;
+  }
+  tiny_skia::StrokeOutputLimit limit{
+      .maxPoints = std::min(maxPoints, drawBudget.remainingStrokeOutputPoints())};
   const bool captured = capture.strokePath(target, path, paint, stroke, transform, mask, &limit);
-  if (limit.exceeded) {
+  if (limit.exceeded || !drawBudget.reserveStrokeOutputPoints(limit.emittedPoints)) {
     drawBudget.reject();
     return false;
   }
@@ -3255,8 +3260,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                 if (decoStrokePaint && decoration.strokeWidth > 0.0) {
                   tiny_skia::Stroke stroke;
                   stroke.width = NarrowToFloat(decoration.strokeWidth);
-                  tiny_skia::Painter::strokePath(pixmapView, tinyPath, *decoStrokePaint, stroke,
-                                                 toTinyTransform(deviceFromLocalTransform_), mask);
+                  strokeIntoWithinOutputLimit(pixmapView, tinyPath, *decoStrokePaint, stroke, mask);
                 }
               };
               // The decoration's own fill/stroke order is the declaring element's `paint-order`.
@@ -3447,6 +3451,7 @@ std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() c
   renderer->surfaceBudget_ = surfaceBudget_;
   renderer->ownsSurfaceBudget_ = false;
   renderer->dashedPathWorkBudget_ = dashedPathWorkBudget_;
+  renderer->strokeOutputPointLimit_ = strokeOutputPointLimit_;
   renderer->textMaterializationBudget_ = textMaterializationBudget_;
   renderer->ownsTextMaterializationBudget_ = false;
   return renderer;
@@ -3474,16 +3479,25 @@ void RendererTinySkia::strokeIntoWithinOutputLimit(tiny_skia::MutablePixmapView&
                                                    const tiny_skia::Paint& paint,
                                                    const tiny_skia::Stroke& stroke,
                                                    const tiny_skia::Mask* mask) {
-  tiny_skia::StrokeOutputLimit limit{.maxPoints = strokeOutputPointLimit_};
+  if (drawBudget_->rejected()) {
+    return;
+  }
+  ++frameCounters_.limitedStrokes;
+  tiny_skia::StrokeOutputLimit limit{
+      .maxPoints = std::min(strokeOutputPointLimit_, drawBudget_->remainingStrokeOutputPoints())};
   tiny_skia::Painter::strokePath(target, path, paint, stroke,
                                  toTinyTransform(deviceFromLocalTransform_), mask, nullptr, &limit);
-  if (limit.exceeded) {
+  if (limit.exceeded || !drawBudget_->reserveStrokeOutputPoints(limit.emittedPoints)) {
     drawBudget_->reject();
   }
 }
 
 void RendererTinySkia::setStrokeOutputPointLimitForTesting(std::size_t maximumPoints) {
   strokeOutputPointLimit_ = std::min(strokeOutputPointLimit_, maximumPoints);
+}
+
+void RendererTinySkia::setFrameStrokeOutputPointLimitForTesting(std::size_t maximumPoints) {
+  drawBudget_->setStrokeOutputPointLimitForTesting(maximumPoints);
 }
 
 void RendererTinySkia::setDashWorkBudgetForTesting(std::size_t maximumWorkUnits) {
@@ -3531,6 +3545,7 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .gradientStops = drawBudget_->gradientStops(),
       .imageDraws = drawBudget_->imageDraws(),
       .imageBytes = drawBudget_->imageBytes(),
+      .strokeOutputPoints = drawBudget_->strokeOutputPoints(),
       .drawBudgetRejected = drawBudget_->rejected(),
       .textMaterializationBudgetSupported = true,
       .textUniqueOutlines = textMaterializationBudget_->uniqueOutlines(),

@@ -4072,6 +4072,37 @@ TEST(RendererTinySkiaSecurityTest, GlyphStrokeExpansionStopsAtTheOutputLimit) {
   EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 0, 0, 100, 100), Gt(0u));
 }
 
+TEST(RendererTinySkiaSecurityTest, GlyphStrokesStopAfterTheFirstPassesTheOutputLimit) {
+  // Four stroked "O"s magnified 100,000 times about the canvas center: the first one's stroke
+  // passes the lowered limit and rejects the draw, and no later glyph is stroked.
+  SVGDocument document = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <text transform="translate(50 50) scale(100000)" x = "-5" y =
+          "29" font - size = "80" fill = "none" stroke = "black" stroke - width =
+                                                             "20" > OOOO</ text></ svg>) ");
+      RendererTinySkia renderer;
+  renderer.setStrokeOutputPointLimitForTesting(4096);
+  renderer.draw(document);
+  EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
+  EXPECT_EQ(renderer.frameCounters().limitedStrokes, 1u);
+}
+
+TEST(RendererTinySkiaSecurityTest, DottedDecorationStrokeStopsAtTheOutputLimit) {
+  // A dotted underline is a row of circles of cubics. Under no-break spaces, which have no
+  // outlines of their own, and magnified 100,000 times about the canvas center, its stroke needs
+  // more outline points than the lowered limit and rejects the draw.
+  SVGDocument document = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <text transform="translate(50 50) scale(100000)" x = "-40" y =
+          "-8" font - size = "80" fill = "none" stroke =
+              "black" stroke - width = "20" style = "text-decoration: underline dotted" > &#160;
+      &#160; &#160; &#160; &#160;</ text></ svg>) ");
+      RendererTinySkia renderer;
+  renderer.setStrokeOutputPointLimitForTesting(4096);
+  renderer.draw(document);
+  EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
+}
+
 #else
 TEST(RendererPublicApiTest, GlyphCapIsZeroWithoutText) {
   Renderer renderer;
@@ -4107,6 +4138,74 @@ TEST(RendererTinySkiaSecurityTest, PathStrokeExpansionStopsAtTheOutputLimit) {
   EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
   const RendererBitmap snapshot = renderer.takeSnapshot();
   EXPECT_TRUE(std::ranges::any_of(snapshot.pixels, [](std::uint8_t byte) { return byte != 0; }));
+}
+
+TEST(RendererTinySkiaSecurityTest, ShapeStrokesStopAtTheOutputLimit) {
+  // A circle, a stroke inside a pattern tile, a marker, and a path drawn through span capture,
+  // each magnified 100,000 times about the canvas center, need more outline points than the
+  // lowered limit and reject the draw.
+  constexpr std::string_view kMagnify = R"(transform="translate(50 50) scale(100000)")";
+  const std::string circle = R"(<circle )" + std::string(kMagnify) +
+                             R"( cx="40" cy="0" r="40" fill="none" stroke="black" stroke-width="2"/>)";
+  const std::string arc = R"(d="M80 0 C80 22.09 62.09 40 40 40 C17.91 40 0 22.09 0 0
+                                C0 -22.09 17.91 -40 40 -40 C62.09 -40 80 -22.09 80 0 Z")";
+  const std::array<std::pair<std::string_view, std::string>, 3> kCases = {{
+      {"circle", circle},
+      {"pattern",
+       R"(<defs><pattern id="tile" width="100" height="100" patternUnits="userSpaceOnUse">
+            <path )" + std::string(kMagnify) + " " + arc +
+           R"( fill="none" stroke="black" stroke-width="2"/></pattern></defs>
+          <rect width="100" height="100" fill="url(#tile)"/>)"},
+      {"marker",
+       R"(<defs><marker id="dot" markerUnits="userSpaceOnUse" markerWidth="100" markerHeight="100"
+                        overflow="visible"><path )" +
+           std::string(kMagnify) + " " + arc +
+           R"( fill="none" stroke="black" stroke-width="2"/></marker></defs>
+          <path d="M0 0 L1 0" marker-start="url(#dot)"/>)"},
+  }};
+  for (const auto& [label, body] : kCases) {
+    SCOPED_TRACE(label);
+    SVGDocument document = ParseDocument(
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)") + body +
+        "</svg>");
+    RendererTinySkia renderer;
+    renderer.setStrokeOutputPointLimitForTesting(4096);
+    renderer.draw(document);
+    EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
+  }
+
+  SVGDocument captured = ParseDocument(StrokedCubicCircle("translate(50 50) scale(100000)"));
+  RendererTinySkia capturing;
+  capturing.setRetainedSpansEnabled(true);
+  capturing.setStrokeOutputPointLimitForTesting(4096);
+  capturing.draw(captured);
+  EXPECT_TRUE(capturing.resourceStats().drawBudgetRejected) << "span capture";
+}
+
+TEST(RendererTinySkiaSecurityTest, StrokesThatEachFitShareTheFrameStrokeOutput) {
+  // Twenty stroked circles each fit the per-stroke limit; together they pass a lowered frame
+  // total, so the frame is rejected, and the strokes after the rejection are not run.
+  std::string body = R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">)";
+  for (int i = 0; i < 20; ++i) {
+    body += R"(<circle cx=")" + std::to_string(10 + (i % 10) * 18) + R"(" cy=")" +
+            std::to_string(20 + (i / 10) * 40) +
+            R"(" r="8" fill="none" stroke="black" stroke-width="2"/>)";
+  }
+  body += "</svg>";
+  SVGDocument document = ParseDocument(body);
+
+  RendererTinySkia unlimited;
+  unlimited.draw(document);
+  const std::size_t total = unlimited.resourceStats().strokeOutputPoints;
+  ASSERT_FALSE(unlimited.resourceStats().drawBudgetRejected);
+  ASSERT_THAT(total, Gt(0u));
+
+  RendererTinySkia limited;
+  limited.setFrameStrokeOutputPointLimitForTesting(total / 2);
+  limited.draw(document);
+  EXPECT_TRUE(limited.resourceStats().drawBudgetRejected);
+  EXPECT_THAT(limited.resourceStats().strokeOutputPoints, testing::Le(total / 2));
+  EXPECT_THAT(limited.frameCounters().limitedStrokes, testing::Lt(20u));
 }
 
 void SetStrokePaint(RendererInterface& renderer) {

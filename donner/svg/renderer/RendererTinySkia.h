@@ -48,6 +48,10 @@ struct RendererTinySkiaFrameCounters {
 
   /// Vector-outline or bitmap materializations attempted for text glyphs in this frame.
   uint64_t textGlyphMaterializations = 0;
+
+  /// Strokes the CPU stroker ran under the stroke output limit in this frame. Strokes skipped
+  /// because the draw budget was already rejected are not counted.
+  uint64_t limitedStrokes = 0;
 };
 
 /**
@@ -274,6 +278,8 @@ public:
   /// Tightens the most outline points one stroke expansion may emit, for a test; this never raises
   /// the limit.
   void setStrokeOutputPointLimitForTesting(std::size_t maximumPoints);
+  /// Tightens the stroke outline points one frame may emit, for a test; this never raises it.
+  void setFrameStrokeOutputPointLimitForTesting(std::size_t maximumPoints);
   /// Reduce materialized gradient stops for a boundary test.
   void setGradientStopBudgetForTesting(std::size_t maximumStops);
   /// Reduce decoded-outline and path-copy ceilings for a boundary test.
@@ -458,8 +464,9 @@ private:
   void strokeWithinOutputLimit(const tiny_skia::Path& path, const tiny_skia::Paint& paint,
                                const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask,
                                tiny_skia::Pixmap* strokePaintPixmap);
-  /// Strokes \p path into \p target with the expansion bounded by \ref strokeOutputPointLimit_; a
-  /// stroke past it draws nothing and rejects the draw budget.
+  /// Strokes \p path into \p target with the expansion bounded by \ref strokeOutputPointLimit_
+  /// and the frame's remaining stroke output, charging what it emits; a stroke past either bound
+  /// draws nothing and rejects the draw budget, and nothing is stroked once the budget is rejected.
   void strokeIntoWithinOutputLimit(tiny_skia::MutablePixmapView& target,
                                    const tiny_skia::Path& path, const tiny_skia::Paint& paint,
                                    const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask);
