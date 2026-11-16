@@ -24,6 +24,11 @@ namespace donner::svg {
 struct TextGlyphOutline {
   Path path;          ///< Glyph outline in text-element local coordinates.
   SVGElement source;  ///< Text-content element whose computed style paints this glyph.
+  /// Layout run that placed the glyph. The renderer paints a run's fill glyph by glyph and its
+  /// stroke one text chunk at a time.
+  std::size_t run = 0;
+  /// Whether a text chunk of the glyph's run starts at this glyph.
+  bool startsTextChunk = false;
 };
 
 /**

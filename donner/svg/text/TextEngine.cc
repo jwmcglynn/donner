@@ -8336,7 +8336,8 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
       return;
     }
     const Box2d extent = transformed.bounds();
-    cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
+    cache.glyphs.push_back(
+        {.sourceEntity = span.sourceEntity, .path = std::move(transformed), .extent = extent});
     addBox(cache.inkBounds, hasInkBounds, extent);
     addBox(charGeom.extent, charGeom.hasExtent, extent);
   } else if (const auto extent = BitmapGlyphExtent(
@@ -8346,8 +8347,40 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
   }
 }
 
+/**
+ * Tags the cached outlines of one layout run with the run and the text chunk starts. Chunk starts
+ * are noted as the renderer notes them: a glyph that starts a chunk splits the run's outlines
+ * there once the run has an earlier outline, even when that glyph has none itself.
+ */
+class CachedRunOutlineTagger {
+public:
+  /// @param runIndex Index of the layout run whose outlines are tagged.
+  explicit CachedRunOutlineTagger(std::size_t runIndex) : runIndex_(runIndex) {}
+
+  /// Notes \p glyph before its outline, if any, is cached.
+  void noteGlyph(const TextGlyph& glyph) {
+    chunkStartPending_ = chunkStartPending_ || (glyph.startsTextChunk && runOutlines_ > 0);
+  }
+
+  /// Tags the outline cached since \p outlinesBefore, if one was.
+  void tagNewOutline(components::ComputedTextGeometryComponent& cache, std::size_t outlinesBefore) {
+    if (cache.glyphs.size() <= outlinesBefore) {
+      return;
+    }
+    cache.glyphs.back().run = runIndex_;
+    cache.glyphs.back().startsTextChunk = chunkStartPending_;
+    chunkStartPending_ = false;
+    ++runOutlines_;
+  }
+
+private:
+  std::size_t runIndex_;
+  std::size_t runOutlines_ = 0;
+  bool chunkStartPending_ = false;
+};
+
 void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& fontManager,
-                           Entity textRootEntity, const TextRun& run,
+                           Entity textRootEntity, std::size_t runIndex, const TextRun& run,
                            const components::ComputedTextComponent::TextSpan& span, bool vertical,
                            components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
                            bool& hasEmBoxBounds, std::size_t& objectBoundingBoxSpanVisits,
@@ -8379,15 +8412,19 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& 
     AddTextObjectBounds(cache, span.sourceEntity, *runEmBounds);
   }
   const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
+  CachedRunOutlineTagger tagger(runIndex);
   for (const auto& glyph : run.glyphs) {
+    tagger.noteGlyph(glyph);
     const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
                                       ? apiMappings.byteToFirstUnit[glyph.cluster]
                                       : 0;
     if (localCharIndex < localCharCount) {
+      const std::size_t outlinesBefore = cache.glyphs.size();
       PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
                           runFontSizePx, hasPaintedGlyphs, vertical,
                           cache.characters[charBaseIndex + localCharIndex], cache, hasInkBounds,
                           stretchedCacheReservation);
+      tagger.tagNewOutline(cache, outlinesBefore);
     }
   }
   ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
@@ -8766,7 +8803,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
     PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, fontManager_, textRootEntity,
-                          runs[runIndex], styledText.spans[runIndex],
+                          runIndex, runs[runIndex], styledText.spans[runIndex],
                           isVertical(params.writingMode), cache, hasInkBounds, hasEmBoxBounds,
                           objectBoundingBoxSpanVisits_, stretchedCacheReservation);
   }
@@ -8797,7 +8834,8 @@ std::vector<TextEngine::GlyphOutline> TextEngine::computedGlyphOutlines(EntityHa
   std::vector<GlyphOutline> result;
   for (const auto& glyph : cache.glyphs) {
     if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
-      result.push_back(GlyphOutline{glyph.path, glyph.sourceEntity});
+      result.push_back(
+          GlyphOutline{glyph.path, glyph.sourceEntity, glyph.run, glyph.startsTextChunk});
     }
   }
   return result;
