@@ -26,9 +26,12 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
@@ -337,6 +340,81 @@ TEST(FontSelection, ChUnitOfAnUnmatchedFamilyListUsesTheDefaultFamily) {
 
   fontManager.setDefaultFamily("");
   EXPECT_THAT(engine.measureChUnitInEm(unmatched), testing::Ne(monoCh));
+}
+
+/// Parses @p svg with the hermetic fonts and @p defaultFamily as the default family.
+SVGDocument ParseWithHermeticFonts(std::string_view svg, std::string_view defaultFamily) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  parser::SVGParser::Options options;
+  auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
+  EXPECT_FALSE(result.hasError()) << "Parse error: " << result.error();
+  SVGDocument document = std::move(result.result());
+  RegisterFontsFromDirectoryForTesting(document, TestFontsDir());
+  document.registry().ctx().get<FontManager>().setDefaultFamily(defaultFamily);
+  return document;
+}
+
+/// The computed text length of the first `<text>` element, which lays it out when needed.
+double FirstTextLength(SVGDocument& document) {
+  std::optional<SVGElement> text = document.querySelector("text");
+  EXPECT_TRUE(text.has_value()) << "SVG under test has no <text> element";
+  return text ? text->cast<SVGTextElement>().getComputedTextLength() : 0.0;
+}
+
+std::string RectSvgWithFamily(std::string_view family) {
+  return std::string(R"(<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">)"
+                     R"(<rect width="4ch" height="10" font-size="20" font-family=")")
+      .append(family)
+      .append("\"/></svg>");
+}
+
+/// The width of the first `<rect>` element's bounds after rendering @p document, which computes
+/// its path with the measured `ch`.
+double FirstRectWidth(SVGDocument& document) {
+  Renderer renderer;
+  renderer.draw(document);
+  std::optional<SVGElement> rect = document.querySelector("rect");
+  EXPECT_TRUE(rect.has_value()) << "SVG under test has no <rect> element";
+  const std::optional<Box2d> bounds =
+      rect ? rect->cast<SVGGeometryElement>().worldBounds() : std::nullopt;
+  EXPECT_TRUE(bounds.has_value()) << "<rect> has no bounds";
+  return bounds ? bounds->width() : 0.0;
+}
+
+TEST(FontSelection, DefaultFamilyChangeLaysOutPreparedTextAgain) {
+  SVGDocument document = ParseWithHermeticFonts(TextSvgWithFamily("Invalid"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(TextSvgWithFamily("Noto Mono"), "");
+  const double fallbackLength = FirstTextLength(document);
+  const double monoLength = FirstTextLength(monoDocument);
+  ASSERT_THAT(fallbackLength, testing::Ne(monoLength));
+
+  document.registry().ctx().get<FontManager>().setDefaultFamily("monospace");
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstTextLength(document), testing::DoubleEq(monoLength));
+}
+
+TEST(FontSelection, GenericFamilyMappingChangeLaysOutPreparedTextAgain) {
+  SVGDocument document = ParseWithHermeticFonts(TextSvgWithFamily("serif"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(TextSvgWithFamily("Noto Mono"), "");
+  const double serifLength = FirstTextLength(document);
+  const double monoLength = FirstTextLength(monoDocument);
+  ASSERT_THAT(serifLength, testing::Ne(monoLength));
+
+  document.registry().ctx().get<FontManager>().setGenericFamilyMapping("serif", "Noto Mono");
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstTextLength(document), testing::DoubleEq(monoLength));
+}
+
+TEST(FontSelection, DefaultFamilyChangeRecomputesChUnitShapes) {
+  SVGDocument document = ParseWithHermeticFonts(RectSvgWithFamily("Invalid"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(RectSvgWithFamily("Noto Mono"), "");
+  const double fallbackWidth = FirstRectWidth(document);
+  const double monoWidth = FirstRectWidth(monoDocument);
+  ASSERT_THAT(fallbackWidth, testing::Ne(monoWidth));
+
+  document.registry().ctx().get<FontManager>().setDefaultFamily("monospace");
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstRectWidth(document), testing::DoubleEq(monoWidth));
 }
 
 TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {

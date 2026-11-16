@@ -737,6 +737,7 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/components/text:components",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/resources:font_manager",
         "//donner/svg/resources:font_metadata",
         "//donner/svg/text:text_engine",
