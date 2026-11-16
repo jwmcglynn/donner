@@ -490,10 +490,10 @@ TEST_F(RendererGeodeTest, SkewedLocalRasterFilterIsUnchangedByWholePixelMoves) {
   FilterNode node;
   node.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 0.01, .stdDeviationY = 0.01};
   graph.nodes.push_back(node);
-  const auto render = [&](int width, double moveX) {
+  const auto render = [&](double moveX) {
     RendererGeode renderer(sharedDevice());
     RenderViewport viewport;
-    viewport.size = Vector2d(width, 64);
+    viewport.size = Vector2d(128, 64);
     viewport.devicePixelRatio = 1.0;
     renderer.beginFrame(viewport);
     Transform2d skew;
@@ -509,13 +509,13 @@ TEST_F(RendererGeodeTest, SkewedLocalRasterFilterIsUnchangedByWholePixelMoves) {
   // Placements at the canvas origin and with room on both sides: the resample into the local
   // raster and the composite back to the device each varied with some of them.
   constexpr int kBase = 32;
-  const RendererBitmap base = render(128, kBase);
+  const RendererBitmap base = render(kBase);
   ASSERT_FALSE(base.empty());
   const RendererBitmap baseCrop =
       editor::tests::CropBitmap(base, Vector2i(kBase, 0), Vector2i(63, 64));
   for (const int at : {0, kBase + 1, 2 * kBase}) {
     SCOPED_TRACE(at);
-    const RendererBitmap moved = render(128, at);
+    const RendererBitmap moved = render(at);
     ASSERT_FALSE(moved.empty());
     editor::tests::CompareBitmapToBitmap(
         editor::tests::CropBitmap(moved, Vector2i(at, 0), Vector2i(63, 64)), baseCrop,
