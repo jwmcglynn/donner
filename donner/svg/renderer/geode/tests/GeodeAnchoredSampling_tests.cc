@@ -82,10 +82,41 @@ TEST(GeodeAnchoredSampling, AnchorOnAWholeTexelHasNoFraction) {
 // The anchor pixel of a position moves by whole pixels with the position, including a position on
 // a pixel boundary that double rounding puts a hair to either side.
 TEST(GeodeAnchoredSampling, AnchorPixelMovesWithItsPosition) {
-  EXPECT_EQ(AnchorPixelFor(Vector2d(3.7, -2.2)), Vector2i(3, -3));
-  EXPECT_EQ(AnchorPixelFor(Vector2d(5.0 - 1e-12, 2.0 + 1e-12)), Vector2i(5, 2));
-  EXPECT_EQ(AnchorPixelFor(Vector2d(37.0 - 1e-12, 2.0)) - AnchorPixelFor(Vector2d(5.0, 2.0)),
-            Vector2i(32, 0));
+  EXPECT_THAT(AnchorPixelFor(Vector2d(3.7, -2.2)), testing::Optional(Vector2i(3, -3)));
+  EXPECT_THAT(AnchorPixelFor(Vector2d(5.0 - 1e-12, 2.0 + 1e-12)),
+              testing::Optional(Vector2i(5, 2)));
+  EXPECT_THAT(AnchorPixelFor(Vector2d(37.0 - 1e-12, 2.0)), testing::Optional(Vector2i(37, 2)));
+}
+
+// Anchors past 2^24, where a float no longer holds every integer, still split exactly, and a
+// position beyond the int range or not finite has no anchor.
+TEST(GeodeAnchoredSampling, LargeAndOutOfRangeAnchors) {
+  constexpr int kLarge = (1 << 24) + 3;
+  EXPECT_THAT(AnchorPixelFor(Vector2d(kLarge + 0.5, -kLarge - 0.5)),
+              testing::Optional(Vector2i(kLarge, -kLarge - 1)));
+  EXPECT_THAT(AnchorPixelFor(Vector2d(3e9, 0.0)), testing::Eq(std::nullopt));
+  EXPECT_THAT(AnchorPixelFor(Vector2d(0.0, -3e9)), testing::Eq(std::nullopt));
+  EXPECT_THAT(AnchorPixelFor(Vector2d(std::nan(""), 0.0)), testing::Eq(std::nullopt));
+
+  // texel = target - (kLarge - 0.25), so the anchor kLarge is texel 0.25.
+  const std::optional<AnchoredTexelRows> rows =
+      AnchoredTexelRowsFor(Transform2d::Translate(kLarge - 0.25, 0.0), Vector2i(kLarge, 0));
+  ASSERT_THAT(rows, testing::Optional(testing::_));
+  EXPECT_EQ(rows->whole, Vector2i(0, 0));
+  EXPECT_EQ(rows->fraction[0], 0.25f);
+  EXPECT_EQ(rows->anchor, Vector2i(kLarge, 0));
+  EXPECT_THAT(AnchoredTexelRowsFor(Transform2d::Translate(-3e9, 0.0), Vector2i::Zero()),
+              testing::Eq(std::nullopt));
+}
+
+// A fraction just below one that single precision rounds up to one carries into the whole part.
+TEST(GeodeAnchoredSampling, FractionRoundingToOneCarries) {
+  // texel = target + 5 + (1 - 1e-8): above the snap distance, but 1 - 1e-8 rounds to 1.0f.
+  const std::optional<AnchoredTexelRows> rows =
+      AnchoredTexelRowsFor(Transform2d::Translate(-(6.0 - 1e-8), 0.0), Vector2i::Zero());
+  ASSERT_THAT(rows, testing::Optional(testing::_));
+  EXPECT_EQ(rows->whole, Vector2i(6, 0));
+  EXPECT_EQ(rows->fraction[0], 0.0f);
 }
 
 TEST(GeodeAnchoredSampling, RejectsASingularTransform) {

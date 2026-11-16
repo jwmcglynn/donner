@@ -82,6 +82,15 @@ consteval bool ValidateImageBlitArtifact() {
   static_assert(shader.matchesMember(
       "uniforms", "texelFromTargetY", offsetof(ImageBlitParams, texelFromTargetY),
       sizeof(ImageBlitParams::texelFromTargetY), ShaderScalarType::F32, 4, 0, 0, 0, 0));
+  static_assert(shader.matchesMember("uniforms", "anchorX", offsetof(ImageBlitParams, anchorX),
+                                     sizeof(ImageBlitParams::anchorX), ShaderScalarType::I32, 1, 0,
+                                     0, 0, 0));
+  static_assert(shader.matchesMember("uniforms", "anchorY", offsetof(ImageBlitParams, anchorY),
+                                     sizeof(ImageBlitParams::anchorY), ShaderScalarType::I32, 1, 0,
+                                     0, 0, 0));
+  static_assert(shader.matchesMember(
+      "uniforms", "_anchorPad", offsetof(ImageBlitParams, anchorPadding),
+      sizeof(ImageBlitParams::anchorPadding), ShaderScalarType::U32, 2, 0, 0, 0, 0));
   return true;
 }
 }  // namespace donner::gpu::shader::programs

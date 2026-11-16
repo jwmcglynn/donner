@@ -75,15 +75,8 @@ gpu::Texture GeodeTextureEncoder::uploadRgba8Texture(const GeodeGpuContext& cont
 
 namespace {
 
-/// Fill the nearest-sampling rows that map target pixel positions to source texel coordinates:
-/// the inverse of placing the quad's source texels in the target, narrowed and inverted in single
-/// precision as the software renderer's image sampler does (see \ref NearestTexelRowsFor).
-///
-/// @param params Quad parameters.
-/// @param textureSize Source texture dimensions in texels.
-/// @param u Uniform block receiving the rows.
-/// @return False when the placement is not invertible, so no pixel samples it.
-/// The transform from source texel coordinates to target pixels for \p params.
+/// The transform from source texel coordinates to target pixels for \p params, whose source has
+/// \p textureSize texels.
 Transform2d TargetFromTexel(const GeodeTextureEncoder::QuadParams& params,
                             const gpu::Extent2d& textureSize) {
   const Vector2d sourceSize(textureSize.width, textureSize.height);
@@ -99,6 +92,14 @@ Transform2d TargetFromTexel(const GeodeTextureEncoder::QuadParams& params,
   return localFromTexel * params.targetFromLocal;
 }
 
+/// Fill the nearest-sampling rows that map target pixel positions to source texel coordinates:
+/// the inverse of placing the quad's source texels in the target, narrowed and inverted in single
+/// precision as the software renderer's image sampler does (see \ref NearestTexelRowsFor).
+///
+/// @param params Quad parameters.
+/// @param textureSize Source texture dimensions in texels.
+/// @param u Uniform block receiving the rows.
+/// @return False when the placement is not invertible, so no pixel samples it.
 bool FillNearestTexelRows(const GeodeTextureEncoder::QuadParams& params,
                           const gpu::Extent2d& textureSize, Uniforms& u) {
   const std::optional<NearestTexelRows> rows =
@@ -111,6 +112,13 @@ bool FillNearestTexelRows(const GeodeTextureEncoder::QuadParams& params,
   return true;
 }
 
+/// Fill the anchored-sampling mapping split at \p params.anchor (see \ref AnchoredTexelRowsFor).
+///
+/// @param params Quad parameters.
+/// @param textureSize Source texture dimensions in texels.
+/// @param u Uniform block receiving the mapping.
+/// @return False when the placement is not invertible or the split does not fit, so no pixel
+///   samples it.
 bool FillAnchoredTexelRows(const GeodeTextureEncoder::QuadParams& params,
                            const gpu::Extent2d& textureSize, Uniforms& u) {
   const std::optional<AnchoredTexelRows> rows =
@@ -121,13 +129,13 @@ bool FillAnchoredTexelRows(const GeodeTextureEncoder::QuadParams& params,
   u.texelFromTargetX[0] = rows->linear[0];
   u.texelFromTargetX[1] = rows->linear[1];
   u.texelFromTargetX[2] = rows->fraction[0];
-  u.texelFromTargetX[3] = static_cast<float>(rows->anchor.x);
   u.texelFromTargetY[0] = rows->linear[2];
   u.texelFromTargetY[1] = rows->linear[3];
   u.texelFromTargetY[2] = rows->fraction[1];
-  u.texelFromTargetY[3] = static_cast<float>(rows->anchor.y);
   u.texelWholeX = rows->whole.x;
   u.texelWholeY = rows->whole.y;
+  u.anchorX = rows->anchor.x;
+  u.anchorY = rows->anchor.y;
   return true;
 }
 

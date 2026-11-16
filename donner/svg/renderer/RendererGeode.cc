@@ -3270,14 +3270,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     updateEncoderScissor();
     if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
       encoder->setTransform(deviceFromLocal);
+      const Box2d rasterRect = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
+                                               static_cast<double>(geometry->height));
       // The raster moves with the content, so anchor at the device pixel holding its origin: a
-      // whole-pixel device move moves the anchor with it and leaves every weight unchanged.
-      encoder->drawTextureAnchored(
-          *composited,
-          Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
-                          static_cast<double>(geometry->height)),
-          kWholeTextureUv, 1.0, /*sourceIsPremultiplied=*/true,
-          geode::AnchorPixelFor(deviceFromLocal.transformPosition(Vector2d::Zero())));
+      // whole-pixel device move moves the anchor with it and leaves every weight unchanged. An
+      // origin beyond the integer pixel range has no anchor and samples with plain bilinear.
+      if (const std::optional<Vector2i> anchor =
+              geode::AnchorPixelFor(deviceFromLocal.transformPosition(Vector2d::Zero()))) {
+        encoder->drawTextureAnchored(*composited, rasterRect, kWholeTextureUv, 1.0,
+                                     /*sourceIsPremultiplied=*/true, *anchor);
+      } else {
+        encoder->drawTexture(*composited, rasterRect, kWholeTextureUv, 1.0, /*pixelated=*/false,
+                             /*sourceIsPremultiplied=*/true);
+      }
       encoder->setTransform(Transform2d());
     }
     releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);

@@ -84,12 +84,15 @@ struct Uniforms {
   texelWholeY: i32,
   // Nearest sampling maps target pixel position p to source texel coordinates:
   // x = p.x * texelFromTargetX.x + (p.y * texelFromTargetX.y + texelFromTargetX.z), likewise y.
-  // Anchored bilinear sampling maps it relative to the anchor pixel a = (texelFromTargetX.w,
-  // texelFromTargetY.w), with q = p - a:
-  // x = q.x * texelFromTargetX.x + (q.y * texelFromTargetX.y + texelFromTargetX.z) + texelWholeX,
-  // where the z terms are the anchor's fractional texel coordinate.
+  // Anchored bilinear sampling maps it relative to the anchor pixel a = (anchorX, anchorY), with
+  // q = p - a: x = q.x * texelFromTargetX.x + (q.y * texelFromTargetX.y + texelFromTargetX.z) +
+  // texelWholeX, where the z terms are the anchor's fractional texel coordinate.
   texelFromTargetX: vec4f,
   texelFromTargetY: vec4f,
+  // Anchored sampling: the anchor pixel.
+  anchorX: i32,
+  anchorY: i32,
+  _anchorPad: vec2u,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -168,7 +171,6 @@ fn sample_nearest(pixel_center: vec2f) -> vec4f {
   return textureLoad(imageTexture, texel, 0);
 }
 
-// Mitchell weights in tiny-skia's form, for texels 0.5 and 1.5 texels from the sample.
 fn anchored_texel(coord: vec2i, source_min: vec2i, source_max: vec2i) -> vec4f {
   return textureLoad(imageTexture, clamp(coord, source_min, source_max), 0);
 }
@@ -188,7 +190,9 @@ fn sample_anchored(pixel_center: vec2f) -> vec4f {
   let last = min(source_origin + source_size, texture_size) - vec2i(1);
   let row_x = uniforms.texelFromTargetX;
   let row_y = uniforms.texelFromTargetY;
-  let q = pixel_center - vec2f(row_x.w, row_y.w);
+  // Offsets from the anchor pixel are computed in integers, so they stay exact for any anchor.
+  let q = vec2f(vec2i(floor(pixel_center)) - vec2i(uniforms.anchorX, uniforms.anchorY)) +
+          vec2f(0.5);
   let coord = vec2f(q.x * row_x.x + (q.y * row_x.y + row_x.z),
                     q.x * row_y.x + (q.y * row_y.y + row_y.z)) - vec2f(0.5);
   let cell = floor(coord);
@@ -201,6 +205,7 @@ fn sample_anchored(pixel_center: vec2f) -> vec4f {
   return mix(top, bottom, fraction.y);
 }
 
+// Mitchell weights in tiny-skia's form, for texels 0.5 and 1.5 texels from the sample.
 fn cubic_near(t: f32) -> f32 {
   return ((-21.0 / 18.0 * t + 27.0 / 18.0) * t + 9.0 / 18.0) * t + 1.0 / 18.0;
 }

@@ -39,16 +39,21 @@ bool SplitTexelCoordinate(double coordinate, int& whole, float& fraction) {
 
 }  // namespace
 
-Vector2i AnchorPixelFor(const Vector2d& position) {
-  const auto pixel = [](double coordinate) {
+std::optional<Vector2i> AnchorPixelFor(const Vector2d& position) {
+  const auto pixel = [](double coordinate) -> std::optional<int> {
     const double floored = std::floor(coordinate + kWholeCoordinateSnap);
     if (!(floored >= static_cast<double>(std::numeric_limits<int>::min()) &&
           floored <= static_cast<double>(std::numeric_limits<int>::max()))) {
-      return 0;
+      return std::nullopt;
     }
     return static_cast<int>(floored);
   };
-  return Vector2i(pixel(position.x), pixel(position.y));
+  const std::optional<int> x = pixel(position.x);
+  const std::optional<int> y = pixel(position.y);
+  if (!x.has_value() || !y.has_value()) {
+    return std::nullopt;
+  }
+  return Vector2i(*x, *y);
 }
 
 std::optional<AnchoredTexelRows> AnchoredTexelRowsFor(const Transform2d& targetFromTexel,

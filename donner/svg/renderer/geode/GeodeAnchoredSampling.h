@@ -50,7 +50,9 @@ std::optional<AnchoredTexelRows> AnchoredTexelRowsFor(const Transform2d& targetF
  * pixel, so two placements a whole number of pixels apart select anchors the same distance apart.
  *
  * @param position Target-space position of a point fixed to the content.
+ * @return The pixel, or `std::nullopt` when it does not fit a 32-bit integer or \p position is
+ *   not finite; the caller then has no anchor to sample through.
  */
-Vector2i AnchorPixelFor(const Vector2d& position);
+std::optional<Vector2i> AnchorPixelFor(const Vector2d& position);
 
 }  // namespace donner::geode
