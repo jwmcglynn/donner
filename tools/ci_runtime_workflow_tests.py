@@ -1030,6 +1030,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertIn('data = [":editor_window_tests_geode"]', target)
         self.assertIn("export DONNER_GPU_BACKEND=vulkan", self.xvfb_runner)
         self.assertIn("xvfb-run -a", self.xvfb_runner)
+        # The server must not reset when a case closes its last connection, or the next case's
+        # reconnect can be dropped mid-reset.
+        self.assertIn("xvfb_server_args='-screen 0 1280x720x24 -noreset'", self.xvfb_runner)
+        invocations = [line for line in self.xvfb_runner.splitlines() if "xvfb-run -a" in line]
+        self.assertEqual(2, len(invocations))
+        for line in invocations:
+            self.assertIn('xvfb-run -a -s "$xvfb_server_args" ', line)
 
         step = self._step_body(local, "Test local Xvfb targets")
         self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
