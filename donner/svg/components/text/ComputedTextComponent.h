@@ -14,6 +14,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -218,8 +219,10 @@ struct ComputedTextComponent {
     /// Stroke dash offset in user units for this span (`stroke-dashoffset`).
     double strokeDashOffset = 0.0;
 
-    /// The span's stroke dash lengths in user units; empty for a solid stroke.
-    [[nodiscard]] std::span<const double> strokeDashLengths() const {
+    /// The span's stroke dash lengths in user units; empty for a solid stroke. The view borrows the
+    /// dash list this span holds, so it is valid only while this span, or another span sharing the
+    /// same list, keeps it.
+    [[nodiscard]] std::span<const double> strokeDashLengths() const UTILS_LIFETIME_BOUND {
       return strokeDashArray ? std::span<const double>(*strokeDashArray)
                              : std::span<const double>();
     }

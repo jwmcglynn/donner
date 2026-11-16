@@ -19,6 +19,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
@@ -908,10 +909,10 @@ public:
 
   /// Number of glyph paths added.
   [[nodiscard]] std::size_t size() const { return fill_.size(); }
-  /// Paths for the fill pass.
-  [[nodiscard]] std::span<const tiny_skia::Path> fill() const { return fill_; }
-  /// Paths for the stroke pass.
-  [[nodiscard]] std::span<const tiny_skia::Path> stroke() const {
+  /// Paths for the fill pass, borrowed from this object until the next \ref add.
+  [[nodiscard]] std::span<const tiny_skia::Path> fill() const UTILS_LIFETIME_BOUND { return fill_; }
+  /// Paths for the stroke pass, borrowed from this object until the next \ref add.
+  [[nodiscard]] std::span<const tiny_skia::Path> stroke() const UTILS_LIFETIME_BOUND {
     return openDashSeam_ ? std::span<const tiny_skia::Path>(stroke_) : fill();
   }
 
