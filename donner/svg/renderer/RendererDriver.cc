@@ -398,15 +398,18 @@ std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle
 }
 
 /// Collect the geometry \ref RenderingObjectBoundingBox bounds into @p collector, placed in a
-/// measurement space by @p spaceFromEntity. A text box is collected as a box.
+/// measurement space by @p spaceFromEntity. A text box is collected as a box; an empty text has no
+/// box and collects nothing, as in-document bounds skip it.
 void CollectRenderingObjectGeometry(Registry& registry, EntityHandle handle,
                                     const Transform2d& spaceFromEntity,
                                     const components::BoundsGeometryCollector& collector) {
 #ifdef DONNER_TEXT_ENABLED
   if (const TextEngine* textEngine = ObjectBoxTextEngine(registry, handle)) {
-    collector.pieces.push_back(
-        components::BoundsGeometryPiece{.spaceFromPiece = spaceFromEntity,
-                                        .geometry = textEngine->computedObjectBoundingBox(handle)});
+    const Box2d box = textEngine->computedObjectBoundingBox(handle);
+    if (!box.isEmpty()) {
+      collector.pieces.push_back(
+          components::BoundsGeometryPiece{.spaceFromPiece = spaceFromEntity, .geometry = box});
+    }
     return;
   }
 #else
