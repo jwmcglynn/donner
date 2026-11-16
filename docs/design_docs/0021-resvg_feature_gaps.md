@@ -378,6 +378,10 @@ generation:`, only when all of the following hold:
 | `text/tspan/nested-whitespaces` | 400 | 387 | 0 | 400 | 416 |
 | `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
+`font-shorthand`, `real-text-height` and `nested-whitespaces` no longer carry a budget: they
+compare at default settings against resvg v0.49.0's 300x300 references, which Donner matches
+within 2 pixels on both CPU text tiers.
+
 The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
 (1555 and 3134 pixels, #1176).
 
