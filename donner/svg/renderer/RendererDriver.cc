@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <iterator>
@@ -60,19 +61,20 @@
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
-#include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/NonScalingStroke.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 #include "donner/svg/renderer/FilterRegionContext.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #endif
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/SubDocumentWarnings.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -4662,67 +4664,40 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
   return *fontCollectionCache_;
 }
 
-namespace {
-
-/**
- * Preparation warnings a sub-document has already delivered to a host sink. An external use
- * invalidates its child document's derived state around every traversal, so the child is prepared
- * again for each occurrence and each frame and repeats the same warnings. Each warning, matched by
- * its text and location, is delivered once per loaded sub-document instead, so identical warnings
- * without a location are merged.
- */
-struct ReportedSubDocumentWarnings {
-  std::unordered_set<std::string> keys;
-};
-
-std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
-  std::ostringstream key;
-  key << warning;
-  return std::move(key).str();
-}
-
-}  // namespace
-
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
   textFrameCache_->roots.erase(&registry);
   textFrameCache_->shadowStyles.erase(&registry);
+  details::DropStaleSubDocumentWarnings(registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
   }
-  if (warningSink_ == nullptr || !warningSink_->isEnabled()) {
-    // Without a collecting host sink these warnings are discarded even when verbose: printing them
-    // would repeat them for every traversal. Nothing is recorded, so a later draw with a collecting
-    // sink still receives them.
-    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-    RendererUtils::prepareDocumentForRendering(document, verbose_, disabledSink);
-    return;
-  }
   // Warnings from preparing the referenced subtree, such as an unresolved `<use>` inside it, reach
   // the host sink once. A warning dropped by a resource limit, here or in the collecting sink,
-  // marks the host sink truncated so it does not look complete. As with any sink limit, the host
-  // sink then drops the rest of this draw's warnings, and because a truncated child is prepared
-  // again on every traversal, each later draw of it reports truncation too.
+  // marks the host sink truncated so it does not look complete; as with any sink limit, the host
+  // sink then drops the rest of this draw's warnings. Without a collecting host sink the warnings
+  // are held for a later draw with one, and not printed even when verbose, since printing would
+  // repeat them for every traversal.
+  const bool collecting = warningSink_ != nullptr && warningSink_->isEnabled();
+  if (collecting) {
+    details::DeliverHeldSubDocumentWarnings(registry, *warningSink_);
+  }
+  const auto deliver = [&](const ParseWarningSink& warnings) {
+    if (collecting) {
+      details::ReportSubDocumentWarnings(registry, warnings, *warningSink_);
+    } else {
+      details::HoldSubDocumentWarnings(registry, warnings);
+    }
+  };
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
-  auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
-  bool truncated = warnings.resourceLimitExceeded();
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    std::string key = SubDocumentWarningKey(warning);
-    if (reported.keys.contains(key)) {
-      continue;
-    }
-    if (reported.keys.size() >= ParseWarningSink::kMaximumWarnings) {
-      truncated = true;
-      continue;
-    }
-    reported.keys.insert(std::move(key));
-    warningSink_->add(ParseDiagnostic(warning));
-  }
-  if (truncated) {
-    warningSink_->markResourceLimitExceeded();
+  deliver(warnings);
+  if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
+    ParseWarningSink restoredWarnings;
+    RendererUtils::prepareDocumentForRendering(document, verbose_, restoredWarnings);
+    deliver(restoredWarnings);
   }
 }
 
@@ -4810,25 +4785,6 @@ bool RendererDriver::beginSubDocumentFontTraversal(const SVGDocumentHandle& chil
 
 namespace {
 
-void InvalidateExternalUseDerivedState(Registry& registry) {
-  for (Entity entity : registry.view<donner::components::TreeComponent>()) {
-    components::StyleSystem().invalidateComputed(EntityHandle(registry, entity));
-    registry.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
-        components::DirtyFlagsComponent::All);
-    if (registry.all_of<components::TextRootComponent>(entity)) {
-      (void)components::InvalidateTextLayout(EntityHandle(registry, entity));
-    }
-  }
-  registry.clear<components::RenderingInstanceComponent>();
-  if (!registry.ctx().contains<components::RenderTreeState>()) {
-    registry.ctx().emplace<components::RenderTreeState>();
-  }
-  auto& state = registry.ctx().get<components::RenderTreeState>();
-  state.needsFullStyleRecompute = true;
-  state.needsFullRebuild = true;
-  components::InvalidateFontResourcePreparation(registry);
-}
-
 /// Which frame allowance an external-use occurrence's layout work is charged to.
 enum class ExternalWorkCharge : std::uint8_t {
   Draw,     ///< Drawing the occurrence, against the external instance allowance.
@@ -4874,7 +4830,7 @@ public:
         root, properties, style.resourceOpacities, fill, stroke, family, bytes, std::move(work));
     retainPaintOwner(fill, resourceLeases_[0]);
     retainPaintOwner(stroke, resourceLeases_[1]);
-    InvalidateExternalUseDerivedState(child);
+    components::ExternalUseStyleRetention::PrepareOccurrence(child);
     installed_ = true;
   }
 
@@ -4889,7 +4845,7 @@ public:
                               "External-use inherited cross-document URL resource is unsupported",
                               FileOffset::EndOfString()));
     }
-    InvalidateExternalUseDerivedState(registry_);
+    components::ExternalUseStyleRetention::FinishOccurrence(registry_);
     if (auto* budget = registry_.ctx().find<components::StyleResourceBudget>()) {
       budget->setAggregateWorkBudget(nullptr);
     }
@@ -4982,28 +4938,20 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   }
   textFrameCache_->roots.erase(&child);
   textFrameCache_->shadowStyles.erase(&child);
-  std::optional<components::RenderingContext::InitialPaintState> previousPaint;
-  if (const auto* context = child.ctx().find<components::RenderingContext>()) {
-    previousPaint = context->initialPaintState();
-  }
   setSubDocumentContextPaint(subDocument, instance.resolvedFill, instance.resolvedStroke);
   const Transform2d surfaceFromHost =
       instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
   if (!fragment.empty()) {
     const ExternalUseInstanceScope instanceScope(child, root,
                                                  EntityHandle(hostRegistry, hostEntity));
+    components::ExternalUseStyleRetention::PrepareInstance(child);
     drawExternalUseInstance(subDocument, fragment, surfaceFromHost, hostRegistry, hostEntity);
   } else {
+    components::ExternalUseStyleRetention::PrepareInstance(child);
     const Vector2i size = subDocument.canvasSize();
     drawAdmittedSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
                             PreserveAspectRatio::Default(), surfaceFromHost, hostRegistry,
                             hostEntity);
-  }
-  if (previousPaint) {
-    child.ctx().get<components::RenderingContext>().restoreInitialPaintState(
-        std::move(*previousPaint));
-  } else {
-    clearSubDocumentContextPaint(subDocument);
   }
   textFrameCache_->roots.erase(&child);
   textFrameCache_->shadowStyles.erase(&child);
@@ -5304,6 +5252,8 @@ std::vector<components::BoundsGeometryPiece> RendererDriver::measureExternalUseG
     return {};
   }
   const ExternalUseInstanceScope instanceScope(child, root, EntityHandle(hostRegistry, hostEntity));
+  // The render tree may hold another occurrence's instance, as drawing finds it.
+  components::ExternalUseStyleRetention::PrepareInstance(child);
   prepareSubDocument(subDocument);
   // The instance is laid out relative to the <use> element, so its world space is the use's. Its
   // own external uses are measured in this layout too, then forgotten with it.
@@ -5360,13 +5310,6 @@ void RendererDriver::setSubDocumentContextPaint(
   }
   auto& renderCtx = subDocument.registry().ctx().get<components::RenderingContext>();
   renderCtx.setInitialContextPaint(contextFill, contextStroke);
-}
-
-void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
-  components::InvalidateFontResourcePreparation(subDocument.registry());
-  if (subDocument.registry().ctx().contains<components::RenderingContext>()) {
-    subDocument.registry().ctx().get<components::RenderingContext>().clearInitialContextPaint();
-  }
 }
 
 void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
