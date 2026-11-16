@@ -619,6 +619,14 @@ std::optional<Path> PathStroker::stroke(const Path& path, const Stroke& stroke,
     limit->emittedPoints = outline.has_value() ? outline->points().size()
                                                : outer_.points().size() + inner_.points().size() +
                                                      cusper_.points().size();
+    // Finishing the last contour adds its caps or closing join and appends its inner side after
+    // the last check above, so the finished outline is checked exactly before it is returned.
+    if (outline.has_value() && outline->points().size() > limit->maxPoints) {
+      limit->exceeded = true;
+    }
+    if (limit->exceeded) {
+      outline.reset();
+    }
   }
   outputLimit_ = nullptr;
   return outline;
