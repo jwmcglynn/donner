@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -852,6 +853,78 @@ TEST(SubDocumentFiltersTest, GeometryAllowanceFallsBackToThePathBox) {
         actual, expected, "sub-document-geometry-allowance-" + std::to_string(allowance),
         editor::tests::PixelmatchIdentityParams());
   }
+
+  // Under a rotation the stand-in box bounds the path more loosely than the path does, so the
+  // effect region grows, but it still contains the in-document region. A flood fills exactly the
+  // region: rotated 45 degrees, the band's own bound spans x 14.6..17.4 and y 1.9..30.1, and its
+  // box's bound spans 1.9..30.1 on both axes.
+  constexpr std::string_view kBand = "<path id='band' d='M6 6 L8 6 L26 24 L26 26 L24 26 L6 8 Z'/>";
+  const std::string rotated =
+      "<defs><filter id='flood' x='0' y='0' width='1' height='1'>"
+      "<feFlood flood-color='#20a040'/></filter></defs><g filter='url(#flood)'>"
+      "<use href='{ref}band' transform='rotate(45 16 16)'/></g></svg>";
+  const Documents bandDocuments = {
+      {"sheet.svg", head + "<defs>" + std::string(kBand) + "</defs></svg>"}};
+  SVGDocument rotatedLocal =
+      Parse(head + "<defs>" + std::string(kBand) + "</defs>" + WithReference(rotated, "#"));
+  Renderer rotatedRenderer;
+  const RendererBitmap tight = Draw(rotatedRenderer, rotatedLocal);
+  components::StyleResourceBudget::Limits noGeometry;
+  noGeometry.externalMeasureGeometryBytes = 0;
+  SVGDocument rotatedExternal = Parse(head + WithReference(rotated, "sheet.svg#"), bandDocuments);
+  RendererBitmap loose;
+  EXPECT_THAT(DrawWithBudget(rotatedExternal, noGeometry, &loose)->externalMeasureGeometryBytes(),
+              testing::Eq(0u));
+  const auto flood = test::RgbaEq(0x20, 0xa0, 0x40, 255);
+  for (const auto& [x, y] : {std::pair{15, 2}, {16, 2}, {15, 29}, {16, 29}}) {
+    SCOPED_TRACE(testing::Message() << "in-document region corner pixel " << x << "," << y);
+    EXPECT_THAT(PixelAt(tight, x, y), flood);
+    EXPECT_THAT(PixelAt(loose, x, y), flood);
+  }
+  EXPECT_THAT(PixelAt(tight, 4, 16), test::IsTransparent());
+  EXPECT_THAT(PixelAt(loose, 4, 16), flood);
+}
+
+/// A host drawing @p uses occurrences of a symbol whose rect is sized in em, inside an effect
+/// bounded by its content. With @p distinct every occurrence sets its own font size, so each one
+/// measures different geometry for the same source element; otherwise all share one font size.
+std::string SizedUsesHost(int uses, bool distinct) {
+  std::string host =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+      "<filter id='f'><feOffset/></filter></defs><g filter='url(#f)'>";
+  for (int i = 1; i <= uses; ++i) {
+    host += "<use href='sheet.svg#s' font-size='" + std::to_string(distinct ? i : 8) + "'/>";
+  }
+  return host + "</g></svg>";
+}
+
+/// Occurrences that measure different geometry for one source element cost no full path
+/// comparisons with each other's copies, so comparisons grow linearly with the occurrences rather
+/// than quadratically. Occurrences of the same geometry each compare with the one retained copy.
+TEST(SubDocumentFiltersTest, PathComparisonsStayLinearInTheOccurrences) {
+  const Documents documents = {
+      {"sheet.svg",
+       "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs><symbol id='s'>"
+       "<rect width='1em' height='1em' fill='#2050d0'/></symbol></defs></svg>"}};
+  struct Work {
+    std::size_t copyBytes = 0;
+    std::size_t comparisons = 0;
+  };
+  const auto measure = [&](int uses, bool distinct) {
+    SVGDocument document = Parse(SizedUsesHost(uses, distinct), documents);
+    RendererBitmap bitmap;
+    const auto work =
+        DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap);
+    return Work{.copyBytes = work->externalMeasureGeometryBytes(),
+                .comparisons = work->externalMeasureGeometryComparisons()};
+  };
+  constexpr std::size_t kUses = 256;
+  const Work same = measure(kUses, false);
+  EXPECT_THAT(same.comparisons, testing::Eq(kUses - 1));
+  const Work distinct = measure(kUses, true);
+  // Every occurrence retained its own copy, so the geometry did differ.
+  EXPECT_THAT(distinct.copyBytes, testing::Eq(kUses * same.copyBytes));
+  EXPECT_THAT(distinct.comparisons, testing::Le(kUses));
 }
 
 }  // namespace

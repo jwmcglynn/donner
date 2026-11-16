@@ -296,6 +296,27 @@ donner_cc_library(
     deps = [":geode_stroke_tolerance"],
 )
 
+# Single-precision pixel-to-texel mapping for nearest image sampling. Pure math, so its parity
+# test runs against the software renderer in every configuration.
+donner_cc_library(
+    name = "geode_nearest_sampling",
+    srcs = ["GeodeNearestSampling.cc"],
+    hdrs = ["GeodeNearestSampling.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = ["//donner/base"],
+)
+
+donner_cc_test(
+    name = "geode_nearest_sampling_tests",
+    srcs = ["tests/GeodeNearestSampling_tests.cc"],
+    deps = [
+        ":geode_nearest_sampling",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg/renderer:tiny_skia_deps",
+    ],
+)
+
 donner_cc_test(
     name = "geode_fill_tolerance_tests",
     srcs = ["tests/GeodeFillTolerance_tests.cc"],
@@ -787,6 +808,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device_api",
+        ":geode_nearest_sampling",
         "//donner/base",
         "//donner/gpu/shader:image_blit_api",
         "//donner/gpu/shader:linked_projection",
