@@ -28,6 +28,7 @@ import unittest
 
 from python.runfiles import runfiles
 from tools import bazelrc_configs
+from tools.ci import lanes
 from tools.ci import macos_remote_shadow as lane
 from tools.test_executable_fixtures import ExecutableFixtureDirectory
 
@@ -475,7 +476,10 @@ class WorkflowTest(unittest.TestCase):
         # The shadow lane runs its Bazel commands under the self-hosted Linux lane's own stall
         # watchdog, which //tools:ci_runtime_workflow_tests exercises.
         self.assertEqual("tools/ci/bazel_watchdog.sh", lane.WATCHDOG)
-        self.assertIn(lane.WATCHDOG + " ", _job(self.text, LINUX_JOB))
+        self.assertEqual(lane.WATCHDOG, lanes.watchdog("test")[0])
+        self.assertIn(lanes.watchdog("test"), [
+            tuple(action.wrappers[1:3]) for action in
+            lanes.LANES[LINUX_JOB].phases["test"].actions if isinstance(action, lanes.Bazel)])
 
     def test_docs_describe_the_opt_in_and_the_runner_contract(self):
         docs = _read("docs/building.md")
@@ -677,8 +681,11 @@ class LaneCommandTest(unittest.TestCase):
             self.assertIn(tag, lane.EXCLUDED_TAGS)
 
     def test_lane_runs_a_subset_of_the_self_hosted_macos_lane(self):
-        test = _read(MAIN).split("  %s:\n" % MACOS_JOB, 1)[1].split("      - name: Test\n", 1)[1]
-        filters = re.search(r"--test_tag_filters=(\S+)", test.split("\n      - ", 1)[0]).group(1)
+        test = next(action for action in lanes.LANES[MACOS_JOB].phases["test"].actions
+                    if isinstance(action, lanes.Bazel))
+        expanded = bazelrc_configs.expand("test", [word for word in test.args
+                                                   if isinstance(word, str)], self.configs)
+        filters = bazelrc_configs.last_value(expanded, "test_tag_filters")
         positive, negative = _tag_filter_sets(filters)
         self.assertEqual(set(), positive)
         self.assertEqual(set(), negative - set(lane.EXCLUDED_TAGS))

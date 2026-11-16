@@ -15,12 +15,10 @@ exports_files([
     "run-browser-ci.sh",
 ])
 
-# Data of //tools/ci:macos_remote_shadow, which runs the test wrapper and reads the Xcode pins.
+# Data of //tools/ci:macos_remote_shadow, which reads the Xcode pins. Its test wrapper,
+# ci_bazel_test.sh, is exported above.
 exports_files(
-    [
-        "ci_bazel_test.sh",
-        "ci_macos_xcode.txt",
-    ],
+    ["ci_macos_xcode.txt"],
     visibility = ["//tools/ci:__pkg__"],
 )
 
@@ -502,6 +500,7 @@ py_test(
     deps = [
         ":bazelrc_configs",
         ":test_executable_fixtures",
+        "//tools/ci:lanes",
         "//tools/ci:macos_remote_shadow",
         "@rules_python//python/runfiles",
     ],
