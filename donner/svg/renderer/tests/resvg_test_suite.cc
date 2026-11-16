@@ -730,8 +730,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-recursive-on-child.png")
-                         .withReason(
-                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason("Reference disagreement: exact tile-edge stroke coverage, and "
+                                     "the mutually recursive fill paints one level deep (#1185)")},
                     {"self-recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")

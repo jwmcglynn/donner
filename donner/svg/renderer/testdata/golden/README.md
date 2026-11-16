@@ -63,14 +63,30 @@ cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 `paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.
 `self-recursive` and `self-recursive-on-child` render identically and share
 `donner-pattern-self-recursive.png`. All three are 500x500 renderings by the software renderer
-at commit `21c59c75`, at default settings. Full text, Geode on Metal and Geode on Linux
-lavapipe (aarch64) render all three identically (0 pixels counted).
+at default settings: the shared self-recursive golden at commit `21c59c75`, and the
+recursive-on-child golden with the active-chain recursion fix on this branch. Full text and Geode
+on Linux lavapipe (aarch64) render all three identically (0 pixels counted); Geode on Metal
+renders the self-recursive rows identically.
 
 Each tile is a 40 x 25 unit rect whose 1-unit stroke straddles the tile edge, so each tile
-clips half of its stroke and two neighboring tiles draw the two halves. A recursive fill
-reference is an error, so the rect's fill is not painted. At 2.5 device pixels per unit, the
-vertical seam at x = 40 units covers device x 98.75 to 101.25. The exact coverage of columns
-98 to 101 is therefore 0.25, 1, 1 and 0.25, which is alpha 64, 255, 255 and 64. Donner draws
+clips half of its stroke and two neighboring tiles draw the two halves. In the self-recursive rows
+the rect's fill references its own pattern, a circular reference, so that fill layer is not
+painted (SVG 2 Linking, "circular references"; Painting, "Specifying paint": an invalid paint
+server reference without a fallback paints nothing for that layer).
+
+In `recursive-on-child` the two patterns fill their rects with each other. Only the reference that
+revisits a pattern already being rendered is circular, so `patt1`'s rect is filled with `patt2`'s
+tile, whose rect keeps its stroke and drops only its fill. The tile therefore holds two layers of
+the stroke, which is what Chromium 147 and Firefox 153 draw (see the table below). Donner's seam
+columns read 96, 255, 255 and 96 there, where the first-layer-only rendering read 64, 255, 255
+and 64. Two layers of 0.25 coverage composite to 1 - (1 - 0.25)^2 = 0.44 (alpha 112), and the
+browsers read 102 to 114. Donner's inner layer contributes about 0.17 instead of 0.25 on those
+columns; the nested tile passes through a second raster resampling, which has not yet been
+confirmed as the cause.
+
+The seam numbers below are for the self-recursive tiles, the single-layer case. At 2.5 device pixels
+per unit, the vertical seam at x = 40 units covers device x 98.75 to 101.25. The exact coverage of
+columns 98 to 101 is therefore 0.25, 1, 1 and 0.25, which is alpha 64, 255, 255 and 64. Donner draws
 exactly that.
 
 Donner does not draw pattern tiles analytically. Both backends rasterize the tile at twice its
@@ -106,10 +122,9 @@ pixel, 0-255):
 
 Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it falls
 mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG does
-everywhere. Keeping the exact seams is a maintainer decision. On `recursive-on-child` they also
-paint the mutually recursive fill one level deep before treating it as an error: a second copy of
-the stroke raises the partial columns to about 1 - (1 - 0.25)^2 = 0.44 (alpha 112). Neither Donner
-nor the vendored PNG draws that layer.
+everywhere. Keeping the exact seams is a maintainer decision. On `recursive-on-child` both browsers
+and Donner paint the second stroke layer described above (Donner: 96, 255, 255, 96 on the
+vertical seam and 0, 224, 255, 224, 0 on the horizontal one); the vendored PNG draws one layer.
 
 resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
 per unit, the horizontal seam at y = 50 units (device y 75) covers device y 74.25 to 75.75, which
@@ -118,7 +133,7 @@ is alpha 192 on rows 74 and 75. Those references read 63, 255 and 192 over rows 
 reads 192, 192 and 0.
 
 PNG SHA-256:
-- `donner-pattern-recursive-on-child.png`: `22d1398ccf3aa7f32351977ef0e284fe193e67ed670a5d4cb424448d317659f3`
+- `donner-pattern-recursive-on-child.png`: `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65`
 - `donner-pattern-self-recursive.png`: `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17`
 
 To regenerate, delete the files and run from the repository root:

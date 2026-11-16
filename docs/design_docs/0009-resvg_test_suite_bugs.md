@@ -107,7 +107,7 @@ draw: exact coverage on pixel-aligned seams and a resampled tile on fractional o
 
 | Category | Test | Reason |
 | --- | --- | --- |
-| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke, recursive fill one level deep; the PNG resamples a raster tile and draws one layer |
 | paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
 | paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
 
