@@ -660,6 +660,52 @@ TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
   EXPECT_THAT(CountNonTransparentPixels(frame.bitmap), testing::Gt(0u));
 }
 
+/// Touching strokes are joined into shapes of at most the group point limit, so a long, heavily
+/// stroked line is drawn as several shapes rather than one.
+TEST_F(GeodeGlyphInstancingTest, TouchingStrokesJoinUpToTheGroupPointLimit) {
+  SVGDocument one = parse(TouchingStrokeRun(1));
+  RendererGeode measure(sharedDevice());
+  const Frame single = render(measure, one);
+  const std::uint64_t pointsPerGlyph = single.counters.strokeOutlinePoints;
+  ASSERT_GT(pointsPerGlyph, 0u);
+
+  SVGDocument joined = parse(TouchingStrokeRun(4));
+  RendererGeode unsplit(sharedDevice());
+  const Frame whole = render(unsplit, joined);
+  EXPECT_THAT(whole.counters.drawCalls, testing::Eq(single.counters.drawCalls))
+      << "Four touching strokes are one shape.";
+
+  SVGDocument split = parse(TouchingStrokeRun(4));
+  RendererGeode renderer(sharedDevice());
+  // Two glyphs' outlines fit in a group, three do not.
+  renderer.setTextStrokeGroupPointLimitForTesting(2 * pointsPerGlyph + 1);
+  const Frame pairs = render(renderer, split);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(pairs.counters.drawCalls, testing::Eq(single.counters.drawCalls + 1))
+      << "Four touching strokes in groups of two are two shapes.";
+  EXPECT_THAT(CountNonTransparentPixels(pairs.bitmap), testing::Gt(0u));
+}
+
+/// Strokes that do not touch stay separate shapes, so a long line of ordinary stroked text is not
+/// joined into one wide shape.
+TEST_F(GeodeGlyphInstancingTest, SeparateStrokesStaySeparateShapes) {
+  const auto parseRun = [&](std::size_t glyphs) {
+    return parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+        font-family="Noto Sans" font-size="20" letter-spacing="8"><text x="4" y="120" fill="none"
+        stroke="black" stroke-width="1">)svg") +
+                 std::string(glyphs, 'e') + "</text></svg>");
+  };
+  SVGDocument one = parseRun(1);
+  RendererGeode measure(sharedDevice());
+  const Frame single = render(measure, one);
+
+  SVGDocument run = parseRun(8);
+  RendererGeode renderer(sharedDevice());
+  const Frame frame = render(renderer, run);
+  EXPECT_THAT(frame.counters.drawCalls, testing::Eq(single.counters.drawCalls + 7))
+      << "Eight strokes that do not touch are eight shapes.";
+}
+
 /// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
 /// lower cap rejects all of that frame's text before any glyph is looked up.
 TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejectsTheText) {

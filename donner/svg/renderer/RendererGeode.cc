@@ -4093,13 +4093,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                             static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
   }
 
+  /// Encodes \p path at the current device tolerance, without admitting it to the frame.
+  geode::EncodedPath encodeAtDeviceTolerance(const Path& path, FillRule rule) {
+    device->countPathEncode();
+    return geode::GeodePathEncoder::encode(
+        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform), pathEncoderLimits);
+  }
+
   std::optional<geode::EncodedPath> encodeGeometry(const Path& path, FillRule rule) {
     if (geometryBudget->rejected()) {
       return std::nullopt;
     }
-    device->countPathEncode();
-    geode::EncodedPath encoded = geode::GeodePathEncoder::encode(
-        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform), pathEncoderLimits);
+    geode::EncodedPath encoded = encodeAtDeviceTolerance(path, rule);
     if (encoded.rejected()) {
       geometryBudget->reject();
       return std::nullopt;
@@ -4114,6 +4119,114 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     transientTextEncodes.push_back(std::move(*encoded));
     return &transientTextEncodes.back();
+  }
+
+  /**
+   * Like \ref encodeTransientGeometry, but when the encoder's limits reject \p path, returns null
+   * and leaves the frame admitted, so the caller can encode the path's parts instead.
+   */
+  const geode::EncodedPath* encodeTransientGeometryOrSplit(const Path& path, FillRule rule) {
+    if (geometryBudget->rejected()) {
+      return &rejectedGeometry;
+    }
+    geode::EncodedPath encoded = encodeAtDeviceTolerance(path, rule);
+    if (encoded.rejected()) {
+      return nullptr;
+    }
+    transientTextEncodes.push_back(std::move(encoded));
+    return &transientTextEncodes.back();
+  }
+
+  /**
+   * Expands each glyph outline's stroke, skipping glyphs whose stroke is empty.
+   *
+   * @param glyphs Placed glyph outlines, in order.
+   * @param style Stroke to expand.
+   */
+  std::vector<Path> strokeGlyphOutlines(std::span<const Path> glyphs, const StrokeStyle& style) {
+    std::vector<Path> outlines;
+    outlines.reserve(glyphs.size());
+    for (const Path& glyph : glyphs) {
+      Path stroked = glyph.strokeToFill(style, strokeFlattenTolerance());
+      if (!stroked.empty()) {
+        countStrokeOutline(stroked);
+        outlines.push_back(std::move(stroked));
+      }
+    }
+    return outlines;
+  }
+
+  /// Most stroke outline points joined into one text stroke shape: far below the path encoder's
+  /// 1 << 20 limit, and it bounds how wide one shape of a long, heavily stroked line can get.
+  static constexpr std::size_t kMaximumTextStrokeGroupPoints = std::size_t{1} << 16;
+  /// \ref kMaximumTextStrokeGroupPoints, unless a test lowers it.
+  std::size_t textStrokeGroupPointLimit = kMaximumTextStrokeGroupPoints;
+
+  /**
+   * Returns the end of the group of stroke outlines that starts at \p begin: following outlines
+   * join it while their bounds, grown by a device pixel, meet the group's and its points stay within
+   * \ref textStrokeGroupPointLimit.
+   *
+   * @param outlines Stroke outlines of one text chunk's glyphs, in order.
+   * @param begin First outline of the group.
+   */
+  std::size_t textStrokeGroupEnd(std::span<const Path> outlines, std::size_t begin) const {
+    const Transform2d localFromDevice = deviceFromLocalTransform.inverse();
+    const double margin =
+        std::max(localFromDevice.transformVector(Vector2d(1.0, 0.0)).length(),
+                 localFromDevice.transformVector(Vector2d(0.0, 1.0)).length());
+    Box2d group = outlines[begin].bounds().inflatedBy(margin);
+    std::size_t points = outlines[begin].points().size();
+    std::size_t end = begin + 1;
+    for (; end < outlines.size(); ++end) {
+      const Box2d next = outlines[end].bounds().inflatedBy(margin);
+      const bool touches = next.topLeft.x <= group.bottomRight.x &&
+                           group.topLeft.x <= next.bottomRight.x &&
+                           next.topLeft.y <= group.bottomRight.y &&
+                           group.topLeft.y <= next.bottomRight.y;
+      points += outlines[end].points().size();
+      if (!touches || points > textStrokeGroupPointLimit) {
+        break;
+      }
+      group.addBox(next);
+    }
+    return end;
+  }
+
+  /**
+   * Draws the stroke outlines of one text chunk's glyphs. Outlines that touch are joined into one
+   * NonZero shape, so a pixel where the strokes of adjacent glyphs overlap is covered once. Shapes
+   * more than a device pixel apart share no pixel, so drawing them apart gives the same coverage. A
+   * group past \ref textStrokeGroupPointLimit is split there, and where two groups meet a pixel
+   * both cover is painted twice, as it is for separate shapes. A group the encoder still rejects is
+   * drawn outline by outline; an outline that cannot be encoded rejects the frame, as any path does.
+   *
+   * @param outlines Stroke outlines of the chunk's glyphs, in order.
+   * @param draw Paints a shape: called with the joined outline and its encoding.
+   */
+  template <typename DrawFn>
+  void drawTextStrokeOutlines(std::span<const Path> outlines, const DrawFn& draw) {
+    for (std::size_t begin = 0; begin < outlines.size();) {
+      const std::size_t end = textStrokeGroupEnd(outlines, begin);
+      if (end - begin == 1) {
+        draw(outlines[begin], encodeTransientGeometry(outlines[begin], FillRule::NonZero));
+      } else {
+        PathBuilder builder;
+        for (const Path& outline : outlines.subspan(begin, end - begin)) {
+          builder.addPath(outline);
+        }
+        const Path joined = builder.build();
+        if (const geode::EncodedPath* encoded =
+                encodeTransientGeometryOrSplit(joined, FillRule::NonZero)) {
+          draw(joined, encoded);
+        } else {
+          for (const Path& outline : outlines.subspan(begin, end - begin)) {
+            draw(outline, encodeTransientGeometry(outline, FillRule::NonZero));
+          }
+        }
+      }
+      begin = end;
+    }
   }
 
   /// Encode-side of the cache. Every path is admitted before insertion or transient upload.
@@ -6300,6 +6413,10 @@ void RendererGeode::setPathEncoderItemLimitForTesting(std::size_t maximumItems) 
   impl_->pathEncoderLimits.maximumEncodedGeometryItems = maximumItems;
 }
 
+void RendererGeode::setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints) {
+  impl_->textStrokeGroupPointLimit = maximumPoints;
+}
+
 void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
                                                std::uint64_t maximumBytes) {
   impl_->surfaceBudget->setLimitsForTesting({.bytes = maximumBytes, .surfaces = maximumSurfaces});
@@ -7677,16 +7794,6 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
 
 namespace {
 
-/// One path holding every contour of \p paths, in order.
-/// @param paths Paths to join.
-Path JoinPaths(std::span<const Path> paths) {
-  PathBuilder joined;
-  for (const Path& path : paths) {
-    joined.addPath(path);
-  }
-  return joined.build();
-}
-
 struct GlyphGeometryModes {
   bool warped;
   bool residentFill;
@@ -7923,6 +8030,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     };
     std::vector<RunGlyphOccurrence> runGlyphOccurrences;
     std::vector<Path> runGlyphPaths;
+    TextChunkRanges runChunks;
     if (glyphModes.residentFill || glyphModes.placedPaths) {
       runGlyphOccurrences.reserve(run.glyphs.size());
     }
@@ -7935,6 +8043,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const bool runNeedsGlyphGeometry = glyphModes.residentFill || glyphModes.placedPaths;
     for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
                                                    : std::span<const TextGlyph>()) {
+      runChunks.noteGlyph(glyph, runGlyphPaths.size());
       // The run's face is not bitmap-only here, so only a fallback face can be.
       const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, scale, false);
       if (!HasVectorGlyph(glyph, face)) {
@@ -8040,23 +8149,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         }
       }
     };
-    const auto drawRunStroke = [&]() {
-      if (!hasStrokePaint) {
-        return;
-      }
-      // The run's glyph outlines are stroked as one path, as resvg strokes a span: the stroke
-      // pieces share one winding and one draw, so where the strokes of adjacent glyphs overlap,
-      // stroke opacity applies once. Same device-aware tolerance as `drawPath`'s stroke: glyph
-      // outlines are submitted in text-local space and scaled on the GPU, so the flattening must
-      // track the draw transform or stroked glyphs facet at high zoom.
-      const Path stroked =
-          JoinPaths(runGlyphPaths).strokeToFill(*strokeStyle, impl_->strokeFlattenTolerance());
-      if (stroked.empty()) {
-        return;
-      }
-      impl_->countStrokeOutline(stroked);
+    // Paints one stroke shape: a joined stroke outline and its encoding.
+    const auto drawStrokeShape = [&](const Path& stroked, const geode::EncodedPath* encoded) {
       const FillRule strokeRule = FillRule::NonZero;
-      const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(stroked, strokeRule);
       if (strokeIsGradient) {
         // Gradient stroke: resolve against the text bbox (the *original*
         // geometry, per SVG), fill the stroked outline.
@@ -8069,6 +8164,24 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
             impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
       } else {
         impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
+      }
+    };
+    const auto drawRunStroke = [&]() {
+      if (!hasStrokePaint) {
+        return;
+      }
+      // Each text chunk of the run is stroked as one shape, as resvg strokes the part of a span in
+      // one chunk: the stroke pieces share one winding and one draw, so where the strokes of
+      // adjacent glyphs overlap, stroke opacity applies once. Each glyph's stroke is expanded on
+      // its own (stroking a path strokes its contours independently), with the same device-aware
+      // tolerance as `drawPath`'s stroke: glyph outlines are submitted in text-local space and
+      // scaled on the GPU, so the flattening must track the draw transform or stroked glyphs facet
+      // at high zoom.
+      const std::span<const Path> paths(runGlyphPaths);
+      for (const auto& [begin, end] : runChunks.ranges(paths.size())) {
+        const std::vector<Path> outlines =
+            impl_->strokeGlyphOutlines(paths.subspan(begin, end - begin), *strokeStyle);
+        impl_->drawTextStrokeOutlines(outlines, drawStrokeShape);
       }
     };
 

@@ -2715,6 +2715,16 @@ void MarkRejectedAnchorRange(const std::vector<TextRun>& runs, const TextAnchorR
   }
 }
 
+/// Flags the first glyph of every text chunk, so a renderer can paint each chunk's glyphs of a run
+/// as one shape.
+void MarkTextChunkStarts(std::vector<TextRun>& runs, std::span<const ChunkBoundary> chunks) {
+  for (const ChunkBoundary& chunk : chunks) {
+    if (chunk.runIndex < runs.size() && chunk.glyphIndex < runs[chunk.runIndex].glyphs.size()) {
+      runs[chunk.runIndex].glyphs[chunk.glyphIndex].startsTextChunk = true;
+    }
+  }
+}
+
 void CompactRejectedAnchorGlyphs(std::vector<TextRun>& runs,
                                  const std::vector<std::vector<bool>>& rejected) {
   for (size_t ri = 0; ri < rejected.size(); ++ri) {
@@ -7514,6 +7524,7 @@ private:
     if (runs_.empty()) {
       return;
     }
+    MarkTextChunkStarts(runs_, chunkBoundaries_);
     if (wrapped_) {
       placeDeferredTextPaths();
       return;

@@ -3082,10 +3082,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     tiny_skia::Stroke spanTinyStroke = tinyStroke;
     PaintOrder spanPaintOrder;
     double spanOpacity = 1.0;
-    // Outline glyph paths for this run, collected so fill and stroke can be painted as
-    // two whole-run passes in `paint-order` (matching resvg, which paints the text's
-    // fill then the text's stroke as units rather than per-glyph).
+    // Outline glyph paths for this run, collected so fill and stroke can be painted as two
+    // whole-run passes in `paint-order`, with the text chunk each one belongs to.
     std::vector<tiny_skia::Path> runGlyphPaths;
+    TextChunkRanges runChunks;
     if (runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
       spanPaintOrder = span.paintOrder;
@@ -3276,6 +3276,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     drawDecorations(kDecorationLinesBeneathText);
 
     for (const auto& glyph : run.glyphs) {
+      runChunks.noteGlyph(glyph, runGlyphPaths.size());
       if (glyph.glyphIndex == 0) {
         continue;  // .notdef glyph, skip.
       }
@@ -3346,9 +3347,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     }
 
     // Honor `paint-order`: paint the whole run's fill and stroke in the resolved order
-    // (markers do not apply to text glyphs, so they are skipped). The fill and stroke
-    // are each painted across all glyphs as a unit so overlapping glyphs composite the
-    // same way resvg renders them.
+    // (markers do not apply to text glyphs, so they are skipped). The fill is painted
+    // glyph by glyph; the stroke is painted per text chunk, below.
     auto pixmapView = currentPixmapView();
     const auto drawRunFill = [&]() {
       if (!spanFillPaint) {
@@ -3364,11 +3364,16 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       if (!spanStrokePaint) {
         return;
       }
-      // One path for the whole run, as resvg strokes a span: where the strokes of adjacent
-      // glyphs overlap, the overlap is covered once instead of composited per glyph.
-      if (const std::optional<tiny_skia::Path> runPath = JoinTinyPaths(runGlyphPaths)) {
-        tiny_skia::Painter::strokePath(pixmapView, *runPath, *spanStrokePaint, spanTinyStroke,
-                                       toTinyTransform(deviceFromLocalTransform_), mask);
+      // One path for each text chunk of the run, as resvg strokes the part of a span in one
+      // chunk: where the strokes of adjacent glyphs overlap, the overlap is covered once instead
+      // of composited per glyph. Separate chunks are separate shapes.
+      const std::span<const tiny_skia::Path> paths(runGlyphPaths);
+      for (const auto& [begin, end] : runChunks.ranges(paths.size())) {
+        if (const std::optional<tiny_skia::Path> chunkPath =
+                JoinTinyPaths(paths.subspan(begin, end - begin))) {
+          tiny_skia::Painter::strokePath(pixmapView, *chunkPath, *spanStrokePaint, spanTinyStroke,
+                                         toTinyTransform(deviceFromLocalTransform_), mask);
+        }
       }
     };
 
