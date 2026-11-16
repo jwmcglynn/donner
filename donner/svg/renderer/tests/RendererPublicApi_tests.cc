@@ -4076,11 +4076,10 @@ TEST(RendererTinySkiaSecurityTest, GlyphStrokesStopAfterTheFirstPassesTheOutputL
   // Four stroked "O"s magnified 100,000 times about the canvas center: the first one's stroke
   // passes the lowered limit and rejects the draw, and no later glyph is stroked.
   SVGDocument document = ParseDocument(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
-           <text transform="translate(50 50) scale(100000)" x = "-5" y =
-          "29" font - size = "80" fill = "none" stroke = "black" stroke - width =
-                                                             "20" > OOOO</ text></ svg>) ");
-      RendererTinySkia renderer;
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <text transform="translate(50 50) scale(100000)" x="-5" y="29" font-size="80"
+                 fill="none" stroke="black" stroke-width="20">OOOO</text></svg>)svg");
+  RendererTinySkia renderer;
   renderer.setStrokeOutputPointLimitForTesting(4096);
   renderer.draw(document);
   EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
@@ -4092,12 +4091,12 @@ TEST(RendererTinySkiaSecurityTest, DottedDecorationStrokeStopsAtTheOutputLimit) 
   // outlines of their own, and magnified 100,000 times about the canvas center, its stroke needs
   // more outline points than the lowered limit and rejects the draw.
   SVGDocument document = ParseDocument(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
-           <text transform="translate(50 50) scale(100000)" x = "-40" y =
-          "-8" font - size = "80" fill = "none" stroke =
-              "black" stroke - width = "20" style = "text-decoration: underline dotted" > &#160;
-      &#160; &#160; &#160; &#160;</ text></ svg>) ");
-      RendererTinySkia renderer;
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <text transform="translate(50 50) scale(100000)" x="-40" y="-8" font-size="80"
+                 fill="none" stroke="black" stroke-width="20"
+                 style="text-decoration: underline dotted">&#160;&#160;&#160;&#160;&#160;</text>
+         </svg>)svg");
+  RendererTinySkia renderer;
   renderer.setStrokeOutputPointLimitForTesting(4096);
   renderer.draw(document);
   EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
@@ -4144,30 +4143,29 @@ TEST(RendererTinySkiaSecurityTest, ShapeStrokesStopAtTheOutputLimit) {
   // A circle, a stroke inside a pattern tile, a marker, and a path drawn through span capture,
   // each magnified 100,000 times about the canvas center, need more outline points than the
   // lowered limit and reject the draw.
-  constexpr std::string_view kMagnify = R"(transform="translate(50 50) scale(100000)")";
-  const std::string circle = R"(<circle )" + std::string(kMagnify) +
-                             R"( cx="40" cy="0" r="40" fill="none" stroke="black" stroke-width="2"/>)";
-  const std::string arc = R"(d="M80 0 C80 22.09 62.09 40 40 40 C17.91 40 0 22.09 0 0
-                                C0 -22.09 17.91 -40 40 -40 C62.09 -40 80 -22.09 80 0 Z")";
+  const std::string magnify = R"svg(transform="translate(50 50) scale(100000)")svg";
+  const std::string arc =
+      R"svg(d="M80 0 C80 22.09 62.09 40 40 40 C17.91 40 0 22.09 0 0 C0 -22.09 17.91 -40 40 -40 C62.09 -40 80 -22.09 80 0 Z")svg";
+  const std::string strokedArc =
+      "<path " + magnify + " " + arc + R"svg( fill="none" stroke="black" stroke-width="2"/>)svg";
   const std::array<std::pair<std::string_view, std::string>, 3> kCases = {{
-      {"circle", circle},
+      {"circle",
+       "<circle " + magnify +
+           R"svg( cx="40" cy="0" r="40" fill="none" stroke="black" stroke-width="2"/>)svg"},
       {"pattern",
-       R"(<defs><pattern id="tile" width="100" height="100" patternUnits="userSpaceOnUse">
-            <path )" + std::string(kMagnify) + " " + arc +
-           R"( fill="none" stroke="black" stroke-width="2"/></pattern></defs>
-          <rect width="100" height="100" fill="url(#tile)"/>)"},
+       R"svg(<defs><pattern id="tile" width="100" height="100" patternUnits="userSpaceOnUse">)svg" +
+           strokedArc +
+           R"svg(</pattern></defs><rect width="100" height="100" fill="url(#tile)"/>)svg"},
       {"marker",
-       R"(<defs><marker id="dot" markerUnits="userSpaceOnUse" markerWidth="100" markerHeight="100"
-                        overflow="visible"><path )" +
-           std::string(kMagnify) + " " + arc +
-           R"( fill="none" stroke="black" stroke-width="2"/></marker></defs>
-          <path d="M0 0 L1 0" marker-start="url(#dot)"/>)"},
+       R"svg(<defs><marker id="dot" markerUnits="userSpaceOnUse" markerWidth="100"
+               markerHeight="100" overflow="visible">)svg" +
+           strokedArc + R"svg(</marker></defs><path d="M0 0 L1 0" marker-start="url(#dot)"/>)svg"},
   }};
   for (const auto& [label, body] : kCases) {
     SCOPED_TRACE(label);
-    SVGDocument document = ParseDocument(
-        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)") + body +
-        "</svg>");
+    SVGDocument document =
+        ParseDocument(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)svg" +
+                      body + "</svg>");
     RendererTinySkia renderer;
     renderer.setStrokeOutputPointLimitForTesting(4096);
     renderer.draw(document);
@@ -4185,11 +4183,11 @@ TEST(RendererTinySkiaSecurityTest, ShapeStrokesStopAtTheOutputLimit) {
 TEST(RendererTinySkiaSecurityTest, StrokesThatEachFitShareTheFrameStrokeOutput) {
   // Twenty stroked circles each fit the per-stroke limit; together they pass a lowered frame
   // total, so the frame is rejected, and the strokes after the rejection are not run.
-  std::string body = R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">)";
+  std::string body = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">)svg";
   for (int i = 0; i < 20; ++i) {
-    body += R"(<circle cx=")" + std::to_string(10 + (i % 10) * 18) + R"(" cy=")" +
+    body += R"svg(<circle cx=")svg" + std::to_string(10 + (i % 10) * 18) + R"svg(" cy=")svg" +
             std::to_string(20 + (i / 10) * 40) +
-            R"(" r="8" fill="none" stroke="black" stroke-width="2"/>)";
+            R"svg(" r="8" fill="none" stroke="black" stroke-width="2"/>)svg";
   }
   body += "</svg>";
   SVGDocument document = ParseDocument(body);
