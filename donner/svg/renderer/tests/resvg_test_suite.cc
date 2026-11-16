@@ -734,8 +734,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"self-recursive.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
+                    // The reference resamples a rasterized pattern tile, so only the tile's thin
+                    // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
-                     Params::WithThreshold(0.5f, 1150, "AA artifacts + quad glyph outlines")},
+                     Params::WithThreshold(0.5f, 1150,
+                                           "Reference resamples a rasterized pattern tile")},
                     {"transform-and-patternTransform.svg",
                      Params{}.withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/geode/"
@@ -991,8 +994,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                            "Reference uses text ink extents for stroke paint")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
-                    {"pattern-on-text.svg",
-                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
                      Params::Skip("Reference disagreement: appears to use ink extents; "
                                   "SVG2 text paint uses glyph-cell bounds")},
@@ -1381,15 +1382,14 @@ INSTANTIATE_TEST_SUITE_P(
                      "Reference rasterizer generation: 4x4 supersampled coverage on the 1.25 px "
                      "crosshair; the text under the shorthand matches; analytic residual 386 px, "
                      "supersampled 0 px (#1173)")},
-                // `font="bold italic 64 Noto Sans"` resolves to Noto Sans Italic, the only italic
-                // face in the test font set (FontSelection_tests.cc). The vendored 400x400 PNG
-                // draws a synthesized bold over it with wider advances, which neither CPU text
-                // tier synthesizes for document fonts, while resvg v0.49.0 rejects the unitless
-                // size in the shorthand and draws 12px default serif text instead.
+                // SVG 2 has no `font` presentation attribute, so the case draws the initial
+                // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
+                // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail it
+                // in results.csv.
                 {"simple-case.svg",
-                 Params::Skip("Reference disagreement: the PNG synthesizes bold over Noto Sans "
-                              "Italic and resvg v0.49.0 ignores the unitless shorthand; Donner "
-                              "applies it and draws the Italic face (#1167, #1173, #1186)")
+                 Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
+                              "which SVG 2 does not list as a presentation attribute (#1167, "
+                              "#1173, #1186)")
                      .setCanvasSize(400, 400)},
             })),
         ValuesIn(ActiveComparisonModes())),

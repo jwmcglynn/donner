@@ -1865,7 +1865,7 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
 // nearly forty branches did not. CSS keywords are case-insensitive, so entries
 // are matched with `equalsLowercase` rather than looked up in a case-sensitive
 // map.
-constexpr std::array<std::pair<std::string_view, CursorType>, 36> kCursorKeywords{{
+constexpr std::pair<std::string_view, CursorType> kCursorKeywords[] = {
     {"auto", CursorType::Auto},
     {"default", CursorType::Default},
     {"none", CursorType::None},
@@ -1902,7 +1902,7 @@ constexpr std::array<std::pair<std::string_view, CursorType>, 36> kCursorKeyword
     {"all-scroll", CursorType::AllScroll},
     {"zoom-in", CursorType::ZoomIn},
     {"zoom-out", CursorType::ZoomOut},
-}};
+};
 
 ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -2426,7 +2426,7 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAttributeEntries{{
+constexpr std::pair<std::string_view, bool> kValidPresentationAttributeEntries[] = {
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -2458,7 +2458,6 @@ constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAt
     {"flood-color", true},
     {"flood-opacity", true},
     {"font-family", true},
-    {"font", true},
     {"font-size", true},
     {"font-size-adjust", true},
     {"font-stretch", true},
@@ -2503,10 +2502,10 @@ constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAt
     {"white-space", true},
     {"word-spacing", true},
     {"writing-mode", true},
-}};
+};
 
 DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
-    makeCompileTimeMap(kValidPresentationAttributeEntries);
+    makeCompileTimeMap(std::to_array(kValidPresentationAttributeEntries));
 
 std::optional<ParseDiagnostic> ParseOverflowWrap(PropertyRegistry& registry,
                                                  const parser::PropertyParseFnParams& params) {
