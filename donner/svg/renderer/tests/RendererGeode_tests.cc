@@ -496,9 +496,9 @@ TEST_F(RendererGeodeTest, SkewedLocalRasterFilterIsUnchangedByWholePixelMoves) {
     viewport.size = Vector2d(128, 64);
     viewport.devicePixelRatio = 1.0;
     renderer.beginFrame(viewport);
-    Transform2d skew;
-    skew.data[2] = 1.0;
-    renderer.setTransform(skew * Transform2d::Translate(moveX, 0));
+    Transform2d skewedFromUser;
+    skewedFromUser.data[2] = 1.0;
+    renderer.setTransform(skewedFromUser * Transform2d::Translate(moveX, 0));
     renderer.pushFilterLayer(graph, Box2d({-100, 0}, {100, 64}));
     renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
     renderer.drawRect(Box2d({4, 8}, {14, 30}), StrokeParams{});
