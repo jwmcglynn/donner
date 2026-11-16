@@ -171,6 +171,18 @@ public:
   };
 
   /**
+   * Build the column-major clip-from-local matrix for a quad drawn through \p targetFromLocal
+   * into a \p targetWidth x \p targetHeight target (y down in target pixels, up in clip space).
+   *
+   * @param targetFromLocal Transform from the quad's local space to target pixels.
+   * @param targetWidth Render-target width in pixels.
+   * @param targetHeight Render-target height in pixels.
+   * @param out16 Receives the 16 matrix entries.
+   */
+  static void BuildClipFromLocal(const Transform2d& targetFromLocal, uint32_t targetWidth,
+                                 uint32_t targetHeight, float out16[16]);
+
+  /**
    * Record a textured-quad draw call into an already-open render pass.
    *
    * The caller must:

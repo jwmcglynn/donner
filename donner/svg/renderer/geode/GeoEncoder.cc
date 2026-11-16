@@ -1304,52 +1304,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// orthographic target-pixel -> clip-space mapping only). Maps
   /// target-pixel coordinates to clip space (-1..+1 with Y down).
   void buildMvp(float* out16, const Transform2d& transform) const {
-    // First: convert path-space → pixel space via the transform.
-    // Then: pixel space → clip space.
-    //   x_clip =  2 * x_pixel / width  - 1
-    //   y_clip = -2 * y_pixel / height + 1   (Y flip for top-left origin)
-
-    const double sx = 2.0 / static_cast<double>(targetWidth);
-    const double sy = -2.0 / static_cast<double>(targetHeight);
-
-    // Composed: clip = scale(sx, sy) * translate(-1, +1) * transform
-    // For affine 2D transforms in row-major mat4:
-    //   [ a c 0 e ]   where transform.data = [a b c d e f] (column-major 2x3)
-    //   [ b d 0 f ]
-    //   [ 0 0 1 0 ]
-    //   [ 0 0 0 1 ]
-    const double a = transform.data[0];
-    const double b = transform.data[1];
-    const double c = transform.data[2];
-    const double d = transform.data[3];
-    const double e = transform.data[4];
-    const double f = transform.data[5];
-
-    // Compose with the clip-space matrix.
-    // Final mat4 (column-major for WGSL):
-    //   col0 = (sx*a, sy*b, 0, 0)
-    //   col1 = (sx*c, sy*d, 0, 0)
-    //   col2 = (0, 0, 1, 0)
-    //   col3 = (sx*e - 1, sy*f + 1, 0, 1)
-    out16[0] = static_cast<float>(sx * a);
-    out16[1] = static_cast<float>(sy * b);
-    out16[2] = 0.0f;
-    out16[3] = 0.0f;
-
-    out16[4] = static_cast<float>(sx * c);
-    out16[5] = static_cast<float>(sy * d);
-    out16[6] = 0.0f;
-    out16[7] = 0.0f;
-
-    out16[8] = 0.0f;
-    out16[9] = 0.0f;
-    out16[10] = 1.0f;
-    out16[11] = 0.0f;
-
-    out16[12] = static_cast<float>(sx * e - 1.0);
-    out16[13] = static_cast<float>(sy * f + 1.0);
-    out16[14] = 0.0f;
-    out16[15] = 1.0f;
+    GeodeTextureEncoder::BuildClipFromLocal(transform, targetWidth, targetHeight, out16);
   }
 
   /// Build the MVP matrix from the encoder's current transform.

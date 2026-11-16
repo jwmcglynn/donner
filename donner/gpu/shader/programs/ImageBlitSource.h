@@ -142,16 +142,22 @@ fn sample_pixelated(uv: vec2f) -> vec4f {
   return mix(top, bottom, fraction.y);
 }
 
-// The texel containing the pixel center under the inverse image transform, evaluated in the
-// order tiny-skia's gather uses. Where a texel boundary passes through a pixel center, an
-// interpolated texture coordinate can land on either side of it.
+// The texel of the source rectangle containing the pixel center under the inverse image
+// transform, evaluated in the order tiny-skia's gather uses. Where a texel boundary passes
+// through a pixel center, an interpolated texture coordinate can land on either side of it.
 fn sample_nearest(pixel_center: vec2f) -> vec4f {
   let texture_size = vec2i(textureDimensions(imageTexture));
+  let source_min = uniforms.srcRect.xy * vec2f(texture_size);
+  let source_max = uniforms.srcRect.zw * vec2f(texture_size);
+  let source_origin = clamp(vec2i(floor(source_min + vec2f(0.5))), vec2i(0),
+                            texture_size - vec2i(1));
+  let source_size = max(vec2i(floor(source_max - source_min + vec2f(0.5))), vec2i(1));
   let row_x = uniforms.texelFromTargetX;
   let row_y = uniforms.texelFromTargetY;
   let coord = vec2f(pixel_center.x * row_x.x + (pixel_center.y * row_x.y + row_x.z),
                     pixel_center.x * row_y.x + (pixel_center.y * row_y.y + row_y.z));
-  let texel = clamp(vec2i(floor(coord)), vec2i(0), texture_size - vec2i(1));
+  let texel = clamp(vec2i(floor(coord)), source_origin,
+                    min(source_origin + source_size, texture_size) - vec2i(1));
   return textureLoad(imageTexture, texel, 0);
 }
 

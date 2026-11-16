@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -18,6 +19,7 @@
 #include <tuple>
 #include <vector>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
@@ -30,6 +32,7 @@
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/geode/GeodeNearestSampling.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -2182,7 +2185,8 @@ TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
 TEST_F(RendererRegressionTests, ImageNearestAtFractionalScalesSamplesTexelUnderPixelCenter) {
   // Each placement stretches the 8x8 image by non-integer factors from integer edges, so no edge
   // pixel is covered partially. At 3.75, 2.5 and 0.75 device pixels per texel, texel boundaries
-  // fall exactly on pixel centers, where the texel at or right of the center is the one sampled.
+  // fall exactly on pixel centers, where the selected texel depends on how the inverse transform
+  // rounds.
   const std::array<Box2d, 5> placements = {
       Box2d::FromXYWH(8, 8, 30, 30), Box2d::FromXYWH(8, 8, 20, 20), Box2d::FromXYWH(8, 8, 6, 6),
       Box2d::FromXYWH(8, 8, 30, 20), Box2d::FromXYWH(3, 5, 52, 46)};
@@ -2204,6 +2208,182 @@ TEST_F(RendererRegressionTests, ImageNearestAtFractionalScalesSamplesTexelUnderP
                                            editor::tests::PixelmatchIdentityParams());
     }
   }
+}
+
+/// A PNG data URI for \p width x \p height opaque texels, each a distinct color.
+std::string DistinctTexelImageDataUri(int width, int height) {
+  std::vector<std::uint8_t> pixels;
+  for (int i = 0; i < width * height; ++i) {
+    pixels.insert(pixels.end(), {std::uint8_t(i * 53 % 256), std::uint8_t(i * 101 % 256),
+                                 std::uint8_t(i * 197 % 256), 255});
+  }
+  const std::vector<std::uint8_t> png =
+      RendererImageIO::writeRgbaPixelsToPngMemory(pixels, width, height);
+  constexpr std::string_view kAlphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string uri = "data:image/png;base64,";
+  for (std::size_t i = 0; i < png.size(); i += 3) {
+    const std::uint32_t chunk = (std::uint32_t(png[i]) << 16) |
+                                (i + 1 < png.size() ? std::uint32_t(png[i + 1]) << 8 : 0u) |
+                                (i + 2 < png.size() ? std::uint32_t(png[i + 2]) : 0u);
+    uri += kAlphabet[(chunk >> 18) & 63];
+    uri += kAlphabet[(chunk >> 12) & 63];
+    uri += i + 1 < png.size() ? kAlphabet[(chunk >> 6) & 63] : '=';
+    uri += i + 2 < png.size() ? kAlphabet[chunk & 63] : '=';
+  }
+  return uri;
+}
+
+/// Whether nearest sampling through \p targetFromTexel selects the same texel at every pixel
+/// center of the \p size region at \p origin however the GPU contracts the mapping
+/// `x * a + (y * b + c)`. The software renderer evaluates it with a fused multiply-add on some
+/// targets and without on others, and so may a GPU shader compiler; where the orders disagree,
+/// the selected texel depends on the platform, and the two renderers cannot be compared there.
+bool NearestTexelsIndependentOfContraction(const Transform2d& targetFromTexel, Vector2i origin,
+                                           Vector2i size) {
+  const std::optional<geode::NearestTexelRows> rows = geode::NearestTexelRowsFor(targetFromTexel);
+  if (!rows.has_value()) {
+    return false;
+  }
+  const auto texel = [](const std::array<float, 3>& row, float x, float y, bool fusedInner,
+                        bool fusedOuter) {
+    volatile float yProduct = y * row[1];
+    const float inner = fusedInner ? std::fma(y, row[1], row[2]) : yProduct + row[2];
+    volatile float xProduct = x * row[0];
+    return std::floor(fusedOuter ? std::fma(x, row[0], inner) : xProduct + inner);
+  };
+  for (int py = origin.y; py < origin.y + size.y; ++py) {
+    for (int px = origin.x; px < origin.x + size.x; ++px) {
+      const float x = static_cast<float>(px) + 0.5f;
+      const float y = static_cast<float>(py) + 0.5f;
+      for (const std::array<float, 3>* row : {&rows->texelX, &rows->texelY}) {
+        const float reference = texel(*row, x, y, false, false);
+        for (const auto [fusedInner, fusedOuter] :
+             {std::pair(false, true), std::pair(true, false), std::pair(true, true)}) {
+          if (texel(*row, x, y, fusedInner, fusedOuter) != reference) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/// Renders \p svg with each backend and compares the region \p origin, \p size of the active
+/// backend's rendering with the software renderer's, whose image sampling resvg shares.
+void ExpectImageRegionMatchesSoftwareRenderer(std::string_view svg, Vector2i origin, Vector2i size,
+                                              std::string_view label) {
+  SVGDocument expectedDocument = ParseSvg(svg);
+  SVGDocument actualDocument = ParseSvg(svg);
+  const RendererBitmap expected = editor::tests::CropBitmap(
+      RenderDocumentWithBackend(expectedDocument, RendererBackend::TinySkia), origin, size);
+  AssertVisibleFixture(expected, std::string(label) + "_visible");
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(RenderDocumentWithBackend(actualDocument, ActiveRendererBackend()),
+                                origin, size),
+      expected, label, editor::tests::PixelmatchIdentityParams());
+}
+
+/// An `<image>` element drawing \p href into \p placement with nearest sampling.
+std::string NearestImageMarkup(const Box2d& placement, std::string_view href) {
+  std::ostringstream markup;
+  markup << "<image x=\"" << placement.topLeft.x << "\" y=\"" << placement.topLeft.y
+         << "\" width=\"" << placement.width() << "\" height=\"" << placement.height()
+         << R"svg(" preserveAspectRatio="none" image-rendering="optimizeSpeed" href=")svg" << href
+         << "\"/>";
+  return markup.str();
+}
+
+TEST_F(RendererRegressionTests, ImageNearestSweepMatchesSoftwareRendererTexels) {
+  // One row per placement: a W x 1 image stretched to each integer width from integer edges, so no
+  // pixel is covered partially and, for even W, many texel boundaries pass through pixel centers.
+  // A row whose texels depend on multiply-add contraction is left out.
+  constexpr int kMaxWidth = 80;
+  int compared = 0;
+  for (const int imageWidth : {2, 4, 8, 16}) {
+    SCOPED_TRACE(testing::Message() << imageWidth << " texels");
+    const std::string href = DistinctTexelImageDataUri(imageWidth, 1);
+    std::ostringstream svg;
+    svg << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width=")svg" << kMaxWidth + 2
+        << R"svg(" height=")svg" << kMaxWidth * 2 << "\">";
+    for (int width = 1; width <= kMaxWidth; ++width) {
+      const Box2d placement = Box2d::FromXYWH(1, (width - 1) * 2, width, 2);
+      if (NearestTexelsIndependentOfContraction(
+              Transform2d::Scale(placement.width() / imageWidth, placement.height()) *
+                  Transform2d::Translate(placement.topLeft),
+              Vector2i(1, (width - 1) * 2), Vector2i(width, 2))) {
+        svg << NearestImageMarkup(placement, href);
+        ++compared;
+      }
+    }
+    svg << "</svg>";
+    ExpectImageRegionMatchesSoftwareRenderer(svg.str(), Vector2i(0, 0),
+                                             Vector2i(kMaxWidth + 2, kMaxWidth * 2),
+                                             "image_nearest_sweep_" + std::to_string(imageWidth));
+  }
+  EXPECT_THAT(compared, testing::Gt(250));
+}
+
+TEST_F(RendererRegressionTests, ImageNearestAtAFarOriginMatchesSoftwareRendererTexels) {
+  // Far from the origin, the inverse's rounding decides texels a double-precision inverse would
+  // not. The compared region excludes the right edge column, which the image covers partially.
+  const Box2d placement = Box2d::FromXYWH(1003, 2, 30.75, 4);
+  ASSERT_TRUE(NearestTexelsIndependentOfContraction(
+      Transform2d::Scale(placement.width() / 3, placement.height()) *
+          Transform2d::Translate(placement.topLeft),
+      Vector2i(1003, 2), Vector2i(30, 4)));
+  ExpectImageRegionMatchesSoftwareRenderer(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="8">)svg" +
+          NearestImageMarkup(placement, DistinctTexelImageDataUri(3, 1)) + "</svg>",
+      Vector2i(1003, 2), Vector2i(30, 4), "image_nearest_far_origin");
+}
+
+TEST_F(RendererRegressionTests, ImageNearestUnderTransformsMatchesSoftwareRendererTexels) {
+  struct TransformCase {
+    Transform2d deviceFromUser;
+    std::string_view transform;
+    std::string_view label;
+    Vector2i interiorOrigin;
+    Vector2i interiorSize;
+  };
+  // Rotation and skew use both off-diagonal terms of the inverse; the flip has a negative scale.
+  // Their interiors exclude the image edges, which the backends rasterize differently.
+  const std::array<TransformCase, 4> cases = {{
+      {Transform2d::Translate(-32, -32) * Transform2d::Rotate(MathConstants<double>::kPi / 6) *
+           Transform2d::Translate(32, 32),
+       "rotate(30 32 32)", "rotated", Vector2i(18, 18), Vector2i(28, 28)},
+      {Transform2d::SkewX(MathConstants<double>::kPi / 9) * Transform2d::Translate(-6, 0),
+       "translate(-6 0) skewX(20)", "skewed_x", Vector2i(20, 12), Vector2i(31, 36)},
+      {Transform2d::SkewY(MathConstants<double>::kPi / 12) * Transform2d::Translate(0, -6),
+       "translate(0 -6) skewY(15)", "skewed_y", Vector2i(12, 16), Vector2i(36, 33)},
+      {Transform2d::Scale(-1, 1) * Transform2d::Translate(61, 0), "translate(61 0) scale(-1 1)",
+       "flipped", Vector2i(0, 0), Vector2i(64, 64)},
+  }};
+  const Box2d placement = Box2d::FromXYWH(8, 8, 44, 44);
+  for (const TransformCase& transformCase : cases) {
+    SCOPED_TRACE(transformCase.label);
+    ASSERT_TRUE(NearestTexelsIndependentOfContraction(
+        Transform2d::Scale(placement.width() / 8, placement.height() / 8) *
+            Transform2d::Translate(placement.topLeft) * transformCase.deviceFromUser,
+        transformCase.interiorOrigin, transformCase.interiorSize));
+    ExpectImageRegionMatchesSoftwareRenderer(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><g transform=")svg" +
+            std::string(transformCase.transform) + "\">" +
+            NearestImageMarkup(placement, kGradientImageDataUri) + "</g></svg>",
+        transformCase.interiorOrigin, transformCase.interiorSize,
+        "image_nearest_" + std::string(transformCase.label));
+  }
+  // The viewBox scale makes 28.125 device pixels per texel from integer device edges.
+  const Box2d viewBoxPlacement = Box2d::FromXYWH(8, 8, 60, 60);
+  ASSERT_TRUE(NearestTexelsIndependentOfContraction(
+      Transform2d::Scale(viewBoxPlacement.width() / 8, viewBoxPlacement.height() / 8) *
+          Transform2d::Translate(viewBoxPlacement.topLeft) * Transform2d::Scale(3.75),
+      Vector2i(0, 0), Vector2i(300, 300)));
+  ExpectImageRegionMatchesSoftwareRenderer(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 80 80">)svg" +
+          NearestImageMarkup(viewBoxPlacement, kGradientImageDataUri) + "</svg>",
+      Vector2i(0, 0), Vector2i(300, 300), "image_nearest_viewbox_scaled");
 }
 
 // The feImage oracles are `<image>` drawn by tiny-skia, whose sampling resvg shares. Both
