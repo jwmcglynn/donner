@@ -4,9 +4,11 @@
 /// room, gives up on a GPU that stops completing work, and never blocks inside the native queue.
 /// A serial wait that gives up only on a stall judges it on the same progress clock.
 ///
-/// Every case runs its devices on a \ref donner::gpu::metal::TestProgressClock and moves it by
-/// hand, so each bound is met at the events the case orders: how long a loaded machine takes to
-/// run the GPU work or to schedule the case's threads does not change what a wait decides.
+/// Every case but one runs its devices on a \ref donner::gpu::metal::TestProgressClock and moves
+/// it by hand, so each bound is met at the events the case orders: how long a loaded machine takes
+/// to run the GPU work or to schedule the case's threads does not change what a wait decides. One
+/// case runs the wait for room on the steady clock, as production does, and checks its outcome
+/// only.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -75,18 +77,23 @@ Result<uint64_t> SubmitEmptyWork(MetalDevice& device, uint64_t buffers = 1) {
   return device.submit(std::span<CommandBuffer>(commandBuffers));
 }
 
-/// Lets the first \p released command buffers \p device paused run, and waits until its command
-/// buffers in flight are down to \p inFlight, so every one of them has completed and stamped its
-/// progress. @param device Device whose paused work to release.
+/// Lets the first \p released command buffers \p device paused run, and waits until every one of
+/// them has completed and stamped its progress. Waits on the count of completed command buffers,
+/// which only grows: the level in flight can rise again as soon as the completions make room for a
+/// waiting submission, which then commits its own command buffers.
+/// @param device Device whose paused work to release.
 /// @param released Command buffers released in all, counted from the first one paused.
-/// @param inFlight Command buffers left in flight once they have completed.
-void ReleaseAndAwaitCompletion(MetalDevice& device, uint64_t released, uint64_t inFlight) {
+/// @param completedBefore \ref MetalDevice::commandBuffersCompletedForTest before the first one was
+///   paused.
+void ReleaseAndAwaitCompletion(MetalDevice& device, uint64_t released, uint64_t completedBefore) {
   device.releasePausedCommandBuffersForTest(released);
-  ASSERT_THAT(
-      donner::tests::WaitUntil([&] { return device.commandBuffersInFlightForTest() <= inFlight; }),
-      IsTrue())
-      << "the released command buffers never completed: " << device.commandBuffersInFlightForTest()
-      << " still in flight, expected " << inFlight;
+  ASSERT_THAT(donner::tests::WaitUntil([&] {
+                return device.commandBuffersCompletedForTest() >= completedBefore + released;
+              }),
+              IsTrue())
+      << "the released command buffers never completed: "
+      << device.commandBuffersCompletedForTest() - completedBefore << " of " << released
+      << " completed";
 }
 
 /// Waits until \p device has completed \p serial. @param device Device to watch.
@@ -117,7 +124,9 @@ protected:
   void SetUp() override {
     device_ = CreateOverRoot(rootLoss_);
     DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal submission backstop");
-    ASSERT_THAT(device_->setProgressClockForTest(clock_), IsOk());
+    if (onTestClock_) {
+      ASSERT_THAT(device_->setProgressClockForTest(clock_), IsOk());
+    }
   }
 
   void TearDown() override {
@@ -137,6 +146,7 @@ protected:
   /// Pauses the GPU and commits command buffers up to the backstop, none of which can complete
   /// until they are released.
   void fillBackstopWhilePaused() {
+    completedBeforeFill_ = device_->commandBuffersCompletedForTest();
     ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
     for (uint64_t submission = 0; submission < kFillingSubmissions; ++submission) {
       ASSERT_THAT(SubmitEmptyWork(*device_, kFullSize), HasResult());
@@ -167,6 +177,10 @@ protected:
   std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
   std::shared_ptr<TestProgressClock> clock_ = std::make_shared<TestProgressClock>();
   std::unique_ptr<MetalDevice> device_;
+  /// Whether \ref SetUp installs \ref clock_ on the case's devices.
+  bool onTestClock_ = true;
+  /// \ref MetalDevice::commandBuffersCompletedForTest just before \ref fillBackstopWhilePaused.
+  uint64_t completedBeforeFill_ = 0;
 };
 
 /// Work that stays below the backstop never waits for room, so ordinary frames cost nothing extra,
@@ -177,8 +191,14 @@ TEST_F(MetalSubmissionBackstopTest, WorkWithinTheBackstopNeverWaits) {
     for (int submission = 0; submission < 3; ++submission) {
       lastSerial = GetResultOrFail(SubmitEmptyWork(*device_, 2));
     }
-    ASSERT_TRUE(device_->waitForSerial(lastSerial, /*timeoutSeconds=*/30.0))
-        << device_->lastErrorForTest();
+    // On the worker, because its budget never runs out on a clock that does not move: a wait that
+    // missed its completion fails at the hang guard rather than blocking the case.
+    const WaitOnWorker<bool> waited(
+        [this, lastSerial] { return device_->waitForSerial(lastSerial, /*timeoutSeconds=*/30.0); },
+        [this] { letEveryWaitEnd(); });
+    ASSERT_THAT(waited.awaitReturn(), IsTrue())
+        << "the wait for frame " << frame << "'s work never returned";
+    ASSERT_THAT(waited.result(), IsTrue()) << device_->lastErrorForTest();
   }
   EXPECT_THAT(device_->commandBufferRoomWaitsForTest(), Eq(0u));
   EXPECT_THAT(device_->commandBuffersInFlightForTest(), Eq(0u));
@@ -272,7 +292,7 @@ TEST_F(MetalSubmissionBackstopTest, CommandBuffersCompletingKeepALongWaitAlive) 
         << " groups of command buffers had completed, the last " << kBetweenGroups.count()
         << " ms before";
     ASSERT_NO_FATAL_FAILURE(
-        ReleaseAndAwaitCompletion(*device_, group * kGroup, kBackstop - group * kGroup));
+        ReleaseAndAwaitCompletion(*device_, group * kGroup, completedBeforeFill_));
   }
   ASSERT_THAT(past->awaitReturn(), IsTrue())
       << "the submission never went through once room was made";
@@ -306,9 +326,12 @@ TEST_F(MetalSubmissionBackstopTest, TheWaitCapEndsAWaitThatKeepsProgressing) {
     ASSERT_THAT(judgedAtNow(*past), Eq(WaitStanding::StillWaiting))
         << "the wait ended " << millisecondsSince(waitStart) << " ms in, before its cap";
     ASSERT_NO_FATAL_FAILURE(
-        ReleaseAndAwaitCompletion(*device_, group * kGroup, kBackstop - group * kGroup));
+        ReleaseAndAwaitCompletion(*device_, group * kGroup, completedBeforeFill_));
   }
-  clock_->advance(kBetweenGroups);
+  clock_->advance(kBetweenGroups - kTick);
+  ASSERT_THAT(judgedAtNow(*past), Eq(WaitStanding::StillWaiting))
+      << "the wait ended " << millisecondsSince(waitStart) << " ms in, before its cap";
+  clock_->advance(kTick);
   ASSERT_THAT(millisecondsSince(waitStart), Eq(kCap.count()));
   ASSERT_THAT(judgedAtNow(*past), Eq(WaitStanding::Returned)) << "the wait ran past its cap";
 
@@ -317,6 +340,32 @@ TEST_F(MetalSubmissionBackstopTest, TheWaitCapEndsAWaitThatKeepsProgressing) {
                                     HasSubstr("for room among the command buffers")))
       << "the wait did not end at its cap";
   EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::QueueIdle));
+}
+
+/// The same device on the steady clock, as production runs it.
+class MetalSubmissionBackstopSteadyClockTest : public MetalSubmissionBackstopTest {
+protected:
+  MetalSubmissionBackstopSteadyClockTest() { onTestClock_ = false; }
+};
+
+/// On the steady clock, as in production, a GPU that completes nothing while a submission waits
+/// for room ends the wait with the root declared lost. Checks the outcome only: the cases on the
+/// test clock check when each bound is met.
+TEST_F(MetalSubmissionBackstopSteadyClockTest, AStalledGpuEndsTheWaitWithTheRootLost) {
+  // Short, so the paused work stays well inside the system's own timeout for command buffers that
+  // make no progress.
+  device_->setSubmissionStallTimeoutForTest(std::chrono::milliseconds(200));
+  ASSERT_NO_FATAL_FAILURE(fillBackstopWhilePaused());
+
+  const auto past = submitPastTheBackstop();
+  ASSERT_THAT(past->awaitReturn(), IsTrue())
+      << "the submission blocked behind a GPU that made no progress";
+
+  EXPECT_THAT(past->result(), IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_TRUE(device_->isLost())
+      << "a submission that gave up on a stalled GPU left the root usable";
+  EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::QueueIdle));
+  EXPECT_THAT(device_->commandBufferRoomWaitsForTest(), Eq(1u));
 }
 
 /// Two devices over one root, as a renderer's context and a context that reads what it rendered.
@@ -329,7 +378,9 @@ protected:
     }
     producer_ = CreateOverRoot(rootLoss_);
     ASSERT_NE(producer_, nullptr);
-    ASSERT_THAT(producer_->setProgressClockForTest(clock_), IsOk());
+    if (onTestClock_) {
+      ASSERT_THAT(producer_->setProgressClockForTest(clock_), IsOk());
+    }
   }
 
   void TearDown() override {
@@ -580,7 +631,11 @@ TEST_F(MetalSubmissionBackstopProducerTest,
 
   // Had the unrelated completions counted, the wait would last a stall bound past the last of
   // them; it ends a stall bound past the meet.
-  clock_->advance(kStallBound - kUnrelated * kBetweenUnrelated);
+  clock_->advance(kStallBound - kUnrelated * kBetweenUnrelated - kTick);
+  ASSERT_THAT(judgedAtNow(*past), Eq(WaitStanding::StillWaiting))
+      << "the consumer gave up " << millisecondsSince(metAt)
+      << " ms after the producer met its wait, less than its stall bound";
+  clock_->advance(kTick);
   ASSERT_THAT(millisecondsSince(metAt), Eq(kStallBound.count()));
   ASSERT_THAT(judgedAtNow(*past), Eq(WaitStanding::Returned))
       << "a producer busy with work the consumer no longer waits for kept the consumer's wait "
