@@ -125,8 +125,9 @@ TEST(FilterPrecisionParity, NearHalfPixelOffsetsMatchSoftwareRenderer) {
 }
 
 // A rotated element runs its filter through the transformed path, whose fractional offsets
-// resample on a local raster; the offsets are not dyadic, so any per-pixel weight drift shows. A quarter turn keeps every edge on the pixel grid, so the software
-// and GPU renderings must agree exactly, seam colors included.
+// resample on a local raster; the offsets are not dyadic, so any per-pixel weight drift shows. A
+// quarter turn keeps every edge on the pixel grid, so the software and GPU renderings must agree
+// exactly, seam colors included.
 TEST(FilterPrecisionParity, RotatedFractionalOffsetsMatchSoftwareRenderer) {
   static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
