@@ -56,6 +56,90 @@ bool AppendLineRuns(SBParagraphRef paragraph, uint32_t start, uint32_t end,
   }
   return true;
 }
+
+/// Whether \p agent's script run starts at \p expected and ends within [start, end).
+bool ContinuesScriptRuns(const SBScriptAgent& agent, uint32_t start, uint32_t end,
+                         uint32_t expected) {
+  return agent.length != 0 && start + agent.offset == expected &&
+         agent.offset + agent.length <= end - start;
+}
+
+/// Split [start, end) of \p scalars, all at \p level, at script boundaries in visual order, so
+/// each run shapes with its own script, for example so Arabic keeps joining inside a
+/// right-to-left override of mixed Latin and Arabic text.
+bool AppendScriptRuns(const char32_t* scalars, uint32_t start, uint32_t end, uint8_t level,
+                      BidiResourceBudget& budget, std::vector<BidiParagraph::Run>& result) {
+  ScriptLocator locator(SBScriptLocatorCreate(), SBScriptLocatorRelease);
+  if (!locator) {
+    budget.rejected = true;
+    return false;
+  }
+  const SBCodepointSequence line{SBStringEncodingUTF32, scalars + start, end - start};
+  SBScriptLocatorLoadCodepoints(locator.get(), &line);
+  const size_t first = result.size();
+  while (SBScriptLocatorMoveNext(locator.get())) {
+    const SBScriptAgent* agent = SBScriptLocatorGetAgent(locator.get());
+    const uint32_t expected = result.size() == first ? start : result.back().end;
+    if (!ContinuesScriptRuns(*agent, start, end, expected) ||
+        !budget.consume(budget.remaining.runs, 1)) {
+      budget.rejected = true;
+      return false;
+    }
+    result.push_back({static_cast<uint32_t>(start + agent->offset),
+                      static_cast<uint32_t>(start + agent->offset + agent->length), level});
+  }
+  if (result.size() == first || result.back().end != end) {
+    budget.rejected = true;
+    return false;
+  }
+  // Script runs arrive in logical order; a right-to-left run shows them right to left.
+  if (level % 2 != 0) {
+    std::reverse(result.begin() + static_cast<std::ptrdiff_t>(first), result.end());
+  }
+  return true;
+}
+
+/// Whether \p codepoint can open or close an embedding, override or isolate.
+bool IsInjectableControl(char32_t codepoint) {
+  return (codepoint >= bidi_control::kLre && codepoint <= bidi_control::kRlo) ||
+         (codepoint >= bidi_control::kLri && codepoint <= bidi_control::kPdi);
+}
+
+/// Whether \p codepoint starts an override, whose content takes one level whatever its script.
+bool IsOverrideCodepoint(char32_t codepoint) {
+  return codepoint == bidi_control::kLro || codepoint == bidi_control::kRlo;
+}
+
+/// Whether \p control starts an override.
+bool IsOverrideControl(const BidiParagraph::InjectedControl& control) {
+  return IsOverrideCodepoint(control.codepoint);
+}
+
+/// Whether every control is an injectable control within \p scalarCount, in nondecreasing order.
+bool ValidControls(std::span<const BidiParagraph::InjectedControl> controls, size_t scalarCount) {
+  return std::all_of(controls.begin(), controls.end(),
+                     [&](const auto& control) {
+                       return control.before <= scalarCount &&
+                              IsInjectableControl(control.codepoint);
+                     }) &&
+         std::is_sorted(controls.begin(), controls.end(),
+                        [](const auto& a, const auto& b) { return a.before < b.before; });
+}
+/// Whether a paragraph resolves through an analysis buffer with injected controls: an element
+/// injects one, or source controls inside a paragraph override open levels as injected ones do,
+/// under a leading override control. Controls around no scalars enclose nothing and are dropped.
+bool NeedsInjectedBuffer(const std::vector<char32_t>& codepoints,
+                         std::span<const BidiParagraph::InjectedControl> controls, bool override) {
+  return !codepoints.empty() &&
+         (!controls.empty() ||
+          (override && std::any_of(codepoints.begin(), codepoints.end(), IsInjectableControl)));
+}
+
+/// Analysis slots that an injected buffer adds beyond the scalars: each control, and the leading
+/// control that carries a paragraph override.
+size_t InjectedSlots(bool inject, size_t controls, bool override) {
+  return inject ? controls + (override ? 1 : 0) : 0;
+}
 }  // namespace
 
 struct BidiParagraph::State {
@@ -64,6 +148,15 @@ struct BidiParagraph::State {
   /// Every scalar takes the explicit base level, as for `unicode-bidi: bidi-override` on the
   /// paragraph's own block container, so SheenBidi never resolves the paragraph.
   bool override = false;
+  /// Whether the analysis buffer holds injected controls besides the scalars.
+  bool injected = false;
+  /// Analysis position of each scalar when controls were injected, in increasing order; empty
+  /// when the analysis buffer is the scalars themselves.
+  std::vector<uint32_t> scalarPositions;
+  /// The scalars apart from injected controls, kept to split runs at script boundaries when the
+  /// buffer holds an override (the paragraph's own, an inline element's or one in the source),
+  /// whose uniform levels can mix scripts. Empty otherwise.
+  std::vector<char32_t> overrideScalars;
   std::vector<uint8_t> levels;
   Algorithm algorithm{nullptr, SBAlgorithmRelease};
   std::vector<Paragraph> paragraphs;
@@ -93,37 +186,103 @@ struct BidiParagraph::State {
   }
 
   /// An override keeps every scalar at the base level, but one level run can then mix scripts.
-  /// Split it at script boundaries so each run shapes with its own script, for example so Arabic
-  /// keeps joining inside a right-to-left override of mixed Latin and Arabic text.
   bool appendOverrideRuns(uint32_t start, uint32_t end, BidiResourceBudget& budget,
                           std::vector<Run>& result) const {
-    ScriptLocator locator(SBScriptLocatorCreate(), SBScriptLocatorRelease);
-    if (!locator) {
-      budget.rejected = true;
-      return false;
+    return AppendScriptRuns(codepoints.data(), start, end, base, budget, result);
+  }
+
+  /// Builds the analysis buffer with \p controls before their scalars. A paragraph override
+  /// becomes a leading override control, so that nested controls still open their own levels.
+  void buildInjectedBuffer(const std::vector<char32_t>& scalars,
+                           std::span<const InjectedControl> controls, bool paragraphOverride) {
+    injected = true;
+    codepoints.reserve(scalars.size() + controls.size() + 1);
+    if (paragraphOverride) {
+      codepoints.push_back(base % 2 != 0 ? bidi_control::kRlo : bidi_control::kLro);
     }
-    const SBCodepointSequence line{SBStringEncodingUTF32, codepoints.data() + start, end - start};
-    SBScriptLocatorLoadCodepoints(locator.get(), &line);
-    const size_t first = result.size();
-    while (SBScriptLocatorMoveNext(locator.get())) {
-      const SBScriptAgent* agent = SBScriptLocatorGetAgent(locator.get());
-      const uint32_t expected = result.size() == first ? start : result.back().end;
-      if (agent->length == 0 || start + agent->offset != expected ||
-          agent->offset + agent->length > end - start ||
-          !budget.consume(budget.remaining.runs, 1)) {
-        budget.rejected = true;
+    if (paragraphOverride || std::any_of(controls.begin(), controls.end(), IsOverrideControl) ||
+        std::any_of(scalars.begin(), scalars.end(), IsOverrideCodepoint)) {
+      overrideScalars = scalars;
+    }
+    scalarPositions.reserve(scalars.size());
+    auto control = controls.begin();
+    for (uint32_t index = 0; index <= scalars.size(); ++index) {
+      for (; control != controls.end() && control->before == index; ++control) {
+        codepoints.push_back(control->codepoint);
+      }
+      if (index < scalars.size()) {
+        scalarPositions.push_back(static_cast<uint32_t>(codepoints.size()));
+        codepoints.push_back(scalars[index]);
+      }
+    }
+  }
+
+  /// Takes \p scalars as the analysis buffer, or builds an injected one around them when
+  /// \p inject.
+  void adopt(std::vector<char32_t> scalars, std::span<const InjectedControl> controls,
+             bool paragraphOverride, bool inject) {
+    if (inject) {
+      buildInjectedBuffer(scalars, controls, paragraphOverride);
+    } else {
+      codepoints = std::move(scalars);
+      override = paragraphOverride;
+    }
+  }
+
+  /// Appends the visual runs of the nonempty scalar line [start, end).
+  bool appendRuns(uint32_t start, uint32_t end, BidiResourceBudget& budget,
+                  std::vector<Run>& result) const {
+    if (injected) {
+      return appendInjectedLineRuns(start, end, budget, result);
+    }
+    if (override) {
+      return appendOverrideRuns(start, end, budget, result);
+    }
+    if (!algorithm) {
+      if (!budget.consume(budget.remaining.runs, 1)) {
         return false;
       }
-      result.push_back({static_cast<uint32_t>(start + agent->offset),
-                        static_cast<uint32_t>(start + agent->offset + agent->length), base});
+      // Without reordering every scalar shares level zero on the left-to-right fast path.
+      result.push_back({start, end, 0});
+      return true;
     }
-    if (result.size() == first || result.back().end != end) {
-      budget.rejected = true;
+    return appendLines(start, end, budget, result);
+  }
+
+  uint32_t analysisPosition(uint32_t index) const {
+    return injected ? scalarPositions[index] : index;
+  }
+
+  /// Resolves the analysis-buffer line that holds scalars [start, end), including the controls
+  /// injected before its first scalar, and maps its runs back to scalar ranges.
+  bool appendInjectedLineRuns(uint32_t start, uint32_t end, BidiResourceBudget& budget,
+                              std::vector<Run>& result) const {
+    const uint32_t bufferStart = start == 0 ? 0 : scalarPositions[start - 1] + 1;
+    const uint32_t bufferEnd = end == scalarPositions.size()
+                                   ? static_cast<uint32_t>(codepoints.size())
+                                   : scalarPositions[end];
+    std::vector<Run> bufferRuns;
+    if (!appendLines(bufferStart, bufferEnd, budget, bufferRuns)) {
       return false;
     }
-    // Script runs arrive in logical order; a right-to-left line shows them right to left.
-    if (base % 2 != 0) {
-      std::reverse(result.begin() + static_cast<std::ptrdiff_t>(first), result.end());
+    for (const Run& run : bufferRuns) {
+      const auto scalarAt = [&](uint32_t position) {
+        return static_cast<uint32_t>(
+            std::lower_bound(scalarPositions.begin(), scalarPositions.end(), position) -
+            scalarPositions.begin());
+      };
+      const uint32_t first = std::max(start, scalarAt(run.start));
+      const uint32_t last = std::min(end, scalarAt(run.end));
+      if (first >= last) {
+        continue;  // A run of injected controls only.
+      }
+      if (!overrideScalars.empty()) {
+        if (!AppendScriptRuns(overrideScalars.data(), first, last, run.level, budget, result)) {
+          return false;
+        }
+      } else {
+        result.push_back({first, last, run.level});
+      }
     }
     return true;
   }
@@ -206,30 +365,38 @@ char32_t BidiParagraph::Mirror(char32_t cp) {
 
 std::optional<BidiParagraph> BidiParagraph::Analyze(std::vector<char32_t> codepoints,
                                                     BidiResourceBudget& budget, uint8_t base,
-                                                    bool forceAnalysis, bool override) {
-  if (base > 2 || (override && base == 2) ||
-      !budget.consume(budget.remaining.codepoints, codepoints.size())) {
+                                                    bool forceAnalysis, bool override,
+                                                    std::span<const InjectedControl> controls) {
+  if (base > 2 || (override && base == 2) || !ValidControls(controls, codepoints.size())) {
     budget.rejected = true;
+    return std::nullopt;
+  }
+  const bool inject = NeedsInjectedBuffer(codepoints, controls, override);
+  if (!budget.consume(budget.remaining.codepoints,
+                      codepoints.size() + InjectedSlots(inject, controls.size(), override))) {
     return std::nullopt;
   }
   std::transform(codepoints.begin(), codepoints.end(), codepoints.begin(), ValidScalar);
   auto state = std::make_unique<State>();
-  state->codepoints = std::move(codepoints);
   state->base = base;
-  state->override = override;
-  if (!state->initialize(budget, forceAnalysis)) {
+  state->adopt(std::move(codepoints), controls, override, inject);
+  if (!state->initialize(budget, forceAnalysis || inject)) {
     return std::nullopt;
   }
   return BidiParagraph(std::move(state));
 }
 
 uint8_t BidiParagraph::levelAt(uint32_t index) const {
-  return index < state_->levels.size() ? state_->levels[index] : 0;
+  const uint32_t position = index < scalarCount() ? state_->analysisPosition(index) : index;
+  return position < state_->levels.size() ? state_->levels[position] : 0;
 }
 
 uint8_t BidiParagraph::paragraphLevelAt(uint32_t index) const {
   if (state_->override) {
     return state_->base;
+  }
+  if (index < scalarCount()) {
+    index = state_->analysisPosition(index);
   }
   const auto found = state_->paragraphAfter(index);
   return found == state_->paragraphs.begin() ? 0 : SBParagraphGetBaseLevel(std::prev(found)->get());
@@ -237,32 +404,20 @@ uint8_t BidiParagraph::paragraphLevelAt(uint32_t index) const {
 
 std::optional<std::vector<BidiParagraph::Run>> BidiParagraph::visualRuns(
     uint32_t start, uint32_t end, BidiResourceBudget& budget) const {
-  if (budget.rejected || start > end || end > state_->codepoints.size()) {
+  if (budget.rejected || start > end || end > scalarCount()) {
     budget.rejected = true;
     return std::nullopt;
   }
   std::vector<Run> result;
-  if (start == end) {
-    return result;
-  }
-  if (state_->override) {
-    if (!state_->appendOverrideRuns(start, end, budget, result)) {
-      return std::nullopt;
-    }
-    return result;
-  }
-  if (!state_->algorithm) {
-    if (!budget.consume(budget.remaining.runs, 1)) {
-      return std::nullopt;
-    }
-    // Without reordering every scalar shares level zero on the left-to-right fast path.
-    result.push_back({start, end, 0});
-    return result;
-  }
-  if (!state_->appendLines(start, end, budget, result)) {
+  if (start != end && !state_->appendRuns(start, end, budget, result)) {
     return std::nullopt;
   }
   return result;
+}
+
+uint32_t BidiParagraph::scalarCount() const {
+  return static_cast<uint32_t>(state_->injected ? state_->scalarPositions.size()
+                                                : state_->codepoints.size());
 }
 
 }  // namespace donner::svg
