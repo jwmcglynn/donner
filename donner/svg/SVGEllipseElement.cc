@@ -96,6 +96,7 @@ void SVGEllipseElement::invalidate() const {
 
 void SVGEllipseElement::compute() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  restoreStandaloneState();
   auto& ellipse = handle_.get_or_emplace<components::EllipseComponent>(access);
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   components::ShapeSystem().createComputedPath(handle_, ellipse, FontMetrics(), disabledSink);
