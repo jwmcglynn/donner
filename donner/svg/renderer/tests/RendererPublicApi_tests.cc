@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -4247,7 +4249,7 @@ TEST(RendererTinySkiaSecurityTest, StrokePaintPassSharesTheStrokeLimits) {
   }
 }
 
-TEST(RendererTinySkiaSecurityTest, MiterLimitLeavesCurvedStrokesUnchanged) {
+TEST(RendererTinySkiaStrokeAccuracyTest, MiterLimitLeavesCurvedStrokesUnchanged) {
   // A curved path without corners draws the same under a miter limit of 4 and of 10^9.
   const auto render = [](std::string_view miterLimit) {
     SVGDocument document = HundredSquareDocument(
@@ -4261,38 +4263,20 @@ TEST(RendererTinySkiaSecurityTest, MiterLimitLeavesCurvedStrokesUnchanged) {
   };
   const RendererBitmap expected = render("4");
   EXPECT_THAT(CoveredPixels(expected, 0, 0, 100, 100), Gt(0u));
-  EXPECT_TRUE(render("1e9").pixels == expected.pixels);
+  editor::tests::CompareBitmapToBitmap(render("1e9"), expected, "miter_limit_curved_stroke",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
-/// A document far from the origin, as projected map coordinates are: 50 solid and 50 dashed cubic
-/// curves, stroked 20 wide, in a 10,000-unit region whose corner is at (4,000,000, 4,000,000),
-/// viewed at \p zoom about the region's center on a 500 x 500 canvas.
-std::string LargeCoordinateCurves(int zoom) {
-  constexpr double kOrigin = 4.0e6;
-  constexpr double kExtent = 10000.0;
-  const double view = kExtent / zoom;
-  const double corner = kOrigin + kExtent / 2 - view / 2;
-  std::ostringstream svg;
-  svg.precision(17);
-  svg << R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox=")" << corner
-      << " " << corner << " " << view << " " << view << R"(">)";
-  for (int i = 0; i < 100; ++i) {
-    const double x = kOrigin + 100.0 * i;
-    const double y = kOrigin + 1000.0 + 80.0 * i;
-    svg << R"(<path fill="none" stroke="black" stroke-width="20" )"
-        << (i % 2 == 1 ? R"(stroke-dasharray="150 60" )" : "") << R"(d="M)" << x << " " << y << " C"
-        << (x + 3000) << " " << (y - 2500) << " " << (x + 6000) << " " << (y + 2500) << " "
-        << (x + 9000) << " " << y << R"("/>)";
-  }
-  svg << "</svg>";
-  return svg.str();
-}
-
-TEST(RendererTinySkiaSecurityTest, LargeCoordinateCurvesMatchTheUnflooredRenderAtModestZoom) {
-  // At 8x the stroke and dash tolerances of these curves stay above one float step of their
-  // coordinates, so the precision floor leaves the render as it was before the floor existed. The
-  // golden is the CPU render from before the floor.
-  SVGDocument document = ParseDocument(LargeCoordinateCurves(8));
+TEST(RendererTinySkiaStrokeAccuracyTest, LargeCoordinateCurvesMatchTheirGoldenAtModestZoom) {
+  // 50 solid and 50 dashed cubic curves in a 10,000-unit region whose corner is at
+  // (4,000,000, 4,000,000), as projected map coordinates are, viewed at 8x on a 500 x 500 canvas.
+  // At this scale every curve's tolerance is above one float step of its coordinates, so the
+  // precision floor does not engage, and the render matches its golden, which the README in the
+  // golden directory traces to a render without the floor.
+  std::ifstream file("donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg");
+  ASSERT_TRUE(file.is_open());
+  const std::string svg((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  SVGDocument document = ParseDocument(svg);
   RendererTinySkia renderer;
   renderer.draw(document);
   ASSERT_FALSE(renderer.resourceStats().drawBudgetRejected);
@@ -4303,9 +4287,9 @@ TEST(RendererTinySkiaSecurityTest, LargeCoordinateCurvesMatchTheUnflooredRenderA
 }
 
 TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
-  // Past the precision of the circle's coordinates, a larger magnification no longer subdivides
-  // its curves further: magnified 10^7 times, the solid and the dashed circle fit the default
-  // limits with the same work as at 10^5, and still draw.
+  // Past the precision of the circle's coordinates, every larger magnification subdivides its
+  // curves to the same tolerance: magnified 10^7 times, the solid and the dashed circle fit the
+  // default limits with the same work as at 10^5, and draw.
   for (const std::string_view dash :
        {std::string_view(),
         std::string_view(R"svg(stroke-dasharray="4 4" stroke-dashoffset="4")svg")}) {
