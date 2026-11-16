@@ -13,6 +13,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -245,6 +246,11 @@ struct ComputedTextComponent {
 
     /// CSS font-family list for this span.
     SmallVector<RcString, 1> fontFamilies;
+
+    /// The span's font-family list, borrowed from this span.
+    [[nodiscard]] std::span<const RcString> fontFamilyList() const UTILS_LIFETIME_BOUND {
+      return {fontFamilies.data(), fontFamilies.size()};
+    }
 
     /// Indicates whether baseline-shift was set via the `sub` or `super` keywords,
     /// which should be resolved from font OS/2 metrics at layout time.
