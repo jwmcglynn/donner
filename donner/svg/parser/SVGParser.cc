@@ -721,6 +721,29 @@ std::optional<ParseDiagnostic> ParseEditedElementContents(const SVGParser::Optio
   return error;
 }
 
+/**
+ * Parse one attribute that a mutation has just set on an existing element into its type-specific
+ * state, as a full parse would. The parser installs this as
+ * \ref components::SVGDocumentContext::parseEditedElementAttribute.
+ *
+ * @param options Options of the parse that built the document.
+ * @param source Current document source.
+ * @param element The edited element.
+ * @param name Attribute name.
+ * @param value New attribute value.
+ * @return The attribute's parse error, if any.
+ */
+std::optional<ParseDiagnostic> ParseEditedElementAttribute(const SVGParser::Options& options,
+                                                           std::string_view source,
+                                                           const SVGElement& element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  SVGParserContext context(source, warnings, options);
+  SVGElement mutableElement = element;
+  return AttributeParser::ParseAndSetAttribute(context, mutableElement, name, value);
+}
+
 }  // namespace
 
 class SVGParserImpl {
@@ -942,6 +965,12 @@ public:
               [options = context_.options()](std::string_view source, const SVGElement& element,
                                              const XMLNode& node) {
                 return ParseEditedElementContents(options, source, element, node);
+              };
+          documentContext.parseEditedElementAttribute =
+              [options = context_.options()](std::string_view source, const SVGElement& element,
+                                             const XMLQualifiedNameRef& name,
+                                             std::string_view value) {
+                return ParseEditedElementAttribute(options, source, element, name, value);
               };
 
           auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), child.value());

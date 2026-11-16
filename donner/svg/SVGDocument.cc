@@ -38,6 +38,7 @@
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationTimeline.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -865,6 +866,38 @@ bool SVGDocument::endAnimation(const SVGElement& animation, double offset) {
 
 namespace {
 
+/**
+ * Applies an attribute just set on a filter primitive, or on a light source, transfer function or
+ * merge node inside one, to the element's own typed state, and drops the computed filter graphs
+ * built from the old value. The generic attribute projection stores these attributes without
+ * interpreting them, and a computed filter graph otherwise survives into later frames.
+ *
+ * @param source Current document source.
+ * @param element The edited element.
+ * @param name Attribute name.
+ * @param value New attribute value.
+ * @return The attribute's parse error, if any.
+ */
+std::optional<ParseDiagnostic> ApplyFilterPrimitiveAttribute(std::string_view source,
+                                                             const SVGElement& element,
+                                                             const xml::XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
+  const ElementType type = element.type();
+  if (type < ElementType::FeBlend || type > ElementType::FeTurbulence) {
+    return std::nullopt;
+  }
+  Registry& registry = *element.entityHandle().registry();
+  const auto& parse =
+      registry.ctx().get<components::SVGDocumentContext>().parseEditedElementAttribute;
+  if (!parse) {
+    return std::nullopt;
+  }
+  std::optional<ParseDiagnostic> diagnostic = parse(source, element, name, value);
+  registry.clear<components::ComputedFilterComponent>();
+  components::RenderingContext(registry).invalidateRenderTree();
+  return diagnostic;
+}
+
 bool IsAttachedAnimation(EntityHandle handle) {
   return handle.valid() && handle.all_of<components::AnimationTimingComponent>() &&
          handle.get<components::NodeLifetimeComponent>().treeState ==
@@ -1461,9 +1494,12 @@ xml::ApplySourceEditResult SVGDocument::setElementAttribute(const SVGElement& el
 
   xml::ApplySourceEditResult result;
   SVGElement mutableElement(element.handle_);
-  if (std::optional<ParseDiagnostic> diagnostic =
-          mutableElement.setAttributeFromXMLMutation(name, value)) {
+  bool consumedAsPresentationAttribute = false;
+  if (std::optional<ParseDiagnostic> diagnostic = mutableElement.setAttributeFromXMLMutation(
+          name, value, &consumedAsPresentationAttribute)) {
     result.diagnostic = std::move(diagnostic);
+  } else if (!consumedAsPresentationAttribute) {
+    result.diagnostic = ApplyFilterPrimitiveAttribute(source(), mutableElement, name, value);
   }
   return result;
 }
@@ -1786,12 +1822,17 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
       diagnostic->range = MutationRange(source(), mutation);
       return diagnostic;
     }
-    if (std::optional<ParseDiagnostic> diagnostic =
-            element.setAttributeFromXMLMutation(mutation.attributeName, *mutation.value)) {
-      diagnostic->range = MutationRange(source(), mutation);
-      return diagnostic;
+    bool consumedAsPresentationAttribute = false;
+    std::optional<ParseDiagnostic> diagnostic = element.setAttributeFromXMLMutation(
+        mutation.attributeName, *mutation.value, &consumedAsPresentationAttribute);
+    if (!diagnostic.has_value() && !consumedAsPresentationAttribute) {
+      diagnostic =
+          ApplyFilterPrimitiveAttribute(source(), element, mutation.attributeName, *mutation.value);
     }
-    return std::nullopt;
+    if (diagnostic.has_value()) {
+      diagnostic->range = MutationRange(source(), mutation);
+    }
+    return diagnostic;
   }
 
   if (std::optional<ParseDiagnostic> diagnostic =

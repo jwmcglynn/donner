@@ -13,6 +13,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
@@ -135,6 +136,20 @@ public:
   std::function<std::optional<ParseDiagnostic>(std::string_view, const SVGElement&,
                                                const xml::XMLNode&)>
       parseEditedElementContents;
+
+  /**
+   * Parses one attribute that a mutation has just set on an existing element into the element's
+   * type-specific state, the way the parser that built this document does for that element type.
+   * The generic attribute projection only stores attributes it does not recognize as presentation
+   * attributes, so this is what makes a filter primitive's own attributes, such as `in` or
+   * `stdDeviation`, take effect. Unset for documents the parser did not build.
+   *
+   * Takes the current document source, the element, the attribute name and its new value, and
+   * returns the first error.
+   */
+  std::function<std::optional<ParseDiagnostic>(std::string_view, const SVGElement&,
+                                               const xml::XMLQualifiedNameRef&, std::string_view)>
+      parseEditedElementAttribute;
 
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.

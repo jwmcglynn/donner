@@ -218,6 +218,65 @@ TEST(RendererAnimationFilter, ToOnlyPreservesImplicitAndTypedInputs) {
   }
 }
 
+// A document with no animation keeps its computed filter between frames, so a setAttribute edit of
+// a primitive's own attribute must reach the next frame without any animation re-reading it.
+TEST(RendererFilterAttributeEdit, StaticPrimitiveEditsReachTheNextFrame) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  struct Case {
+    const char* name;
+    const char* base;
+    const char* attribute;
+    const char* value;
+    const char* expected;
+  };
+  const std::string floods =
+      "<feFlood flood-color='red' result='red'/><feFlood flood-color='blue' result='blue'/>";
+  for (const auto& item : {
+           Case{"input", "<feOffset id='p' in='red'/>", "in", "blue", "<feOffset in='blue'/>"},
+           Case{"subregion", "<feFlood id='p' flood-color='blue'/>", "x", "8",
+                "<feFlood flood-color='blue' x='8'/>"},
+           Case{"input2", "<feBlend id='p' in='SourceGraphic' in2='red' mode='multiply'/>", "in2",
+                "blue", "<feBlend in='SourceGraphic' in2='blue' mode='multiply'/>"},
+           Case{"mode", "<feBlend id='p' in='SourceGraphic' in2='blue'/>", "mode", "screen",
+                "<feBlend in='SourceGraphic' in2='blue' mode='screen'/>"},
+           Case{"offset", "<feOffset id='p' in='SourceGraphic'/>", "dx", "3",
+                "<feOffset in='SourceGraphic' dx='3'/>"},
+           Case{"blur", "<feGaussianBlur id='p' in='SourceGraphic'/>", "stdDeviation", "1.5",
+                "<feGaussianBlur in='SourceGraphic' stdDeviation='1.5'/>"},
+           Case{"matrix", "<feColorMatrix id='p' in='SourceGraphic' type='saturate'/>", "values",
+                ".3", "<feColorMatrix in='SourceGraphic' type='saturate' values='.3'/>"},
+           Case{"merge-node",
+                "<feMerge><feMergeNode in='SourceGraphic'/><feMergeNode id='p' "
+                "in='red'/></feMerge>",
+                "in", "blue",
+                "<feMerge><feMergeNode in='SourceGraphic'/><feMergeNode in='blue'/></feMerge>"},
+           Case{"transfer",
+                "<feComponentTransfer in='SourceGraphic'><feFuncR id='p' "
+                "type='linear'/></feComponentTransfer>",
+                "slope", ".25",
+                "<feComponentTransfer in='SourceGraphic'><feFuncR type='linear' "
+                "slope='.25'/></feComponentTransfer>"},
+       }) {
+    SCOPED_TRACE(item.name);
+    auto document = FilterDocument(floods + item.base);
+    const RendererBitmap before = RenderDocumentWithActiveBackend(document);
+
+    auto target = document.querySelector("#p");
+    ASSERT_THAT(target, testing::Ne(std::nullopt));
+    target->setAttribute(xml::XMLQualifiedNameRef(item.attribute), item.value);
+
+    auto expectedDocument = FilterDocument(floods + item.expected);
+    const RendererBitmap expected = RenderDocumentWithActiveBackend(expectedDocument);
+    ASSERT_NE(before.pixels, expected.pixels)
+        << "the edit must change the rendering for this case to detect a stale filter";
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expected,
+                                         std::string(item.name) + "-static-edit",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 struct NumericFilterCase {
   std::string name;
   std::string primitive;
