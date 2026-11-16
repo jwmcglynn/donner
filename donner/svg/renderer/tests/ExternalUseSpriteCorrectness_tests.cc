@@ -1185,8 +1185,8 @@ TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
 }
 
 // A sheet that has delivered its warnings and the truncation, then finds a new warning without a
-// sink, marks the next collecting sink truncated: that sink would drop the new warning, and must not
-// look complete.
+// sink, marks the next collecting sink truncated: that sink would drop the new warning, and must
+// not look complete.
 TEST(ExternalUseWarningReplayTest, NewWarningPastADeliveredTruncationMarksTheLaterSink) {
   std::string sheet = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg"
                       R"svg(<g id="a"><rect id="other" width="4" height="4"/>)svg";

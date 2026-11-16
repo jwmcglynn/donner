@@ -121,7 +121,6 @@ void DropStaleSubDocumentWarnings(Registry& registry) {
   components::ForgetMissingFallbackFontReport(registry);
 }
 
-
 void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings,
                                ParseWarningSink& hostSink) {
   auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
@@ -143,7 +142,6 @@ void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warni
     reported.truncationReported = true;
   }
 }
-
 
 void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
   if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
