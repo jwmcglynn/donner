@@ -57,3 +57,42 @@ This reference qualifies the full-text CPU rendering path. Geode currently skips
 bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
+
+## Donner renderings of filter references that resvg gets wrong
+
+The goldens below are Donner renderings for rows where the vendored resvg reference does not follow
+the specification. A self-rendered golden cannot prove itself correct, so each row's section gives
+independent evidence, how resvg v0.49.0 renders the row, and what the suite's results.csv records:
+those are manual visual grades of the vendored reference by browser and renderer, which show
+whether an engine draws the case's intended picture but cannot resolve differences of a level or
+a pixel along an edge.
+
+### `filters/filter/complex-order-and-xlink-href`
+
+Disposition: reference disagreement. `donner-complex-order-and-xlink-href.png` is a Donner CPU
+rendering of the unchanged corpus file, at the 300x300 size of the resvg v0.49.0 reference,
+rendered by the resvg suite harness at the commit that adds it. The software backend compares with
+it at default settings; Geode differs by 3 pixels.
+
+The filter region's x and height cut the blur's input. Filter Effects 1 makes the filter region a
+hard clip on a primitive's input and result, and allows three successive box blurs only as an
+approximation of the Gaussian convolution of that input. resvg blurs with five 8-bit box passes
+inside a buffer the size of the region, so each pass drops what the previous one spread past the
+region. Modeling those five passes on the clipped step gives 84 for the first row inside the edge,
+which is the reference's value; the same passes keeping their spill give 143, Donner's value, and
+the exact Gaussian of the clipped input gives 144.4 (standard deviation 3 device pixels). resvg
+v0.49.0 renders the row like the vendored reference.
+
+results.csv records Firefox passing the vendored reference and Chrome and Safari failing it (resvg
+passes its own). The failing browsers draw the case differently enough for a visual grade to see;
+a grade cannot see the one-pixel band along the clipped edges where Donner and the reference
+differ.
+
+PNG SHA-256: `9962099aac41e77fd1d9044fd05d2c939dad0ecfdc941f98dc1b36dae9ab3750`.
+
+To regenerate, delete the file and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*complex_order_and_xlink_href*'
+```
