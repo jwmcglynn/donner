@@ -49,9 +49,22 @@ AFTER_LINUX = ("!cancelled() && (needs.linux-self-hosted.result == 'success' || 
                "needs.linux-self-hosted.result == 'failure') && ")
 # After the opt-in, on the lane job only: its own admission let it run.
 ADMITTED = " && needs.%s.outputs.admitted == 'true'" % (JOB + "-turnstile")
-RUN = ('python3 tools/ci/macos_remote_shadow.py --out "$RUNNER_TEMP/macos-remote-shadow" '
-       '--output-user-root "$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output" '
-       '--budget-minutes 70')
+# The lane step runs the lane table's one phase for the lane, as every lane step does.
+RUN = "python3 tools/ci/lane.py phase macos-remote-shadow shadow"
+SELECTION_ENV = {"TARGETS_FALLBACK": "${{ needs.determine-targets.outputs.fallback }}",
+                 "TARGETS_AFFECTED": "${{ needs.determine-targets.outputs.affected }}"}
+
+
+def _shadow_phase():
+    """The lane table's phase for the shadow lane."""
+    return lanes.LANES[JOB].phases["shadow"]
+
+
+def _script_argv(phase=None):
+    """The script command of the shadow phase, as words, the selection as SELECTED."""
+    phase = phase or _shadow_phase()
+    commands = [action for action in phase.actions if isinstance(action, lanes.Command)]
+    return list(commands[0].argv) if len(commands) == 1 else []
 # Private runner configuration that must come only from the runner's own rc files: endpoints,
 # credentials, priority and per-host concurrency (as in //tools:remote_macos_config_tests).
 PRIVATE_FLAG = re.compile(
@@ -194,14 +207,16 @@ def trust_problems(text):
 
 
 def _lane_step_problems(job):
-    """The lane step runs the script alone, on the planner's selection, and cannot fail the job."""
+    """The lane step runs the lane's phase alone, on the planner's selection, and cannot fail the
+    job; the phase runs the script on that selection."""
     shadow = _step(job, "shadow")
     if shadow is None or _key(shadow, "continue-on-error", 8) != "true":
         return ["the shadow step can fail the job"]
-    selection = (_key(shadow, "FALLBACK", 10), _key(shadow, "AFFECTED", 10))
-    if _key(shadow, "run", 8) != RUN or selection != (
-            "${{ needs.determine-targets.outputs.fallback }}",
-            "${{ needs.determine-targets.outputs.affected }}"):
+    selection = {name: _key(job, name, 6) for name in SELECTION_ENV}
+    argv = _script_argv()
+    if _key(shadow, "run", 8) != RUN or selection != SELECTION_ENV or "env:" in shadow or \
+            argv[:2] != ["python3", "tools/ci/macos_remote_shadow.py"] or \
+            argv[-2:] != ["--targets", lanes.SELECTED]:
         return ["the shadow step must run the lane script alone on the planner's selection"]
     others = [step for step in _steps(job) if step != shadow]
     if any(re.search(r"(?m)^        run:", step) for step in others):
@@ -295,9 +310,9 @@ def upload_problems(text):
 
 
 def _staged_root():
-    """The workflow's spelling of the directory the script stages failed tests' outputs in."""
-    out = RUN.split('--out "', 1)[1].split('"', 1)[0]
-    return out.replace("$RUNNER_TEMP", "${{ runner.temp }}") + "/" + lane.ARTIFACTS
+    """The workflow's spelling of the directory the script stages failed tests' outputs in: its
+    default output directory under the runner's temporary directory."""
+    return "${{ runner.temp }}/%s/%s" % (lane.OUT_NAME, lane.ARTIFACTS)
 
 
 def failure_artifact_problems(text):
@@ -318,16 +333,17 @@ def failure_artifact_problems(text):
     return problems
 
 
-def budget_problems(text):
+def budget_problems(text, argv=None):
     """The lane's own budget, plus the margin it needs to report and upload, fits inside the
     job's timeout-minutes, so the lane always stops itself before the runner cancels the job."""
     job = _job(text, JOB) or ""
-    run = _key(_step(job, "shadow"), "run", 8) or ""
-    found = re.search(r"--budget-minutes (\d+(?:\.\d+)?)(?:\s|$)", run)
+    argv = _script_argv() if argv is None else argv
     timeout = int(_key(job, "timeout-minutes") or 0)
-    if not found:
-        return ["the shadow step passes no --budget-minutes"]
-    budget = float(found.group(1))
+    values = [argv[index + 1] for index, word in enumerate(argv[:-1])
+              if word == "--budget-minutes"]
+    if len(values) != 1 or not re.fullmatch(r"\d+(?:\.\d+)?", str(values[0])):
+        return ["the shadow phase passes no single --budget-minutes"]
+    budget = float(values[0])
     if not 0 < budget or budget + lane.REPORT_MARGIN_MINUTES >= timeout:
         return ["a %g-minute budget plus the %d-minute report margin does not fit in the job's "
                 "%d minutes" % (budget, lane.REPORT_MARGIN_MINUTES, timeout)]
@@ -405,7 +421,8 @@ class WorkflowTest(unittest.TestCase):
         for old, new in (("    continue-on-error: true\n", ""),
                          ("        continue-on-error: true\n", ""),
                          (RUN, RUN + " || true"),
-                         ("outputs.affected", "outputs.fallback"),
+                         ("TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}",
+                          "TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.fallback }}"),
                          ("timeout-minutes: 90", "timeout-minutes: 20"),
                          ("timeout-minutes: 90", "timeout-minutes: 210"),
                          (upload, receipt + upload)):
@@ -459,6 +476,28 @@ class WorkflowTest(unittest.TestCase):
                     "macos-remote-shadow/report.md\n            ${{ runner.temp }}/"
                     "macos-remote-shadow/%s\n" % leak)))
 
+    def test_the_lane_runs_through_the_lane_table(self):
+        from tools.ci import lane as lane_entry
+        for environ, targets in (
+                ({"TARGETS_FALLBACK": "false", "TARGETS_AFFECTED": "//a:b //c:d"},
+                 ["//a:b", "//c:d"]),
+                ({"TARGETS_FALLBACK": "true", "TARGETS_AFFECTED": ""}, ["//..."])):
+            with self.subTest(targets=targets):
+                described = lane_entry.dry_run(JOB, "shadow", environ)
+                self.assertEqual("Build and test for macOS on the remote executor",
+                                 described["step"])
+                self.assertEqual(["require_selection", "run"],
+                                 [action["action"] for action in described["actions"]])
+                argv = described["actions"][1]["argv"]
+                self.assertEqual(["python3", "tools/ci/macos_remote_shadow.py",
+                                  "--budget-minutes", "70", "--targets"] + targets, argv)
+                args = lane.parse_args(argv[2:], {})
+                self.assertEqual(targets, lane.selection(args.fallback, args.affected,
+                                                         args.targets))
+        # Run-time paths come from the runner's environment, so the lane table's command line,
+        # which the entry point echoes to the public log, names none.
+        self.assertEqual([], [word for word in _script_argv() if "$" in str(word)])
+
     def test_the_lane_budget_leaves_room_to_report_inside_the_job_timeout(self):
         self.assertEqual([], budget_problems(self.text))
         # The margin covers the worst case after the budget: stopping the command, shutting the
@@ -467,12 +506,18 @@ class WorkflowTest(unittest.TestCase):
                  lane.UPLOAD_MINUTES * 60)
         self.assertEqual(150, sum(lane.STOP_GRACE) + lane.STOP_KILL_SECONDS)
         self.assertLessEqual(worst, lane.REPORT_MARGIN_MINUTES * 60)
-        for old, new in (("--budget-minutes 70", "--budget-minutes 80"),
-                         (" --budget-minutes 70", ""),
-                         ("--budget-minutes 70", "--budget-minutes 10"),
-                         ("timeout-minutes: 90", "timeout-minutes: 80")):
-            with self.subTest(old=old, new=new):
-                self.assertTrue(budget_problems(self._mutated(old, new)))
+        argv = _script_argv()
+        position = argv.index("--budget-minutes")
+        for name, changed in (
+                ("a budget that eats the margin", argv[:position + 1] + ["80"] +
+                 argv[position + 2:]),
+                ("no budget", argv[:position] + argv[position + 2:]),
+                ("a budget under the starvation bound", argv[:position + 1] + ["10"] +
+                 argv[position + 2:])):
+            with self.subTest(case=name):
+                self.assertTrue(budget_problems(self.text, changed))
+        self.assertTrue(budget_problems(self._mutated("timeout-minutes: 90",
+                                                      "timeout-minutes: 80")))
 
     def test_failed_test_outputs_are_uploaded_on_the_lane_steps_outcome(self):
         self.assertEqual([], failure_artifact_problems(self.text))
@@ -658,9 +703,13 @@ class LaneCommandTest(unittest.TestCase):
                                  words[bazel + 1:bazel + 3])
         self.assertTrue(lines[-1].endswith(
             "bazelisk --output_user_root=/root/x --max_idle_secs=600 shutdown"))
-        # The workflow keeps it out of the workspace, in the runner's persistent tool cache.
-        self.assertIn('--output-user-root "$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output"',
-                      RUN)
+        # By default it lives outside the workspace, in the runner's persistent tool cache.
+        args = lane.parse_args([], {})
+        self.assertTrue(lane._default_locations(args, {"RUNNER_TEMP": "/t",
+                                                       "RUNNER_TOOL_CACHE": "/c"}))
+        self.assertEqual(("/t/macos-remote-shadow", "/c/donner-macos-remote-shadow-output"),
+                         (args.out, args.output_user_root))
+        self.assertFalse(lane._default_locations(lane.parse_args([], {}), {}))
 
     def test_routing_probe_is_a_manual_uncached_test(self):
         probe = re.search(r'(?ms)^sh_test\(\n    name = "remote_macos_probe",\n(.*?)^\)$',

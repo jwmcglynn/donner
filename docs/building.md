@@ -562,7 +562,10 @@ appear; an unreadable or partly listed run still counts. That cost is why the la
 pull request, and turning it on for every trusted pull request should wait for dedicated runner
 capacity. While the shadow lane runs, the pull request's checks stay pending.
 
-`tools/ci/macos_remote_shadow.py` is the whole lane (`--dry-run` prints its commands):
+The job runs the lane as every lane runs, `python3 tools/ci/lane.py phase macos-remote-shadow
+shadow`, whose one phase in `tools/ci/lanes.py` runs `tools/ci/macos_remote_shadow.py` on the
+planner's selection with the lane's budget. That script is the whole lane (`--dry-run` prints
+its commands):
 
 1. A preflight: two `bazel build --nobuild` probes, with the config and without it. The lane stops
    with "this runner is not configured for the remote macOS lane" when the runner's rc files set no

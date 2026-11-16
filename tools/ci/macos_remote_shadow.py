@@ -40,12 +40,15 @@ passes `--config=ci`: on a self-hosted Linux runner that config also carries the
 executor. It passes the parts of `ci` that this lane needs itself (CI_FLAGS).
 
 Usage:
-  tools/ci/macos_remote_shadow.py [--dry-run] --out DIR [--fallback true|false]
-      [--affected 'LABEL ...'] [--bazel PATH] [--startup-option OPT]... [--rc-option OPT]...
-      [--output-user-root DIR] [--budget-minutes N]
+  tools/ci/macos_remote_shadow.py [--dry-run] [--out DIR] [--output-user-root DIR]
+      [--budget-minutes N] [--targets PATTERN... | --fallback true|false --affected 'LABEL ...']
+      [--bazel PATH] [--startup-option OPT]... [--rc-option OPT]...
 
---fallback and --affected default to the FALLBACK and AFFECTED environment variables, which the
-workflow sets from the planner's outputs: a fallback selects //..., otherwise the affected labels.
+CI runs it through the lane table (tools/ci/lanes.py, lane macos-remote-shadow), which passes the
+planner's selection as --targets: //... on a fallback, otherwise the affected labels. Without
+--targets, --fallback and --affected default to the FALLBACK and AFFECTED environment variables.
+--out defaults to $RUNNER_TEMP/macos-remote-shadow and --output-user-root to
+$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output.
 --budget-minutes is the lane's own wall-clock budget (see REPORT_MARGIN_MINUTES): when it runs out,
 the running command is stopped, the later phase skipped and the report written.
 --rc-option stands in for runner rc configuration in a manual run: each one is placed right after
@@ -362,11 +365,32 @@ def tag_filters(phase):
     return ",".join(list(GPU_TAGS) + excluded)
 
 
-def selection(fallback, affected):
-    """The target patterns: //... on a fallback, otherwise the affected labels."""
+def selection(fallback, affected, targets=None):
+    """The target patterns: `targets` when given (the lane table passes the planner's selection),
+    else //... on a fallback, otherwise the affected labels."""
+    if targets is not None:
+        return list(targets)
     if fallback == "true":
         return ["//..."]
     return affected.split()
+
+
+# Where the lane writes, by default: its output directory under the runner's temporary directory,
+# and its own Bazel output root in the runner's persistent tool cache, outside the workspace, so
+# the Linux lane's server and analysis cache are left alone and the lane keeps its repository and
+# analysis caches between runs.
+OUT_NAME = "macos-remote-shadow"
+OUTPUT_ROOT_NAME = "donner-macos-remote-shadow-output"
+
+
+def _default_locations(args, environ):
+    """Fills --out and --output-user-root from RUNNER_TEMP and RUNNER_TOOL_CACHE when unset."""
+    if not args.out and environ.get("RUNNER_TEMP"):
+        args.out = os.path.join(environ["RUNNER_TEMP"], OUT_NAME)
+    if args.output_user_root is None:
+        cache = environ.get("RUNNER_TOOL_CACHE")
+        args.output_user_root = os.path.join(cache, OUTPUT_ROOT_NAME) if cache else ""
+    return bool(args.out)
 
 
 def xcode_identity(root=ROOT):
@@ -1236,13 +1260,13 @@ def _finish(out, summary, environment):
 
 def run(args, environment):
     """Runs the preflight and both phases; returns the first failing status, or 0."""
-    targets = selection(args.fallback, args.affected)
+    targets = selection(args.fallback, args.affected, args.targets)
     if not targets:
         print("::error::Empty target selection reached the macOS remote shadow lane.")
         return 2
     args.deadline = time.monotonic() + args.budget_minutes * 60 if args.budget_minutes > 0 \
         else None
-    summary = {"version": 1, "targets": len(targets), "fallback": args.fallback == "true",
+    summary = {"version": 1, "targets": len(targets), "fallback": targets == ["//..."],
                "phases": {}}
     try:
         return _run_lane(args, environment, targets, summary)
@@ -1403,14 +1427,17 @@ class _Parser(argparse.ArgumentParser):
 def parse_args(argv, environ):
     parser = _Parser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out", default="",
+                        help="the output directory; default $RUNNER_TEMP/" + OUT_NAME)
     parser.add_argument("--fallback", default=environ.get("FALLBACK", ""))
     parser.add_argument("--affected", default=environ.get("AFFECTED", ""))
     parser.add_argument("--bazel", default="bazelisk")
     parser.add_argument("--startup-option", action="append", default=[])
-    parser.add_argument("--output-user-root", default="",
+    parser.add_argument("--output-user-root", default=None,
                         help="the lane's own Bazel output root, passed to every Bazel command")
     parser.add_argument("--rc-option", action="append", default=[])
+    parser.add_argument("--targets", nargs="*", default=None,
+                        help="the target patterns, in place of --fallback and --affected")
     parser.add_argument("--budget-minutes", type=float, default=0.0,
                         help="the lane's wall-clock budget; 0 for none (see REPORT_MARGIN_MINUTES)")
     # The deadline the budget sets, on time.monotonic; run() computes it.
@@ -1421,6 +1448,9 @@ def parse_args(argv, environ):
 def main(argv=None, environ=None):
     environ = dict(os.environ if environ is None else environ)
     args = parse_args(sys.argv[1:] if argv is None else argv, environ)
+    if not _default_locations(args, environ):
+        print("::error::macOS remote shadow lane: pass --out, or run where RUNNER_TEMP is set.")
+        return 2
     identity = xcode_identity()
     if environ.get(IDENTITY, identity) != identity:
         print("::error::%s=%s contradicts the config's Xcode %s." % (
@@ -1434,7 +1464,8 @@ def main(argv=None, environ=None):
     # default three hours.
     args.startup_option = [*args.startup_option, MAX_IDLE]
     if args.dry_run:
-        targets = selection(args.fallback, args.affected) or ["<empty selection>"]
+        targets = selection(args.fallback, args.affected, args.targets) or \
+            ["<empty selection>"]
         builtins.print("%s=%s" % (IDENTITY, identity))
         for command, _ in preflight_commands(args.bazel, args.startup_option, args.rc_option,
                                              args.out).values():
