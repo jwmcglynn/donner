@@ -247,7 +247,7 @@ TEST(FontSelection, BoldItalicRequestSelectsAvailableItalicFaceBeforeUprightBold
   EXPECT_EQ(fonts.select("Noto Sans", 700, 1, 5), expected);
   EXPECT_EQ(ResolveDocumentFace(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 60">
-      <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>
+      <text x="4" y="38" style="font: bold italic 28px Noto Sans">Ab</text>
     </svg>)svg"),
             expected);
 }
