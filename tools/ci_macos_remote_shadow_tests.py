@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -888,9 +889,10 @@ class LaneRunTest(unittest.TestCase):
                 for phase in failing:
                     expected.update(self._phase_outputs(phase))
                 self.assertEqual(expected, self._collected(out))
-                for phase in failing:
-                    self.assertIn("staged 3 output files (", result.stdout)
-                    self.assertIn("of the %s phase's failed tests" % phase, result.stdout)
+                for phase in lane.PHASES:
+                    self.assertRegex(result.stdout, r"staged %d output files \(\d+ bytes\) for %s\."
+                                     % (3 if phase in failing else 0, phase))
+                self.assertNotIn("staged no output files", result.stdout)
 
     def test_nothing_is_staged_when_every_test_passes(self):
         result, out, _, _ = self._run_with_outputs()
@@ -898,7 +900,9 @@ class LaneRunTest(unittest.TestCase):
         self.assertEqual([], [path for path in (out / lane.ARTIFACTS).rglob("*")
                               if path.is_file()])
         self.assertEqual({}, self._collected(out))
-        self.assertNotIn("staged", result.stdout)
+        for phase in lane.PHASES:
+            self.assertIn("staged 0 output files (0 bytes) for %s." % phase, result.stdout)
+        self.assertNotIn("::warning::", result.stdout)
 
     def test_empty_selection_fails_before_bazel(self):
         directory = tempfile.TemporaryDirectory()
@@ -1284,9 +1288,136 @@ class StagingTest(unittest.TestCase):
         opened = lane._open_regular(str(regular))
         self.addCleanup(os.close, opened[0])
         self.assertEqual(5, opened[1])
-        for path in (link, self.dir, fifo, self.dir / "absent"):
+        hard = self.dir / "hard"
+        os.link(self._file(self.dir / "linked", b"x"), hard)
+        for path in (link, self.dir, fifo, self.dir / "absent", hard):
             with self.subTest(path=path.name):
                 self.assertIsNone(lane._open_regular(str(path)))
+
+    def test_a_hard_link_to_a_file_outside_the_output_root_is_refused(self):
+        outside = self._file(self.dir / "outside" / "secret", b"outside sentinel")
+        target = self.testlogs / "a" / "test.log"
+        target.parent.mkdir(parents=True)
+        os.link(outside, target)
+        self._assert_refused(target.as_uri())
+
+    def test_a_path_must_name_exactly_one_testlogs_directory(self):
+        nested = self.testlogs / "a" / "bazel-out" / "k8-opt" / "testlogs" / "b" / "test.log"
+        self._assert_refused(self._file(nested).as_uri())
+        self.assertIsNone(lane._staged_key("/r/bazel-out/k/x/test.log"))
+
+    def test_a_symbolic_link_at_the_stage_root_is_refused(self):
+        log = self._file(self.testlogs / "a" / "test.log")
+        for linked in (self.out / lane.ARTIFACTS, self.out / lane.ARTIFACTS / "native"):
+            with self.subTest(link=linked.name):
+                outside = self.dir / ("outside-" + linked.name)
+                kept = self._file(outside / "native" / "kept", b"kept")
+                self._file(outside / "kept", b"kept")
+                shutil.rmtree(self.out, ignore_errors=True)
+                linked.parent.mkdir(parents=True, exist_ok=True)
+                linked.symlink_to(outside, target_is_directory=True)
+                with contextlib.redirect_stdout(io.StringIO()) as printed:
+                    self.assertEqual((0, 0), lane.stage_failed_test_outputs(
+                        _events(self._result("//a:t", log.as_uri())), self.out, "native",
+                        str(self.root), lane.MAX_ARTIFACT_TOTAL_BYTES))
+                self.assertIn("is a symbolic link; nothing of the native phase is staged",
+                              printed.getvalue())
+                self.assertEqual([b"kept", b"kept"], sorted(
+                    path.read_bytes() for path in outside.rglob("*") if path.is_file()))
+
+    def _phase(self, *events, budget=lane.MAX_ARTIFACT_TOTAL_BYTES, status=3):
+        args = lane.parse_args(["--out", str(self.out), "--output-user-root", str(self.root)], {})
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            used = lane._stage_phase(args, _events(*events), "native", budget, status)
+        stage = self.out / lane.ARTIFACTS / "native"
+        staged = sorted(path.relative_to(stage).as_posix() for path in stage.rglob("*")
+                        if path.is_file())
+        return used, staged, printed.getvalue()
+
+    def test_a_stage_root_that_cannot_be_cleared_is_a_warning(self):
+        stuck = self._file(self.out / lane.ARTIFACTS / "native" / "locked" / "old")
+        stuck.parent.chmod(0o500)
+        self.addCleanup(stuck.parent.chmod, 0o700)
+        log = self._file(self.testlogs / "a" / "test.log")
+        used, _, printed = self._phase(self._result("//a:t", log.as_uri()))
+        self.assertEqual(0, used)
+        self.assertIn("::warning::macOS remote shadow lane: the native phase's failed test "
+                      "outputs were not all staged (PermissionError)", printed)
+
+    def test_a_copy_that_raises_leaves_no_partial_file(self):
+        from unittest import mock
+        log = self._file(self.testlogs / "a" / "test.log")
+
+        def failing_copy(source, destination, limit):
+            os.write(destination, b"part")
+            raise OSError("disk full")
+
+        with mock.patch.object(lane, "_copy_bounded", side_effect=failing_copy):
+            staged, printed = self._stage(self._result("//a:t", log.as_uri()))
+        self.assertEqual({}, staged)
+        self.assertIn("is not staged (OSError)", printed)
+
+    def test_a_phase_that_stops_part_way_reports_what_it_staged(self):
+        from unittest import mock
+        first = self._file(self.testlogs / "a" / "test.log", b"x" * 6)
+        second = self._file(self.testlogs / "b" / "test.log", b"y" * 6)
+        real = lane._copy_bounded
+        calls = []
+
+        def copy(source, destination, limit):
+            calls.append(limit)
+            if len(calls) == 1:
+                return real(source, destination, limit)
+            os.write(destination, b"part")
+            raise RuntimeError("stopped")
+
+        with mock.patch.object(lane, "_copy_bounded", side_effect=copy):
+            used, staged, printed = self._phase(self._result("//a:a", first.as_uri()),
+                                                self._result("//a:b", second.as_uri()))
+        self.assertEqual(6, used)
+        self.assertEqual([self.CFG + "/a/test.log"], staged)
+        self.assertIn("not all staged (RuntimeError)", printed)
+        self.assertIn("staged 1 output files (6 bytes) for native.", printed)
+
+    def test_failed_results_that_stage_nothing_are_a_warning(self):
+        outside = self.dir / "elsewhere/base/execroot/_main/bazel-out" / self.CFG / "testlogs"
+        log = self._file(outside / "a" / "test.log")
+        used, staged, printed = self._phase(self._result("//a:t", log.as_uri()))
+        self.assertEqual((0, []), (used, staged))
+        self.assertIn("staged 0 output files (0 bytes) for native.", printed)
+        self.assertIn("::warning::macOS remote shadow lane: the native phase has 1 test results "
+                      "that did not pass but staged no output files", printed)
+        _, _, passing = self._phase(self._result("//a:t", log.as_uri(), status="PASSED"),
+                                    status=0)
+        self.assertNotIn("::warning::", passing)
+
+    def test_the_run_cap_carries_across_phases(self):
+        from unittest import mock
+        logs = {phase: self._file(self.testlogs / phase / "test.log", b"x" * 6)
+                for phase in lane.PHASES}
+
+        def fake_phase(command, environment, console):
+            phase = "gpu" if "--config=remote-macos-gpu" in command else "native"
+            events = next(word.split("=", 1)[1] for word in command
+                          if word.startswith("--build_event_json_file="))
+            Path(events).write_text(
+                "\n".join(_events(self._result("//a:" + phase, logs[phase].as_uri()))) + "\n",
+                encoding="utf-8")
+            return 3, False
+
+        args = lane.parse_args(["--out", str(self.out), "--fallback", "true",
+                                "--output-user-root", str(self.root)], {})
+        with mock.patch.object(lane, "_preflight", return_value=(None, 0)), \
+                mock.patch.object(lane, "run_phase", side_effect=fake_phase), \
+                mock.patch.object(lane, "MAX_ARTIFACT_TOTAL_BYTES", 10), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(3, lane.run(args, {}))
+        self.assertTrue((self.out / lane.ARTIFACTS / "native" / self.CFG / "native" /
+                         "test.log").is_file())
+        self.assertFalse((self.out / lane.ARTIFACTS / "gpu").exists() and any(
+            path.is_file() for path in (self.out / lane.ARTIFACTS / "gpu").rglob("*")))
+        self.assertIn("gpu/test.log of //a:gpu is not uploaded: 6 bytes is over the per-run cap "
+                      "of 4 bytes", printed.getvalue())
 
     def test_a_staged_file_stays_inside_the_stage_root(self):
         stage = self.out / "stage"

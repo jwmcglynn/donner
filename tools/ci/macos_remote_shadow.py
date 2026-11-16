@@ -532,16 +532,17 @@ def _contained_source(path, output_root):
 
 
 def _open_regular(path):
-    """(read descriptor, size) of a regular file, or None. A final symbolic link is not followed,
-    and the type and size come from the opened descriptor, so the file cannot be swapped between
-    the check and the copy."""
+    """(read descriptor, size) of a regular file with one link, or None. A final symbolic link is
+    not followed, a hard link (which can name a file outside the output root) is refused, and the
+    type, link count and size come from the opened descriptor, so the file cannot be swapped
+    between the check and the copy."""
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
                              getattr(os, "O_CLOEXEC", 0))
     except OSError:
         return None
     info = os.fstat(descriptor)
-    if not stat.S_ISREG(info.st_mode):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         os.close(descriptor)
         return None
     return descriptor, info.st_size
@@ -592,21 +593,34 @@ def _stage_one(stage_root, key, source, limit):
     target = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     try:
         copied = _copy_bounded(source, target, limit)
-    finally:
+    except BaseException:
         os.close(target)
+        destination.unlink()
+        raise
+    os.close(target)
     if copied is None:
         destination.unlink()
     return copied
 
 
-def stage_failed_test_outputs(lines, out, phase, output_root, budget):
+def stage_failed_test_outputs(lines, out, phase, output_root, budget, staged=None):
     """Copies a phase's failed tests' collected outputs that Bazel downloaded (by the lane's
     download regex) and that lie inside the lane's output root to OUT/test-artifacts/PHASE/.
-    `budget` is how many bytes this run may still stage. Returns (files, bytes) staged."""
+    `budget` is how many bytes this run may still stage. Returns (files, bytes) staged, which it
+    also keeps current in `staged` as it goes, so a caller knows them even if it raises."""
+    staged = {"files": 0, "bytes": 0} if staged is None else staged
     stage_root = Path(out) / ARTIFACTS / phase
-    shutil.rmtree(stage_root, ignore_errors=True)
+    if any(path.is_symlink() for path in (stage_root.parent, stage_root)):
+        print("::warning::macOS remote shadow lane: %s is a symbolic link; nothing of the %s "
+              "phase is staged." % (ARTIFACTS, phase))
+        return 0, 0
+    if os.path.lexists(stage_root):
+        shutil.rmtree(stage_root)
     files = used = 0
     for key, path, label in failed_test_outputs(lines):
+        # Residual window: a directory below the output root could be swapped for a link after
+        # this check and before the open below. Only a concurrent process on the runner can do
+        # that, and the lane's trust gate already lets such a pull request run code there.
         source = _contained_source(path, output_root)
         opened = _open_regular(source) if source else None
         if opened is None:
@@ -628,6 +642,7 @@ def stage_failed_test_outputs(lines, out, phase, output_root, budget):
                 _skip(label, key, size, cap, which + " (it grew while it was copied)")
                 continue
             files, used = files + 1, used + copied
+            staged.update(files=files, bytes=used)
         finally:
             os.close(descriptor)
     return files, used
@@ -864,25 +879,37 @@ def _run_lane(args, environment, targets, summary):
     return first_failure
 
 
+def _non_passing_results(lines):
+    """How many test results of a build event file did not pass."""
+    return sum(1 for event in _decoded(lines)
+               if _dict(event.get("id")).get("testResult") is not None and
+               _dict(event.get("testResult")).get("status") != "PASSED")
+
+
 def _stage_phase(args, lines, phase, budget, status):
-    """Stages a phase's failed test outputs; returns the bytes staged. Never raises: staging must
-    not cost the summary."""
+    """Stages a phase's failed test outputs; returns the bytes staged, also when staging stopped
+    part way, so the run cap holds across phases. Never raises: staging must not cost the
+    summary."""
+    staged = {"files": 0, "bytes": 0}
     if not args.output_user_root:
         if status != 0:
             print("::warning::macOS remote shadow lane: failed test outputs are staged only with "
                   "--output-user-root.")
-        return 0
-    try:
-        files, used = stage_failed_test_outputs(lines, args.out, phase, args.output_user_root,
-                                                budget)
-    except Exception as error:  # Staging is diagnostic only; never lose the summary.
-        print("::warning::macOS remote shadow lane: the %s phase's failed test outputs were not "
-              "staged (%s)." % (phase, type(error).__name__))
-        return 0
-    if files:
-        print("macOS remote shadow lane: staged %d output files (%d bytes) of the %s phase's "
-              "failed tests." % (files, used, phase))
-    return used
+    else:
+        try:
+            stage_failed_test_outputs(lines, args.out, phase, args.output_user_root, budget,
+                                      staged)
+        except Exception as error:  # Staging is diagnostic only; never lose the summary.
+            print("::warning::macOS remote shadow lane: the %s phase's failed test outputs were "
+                  "not all staged (%s)." % (phase, type(error).__name__))
+    print("macOS remote shadow lane: staged %d output files (%d bytes) for %s."
+          % (staged["files"], staged["bytes"], phase))
+    failed = _non_passing_results(lines)
+    if failed and not staged["files"]:
+        print("::warning::macOS remote shadow lane: the %s phase has %d test results that did "
+              "not pass but staged no output files; their outputs were not downloaded or do not "
+              "lie below the lane's output root." % (phase, failed))
+    return staged["bytes"]
 
 
 def parse_args(argv, environ):

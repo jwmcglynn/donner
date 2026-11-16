@@ -621,8 +621,10 @@ that the phase's build events name for that test to `test-artifacts/<phase>/<con
 the job uploads them through the test-artifact collector the other lanes use, as the
 `macos-remote-shadow-test-failures-<attempt>` artifact. Only results of the current invocation
 select files, so a log another run left in the lane's persistent output root is never uploaded.
-Only regular files inside the lane's output root, reached without symbolic links, are copied, at
-most 64 MB each and 256 MB per run; a larger file is skipped with a warning that names the test.
+Only regular files with a single link inside the lane's output root, reached without symbolic
+links, are copied, at most 64 MB each and 256 MB per run; a larger file is skipped with a warning
+that names the test. Each phase prints how many files and bytes it staged, and warns when it had
+results that did not pass but staged nothing.
 Earlier attempts of a retried test are not kept, only its final attempt. The lane downloads
 outputs with `--remote_download_outputs=minimal` plus a `--remote_download_regex` for `test.log`,
 `test.xml` and `outputs.zip`. Bazel has no download mode that depends on a test's result, so those
