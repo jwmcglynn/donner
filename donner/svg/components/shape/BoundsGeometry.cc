@@ -1,7 +1,9 @@
 #include "donner/svg/components/shape/BoundsGeometry.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 
 #include "donner/svg/components/style/StyleSystem.h"
 
@@ -12,6 +14,28 @@ namespace {
 bool IsFinite(const Box2d& box) {
   return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
          std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y);
+}
+
+/// A hash of @p path's commands and points, equal for paths \ref HasIdenticalPathData matches.
+std::size_t PathDataHash(const Path& path) {
+  // FNV-1a over 64-bit words.
+  std::uint64_t hash = 14695981039346656037ull;
+  const auto mix = [&hash](std::uint64_t word) {
+    hash ^= word;
+    hash *= 1099511628211ull;
+  };
+  // Adding zero maps -0 to +0, which compare equal.
+  const auto mixCoordinate = [&mix](double value) { mix(std::bit_cast<std::uint64_t>(value + 0.0)); };
+  mix(path.commands().size());
+  for (const Path::Command& command : path.commands()) {
+    mix((static_cast<std::uint64_t>(command.verb) << 33) |
+        (static_cast<std::uint64_t>(command.isInternal) << 32) | command.pointIndex);
+  }
+  for (const Vector2d& point : path.points()) {
+    mixCoordinate(point.x);
+    mixCoordinate(point.y);
+  }
+  return static_cast<std::size_t>(hash);
 }
 
 }  // namespace
@@ -48,18 +72,21 @@ bool HasIdenticalPathData(const Path& first, const Path& second) {
 std::shared_ptr<const Path> BoundsGeometryPaths::share(const Registry& registry, Entity source,
                                                        const Path& path,
                                                        StyleResourceBudget& budget) {
-  std::vector<std::shared_ptr<const Path>>& copies = paths_[{&registry, source}];
-  for (const std::shared_ptr<const Path>& copy : copies) {
+  // Past the allowance nothing more is looked up or copied, so no work grows with the copies.
+  if (budget.externalMeasureGeometryExhausted()) {
+    return nullptr;
+  }
+  CopiesByHash& copies = paths_[{&registry, source}];
+  const std::size_t hash = PathDataHash(path);
+  if (const auto found = copies.find(hash); found != copies.end()) {
     budget.noteExternalMeasureGeometryComparison();
-    if (HasIdenticalPathData(*copy, path)) {
-      return copy;
-    }
+    return HasIdenticalPathData(*found->second, path) ? found->second : nullptr;
   }
   const std::optional<std::size_t> bytes = path.retainedBytes();
   if (!bytes || !budget.reserveExternalMeasureGeometryBytes(*bytes)) {
     return nullptr;
   }
-  return copies.emplace_back(std::make_shared<const Path>(path));
+  return copies.emplace(hash, std::make_shared<const Path>(path)).first->second;
 }
 
 }  // namespace donner::svg::components

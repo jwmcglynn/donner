@@ -92,6 +92,7 @@ public:
         externalMeasureWork_(other.externalMeasureWork_),
         externalMeasureGeometryBytes_(other.externalMeasureGeometryBytes_),
         externalMeasureGeometryComparisons_(other.externalMeasureGeometryComparisons_),
+        externalMeasureGeometryExhausted_(other.externalMeasureGeometryExhausted_),
         externalResourceWarning_(other.externalResourceWarning_),
         aggregateWork_(other.aggregateWork_),
         limits_(other.limits_),
@@ -110,6 +111,7 @@ public:
     other.externalMeasureWork_ = 0;
     other.externalMeasureGeometryBytes_ = 0;
     other.externalMeasureGeometryComparisons_ = 0;
+    other.externalMeasureGeometryExhausted_ = false;
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
 
@@ -201,12 +203,14 @@ public:
 
   /**
    * Admit @p bytes of path geometry that external-use measurement retains until the frame ends,
-   * against a frame allowance of its own.
+   * against a frame allowance of its own. The first refusal exhausts the allowance for the frame.
    * @param bytes Bytes of one retained path copy.
    * @return True when the bytes fit the remaining allowance.
    */
   bool reserveExternalMeasureGeometryBytes(std::size_t bytes) {
-    if (bytes > limits_.externalMeasureGeometryBytes - externalMeasureGeometryBytes_) {
+    if (externalMeasureGeometryExhausted_ ||
+        bytes > limits_.externalMeasureGeometryBytes - externalMeasureGeometryBytes_) {
+      externalMeasureGeometryExhausted_ = true;
       return false;
     }
     externalMeasureGeometryBytes_ += bytes;
@@ -216,6 +220,12 @@ public:
   /// Path bytes external-use measurement retains in the current frame.
   [[nodiscard]] std::size_t externalMeasureGeometryBytes() const {
     return externalMeasureGeometryBytes_;
+  }
+
+  /// Whether a path copy external-use measurement asked to retain did not fit the current frame's
+  /// allowance, after which no more are retained.
+  [[nodiscard]] bool externalMeasureGeometryExhausted() const {
+    return externalMeasureGeometryExhausted_;
   }
 
   /// Count one full comparison of a measured path against a retained path copy.
@@ -244,6 +254,7 @@ public:
     externalMeasureWork_ = 0;
     externalMeasureGeometryBytes_ = 0;
     externalMeasureGeometryComparisons_ = 0;
+    externalMeasureGeometryExhausted_ = false;
     externalResourceWarning_ = false;
   }
 
@@ -384,6 +395,7 @@ private:
   std::size_t externalMeasureWork_ = 0;
   std::size_t externalMeasureGeometryBytes_ = 0;
   std::size_t externalMeasureGeometryComparisons_ = 0;
+  bool externalMeasureGeometryExhausted_ = false;
   bool externalResourceWarning_ = false;
   StyleResourceBudget* aggregateWork_ = nullptr;
   Limits limits_;

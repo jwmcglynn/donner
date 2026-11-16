@@ -809,7 +809,10 @@ private:
       std::shared_ptr<const Path> shared =
           collector_->paths.share(*source.registry(), source.entity(), path, collector_->budget);
       if (!shared) {
-        // Past the allowance, the path's own box stands in for it.
+        // Past the allowance, or on a rare hash collision, the path's own box stands in for it.
+        // Under a rotation or skew that box bounds the path more loosely, so objectBoundingBox
+        // effects scale against a larger box than in-document: an intended degradation, and the
+        // bound still contains the path.
         addBox(path.bounds(), targetFromPath);
         return;
       }
