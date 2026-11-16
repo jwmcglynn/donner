@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,6 +24,8 @@ import {
   shouldRecordBrowserStall,
   systemLogWindow,
 } from "./browser-stall-diagnostics.mjs";
+
+const { kStallGuardMs } = createRequire(import.meta.url)("./test-timing.cjs");
 
 const kApp = "/private/home/runfiles/chrome-mac-arm64/Google Chrome for Testing.app/Contents";
 const kHelper = `${kApp}/Frameworks/Google Chrome for Testing Framework.framework/Helpers`;
@@ -187,10 +190,12 @@ test("call graphs drop the report header and binary image paths", () => {
 test("failed commands are described without their command line", async () => {
   const directory = await scratch("stall-commands");
   const results = await Promise.all([
-    runBounded(process.execPath, ["-e", "process.exit(3)", directory], 10_000).done,
+    // The stall guard bounds the commands that end on their own; only the second relies on its
+    // bound firing.
+    runBounded(process.execPath, ["-e", "process.exit(3)", directory], kStallGuardMs).done,
     runBounded(process.execPath, ["-e", "setTimeout(() => {}, 60000)", directory], 200).done,
-    runBounded(path.join(directory, "missing-tool"), [directory], 10_000).done,
-    runBounded(process.execPath, ["-e", "process.stdout.write('ok')"], 10_000).done,
+    runBounded(path.join(directory, "missing-tool"), [directory], kStallGuardMs).done,
+    runBounded(process.execPath, ["-e", "process.stdout.write('ok')"], kStallGuardMs).done,
   ]);
   assert.deepEqual(results, [
     { ok: false, stdout: "", error: "exit:3" },

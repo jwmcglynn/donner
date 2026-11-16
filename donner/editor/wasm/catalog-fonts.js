@@ -399,8 +399,12 @@
       try {
         await abortable(
           this.locks.request(cacheName, { ifAvailable: true }, (lock) => {
-            if (!lock) return;
-            return this.persistLocked(work);
+            // A grant can arrive after the deadline already settled cacheWork. Write nothing then,
+            // and never return a rejected promise: the browser can report it as uncaught before
+            // the lock manager adopts it. The returned promise still holds the lock until an
+            // issued cache mutation settles.
+            if (!lock || signal.aborted) return;
+            return this.persistLocked(work).catch(() => {});
           }),
           signal,
         );

@@ -1128,6 +1128,9 @@ struct TextParams {
   Direction direction = Direction::Ltr;
   /// Whether this text element's own `unicode-bidi` overrides every character to `direction`.
   bool bidiOverride = false;
+  /// Whether the `<text>` element's own `unicode-bidi` is `plaintext`, which detects each
+  /// paragraph's base direction from its first strong character.
+  bool bidiPlaintext = false;
 };
 
 /**

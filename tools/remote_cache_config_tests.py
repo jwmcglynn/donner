@@ -14,11 +14,12 @@ class RemoteCacheConfigTest(unittest.TestCase):
         assert bazelversion_path is not None
 
         with open(bazelrc_path, encoding="utf-8") as bazelrc:
-            cls.bazelrc_lines = {
-                line.strip()
-                for line in bazelrc
-                if line.strip() and not line.lstrip().startswith("#")
-            }
+            cls.bazelrc_text = bazelrc.read()
+        cls.bazelrc_lines = {
+            line.strip()
+            for line in cls.bazelrc_text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
         with open(bazelversion_path, encoding="utf-8") as bazelversion:
             cls.bazel_version = bazelversion.read().strip()
 
@@ -70,6 +71,28 @@ class RemoteCacheConfigTest(unittest.TestCase):
             "coverage --skip_incompatible_explicit_targets",
             self.bazelrc_lines,
         )
+
+    def test_profiler_skips_network_usage_until_bazel_9(self):
+        # Bazel 8 can crash while sampling the macOS network counters; see the comment at the
+        # line in .bazelrc. Bazel 9 retries the sampling, so the upgrade removes the line and
+        # this test together.
+        line = "common --noexperimental_collect_system_network_usage"
+        rc = self.bazelrc_text.splitlines()
+        self.assertEqual(
+            [line],
+            [entry.strip() for entry in rc
+             if "experimental_collect_system_network_usage" in entry
+             and not entry.lstrip().startswith("#")],
+        )
+        major = int(self.bazel_version.split(".", 1)[0])
+        self.assertLess(major, 9, "Bazel 9 fixed the crash: remove %r and this test" % line)
+        comment = []
+        for entry in reversed(rc[:rc.index(line)]):
+            if not entry.startswith("#"):
+                break
+            comment.append(entry)
+        self.assertIn("Remove this when the repository moves to Bazel 9",
+                      " ".join(entry.lstrip("# ") for entry in reversed(comment)))
 
 
 if __name__ == "__main__":
