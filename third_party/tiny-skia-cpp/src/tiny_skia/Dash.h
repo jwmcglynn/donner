@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "tiny_skia/Path.h"
@@ -86,7 +87,8 @@ struct ContourMeasure {
 /// Iterator that yields ContourMeasure for each contour in a path.
 class ContourMeasureIter {
  public:
-  /// \p resScale is lowered as \ref PrecisionLimitedResScale states (a Donner addition).
+  /// For each curve, \p resScale is lowered as \ref PrecisionLimitedResScale states for that
+  /// curve's own coordinates (a Donner addition).
   /// @param limits Optional bound on the measurement steps (a Donner addition; see StrokeLimits).
   ContourMeasureIter(const Path& path, float resScale, StrokeLimits* limits = nullptr);
 
@@ -95,7 +97,10 @@ class ContourMeasureIter {
 
  private:
   PathSegmentsIter iter_;
-  float tolerance_;
+  /// Donner addition: the curve tolerance for a segment with control points \p points.
+  [[nodiscard]] float toleranceFor(std::span<const Point> points) const;
+
+  float resScale_ = 1.0f;
   StrokeLimits* limits_ = nullptr;
 };
 

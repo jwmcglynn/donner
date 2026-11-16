@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "tiny_skia/Path.h"
@@ -66,8 +67,9 @@ struct StrokeLimits {
 [[nodiscard]] float PrecisionLimitedResScale(float resScale, float maxCoordinate,
                                              float toleranceAtUnitScale);
 
-/// The largest absolute coordinate of \p path's control points, grown by \p reach.
-[[nodiscard]] float MaxAbsCoordinate(const Path& path, float reach);
+/// The largest absolute coordinate of \p points, grown by \p reach. A sum past the largest float
+/// is infinite, which \ref PrecisionLimitedResScale treats as giving no bound.
+[[nodiscard]] float MaxAbsCoordinate(std::span<const Point> points, float reach);
 
 /// Stroke properties for Painter::strokePath.
 struct Stroke {

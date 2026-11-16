@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <numbers>
 #include <utility>
 
 #include "tiny_skia/Math.h"
@@ -613,13 +612,6 @@ std::optional<Path> PathStroker::stroke(const Path& path, const Stroke& stroke,
   if (stroke.width <= 0.0f || !std::isfinite(stroke.width)) {
     return std::nullopt;
   }
-  // Donner addition: keep the curve tolerance above the precision of the coordinates the curve
-  // offsetting works in. The tolerance governs only that subdivision, whose points lie within the
-  // stroke radius of the path; miter tips and caps are computed directly. A square cap's corner
-  // reaches sqrt(2) radii.
-  resolutionScale = PrecisionLimitedResScale(
-      resolutionScale, MaxAbsCoordinate(path, stroke.width * 0.5f * std::numbers::sqrt2_v<float>),
-      kStrokeToleranceAtUnitScale);
   limits_ = limits;
   std::optional<Path> outline = strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap,
                                             stroke.lineJoin, resolutionScale);
@@ -655,19 +647,9 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
     invMiterLimit = 1.0f / miterLimit;
   }
 
-  resScale_ = resScale;
   radius_ = width * 0.5f;
-  // The '4' below matches the fill scan converter's error term.
-  float baseInvResScale = 1.0f / (resScale * 4.0f);
-  // For thin strokes (radius < 2px), loosen tolerance proportionally.
-  // Subpixel precision is wasted when the stroke is only a few pixels wide.
-  if (radius_ > 0.0f && radius_ < 2.0f) {
-    float scale = std::min(2.0f / radius_, 2.0f);
-    invResScale_ = baseInvResScale * scale;
-  } else {
-    invResScale_ = baseInvResScale;
-  }
-  invResScaleSquared_ = invResScale_ * invResScale_;
+  pathResScale_ = resScale;
+  setResolutionScale(resScale);
   invMiterLimit_ = invMiterLimit;
 
   firstNormal_ = Point::zero();
@@ -722,20 +704,24 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
         moveTo(segment->pts[0]);
         break;
       case PathSegment::Kind::LineTo:
+        limitSegmentResolution({prevPt_, segment->pts[0]});
         lineTo(segment->pts[0], &iter);
         lastSegmentIsLine = true;
         break;
       case PathSegment::Kind::QuadTo:
+        limitSegmentResolution({prevPt_, segment->pts[0], segment->pts[1]});
         quadTo(segment->pts[0], segment->pts[1]);
         lastSegmentIsLine = false;
         break;
       case PathSegment::Kind::CubicTo:
+        limitSegmentResolution({prevPt_, segment->pts[0], segment->pts[1], segment->pts[2]});
         cubicTo(segment->pts[0], segment->pts[1], segment->pts[2]);
         lastSegmentIsLine = false;
         break;
       case PathSegment::Kind::Close:
         if (lineCap != LineCap::Butt) {
           if (hasOnlyMoveTo()) {
+            limitSegmentResolution({prevPt_, moveToPt()});
             lineTo(moveToPt(), nullptr);
             lastSegmentIsLine = true;
             continue;
@@ -754,6 +740,33 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
     return std::nullopt;
   }
   return finish(lastSegmentIsLine);
+}
+
+void PathStroker::setResolutionScale(float resScale) {
+  resScale_ = resScale;
+  // The '4' below matches the fill scan converter's error term.
+  float baseInvResScale = 1.0f / (resScale * 4.0f);
+  // For thin strokes (radius < 2px), loosen tolerance proportionally.
+  // Subpixel precision is wasted when the stroke is only a few pixels wide.
+  if (radius_ > 0.0f && radius_ < 2.0f) {
+    float scale = std::min(2.0f / radius_, 2.0f);
+    invResScale_ = baseInvResScale * scale;
+  } else {
+    invResScale_ = baseInvResScale;
+  }
+  invResScaleSquared_ = invResScale_ * invResScale_;
+}
+
+// Donner addition: the stroke's tolerances are distances in the path's own coordinates, the
+// device tolerance divided by the resolution scale. Each segment keeps its tolerance at least one
+// float step of the coordinates its offsetting works in: its own points, grown by the stroke
+// radius, which bounds every offset point. Miter tips and caps are placed directly, without this
+// tolerance. A segment far from the origin therefore cannot coarsen another segment of the path.
+void PathStroker::limitSegmentResolution(std::initializer_list<Point> points) {
+  setResolutionScale(PrecisionLimitedResScale(
+      pathResScale_,
+      MaxAbsCoordinate(std::span<const Point>(points.begin(), points.size()), radius_),
+      kStrokeToleranceAtUnitScale));
 }
 
 // Donner addition: outline points emitted by the stroke in progress.

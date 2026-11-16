@@ -10,6 +10,7 @@
 #include "tiny_skia/Dash.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -508,15 +509,22 @@ float ContourMeasure::computeCubicSegs(Point p0, Point p1, Point p2, Point p3, f
 
 ContourMeasureIter::ContourMeasureIter(const Path& path, float resScale, StrokeLimits* limits)
     : iter_(path), limits_(limits) {
+  resScale_ = resScale;
+}
+
+// Donner addition: the measure's tolerance is a distance in the path's own coordinates, the device
+// tolerance divided by the resolution scale. Each curve keeps its tolerance at least one float
+// step of its own coordinates, so a segment far from the origin cannot coarsen another segment.
+float ContourMeasureIter::toleranceFor(std::span<const Point> points) const {
   // can't use tangents, since we need [0..1..................2] to be seen
   // as definitely not a line (it is when drawn, but not parametrically)
   // so we compare midpoints
   constexpr float kCheapDistLimit = 0.5f;  // just made this value up
 
-  // Donner addition: keep the tolerance above the precision of the path's coordinates.
-  resScale = PrecisionLimitedResScale(resScale, MaxAbsCoordinate(path, 0.0f), kCheapDistLimit);
+  const float resScale =
+      PrecisionLimitedResScale(resScale_, MaxAbsCoordinate(points, 0.0f), kCheapDistLimit);
   float invResScale = (resScale != 0.0f) ? (1.0f / resScale) : 1.0f;
-  tolerance_ = kCheapDistLimit * invResScale;
+  return kCheapDistLimit * invResScale;
 }
 
 std::optional<ContourMeasure> ContourMeasureIter::next() {
@@ -554,8 +562,9 @@ std::optional<ContourMeasure> ContourMeasureIter::next() {
       }
       case PathSegment::Kind::QuadTo: {
         float prevD = distance;
-        distance = contour.computeQuadSegs(prevP, seg->pts[0], seg->pts[1], distance, 0, kMaxTValue,
-                                           pointIndex, tolerance_);
+        distance = contour.computeQuadSegs(
+            prevP, seg->pts[0], seg->pts[1], distance, 0, kMaxTValue, pointIndex,
+            toleranceFor(std::array{prevP, seg->pts[0], seg->pts[1]}));
         if (distance > prevD) {
           contour.points.push_back(seg->pts[0]);
           contour.points.push_back(seg->pts[1]);
@@ -566,8 +575,9 @@ std::optional<ContourMeasure> ContourMeasureIter::next() {
       }
       case PathSegment::Kind::CubicTo: {
         float prevD = distance;
-        distance = contour.computeCubicSegs(prevP, seg->pts[0], seg->pts[1], seg->pts[2], distance,
-                                            0, kMaxTValue, pointIndex, tolerance_);
+        distance = contour.computeCubicSegs(
+            prevP, seg->pts[0], seg->pts[1], seg->pts[2], distance, 0, kMaxTValue, pointIndex,
+            toleranceFor(std::array{prevP, seg->pts[0], seg->pts[1], seg->pts[2]}));
         if (distance > prevD) {
           contour.points.push_back(seg->pts[0]);
           contour.points.push_back(seg->pts[1]);

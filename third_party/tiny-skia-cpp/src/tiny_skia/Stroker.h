@@ -1,5 +1,6 @@
 #pragma once
 
+#include <initializer_list>
 #include <optional>
 
 #include "tiny_skia/Path.h"
@@ -81,8 +82,9 @@ class PathStroker {
   /// scale. The '4' matches the fill scan converter's error term.
   static constexpr float kStrokeToleranceAtUnitScale = 0.25f;
 
-  /// Strokes \p path. \p resolutionScale is lowered as \ref PrecisionLimitedResScale states (a
-  /// Donner addition). With \p limits, stops and returns no path once the emitted outline passes
+  /// Strokes \p path. For each segment, \p resolutionScale is lowered as
+  /// \ref PrecisionLimitedResScale states for that segment's own coordinates (a Donner addition).
+  /// With \p limits, stops and returns no path once the emitted outline passes
   /// `limits->maxOutlinePoints`, setting `limits->exceeded` (a Donner addition; see StrokeLimits).
   std::optional<Path> stroke(const Path& path, const Stroke& stroke, float resolutionScale,
                              StrokeLimits* limits = nullptr);
@@ -129,6 +131,8 @@ class PathStroker {
 
   std::optional<Path> finish(bool isLine);
   bool exceedsOutputLimit();
+  void setResolutionScale(float resScale);
+  void limitSegmentResolution(std::initializer_list<Point> points);
   std::size_t pendingPoints() const;
   bool passesOutlineLimit(std::size_t emitted) const;
   bool hasOnlyMoveTo() const;
@@ -165,6 +169,10 @@ class PathStroker {
   std::int32_t recursionDepth_ = 0;
   bool foundTangents_ = false;
   bool joinCompleted_ = false;
+
+  // Donner addition: the resolution scale the caller asked for, before each segment's precision
+  // floor (see limitSegmentResolution).
+  float pathResScale_ = 1.0f;
 
   // Donner addition: the caller's bounds, if any (see StrokeLimits).
   StrokeLimits* limits_ = nullptr;

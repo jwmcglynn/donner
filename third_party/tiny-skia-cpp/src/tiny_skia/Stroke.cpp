@@ -52,11 +52,12 @@ float PrecisionLimitedResScale(float resScale, float maxCoordinate, float tolera
                                                           : resScale;
 }
 
-float MaxAbsCoordinate(const Path& path, float reach) {
-  const Rect bounds = path.bounds();
-  return std::max({std::abs(bounds.left()), std::abs(bounds.right()), std::abs(bounds.top()),
-                   std::abs(bounds.bottom())}) +
-         std::abs(reach);
+float MaxAbsCoordinate(std::span<const Point> points, float reach) {
+  float largest = 0.0f;
+  for (const Point point : points) {
+    largest = std::max({largest, std::abs(point.x), std::abs(point.y)});
+  }
+  return largest + std::abs(reach);
 }
 
 }  // namespace tiny_skia

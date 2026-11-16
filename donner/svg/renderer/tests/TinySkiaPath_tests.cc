@@ -472,10 +472,57 @@ TEST(PathTest, StrokeStaysWithinOneFloatStepWhenTheFloorEngages) {
   }
 }
 
+TEST(PathTest, PrecisionFloorIsPerSegment) {
+  // A path that holds a short line four million units out and a small curve near the origin. The
+  // curve's tolerance depends only on its own coordinates, so its stroke outline and its dash
+  // measurement are those of the curve stroked or dashed alone.
+  constexpr float kScale = 20.0f;
+  tiny_skia::PathBuilder curveBuilder;
+  curveBuilder.moveTo(1.0f, 1.0f);
+  curveBuilder.cubicTo(1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 1.0f);
+  const tiny_skia::Path curve = *curveBuilder.finish();
+  tiny_skia::PathBuilder lineBuilder;
+  lineBuilder.moveTo(4000000.0f, 0.0f);
+  lineBuilder.lineTo(4000001.0f, 0.0f);
+  const tiny_skia::Path line = *lineBuilder.finish();
+  tiny_skia::PathBuilder bothBuilder;
+  bothBuilder.pushPath(line);
+  bothBuilder.pushPath(curve);
+  const tiny_skia::Path both = *bothBuilder.finish();
+
+  tiny_skia::Stroke stroke;
+  stroke.width = 0.5f;
+  const std::optional<tiny_skia::Path> curveOutline = curve.stroke(stroke, kScale);
+  const std::optional<tiny_skia::Path> bothOutline = both.stroke(stroke, kScale);
+  ASSERT_THAT(curveOutline, Optional(testing::_));
+  ASSERT_THAT(bothOutline, Optional(testing::_));
+  // The curve's contours come last.
+  const auto curvePoints = curveOutline->points();
+  const auto bothPoints = bothOutline->points();
+  ASSERT_THAT(bothPoints.size(), testing::Gt(curvePoints.size()));
+  EXPECT_THAT(bothPoints.last(curvePoints.size()), testing::ElementsAreArray(curvePoints));
+
+  const std::optional<tiny_skia::StrokeDash> dash =
+      tiny_skia::StrokeDash::create({0.1f, 0.1f}, 0.0f);
+  ASSERT_THAT(dash, Optional(testing::_));
+  tiny_skia::StrokeLimits curveSteps;
+  tiny_skia::StrokeLimits lineSteps;
+  tiny_skia::StrokeLimits bothSteps;
+  const std::optional<tiny_skia::Path> curveDashes = curve.dash(*dash, kScale, &curveSteps);
+  ASSERT_THAT(line.dash(*dash, kScale, &lineSteps), Optional(testing::_));
+  const std::optional<tiny_skia::Path> bothDashes = both.dash(*dash, kScale, &bothSteps);
+  ASSERT_THAT(curveDashes, Optional(testing::_));
+  ASSERT_THAT(bothDashes, Optional(testing::_));
+  EXPECT_EQ(bothSteps.measureSteps, lineSteps.measureSteps + curveSteps.measureSteps);
+  const auto curveDashPoints = curveDashes->points();
+  EXPECT_THAT(bothDashes->points().last(curveDashPoints.size()),
+              testing::ElementsAreArray(curveDashPoints));
+}
+
 TEST(PathTest, StrokeAndDashWorkStaysBoundedAtExtremeScales) {
-  // Past the precision of the coordinates, a larger resolution scale no longer subdivides further:
-  // the stroke's outline and the dash's measurement steps are the same at 10^6 and 10^9, and the
-  // stroke still has an outline.
+  // Past the precision of the coordinates, every larger resolution scale subdivides to the same
+  // tolerance: the stroke's outline and the dash's measurement steps are the same at 10^6 and 10^9,
+  // and the stroke has an outline.
   const tiny_skia::Path circle = CubicCircle();
   tiny_skia::Stroke stroke;
   stroke.width = 2.0f;
@@ -483,7 +530,7 @@ TEST(PathTest, StrokeAndDashWorkStaysBoundedAtExtremeScales) {
   const std::optional<tiny_skia::Path> atBillion = circle.stroke(stroke, 1.0e9f);
   ASSERT_THAT(atMillion, Optional(testing::_));
   ASSERT_THAT(atBillion, Optional(testing::_));
-  EXPECT_EQ(atMillion->points().size(), atBillion->points().size());
+  EXPECT_THAT(atBillion->points(), testing::ElementsAreArray(atMillion->points()));
   EXPECT_THAT(atBillion->points().size(), testing::Lt(16384u));
 
   const tiny_skia::StrokeDash dash = FourFourDash();
