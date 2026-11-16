@@ -609,6 +609,16 @@ unavailable" and skips the remaining phase. The job's 90-minute budget covers a 
 expected within the self-hosted macOS lane's 60 minutes, and keeps a stuck run from holding a
 self-hosted Linux runner for hours.
 
+**The lane's own budget.** The workflow passes `--budget-minutes 70`. It is a deadline on this
+advisory lane's own runtime, not on any test: when it runs out, the running Bazel command is
+stopped the same way, the later phase is skipped, and the lane still stages failed tests' outputs,
+writes its report, summary and job summary, and exits with a failure status so the upload steps
+run. A stopped phase's line in the report gives the actions and tests completed of their totals,
+actions per minute, and the executed actions and action cache hits from its build events, so a
+cold cache reads differently from a starved executor. The budget plus a 15-minute margin for
+stopping Bazel, the summary and the uploads stays below the job's 90-minute timeout, so the runner
+never cancels the job before the lane has reported.
+
 **How a result shows.** The lane never fails a pull request or the coverage contract, which does
 not read it:
 

@@ -482,7 +482,9 @@ py_test(
 # runner configuration, and running a documented subset of the self-hosted macOS lane's tests.
 py_test(
     name = "ci_macos_remote_shadow_tests",
-    size = "small",
+    # The lane-run, starvation and budget cases run real stand-in processes for seconds each
+    # (about 30 s in all), so the small size's 60 s would leave too little room on a loaded host.
+    size = "medium",
     srcs = ["ci_macos_remote_shadow_tests.py"],
     data = [
         "ci_bazel_test.sh",

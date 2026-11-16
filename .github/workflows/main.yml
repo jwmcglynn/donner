@@ -640,7 +640,8 @@ jobs:
         # Its own Bazel output root, outside the workspace, in the runner's persistent tool cache:
         # the Linux lane's server and analysis cache are left alone, and the lane keeps its
         # repository and analysis caches between runs. The script shuts its server down at the end.
-        run: python3 tools/ci/macos_remote_shadow.py --out "$RUNNER_TEMP/macos-remote-shadow" --output-user-root "$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output"
+        # --budget-minutes keeps the lane inside timeout-minutes with room to report and upload.
+        run: python3 tools/ci/macos_remote_shadow.py --out "$RUNNER_TEMP/macos-remote-shadow" --output-user-root "$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output" --budget-minutes 70
 
       # Derived files only: the build event and execution logs record the runner's effective
       # Bazel configuration, and a stall note can quote a Bazel message; they stay on the runner.

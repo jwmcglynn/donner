@@ -39,9 +39,12 @@ executor. It passes the parts of `ci` that this lane needs itself (CI_FLAGS).
 Usage:
   tools/ci/macos_remote_shadow.py [--dry-run] --out DIR [--fallback true|false]
       [--affected 'LABEL ...'] [--bazel PATH] [--startup-option OPT]... [--rc-option OPT]...
+      [--output-user-root DIR] [--budget-minutes N]
 
 --fallback and --affected default to the FALLBACK and AFFECTED environment variables, which the
 workflow sets from the planner's outputs: a fallback selects //..., otherwise the affected labels.
+--budget-minutes is the lane's own wall-clock budget (see REPORT_MARGIN_MINUTES): when it runs out,
+the running command is stopped, the later phase skipped and the report written.
 --rc-option stands in for runner rc configuration in a manual run: each one is placed right after
 the config, where the config's own rc lines apply. --dry-run prints each Bazel command line and
 runs nothing.
@@ -132,6 +135,8 @@ CLIENT_REPO_ENV = "--incompatible_repo_env_ignores_action_env"
 # `ci` composes for every non-release lane.
 TEST_LANE_CONFIG = "--config=ci-test-lane"
 
+LANE_TEST_ENV = "--test_env=DONNER_CI_MACOS_LANE=remote-shadow"
+
 # Remote timeouts, fallback and every other remote setting come from the config and the runner's
 # rc; a command-line value here would override the runner's.
 LANE_FLAGS = (CLIENT_REPO_ENV,) + CI_FLAGS + (
@@ -142,7 +147,7 @@ LANE_FLAGS = (CLIENT_REPO_ENV,) + CI_FLAGS + (
     "--test_output=errors",
     QUIET_REMOTE_MESSAGES,
     # Test results of this lane are its own; build actions are shared.
-    "--test_env=DONNER_CI_MACOS_LANE=remote-shadow",
+    LANE_TEST_ENV,
 )
 
 IDENTITY = "DONNER_CI_XCODE_IDENTITY"
@@ -238,9 +243,11 @@ def routing_command(bazel, startup, rc_options, out):
     directory = Path(out) / "preflight"
     events, console = directory / "routing.json", directory / "routing.log"
     return ([WATCHDOG, str(console), bazel, *startup, "test", "--config=" + CONFIG, *rc_options,
-             CLIENT_REPO_ENV, *CI_FLAGS, QUIET_REMOTE_MESSAGES, "--nocache_test_results",
-             "--test_tag_filters=", "--test_output=errors", "--build_event_json_file=%s" % events,
-             ROUTING_PROBE],
+             CLIENT_REPO_ENV, *CI_FLAGS,
+             # The native phase's analysis options, so that phase reuses this analysis.
+             TEST_LANE_CONFIG, LANE_TEST_ENV,
+             QUIET_REMOTE_MESSAGES, "--nocache_test_results", "--test_tag_filters=",
+             "--test_output=errors", "--build_event_json_file=%s" % events, ROUTING_PROBE],
             events, console)
 
 
@@ -294,10 +301,13 @@ def _routing_problem(args, environment):
     """Why the routing probe does not prove the lane's actions run on macOS arm64, or None."""
     command, events, console = routing_command(args.bazel, args.startup_option, args.rc_option,
                                                args.out)
-    status, starved = run_phase(command, environment, console, limit=ROUTING_STARVED_SECONDS)
+    status, stop = run_phase(command, environment, console, limit=ROUTING_STARVED_SECONDS,
+                             deadline=args.deadline)
     lines = _read_lines(events) or []
     events.unlink(missing_ok=True)
-    if starved:
+    if stop == OUT_OF_TIME:
+        return "the routing probe ran out of the lane's budget (%s)." % OUT_OF_TIME
+    if stop:
         return ("this runner is not configured for the remote macOS lane: the routing probe was "
                 "not scheduled within %d minutes (%s)." % (ROUTING_STARVED_SECONDS // 60, STARVED))
     if status != 0 and probe_ran_and_failed(lines):
@@ -374,7 +384,8 @@ def _preflight(args, environment):
     statuses, executors = {}, {}
     for probe, (command, events) in preflight_commands(
             args.bazel, args.startup_option, args.rc_option, args.out).items():
-        statuses[probe], executors[probe], repository = _probe(command, events, environment)
+        statuses[probe], executors[probe], repository = _probe(command, events, environment,
+                                                               args.deadline)
         if repository:
             return _REPOSITORY_PROBLEM % statuses[probe], statuses[probe]
         if statuses[probe] != 0:
@@ -387,12 +398,12 @@ def _preflight(args, environment):
     return _routing_problem(args, environment), 2
 
 
-def _probe(command, events, environment):
+def _probe(command, events, environment, deadline=None):
     """Runs one preflight probe: (exit status, executor or None when unreadable, whether a
     repository rule failed on the client). Its build event file is deleted at once, since it
     records the runner's effective options."""
     events.parent.mkdir(parents=True, exist_ok=True)
-    status, output = _run_captured(command, environment)
+    status, output = _run_captured(command, environment, events.with_suffix(".log"), deadline)
     repository = status != 0 and any(marker in output for marker in _REPOSITORY_FAILURES)
     lines = _read_lines(events)
     events.unlink(missing_ok=True)
@@ -728,8 +739,24 @@ def _row(phase, entry):
             entry["actions_executed"], entry["action_cache_hits"])))
 
 
+def _stopped_details(phase, entry):
+    """What a stopped phase got through, so a cold cache reads differently from starvation."""
+    counts = entry.get("progress") or {}
+
+    def pair(done, total):
+        return "%s / %s" % ("-" if done is None else done, "-" if total is None else total)
+
+    return ["- %s stopped (%s) after %s s: %s actions, %s tests, %s actions per minute; build "
+            "events: %d actions executed, %d action cache hits" % (
+                phase, entry["outcome"], entry["wall_time_seconds"],
+                pair(counts.get("actions_done"), counts.get("actions_total")),
+                pair(counts.get("tests_done"), counts.get("tests_total")),
+                "-" if entry.get("actions_per_minute") is None else entry["actions_per_minute"],
+                entry["actions_executed"], entry["action_cache_hits"])]
+
+
 def _details(phase, entry):
-    lines = []
+    lines = _stopped_details(phase, entry) if entry.get("outcome") else []
     if entry.get("runners"):
         lines.append("- %s spawns by runner: %s" % (phase, ", ".join(
             "%s %d" % (name, count) for name, count in sorted(entry["runners"].items()))))
@@ -765,18 +792,51 @@ STARVED_SECONDS = 20 * 60
 STARVED_STATUS = 124
 POLL_SECONDS = 15
 STARVED = "executor starved or unavailable"
+
+# The lane's own wall-clock budget, --budget-minutes, which the workflow step passes. It is a
+# deadline on this advisory lane's runtime, so that the lane stops itself and reports before the
+# job's timeout-minutes cancels it with nothing written; it is not a deadline on any test or on
+# correctness. When it runs out, the running Bazel command is stopped like a starved phase and the
+# later phase is skipped. REPORT_MARGIN_MINUTES is what the job still needs after the budget:
+# up to two minutes of interrupts to stop Bazel, staging, the summary, up to two minutes to shut
+# the server down, and the upload steps. The workflow's budget plus this margin stays below the
+# job's timeout-minutes (//tools:ci_macos_remote_shadow_tests).
+REPORT_MARGIN_MINUTES = 15
+OUT_OF_TIME = "out of time"
+OUT_OF_TIME_STATUS = 124
+_STOP_STATUS = {STARVED: STARVED_STATUS, OUT_OF_TIME: OUT_OF_TIME_STATUS}
 # An optional `(HH:MM:SS)` prefix: a runner rc may turn on --show_timestamps.
 _PROGRESS = re.compile(r"^(?:\(\d\d:\d\d:\d\d(?:\.\d+)?\) )?\[([\d,]+) / ([\d,]+)\]")
 
 
+_PROGRESS_TESTS = re.compile(r"\] ([\d,]+) / ([\d,]+) tests?\b")
+
+
+def _last_progress_line(text):
+    lines = [line for line in text.splitlines() if _PROGRESS.match(line)]
+    return lines[-1] if lines else None
+
+
+def _counts(match):
+    return tuple(int(group.replace(",", "")) for group in match.groups())
+
+
 def progress(text):
     """(done, total) of the last Bazel progress line in console text, or None."""
-    found = None
-    for line in text.splitlines():
-        match = _PROGRESS.match(line)
-        if match:
-            found = tuple(int(group.replace(",", "")) for group in match.groups())
-    return found
+    line = _last_progress_line(text)
+    return _counts(_PROGRESS.match(line)) if line else None
+
+
+def progress_counts(text):
+    """Actions and tests done and total of the last Bazel progress line, or None."""
+    line = _last_progress_line(text)
+    if line is None:
+        return None
+    actions = _counts(_PROGRESS.match(line))
+    tests = _PROGRESS_TESTS.search(line)
+    tests = _counts(tests) if tests else (None, None)
+    return {"actions_done": actions[0], "actions_total": actions[1],
+            "tests_done": tests[0], "tests_total": tests[1]}
 
 
 class StarvationGuard:
@@ -809,51 +869,94 @@ def _tail(path, size=65536):
 
 
 def _stop(process, grace=(60, 30, 30)):
-    """Interrupts the phase's process group as Ctrl-C would, up to three times (Bazel cancels
-    the invocation on the first and kills its server on the third), then kills what is left."""
+    """Interrupts the command's process group as Ctrl-C would, up to three times (Bazel cancels
+    the invocation on the first and kills its server on the third), then kills what is left. It
+    returns only once every process of the group has exited, so no wrapper or Bazel client is
+    left behind, still writing the build event file the lane reads next."""
     for seconds in grace:
         try:
             os.killpg(process.pid, signal.SIGINT)
         except ProcessLookupError:
+            break
+        if _group_gone(process, seconds):
             return
-        try:
-            process.wait(timeout=seconds)
-            return
-        except subprocess.TimeoutExpired:
-            continue
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    _group_gone(process, 30)
     process.wait()
 
 
+def _group_gone(process, seconds):
+    """Waits up to `seconds` for every process of the command's process group to exit, reaping
+    the command itself; returns whether the group is gone."""
+    bound = time.monotonic() + seconds
+    while True:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            process.wait()
+            return True
+        if time.monotonic() >= bound:
+            return False
+        time.sleep(0.1)
+
+
 def run_phase(command, environment, console, limit=STARVED_SECONDS, poll=POLL_SECONDS,
-              clock=time.monotonic, grace=(60, 30, 30)):
-    """Runs one phase command; returns (status, starved). The process runs in a session of its
-    own, so a starvation stop reaches the wrappers and the Bazel client together."""
+              clock=time.monotonic, grace=(60, 30, 30), deadline=None):
+    """Runs one phase command; returns (status, stop), stop being None, STARVED or OUT_OF_TIME
+    (the lane's budget, `deadline` on `clock`, ran out). The process runs in a session of its
+    own, so a stop reaches the wrappers and the Bazel client together; the lane shuts the
+    server down at its end."""
     print("+ " + shlex.join(command), flush=True)
     process = subprocess.Popen(command, cwd=ROOT, env=environment, start_new_session=True)
     guard = StarvationGuard(clock(), limit)
     while True:
+        wait = poll if deadline is None else max(0.0, min(poll, deadline - clock()))
         try:
-            return process.wait(timeout=poll), False
+            return process.wait(timeout=wait), None
         except subprocess.TimeoutExpired:
             pass
-        if guard.starved(progress(_tail(console)), clock()):
-            print("::warning::macOS remote shadow lane: no Bazel action completed for %ds while "
-                  "actions remained; stopping the phase (%s)." % (limit, STARVED), flush=True)
+        stop = _stop_reason(guard, console, clock, deadline)
+        if stop is not None:
+            print("::warning::macOS remote shadow lane: %s; stopping the command (%s)." % (
+                "no Bazel action completed for %ds while actions remained" % limit
+                if stop == STARVED else "the lane's budget ran out", stop), flush=True)
             _stop(process, grace)
-            return STARVED_STATUS, True
+            return _STOP_STATUS[stop], stop
 
 
-def _run_captured(command, environment):
-    """(exit status, console output) of a command; the output is also printed, as it would be."""
+def _stop_reason(guard, console, clock, deadline):
+    """STARVED, OUT_OF_TIME or None. Starvation is checked first: a starved executor is the more
+    useful finding."""
+    if guard.starved(progress(_tail(console)), clock()):
+        return STARVED
+    if deadline is not None and clock() >= deadline:
+        return OUT_OF_TIME
+    return None
+
+
+def _run_captured(command, environment, console, deadline=None, grace=(60, 30, 30)):
+    """(exit status, console output) of a command; the output is also printed, as it would be.
+    Past `deadline` (time.monotonic) it is stopped like a phase and reports OUT_OF_TIME_STATUS."""
     print("+ " + shlex.join(command), flush=True)
-    result = subprocess.run(command, cwd=ROOT, env=environment, check=False, text=True,
-                            errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    print(result.stdout, end="", flush=True)
-    return result.returncode, result.stdout
+    with open(console, "w", encoding="utf-8") as handle:
+        process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=handle,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            status = process.wait(
+                timeout=None if deadline is None else max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            print("::warning::macOS remote shadow lane: the lane's budget ran out; stopping the "
+                  "command (%s)." % OUT_OF_TIME, flush=True)
+            _stop(process, grace)
+            status = OUT_OF_TIME_STATUS
+    output = Path(console).read_text(encoding="utf-8", errors="replace")
+    Path(console).unlink(missing_ok=True)
+    print(output, end="", flush=True)
+    return status, output
 
 
 def _read_lines(path):
@@ -882,6 +985,8 @@ def run(args, environment):
     if not targets:
         print("::error::Empty target selection reached the macOS remote shadow lane.")
         return 2
+    args.deadline = time.monotonic() + args.budget_minutes * 60 if args.budget_minutes > 0 \
+        else None
     summary = {"version": 1, "targets": len(targets), "fallback": args.fallback == "true",
                "phases": {}}
     try:
@@ -908,41 +1013,76 @@ def _run_lane(args, environment, targets, summary):
         print("::error::macOS remote shadow lane: %s" % problem)
         _finish(args.out, summary, environment)
         return status
-    first_failure = 0
+    first_failure, stopped = 0, None
     budget = MAX_ARTIFACT_TOTAL_BYTES
     for phase in PHASES:
-        if first_failure == STARVED_STATUS:
-            # The executor gave no progress; another phase would only wait again.
+        if stopped is None and _past(args.deadline):
+            stopped = OUT_OF_TIME
+            summary["problem"] = "the lane's budget ran out before the %s phase (%s)." % (
+                phase, OUT_OF_TIME)
+            first_failure = first_failure or OUT_OF_TIME_STATUS
+        if stopped is not None:
+            # A starved executor or no time left: another phase would only wait again.
             summary["phases"][phase] = None
             continue
-        files = _phase_files(args.out, phase)
-        files["bep"].parent.mkdir(parents=True, exist_ok=True)
-        started = time.monotonic()
-        status, starved = run_phase(phase_command(phase, args.bazel, args.startup_option,
-                                                  args.rc_option, args.out, targets),
-                                    environment, files["console"])
-        lines = _read_lines(files["bep"]) or []
-        try:
-            entry = summarize(lines)
-        except Exception as error:  # A malformed event file must not cost the summary.
-            print("::warning::macOS remote shadow lane: the %s phase's build event file could "
-                  "not be summarized (%s)." % (phase, type(error).__name__))
-            entry = summarize([])
-        budget -= _stage_phase(args, lines, phase, budget, status)
-        entry["status"] = status
-        if starved:
-            entry["outcome"] = STARVED
-            summary["problem"] = "the %s phase was stopped: %s (no action completed for %d " \
-                "minutes while actions remained)." % (phase, STARVED, STARVED_SECONDS // 60)
-        if entry["wall_time_seconds"] is None:
-            entry["wall_time_seconds"] = round(time.monotonic() - started, 1)
+        entry, stopped, used = _run_one_phase(args, environment, targets, phase, budget)
+        budget -= used
         summary["phases"][phase] = entry
-        if status != 0:
+        if stopped is not None:
+            summary["problem"] = _stop_problem(args, phase, entry)
+        if entry["status"] != 0:
             print("::warning::macOS remote shadow lane: the %s phase exited %d (advisory; the "
-                  "pull request is not failed by it)." % (phase, status))
-            first_failure = first_failure or status
+                  "pull request is not failed by it)." % (phase, entry["status"]))
+            first_failure = first_failure or entry["status"]
     _finish(args.out, summary, environment)
     return first_failure
+
+
+def _past(deadline):
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _run_one_phase(args, environment, targets, phase, budget):
+    """Runs and summarizes one phase and stages its failed tests' outputs: (entry, stop, bytes
+    staged)."""
+    files = _phase_files(args.out, phase)
+    files["bep"].parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    status, stop = run_phase(phase_command(phase, args.bazel, args.startup_option,
+                                           args.rc_option, args.out, targets),
+                             environment, files["console"], deadline=args.deadline)
+    lines = _read_lines(files["bep"]) or []
+    try:
+        entry = summarize(lines)
+    except Exception as error:  # A malformed event file must not cost the summary.
+        print("::warning::macOS remote shadow lane: the %s phase's build event file could "
+              "not be summarized (%s)." % (phase, type(error).__name__))
+        entry = summarize([])
+    used = _stage_phase(args, lines, phase, budget, status)
+    entry["status"] = status
+    if entry["wall_time_seconds"] is None:
+        entry["wall_time_seconds"] = round(time.monotonic() - started, 1)
+    if stop is not None:
+        entry["outcome"] = stop
+        entry["progress"] = progress_counts(_tail(files["console"]))
+        minutes = (time.monotonic() - started) / 60.0
+        done = (entry["progress"] or {}).get("actions_done")
+        entry["actions_per_minute"] = None if done is None or minutes <= 0 else \
+            round(done / minutes, 1)
+    return entry, stop, used
+
+
+def _stop_problem(args, phase, entry):
+    """The summary's problem line for a phase stopped as starved or out of time."""
+    if entry["outcome"] == STARVED:
+        return "the %s phase was stopped: %s (no action completed for %d minutes while " \
+            "actions remained)." % (phase, STARVED, STARVED_SECONDS // 60)
+    return "the %s phase was stopped: %s (the lane's %s-minute budget ran out)." % (
+        phase, OUT_OF_TIME, _minutes(args.budget_minutes))
+
+
+def _minutes(value):
+    return ("%g" % value) if value else "-"
 
 
 def _non_passing_results(lines):
@@ -989,6 +1129,10 @@ def parse_args(argv, environ):
     parser.add_argument("--output-user-root", default="",
                         help="the lane's own Bazel output root, passed to every Bazel command")
     parser.add_argument("--rc-option", action="append", default=[])
+    parser.add_argument("--budget-minutes", type=float, default=0.0,
+                        help="the lane's wall-clock budget; 0 for none (see REPORT_MARGIN_MINUTES)")
+    # The deadline the budget sets, on time.monotonic; run() computes it.
+    parser.set_defaults(deadline=None)
     return parser.parse_args(argv)
 
 
