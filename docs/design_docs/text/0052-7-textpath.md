@@ -104,9 +104,9 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | 001-005 | Minor char advance diffs |
 | 007 | Donner regression golden: the vendored PNG is byte-identical to the align case |
 | 009-010 | Minor char advance diffs |
-| 011 | AA diffs |
+| 011 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
 | 013-014 | Minor char advance diffs |
-| 015 | AA diffs |
+| 015 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
 | 019-020 | Minor char advance diffs / AA diffs |
 | 021 | 250 px at 300x300: upright vmtx origin vs the reference's hhea-centered cell |
 | 022-023 | Minor char advance diffs |

@@ -1766,7 +1766,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
-                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"mixed-children-2.svg",
                  Params::Skip("SVG 2 positions text after textPath at the geometric path endpoint; "
                               "the reference continues from the occupied text extent")},
@@ -1821,7 +1821,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
-                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
                 {"with-baseline-shift.svg",
