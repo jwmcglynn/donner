@@ -249,6 +249,16 @@ count, and reproduced by the last autonomous attempt's transform/shape regressio
   ray cast *along* a sub-pixel line never exits it and reports full coverage (255 vs
   tiny's ~160). Slug's **dual-ray combine** is the published fix — the perpendicular ray
   resolves what the parallel ray conflates. M4 must verify the crosshair specifically.
+- **One-sample corner limit.** The combine works from two axis-aligned rays through the pixel
+  center, so coverage is exact area for a pixel crossed by a single edge, and is not exact area
+  for a pixel that contains a corner or two edges. Example: the corner pixel (74, 85) of a rect
+  spanning x 70.368..74.118, y 85.29..89.04. The horizontal ray (y = 85.5) crosses the right
+  edge, giving coverage 0.118; the vertical ray (x = 74.5) misses the rect, giving 0. The result
+  is 0.118 (30 of 255), where exact area is 0.118 x 0.71 (21 of 255). On a stroked glyph, where
+  a stroke band, a miter join and a second band meet in one pixel, the largest measured error is
+  44 against an exact 74, and 213 against 187. The fill, mask and gradient shader families share
+  this combine (`calc_coverage` in `SlugFillSource.h`, `SlugMaskSource.h` and
+  `SlugGradientSource.h`).
 
 ## 7. Risks / open questions
 - **Perf (hot path):** dual-ray ~doubles per-pixel root solves but removes the MSAA
