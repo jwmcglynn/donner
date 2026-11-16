@@ -734,13 +734,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"self-recursive.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
-                    // The reference resamples a rasterized pattern tile, so the tile's thin
-                    // border lines and the glyph tops the tile clips land at different coverage:
-                    // 4841 px differ at the default settings, all on those lines and tops, while
-                    // the glyph edges themselves match. Donner's tile lines follow the geometry
-                    // (alpha 0.50 and 0.22 across a half-unit line on 1.5x, exactly 0.5 and 0.25).
-                    // resvg v0.49.0 differs by 13083 px: it samples its tile raster with a bicubic
-                    // filter at the pattern transform's axis lengths (1.5 by 1.523 here).
+                    // The reference resamples a rasterized pattern tile, so only the tile's thin
+                    // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150,
                                            "Reference resamples a rasterized pattern tile")},
