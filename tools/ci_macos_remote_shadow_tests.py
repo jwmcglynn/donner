@@ -1275,9 +1275,10 @@ class LaneRunTest(unittest.TestCase):
         self.assertFalse((Path(directory.name) / "calls").exists())
 
 
-# Writes Bazel-like progress lines to a console log, as the watchdog's tee does, in one of three
-# shapes: a starved executor (the counter frozen, only the elapsed time growing), slow but steady
-# progress, and one long action that finishes just inside the bound.
+# Writes Bazel-like progress lines to a console log, as the watchdog's tee does: a starved executor
+# (the counter frozen, only the elapsed time growing), or a command that keeps completing actions
+# and starts a child. It runs as a real process, to prove how a stop reaches its process group;
+# when the guard runs is tested without real time (_ScriptedPhase).
 _FAKE_CONSOLE = r'''
 import os, signal, sys, time
 mode, console, step = sys.argv[1], sys.argv[2], float(sys.argv[3])
@@ -1294,11 +1295,6 @@ if mode == "starved":
         line(137, 150, time.monotonic() - start)
         time.sleep(step)
     sys.exit(8)
-if mode == "progressing":
-    for done in range(10):
-        line(done, 10, time.monotonic() - start)
-        time.sleep(step)
-    sys.exit(0)
 if mode == "spawning":
     # Records its own and a child's pid, then keeps completing actions until it is stopped.
     import subprocess
@@ -1311,20 +1307,54 @@ if mode == "spawning":
         line(done, 100000, time.monotonic() - start)
         time.sleep(step)
     sys.exit(8)
-if mode == "long":
-    line(5, 10, 0)
-    while time.monotonic() - start < step:
-        line(5, 10, time.monotonic() - start)
-        time.sleep(0.05)
-    line(10, 10, time.monotonic() - start)
-    sys.exit(0)
 '''
+
+
+class _StepClock:
+    """A clock that moves only when the scripted phase advances it."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class _ScriptedPhase:
+    """A phase command driven by a script instead of real time. Each wait that times out appends
+    the script's next console line (None appends nothing), advances the clock by the wait's
+    timeout and raises TimeoutExpired, as a running command would; once the script is used up,
+    the command exits 0."""
+
+    pid = None
+
+    def __init__(self, console, script, clock):
+        self.console, self.script, self.clock = console, list(script), clock
+        self.waits = 0
+
+    def wait(self, timeout=None):
+        if not self.script:
+            return 0
+        line = self.script.pop(0)
+        if line is not None:
+            with open(self.console, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        self.waits += 1
+        self.clock.now += timeout
+        raise subprocess.TimeoutExpired("phase", timeout)
+
+
+def _progress(done, total, elapsed=3):
+    return "[%d / %d] Compiling a.cc; %ds remote, remote-cache ... (3 actions, 0 running)" % (
+        done, total, elapsed)
 
 
 class StarvationGuardTest(unittest.TestCase):
     """The lane stops a phase whose executor completes nothing, and only that."""
 
     LIMIT = 1.0
+    # The scripted runs: the guard's bound and the poll interval, on the step clock.
+    BOUND, POLL = 10, 1
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -1334,40 +1364,68 @@ class StarvationGuardTest(unittest.TestCase):
         self.script = self.directory / "fake_console.py"
         self.script.write_text(_FAKE_CONSOLE, encoding="utf-8")
 
-    def _phase(self, mode, step, *extra, limit=LIMIT):
+    def _phase(self, mode, step, *extra):
         import contextlib
         import io
         command = [sys.executable, str(self.script), mode, str(self.console), str(step), *extra]
-        started = time.monotonic()
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             status, starved = lane.run_phase(command, _environ(), self.console,
-                                             limit=limit, poll=0.05, grace=(2, 2, 2))
-        return status, starved, time.monotonic() - started, printed.getvalue()
+                                             limit=self.LIMIT, poll=0.05, grace=(2, 2, 2))
+        return status, starved, printed.getvalue()
 
-    def test_frozen_counter_with_a_growing_elapsed_time_is_starved(self):
-        status, starved, seconds, printed = self._phase("starved", 0.05)
-        self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, starved))
-        self.assertLess(seconds, self.LIMIT + 5)
+    def _scripted(self, script):
+        """(status, stop, the step clock's time at the end, stop calls, printed) of the wait loop
+        over a scripted phase."""
+        import contextlib
+        import io
+        from unittest import mock
+        clock = _StepClock()
+        process = _ScriptedPhase(self.console, script, clock)
+        relay = lane._Relay(self.directory / "unread")
+        with mock.patch.object(lane, "_stop") as stop, \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            status, stopped = lane._wait_phase(process, self.console, relay, self.BOUND,
+                                               self.POLL, clock, (2, 2, 2), None)
+        return status, stopped, clock.now, stop.call_count, printed.getvalue()
+
+    def test_frozen_counter_with_a_growing_elapsed_time_is_starved_at_the_bound(self):
+        # The first progress line arrives on the first poll; the counter never moves after it.
+        script = [_progress(137, 150, elapsed) for elapsed in range(1, 40)]
+        status, stopped, now, stops, printed = self._scripted(script)
+        self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, stopped))
+        # Stopped on exactly the poll that is BOUND after the first sight of the counter.
+        self.assertEqual(self.POLL + self.BOUND, now)
+        self.assertEqual(1, stops)
         self.assertIn(lane.STARVED, printed)
         # The elapsed time kept changing, so a whole-line comparison saw progress throughout.
         lines = [line for line in self.console.read_text().splitlines() if line.startswith("[")]
         self.assertGreater(len(set(lines)), 5)
         self.assertEqual({(137, 150)}, {lane.progress(line) for line in lines})
 
-    def test_a_client_that_ignores_the_first_interrupts_is_still_stopped(self):
-        status, starved, seconds, _ = self._phase("starved", 0.05, "stubborn")
-        self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, starved))
-        self.assertLess(seconds, self.LIMIT + 8)
-
-    # The two runs that must not be stopped get a bound well above their gaps, so a loaded host
-    # that delays the fake client's start or a write cannot turn them into a starvation stop.
     def test_slow_but_steady_progress_is_not_starved(self):
-        status, starved, _, _ = self._phase("progressing", 0.2, limit=10)
-        self.assertEqual((0, None), (status, starved))
+        # The counter advances every 3 polls, 3 s on the step clock, well inside the 10 s bound.
+        script = []
+        for done in range(10):
+            script += [_progress(done, 10), None, None]
+        status, stopped, now, stops, _ = self._scripted(script)
+        self.assertEqual((0, None, 0), (status, stopped, stops))
+        self.assertEqual(30 * self.POLL, now)
 
     def test_one_long_action_inside_the_bound_is_not_starved(self):
-        status, starved, _, _ = self._phase("long", 3, limit=6)
-        self.assertEqual((0, None), (status, starved))
+        # One action holds the counter for one poll less than the bound, then the build ends.
+        held = self.BOUND // self.POLL - 1
+        script = [_progress(5, 10)] + [None] * held + [_progress(10, 10)]
+        status, stopped, _, stops, _ = self._scripted(script)
+        self.assertEqual((0, None, 0), (status, stopped, stops))
+        # One poll more and the same action is starved.
+        status, stopped, _, stops, _ = self._scripted(
+            [_progress(5, 10)] + [None] * (held + 1) + [_progress(10, 10)])
+        self.assertEqual((lane.STARVED, 1), (stopped, stops))
+
+    def test_a_client_that_ignores_the_first_interrupts_is_still_stopped(self):
+        # A real process: the interrupts and the kill reach its process group.
+        status, starved, _ = self._phase("starved", 0.05, "stubborn")
+        self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, starved))
 
     def test_starved_phase_skips_the_next_phase_and_is_reported(self):
         from unittest import mock
@@ -1458,14 +1516,19 @@ class StarvationGuardTest(unittest.TestCase):
         self.assertFalse(self._alive(child), "the stopped command left a process behind")
 
     def test_starvation_still_stops_first_when_nothing_completes(self):
+        # The budget runs out on the very poll that the counter has been frozen for the bound.
         import contextlib
         import io
-        command = [sys.executable, str(self.script), "starved", str(self.console), "0.05"]
-        with contextlib.redirect_stdout(io.StringIO()):
-            status, stop = lane.run_phase(command, _environ(), self.console, limit=self.LIMIT,
-                                          poll=0.05, grace=(2, 2, 2),
-                                          deadline=time.monotonic() + 60)
+        from unittest import mock
+        clock = _StepClock()
+        process = _ScriptedPhase(self.console, [_progress(5, 10)] * 40, clock)
+        with mock.patch.object(lane, "_stop"), contextlib.redirect_stdout(io.StringIO()):
+            status, stop = lane._wait_phase(process, self.console,
+                                            lane._Relay(self.directory / "unread"), self.BOUND,
+                                            self.POLL, clock, (2, 2, 2),
+                                            self.POLL + self.BOUND)
         self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, stop))
+        self.assertEqual(self.POLL + self.BOUND, clock.now)
 
     def test_a_preflight_command_is_stopped_at_the_deadline(self):
         import contextlib
