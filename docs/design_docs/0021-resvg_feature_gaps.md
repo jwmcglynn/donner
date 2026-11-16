@@ -440,7 +440,8 @@ not.
 
 Budgets that already passed at default settings were removed from 39 cases, including the
 `structure/transform-origin` category default (0.13 threshold, 300 pixels; `on-image`,
-`on-text-path` and `on-text` still need it and keep it per case), `text/text/xml-space` (1400
+`on-text-path` and `on-text` kept it per case until `on-image` was found to match at default
+settings and the two text rows moved to resvg v0.49.0 references), `text/text/xml-space` (1400
 pixels) and `painting/fill/pattern-on-text` (2100 pixels). Measured at default settings, their
 largest residuals are:
 

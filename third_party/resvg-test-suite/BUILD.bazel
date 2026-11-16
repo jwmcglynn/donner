@@ -147,6 +147,7 @@ ascent and descent. Their SVG inputs are byte-identical at both revisions.
 
   tests/masking/clipPath/clip-path-with-transform-on-text.png
   tests/painting/visibility/bbox-impact-3.png
+
 From the same revision and license, these PNGs were replaced with their 300x300 versions. The
 snapshot's references differed from Donner only along rotated glyph edges; Donner matches
 the v0.49.0 renderings within the default allowance on the CPU and GPU backends. Their SVG
