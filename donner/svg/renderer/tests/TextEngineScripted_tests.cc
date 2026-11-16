@@ -4855,6 +4855,90 @@ INSTANTIATE_TEST_SUITE_P(AllAxes, RtlPreservedNewlineAxisTest,
                          testing::Values(WritingMode::HorizontalTb, WritingMode::VerticalRl,
                                          WritingMode::VerticalLr));
 
+// CSS Text 3 section 4.1.1 collapses a space that follows another collapsible space across inline
+// element boundaries, so at a textPath end the textPath's own trailing space survives (laid on the
+// path) and the following span's leading space is removed. Chrome 157 and Firefox 160 both
+// attribute the surviving space to the textPath, and in Chrome the text after the path starts
+// exactly at the end point.
+TEST(TextEngineScriptedTest, PostTextPathCursorBoundarySpaceStaysOnThePath) {
+  constexpr int kSpaceGlyph = ' ' + 1;
+  constexpr int kBGlyph = 'B' + 1;
+  for (std::string_view markup : {
+           std::string_view("<textPath href='#p'>A </textPath> B"),
+           std::string_view("<textPath href='#p'>\n  A\n  </textPath>\n  <tspan>B</tspan>\n"),
+       }) {
+    SCOPED_TRACE(markup);
+    const auto glyphs = LayoutParsedTextPath(markup, true, "M0 50H100");
+    ASSERT_THAT(glyphs, SizeIs(3));
+    EXPECT_THAT(glyphs[1], AllOf(GlyphIndexIs(Eq(kSpaceGlyph)), GlyphXPositionIs(Lt(100.0)),
+                                 GlyphYPositionIs(DoubleEq(50.0))));
+    EXPECT_THAT(glyphs[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphXPositionIs(DoubleEq(100.0)),
+                                 GlyphYPositionIs(DoubleEq(50.0))));
+  }
+}
+
+// A space that only follows the textPath (none inside it) is ordinary text after the path: it is
+// laid at the end point and the next glyph follows it.
+TEST(TextEngineScriptedTest, PostTextPathCursorSpaceAfterThePathStartsAtTheEndpoint) {
+  constexpr int kSpaceGlyph = ' ' + 1;
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p'>A</textPath> B", true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphIndexIs(Eq(kSpaceGlyph)), GlyphXPositionIs(DoubleEq(100.0)),
+                               GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(glyphs[2], GlyphXPositionIs(Gt(100.0)));
+}
+
+// The collapsed leading space is not addressable, so the following element's first per-character
+// value goes to its first remaining character. Chrome 157 gives B dx[0] (absorbed by the end
+// point, as PostTextPathCursorFirstRelativeShiftIsAbsorbedByEndpoint pins) and C dx[1], and gives
+// B rotate[0] and C rotate[1].
+TEST(TextEngineScriptedTest, PostTextPathCursorCollapsedBoundarySpaceTakesNoPositionValue) {
+  constexpr int kBGlyph = 'B' + 1;
+  constexpr int kCGlyph = 'C' + 1;
+  const auto shifted = LayoutParsedTextPath(
+      "<textPath href='#p'>A </textPath><tspan dx='7 2'> BC</tspan>", true, "M0 50H100");
+  ASSERT_THAT(shifted, SizeIs(4));
+  EXPECT_THAT(shifted[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphXPositionIs(DoubleEq(100.0)),
+                                GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(shifted[3], AllOf(GlyphIndexIs(Eq(kCGlyph)), GlyphXPositionIs(DoubleEq(113.0))));
+
+  const auto rotated = LayoutParsedTextPath(
+      "<textPath href='#p'>A </textPath><tspan rotate='30 60'> BC</tspan>", true, "M0 50H100");
+  ASSERT_THAT(rotated, SizeIs(4));
+  EXPECT_THAT(rotated[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphRotateDegreesIs(DoubleEq(30.0))));
+  EXPECT_THAT(rotated[3], AllOf(GlyphIndexIs(Eq(kCGlyph)), GlyphRotateDegreesIs(DoubleEq(60.0))));
+}
+
+// Between two textPaths the first keeps its trailing space on its path, and the inter-element
+// space and the second path's leading space collapse, as in Chrome 157.
+TEST(TextEngineScriptedTest, AdjacentTextPathsKeepOnlyTheFirstPathsBoundarySpace) {
+  constexpr int kSpaceGlyph = ' ' + 1;
+  constexpr int kBGlyph = 'B' + 1;
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p'>A </textPath> <textPath path='M200 80H300'> B</textPath>", true,
+      "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphIndexIs(Eq(kSpaceGlyph)), GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(glyphs[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphXPositionIs(DoubleEq(200.0)),
+                               GlyphYPositionIs(DoubleEq(80.0))));
+}
+
+// A textPath whose reference does not resolve is not rendered. Chrome 157 still counts its
+// characters, so its trailing space collapses the following one: the visible text is "X", one
+// space, then B.
+TEST(TextEngineScriptedTest, UnresolvedTextPathBoundaryKeepsOneVisibleSpace) {
+  constexpr int kXGlyph = 'X' + 1;
+  constexpr int kSpaceGlyph = ' ' + 1;
+  constexpr int kBGlyph = 'B' + 1;
+  const auto glyphs =
+      LayoutParsedTextPath("X <textPath href='#missing'>A </textPath> B", true, "M0 50H100");
+  std::vector<int> indices;
+  for (const TextGlyph& glyph : glyphs) {
+    indices.push_back(glyph.glyphIndex);
+  }
+  EXPECT_THAT(indices, ElementsAre(kXGlyph, kSpaceGlyph, kBGlyph));
+}
+
 }  // namespace
 
 }  // namespace donner::svg
