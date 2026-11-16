@@ -1,7 +1,9 @@
 #include "donner/editor/TextToOutlines.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -73,17 +75,17 @@ std::string serializePaint(const svg::PaintServer& paint, const css::RGBA& curre
 struct ResolvedPaint {
   std::string fill;           ///< `fill` value (`none`, hex, or `url(#id)`).
   std::string fillRule;       ///< `fill-rule` value (`nonzero` / `evenodd`).
-  std::string fillOpacity;    ///< `fill-opacity` value.
+  std::string fillOpacity;    ///< `fill-opacity` value, with any run opacity folded in.
   std::string stroke;         ///< `stroke` value (`none`, hex, or `url(#id)`).
   std::string strokeWidth;    ///< `stroke-width` value.
-  std::string strokeOpacity;  ///< `stroke-opacity` value.
-  /// `opacity` value to write onto the element this paint is serialized to. Unlike the paint
-  /// properties, `opacity` does not inherit and does not override an enclosing value - every
-  /// `opacity` between an element and the canvas multiplies - so this holds only the share of the
-  /// opacity the receiving element is responsible for.
-  std::string opacity;
+  std::string strokeOpacity;  ///< `stroke-opacity` value, with any run opacity folded in.
 
-  bool hasStroke() const { return stroke != "none"; }
+  /// Whether the stroke has a width the renderer strokes; a zero width paints nothing.
+  bool strokeHasWidth = true;
+
+  /// Whether the stroke is painted at all, as the renderer decides: a stroke paint and a positive
+  /// width.
+  bool hasStroke() const { return stroke != "none" && strokeHasWidth; }
 };
 
 /// Computed `opacity` of \p element alone. `opacity` is not an inherited property, so this is the
@@ -115,9 +117,21 @@ double runOpacityBelowRoot(const svg::SVGElement& source, const svg::SVGElement&
   return 1.0;
 }
 
-/// Resolve the paint-affecting computed style of \p element into serialized SVG attribute strings,
-/// carrying \p opacity as the receiving element's own `opacity`.
-ResolvedPaint resolvePaint(const svg::SVGElement& element, double opacity) {
+/// Serializes an opacity product, rounded to six decimal places so a product such as 0.8 * 0.4
+/// writes as `0.32`, not `0.32000000000000006`. The rounding moves the value by at most 5e-7, far
+/// below one step of 8-bit paint alpha.
+std::string formatOpacity(double opacity) {
+  return detail::FormatNumberForSVG(std::round(opacity * 1e6) / 1e6);
+}
+
+/// Resolve the paint-affecting computed style of \p element into serialized SVG attribute strings.
+///
+/// \p runOpacity is folded into `fill-opacity` and `stroke-opacity`, as the text renderer folds a
+/// span's opacity into the alpha of each glyph's fill and each chunk's stroke rather than
+/// compositing the span as a layer. A path that paints only a fill or only a stroke then renders
+/// exactly as that paint did on the `<text>`; an `opacity` on the path would instead composite it
+/// as a layer, which rounds differently.
+ResolvedPaint resolvePaint(const svg::SVGElement& element, double runOpacity) {
   static constexpr css::RGBA kBlack = css::RGBA(0, 0, 0, 0xFF);
   const svg::PropertyRegistry& style = element.getComputedStyle();
 
@@ -129,13 +143,13 @@ ResolvedPaint resolvePaint(const svg::SVGElement& element, double opacity) {
       currentColor);
   paint.fillRule =
       style.fillRule.getOr(FillRule::NonZero) == FillRule::EvenOdd ? "evenodd" : "nonzero";
-  paint.fillOpacity = detail::FormatNumberForSVG(style.fillOpacity.getOr(1.0));
+  paint.fillOpacity = formatOpacity(style.fillOpacity.getOr(1.0) * runOpacity);
   paint.stroke =
       serializePaint(style.stroke.getOr(svg::PaintServer(svg::PaintServer::None())), currentColor);
-  paint.strokeWidth = std::string(
-      std::string_view(style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None)).toRcString()));
-  paint.strokeOpacity = detail::FormatNumberForSVG(style.strokeOpacity.getOr(1.0));
-  paint.opacity = detail::FormatNumberForSVG(opacity);
+  const Lengthd strokeWidth = style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None));
+  paint.strokeWidth = std::string(std::string_view(strokeWidth.toRcString()));
+  paint.strokeHasWidth = strokeWidth.value > 0.0;
+  paint.strokeOpacity = formatOpacity(style.strokeOpacity.getOr(1.0) * runOpacity);
   return paint;
 }
 
@@ -193,21 +207,29 @@ std::optional<std::string> validateOutlineGlyphs(svg::SVGDocument& document,
   return std::nullopt;
 }
 
+/// Which paints a `<path>` of the outlines paints.
+enum class PathPaints : std::uint8_t {
+  Fill,    ///< One glyph, painting only its fill.
+  Stroke,  ///< One text chunk of a stroked run, painting only its stroke.
+};
+
 void applyPaintOverrides(svg::SVGElement& pathElement, const ResolvedPaint& runPaint,
-                         const ResolvedPaint& groupPaint) {
-  if (runPaint.fill != groupPaint.fill) {
-    pathElement.setAttribute("fill", runPaint.fill);
+                         const ResolvedPaint& groupPaint, PathPaints paints) {
+  if (paints == PathPaints::Fill) {
+    if (runPaint.fill != groupPaint.fill) {
+      pathElement.setAttribute("fill", runPaint.fill);
+    }
+    if (runPaint.fillRule != groupPaint.fillRule) {
+      pathElement.setAttribute("fill-rule", runPaint.fillRule);
+    }
+    if (runPaint.fillOpacity != groupPaint.fillOpacity) {
+      pathElement.setAttribute("fill-opacity", runPaint.fillOpacity);
+    }
   }
-  if (runPaint.fillRule != groupPaint.fillRule) {
-    pathElement.setAttribute("fill-rule", runPaint.fillRule);
-  }
-  if (runPaint.fillOpacity != groupPaint.fillOpacity) {
-    pathElement.setAttribute("fill-opacity", runPaint.fillOpacity);
-  }
-  if (runPaint.stroke != groupPaint.stroke) {
-    pathElement.setAttribute("stroke", runPaint.stroke);
-  }
-  if (runPaint.hasStroke()) {
+  if (paints == PathPaints::Stroke) {
+    if (runPaint.stroke != groupPaint.stroke) {
+      pathElement.setAttribute("stroke", runPaint.stroke);
+    }
     if (runPaint.strokeWidth != groupPaint.strokeWidth) {
       pathElement.setAttribute("stroke-width", runPaint.strokeWidth);
     }
@@ -215,55 +237,61 @@ void applyPaintOverrides(svg::SVGElement& pathElement, const ResolvedPaint& runP
       pathElement.setAttribute("stroke-opacity", runPaint.strokeOpacity);
     }
   }
-  // The run's opacity multiplies with the group's rather than replacing it, so it is written
-  // whenever the run is not fully opaque - never compared against the group's value.
-  if (runPaint.opacity != "1") {
-    pathElement.setAttribute("opacity", runPaint.opacity);
-  }
 }
 
-void applyGroupPaint(svg::SVGElement& groupElement, const ResolvedPaint& groupPaint) {
+/// The paint of the outline group: the converted `<text>`'s own computed paint, with a stroke the
+/// renderer does not paint (a zero width) written as `stroke="none"`, so the paths compare their
+/// runs' strokes against what the group actually paints.
+ResolvedPaint resolveGroupPaint(const svg::SVGElement& textElement) {
+  ResolvedPaint paint = resolvePaint(textElement, 1.0);
+  if (!paint.hasStroke()) {
+    paint.stroke = "none";
+  }
+  return paint;
+}
+
+/// Writes \p groupPaint onto the outline group, with \p opacity, the converted `<text>`'s own
+/// `opacity`. Unlike a span's, the text's opacity stays a group property: it composites the whole
+/// outline set as one layer, as it did on the `<text>`.
+///
+/// Every paint attribute \ref applyPaintOverrides compares against is written, defaults included:
+/// the group takes the `<text>`'s place under the same parent, so an attribute left off would be
+/// inherited from the `<text>`'s ancestors instead of from its computed style.
+void applyGroupPaint(svg::SVGElement& groupElement, const ResolvedPaint& groupPaint,
+                     double opacity) {
   groupElement.setAttribute("fill", groupPaint.fill);
-  if (groupPaint.fillRule != "nonzero") {
-    groupElement.setAttribute("fill-rule", groupPaint.fillRule);
-  }
-  if (groupPaint.fillOpacity != "1") {
-    groupElement.setAttribute("fill-opacity", groupPaint.fillOpacity);
-  }
-  if (groupPaint.hasStroke()) {
-    groupElement.setAttribute("stroke", groupPaint.stroke);
-    groupElement.setAttribute("stroke-width", groupPaint.strokeWidth);
-    if (groupPaint.strokeOpacity != "1") {
-      groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
-    }
-  }
-  if (groupPaint.opacity != "1") {
-    groupElement.setAttribute("opacity", groupPaint.opacity);
+  groupElement.setAttribute("fill-rule", groupPaint.fillRule);
+  groupElement.setAttribute("fill-opacity", groupPaint.fillOpacity);
+  groupElement.setAttribute("stroke", groupPaint.stroke);
+  groupElement.setAttribute("stroke-width", groupPaint.strokeWidth);
+  groupElement.setAttribute("stroke-opacity", groupPaint.strokeOpacity);
+  if (opacity != 1.0) {
+    groupElement.setAttribute("opacity", detail::FormatNumberForSVG(opacity));
   }
 }
 
 /**
- * Builds the detached outline elements of one converted `<text>`, painting each layout run as the
+ * Builds the detached outline `<path>`s of one converted `<text>`, painting each text run as the
  * renderer paints it: the run's fill glyph by glyph and its stroke one text chunk at a time, in
  * the run's `paint-order`.
  *
- * A run without a stroke becomes one path per glyph. A stroked run becomes one fill-only path per
- * glyph and one stroke-only path per text chunk, holding every glyph of the chunk, so overlapping
- * glyph strokes are covered once, as they are on the `<text>`. Empty glyph paths (e.g.
- * whitespace) contribute no geometry and are skipped. Each path overrides the group paint only
- * where its source run's computed paint differs, so per-<tspan> fill/stroke is preserved without
- * collapsing to the group level, and carries the `opacity` of the spans between it and the
- * `<text>`, which multiplies with the group's. A stroked run with such an opacity puts its paths
- * in a `<g>` that carries it, so the run's fill and stroke composite as one layer, as a single
- * path's fill and stroke do.
+ * A run without a visible stroke becomes one fill-only path per glyph. A stroked run becomes one
+ * fill-only path per glyph, none when its fill is `none`, and one stroke-only path per text chunk,
+ * holding every glyph of the chunk, so overlapping glyph strokes are covered once, as they are on
+ * the `<text>`. Empty glyph paths (e.g. whitespace) contribute no geometry and are skipped. Each
+ * path overrides the group paint only where its source run's computed paint differs, writing only
+ * the paint it paints, so per-<tspan> fill/stroke is preserved without collapsing to the group
+ * level. The opacity of the spans between a run and the `<text>` is folded into the paint's
+ * `fill-opacity` or `stroke-opacity`, as the renderer folds it into each glyph's fill alpha and
+ * each chunk's stroke alpha (see \ref resolvePaint).
  */
 class OutlineRunBuilder {
 public:
   /// @param document Document the detached elements are created in.
   /// @param textElement The converted `<text>`.
-  /// @param groupId Id of the outline group; element ids are numbered after it.
+  /// @param groupId Id of the outline group; path ids are numbered after it.
   /// @param groupPaint Paint the outline group carries.
-  /// @param out Receives the top-level elements in paint order.
+  /// @param out Receives the paths in paint order.
   OutlineRunBuilder(svg::SVGDocument& document, const svg::SVGElement& textElement,
                     std::string groupId, const ResolvedPaint& groupPaint,
                     std::vector<svg::SVGElement>& out)
@@ -273,43 +301,37 @@ public:
         groupPaint_(groupPaint),
         out_(out) {}
 
-  /// Adds the elements of one layout run, whose glyphs share one source element.
+  /// Adds the paths of one text run, whose glyphs share one source element.
   void addRun(std::span<const svg::TextGlyphOutline> run) {
     const svg::SVGElement& source = run.front().source;
     const bool ownPaint = source != textElement_;
-    ResolvedPaint paint =
+    const ResolvedPaint paint =
         ownPaint ? resolvePaint(source, runOpacityBelowRoot(source, textElement_)) : groupPaint_;
     if (!paint.hasStroke()) {
-      addFills(run, ownPaint, paint, std::nullopt);
+      addGlyphs(run, ownPaint, paint);
       return;
     }
-
-    // The run's opacity moves to a wrapper, so its paths carry none of their own.
-    if (ownPaint && paint.opacity != "1") {
-      svg::SVGGElement wrapper = svg::SVGGElement::Create(document_);
-      wrapper.setAttribute("id", nextId());
-      wrapper.setAttribute("opacity", paint.opacity);
-      out_.push_back(wrapper);
-      wrapper_ = out_.back();
-      paint.opacity = "1";
-    }
+    const bool paintsFill = paint.fill != "none";
     if (source.getComputedStyle().paintOrder.getOr(svg::PaintOrder()).strokeBeforeFill()) {
       addChunkStrokes(run, ownPaint, paint);
-      addFills(run, ownPaint, paint, "stroke");
+      if (paintsFill) {
+        addGlyphs(run, ownPaint, paint);
+      }
     } else {
-      addFills(run, ownPaint, paint, "stroke");
+      if (paintsFill) {
+        addGlyphs(run, ownPaint, paint);
+      }
       addChunkStrokes(run, ownPaint, paint);
     }
-    wrapper_.reset();
   }
 
 private:
-  /// One path per non-empty glyph, with \p noPaint, if any, set to `none`.
-  void addFills(std::span<const svg::TextGlyphOutline> run, bool ownPaint,
-                const ResolvedPaint& paint, std::optional<std::string_view> noPaint) {
+  /// One fill-only path per non-empty glyph of \p run.
+  void addGlyphs(std::span<const svg::TextGlyphOutline> run, bool ownPaint,
+                 const ResolvedPaint& paint) {
     for (const svg::TextGlyphOutline& glyph : run) {
       if (!glyph.path.empty()) {
-        addPath(glyph.path.toSVGPathData(), ownPaint, paint, noPaint);
+        addPath(glyph.path.toSVGPathData(), ownPaint, paint, PathPaints::Fill);
       }
     }
   }
@@ -323,43 +345,39 @@ private:
         continue;
       }
       if (glyph.startsTextChunk && !chunkData.empty()) {
-        addPath(chunkData, ownPaint, paint, "fill");
+        addPath(chunkData, ownPaint, paint, PathPaints::Stroke);
         chunkData.clear();
       }
       chunkData += chunkData.empty() ? "" : " ";
       chunkData += std::string_view(glyph.path.toSVGPathData());
     }
     if (!chunkData.empty()) {
-      addPath(chunkData, ownPaint, paint, "fill");
+      addPath(chunkData, ownPaint, paint, PathPaints::Stroke);
     }
   }
 
   void addPath(std::string_view pathData, bool ownPaint, const ResolvedPaint& paint,
-               std::optional<std::string_view> noPaint) {
+               PathPaints paints) {
     svg::SVGPathElement pathElement = svg::SVGPathElement::Create(document_);
-    pathElement.setAttribute("id", nextId());
+    pathElement.setAttribute("id", groupId_ + "_" + std::to_string(nextIndex_++));
     pathElement.setAttribute("d", pathData);
     if (ownPaint) {
-      applyPaintOverrides(pathElement, paint, groupPaint_);
+      applyPaintOverrides(pathElement, paint, groupPaint_, paints);
     }
-    if (noPaint.has_value()) {
-      pathElement.setAttribute(xml::XMLQualifiedNameRef(*noPaint), "none");
+    // Turn off the paint the path does not paint, where it would otherwise inherit the group's.
+    if (paints == PathPaints::Fill && groupPaint_.hasStroke()) {
+      pathElement.setAttribute("stroke", "none");
+    } else if (paints == PathPaints::Stroke && groupPaint_.fill != "none") {
+      pathElement.setAttribute("fill", "none");
     }
-    if (wrapper_.has_value()) {
-      wrapper_->appendChild(pathElement);
-    } else {
-      out_.push_back(pathElement);
-    }
+    out_.push_back(pathElement);
   }
-
-  std::string nextId() { return groupId_ + "_" + std::to_string(nextIndex_++); }
 
   svg::SVGDocument& document_;
   const svg::SVGElement& textElement_;
   std::string groupId_;
   const ResolvedPaint& groupPaint_;
   std::vector<svg::SVGElement>& out_;
-  std::optional<svg::SVGElement> wrapper_;  ///< Wrapper of the run being added, if it has one.
   int nextIndex_ = 0;
 };
 
@@ -399,19 +417,19 @@ ConvertTextToOutlinesResult buildDetachedTextOutlines(svg::SVGDocument& document
   // The text element's own `opacity` composites the whole run set as one layer, exactly as it did
   // on the `<text>`; `transform` positions the outlined geometry. Carry both onto the group so it
   // sits and composites where the text did.
-  const ResolvedPaint groupPaint = resolvePaint(textElement, ownOpacity(textElement));
-  applyGroupPaint(groupElement, groupPaint);
+  const ResolvedPaint groupPaint = resolveGroupPaint(textElement);
+  applyGroupPaint(groupElement, groupPaint, ownOpacity(textElement));
   copyAttributeIfPresent(textElement, "transform", groupElement);
 
-  // Build the detached outline elements run by run (see \ref OutlineRunBuilder). Each layout run
-  // holds consecutive glyphs.
+  // Build the detached outline paths run by run (see \ref OutlineRunBuilder). Each text run holds
+  // consecutive glyphs.
   OutlineRunBuilder builder(document, textElement, groupId, groupPaint, result.outlinePaths);
   for (std::size_t begin = 0; begin < glyphs.size();) {
     std::size_t end = begin + 1;
     while (end < glyphs.size() && glyphs[end].run == glyphs[begin].run) {
       ++end;
     }
-    builder.addRun(std::span<const svg::TextGlyphOutline>(glyphs.data() + begin, end - begin));
+    builder.addRun(std::span<const svg::TextGlyphOutline>(glyphs).subspan(begin, end - begin));
     begin = end;
   }
 
