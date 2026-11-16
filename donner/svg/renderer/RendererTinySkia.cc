@@ -340,21 +340,13 @@ bool ReserveTinyRunDashWork(const std::optional<tiny_skia::StrokeDash>& dash,
   return true;
 }
 
-/// Expands one glyph's stroke as the rasterizer's stroke pass does: dashed first when the stroke
-/// has a dash, then stroked into an outline.
-std::optional<tiny_skia::Path> ExpandTinyGlyphStroke(const tiny_skia::Path& glyph,
-                                                     const tiny_skia::Stroke& stroke,
-                                                     float resScale) {
-  if (!stroke.dash.has_value()) {
-    return glyph.stroke(stroke, resScale);
-  }
-  const std::optional<tiny_skia::Path> dashed = glyph.dash(*stroke.dash, resScale);
-  if (!dashed.has_value()) {
-    return std::nullopt;
-  }
-  tiny_skia::Stroke solid = stroke;
-  solid.dash.reset();
-  return dashed->stroke(solid, resScale);
+/// Charges an expanded stroke outline's commands, points and bytes to \p textBudget.
+bool ReserveTinyStrokeExpansion(const tiny_skia::Path& expanded,
+                                RendererTextMaterializationBudget& textBudget) {
+  const std::size_t points = expanded.points().size();
+  const std::size_t verbs = expanded.verbs().size();
+  return textBudget.reserve(
+      {.commands = verbs, .points = points, .bytes = points * sizeof(tiny_skia::Point) + verbs});
 }
 
 /// One path per text chunk, holding every contour of that chunk's glyph paths; chunks without
@@ -406,10 +398,13 @@ bool TinyStrokeMayReachTarget(const tiny_skia::Path& glyph, const tiny_skia::Str
 }
 
 /**
- * Expands the strokes of one text chunk's glyphs into one path. Each glyph is expanded on its own
- * (stroking a path strokes its contours independently, so this equals stroking the joined chunk)
- * and its expansion is charged to \p textBudget before it is kept; glyphs whose stroke cannot
- * reach the target are not expanded.
+ * Expands the strokes of one text chunk's glyphs into one path, charging each piece to
+ * \p textBudget before it is kept; glyphs whose stroke cannot reach the target are left out.
+ * Stroking a path strokes its contours independently, so expanding piece by piece and joining the
+ * pieces equals stroking the joined chunk. An undashed chunk is expanded glyph by glyph. A dashed
+ * chunk is dashed whole, as the rasterizer dashes a path, and expanded whole: its dash work, which
+ * bounds how many dashes there are, is already charged, and the expansion is charged before it is
+ * kept.
  *
  * @return The joined expansion, empty when nothing is kept, or std::nullopt when a charge fails.
  */
@@ -417,23 +412,38 @@ std::optional<std::optional<tiny_skia::Path>> ExpandTinyTextChunkStroke(
     std::span<const tiny_skia::Path> glyphs, const tiny_skia::Stroke& stroke,
     const tiny_skia::Transform& transform, float resScale, float width, float height,
     RendererTextMaterializationBudget& textBudget) {
+  tiny_skia::PathBuilder source;
   tiny_skia::PathBuilder joined;
+  tiny_skia::Stroke solid = stroke;
+  solid.dash.reset();
+  const auto expand = [&](const tiny_skia::Path& piece) {
+    std::optional<tiny_skia::Path> expanded = piece.stroke(solid, resScale);
+    if (!expanded.has_value()) {
+      return true;
+    }
+    if (!ReserveTinyStrokeExpansion(*expanded, textBudget)) {
+      return false;
+    }
+    joined.pushPath(*expanded);
+    return true;
+  };
   for (const tiny_skia::Path& glyph : glyphs) {
     if (!TinyStrokeMayReachTarget(glyph, stroke, transform, width, height)) {
       continue;
     }
-    std::optional<tiny_skia::Path> expanded = ExpandTinyGlyphStroke(glyph, stroke, resScale);
-    if (!expanded.has_value()) {
-      continue;
-    }
-    const std::size_t points = expanded->points().size();
-    const std::size_t verbs = expanded->verbs().size();
-    if (!textBudget.reserve({.commands = verbs,
-                             .points = points,
-                             .bytes = points * sizeof(tiny_skia::Point) + verbs})) {
+    if (stroke.dash.has_value()) {
+      source.pushPath(glyph);
+    } else if (!expand(glyph)) {
       return std::nullopt;
     }
-    joined.pushPath(*expanded);
+  }
+  if (stroke.dash.has_value()) {
+    if (std::optional<tiny_skia::Path> chunk = source.finish()) {
+      const std::optional<tiny_skia::Path> dashed = chunk->dash(*stroke.dash, resScale);
+      if (dashed.has_value() && !expand(*dashed)) {
+        return std::nullopt;
+      }
+    }
   }
   return joined.finish();
 }
