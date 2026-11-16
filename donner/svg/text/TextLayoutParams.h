@@ -55,6 +55,9 @@ struct TextLayoutParams {
   /// Whether the `<text>` element's own `unicode-bidi` overrides every character to `direction`
   /// (`bidi-override` or `isolate-override`).
   bool bidiOverride = false;
+  /// Whether the `<text>` element's own `unicode-bidi` is `plaintext`: each paragraph takes its
+  /// base direction from its first strong character instead of `direction`.
+  bool bidiPlaintext = false;
 };
 
 }  // namespace donner::svg
