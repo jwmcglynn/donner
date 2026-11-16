@@ -453,6 +453,16 @@ private:
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
+  /// Strokes \p path into the current surface and, when given, \p strokePaintPixmap, with each
+  /// expansion bounded by \ref strokeOutputPointLimit_ (see \ref strokeIntoWithinOutputLimit).
+  void strokeWithinOutputLimit(const tiny_skia::Path& path, const tiny_skia::Paint& paint,
+                               const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask,
+                               tiny_skia::Pixmap* strokePaintPixmap);
+  /// Strokes \p path into \p target with the expansion bounded by \ref strokeOutputPointLimit_; a
+  /// stroke past it draws nothing and rejects the draw budget.
+  void strokeIntoWithinOutputLimit(tiny_skia::MutablePixmapView& target,
+                                   const tiny_skia::Path& path, const tiny_skia::Paint& paint,
+                                   const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask);
   void resetOwnedFrameBudgets();
   void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
   [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
