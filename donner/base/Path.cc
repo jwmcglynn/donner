@@ -143,7 +143,7 @@ bool IsFiniteVector(const Vector2d& value) {
 }
 
 constexpr int kMaximumRoundStrokeSubdivisionSteps = 4096;
-constexpr std::size_t kMaximumStrokeOutputPoints = 1024 * 1024;
+constexpr std::size_t kMaximumStrokeOutputPoints = Path::kMaximumStrokeOutputPoints;
 
 /// Returns the subdivision steps for a round stroke piece: an arc of @p radius sweeping
 /// @p sweep radians around @p center, tessellated with @p requestedSteps chords and clamped to
