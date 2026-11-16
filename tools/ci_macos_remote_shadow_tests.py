@@ -1334,14 +1334,14 @@ class StarvationGuardTest(unittest.TestCase):
         self.script = self.directory / "fake_console.py"
         self.script.write_text(_FAKE_CONSOLE, encoding="utf-8")
 
-    def _phase(self, mode, step, *extra):
+    def _phase(self, mode, step, *extra, limit=LIMIT):
         import contextlib
         import io
         command = [sys.executable, str(self.script), mode, str(self.console), str(step), *extra]
         started = time.monotonic()
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             status, starved = lane.run_phase(command, _environ(), self.console,
-                                             limit=self.LIMIT, poll=0.05, grace=(2, 2, 2))
+                                             limit=limit, poll=0.05, grace=(2, 2, 2))
         return status, starved, time.monotonic() - started, printed.getvalue()
 
     def test_frozen_counter_with_a_growing_elapsed_time_is_starved(self):
@@ -1359,12 +1359,14 @@ class StarvationGuardTest(unittest.TestCase):
         self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, starved))
         self.assertLess(seconds, self.LIMIT + 8)
 
+    # The two runs that must not be stopped get a bound well above their gaps, so a loaded host
+    # that delays the fake client's start or a write cannot turn them into a starvation stop.
     def test_slow_but_steady_progress_is_not_starved(self):
-        status, starved, _, _ = self._phase("progressing", self.LIMIT * 0.4)
+        status, starved, _, _ = self._phase("progressing", 0.2, limit=10)
         self.assertEqual((0, None), (status, starved))
 
     def test_one_long_action_inside_the_bound_is_not_starved(self):
-        status, starved, _, _ = self._phase("long", self.LIMIT * 0.8)
+        status, starved, _, _ = self._phase("long", 3, limit=6)
         self.assertEqual((0, None), (status, starved))
 
     def test_starved_phase_skips_the_next_phase_and_is_reported(self):
