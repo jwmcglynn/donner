@@ -763,7 +763,8 @@ TEST(SVGPatternElementTests, PatternRecursionThroughFeImageTerminates) {
  * its own entity ids, which can equal the host's active pattern. The sub-document's own patterns
  * must still paint. Its chain of patterns covers a run of entity ids, and the host's pattern `a`
  * sits inside that run, so one of them shares its id; the leading `<g>` shifts the run by one id
- * so both parities are covered. Each level is scaled by half so every tile has the same raster size.
+ * so both parities are covered. Each level is scaled by half so every tile has the same raster
+ * size.
  */
 TEST(SVGPatternElementTests, PatternChainIsPerDocument) {
   for (const bool shift : {false, true}) {
@@ -785,7 +786,10 @@ TEST(SVGPatternElementTests, PatternChainIsPerDocument) {
     sub += "<rect width='16' height='16' fill='url(%23p0)'/></svg>";
     std::string uri = "data:image/svg+xml,";
     for (const char c : sub) {
-      uri += c == ' ' ? std::string("%20") : c == '<' ? std::string("%3C") : c == '>' ? std::string("%3E") : std::string(1, c);
+      uri += c == ' '   ? std::string("%20")
+             : c == '<' ? std::string("%3C")
+             : c == '>' ? std::string("%3E")
+                        : std::string(1, c);
     }
     // Twenty empty groups first give the host pattern an id inside the sub-document's run.
     std::string svg;
@@ -817,7 +821,8 @@ TEST(SVGPatternElementTests, PatternChainIsPerDocument) {
         @@@@@@@@@@@@@@@@
         @@@@@@@@@@@@@@@@
         @@@@@@@@@@@@@@@@
-        )")) << "shift=" << shift;
+        )"))
+        << "shift=" << shift;
   }
 }
 
