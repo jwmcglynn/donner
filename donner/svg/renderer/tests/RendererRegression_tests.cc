@@ -621,9 +621,10 @@ TEST_F(RendererRegressionTests, CssFilterContractShadowFractionalOffsetsTranslat
             R"svg(" width="20" height="20" fill="blue"/>
           <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
         {}, Vector2i(64, 64));
-    ExpectBitmapsIdentical(RenderCssFilterContract(filter, true),
-                           RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
-                           "shadow_subpixel_offset_contract");
+    editor::tests::CompareBitmapToBitmap(
+        RenderCssFilterContract(filter, true),
+        RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+        "shadow_subpixel_offset_contract", editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -649,14 +650,16 @@ TEST_F(RendererRegressionTests, FilterFractionalOffsetsTranslateBySubpixels) {
     const std::string shifted = std::string(R"svg(<rect x=")svg") + std::string(x) +
                                 R"svg(" y=")svg" + std::string(y) +
                                 R"svg(" width="20" height="20" fill=")svg";
-    ExpectBitmapsIdentical(filtered(std::string(R"svg(<feOffset dx=")svg") + std::string(dx) +
-                                    R"svg(" dy=")svg" + std::string(dy) + R"svg("/>)svg"),
-                           render(shifted + R"svg(lime"/>)svg"), "fe_offset_subpixel_translation");
-    ExpectBitmapsIdentical(
+    editor::tests::CompareBitmapToBitmap(
+        filtered(std::string(R"svg(<feOffset dx=")svg") + std::string(dx) + R"svg(" dy=")svg" +
+                 std::string(dy) + R"svg("/>)svg"),
+        render(shifted + R"svg(lime"/>)svg"), "fe_offset_subpixel_translation",
+        editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(
         filtered(std::string(R"svg(<feDropShadow dx=")svg") + std::string(dx) + R"svg(" dy=")svg" +
                  std::string(dy) + R"svg(" stdDeviation="0" flood-color="blue"/>)svg"),
-        render(shifted + R"svg(blue"/>)svg" + source + "/>"),
-        "fe_drop_shadow_subpixel_translation");
+        render(shifted + R"svg(blue"/>)svg" + source + "/>"), "fe_drop_shadow_subpixel_translation",
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -4144,9 +4147,9 @@ TEST_F(RendererRegressionTests, SkewedBlurCropsSourceToFilterRegion) {
 
 /// Renders \p markup on a 64x64 canvas and again shifted 32 device pixels right on a 96x64 canvas,
 /// and checks the two agree over the shared 64x64 window. Offsets blend by a weight fixed per
-/// shift, so the same content resamples identically wherever it sits on the raster. The shifted copy
-/// keeps everything the filter reads on the canvas, so a difference means the capture near the left
-/// edge fell short.
+/// shift, so the same content resamples identically wherever it sits on the raster. The shifted
+/// copy keeps everything the filter reads on the canvas, so a difference means the capture near the
+/// left edge fell short.
 void ExpectFilterMatchesRenderWithRoom(std::string_view markup, std::string_view label) {
   SVGDocument atEdge = instantiateSubtree(markup, {}, Vector2i(64, 64));
   SVGDocument withRoom = instantiateSubtree(
