@@ -707,8 +707,7 @@ struct SpanStrokeLengths {
 
 /// Resolves the stroke lengths of the spans styled by \p properties, as `toStrokeParams` resolves
 /// the text root's (\ref StrokeLengthResolver), multiplied by \p strokeScale, the text's
-/// `non-scaling-stroke` adjustment. The dash lengths are returned apart,
-/// for the caller to share.
+/// `non-scaling-stroke` adjustment. The dash lengths are returned apart, for the caller to share.
 std::pair<SpanStrokeLengths, std::vector<double>> ResolveSpanStrokeLengths(
     const PropertyRegistry& properties, const Box2d& viewBox, double strokeScale) {
   const StrokeLengthResolver toPixels(properties, viewBox, strokeScale);

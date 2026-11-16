@@ -2453,7 +2453,7 @@ TEST_F(RendererRegressionTests, NonScalingTextDecorationStrokeKeepsItsAuthoredWi
         placed + R"svg(vector-effect="non-scaling-stroke" stroke-width="4")svg");
     const RendererBitmap expected =
         RenderStrokedUnderline(placed + "stroke-width=\"" + localWidth.str() + "\"");
-    AssertVisibleFixture(expected, "non_scaling_decoration_visible");
+    AssertVisibleFixture(expected, "non_scaling_decoration_visible_" + std::string(testCase.label));
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "non_scaling_decoration_" + std::string(testCase.label),
                                          editor::tests::PixelmatchIdentityParams());
