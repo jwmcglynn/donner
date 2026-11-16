@@ -3716,6 +3716,63 @@ TEST(RendererTinySkiaSecurityTest, TextReservesAStrokeDrawCallOnlyWhenStroked) {
   EXPECT_EQ(renderer.resourceStats().drawCalls, 4u) << "A span's stroke paint counts too.";
 }
 
+TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionIsChargedBeforeTheChunkIsKept) {
+  // Each glyph's expanded stroke is charged to the text budget as it is made, so a chunk whose
+  // expansions pass the budget is rejected before they are all kept.
+  constexpr std::string_view kHead =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+           <text x="2" y="44" font-size="40" fill="none" )";
+  SVGDocument filled = ParseDocument(std::string(kHead) + R"(>OOOO</text></svg>)");
+  SVGDocument stroked =
+      ParseDocument(std::string(kHead) + R"(stroke="black" stroke-width="2">OOOO</text></svg>)");
+
+  RendererTinySkia renderer;
+  renderer.draw(filled);
+  const std::size_t outlinePoints = renderer.resourceStats().textMaterializationPoints;
+  renderer.draw(stroked);
+  const RendererResourceStats full = renderer.resourceStats();
+  ASSERT_FALSE(full.textMaterializationBudgetRejected);
+  ASSERT_THAT(full.textMaterializationPoints, Gt(outlinePoints))
+      << "The expanded strokes are charged on top of the glyph outlines.";
+  const std::size_t expansionPoints = full.textMaterializationPoints - outlinePoints;
+
+  // Room for the outlines and about one and a half of the four expansions.
+  const std::size_t limit = outlinePoints + expansionPoints * 3 / 8;
+  RendererTinySkia limited;
+  limited.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = RendererTextMaterializationBudget::kDefaultMaximumGlyphs,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = limit,
+       .bytes = RendererTextMaterializationBudget::kMaximumBytes,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork});
+  limited.draw(stroked);
+  const RendererResourceStats stats = limited.resourceStats();
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_TRUE(stats.drawBudgetRejected);
+  EXPECT_THAT(stats.textMaterializationPoints, testing::Le(limit));
+}
+
+TEST(RendererTinySkiaSecurityTest, TextStrokeIsNotExpandedForGlyphsOutsideTheCanvas) {
+  // A glyph whose stroke cannot reach the canvas is not expanded: moving the second "O" of the
+  // chunk far off the canvas charges only the visible glyph's expansion.
+  const auto expansionPoints = [](std::string_view glyphs) {
+    const auto points = [&](std::string_view stroke) {
+      SVGDocument document = ParseDocument(
+          std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60">
+                           <text x="2" y="44" dx="0 5000" font-size="40" fill="none" )") +
+          std::string(stroke) + ">" + std::string(glyphs) + "</text></svg>");
+      RendererTinySkia renderer;
+      renderer.draw(document);
+      EXPECT_FALSE(renderer.resourceStats().textMaterializationBudgetRejected);
+      return renderer.resourceStats().textMaterializationPoints;
+    };
+    return points(R"(stroke="black" stroke-width="2")") - points("");
+  };
+  const std::size_t one = expansionPoints("O");
+  EXPECT_THAT(one, Gt(0u));
+  EXPECT_EQ(expansionPoints("OO"), one);
+}
+
 /// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
 /// snapshot. An empty snapshot fails the calling test instead of covering no pixel of the rect.
 std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1,
