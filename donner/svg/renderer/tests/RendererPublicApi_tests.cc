@@ -4289,9 +4289,10 @@ TEST(RendererTinySkiaStrokeAccuracyTest, LargeCoordinateCurvesMatchTheirGoldenAt
 TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
   // Past the precision of the circle's coordinates, every larger magnification subdivides its
   // curves to the same tolerance. The dashes start near the origin, where float steps are finest,
-  // so every segment is past its floor only above a scale of about 2 x 10^6: magnified 2 x 10^7
-  // times, the solid and the dashed circle fit the default limits with the same work as at 10^7,
-  // and draw.
+  // so every segment is past its floor only above a scale of about 2 x 10^6: magnified 10^9
+  // times, the solid and the dashed circle fit the default limits with the same work as at 10^7.
+  // At 10^7 they draw. At 10^9 the outline's device bounds pass the 32-bit integer range the
+  // rasterizer rounds them to, so it fills nothing, as it would without the floor.
   for (const std::string_view dash :
        {std::string_view(),
         std::string_view(R"svg(stroke-dasharray="4 4" stroke-dashoffset="4")svg")}) {
@@ -4299,12 +4300,14 @@ TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
     std::array<std::pair<std::size_t, std::size_t>, 2> work;
     for (std::size_t i = 0; i < 2; ++i) {
       const std::string transform = std::string(R"svg(transform="translate(50 50) scale()svg") +
-                                    (i == 0 ? "1e7" : "2e7") + R"svg()")svg";
+                                    (i == 0 ? "1e7" : "1e9") + R"svg()")svg";
       SVGDocument document = HundredSquareDocument(StrokedCircleElement(transform, dash));
       RendererTinySkia renderer;
       renderer.draw(document);
       EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
-      EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 0, 0, 100, 100), Gt(0u));
+      if (i == 0) {
+        EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 0, 0, 100, 100), Gt(0u));
+      }
       work[i] = {renderer.resourceStats().strokeOutputPoints,
                  renderer.resourceStats().dashMeasureSteps};
     }

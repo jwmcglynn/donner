@@ -68,12 +68,14 @@ this render unchanged.
 
 PNG SHA-256: `045379b1dd1c2f0101bc08df460aba43323f233c41edecfa22300af7bfaae5a6`.
 
-The test that renders it is not on that commit, so the recipe adds a minimal one. From the
-repository root, with the SVG saved outside the tree as `/tmp/large.svg`:
+The SVG and the test that renders it are not on that commit, so the recipe copies the SVG out
+of the tree first and adds a minimal test. From the repository root, on a commit that has the
+SVG, with `<outside>` any directory outside the repository:
 
 ```sh
+cp donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg <outside>/large.svg
 git checkout 7e8acc4ab
-cp /tmp/large.svg donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg
+cp <outside>/large.svg donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg
 cat >> donner/svg/renderer/tests/RendererPublicApi_tests.cc <<'CPP'
 #include <fstream>
 #include <iterator>

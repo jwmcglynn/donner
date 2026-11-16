@@ -508,9 +508,7 @@ float ContourMeasure::computeCubicSegs(Point p0, Point p1, Point p2, Point p3, f
 // ---------------------------------------------------------------------------
 
 ContourMeasureIter::ContourMeasureIter(const Path& path, float resScale, StrokeLimits* limits)
-    : iter_(path), limits_(limits) {
-  resScale_ = resScale;
-}
+    : iter_(path), resScale_(resScale), limits_(limits) {}
 
 // Donner addition: the measure's tolerance is a distance in the path's own coordinates, the device
 // tolerance divided by the resolution scale. Each curve keeps its tolerance at least one float

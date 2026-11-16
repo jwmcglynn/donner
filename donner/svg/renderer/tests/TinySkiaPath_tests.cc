@@ -399,8 +399,7 @@ TEST(PathTest, ResolutionScaleFloorHandlesTheLargestFloat) {
   // The largest finite float has no float step above it; the floor still yields a positive scale.
   const float scale =
       tiny_skia::PrecisionLimitedResScale(1.0f, std::numeric_limits<float>::max(), 0.25f);
-  EXPECT_THAT(scale, testing::Gt(0.0f));
-  EXPECT_THAT(scale, testing::Le(1.0f));
+  EXPECT_THAT(scale, testing::AllOf(testing::Gt(0.0f), testing::Le(1.0f)));
 }
 
 TEST(PathTest, ResolutionScaleStaysAboveCoordinatePrecision) {
