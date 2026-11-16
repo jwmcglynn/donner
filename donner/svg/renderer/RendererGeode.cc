@@ -4179,11 +4179,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /**
    * Returns, for each box, a representative of the set of boxes it touches directly or through
-   * other boxes, found by sweeping the boxes from left to right.
+   * other boxes. The boxes are swept along their longer extent, so a run in either writing mode
+   * only tests boxes that overlap along it; each test is counted in
+   * `counters.textStrokeBoundsTests`.
    *
    * @param boxes Boxes to connect.
    */
-  static std::vector<std::size_t> TouchingBoxSets(std::span<const Box2d> boxes) {
+  std::vector<std::size_t> touchingBoxSets(std::span<const Box2d> boxes) {
     std::vector<std::size_t> parent(boxes.size());
     std::iota(parent.begin(), parent.end(), std::size_t{0});
     const auto find = [&parent](std::size_t index) {
@@ -4193,19 +4195,34 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
       return index;
     };
-    std::vector<std::size_t> byLeft(boxes.size());
-    std::iota(byLeft.begin(), byLeft.end(), std::size_t{0});
-    std::ranges::sort(byLeft, [&boxes](std::size_t a, std::size_t b) {
-      return boxes[a].topLeft.x < boxes[b].topLeft.x;
+    Box2d extent = boxes.empty() ? Box2d() : boxes.front();
+    for (const Box2d& box : boxes) {
+      extent.addBox(box);
+    }
+    // Sweep axis: x for a run laid out horizontally, y for a vertical one.
+    const bool alongY = extent.height() > extent.width();
+    const auto low = [alongY](const Box2d& box) {
+      return alongY ? box.topLeft.y : box.topLeft.x;
+    };
+    const auto high = [alongY](const Box2d& box) {
+      return alongY ? box.bottomRight.y : box.bottomRight.x;
+    };
+    const auto crossOverlaps = [alongY](const Box2d& a, const Box2d& b) {
+      return alongY ? a.topLeft.x <= b.bottomRight.x && b.topLeft.x <= a.bottomRight.x
+                    : a.topLeft.y <= b.bottomRight.y && b.topLeft.y <= a.bottomRight.y;
+    };
+    std::vector<std::size_t> order(boxes.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+      return low(boxes[a]) < low(boxes[b]);
     });
     std::vector<std::size_t> open;
-    for (const std::size_t index : byLeft) {
+    for (const std::size_t index : order) {
       const Box2d& box = boxes[index];
-      std::erase_if(open,
-                    [&](std::size_t other) { return boxes[other].bottomRight.x < box.topLeft.x; });
+      std::erase_if(open, [&](std::size_t other) { return high(boxes[other]) < low(box); });
+      counters.textStrokeBoundsTests += open.size();
       for (const std::size_t other : open) {
-        if (boxes[other].topLeft.y <= box.bottomRight.y &&
-            box.topLeft.y <= boxes[other].bottomRight.y) {
+        if (crossOverlaps(boxes[other], box)) {
           parent[find(index)] = find(other);
         }
       }
@@ -4227,8 +4244,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * @param outlines Stroke outlines of one text chunk's glyphs, in run order.
    * @return Each group's outline indices, in run order.
    */
-  std::vector<std::vector<std::size_t>> textStrokeGroups(std::span<const Path> outlines) const {
-    const std::vector<std::size_t> sets = TouchingBoxSets(grownTextStrokeBounds(outlines));
+  std::vector<std::vector<std::size_t>> textStrokeGroups(std::span<const Path> outlines) {
+    const std::vector<std::size_t> sets = touchingBoxSets(grownTextStrokeBounds(outlines));
     constexpr std::size_t kNoGroup = std::numeric_limits<std::size_t>::max();
     std::vector<std::size_t> openGroupOfSet(outlines.size(), kNoGroup);
     std::vector<std::vector<std::size_t>> groups;
