@@ -565,6 +565,14 @@ private:
   /// the sub-driver (see `preRenderFeImageFragments`).
   int feImageFragmentDepth_ = 0;
 
+  /// Pattern elements whose tiles are being rendered, outermost first. A pattern reference that
+  /// revisits one of them closes a cycle on the active render chain, so that paint layer draws
+  /// nothing (SVG 2 Linking, circular references; Painting, invalid paint server). Each nested
+  /// tile adds a distinct pattern, so the chain never exceeds the document's pattern count.
+  /// \ref renderPattern adds and removes entries with a scoped guard, so the set is empty between
+  /// frames.
+  std::vector<Entity> activePatternTiles_;
+
   RendererFilterPreparationBudget ownedFilterPreparationBudget_;
   RendererFilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
   /// Charges each clip shape as one outline within \ref kClipGeometryCopyLimits.

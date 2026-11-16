@@ -104,7 +104,7 @@ std::optional<ShadowExpansionCost> PreflightShadowExpansion(
 }
 
 /**
- * Get the target entity for a 'fill' or 'stroke' paint server reference.
+ * Get the target entity of \p lightTarget's reference of the given offscreen branch kind.
  *
  * @param registry The registry to use.
  * @param lightTarget The element in the style tree to read properties from.
@@ -363,8 +363,14 @@ Entity ShadowTreeSystem::createShadowAndChildren(
     return true;
   };
 
-  // Validate we don't have recursion from 'fill' or 'stroke' paint servers.
-  if (branchType != ShadowBranchType::Main) {
+  // A cloned element whose own reference of this branch's kind points back at a host parent would
+  // recurse; drop it. Fill and stroke branches are the exception: there only that paint layer is
+  // invalid (SVG 2 Painting, "Specifying paint"), so the element is cloned and keeps its other
+  // layers, and the renderer stops the reference when its pattern is already on the active render
+  // chain. The element's own paint branch is still rejected by \ref populateInstance when it
+  // references itself or a host parent.
+  if (branchType != ShadowBranchType::Main && branchType != ShadowBranchType::OffscreenFill &&
+      branchType != ShadowBranchType::OffscreenStroke) {
     if (auto [targetEntity, href] = GetPaintTarget(registry, lightTarget, branchType);
         targetEntity != entt::null) {
       if (!validateNoRecursion(href, targetEntity)) {

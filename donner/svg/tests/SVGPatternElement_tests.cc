@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -447,6 +449,215 @@ TEST(SVGPatternElementTests, PatternRecursionOnChild) {
         ................
         ................
         )"));
+}
+
+/**
+ * Mutual recursion through pattern content: `a`'s rect fills with `b`, and `b`'s rect fills with
+ * `a`. Only the reference that revisits a pattern already being rendered is invalid (SVG 2,
+ * Linking: circular references; Painting: an invalid paint server paints nothing for that layer).
+ * So `a`'s tile paints `b`'s tile, whose rect keeps its stroke and drops only its fill. Chromium
+ * and Firefox render resvg's paint-servers/pattern/recursive-on-child the same way.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionDropsOnlyTheCycleClosingLayer) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black" stroke-width="2" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        )"));
+}
+
+/**
+ * The cycle-closing layer is the stroke here: `b`'s rect keeps its black fill and drops only the
+ * stroke that references `a`.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionDropsACycleClosingStroke) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="2" y="2" width="4" height="4" fill="black" stroke="url(#a)" stroke-width="2" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        ................
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ................
+        ................
+        ................
+        ................
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ................
+        ................
+        )"));
+}
+
+/**
+ * The cycle also closes through `href` templating: `c` has no content of its own and inherits
+ * `b`'s, whose fill references `a` again.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionThroughHrefTemplate) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#c)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black" stroke-width="2" />
+        </pattern>
+        <pattern id="c" xlink:href="#b" />
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        )"));
+}
+
+/**
+ * Rendering the same document again gives the same result: no cycle state survives a frame.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionRendersTheSameTwice) {
+  SVGDocument document = instantiateSubtree(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black" stroke-width="2" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  constexpr std::string_view kRing = R"(
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        )";
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kRing));
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kRing));
+}
+
+/**
+ * A three-pattern cycle still terminates: the chain a -> b -> c renders, and c's reference back to
+ * `a` paints nothing because `a` is already being rendered.
+ */
+TEST(SVGPatternElementTests, PatternThreeWayRecursionTerminates) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#c)" />
+        </pattern>
+        <pattern id="c" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black" stroke-width="2" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        )"));
+}
+
+/**
+ * A long acyclic chain of pattern references (each pattern's content filled with the next) is not a
+ * cycle, so the active-chain guard never stops it; the shadow-tree resource budget bounds its
+ * expansion. It must finish and render the same way twice.
+ */
+TEST(SVGPatternElementTests, PatternLongAcyclicChainTerminates) {
+  std::string svg;
+  constexpr int kChainLength = 100;
+  for (int i = 0; i < kChainLength; ++i) {
+    svg += "<pattern id=\"p" + std::to_string(i) +
+           "\" patternUnits=\"userSpaceOnUse\" width=\"8\" height=\"8\">";
+    if (i + 1 < kChainLength) {
+      svg += "<rect width=\"8\" height=\"8\" fill=\"url(#p" + std::to_string(i + 1) + ")\" />";
+    } else {
+      svg += "<rect x=\"2\" y=\"2\" width=\"4\" height=\"4\" fill=\"black\" />";
+    }
+    svg += "</pattern>";
+  }
+  svg += "<rect width=\"16\" height=\"16\" fill=\"url(#p0)\" />";
+
+  SVGDocument document = instantiateSubtree(svg);
+  const AsciiImage first = RendererTestUtils::renderToAsciiImage(document);
+  const AsciiImage second = RendererTestUtils::renderToAsciiImage(document);
+  EXPECT_EQ(first.generated, second.generated);
 }
 
 /**

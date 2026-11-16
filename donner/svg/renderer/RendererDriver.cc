@@ -4213,6 +4213,13 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     return;
   }
 
+  // A pattern already being rendered further up closes a cycle: this layer paints nothing.
+  if (std::find(activePatternTiles_.begin(), activePatternTiles_.end(), target.entity()) !=
+      activePatternTiles_.end()) {
+    skipSubtree();
+    return;
+  }
+
   const auto placement =
       ResolvePatternPlacement(registry, instance, ref, target, *computedPattern, rect);
 
@@ -4229,6 +4236,12 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
       std::exchange(drawSurfaceSize_, std::nullopt);
   surfaceFromCanvasTransform_ = placement->patternContentFromPatternTile;
   {
+    struct ActivePatternScope {
+      std::vector<Entity>& tiles;
+      ~ActivePatternScope() { tiles.pop_back(); }
+    };
+    activePatternTiles_.push_back(target.entity());
+    const ActivePatternScope activePattern{activePatternTiles_};
     RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
                                                                           registry);
     if (subtreeAhead) {
