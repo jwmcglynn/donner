@@ -88,7 +88,7 @@ TEST(FilterPrecisionParity, DropShadowHalfOffsetsMatchSoftwareRenderer) {
   }
 }
 
-TEST(FilterPrecisionParity, PixelOffsetsKeepDoublePrecisionUntilRounding) {
+TEST(FilterPrecisionParity, NearHalfPixelOffsetsMatchSoftwareRenderer) {
   static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
   size_t index = 0;

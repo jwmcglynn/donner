@@ -1,5 +1,5 @@
 /// @file
-/// Reflected offset interfaces, deterministic compilation and half-pixel rounding contract.
+/// Reflected offset interfaces, deterministic compilation and fractional resampling contract.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -69,17 +69,15 @@ TEST(OffsetProgramTests, MutationPropagatesThroughDescriptorAndBindingLayout) {
   ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(1));
   EXPECT_EQ(descriptor.bufferBindings->front().binding, 7u);
 }
-TEST(OffsetProgramTests, KeepsHalfAwayRoundingAndTransparentSourceEdges) {
+TEST(OffsetProgramTests, ResamplesFractionalShiftsAndKeepsTransparentSourceEdges) {
   const auto source = programs::kOffsetSource.view();
-  EXPECT_THAT(source, testing::HasSubstr("floor(magnitude)"));
   // Native image robustness would mask removal of this authored early return in pixel tests.
   EXPECT_THAT(source, testing::HasSubstr(
                           "if (((gid.x >= extent.x) || (gid.y >= extent.y))) {\n    return;\n  }"));
-  EXPECT_THAT(source, testing::HasSubstr("sign(x)"));
-  EXPECT_THAT(source, testing::HasSubstr("(magnitude - integral) >= 0.5f"));
+  EXPECT_THAT(source, testing::HasSubstr("let base = vec2<i32>(floor(position));"));
+  EXPECT_THAT(source, testing::HasSubstr("let fraction = (position - floor(position));"));
   EXPECT_THAT(source, testing::Not(testing::HasSubstr("round(")));
-  EXPECT_THAT(source,
-              testing::HasSubstr("textureStore(outputTexture, coords, vec4<f32>(0f, 0f, 0f, 0f))"));
+  EXPECT_THAT(source, testing::HasSubstr("return vec4<f32>(0f);"));
 }
 }  // namespace
 }  // namespace donner::gpu::shader

@@ -1,11 +1,11 @@
 #pragma once
 /// @file
-/// Authoritative WGSL for integer-pixel SVG offset filtering.
+/// Authoritative WGSL for SVG offset filtering; fractional offsets resample bilinearly.
 
 #include "donner/gpu/shader/wgsl/Compiler.h"
 
 namespace donner::gpu::shader::programs {
-/// Authoritative WGSL for integer-pixel SVG offset filtering.
+/// Authoritative WGSL for SVG offset filtering; fractional offsets resample bilinearly.
 inline constexpr wgsl::SourceText kOffsetSource{R"wgsl(struct OffsetParams {
   dx: f32,
   dy: f32,
@@ -17,14 +17,11 @@ inline constexpr wgsl::SourceText kOffsetSource{R"wgsl(struct OffsetParams {
 @group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> params: OffsetParams;
 
-fn round_half_away_from_zero(x: f32) -> f32 {
-  let magnitude = abs(x);
-  let integral = floor(magnitude);
-  let direction = sign(x);
-  if (((magnitude - integral) >= 0.5f)) {
-    return (direction * (integral + 1f));
+fn sampleInput(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+  if ((any((coord < vec2<i32>(0i))) || any((coord >= size)))) {
+    return vec4<f32>(0f);
   }
-  return (direction * integral);
+  return textureLoad(inputTexture, coord, 0i);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -34,15 +31,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   let coords = vec2<i32>(gid.xy);
-  let shift = vec2<i32>(i32(round_half_away_from_zero(params.dx)), i32(round_half_away_from_zero(params.dy)));
-  let source = (coords - shift);
-  let sourceExtent = vec2<i32>(textureDimensions(inputTexture));
-  let outside = ((((source.x < 0i) || (source.y < 0i)) || (source.x >= sourceExtent.x)) || (source.y >= sourceExtent.y));
-  if (outside) {
-    textureStore(outputTexture, coords, vec4<f32>(0f, 0f, 0f, 0f));
-  } else {
-    textureStore(outputTexture, coords, textureLoad(inputTexture, source, 0i));
-  }
+  let size = vec2<i32>(textureDimensions(inputTexture));
+  let position = (vec2<f32>(coords) - vec2<f32>(params.dx, params.dy));
+  let base = vec2<i32>(floor(position));
+  let fraction = (position - floor(position));
+  let topLeft = sampleInput(base, size);
+  let topRight = sampleInput((base + vec2<i32>(1i, 0i)), size);
+  let bottomLeft = sampleInput((base + vec2<i32>(0i, 1i)), size);
+  let bottomRight = sampleInput((base + vec2<i32>(1i, 1i)), size);
+  let top = (topLeft + (fraction.x * (topRight - topLeft)));
+  let bottom = (bottomLeft + (fraction.x * (bottomRight - bottomLeft)));
+  textureStore(outputTexture, coords, (top + (fraction.y * (bottom - top))));
 }
 )wgsl"};
 }  // namespace donner::gpu::shader::programs

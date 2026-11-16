@@ -17,14 +17,11 @@ inline constexpr wgsl::SourceText kDropShadowSource{R"wgsl(struct DropShadowPara
 @group(0) @binding(2) var outputTexture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<uniform> params: DropShadowParams;
 
-fn round_half_away_from_zero(x: f32) -> f32 {
-  let magnitude = abs(x);
-  let integral = floor(magnitude);
-  let direction = sign(x);
-  if (((magnitude - integral) >= 0.5f)) {
-    return (direction * (integral + 1f));
+fn blurredAlphaAt(coord: vec2<i32>, size: vec2<i32>) -> f32 {
+  if ((any((coord < vec2<i32>(0i))) || any((coord >= size)))) {
+    return 0f;
   }
-  return (direction * integral);
+  return textureLoad(blurredTexture, coord, 0i).w;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -34,12 +31,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   let coord = vec2<i32>(gid.xy);
-  let sampleCoord = (coord - vec2<i32>(i32(round_half_away_from_zero(params.dx)), i32(round_half_away_from_zero(params.dy))));
   let blurredSize = vec2<i32>(textureDimensions(blurredTexture));
-  var blurredAlpha: f32 = 0f;
-  if ((all((sampleCoord >= vec2<i32>(0i))) && all((sampleCoord < blurredSize)))) {
-    blurredAlpha = textureLoad(blurredTexture, sampleCoord, 0i).w;
-  }
+  let position = (vec2<f32>(coord) - vec2<f32>(params.dx, params.dy));
+  let base = vec2<i32>(floor(position));
+  let fraction = (position - floor(position));
+  let topLeft = blurredAlphaAt(base, blurredSize);
+  let topRight = blurredAlphaAt((base + vec2<i32>(1i, 0i)), blurredSize);
+  let bottomLeft = blurredAlphaAt((base + vec2<i32>(0i, 1i)), blurredSize);
+  let bottomRight = blurredAlphaAt((base + vec2<i32>(1i, 1i)), blurredSize);
+  let upperAlpha = (topLeft + (fraction.x * (topRight - topLeft)));
+  let lowerAlpha = (bottomLeft + (fraction.x * (bottomRight - bottomLeft)));
+  let blurredAlpha = (upperAlpha + (fraction.y * (lowerAlpha - upperAlpha)));
   let shadow = vec4<f32>(((params.color.xyz * params.color.w) * blurredAlpha), (params.color.w * blurredAlpha));
   let top = textureLoad(sourceTexture, coord, 0i);
   let result = (top + (shadow * (1f - top.w)));

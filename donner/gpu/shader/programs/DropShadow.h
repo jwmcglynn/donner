@@ -5,7 +5,7 @@
 
 #include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
-/// Uniform straight flood color and integer-rounded pixel offset.
+/// Uniform straight flood color and pixel offset; a fractional offset resamples bilinearly.
 struct alignas(16) DropShadowParams {
   float color[4];  //!< Straight RGBA flood color; the shader premultiplies.
   float dx;        //!< Horizontal shadow offset in pixels.

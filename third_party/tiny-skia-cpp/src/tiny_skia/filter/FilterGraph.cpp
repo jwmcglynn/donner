@@ -562,8 +562,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                    const double expandX = std::ceil(primitive.sigmaX * 3.0);
                    const double expandY = std::ceil(primitive.sigmaY * 3.0);
                    const Box shadowBounds = inputBounds
-                                                .translate(static_cast<double>(primitive.dx),
-                                                           static_cast<double>(primitive.dy))
+                                                .translate(primitive.dx, primitive.dy)
                                                 .outset(expandX, expandY);
                    return inputBounds.unite(shadowBounds);
                  } else if constexpr (std::is_same_v<T, graph_primitive::Morphology>) {

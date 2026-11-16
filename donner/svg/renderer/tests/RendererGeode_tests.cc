@@ -5001,8 +5001,8 @@ TEST_F(RendererGeodeTest, FilterOffsetKeepsTheAxesApart) {
       << "A texel the transposed shift would have covered must be clear";
 }
 
-/// feOffset with a shift on an exact half, where the two rounding rules land a pixel apart.
-TEST_F(RendererGeodeTest, FilterOffsetRoundsAHalfAwayFromZero) {
+/// feOffset with a shift on an exact half translates by that half pixel instead of snapping.
+TEST_F(RendererGeodeTest, FilterOffsetTranslatesByAHalfPixel) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
@@ -5027,11 +5027,13 @@ TEST_F(RendererGeodeTest, FilterOffsetRoundsAHalfAwayFromZero) {
   RendererBitmap snap = renderer.takeSnapshot();
   ASSERT_FALSE(snap.empty());
 
-  // Rounding half away from zero shifts by three and puts the right edge at 51, so the texel at
-  // 50 is wholly inside. Round-half-to-even shifts by two, puts the edge at 50, and leaves that
-  // same texel wholly outside; no partial coverage separates the two answers.
-  EXPECT_THAT(PixelAt(snap, 50, 32), RgbaEq(255, 0, 0, 255))
-      << "A half-pixel shift must round away from zero, matching the CPU filter path";
+  // The shifted right edge lands at 50.5: texel 49 stays wholly inside, texel 50 is half covered,
+  // and texel 51 is outside. Snapping the shift to either neighboring whole pixel would leave
+  // texel 50 wholly inside or wholly outside.
+  EXPECT_THAT(PixelAt(snap, 49, 32), RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(snap, 50, 32),
+              Rgba(255, 0, 0, testing::AllOf(testing::Ge(127), testing::Le(128))));
+  EXPECT_THAT(PixelAt(snap, 51, 32), IsTransparent());
 }
 
 /// Parses \p source, which must parse without warnings, into \p document.

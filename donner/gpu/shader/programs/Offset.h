@@ -10,8 +10,8 @@ namespace donner::gpu::shader::programs {
 
 /// Uniform layout for finite pixel shifts in the admitted [-4096, 4096] range.
 struct OffsetParams {
-  float dx;       //!< Shift along x, rounded half away from zero by the shader.
-  float dy;       //!< Shift along y, rounded half away from zero by the shader.
+  float dx;       //!< Shift along x; a fractional part resamples bilinearly.
+  float dy;       //!< Shift along y; a fractional part resamples bilinearly.
   uint32_t pad0;  //!< Padding to the 16-byte uniform block size.
   uint32_t pad1;  //!< Padding to the 16-byte uniform block size.
 };
