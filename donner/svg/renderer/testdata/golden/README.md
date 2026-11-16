@@ -121,8 +121,8 @@ server reference without a fallback paints nothing for that layer).
 In `recursive-on-child` the two patterns fill their rects with each other. Only the reference that
 revisits a pattern already being rendered is circular, so `patt1`'s rect is filled with `patt2`'s
 tile, whose rect keeps its stroke and drops only its fill. The tile therefore holds two layers of
-the stroke, which is what Chromium 147 and Firefox 153 draw (see the table below). Donner's seam
-columns read 96, 255, 255 and 96, and the browsers read 102 to 114. Both layers contribute fully;
+the stroke in both rects, as Firefox 153 draws it (see the table below). Donner's seam columns
+read 96, 255, 255 and 96, and Firefox reads 102 to 114. Both layers contribute fully;
 the difference is where the two coincident half-strokes are composited:
 
 - Tiles rasterize at twice the device scale of their parent surface: the outer tile at 5 raster
@@ -170,14 +170,26 @@ pixel, 0-255):
 | Vendored PNG | 89, 242, 242, 90 | 12, 165, 255, 166, 13 |
 | Chromium 147, self-recursive | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
 | Firefox 153, self-recursive | 59, 255, 255, 64 | 28, 148, 255, 160, 33 |
-| Chromium 147, recursive-on-child | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
-| Firefox 153, recursive-on-child | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
+| Vendored PNG, recursive-on-child lower rect (`rect4`) | 134, 248, 248, 135 | 18, 210, 255, 210, 19 |
+| Chromium 147, recursive-on-child upper rect (`rect3`) | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
+| Chromium 151, recursive-on-child lower rect (`rect4`) | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
+| Firefox 153, recursive-on-child, both rects | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
+
+The vendored PNG row above it is the self-recursive rows and the upper rect of
+recursive-on-child.
 
 Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it falls
 mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG does
-everywhere. Keeping the exact seams is a maintainer decision. On `recursive-on-child` both browsers
-and Donner paint the second stroke layer described above (Donner: 96, 255, 255, 96 on the
-vertical seam and 0, 224, 255, 224, 0 on the horizontal one); the vendored PNG draws one layer.
+everywhere. Keeping the exact seams is a maintainer decision.
+
+On `recursive-on-child`, `rect3` is filled with `patt1` and `rect4` with `patt2`. The second
+stroke layer described above is drawn by Firefox 153 in both rects, by Chromium (147 and 151) in
+`rect3` only, by the vendored PNG in `rect4` only, and by Donner in both rects: 96, 255, 255, 96
+on the vertical seam and 0, 224, 255, 224, 0 on the horizontal one, in each rect. Donner
+therefore draws the layer in the same rects as Firefox, and its partial columns read 96 where
+Firefox reads 102 to 114, for the compositing reason above. SVG 2 does not say which reference of
+a two-pattern cycle is the circular one; Donner treats only the reference that revisits a pattern
+already being rendered as circular.
 
 resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
 per unit, the horizontal seam at y = 50 units (device y 75) covers device y 74.25 to 75.75, which
