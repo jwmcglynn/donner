@@ -78,9 +78,6 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
-| paint-servers/pattern      | recursive-on-child                    | Exact tile-edge stroke; the PNG resamples a raster tile        |
-| paint-servers/pattern      | self-recursive-on-child               | Exact tile-edge stroke; the PNG resamples a raster tile        |
-| paint-servers/pattern      | self-recursive                        | Exact tile-edge stroke; the PNG resamples a raster tile        |
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
@@ -99,6 +96,20 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 `with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
+
+### Exact pattern-tile seams (reference rasterization, not a spec violation)
+
+The specification does not say how a pattern tile is rasterized, so these are not "wrong per
+spec". Donner draws the exact coverage of each tile's stroke; the vendored PNGs resample a
+rasterized tile. `testdata/golden/README.md` has the measurements, including what current
+Chromium and Firefox draw (exact coverage on pixel-aligned seams, a resampled tile on fractional
+ones), and the golden is pending a maintainer decision on that evidence.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
 
 ### Allowed nearest-neighbor reference differences
 

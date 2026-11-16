@@ -63,7 +63,8 @@ cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 `paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.
 `self-recursive` and `self-recursive-on-child` render identically and share
 `donner-pattern-self-recursive.png`. All three are 500x500 renderings by the software renderer
-at commit `21c59c75`, at default settings. Full text and Geode render all three identically.
+at commit `21c59c75`, at default settings. Full text, Geode on Metal and Geode on Linux
+lavapipe (aarch64) render all three identically (0 pixels counted).
 
 Each tile is a 40 x 25 unit rect whose 1-unit stroke straddles the tile edge, so each tile
 clips half of its stroke and two neighboring tiles draw the two halves. A recursive fill
@@ -74,10 +75,34 @@ exactly that. The vendored PNGs read 89, 242, 242 and 90, the profile of a raste
 resampled with a filter. At the default threshold the rows differ from those PNGs by 4,053
 (recursive-on-child) and 5,503 pixels, and by 0 pixels under a 0.2 color threshold.
 
+`results.csv` records Chrome, Firefox and resvg passing all three vendored PNGs (Safari fails).
+That is a visual verdict, and it cannot separate the two profiles: they differ by 25 of 255
+levels on the two partial columns and 13 on the full ones, and both cover the seam with 2.5 to
+2.6 pixels of stroke, a 4% difference in width at 2.5 pixels per unit.
+
+What the browsers draw, measured on Chromium 147 and Firefox 153 at 500x500 (stroke coverage per
+pixel, 0-255):
+
+| Rendering | Vertical seam, x = 40 units (pixel-aligned), cols 98-101 | Horizontal seam, y = 25 units (fractional), rows 60-64 |
+| --- | --- | --- |
+| Donner | 64, 255, 255, 64 | 0, 192, 255, 192, 0 |
+| Vendored PNG | 89, 242, 242, 90 | 12, 165, 255, 166, 13 |
+| Chromium 147, self-recursive | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
+| Firefox 153, self-recursive | 59, 255, 255, 64 | 28, 148, 255, 160, 33 |
+| Chromium 147, recursive-on-child | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
+| Firefox 153, recursive-on-child | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
+
+Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it
+falls mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG
+does everywhere. On `recursive-on-child` they also paint the mutually recursive fill one level
+deep before treating it as an error: a second copy of the stroke raises the partial columns to
+about 1 - (1 - 0.25)^2 = 0.44 (alpha 112). Neither Donner nor the vendored PNG draws that layer.
+
 resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
-per unit, the horizontal seam at y = 75 should cover rows 74 and 75 at alpha 192 each, but
-those references read 63, 255 and 192 over rows 74 to 76. That is the stroke moved half a
-pixel by a tile rasterized on whole pixels; Donner reads 192, 192 and 0.
+per unit, the horizontal seam at y = 50 units (device y 75) covers device y 74.25 to 75.75, which
+is alpha 192 on rows 74 and 75. Those references read 63, 255 and 192 over rows 74 to 76: about
+2.0 pixels of coverage where the exact stroke is 1.5, so the stroke is widened and offset. Donner
+reads 192, 192 and 0.
 
 PNG SHA-256:
 - `donner-pattern-recursive-on-child.png`: `22d1398ccf3aa7f32351977ef0e284fe193e67ed670a5d4cb424448d317659f3`
