@@ -19,6 +19,10 @@ resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/Not
 resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf --width 500 third_party/resvg-test-suite/tests/text/textPath/dy-with-tiny-coordinates.svg donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png
 ```
 
+Both compare at the ordinary 100-pixel budget. `dy-with-tiny-coordinates` sets a 0.24 font size
+under `scale(100)`; its former 1100-pixel allowance covered full-tier advances rounded to 1/64
+pixel of that tiny face, which the full tier no longer does.
+
 ## Emoji positioning reference
 
 `resvg-compound-emojis-and-coordinates-list.png` is generated independently with

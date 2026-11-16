@@ -1748,9 +1748,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
-                     .withMaxPixelsDifferent(1100)
-                     .withReason(
-                         "resvg 0.47.0 reference; full-text small-font placement residual")},
+                     .withReason("resvg 0.47.0 reference (golden README)")},
                 {"m-A-path.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(

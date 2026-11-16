@@ -143,7 +143,7 @@ noted.
 
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
-| text/textPath        | dy-with-tiny-coordinates                 | AA + minor char advance diffs (text vs text-full) |
+| text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
 | text/textPath        | m-L-Z-path                               | Minor char                                        |
 | text/textPath        | mixed-children-1                         | AA diffs                                          |
 | text/textPath        | nested                                   | Minor char                                        |
