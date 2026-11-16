@@ -527,6 +527,17 @@ TEST(SubDocumentFiltersTest, TransformedTextUnderBoxClipMatchesInDocument) {
   }
 }
 
+/// An empty text has no object box, so it adds nothing to an enclosing group's box: a group of a
+/// rect at x=10..20 and an external use of empty text clips to the rect's own box, as in-document.
+TEST(SubDocumentFiltersTest, EmptyTextLeavesGroupBoxUnchangedUnderBoxClip) {
+  ExpectExternalMatchesInDocument(
+      "sub-document-empty-text-box", "<text id='sprite' x='4' y='20' font-size='12'></text>",
+      "<defs><clipPath id='half' clipPathUnits='objectBoundingBox'>"
+      "<rect width='0.5' height='1'/></clipPath></defs>"
+      "<rect width='32' height='32' fill='#ffffff'/><g clip-path='url(#half)'>"
+      "<rect x='10' y='4' width='10' height='24' fill='#2050d0'/><use href='{ref}sprite'/></g>");
+}
+
 TEST(SubDocumentFiltersTest, SymbolTargetViewportUnderBoxClip) {
   ExpectExternalMatchesInDocument(
       "sub-document-symbol-viewport",
@@ -913,8 +924,7 @@ TEST(SubDocumentFiltersTest, PathComparisonsStayLinearInTheOccurrences) {
   const auto measure = [&](int uses, bool distinct) {
     SVGDocument document = Parse(SizedUsesHost(uses, distinct), documents);
     RendererBitmap bitmap;
-    const auto work =
-        DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap);
+    const auto work = DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap);
     return Work{.copyBytes = work->externalMeasureGeometryBytes(),
                 .comparisons = work->externalMeasureGeometryComparisons()};
   };
