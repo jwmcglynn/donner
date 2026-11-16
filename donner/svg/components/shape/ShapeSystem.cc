@@ -517,19 +517,6 @@ constexpr bool ForEachShape(const F& f) {
   return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
 }
 
-bool HasIdenticalPathData(const Path& first, const Path& second) {
-  const auto sameCommand = [](const Path::Command& a, const Path::Command& b) {
-    return a.verb == b.verb && a.pointIndex == b.pointIndex && a.isInternal == b.isInternal;
-  };
-  const auto samePoint = [](const Vector2d& a, const Vector2d& b) {
-    return a.x == b.x && a.y == b.y;
-  };
-  return std::equal(first.commands().begin(), first.commands().end(), second.commands().begin(),
-                    second.commands().end(), sameCommand) &&
-         std::equal(first.points().begin(), first.points().end(), second.points().begin(),
-                    second.points().end(), samePoint);
-}
-
 bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
   return style.properties && style.properties->display.get().value() == Display::None;
@@ -760,17 +747,17 @@ Path BuildClosedPathClip(const Path& path, const Vector2d& origin) {
 
 class ReferenceBoundsAccumulator {
 public:
-  /// With @p pieces, the accumulator collects geometry there instead of bounding it.
+  /// With @p collector, the accumulator collects geometry there instead of bounding it.
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
                              const Transform2d& targetFromWorld, bool includeStroke,
                              CircleClipGeometryBudget* budget,
-                             std::vector<BoundsGeometryPiece>* pieces = nullptr)
+                             const BoundsGeometryCollector* collector = nullptr)
       : shapes_(shapes),
         root_(root),
         targetFromWorld_(targetFromWorld),
         includeStroke_(includeStroke),
         budget_(budget),
-        pieces_(pieces) {}
+        collector_(collector) {}
 
   bool visit(EntityHandle child) {
     if (failed_ || (budget_ && !budget_->reserve(1))) {
@@ -797,7 +784,7 @@ public:
 private:
   /// Add a box already in the target space.
   void add(const Box2d& bounds) {
-    if (pieces_) {
+    if (collector_) {
       addBox(bounds, Transform2d());
     } else {
       accumulate(bounds);
@@ -805,20 +792,29 @@ private:
   }
 
   void addBox(const Box2d& box, const Transform2d& targetFromBox) {
-    if (pieces_) {
+    if (collector_) {
       if (!IsFiniteBox(box)) {
         RejectGeometry(budget_, failed_);
         return;
       }
-      pieces_->push_back(BoundsGeometryPiece{.spaceFromPiece = targetFromBox, .geometry = box});
+      collector_->pieces.push_back(
+          BoundsGeometryPiece{.spaceFromPiece = targetFromBox, .geometry = box});
       return;
     }
     accumulate(targetFromBox.transformBox(box));
   }
 
-  void addPath(const Path& path, const Transform2d& targetFromPath) {
-    if (pieces_) {
-      pieces_->push_back(BoundsGeometryPiece{.spaceFromPiece = targetFromPath, .geometry = path});
+  void addPath(EntityHandle source, const Path& path, const Transform2d& targetFromPath) {
+    if (collector_) {
+      std::shared_ptr<const Path> shared =
+          collector_->paths.share(*source.registry(), source.entity(), path, collector_->budget);
+      if (!shared) {
+        // Past the allowance, the path's own box stands in for it.
+        addBox(path.bounds(), targetFromPath);
+        return;
+      }
+      collector_->pieces.push_back(
+          BoundsGeometryPiece{.spaceFromPiece = targetFromPath, .geometry = std::move(shared)});
       return;
     }
     accumulate(path.transformedBounds(targetFromPath));
@@ -853,7 +849,7 @@ private:
       RejectGeometry(budget_, failed_);
       return;
     }
-    addPath(path->spline, worldFromChild * targetFromWorld_);
+    addPath(child, path->spline, worldFromChild * targetFromWorld_);
     if (!includeStroke_) {
       return;
     }
@@ -970,29 +966,13 @@ private:
   const Transform2d& targetFromWorld_;
   bool includeStroke_;
   CircleClipGeometryBudget* budget_;
-  std::vector<BoundsGeometryPiece>* pieces_;
+  const BoundsGeometryCollector* collector_;
   ParseWarningSink warningSink_ = ParseWarningSink::Disabled();
   std::optional<Box2d> bounds_;
   bool failed_ = false;
 };
 
 }  // namespace
-
-std::optional<Box2d> BoundGeometryPieces(std::span<const BoundsGeometryPiece> pieces,
-                                         const Transform2d& targetFromSpace) {
-  std::optional<Box2d> bounds;
-  for (const BoundsGeometryPiece& piece : pieces) {
-    const Transform2d targetFromPiece = piece.spaceFromPiece * targetFromSpace;
-    const Box2d box = std::holds_alternative<Path>(piece.geometry)
-                          ? std::get<Path>(piece.geometry).transformedBounds(targetFromPiece)
-                          : targetFromPiece.transformBox(std::get<Box2d>(piece.geometry));
-    if (!IsFiniteBox(box)) {
-      return std::nullopt;
-    }
-    bounds = bounds ? Box2d::Union(*bounds, box) : box;
-  }
-  return bounds;
-}
 
 EntityHandle ShapeSystem::geometryHandle(EntityHandle instance) {
   const auto* shadow = instance.try_get<ShadowEntityComponent>();
@@ -1111,7 +1091,7 @@ std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
 }
 
 bool ShapeSystem::collectShapeGeometry(EntityHandle handle, const Transform2d& spaceFromEntity,
-                                       std::vector<BoundsGeometryPiece>& pieces) {
+                                       const BoundsGeometryCollector& collector) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (IsDisplayNone(handle, disabledSink)) {
     return true;
@@ -1119,8 +1099,9 @@ bool ShapeSystem::collectShapeGeometry(EntityHandle handle, const Transform2d& s
   const Transform2d spaceFromWorld =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse() * spaceFromEntity;
   const ScopedTextPathBoundsWorkEpoch textPathWorkEpoch(*handle.registry());
+  std::vector<BoundsGeometryPiece>& pieces = collector.pieces;
   const std::size_t firstPiece = pieces.size();
-  ReferenceBoundsAccumulator accumulator(*this, handle, spaceFromWorld, false, nullptr, &pieces);
+  ReferenceBoundsAccumulator accumulator(*this, handle, spaceFromWorld, false, nullptr, &collector);
   donner::components::ForAllChildrenRecursivePruned(
       handle, [&accumulator](EntityHandle child) { return accumulator.visit(child); });
   if (accumulator.failed()) {

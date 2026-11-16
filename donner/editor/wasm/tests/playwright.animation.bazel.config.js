@@ -2,6 +2,7 @@ const base = require("./playwright.bazel.config.js");
 const { devices } = require("@playwright/test");
 const { browserExecutablePaths } = require("./prepare-browser-archives.js");
 const { firefoxLaunchOptions } = require("./firefox-launch-env.cjs");
+const { kBrowserLaunchTimeoutMs } = require("./test-timing.cjs");
 const executables = browserExecutablePaths(process.env);
 
 // Firefox only: the Editor WASM workflow's chromium-default lane runs every Chromium case of
@@ -9,7 +10,8 @@ const executables = browserExecutablePaths(process.env);
 module.exports = {
   ...base,
   use: {},
-  // The archives prepare-browser-archives.js extracts before any case: only the browser run here.
+  // The archives the global setup extracts before probing one launch of each project's
+  // browser (prepare-browser-archives.js, browser-launch-probe.js): only the browser run here.
   metadata: { pinnedBrowsers: ["firefox"] },
   globalSetup: require.resolve("./prepare-browser-archives.js"),
   projects: [
@@ -23,7 +25,7 @@ module.exports = {
         ignoreHTTPSErrors: true,
         launchOptions: {
           executablePath: executables.firefox,
-          timeout: 30000,
+          timeout: kBrowserLaunchTimeoutMs,
           ...firefoxLaunchOptions(process.env),
           firefoxUserPrefs: { "dom.webgpu.enabled": true },
         },

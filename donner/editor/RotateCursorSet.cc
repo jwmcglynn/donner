@@ -16,6 +16,7 @@
 #endif
 
 #include "GLFW/glfw3.h"
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/PanClosedCursorSvg.h"
 #include "donner/editor/PanCursorSvg.h"
@@ -292,7 +293,8 @@ double RotationDegreesForCorner(SelectionTransformCorner corner) {
 
 std::string RotatedCursorSvg(ResourceLease bytes, SelectionTransformCorner corner) {
   std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  std::ostringstream replacement;
+  // The cursor art is parsed as SVG, so its numbers must not follow the global locale.
+  std::ostringstream replacement = MakeClassicNumberStream();
   replacement << "rotate(" << RotationDegreesForCorner(corner) << ",16,16)";
   ReplaceFirst(&svg, kRotationPlaceholder, replacement.str());
   return svg;
@@ -301,7 +303,7 @@ std::string RotatedCursorSvg(ResourceLease bytes, SelectionTransformCorner corne
 // Substitute the source SVG's declared 32px width/height for the 4x raster
 // size, so Donner rasterizes the art at kCursorRasterSizePx before downsample.
 void ApplyRasterSize(std::string* svg) {
-  std::ostringstream rasterSize;
+  std::ostringstream rasterSize = MakeClassicNumberStream();
   rasterSize << kCursorRasterSizePx;
   const std::string rasterSizeText = rasterSize.str();
   ReplaceFirst(svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -26,6 +25,17 @@ constexpr bool IsAscii(char c) {
 /// Check if a character is a UTF-8 continuation byte.
 bool isUtfSequence(char c) {
   return (c & 0xC0) == 0x80;
+}
+
+/// Index of the first byte of the glyph that ends at \p lastIndex in \p line: the lead byte of the
+/// UTF-8 sequence holding it, or \p lastIndex itself when no preceding lead claims it (a stray
+/// continuation byte is a glyph of its own, as TextBuffer::glyphByteLength walks it forward).
+int GlyphStartBefore(const Line& line, int lastIndex) {
+  int start = lastIndex;
+  while (start > 0 && isUtfSequence(line[start].character)) {
+    --start;
+  }
+  return start + TextBuffer::glyphByteLength(line[start].character) > lastIndex ? start : lastIndex;
 }
 
 /// Encode a UTF-32 character to UTF-8 in the given buffer. Mirrors ImGui's
@@ -264,7 +274,7 @@ void TextEditorCore::advance(Coordinates& coords) const {
 
   if (charIndex + 1 < static_cast<int>(line.size())) {
     // Get length of current UTF-8 sequence at position
-    int delta = Utf8::SequenceLength(line[charIndex].character);
+    int delta = TextBuffer::glyphByteLength(line[charIndex].character);
     const int newIndex = std::min(charIndex + delta, static_cast<int>(line.size()) - 1);
     coords.column = text_.getCharacterColumn(coords.line, newIndex);
   } else {
@@ -465,7 +475,7 @@ void updateFoldColumnImpl(Coordinates& fold, const Coordinates& matchingEnd,
   while (charIndex < static_cast<int>(startLine.size()) &&
          (!skipped || (skipped && charIndex < bracketEndCharIndex))) {
     char c = startLine[charIndex].character;
-    charIndex += Utf8::SequenceLength(c);
+    charIndex += TextBuffer::glyphByteLength(c);
 
     if (c == '\t') {
       colOffset = (colOffset / tabSize) * tabSize + tabSize;
@@ -605,18 +615,35 @@ enum class WordClass : std::uint8_t {
 };
 
 WordClass ClassifyChar(char c) {
-  // UTF-8 continuation bytes are treated as part of the current run
-  // so multi-byte characters don't fragment word boundaries.
-  if ((c & 0xC0) == 0x80) {
+  // Every byte of a multi-byte UTF-8 character is a word byte, so a character never splits a
+  // word; classification is ASCII-only and does not depend on the process locale.
+  if (static_cast<unsigned char>(c) >= 0x80) {
     return WordClass::Alphanum;
   }
-  if (c <= 32 && std::isspace(static_cast<unsigned char>(c))) {
+  if (StringUtils::IsAsciiWhitespace(c)) {
     return WordClass::Whitespace;
   }
-  if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+  if (StringUtils::IsAsciiAlnum(c) || c == '_') {
     return WordClass::Alphanum;
   }
   return WordClass::Punctuation;
+}
+
+/// True for a typed character that requests autocomplete: an ASCII letter or underscore.
+/// @param character Typed code point.
+bool IsAutocompleteTriggerCharacter(char32_t character) {
+  if (character > 127) {
+    return false;
+  }
+  const char lowered = StringUtils::ToLowerAscii(static_cast<char>(character));
+  return (lowered >= 'a' && lowered <= 'z') || character == '_';
+}
+
+/// True for bytes that start a word for \ref TextEditorCore::findNextWord: ASCII letters and
+/// digits, and every byte of a multi-byte UTF-8 character.
+/// @param c Byte to classify.
+bool IsNextWordByte(char c) {
+  return static_cast<unsigned char>(c) >= 0x80 || StringUtils::IsAsciiAlnum(c);
 }
 
 /// True for bytes that keyboard word movement treats as part of a word: ASCII letters, digits and
@@ -625,7 +652,7 @@ WordClass ClassifyChar(char c) {
 /// @param c Byte to classify.
 bool IsWordMovementByte(char c) {
   const auto byte = static_cast<unsigned char>(c);
-  return byte >= 0x80 || std::isalnum(byte) || c == '_';
+  return byte >= 0x80 || StringUtils::IsAsciiAlnum(c) || c == '_';
 }
 
 }  // namespace
@@ -676,7 +703,7 @@ Coordinates TextEditorCore::findWordEnd(const Coordinates& from) const {
     if (ClassifyChar(line[currentIndex].character) != startClass) {
       break;
     }
-    currentIndex += Utf8::SequenceLength(line[currentIndex].character);
+    currentIndex += TextBuffer::glyphByteLength(line[currentIndex].character);
   }
 
   return Coordinates(from.line, text_.getCharacterColumn(from.line, currentIndex));
@@ -696,7 +723,7 @@ Coordinates TextEditorCore::findNextWord(const Coordinates& from) const {
   if (current.line < text_.getTotalLines()) {
     const Line& line = text_.getLineGlyphs(current.line);
     if (charIndex < static_cast<int>(line.size())) {
-      isWord = std::isalnum(line[charIndex].character);
+      isWord = IsNextWordByte(line[charIndex].character);
       skip = isWord;
     }
   }
@@ -710,7 +737,7 @@ Coordinates TextEditorCore::findNextWord(const Coordinates& from) const {
 
     const Line& line = text_.getLineGlyphs(current.line);
     if (charIndex < static_cast<int>(line.size())) {
-      isWord = std::isalnum(line[charIndex].character);
+      isWord = IsNextWordByte(line[charIndex].character);
 
       if (isWord && !skip) {
         return Coordinates(current.line, text_.getCharacterColumn(current.line, charIndex));
@@ -748,7 +775,8 @@ bool TextEditorCore::isOnWordBoundary(const Coordinates& at) const {
     return line[charIndex].colorIndex != line[charIndex - 1].colorIndex;
   }
 
-  return std::isspace(line[charIndex].character) != std::isspace(line[charIndex - 1].character);
+  return StringUtils::IsAsciiWhitespace(line[charIndex].character) !=
+         StringUtils::IsAsciiWhitespace(line[charIndex - 1].character);
 }
 
 RcString TextEditorCore::getWordUnderCursor() const {
@@ -1086,7 +1114,7 @@ void TextEditorCore::enterCharacter(char32_t character, bool shift) {
   }
 
   // Update autocomplete
-  if (activeAutocomplete_ && character <= 127 && (std::isalpha(character) || character == '_')) {
+  if (activeAutocomplete_ && IsAutocompleteTriggerCharacter(character)) {
     requestAutocomplete();
   }
 
@@ -1491,7 +1519,7 @@ void TextEditorCore::handleMidLineDelete(Coordinates pos, UndoRecord& undo) {
 
   removeFolds(undo.removedStart, undo.removedEnd);
 
-  auto charLen = Utf8::SequenceLength(line[charIndex].character);
+  auto charLen = TextBuffer::glyphByteLength(line[charIndex].character);
   while (charLen-- > 0 && charIndex < static_cast<int>(line.size())) {
     line.erase(line.begin() + charIndex);
   }
@@ -1600,13 +1628,10 @@ void TextEditorCore::handleMidLineBackspace(const Coordinates& pos, UndoRecord& 
   Line& line = text_.getLineGlyphsMutable(pos.line);
 
   // Find the character cluster to remove
-  int charIndex = text_.getCharacterIndex(pos) - 1;
-  while (charIndex > 0 && isUtfSequence(line[charIndex].character)) {
-    --charIndex;
-  }
+  const int charIndex = GlyphStartBefore(line, text_.getCharacterIndex(pos) - 1);
 
-  int charLen = Utf8::SequenceLength(line[charIndex].character);
-  int endIndex = charIndex + charLen;
+  int charLen = TextBuffer::glyphByteLength(line[charIndex].character);
+  int endIndex = std::min(charIndex + charLen, static_cast<int>(line.size()));
 
   // Calculate column positions before and after the character
   int preColumn = text_.getCharacterColumn(pos.line, charIndex);
@@ -1997,7 +2022,7 @@ void TextEditorCore::colorizeInternal() {
           }
         }
 
-        currentIndex += Utf8::SequenceLength(c);
+        currentIndex += TextBuffer::glyphByteLength(c);
       }
       currentLine++;
     }

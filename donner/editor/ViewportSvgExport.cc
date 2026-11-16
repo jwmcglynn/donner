@@ -4,7 +4,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -13,6 +12,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/Length.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
@@ -55,8 +55,8 @@ std::string FormatNumber(double value) {
   if (!std::isfinite(value)) {
     return "0";
   }
-  std::ostringstream stream;
-  stream.precision(6);
+  // Exported SVG must not follow the global C++ locale (comma decimals, digit grouping).
+  std::ostringstream stream = MakeClassicNumberStream(6);
   stream << std::fixed << value;
   std::string text = stream.str();
   if (text.find('.') != std::string::npos) {
@@ -79,8 +79,7 @@ std::string FormatDimension(double value) {
   if (!std::isfinite(value) || value <= 0.0 || formatted != "0") {
     return formatted;
   }
-  std::ostringstream precise;
-  precise.precision(std::numeric_limits<double>::max_digits10);
+  std::ostringstream precise = MakeClassicNumberStream();
   precise << value;
   return precise.str();
 }

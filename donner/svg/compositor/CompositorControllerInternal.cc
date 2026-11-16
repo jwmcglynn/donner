@@ -18,6 +18,8 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -538,6 +540,20 @@ bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
   return layer.isImmediate() ||
          (layer.fallbackReasons() & (FallbackReason::ExternalPaint | FallbackReason::BlendMode)) !=
              FallbackReason::None;
+}
+
+bool DocumentReadsFilterBackdrop(Registry& registry, Entity rootEntity) {
+  // Scan the document's computed <filter> graphs rather than the elements that reference them:
+  // there are few, and every way an element names a filter (a sole url(), a list of url() and
+  // filter functions) resolves to one of them. A defined but unused reader in the document is
+  // counted too, which only costs the layer cache; a detached one is not. CSS filter functions
+  // never read the backdrop.
+  auto view = registry.view<components::ComputedFilterComponent>();
+  return std::any_of(view.begin(), view.end(), [&](Entity entity) {
+    const auto& filter = view.get<components::ComputedFilterComponent>(entity);
+    return components::StandardInputUsage(filter.filterGraph).readsBackdrop() &&
+           IsEntityInLiveTree(registry, entity, rootEntity);
+  });
 }
 
 double ImmediateStaticSpanBudgetMs() {

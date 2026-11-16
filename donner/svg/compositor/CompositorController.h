@@ -1446,6 +1446,10 @@ private:
   /// all defer to it after running the resolver.
   void reconcileLayers(Registry& registry);
 
+  /// True when the live document has a filter reading BackgroundImage or BackgroundAlpha; such a
+  /// document keeps no layers (see `DocumentReadsFilterBackdrop`).
+  bool documentReadsFilterBackdrop(Registry& registry);
+
   /// Apply the runtime hint gates and the transient exclusive-parent boundary to one resolver
   /// pass. The latter withholds overlapping descendant assignments while their hints stay live.
   void resolveLayerAssignments(Registry& registry, ResolveOptions options = {});

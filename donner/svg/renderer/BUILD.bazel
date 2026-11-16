@@ -170,10 +170,7 @@ donner_perf_sensitive_cc_library(
 donner_perf_sensitive_cc_library(
     name = "renderer_driver",
     srcs = ["RendererDriver.cc"],
-    hdrs = [
-        "RendererDriver.h",
-        "SubDocumentWarnings.h",
-    ],
+    hdrs = ["RendererDriver.h"],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
@@ -185,6 +182,7 @@ donner_perf_sensitive_cc_library(
         ":renderer_interface",
         ":renderer_utils",
         ":rendering_context",
+        ":sub_document_warnings",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components:attached_id_lookup",
@@ -199,6 +197,18 @@ donner_perf_sensitive_cc_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+donner_cc_library(
+    name = "sub_document_warnings",
+    srcs = ["SubDocumentWarnings.cc"],
+    hdrs = ["SubDocumentWarnings.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":rendering_context",
+        "//donner/base",
+        "//donner/svg/components",
+    ],
 )
 
 donner_perf_sensitive_cc_library(

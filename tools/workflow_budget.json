@@ -1,0 +1,236 @@
+{
+  "tree": {
+    "lines": 6152,
+    "comment_lines": 688,
+    "multiline_runs": 110,
+    "longest_run": 194,
+    "run_expressions": 44,
+    "longest_if": 402
+  },
+  "files": {
+    ".github/workflows/badges.yaml": {
+      "lines": 75,
+      "comment_lines": 1,
+      "multiline_runs": 2,
+      "longest_run": 8,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/workflows/bcr_preflight.yml": {
+      "lines": 337,
+      "comment_lines": 31,
+      "multiline_runs": 3,
+      "longest_run": 2,
+      "run_expressions": 0,
+      "longest_if": 109
+    },
+    ".github/workflows/build_docs.yaml": {
+      "lines": 77,
+      "comment_lines": 11,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 27
+    },
+    ".github/workflows/cmake.yml": {
+      "lines": 355,
+      "comment_lines": 38,
+      "multiline_runs": 5,
+      "longest_run": 30,
+      "run_expressions": 0,
+      "longest_if": 369
+    },
+    ".github/workflows/codeql.yml": {
+      "lines": 116,
+      "comment_lines": 31,
+      "multiline_runs": 1,
+      "longest_run": 13,
+      "run_expressions": 0,
+      "longest_if": 29
+    },
+    ".github/workflows/coverage.yml": {
+      "lines": 182,
+      "comment_lines": 47,
+      "multiline_runs": 2,
+      "longest_run": 8,
+      "run_expressions": 0,
+      "longest_if": 48
+    },
+    ".github/workflows/deploy_docs.yaml": {
+      "lines": 350,
+      "comment_lines": 3,
+      "multiline_runs": 8,
+      "longest_run": 2,
+      "run_expressions": 0,
+      "longest_if": 342
+    },
+    ".github/workflows/editor_wasm.yml": {
+      "lines": 342,
+      "comment_lines": 51,
+      "multiline_runs": 2,
+      "longest_run": 3,
+      "run_expressions": 0,
+      "longest_if": 137
+    },
+    ".github/workflows/fuzz.yml": {
+      "lines": 131,
+      "comment_lines": 31,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 9
+    },
+    ".github/workflows/github_hosted_nightly.yml": {
+      "lines": 127,
+      "comment_lines": 18,
+      "multiline_runs": 2,
+      "longest_run": 25,
+      "run_expressions": 2,
+      "longest_if": 70
+    },
+    ".github/workflows/lint.yml": {
+      "lines": 185,
+      "comment_lines": 16,
+      "multiline_runs": 2,
+      "longest_run": 30,
+      "run_expressions": 0,
+      "longest_if": 195
+    },
+    ".github/workflows/main.yml": {
+      "lines": 1767,
+      "comment_lines": 248,
+      "multiline_runs": 48,
+      "longest_run": 38,
+      "run_expressions": 38,
+      "longest_if": 402
+    },
+    ".github/workflows/perf.yml": {
+      "lines": 167,
+      "comment_lines": 10,
+      "multiline_runs": 3,
+      "longest_run": 18,
+      "run_expressions": 4,
+      "longest_if": 85
+    },
+    ".github/workflows/pr_base_change.yml": {
+      "lines": 42,
+      "comment_lines": 17,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 32
+    },
+    ".github/workflows/pr_metadata.yml": {
+      "lines": 37,
+      "comment_lines": 7,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/workflows/publish_bcr.yml": {
+      "lines": 280,
+      "comment_lines": 11,
+      "multiline_runs": 8,
+      "longest_run": 28,
+      "run_expressions": 0,
+      "longest_if": 74
+    },
+    ".github/workflows/release.yml": {
+      "lines": 159,
+      "comment_lines": 8,
+      "multiline_runs": 9,
+      "longest_run": 16,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/workflows/release_candidate.yml": {
+      "lines": 139,
+      "comment_lines": 11,
+      "multiline_runs": 2,
+      "longest_run": 9,
+      "run_expressions": 0,
+      "longest_if": 74
+    },
+    ".github/workflows/rerun_runner_loss.yml": {
+      "lines": 91,
+      "comment_lines": 19,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 237
+    },
+    ".github/workflows/sanitizers-pr.yml": {
+      "lines": 130,
+      "comment_lines": 35,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 116
+    },
+    ".github/workflows/sanitizers.yml": {
+      "lines": 154,
+      "comment_lines": 17,
+      "multiline_runs": 3,
+      "longest_run": 4,
+      "run_expressions": 0,
+      "longest_if": 70
+    },
+    ".github/workflows/sign_macos_release.yml": {
+      "lines": 144,
+      "comment_lines": 0,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 75
+    },
+    ".github/actions/apt-install/action.yml": {
+      "lines": 114,
+      "comment_lines": 15,
+      "multiline_runs": 1,
+      "longest_run": 54,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/actions/buildbuddy-cache/action.yml": {
+      "lines": 277,
+      "comment_lines": 2,
+      "multiline_runs": 1,
+      "longest_run": 194,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/actions/cache-bazel-actions/action.yml": {
+      "lines": 121,
+      "comment_lines": 10,
+      "multiline_runs": 6,
+      "longest_run": 11,
+      "run_expressions": 0,
+      "longest_if": 177
+    },
+    ".github/actions/pr-trust/action.yml": {
+      "lines": 102,
+      "comment_lines": 0,
+      "multiline_runs": 1,
+      "longest_run": 74,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/actions/re-turnstile/action.yml": {
+      "lines": 105,
+      "comment_lines": 0,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 0
+    },
+    ".github/actions/upload-bazel-test-artifacts/action.yml": {
+      "lines": 46,
+      "comment_lines": 0,
+      "multiline_runs": 1,
+      "longest_run": 24,
+      "run_expressions": 0,
+      "longest_if": 0
+    }
+  }
+}
