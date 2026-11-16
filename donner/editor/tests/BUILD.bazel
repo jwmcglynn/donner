@@ -1717,6 +1717,10 @@ donner_cc_test(
 donner_cc_test(
     name = "text_outline_tests",
     srcs = ["TextToOutlines_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GEODE_BACKEND_AVAILABLE"],
+        "//conditions:default": [],
+    }),
     opens_gpu_device = True,
     variants = ["geode"],
     deps = [
