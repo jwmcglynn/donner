@@ -197,11 +197,12 @@ perform no live network requests. Applications independently provide resource by
 `ResourceLoaderInterface`; deterministic image-loader tests cover accepted PNG/SVG bytes, denied
 requests and resource-size limits.
 
-The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text.
-Its upstream reference is entirely opaque, whereas the SVG canvas is transparent outside painted
-content. The comparison remains gated pending background and typography reference qualification.
-An independently authored inline-versus-external text-fragment comparison covers host style
-inheritance, fragment selection, the callback identifier and transparent canvas behavior.
+The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text,
+but in the wrong face: external-use content resolves fonts in the referenced document's own font
+catalog, so the `Noto Sans` it inherits from the `use` falls back to the embedded face (#1183).
+Its reference is also entirely opaque, whereas the SVG canvas is transparent outside painted
+content. An independently authored inline-versus-external text-fragment comparison covers host
+style inheritance, fragment selection, the callback identifier and transparent canvas behavior.
 
 ## CSS radial clipping
 
