@@ -23,8 +23,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -33,6 +35,8 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -643,6 +647,24 @@ std::string TouchingStrokeRun(std::size_t glyphs) {
          std::string(glyphs, 'e') + "</text></svg>";
 }
 
+/// The glyphs of \p run, a `TouchingStrokeRun`, drawn as separate `<text>` elements of
+/// \p groupSize glyphs each, every one placed where \p run places its first glyph. Each element is
+/// stroked as its own shape, so this is an independently authored picture of the run's strokes
+/// drawn group by group.
+std::string SeparatelyStrokedGroups(SVGDocument& run, std::size_t glyphs, std::size_t groupSize) {
+  const std::optional<SVGElement> text = run.querySelector("text");
+  EXPECT_TRUE(text.has_value());
+  std::string body = R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+      font-family="Noto Sans" font-size="40">)svg";
+  for (std::size_t first = 0; first < glyphs; first += groupSize) {
+    const Vector2d start = text->cast<SVGTextContentElement>().getStartPositionOfChar(first);
+    body += std::format(
+        R"svg(<text x="{}" y="{}" fill="none" stroke="black" stroke-width="8">{}</text>)svg",
+        start.x, start.y, std::string(std::min(groupSize, glyphs - first), 'e'));
+  }
+  return body + "</svg>";
+}
+
 /// When the path encoder cannot take a run's joined stroke, the stroke is still drawn and the frame
 /// is not rejected, as long as each glyph's own stroke fits.
 TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
@@ -663,7 +685,11 @@ TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
   EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
   EXPECT_THAT(frame.counters.drawCalls, testing::Eq(drawsPerGlyph + 3))
       << "The rejected group is drawn glyph by glyph.";
-  EXPECT_THAT(CountNonTransparentPixels(frame.bitmap), testing::Gt(0u));
+  SVGDocument glyphByGlyph = parse(SeparatelyStrokedGroups(run, 4, 1));
+  RendererGeode referenceRenderer(sharedDevice());
+  editor::tests::CompareBitmapToBitmap(frame.bitmap, render(referenceRenderer, glyphByGlyph).bitmap,
+                                       "stroked_run_past_encoder_limit",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Touching strokes are joined into shapes of at most the group point limit, so a long, heavily
@@ -689,7 +715,11 @@ TEST_F(GeodeGlyphInstancingTest, TouchingStrokesJoinUpToTheGroupPointLimit) {
   EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
   EXPECT_THAT(pairs.counters.drawCalls, testing::Eq(single.counters.drawCalls + 1))
       << "Four touching strokes in groups of two are two shapes.";
-  EXPECT_THAT(CountNonTransparentPixels(pairs.bitmap), testing::Gt(0u));
+  SVGDocument twoByTwo = parse(SeparatelyStrokedGroups(split, 4, 2));
+  RendererGeode referenceRenderer(sharedDevice());
+  editor::tests::CompareBitmapToBitmap(pairs.bitmap, render(referenceRenderer, twoByTwo).bitmap,
+                                       "touching_strokes_in_pairs",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Strokes that do not touch stay separate shapes, so a long line of ordinary stroked text is not
