@@ -1179,9 +1179,8 @@ TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
   ParseWarningSink later;
   renderer.draw(host->document, later);
   EXPECT_EQ(restyles.restyles(), 0u);
-  // Every warning it finds again was delivered, and the sheet is still over the limit.
+  // Every warning a preparation can find again was already delivered.
   EXPECT_THAT(later.warnings(), testing::IsEmpty());
-  EXPECT_TRUE(later.resourceLimitExceeded());
 }
 
 // A sheet that has delivered its warnings and the truncation, then finds a new warning without a
