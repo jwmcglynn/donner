@@ -349,6 +349,23 @@ bool ReserveTinyStrokeExpansion(const tiny_skia::Path& expanded,
       {.commands = verbs, .points = points, .bytes = points * sizeof(tiny_skia::Point) + verbs});
 }
 
+/**
+ * Fills a text run's glyph paths one by one. A run drawn after the draw budget was rejected, such
+ * as a stroke-first run whose stroke rejected it, draws no fill, as a path's fill does not reach
+ * the frame after its stroke is rejected.
+ */
+void FillTinyTextRun(tiny_skia::MutablePixmapView& pixmap, std::span<const tiny_skia::Path> glyphs,
+                     const tiny_skia::Paint& paint, const tiny_skia::Transform& transform,
+                     const tiny_skia::Mask* mask, const RendererDrawBudget& drawBudget) {
+  if (drawBudget.rejected()) {
+    return;
+  }
+  for (const tiny_skia::Path& glyph : glyphs) {
+    tiny_skia::Painter::fillPath(pixmap, glyph, paint, tiny_skia::FillRule::Winding, transform,
+                                 mask);
+  }
+}
+
 /// One path per text chunk, holding every contour of that chunk's glyph paths; chunks without
 /// contours are left out.
 /// @param paths A run's glyph paths, in order.
@@ -3578,16 +3595,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     // glyph by glyph; the stroke is painted per text chunk, below.
     auto pixmapView = currentPixmapView();
     const auto drawRunFill = [&]() {
-      // A stroke-first run whose stroke rejected the draw budget draws no fill, as a path's
-      // fill does not reach the frame after its stroke is rejected.
-      if (!spanFillPaint || drawBudget_->rejected()) {
+      if (!spanFillPaint) {
         return;
       }
-      for (const auto& tinyPath : runGlyphPaths.fill()) {
-        tiny_skia::Painter::fillPath(pixmapView, tinyPath, *spanFillPaint,
-                                     tiny_skia::FillRule::Winding,
-                                     toTinyTransform(deviceFromLocalTransform_), mask);
-      }
+      FillTinyTextRun(pixmapView, runGlyphPaths.fill(), *spanFillPaint,
+                      toTinyTransform(deviceFromLocalTransform_), mask, *drawBudget_);
     };
     const auto drawRunStroke = [&]() {
       if (!spanStrokePaint) {
