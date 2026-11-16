@@ -1724,15 +1724,13 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/textPath",
             {
+                // The 300x300 resvg v0.49.0 rendering; the superseded reference was opaque.
+                {"link-to-rect.svg", ResvgV049Reference()},
                 // Pixelmatch 2.0 checkerboard exposes the transparent-vs-white
                 // background convention (Donner renders no background; the
                 // reference is opaque). Each threshold is the measured minimal
                 // passing hundredth at the existing pixel allowance (PR #1285, see
                 // README_pixelmatch_2.md).
-                {"link-to-rect.svg",
-                 Params::WithThreshold(
-                     0.89f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes background convention; measured minimal")},
                 {"with-path-and-xlink-href.svg",
                  Params::WithThreshold(
                      0.89f, kDefaultMismatchedPixels,
