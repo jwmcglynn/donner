@@ -117,6 +117,55 @@ inline uint8_t ClipValue(uint32_t x, uint32_t y) {
   return values[(x + y) % values.size()];
 }
 
+/// The image blit shader's samplingMode for \p kind.
+inline uint32_t SamplingMode(Case kind) {
+  if (SamplesNearest(kind)) {
+    return 1u;
+  }
+  if (kind == Case::Pixelated) {
+    return 2u;
+  }
+  if (kind == Case::Cubic || kind == Case::CubicTranslucent) {
+    return 3u;
+  }
+  return SamplesAnchored(kind) ? 4u : 0u;
+}
+
+/// Places the 2x2 source by TargetFromTexel and fills the anchored mapping of \p result for an
+/// anchored scenario.
+inline void SetAnchoredPlacement(const Scenario& scenario,
+                                 shader::programs::ImageBlitParams& result) {
+  constexpr float kSourceTexels = 2.0f;
+  // The quad is the source's texel rectangle placed by TargetFromTexel; the mapping back is
+  // split at the anchor in double precision into a float linear part, the anchor's fractional
+  // texel coordinate and its whole texel coordinate.
+  const Transform2d placement = TargetFromTexel(scenario.kind);
+  const float w = float(scenario.width()), h = float(scenario.height());
+  std::fill(std::begin(result.mvp), std::end(result.mvp), 0.0f);
+  result.mvp[0] = float(2.0 * placement.data[0] / w);
+  result.mvp[1] = float(-2.0 * placement.data[1] / h);
+  result.mvp[4] = float(2.0 * placement.data[2] / w);
+  result.mvp[5] = float(-2.0 * placement.data[3] / h);
+  result.mvp[10] = result.mvp[15] = 1.0f;
+  result.mvp[12] = float(2.0 * placement.data[4] / w - 1.0);
+  result.mvp[13] = float(-2.0 * placement.data[5] / h + 1.0);
+  result.destRect[0] = result.destRect[1] = 0.0f;
+  result.destRect[2] = result.destRect[3] = kSourceTexels;
+  const Transform2d texelFromTarget = placement.inverse();
+  const Vector2d anchorTexel = texelFromTarget.transformPosition(Vector2d(kAnchor[0], kAnchor[1]));
+  const Vector2d whole(std::floor(anchorTexel.x), std::floor(anchorTexel.y));
+  result.texelFromTargetX[0] = float(texelFromTarget.data[0]);
+  result.texelFromTargetX[1] = float(texelFromTarget.data[2]);
+  result.texelFromTargetX[2] = float(anchorTexel.x - whole.x);
+  result.texelFromTargetY[0] = float(texelFromTarget.data[1]);
+  result.texelFromTargetY[1] = float(texelFromTarget.data[3]);
+  result.texelFromTargetY[2] = float(anchorTexel.y - whole.y);
+  result.texelWholeX = int32_t(whole.x);
+  result.texelWholeY = int32_t(whole.y);
+  result.anchorX = kAnchor[0];
+  result.anchorY = kAnchor[1];
+}
+
 inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   shader::programs::ImageBlitParams result{};
   result.mvp[0] = 2.0f / scenario.width();
@@ -129,12 +178,7 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.srcRect[2] = result.srcRect[3] = 1.0f;
   result.opacity = scenario.textured() ? 1.0f : 0.75f;
   result.sourceIsPremult = scenario.kind != Case::Straight;
-  result.samplingMode = SamplesNearest(scenario.kind)      ? 1u
-                        : SamplesAnchored(scenario.kind)   ? 4u
-                        : scenario.kind == Case::Pixelated ? 2u
-                        : scenario.kind == Case::Cubic || scenario.kind == Case::CubicTranslucent
-                            ? 3u
-                            : 0u;
+  result.samplingMode = SamplingMode(scenario.kind);
   result.pixelatedScale[0] = scenario.width() / 2.0f;
   result.pixelatedScale[1] = scenario.height() / 2.0f;
   result.maskMode = scenario.kind == Case::LuminanceMask                                    ? 1u
@@ -165,35 +209,7 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.texelFromTargetY[2] =
       result.srcRect[1] * kSourceTexels - result.destRect[1] * texelsPerPixelY;
   if (SamplesAnchored(scenario.kind)) {
-    // The quad is the source's texel rectangle placed by TargetFromTexel; the mapping back is
-    // split at the anchor in double precision into a float linear part, the anchor's fractional
-    // texel coordinate and its whole texel coordinate.
-    const Transform2d placement = TargetFromTexel(scenario.kind);
-    const float w = float(scenario.width()), h = float(scenario.height());
-    std::fill(std::begin(result.mvp), std::end(result.mvp), 0.0f);
-    result.mvp[0] = float(2.0 * placement.data[0] / w);
-    result.mvp[1] = float(-2.0 * placement.data[1] / h);
-    result.mvp[4] = float(2.0 * placement.data[2] / w);
-    result.mvp[5] = float(-2.0 * placement.data[3] / h);
-    result.mvp[10] = result.mvp[15] = 1.0f;
-    result.mvp[12] = float(2.0 * placement.data[4] / w - 1.0);
-    result.mvp[13] = float(-2.0 * placement.data[5] / h + 1.0);
-    result.destRect[0] = result.destRect[1] = 0.0f;
-    result.destRect[2] = result.destRect[3] = kSourceTexels;
-    const Transform2d texelFromTarget = placement.inverse();
-    const Vector2d anchorTexel =
-        texelFromTarget.transformPosition(Vector2d(kAnchor[0], kAnchor[1]));
-    const Vector2d whole(std::floor(anchorTexel.x), std::floor(anchorTexel.y));
-    result.texelFromTargetX[0] = float(texelFromTarget.data[0]);
-    result.texelFromTargetX[1] = float(texelFromTarget.data[2]);
-    result.texelFromTargetX[2] = float(anchorTexel.x - whole.x);
-    result.texelFromTargetY[0] = float(texelFromTarget.data[1]);
-    result.texelFromTargetY[1] = float(texelFromTarget.data[3]);
-    result.texelFromTargetY[2] = float(anchorTexel.y - whole.y);
-    result.texelWholeX = int32_t(whole.x);
-    result.texelWholeY = int32_t(whole.y);
-    result.anchorX = kAnchor[0];
-    result.anchorY = kAnchor[1];
+    SetAnchoredPlacement(scenario, result);
   }
   return result;
 }
