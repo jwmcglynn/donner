@@ -63,7 +63,7 @@ Gaussian of the clipped input. The row is a reference-disagreement skip; a raise
 would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (37)
+## Active overrides (38)
 
 ### resvg golden is wrong per spec
 
@@ -76,6 +76,14 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/marker            | with-an-image-child                   | We (correctly) render the image child                          |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+
+`font-size-adjust/simple-case` runs against a committed Donner render
+(`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
+it on the unkerned advance, 4.03 device px left of the kerned center, while SVG 2
+anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
+`font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
+command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
 (`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends

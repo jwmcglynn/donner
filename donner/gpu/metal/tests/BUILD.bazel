@@ -53,6 +53,19 @@ donner_cc_library(
     ],
 )
 
+# Runs a Metal device's bounded waits on a worker thread against a progress clock a case moves by
+# hand, and reports how each wait judged its bounds at the time the case moved it to.
+donner_cc_library(
+    name = "metal_wait_test_utils",
+    testonly = 1,
+    hdrs = ["MetalWaitTestUtils.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base:stall_guard",
+        "//donner/gpu/metal:metal_device",
+    ],
+)
+
 # Drives DONNER_REQUIRE_METAL_DEVICE directly: no Metal device involved, so unlike the three
 # fixtures below this runs on every lane and exercises the missing-device branches deterministically
 # rather than only when a runner has actually lost its device.
@@ -577,6 +590,7 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_device_gate",
+        ":metal_wait_test_utils",
         "//donner/base:stall_guard",
         "//donner/gpu",
         "//donner/gpu:device_lost",
@@ -588,7 +602,7 @@ donner_cc_test(
 )
 
 # A serial wait sleeps until the device's completion state changes instead of rechecking it on a
-# timer.
+# timer, and each such change wakes it.
 donner_cc_test(
     name = "metal_serial_wait_tests",
     srcs = ["MetalSerialWait_tests.cc"],
@@ -602,6 +616,7 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_device_gate",
+        ":metal_wait_test_utils",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu/metal:metal_device",
