@@ -281,6 +281,16 @@ tiny_skia::Point toTinyPoint(const Vector2d& value) {
   return tiny_skia::Point::fromXY(NarrowToFloat(value.x), NarrowToFloat(value.y));
 }
 
+/// One path holding every contour of \p paths, or `std::nullopt` when they hold none.
+/// @param paths Paths to join, in order.
+std::optional<tiny_skia::Path> JoinTinyPaths(std::span<const tiny_skia::Path> paths) {
+  tiny_skia::PathBuilder joined;
+  for (const tiny_skia::Path& path : paths) {
+    joined.pushPath(path);
+  }
+  return joined.finish();
+}
+
 tiny_skia::Transform toTinyTransform(const Transform2d& transform) {
   return tiny_skia::Transform::fromRow(
       NarrowToFloat(transform.data[0]), NarrowToFloat(transform.data[1]),
@@ -3354,8 +3364,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       if (!spanStrokePaint) {
         return;
       }
-      for (const auto& tinyPath : runGlyphPaths) {
-        tiny_skia::Painter::strokePath(pixmapView, tinyPath, *spanStrokePaint, spanTinyStroke,
+      // One path for the whole run, as resvg strokes a span: where the strokes of adjacent
+      // glyphs overlap, the overlap is covered once instead of composited per glyph.
+      if (const std::optional<tiny_skia::Path> runPath = JoinTinyPaths(runGlyphPaths)) {
+        tiny_skia::Painter::strokePath(pixmapView, *runPath, *spanStrokePaint, spanTinyStroke,
                                        toTinyTransform(deviceFromLocalTransform_), mask);
       }
     };

@@ -7671,6 +7671,16 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
 
 namespace {
 
+/// One path holding every contour of \p paths, in order.
+/// @param paths Paths to join.
+Path JoinPaths(std::span<const Path> paths) {
+  PathBuilder joined;
+  for (const Path& path : paths) {
+    joined.addPath(path);
+  }
+  return joined.build();
+}
+
 struct GlyphGeometryModes {
   bool warped;
   bool residentFill;
@@ -8025,34 +8035,34 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
     };
     const auto drawRunStroke = [&]() {
-      for (const Path& placed : runGlyphPaths) {
-        if (hasStrokePaint) {
-          // Stroke pieces share one winding and one draw, so overlaps stay covered
-          // without applying stroke opacity more than once within the glyph.
-          // Same device-aware tolerance as `drawPath`'s stroke: glyph outlines
-          // are submitted in text-local space and scaled on the GPU, so the
-          // flattening must track the draw transform or stroked glyphs facet
-          // at high zoom.
-          const Path stroked = placed.strokeToFill(*strokeStyle, impl_->strokeFlattenTolerance());
-          if (!stroked.empty()) {
-            impl_->countStrokeOutline(stroked);
-            const FillRule strokeRule = FillRule::NonZero;
-            const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(stroked, strokeRule);
-            if (strokeIsGradient) {
-              // Gradient stroke: resolve against the text bbox (the *original*
-              // geometry, per SVG), fill the stroked outline.
-              impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
-                                            strokeRule, encoded);
-            } else if (usePatternStroke) {
-              impl_->syncTransform();
-              impl_->encoder->fillPathPattern(
-                  stroked, strokeRule,
-                  impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
-            } else {
-              impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
-            }
-          }
-        }
+      if (!hasStrokePaint) {
+        return;
+      }
+      // The run's glyph outlines are stroked as one path, as resvg strokes a span: the stroke
+      // pieces share one winding and one draw, so where the strokes of adjacent glyphs overlap,
+      // stroke opacity applies once. Same device-aware tolerance as `drawPath`'s stroke: glyph
+      // outlines are submitted in text-local space and scaled on the GPU, so the flattening must
+      // track the draw transform or stroked glyphs facet at high zoom.
+      const Path stroked =
+          JoinPaths(runGlyphPaths).strokeToFill(*strokeStyle, impl_->strokeFlattenTolerance());
+      if (stroked.empty()) {
+        return;
+      }
+      impl_->countStrokeOutline(stroked);
+      const FillRule strokeRule = FillRule::NonZero;
+      const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(stroked, strokeRule);
+      if (strokeIsGradient) {
+        // Gradient stroke: resolve against the text bbox (the *original*
+        // geometry, per SVG), fill the stroked outline.
+        impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
+                                      strokeRule, encoded);
+      } else if (usePatternStroke) {
+        impl_->syncTransform();
+        impl_->encoder->fillPathPattern(
+            stroked, strokeRule,
+            impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
+      } else {
+        impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
       }
     };
 
