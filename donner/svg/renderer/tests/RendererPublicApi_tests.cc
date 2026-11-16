@@ -3752,22 +3752,30 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionIsChargedBeforeTheChunkIsK
   EXPECT_THAT(stats.textMaterializationPoints, testing::Le(limit));
 }
 
-TEST(RendererTinySkiaSecurityTest, TextStrokeChunkStopsAtTheStrokeOutputCap) {
-  // One chunk of 30,000 stroked "O"s with round joins, all drawn at one place (letter-spacing
-  // cancels the 0.741 em advance of the bundled font's "O"), expands into more than
-  // Path::kMaximumStrokeOutputPoints outline points; its stroke is rejected at that cap, well below
-  // the text budget's own limits.
-  const std::string glyphs(30000, 'O');
+TEST(RendererTinySkiaSecurityTest, TextStrokeChunkStopsAtTheFrameStrokeOutput) {
+  // One chunk of 200 stroked "O"s, all drawn at one place (letter-spacing cancels the 0.741 em
+  // advance of the bundled font's "O"), each fitting the per-stroke limit, together pass a
+  // lowered frame stroke-output total; the chunk's stroke is rejected there, before the text
+  // budget's own limits.
+  const std::string glyphs(200, 'O');
   SVGDocument document = ParseDocument(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
            <text x="10" y="60" font-size="40" letter-spacing="-29.64" fill="none" stroke="black"
-                 stroke-width="2" stroke-linejoin="round">)" +
+                 stroke-width="2">)svg" +
       glyphs + "</text></svg>");
+  RendererTinySkia unlimited;
+  unlimited.draw(document);
+  const std::size_t total = unlimited.resourceStats().strokeOutputPoints;
+  ASSERT_FALSE(unlimited.resourceStats().drawBudgetRejected);
+  ASSERT_THAT(total, Gt(0u));
+
   RendererTinySkia renderer;
+  renderer.setFrameStrokeOutputPointLimitForTesting(total / 2);
   renderer.draw(document);
   const RendererResourceStats stats = renderer.resourceStats();
   EXPECT_TRUE(stats.drawBudgetRejected);
   EXPECT_FALSE(stats.textMaterializationBudgetRejected);
+  EXPECT_THAT(stats.strokeOutputPoints, testing::Le(total / 2));
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionsOfSeparateTextsShareTheBudget) {

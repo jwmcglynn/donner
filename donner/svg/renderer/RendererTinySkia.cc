@@ -379,16 +379,14 @@ struct TinyTextChunkExpansion {
 
 /**
  * Charges an expanded stroke outline to \p textBudget, \ref kTextStrokeExpansionCopies times
- * over, and adds it to \p expansion unless the chunk would pass \ref
- * Path::kMaximumStrokeOutputPoints. Marks \p expansion rejected when either fails.
+ * over, and adds it to \p expansion; marks \p expansion rejected when the charge fails.
  */
 void KeepTinyStrokeExpansion(tiny_skia::Path expanded, TinyTextChunkExpansion& expansion,
                              RendererTextMaterializationBudget& textBudget) {
   const std::size_t points = expanded.points().size();
   const std::size_t verbs = expanded.verbs().size();
   constexpr std::size_t kCopies = kTextStrokeExpansionCopies;
-  if (points > Path::kMaximumStrokeOutputPoints - expansion.points ||
-      !textBudget.reserve({.commands = verbs * kCopies,
+  if (!textBudget.reserve({.commands = verbs * kCopies,
                            .points = points * kCopies,
                            .bytes = (points * sizeof(tiny_skia::Point) + verbs) * kCopies})) {
     expansion.rejected = true;
@@ -409,13 +407,11 @@ void KeepTinyStrokeExpansion(tiny_skia::Path expanded, TinyTextChunkExpansion& e
  * depends on the other contours of the path it fills, so leaving a glyph out would change the edges
  * of the others.
  */
-TinyTextChunkExpansion ExpandTinyTextChunkStroke(std::span<const tiny_skia::Path> glyphs,
-                                                 const tiny_skia::Stroke& stroke,
-                                                 const tiny_skia::Transform& transform,
-                                                 float resScale, float width, float height,
-                                                 std::size_t maxStrokePoints,
-                                                 RendererTextMaterializationBudget& textBudget,
-                                                 RendererDrawBudget& drawBudget) {
+TinyTextChunkExpansion ExpandTinyTextChunkStroke(
+    std::span<const tiny_skia::Path> glyphs, const tiny_skia::Stroke& stroke,
+    const tiny_skia::Transform& transform, float resScale, float width, float height,
+    std::size_t maxStrokePoints, RendererTextMaterializationBudget& textBudget,
+    RendererDrawBudget& drawBudget, std::uint64_t& limitedStrokes) {
   TinyTextChunkExpansion expansion;
   if (std::ranges::none_of(glyphs, [&](const tiny_skia::Path& glyph) {
         return TinyStrokeMayReachTarget(glyph, stroke, transform, width, height);
@@ -423,6 +419,7 @@ TinyTextChunkExpansion ExpandTinyTextChunkStroke(std::span<const tiny_skia::Path
     return expansion;
   }
   for (const tiny_skia::Path& glyph : glyphs) {
+    ++limitedStrokes;
     tiny_skia::StrokeOutputLimit limit{
         .maxPoints = std::min(maxStrokePoints, drawBudget.remainingStrokeOutputPoints())};
     std::optional<tiny_skia::Path> expanded = glyph.stroke(stroke, resScale, &limit);
@@ -452,7 +449,7 @@ void StrokeTinyTextRun(tiny_skia::MutablePixmapView& pixmap,
                        const tiny_skia::Paint& paint, const tiny_skia::Stroke& stroke,
                        const tiny_skia::Transform& transform, const tiny_skia::Mask* mask,
                        std::size_t maxStrokePoints, RendererTextMaterializationBudget& textBudget,
-                       RendererDrawBudget& drawBudget) {
+                       RendererDrawBudget& drawBudget, std::uint64_t& limitedStrokes) {
   if (textBudget.rejected() || drawBudget.rejected()) {
     return;
   }
@@ -466,9 +463,9 @@ void StrokeTinyTextRun(tiny_skia::MutablePixmapView& pixmap,
   const auto width = static_cast<float>(pixmap.width());
   const auto height = static_cast<float>(pixmap.height());
   for (const auto& [begin, end] : chunks.ranges(glyphs.size())) {
-    const TinyTextChunkExpansion expansion =
-        ExpandTinyTextChunkStroke(glyphs.subspan(begin, end - begin), stroke, transform, resScale,
-                                  width, height, maxStrokePoints, textBudget, drawBudget);
+    const TinyTextChunkExpansion expansion = ExpandTinyTextChunkStroke(
+        glyphs.subspan(begin, end - begin), stroke, transform, resScale, width, height,
+        maxStrokePoints, textBudget, drawBudget, limitedStrokes);
     if (expansion.rejected) {
       drawBudget.reject();
       return;
@@ -3553,7 +3550,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // of composited per glyph. Separate chunks are separate shapes.
       StrokeTinyTextRun(pixmapView, runGlyphPaths, runChunks, *spanStrokePaint, spanTinyStroke,
                         toTinyTransform(deviceFromLocalTransform_), mask, strokeOutputPointLimit_,
-                        *textMaterializationBudget_, *drawBudget_);
+                        *textMaterializationBudget_, *drawBudget_, frameCounters_.limitedStrokes);
     };
 
     bool fillDrawn = false;
