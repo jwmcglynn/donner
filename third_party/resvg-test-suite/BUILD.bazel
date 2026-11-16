@@ -161,6 +161,45 @@ the default. Their SVG inputs are byte-identical at both revisions.
   SHA256: 28ac3a6aad37f0144934071fe28642ef290fe8a7fd0e1bbaad9a488b55ee4de6
   tests/filters/feDropShadow/with-percent-offset.png
   SHA256: ff7c4cf87937e4d8ae4f1fde51f155fcb83246abf405a6aa88fe8b410703e24b
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references were flattened onto white: where the filter output is semi-transparent or
+empty they store opaque colors (for example opaque white for an eroded or empty region, and
+(0, 0, 210) at alpha 120 where the filter gives (103, 103, 229) at alpha 199), which match the
+filter output only when composited over white. The v0.49.0 renderings keep the transparency and
+compare at default settings. The feTurbulence color-interpolation-filters=sRGB reference is not
+flattened, but the snapshot draws its faint noise lighter than both v0.49.0 and Donner (346
+pixels at default settings against Donner, none against v0.49.0). Their SVG inputs are
+byte-identical at both revisions.
+
+  tests/filters/feConvolveMatrix/edgeMode=none.png
+  SHA256: c79ca487455cd40d69e1f06b4a2cac71b9503efc5f86d589fd92112aa72b76fb
+  tests/filters/feConvolveMatrix/order=4-2.png
+  SHA256: 7e286558bf9033b3bb26eff6fc469a9e27eacae21827f1670286e90e79d2ae08
+  tests/filters/feConvolveMatrix/order=4-4.png
+  SHA256: c97f4eca75e6410db4e10c0cf9e711d6c46a68ba0edef89b0ec1ba43fd69b5cf
+  tests/filters/feConvolveMatrix/order=4.png
+  SHA256: c97f4eca75e6410db4e10c0cf9e711d6c46a68ba0edef89b0ec1ba43fd69b5cf
+  tests/filters/feConvolveMatrix/preserveAlpha=true.png
+  SHA256: 98f0f198a2411583fb8124cdd9b9bc08739801ee63cc2455146e07083f2cb060
+  tests/filters/feConvolveMatrix/targetX=0.png
+  SHA256: 953732f3d2cbf35e5eabf7f4a38991953612a1380231dbfaed7ec391f0d710db
+  tests/filters/feConvolveMatrix/targetX=2.png
+  SHA256: 1563f8f41601d3b1996513fd2079ed09e26223b86d6d73694bd63658f2a2d985
+  tests/filters/feConvolveMatrix/unset-order.png
+  SHA256: ad777c7d170f00d7b0b77d44cddbb78d88f93f033c16fa5549d7752182c685de
+  tests/filters/feMorphology/radius=0.5.png
+  SHA256: 8570e9d0c448c9d4ad98b2de4431a5d0f2db9299a5bf5907345cdd1dd844a7b3
+  tests/filters/feMorphology/radius=1-10.png
+  SHA256: 07b8cafb939aa0da774efe535529b95ccd42a9d618b841372ccf0c0e7e88a00e
+  tests/filters/feMorphology/radius=10-1.png
+  SHA256: a7be1ab161ba7770b8adb557c253d2bc4df78a51568f13a36175318a07122b74
+  tests/filters/feSpecularLighting/with-feSpotLight-and-specular-and-exponent.png
+  SHA256: 6bc73f186df9748f6c11dd9c1e1b2d22ac1088425f1e76a4ff84d8307f765bf2
+  tests/filters/feSpecularLighting/with-feSpotLight-and-specularConstant=5.png
+  SHA256: d36c7e4d895c1d274b89f191f751df376d218f34fd54ecff3050af632f6fa648
+  tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
+  SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
 """
 
 package(default_visibility = ["//visibility:public"])
