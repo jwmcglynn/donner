@@ -717,6 +717,12 @@ TEST_F(MetalColorMatrixTest, ImageBlitCubicTranslucent) {
                              {gpu::tests::image_blit_scene::Case::CubicTranslucent});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
+TEST_F(MetalColorMatrixTest, ImageBlitNearestCropped) {
+  gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
+                             [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                             {gpu::tests::image_blit_scene::Case::NearestCropped});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
 TEST_F(MetalColorMatrixTest, ImageBlitCropped) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },

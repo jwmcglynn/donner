@@ -432,6 +432,7 @@ donner_cc_test(
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:tiny_skia_deps",
+        "//donner/svg/renderer/geode:geode_nearest_sampling",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
