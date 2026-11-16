@@ -38,6 +38,7 @@ enum class LineCap : std::uint8_t {
 // Forward declarations for stroke/dash.
 class PathBuilder;
 struct Stroke;
+struct StrokeOutputLimit;
 struct StrokeDash;
 
 /// @internal
@@ -195,8 +196,10 @@ class Path {
   /// Clears the path and returns a PathBuilder reusing the allocations.
   [[nodiscard]] PathBuilder clear();
 
-  /// Generates a filled path representing the stroke outline.
-  [[nodiscard]] std::optional<Path> stroke(const Stroke& stroke, float resScale) const;
+  /// Generates a filled path representing the stroke outline. With \p limit, returns no path
+  /// once the outline passes `limit->maxPoints` (a Donner addition; see StrokeOutputLimit).
+  [[nodiscard]] std::optional<Path> stroke(const Stroke& stroke, float resScale,
+                                           StrokeOutputLimit* limit = nullptr) const;
 
   /// Applies a dash pattern, returning a new dashed path.
   [[nodiscard]] std::optional<Path> dash(const StrokeDash& dash, float resScale) const;

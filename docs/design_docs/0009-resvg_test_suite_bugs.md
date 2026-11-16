@@ -63,7 +63,7 @@ Gaussian of the clipped input. The row is a reference-disagreement skip; a raise
 would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (36)
+## Active overrides (37)
 
 ### resvg golden is wrong per spec
 
@@ -77,9 +77,17 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
+| text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`font-size-adjust/simple-case` runs against a committed Donner render
+(`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
+it on the unkerned advance, 4.03 device px left of the kerned center, while SVG 2
+anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
+`font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
+command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
 (`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
@@ -197,7 +205,7 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds 38 `resvg-*.png`: 36 active, counted by distinct file
+`golden/` dir holds 39 `resvg-*.png`: 37 active, counted by distinct file
 (`resvg-simple-case.png` serves two textPath rows), and the 2 parked drop-shadow goldens above.
 
 ## Maintenance

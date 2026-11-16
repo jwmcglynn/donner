@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
@@ -87,6 +89,45 @@ inline constexpr size_t kElementTypeCount = static_cast<size_t>(ElementType::Use
 
 /// Ostream output operator for \ref ElementType, outputs the element name.
 std::ostream& operator<<(std::ostream& os, ElementType type);
+
+/**
+ * Whether \p type is a filter element family member whose own attributes live in typed filter
+ * state: \ref xml_filter, each filter primitive, and the light source, transfer function and merge
+ * node elements inside them.
+ *
+ * @param type Element type.
+ */
+constexpr bool IsFilterElementFamily(ElementType type) {
+  constexpr std::array kFilterElementFamily = {
+      ElementType::Filter,
+      ElementType::FeBlend,
+      ElementType::FeColorMatrix,
+      ElementType::FeComponentTransfer,
+      ElementType::FeComposite,
+      ElementType::FeConvolveMatrix,
+      ElementType::FeDiffuseLighting,
+      ElementType::FeDisplacementMap,
+      ElementType::FeDistantLight,
+      ElementType::FeDropShadow,
+      ElementType::FeFlood,
+      ElementType::FeFuncA,
+      ElementType::FeFuncB,
+      ElementType::FeFuncG,
+      ElementType::FeFuncR,
+      ElementType::FeGaussianBlur,
+      ElementType::FeImage,
+      ElementType::FeMerge,
+      ElementType::FeMergeNode,
+      ElementType::FeMorphology,
+      ElementType::FeOffset,
+      ElementType::FePointLight,
+      ElementType::FeSpecularLighting,
+      ElementType::FeSpotLight,
+      ElementType::FeTile,
+      ElementType::FeTurbulence,
+  };
+  return std::ranges::find(kFilterElementFamily, type) != kFilterElementFamily.end();
+}
 
 /**
  * Converts a \ref ElementType runtime value to a compile-time value, allowing conditional behavior

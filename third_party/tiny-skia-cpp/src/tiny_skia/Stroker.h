@@ -77,7 +77,10 @@ class PathStroker {
 
   static float computeResolutionScale(const Transform& ts);
 
-  std::optional<Path> stroke(const Path& path, const Stroke& stroke, float resolutionScale);
+  /// Strokes \p path. With \p limit, stops and returns no path once the emitted outline passes
+  /// `limit->maxPoints`, setting `limit->exceeded` (a Donner addition; see StrokeOutputLimit).
+  std::optional<Path> stroke(const Path& path, const Stroke& stroke, float resolutionScale,
+                             StrokeOutputLimit* limit = nullptr);
 
  private:
   std::optional<Path> strokeInner(const Path& path, float width, float miterLimit, LineCap lineCap,
@@ -120,6 +123,7 @@ class PathStroker {
   ResultType tangentsMeet(const Point cubic[4], QuadConstruct& quadPoints);
 
   std::optional<Path> finish(bool isLine);
+  bool exceedsOutputLimit();
   bool hasOnlyMoveTo() const;
   bool isCurrentContourEmpty() const;
 
@@ -154,6 +158,9 @@ class PathStroker {
   std::int32_t recursionDepth_ = 0;
   bool foundTangents_ = false;
   bool joinCompleted_ = false;
+
+  // Donner addition: the caller's output bound, if any (see StrokeOutputLimit).
+  StrokeOutputLimit* outputLimit_ = nullptr;
 };
 
 // Free functions used by the stroker.
