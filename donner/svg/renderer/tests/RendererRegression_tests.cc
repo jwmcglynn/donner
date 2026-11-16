@@ -1826,6 +1826,48 @@ TEST_F(RendererRegressionTests, MixedScriptSpanMatchesSpansNamingEachFace) {
   }
 }
 
+/// Path data of every glyph outline of the rendered text element matching \p selector, in the
+/// element's user space, as one path.
+std::string GlyphOutlinePathData(SVGDocument& document, std::string_view selector) {
+  auto access = document.writeAccess();
+  const std::optional<SVGElement> text = document.querySelector(selector);
+  EXPECT_THAT(text, testing::Ne(std::nullopt)) << selector;
+  if (text == std::nullopt) {
+    return {};
+  }
+  TextEngine& engine = document.registry().ctx().get<TextEngine>();
+  const components::ComputedTextGeometryComponent& geometry =
+      engine.ensureComputedTextGeometryComponent(text->entityHandle());
+  EXPECT_THAT(geometry.glyphs, testing::Not(testing::IsEmpty())) << selector;
+  PathBuilder outline;
+  for (const components::ComputedTextGeometryComponent::GlyphGeometry& glyph : geometry.glyphs) {
+    outline.addPath(glyph.path);
+  }
+  return std::string(outline.build().toSVGPathData());
+}
+
+TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
+  // The strokes of adjacent glyphs overlap at this width, so a translucent stroke shows whether
+  // the overlap is covered once, as a single path made of every glyph outline of the run is.
+  constexpr std::string_view kStroke =
+      R"svg(fill="none" stroke="rgb(0,0,255)" stroke-opacity="0.5" stroke-width="8")svg";
+  SVGDocument textDocument = instantiateSubtree(
+      R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
+          std::string(kStroke) + ">Text</text>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+  SVGDocument pathDocument =
+      instantiateSubtree("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " +
+                             std::string(kStroke) + "/>",
+                         parser::SVGParser::Options(), Vector2i(200, 200));
+  const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+  AssertVisibleFixture(expected, "text_stroke_run_outline_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "text_stroke_run_outline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
   const Path path = PathBuilder()
                         .moveTo({30, 10})
