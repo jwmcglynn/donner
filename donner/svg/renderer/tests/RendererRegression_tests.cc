@@ -2348,13 +2348,16 @@ TEST_F(RendererRegressionTests, ImageNearestUnderTransformsMatchesSoftwareRender
     Vector2i interiorSize;
   };
   // Rotation and skew use both off-diagonal terms of the inverse; the flip has a negative scale.
-  // Their interiors exclude the image edges, which the backends rasterize differently.
+  // Each compared interior holds only pixels the 44-unit image covers completely: the software
+  // renderer gives pixels an image edge crosses partial coverage, while Geode's image quad covers
+  // a pixel fully or not at all. Under skewX(20) the right edge is x = 46 + 0.364 y, so row 12
+  // keeps columns up to 49.
   const std::array<TransformCase, 4> cases = {{
       {Transform2d::Translate(-32, -32) * Transform2d::Rotate(MathConstants<double>::kPi / 6) *
            Transform2d::Translate(32, 32),
        "rotate(30 32 32)", "rotated", Vector2i(18, 18), Vector2i(28, 28)},
       {Transform2d::SkewX(MathConstants<double>::kPi / 9) * Transform2d::Translate(-6, 0),
-       "translate(-6 0) skewX(20)", "skewed_x", Vector2i(20, 12), Vector2i(31, 36)},
+       "translate(-6 0) skewX(20)", "skewed_x", Vector2i(20, 12), Vector2i(30, 36)},
       {Transform2d::SkewY(MathConstants<double>::kPi / 12) * Transform2d::Translate(0, -6),
        "translate(0 -6) skewY(15)", "skewed_y", Vector2i(12, 16), Vector2i(36, 33)},
       {Transform2d::Scale(-1, 1) * Transform2d::Translate(61, 0), "translate(61 0) scale(-1 1)",
