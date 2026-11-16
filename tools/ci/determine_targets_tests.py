@@ -413,6 +413,39 @@ class DetermineTest(_ScriptTest):
                                     "metal_affected=false", "fallback=true", "affected=")
                 self.assertIn("Could not list browser tests", result.stdout)
 
+    def test_a_selection_longer_than_a_lane_can_receive_falls_back(self):
+        # 98304 bytes of labels is the bound: one byte more selects //... before any query.
+        labels = ["//p:%s" % ("t" * 59)] * 1536
+        for extra, falls_back in ((0, False), (1, False), (2, True)):
+            selection = labels[:-1] + [labels[-1] + "x" * extra]
+            with self.subTest(bytes=len(" ".join(selection))):
+                self.assertEqual(len(" ".join(selection)), 98303 + extra)
+                result, calls, outputs = self.determine(affected="\n".join(selection))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if falls_back:
+                    self.assert_outputs(outputs, "full_test=false",
+                                        "wgpu_reference_changed=false", "fallback=true",
+                                        "affected=", "wgpu_reference_unknown=true")
+                    self.assertIn("98305 bytes, more than the 98304 a CI lane", result.stdout)
+                    self.assertEqual([], self.queried(calls))
+                else:
+                    self.assertIn("affected=" + " ".join(selection) + "\n", outputs)
+                    self.assertNotIn("more than the", result.stdout)
+
+    def test_browser_tests_added_past_the_bound_fall_back(self):
+        label = "//p:%s" % ("t" * 59)
+        manifest = "\n".join("//w:%s%d" % ("b" * 60, index) for index in range(20)) + "\n"
+        result, calls, outputs = self.determine(
+            changed="donner/editor/wasm/tests/package-lock.json\n",
+            affected="\n".join([label] * 1520),
+            queries=_queries(**{_MANIFEST_QUERY: (manifest, 0)}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # 1520 labels fit (97279 bytes); the 20 browser tests take the list past the bound.
+        self.assertTrue(outputs.endswith("fallback=true\naffected=\n"), outputs[-200:])
+        self.assertIn("more than the 98304 a CI lane", result.stdout)
+        self.assertFalse([query for query in self.queried(calls)
+                          if 'attr("tags", "launches-browser", set(' in query])
+
     def test_an_affected_set_publishes_the_selection_and_lane_hints(self):
         affected = "//a:b\n" + _REFERENCE + "\n//a:manual\n@npm//:pkg+x\n"
         result, calls, outputs = self.determine(
