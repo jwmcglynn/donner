@@ -1466,13 +1466,16 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(
         ValuesIn(getTestsInCategory(
             "text/font-size-adjust",
+            // The PNG kerns "Text" (T-e -70 and e-x -20 font units) but centers the chunk on its
+            // unkerned advance: its T and t stems sit 4.03 and 4.05 device px left of Donner's,
+            // half of 90 units at the adjusted 35.82px size and 2.5x scale, while the stem-to-stem
+            // distance agrees within 0.01 px. text/text-anchor/middle-on-text centers the same
+            // kerned string on its kerned advance and compares at default. resvg v0.49.0 ignores
+            // font-size-adjust, so no upstream reference renders this case.
             {{"simple-case.svg",
-              Params::Skip(
-                  "Reference places the adjusted text about 4 device px left of center. Both "
-                  "renderings use the same adjusted size, 64 * 0.3 / (536/1000) = 35.8, and the "
-                  "same glyph advances; only the anchor origin differs, and Donner's text-anchor "
-                  "placement for this string and face is exact where font-size-adjust is absent "
-                  "(#1173)")}})),
+              Params::Skip("Reference disagreement: the PNG centers the kerned text on its "
+                           "unkerned advance, 1.61 user units left of the kerned center; text "
+                           "anchoring uses the shaped advance (#1173)")}})),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
