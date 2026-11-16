@@ -147,6 +147,20 @@ ascent and descent. Their SVG inputs are byte-identical at both revisions.
 
   tests/masking/clipPath/clip-path-with-transform-on-text.png
   tests/painting/visibility/bbox-impact-3.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references drew the filtered circle's anti-aliased edge 0.1 to 0.26 coverage lighter
+than its geometry gives wherever the semi-transparent shadow lies beneath it; the v0.49.0
+renderings and Donner both match the geometry there. The v0.49.0 with-percent-offset.png is
+byte-identical to only-stdDeviation.png, since percentages are invalid offsets that fall back to
+the default. Their SVG inputs are byte-identical at both revisions.
+
+  tests/filters/feDropShadow/only-stdDeviation.png
+  SHA256: ff7c4cf87937e4d8ae4f1fde51f155fcb83246abf405a6aa88fe8b410703e24b
+  tests/filters/feDropShadow/with-flood-color.png
+  SHA256: 28ac3a6aad37f0144934071fe28642ef290fe8a7fd0e1bbaad9a488b55ee4de6
+  tests/filters/feDropShadow/with-percent-offset.png
+  SHA256: ff7c4cf87937e4d8ae4f1fde51f155fcb83246abf405a6aa88fe8b410703e24b
 """
 
 package(default_visibility = ["//visibility:public"])
