@@ -1858,6 +1858,7 @@ TEST(FontManagerTest, HostFontOverlayLendsFacesOnlyWhileInstalled) {
   const FontHandle fallback = manager.findFont("Lent");
   const uint64_t revision = manager.fontResourceRevision();
   EXPECT_FALSE(manager.hasFamily("Lent"));
+  EXPECT_EQ(manager.hostFontKey(), 0u);
 
   manager.setHostFontOverlay(overlay);
   EXPECT_TRUE(manager.hasFamily("Lent"));
@@ -1866,19 +1867,25 @@ TEST(FontManagerTest, HostFontOverlayLendsFacesOnlyWhileInstalled) {
   EXPECT_NE(lent, fallback);
   EXPECT_EQ(manager.findFont("cursive"), lent);
   EXPECT_EQ(manager.findFont("Own"), own) << "the manager's own rule outranks a lent face";
-  EXPECT_NE(manager.fontResourceRevision(), revision);
-  const uint64_t lentRevision = manager.fontResourceRevision();
+  // Lending identifies itself by key; the document's own font revision does not move.
+  EXPECT_EQ(manager.fontResourceRevision(), revision);
+  const uint64_t lentKey = manager.hostFontKey();
+  EXPECT_NE(lentKey, 0u);
   EXPECT_EQ(manager.numFaces(), 1u) << "lent faces are not the manager's own rules";
 
   manager.setHostFontOverlay(nullptr);
   EXPECT_FALSE(manager.hasFamily("Lent"));
   EXPECT_EQ(manager.findFont("Lent"), fallback);
+  EXPECT_EQ(manager.hostFontKey(), 0u);
   EXPECT_EQ(manager.fontResourceRevision(), revision);
 
-  // Lending the same content again reuses the loaded face and the same revision.
+  // Lending the same content again, from a newly built overlay, reuses the lent set and the
+  // loaded face in constant time.
+  const size_t rebuilds = manager.hostFontOverlayStats().rebuilds;
   manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(hostFaces, &host));
+  EXPECT_EQ(manager.hostFontOverlayStats().rebuilds, rebuilds);
   EXPECT_EQ(manager.findFont("Lent"), lent);
-  EXPECT_EQ(manager.fontResourceRevision(), lentRevision);
+  EXPECT_EQ(manager.hostFontKey(), lentKey);
 }
 
 /// Only sources the host already holds as bytes are lent, and a host with nothing to lend lends
@@ -1915,6 +1922,9 @@ TEST(FontManagerTest, HostFontOverlayKeepsLendingAfterManyDistinctFaces) {
     ASSERT_NE(lent, fallback) << i;
     manager.setHostFontOverlay(nullptr);
   }
+  // Faces no overlay lends are released beyond the idle bound.
+  EXPECT_LE(manager.numLoadedFonts(), FontManager::kMaximumIdleLentFaces + 2);
+  EXPECT_GT(manager.hostFontOverlayStats().evictions, 0u);
 }
 
 /// Faces a host lent and no longer lends do not keep this document's own face out of its budget.
@@ -1931,6 +1941,11 @@ TEST(FontManagerTest, IdleLentFacesYieldTheBudgetToTheDocumentsOwnFaces) {
   const FontHandle own = manager.findFont("Own");
   ASSERT_TRUE(static_cast<bool>(own));
   EXPECT_FALSE(manager.fontData(own).empty());
+
+  // Lending the same content again after its faces were released lends them afresh.
+  manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+  EXPECT_TRUE(manager.hasFamily("LentA"));
+  EXPECT_TRUE(static_cast<bool>(manager.findFont("LentA")));
 }
 
 }  // namespace donner::svg

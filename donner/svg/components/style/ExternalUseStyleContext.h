@@ -3,6 +3,7 @@
 /// Temporary, owned computed-parent state for one external-use occurrence.
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -42,10 +43,13 @@ struct ExternalUseStyleContext {
   ExternalUseStyleContext& operator=(const ExternalUseStyleContext&) = delete;
 
   bool unsupportedResource = false;  ///< An inherited resource was refused in this occurrence.
-  Entity root;                       ///< Referenced instance root.
-  ComputedStyleComponent parent;     ///< Host's owned properties and canonical resource values.
-  ResolvedPaintServer fill;          ///< Host-registry-qualified fill.
-  ResolvedPaintServer stroke;        ///< Host-registry-qualified stroke.
+  /// \ref FontManager::hostFontKey of the fonts the host lends this occurrence; zero for none.
+  /// Text prepared under one set of lent fonts is not reused under another.
+  std::uint64_t hostFontKey = 0;
+  Entity root;                    ///< Referenced instance root.
+  ComputedStyleComponent parent;  ///< Host's owned properties and canonical resource values.
+  ResolvedPaintServer fill;       ///< Host-registry-qualified fill.
+  ResolvedPaintServer stroke;     ///< Host-registry-qualified stroke.
   std::shared_ptr<DocumentResourceFamilyBudget> family;  ///< Shared retained-byte envelope.
   std::size_t chargedBytes;                              ///< Live charge for the parent snapshot.
   std::shared_ptr<StyleResourceBudget>

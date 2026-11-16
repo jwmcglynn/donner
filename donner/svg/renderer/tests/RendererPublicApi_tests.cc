@@ -3501,6 +3501,63 @@ TEST(RendererPublicApiTest, SharedExternalTextRestylesWhenTheLentFontsChange) {
   }
 }
 
+// Lending is constant work per occurrence: a host drawing one referenced text thousands of times
+// builds its overlay once a frame, and a second frame neither restyles nor lays the text out again
+// nor rebuilds the lent face set.
+TEST(RendererPublicApiTest, ManyOccurrencesOfOneHostKeepTheLendingFastPath) {
+  constexpr int kUses = 2000;
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle();
+  for (int i = 0; i < kUses; ++i) {
+    source += R"svg(<use href="external.svg#label" font-size="4" font-family="HostFace"/>)svg";
+  }
+  source += "</svg>";
+  SharedDocuments shared({{"external.svg", std::string(kHostFaceResource)}});
+  SVGDocument document = shared.parse(source);
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  driver.draw(document);
+  EXPECT_EQ(driver.textPreparationStatsForTesting().hostFontOverlayBuilds, 1u);
+
+  const SVGDocumentHandle child = shared.handle("external.svg");
+  ASSERT_THAT(child, testing::NotNull());
+  Registry& registry = child->registry();
+  const FontManager* fonts = registry.ctx().find<FontManager>();
+  ASSERT_THAT(fonts, testing::NotNull());
+  const size_t rebuilds = fonts->hostFontOverlayStats().rebuilds;
+  ConstructionCount<components::ComputedStyleComponent> restyles(registry);
+  ConstructionCount<components::ComputedTextGeometryComponent> layouts(registry);
+  driver.draw(document);
+  EXPECT_EQ(driver.textPreparationStatsForTesting().hostFontOverlayBuilds, 2u) << "once a frame";
+  EXPECT_EQ(restyles.count(), 0u);
+  EXPECT_EQ(layouts.count(), 0u);
+  EXPECT_EQ(fonts->hostFontOverlayStats().rebuilds, rebuilds);
+}
+
+// An occurrence the frame's external work allowance refuses lends nothing and builds nothing.
+TEST(RendererPublicApiTest, RefusedExternalOccurrenceLendsNoFonts) {
+  std::string resource = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
+      <g id="label"><text x="4" y="28">Map</text>)svg";
+  for (int i = 0; i < 64; ++i) {
+    resource += "<g/>";
+  }
+  resource += "</g></svg>";
+  SharedDocuments shared({{"external.svg", resource}});
+  SVGDocument document = shared.parse(HostFaceUseHost(HostFaceStyle()));
+  components::StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 32;
+  Renderer renderer;
+  RendererDriver driver(renderer, false, nullptr,
+                        std::make_shared<components::StyleResourceBudget>(limits));
+  driver.draw(document);
+  EXPECT_EQ(driver.textPreparationStatsForTesting().hostFontOverlayBuilds, 0u);
+  EXPECT_THAT(NormalizeSnapshot(renderer.takeSnapshot()).pixels, testing::Each(0));
+  if (const SVGDocumentHandle child = shared.handle("external.svg")) {
+    const auto* fonts = child->registry().ctx().find<FontManager>();
+    EXPECT_TRUE(fonts == nullptr || fonts->hostFontOverlayStats().rebuilds == 0);
+  }
+}
+
 // The faces below arrive as untrusted `data:` URLs, which only the full text tier loads; the
 // simple tier renders them with the fallback, so these comparisons cannot tell host fonts apart.
 #ifdef DONNER_TEXT_FULL
