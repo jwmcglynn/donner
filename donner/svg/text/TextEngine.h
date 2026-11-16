@@ -99,6 +99,12 @@ public:
     return fallbackCoverageEntries_;
   }
 
+  /// Times the most recent layout read the registered faces' family list for cluster fallback,
+  /// for CPU-work regression tests.
+  [[nodiscard]] std::size_t declaredFamilyListBuildsForTesting() const {
+    return declaredFamilyListBuilds_;
+  }
+
   /// Run candidates examined by paragraph intersections, including binary-search comparisons.
   [[nodiscard]] std::size_t bidiRunCandidatesForTesting() const { return bidiRunCandidates_; }
 
@@ -261,6 +267,7 @@ private:
   uint64_t observedFontResourceRevision_ = 0;
   std::size_t layoutCallCount_ = 0;
   std::size_t fallbackCoverageEntries_ = 0;
+  std::size_t declaredFamilyListBuilds_ = 0;
   std::size_t bidiRunCandidates_ = 0;
   std::optional<std::size_t> bidiRunCandidateLimit_;
   bool bidiNestedOwnersPreserved_ = false;

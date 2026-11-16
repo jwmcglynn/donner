@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/fonts/SfntUtils.h"
 #include "donner/css/FontFace.h"
@@ -429,12 +430,11 @@ public:
   size_t numFaces() const;
 
   /**
-   * Get the family name of a registered `@font-face` rule by index.
-   *
-   * @param index Index into the registered faces (0 to numFaces()-1).
-   * @return The family name, or empty string_view if index is out of range.
+   * Get the family names of the registered `@font-face` rules in declaration order, one per rule:
+   * the rule registered first comes first, and a family with several rules repeats. Rules that two
+   * managers on the same registry numbered alike keep entity order.
    */
-  std::string_view faceFamilyName(size_t index) const;
+  std::vector<RcString> faceFamilyNamesInDeclarationOrder() const;
 
   /**
    * Get the handle for the packaged fallback font (Public Sans).

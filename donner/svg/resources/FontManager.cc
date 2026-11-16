@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <tuple>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/fonts/SfntUtils.h"
@@ -544,17 +546,32 @@ size_t FontManager::numFaces() const {
   return count;
 }
 
-std::string_view FontManager::faceFamilyName(size_t index) const {
-  size_t currentIndex = 0;
-  auto view = registry_.view<FontFaceComponent>();
-  for (const Entity entity : view) {
-    if (currentIndex == index) {
-      return std::string_view(view.get<FontFaceComponent>(entity).face.familyName);
-    }
-    ++currentIndex;
-  }
+std::vector<RcString> FontManager::faceFamilyNamesInDeclarationOrder() const {
+  struct Rule {
+    uint64_t sequence;
+    Entity entity;
+    const RcString* familyName;
+  };
 
-  return {};
+  auto view = registry_.view<FontFaceComponent>();
+  std::vector<Rule> rules;
+  for (const Entity entity : view) {
+    const FontFaceComponent& component = view.get<FontFaceComponent>(entity);
+    rules.push_back({component.sequence, entity, &component.face.familyName});
+  }
+  // Storage order is not declaration order. Each manager numbers its own registrations, so a
+  // second manager on the same registry can repeat a sequence; the entity breaks those ties.
+  std::sort(rules.begin(), rules.end(), [](const Rule& lhs, const Rule& rhs) {
+    return std::pair(lhs.sequence, entt::to_integral(lhs.entity)) <
+           std::pair(rhs.sequence, entt::to_integral(rhs.entity));
+  });
+
+  std::vector<RcString> familyNames;
+  familyNames.reserve(rules.size());
+  for (const Rule& rule : rules) {
+    familyNames.push_back(*rule.familyName);
+  }
+  return familyNames;
 }
 
 void FontManager::setGenericFamilyMapping(std::string_view genericName,
