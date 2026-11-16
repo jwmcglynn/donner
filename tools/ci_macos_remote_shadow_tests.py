@@ -1729,10 +1729,27 @@ class StagingTest(unittest.TestCase):
         self.assertEqual((0, []), (used, staged))
         self.assertIn("staged 0 output files (0 bytes) for native.", printed)
         self.assertIn("::warning::macOS remote shadow lane: the native phase has 1 test results "
-                      "that did not pass but staged no output files", printed)
+                      "of tests that ran and did not pass but staged no output files", printed)
         _, _, passing = self._phase(self._result("//a:t", log.as_uri(), status="PASSED"),
                                     status=0)
         self.assertNotIn("::warning::", passing)
+
+    def test_tests_that_never_ran_are_not_counted_and_a_build_failure_says_so(self):
+        # A build failure: its tests report FAILED_TO_BUILD or no status, and never ran.
+        never_ran = [self._result("//a:t%d" % index, status=status)
+                     for index, status in enumerate(("FAILED_TO_BUILD", None, "NO_STATUS",
+                                                     "TOOL_HALTED_BEFORE_TESTING"))]
+        for status in ("FAILED", "TIMEOUT", "INCOMPLETE", "REMOTE_FAILURE"):
+            self.assertEqual(1, lane._ran_and_did_not_pass(_events(
+                self._result("//a:ran", status=status))))
+        self.assertEqual(0, lane._ran_and_did_not_pass(_events(*never_ran)))
+        args = lane.parse_args(["--out", str(self.out), "--output-user-root", str(self.root)], {})
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            lane._stage_phase(args, _events(*never_ran), "native",
+                              lane.MAX_ARTIFACT_TOTAL_BYTES, 1, build_failures=60)
+        self.assertNotIn("staged no output files", printed.getvalue())
+        self.assertIn("the native phase failed to build 60 targets, so their tests did not run",
+                      printed.getvalue())
 
     def test_the_run_cap_carries_across_phases(self):
         from unittest import mock

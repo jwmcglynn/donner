@@ -1110,7 +1110,7 @@ def _run_one_phase(args, environment, targets, phase, budget):
         print("::warning::macOS remote shadow lane: the %s phase's build event file could "
               "not be summarized (%s)." % (phase, type(error).__name__))
         entry = summarize([])
-    used = _stage_phase(args, lines, phase, budget, status)
+    used = _stage_phase(args, lines, phase, budget, status, entry["targets"]["failed"])
     entry["status"] = status
     if entry["wall_time_seconds"] is None:
         entry["wall_time_seconds"] = round(time.monotonic() - started, 1)
@@ -1137,14 +1137,19 @@ def _minutes(value):
     return ("%g" % value) if value else "-"
 
 
-def _non_passing_results(lines):
-    """How many test results of a build event file did not pass."""
+# Test results of a test that ran and did not pass. A test that was never built or never started
+# (FAILED_TO_BUILD, NO_STATUS, TOOL_HALTED_BEFORE_TESTING) has no outputs to stage.
+_RAN_AND_DID_NOT_PASS = frozenset({"FAILED", "TIMEOUT", "INCOMPLETE", "REMOTE_FAILURE"})
+
+
+def _ran_and_did_not_pass(lines):
+    """How many test results of a build event file are of tests that ran and did not pass."""
     return sum(1 for event in _decoded(lines)
                if _dict(event.get("id")).get("testResult") is not None and
-               _dict(event.get("testResult")).get("status") != "PASSED")
+               _dict(event.get("testResult")).get("status") in _RAN_AND_DID_NOT_PASS)
 
 
-def _stage_phase(args, lines, phase, budget, status):
+def _stage_phase(args, lines, phase, budget, status, build_failures=0):
     """Stages a phase's failed test outputs; returns the bytes staged, also when staging stopped
     part way, so the run cap holds across phases. Never raises: staging must not cost the
     summary."""
@@ -1162,11 +1167,16 @@ def _stage_phase(args, lines, phase, budget, status):
                   "not all staged (%s)." % (phase, type(error).__name__))
     print("macOS remote shadow lane: staged %d output files (%d bytes) for %s."
           % (staged["files"], staged["bytes"], phase))
-    failed = _non_passing_results(lines)
+    failed = _ran_and_did_not_pass(lines)
     if failed and not staged["files"]:
-        print("::warning::macOS remote shadow lane: the %s phase has %d test results that did "
-              "not pass but staged no output files; their outputs were not downloaded or do not "
-              "lie below the lane's output root." % (phase, failed))
+        print("::warning::macOS remote shadow lane: the %s phase has %d test results of tests "
+              "that ran and did not pass but staged no output files; their outputs were not "
+              "downloaded or do not lie below the lane's output root." % (phase, failed))
+    if build_failures:
+        print("::warning::macOS remote shadow lane: the %s phase failed to build %d targets, so "
+              "their tests did not run. This lane does not publish build output, which can name "
+              "runner paths and the remote executor; the failed actions are listed above by "
+              "label, to reproduce on the gating lanes." % (phase, build_failures))
     return staged["bytes"]
 
 
