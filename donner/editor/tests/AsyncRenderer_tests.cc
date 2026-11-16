@@ -45,6 +45,18 @@
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "gtest/gtest.h"
 
+namespace donner::svg::compositor {
+
+void PrintTo(const CompositorController::FastPathCounters& counters, std::ostream* os) {
+  *os << "FastPathCounters{fastPathFrames=" << counters.fastPathFrames
+      << ", slowPathFramesWithDirty=" << counters.slowPathFramesWithDirty
+      << ", noDirtyFrames=" << counters.noDirtyFrames
+      << ", segmentResyncRebuilds=" << counters.segmentResyncRebuilds
+      << ", paintOrderSnapshots=" << counters.paintOrderSnapshots << "}";
+}
+
+}  // namespace donner::svg::compositor
+
 namespace donner::editor {
 
 void PrintTo(const Vector2d& vector, std::ostream* os) {
@@ -4757,6 +4769,106 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   ASSERT_TRUE(waitForResult().has_value());
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 1u)
       << "bumping documentGeneration must trigger exactly one reset";
+}
+
+using FastPathCounters = svg::compositor::CompositorController::FastPathCounters;
+using RenderFrameStats = svg::compositor::CompositorController::RenderFrameStats;
+
+/// Field-wise increase of the compositor's lifetime fast-path counters between two snapshots.
+FastPathCounters FastPathCounterIncrease(const FastPathCounters& before,
+                                         const FastPathCounters& after) {
+  return FastPathCounters{
+      .fastPathFrames = after.fastPathFrames - before.fastPathFrames,
+      .slowPathFramesWithDirty = after.slowPathFramesWithDirty - before.slowPathFramesWithDirty,
+      .noDirtyFrames = after.noDirtyFrames - before.noDirtyFrames,
+      .segmentResyncRebuilds = after.segmentResyncRebuilds - before.segmentResyncRebuilds,
+      .paintOrderSnapshots = after.paintOrderSnapshots - before.paintOrderSnapshots,
+  };
+}
+
+/// Matches fast-path counters equal to \p expected in every field.
+auto FastPathCountersEq(const FastPathCounters& expected) {
+  return ::testing::FieldsAre(expected.fastPathFrames, expected.slowPathFramesWithDirty,
+                              expected.noDirtyFrames, expected.segmentResyncRebuilds,
+                              expected.paintOrderSnapshots);
+}
+
+// Browser telemetry publishes each worker result's own compositor counters, so every result of a
+// masked child's held drag must carry exactly the compositor's counter change for that render.
+TEST(AsyncRendererTest, MaskedChildHeldDragResultsReportTheirCompositorCounters) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode texture presentation is unavailable in this configuration";
+  }
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  svg::SVGDocument document = svg::instantiateSubtree(source.contents);
+  document.setCanvasSize(1536, 1024);
+  // The masked crown face the browser drag test selects. It stays inside its masked owner tile.
+  const std::optional<svg::SVGElement> target = document.querySelector("#central-crown-face-3");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  AsyncRenderer asyncRenderer;
+  std::uint64_t version = 0;
+  struct Rendered {
+    std::optional<RenderResult> result;
+    FastPathCounters compositorIncrease;
+    RenderFrameStats frameStats;
+  };
+  const auto render = [&](svg::compositor::InteractionHint interactionKind,
+                          Vector2d dragTranslation) {
+    const FastPathCounters before = asyncRenderer.compositorFastPathCountersForTesting();
+    RenderRequest request(renderer, document);
+    request.version = ++version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = interactionKind,
+        .translation = dragTranslation,
+        .dragGeneration = interactionKind == svg::compositor::InteractionHint::ActiveDrag ? 1u : 0u,
+    };
+    asyncRenderer.requestRender(request);
+    Rendered rendered{.result = WaitForRenderResult(asyncRenderer)};
+    rendered.compositorIncrease =
+        FastPathCounterIncrease(before, asyncRenderer.compositorFastPathCountersForTesting());
+    rendered.frameStats = asyncRenderer.compositorRenderFrameStats();
+    return rendered;
+  };
+
+  const Rendered selected = render(svg::compositor::InteractionHint::Selection, Vector2d::Zero());
+  ASSERT_THAT(selected.result, ::testing::Optional(::testing::_));
+  EXPECT_THAT(selected.result->compositorFastPathDelta,
+              FastPathCountersEq(selected.compositorIncrease));
+  const Rendered dragStart = render(svg::compositor::InteractionHint::ActiveDrag, Vector2d::Zero());
+  ASSERT_THAT(dragStart.result, ::testing::Optional(::testing::_));
+  EXPECT_THAT(dragStart.result->compositorFastPathDelta,
+              FastPathCountersEq(dragStart.compositorIncrease));
+
+  for (const double x : {4.0, 8.0, 12.0}) {
+    SCOPED_TRACE(testing::Message() << "held move to x=" << x);
+    SetGraphicsElementTranslation(*target, Vector2d(x, 0.0));
+    const Rendered held = render(svg::compositor::InteractionHint::ActiveDrag, Vector2d(x, 0.0));
+    ASSERT_THAT(held.result, ::testing::Optional(::testing::_));
+    EXPECT_THAT(held.result->compositorFastPathDelta, FastPathCountersEq(held.compositorIncrease));
+    EXPECT_THAT(held.result->compositorFastPathDelta,
+                ::testing::FieldsAre(1u, 0u, 0u, ::testing::_, ::testing::_))
+        << "a held move of a masked child must take the fast path once, without the slow path";
+    EXPECT_THAT(held.frameStats,
+                AllOf(Field("damagePatchTileCount", &RenderFrameStats::damagePatchTileCount, 1),
+                      Field("cachedTileCount", &RenderFrameStats::cachedTileCount, 1),
+                      Field("immediateTileCount", &RenderFrameStats::immediateTileCount, 0),
+                      Field("maskedChildComposeTileCount",
+                            &RenderFrameStats::maskedChildComposeTileCount, 0)))
+        << "the held move rasterizes only the damage patch of its owning masked tile";
+  }
+
+  const Rendered release = render(svg::compositor::InteractionHint::Selection, Vector2d::Zero());
+  ASSERT_THAT(release.result, ::testing::Optional(::testing::_));
+  EXPECT_THAT(release.result->compositorFastPathDelta,
+              FastPathCountersEq(release.compositorIncrease));
 }
 
 // End-to-end drag-latency harness that FAITHFULLY mirrors the real

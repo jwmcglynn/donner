@@ -347,6 +347,13 @@ struct RenderResult {
 
     /// Legacy device-poll iterations used while waiting for those readbacks.
     int readbackPollIterations = 0;
+    /// Cross-thread browser GPU owner dispatches requested by any client thread while this
+    /// iteration ran. Each blocks its thread until the owner runs it. Zero in native builds.
+    int gpuOwnerDispatchCount = 0;
+    /// One-millisecond wait slices that expired while those dispatches were pending.
+    int gpuOwnerWaitSliceTimeouts = 0;
+    /// Wall time requesting threads spent blocked on those dispatches.
+    double gpuOwnerDispatchWaitMs = 0.0;
     /// True when browser readbacks used the event-driven timed WaitAny path.
     bool usedTimedWaitAny = false;
     /// True when the worker's backend device has been declared lost, either by
@@ -453,6 +460,9 @@ struct RenderResult {
       fontDependencies;   //!< Faces pending before final pixel export.
   double workerMs = 0.0;  //!< Worker iteration latency in milliseconds, zero if unavailable.
   WorkerTimingBreakdown workerTiming;  //!< Phase and handoff timings for this worker iteration.
+  /// Increase of each compositor fast-path counter during this worker iteration, which can render
+  /// the compositor more than once. Zero when composited rendering is Off.
+  svg::compositor::CompositorController::FastPathCounters compositorFastPathDelta;
   std::chrono::steady_clock::time_point workerCompletedAt;  //!< Worker completion timestamp.
 };
 

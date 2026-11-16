@@ -71,6 +71,15 @@ WorkerTilePayloadCounts CountWorkerTilePayloads(const RenderResult& result) {
   return counts;
 }
 
+/// Whether the worker rendered this result for an active drag request rather than a selection,
+/// release or idle request.
+bool RepresentsActiveDrag(const RenderResult& result) {
+  return result.compositedPreview.has_value() &&
+         result.compositedPreview->representedDragPreview.has_value() &&
+         result.compositedPreview->representedDragPreview->interactionKind ==
+             svg::compositor::InteractionHint::ActiveDrag;
+}
+
 // clang-format off
 EM_JS(int, WorkerResultBoundaryKnown,
       (int supplied, double admissionSequence, double producerGeneration, double captureId), {
@@ -91,7 +100,8 @@ void PublishWorkerTimingStats(
     std::optional<std::uint64_t> presentationAdmissionSequence,
     std::optional<std::uint64_t> presentationProducerGeneration) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 45;
+  const auto& fastPath = result.compositorFastPathDelta;
+  constexpr std::size_t kValueCount = 58;
   const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
   const double values[kValueCount] = {
       result.workerMs,
@@ -138,7 +148,20 @@ void PublishWorkerTimingStats(
       timing.idleYieldMs,
       timing.idleCallbackMs,
       timing.idleLockMs,
-      timing.idleWaitMs};
+      timing.idleWaitMs,
+      static_cast<double>(fastPath.fastPathFrames),
+      static_cast<double>(fastPath.slowPathFramesWithDirty),
+      static_cast<double>(fastPath.noDirtyFrames),
+      static_cast<double>(fastPath.segmentResyncRebuilds),
+      static_cast<double>(fastPath.paintOrderSnapshots),
+      static_cast<double>(compositorStats.damagePatchTileCount),
+      static_cast<double>(compositorStats.damagePatchGeometryDraws),
+      static_cast<double>(compositorStats.maskedChildComposeTileCount),
+      static_cast<double>(compositorStats.mainComposeCount),
+      static_cast<double>(timing.gpuOwnerDispatchCount),
+      static_cast<double>(timing.gpuOwnerWaitSliceTimeouts),
+      timing.gpuOwnerDispatchWaitMs,
+      static_cast<double>(RepresentsActiveDrag(result))};
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -213,6 +236,26 @@ void PublishWorkerTimingStats(
         stats['idleCallbackMs'] = heap[b + 42];
         stats['idleLockMs'] = heap[b + 43];
         stats['idleWaitMs'] = heap[b + 44];
+        // This result's own compositor counters, the last compositor frame's tile work, and the
+        // browser GPU owner dispatches requested while the worker produced it.
+        const resultCounterNames = ([
+          'fastPathFrames',
+          'slowPathFramesWithDirty',
+          'noDirtyFrames',
+          'segmentResyncRebuilds',
+          'paintOrderSnapshots',
+          'damagePatchTileCount',
+          'damagePatchGeometryDraws',
+          'maskedChildComposeTileCount',
+          'mainComposeCount',
+          'gpuOwnerDispatchCount',
+          'gpuOwnerWaitSliceTimeouts',
+          'gpuOwnerDispatchWaitMs'
+        ]);
+        for (let index = 0; index < resultCounterNames.length; ++index) {
+          stats[resultCounterNames[index]] = heap[b + 45 + index];
+        }
+        stats['activeDragResult'] = heap[b + 57] > 0;
         const totals = ([
           [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
           [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
