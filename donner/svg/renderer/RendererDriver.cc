@@ -74,6 +74,7 @@
 #endif
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/SubDocumentWarnings.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -366,37 +367,53 @@ std::optional<Box2d> DeviceDrawableBoundsWithStroke(const EntityHandle& dataHand
   return (worldFromEntity * surfaceFromCanvas).transformBox(box);
 }
 
-/// Return the SVG object bounding box used by objectBoundingBox effects, bounding the element's
-/// geometry after @p targetFromEntity maps it into a target space. Shape geometry is bounded after
-/// every transform is composed, so the box is tight however the transforms combine; a text box is
-/// mapped as a box.
+#ifdef DONNER_TEXT_ENABLED
+/// The text engine when it, rather than ShapeSystem, owns @p handle's object bounding box.
+///
+/// Not `TextComponent`: `<a>` carries one unconditionally so that it can act as a text content
+/// element when nested in text, but outside text it is an ordinary group whose box comes from its
+/// children's shapes. Asking the text engine for that element's box would trip its assertion that
+/// a text root exists.
+const TextEngine* ObjectBoxTextEngine(Registry& registry, EntityHandle handle) {
+  const auto* textEngine = registry.ctx().find<TextEngine>();
+  return textEngine && textEngine->textRootEntity(handle) != entt::null ? textEngine : nullptr;
+}
+#endif
+
+/// Return the SVG object bounding box used by objectBoundingBox effects.
 ///
 /// ShapeSystem covers path-backed elements and their path-backed descendants, but text geometry
 /// is produced by TextEngine instead of ComputedPathComponent. Falling back to an empty shape box
 /// for text collapses objectBoundingBox filter regions to zero and clips the entire filter output.
-std::optional<Box2d> RenderingObjectBoundingBoxIn(Registry& registry, EntityHandle handle,
-                                                  const Transform2d& targetFromEntity) {
+std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
 #ifdef DONNER_TEXT_ENABLED
-  // Not `TextComponent`: `<a>` carries one unconditionally so that it can act as a text content
-  // element when nested in text, but outside text it is an ordinary group whose box comes from its
-  // children's shapes. Asking the text engine for that element's box would trip its assertion that
-  // a text root exists.
-  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-    if (textEngine->textRootEntity(handle) != entt::null) {
-      const std::optional<Box2d> box = textEngine->computedObjectBoundingBox(handle);
-      return box ? std::optional<Box2d>(targetFromEntity.transformBox(*box)) : std::nullopt;
-    }
+  if (const TextEngine* textEngine = ObjectBoxTextEngine(registry, handle)) {
+    return textEngine->computedObjectBoundingBox(handle);
   }
 #else
   (void)registry;
 #endif
 
-  return components::ShapeSystem().getShapeBoundsIn(handle, targetFromEntity);
+  return components::ShapeSystem().getShapeBounds(handle);
 }
 
-/// \ref RenderingObjectBoundingBoxIn in the element's own space.
-std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle handle) {
-  return RenderingObjectBoundingBoxIn(registry, handle, Transform2d());
+/// Collect the geometry \ref RenderingObjectBoundingBox bounds into @p pieces, placed in a
+/// measurement space by @p spaceFromEntity. A text box is collected as a box.
+void CollectRenderingObjectGeometry(Registry& registry, EntityHandle handle,
+                                    const Transform2d& spaceFromEntity,
+                                    std::vector<components::BoundsGeometryPiece>& pieces) {
+#ifdef DONNER_TEXT_ENABLED
+  if (const TextEngine* textEngine = ObjectBoxTextEngine(registry, handle)) {
+    pieces.push_back(
+        components::BoundsGeometryPiece{.spaceFromPiece = spaceFromEntity,
+                                        .geometry = textEngine->computedObjectBoundingBox(handle)});
+    return;
+  }
+#else
+  (void)registry;
+#endif
+
+  (void)components::ShapeSystem().collectShapeGeometry(handle, spaceFromEntity, pieces);
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -4645,6 +4662,14 @@ namespace {
  */
 struct ReportedSubDocumentWarnings {
   std::unordered_set<std::string> keys;
+  /// Whether the host sink was marked truncated for this sub-document's warnings.
+  bool truncationReported = false;
+
+  /// Whether delivering @p key would only drop it, after the truncation it causes was reported.
+  bool dropsAfterTruncation(const std::string& key) const {
+    return truncationReported && keys.size() >= ParseWarningSink::kMaximumWarnings &&
+           !keys.contains(key);
+  }
 };
 
 /**
@@ -4664,10 +4689,16 @@ struct PendingSubDocumentWarnings {
 /// host sink restyles it to find its current warnings.
 struct RediscoverSubDocumentWarnings {};
 
-/// Fingerprint of the last warnings a preparation without a collecting host sink found, once each
-/// of them was delivered or held, so finding the same warnings again needs no matching.
+/// The last warnings a preparation without a collecting host sink found, once each of them was
+/// delivered or held, so finding exactly the same warnings again needs no matching or formatting.
 struct HeldSubDocumentWarningBatch {
-  std::size_t fingerprint = 0;
+  std::vector<ParseDiagnostic> warnings;  //!< The batch's warnings, in order.
+  bool truncated = false;                 //!< Whether the batch was truncated.
+
+  /// Whether @p batch holds exactly these warnings and truncation.
+  bool matches(const ParseWarningSink& batch) const {
+    return truncated == batch.resourceLimitExceeded() && warnings == batch.warnings();
+  }
 };
 
 std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
@@ -4678,22 +4709,6 @@ std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
 
 std::uint64_t SubDocumentRevision(const Registry& registry) {
   return registry.ctx().get<components::SVGDocumentContext>().mutationRevision();
-}
-
-/// Order-sensitive fingerprint of @p warnings, computed without formatting them.
-std::size_t WarningBatchFingerprint(const ParseWarningSink& warnings) {
-  constexpr std::size_t kNoOffset = static_cast<std::size_t>(-1);
-  std::size_t fingerprint = warnings.resourceLimitExceeded() ? 1 : 0;
-  const auto mix = [&fingerprint](std::size_t value) {
-    fingerprint ^= value + 0x9e3779b97f4a7c15ULL + (fingerprint << 6) + (fingerprint >> 2);
-  };
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    mix(std::hash<std::string_view>()(std::string_view(warning.reason)));
-    mix(static_cast<std::size_t>(warning.severity));
-    mix(warning.range.start.offset.value_or(kNoOffset));
-    mix(warning.range.end.offset.value_or(kNoOffset));
-  }
-  return fingerprint;
 }
 
 /**
@@ -4726,11 +4741,13 @@ PendingSubDocumentWarnings& EnsureHeldWarnings(Registry& registry,
   return *pending;
 }
 
-/// Hold @p warning unless it was already delivered or held, creating the held set on first use.
+/// Hold @p warning unless it was already delivered or held, or delivering it would only drop it,
+/// creating the held set on first use.
 void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
                             PendingSubDocumentWarnings*& pending, const ParseDiagnostic& warning) {
   std::string key = SubDocumentWarningKey(warning);
-  if ((reported != nullptr && reported->keys.contains(key)) ||
+  if ((reported != nullptr &&
+       (reported->keys.contains(key) || reported->dropsAfterTruncation(key))) ||
       (pending != nullptr && pending->keys.contains(key))) {
     return;
   }
@@ -4740,38 +4757,6 @@ void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarning
   if (held.warnings.warnings().size() > count) {
     held.keys.insert(std::move(key));
   }
-}
-
-/**
- * Hold @p warnings found while preparing a sub-document without a collecting host sink, skipping
- * warnings already delivered or held. Held warnings found before a mutation of the sub-document
- * are dropped first.
- *
- * @param registry The sub-document's registry, which holds the warnings.
- * @param warnings Warnings collected while preparing the sub-document.
- */
-void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
-  if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
-    return;
-  }
-  DropStaleSubDocumentWarnings(registry);
-  const std::size_t fingerprint = WarningBatchFingerprint(warnings);
-  const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
-  if (last != nullptr && last->fingerprint == fingerprint) {
-    return;
-  }
-  const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
-  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
-      break;
-    }
-    HoldSubDocumentWarning(registry, reported, pending, warning);
-  }
-  if (warnings.resourceLimitExceeded()) {
-    EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
-  }
-  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{.fingerprint = fingerprint});
 }
 
 /**
@@ -4800,17 +4785,36 @@ void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warni
   }
   if (truncated) {
     hostSink.markResourceLimitExceeded();
+    reported.truncationReported = true;
   }
 }
 
-/**
- * Before a draw with a collecting host sink prepares a sub-document, deliver the warnings it holds,
- * and restyle it on this preparation if a mutation dropped held warnings, so the preparation finds
- * its current ones.
- *
- * @param registry The sub-document's registry.
- * @param hostSink The host's collecting sink.
- */
+}  // namespace
+
+void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
+  if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
+    return;
+  }
+  DropStaleSubDocumentWarnings(registry);
+  const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
+  if (last != nullptr && last->matches(warnings)) {
+    return;
+  }
+  const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
+  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
+      break;
+    }
+    HoldSubDocumentWarning(registry, reported, pending, warning);
+  }
+  if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
+    EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
+  }
+  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{
+      .warnings = warnings.warnings(), .truncated = warnings.resourceLimitExceeded()});
+}
+
 void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSink) {
   if (registry.ctx().erase<RediscoverSubDocumentWarnings>()) {
     components::ExternalUseStyleRetention::ScheduleFullRestyle(registry);
@@ -4821,8 +4825,6 @@ void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSi
     ReportSubDocumentWarnings(registry, held.warnings, hostSink);
   }
 }
-
-}  // namespace
 
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
@@ -5242,31 +5244,37 @@ std::optional<Box2d> RendererDriver::objectBoundingBox(Registry& registry, Entit
       cached != objectBoundsCache_[&registry].end()) {
     return cached->second;
   }
-  const std::optional<Box2d> bounds = objectBoundingBoxIn(registry, entity, Transform2d());
-  objectBoundsCache_[&registry][entity] = bounds;
-  return bounds;
-}
-
-std::optional<Box2d> RendererDriver::objectBoundingBoxIn(Registry& registry, Entity entity,
-                                                         const Transform2d& targetFromEntity) {
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
   std::optional<Box2d> bounds =
-      RenderingObjectBoundingBoxIn(registry, instance.styleHandle(registry), targetFromEntity);
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
-  const std::vector<std::pair<int, Entity>>& uses = externalUseInstances(registry);
-  const int lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
-  const auto firstUse =
-      std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity()));
-  for (auto it = firstUse; it != uses.end() && it->first <= lastDrawOrder; ++it) {
-    const auto& useInstance = registry.get<components::RenderingInstanceComponent>(it->second);
-    const std::optional<Box2d> content = externalUseContentBounds(
-        registry, it->second,
-        useInstance.worldFromEntityTransform * entityFromWorld * targetFromEntity);
+  for (const auto& [drawOrder, use] : externalUsesInSubtree(registry, instance)) {
+    const auto& useInstance = registry.get<components::RenderingInstanceComponent>(use);
+    const std::optional<Box2d> content = components::BoundGeometryPieces(
+        externalUseGeometry(registry, use), useInstance.worldFromEntityTransform * entityFromWorld);
     if (content) {
       bounds = bounds ? Box2d::Union(*bounds, *content) : *content;
     }
   }
+  objectBoundsCache_[&registry][entity] = bounds;
   return bounds;
+}
+
+void RendererDriver::collectObjectGeometry(Registry& registry, Entity entity,
+                                           const Transform2d& spaceFromEntity,
+                                           std::vector<components::BoundsGeometryPiece>& pieces) {
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+  CollectRenderingObjectGeometry(registry, instance.styleHandle(registry), spaceFromEntity, pieces);
+  const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
+  for (const auto& [drawOrder, use] : externalUsesInSubtree(registry, instance)) {
+    const auto& useInstance = registry.get<components::RenderingInstanceComponent>(use);
+    const Transform2d spaceFromUse =
+        useInstance.worldFromEntityTransform * entityFromWorld * spaceFromEntity;
+    for (const components::BoundsGeometryPiece& piece : externalUseGeometry(registry, use)) {
+      pieces.push_back(components::BoundsGeometryPiece{
+          .spaceFromPiece = piece.spaceFromPiece * spaceFromUse, .geometry = piece.geometry});
+    }
+  }
 }
 
 std::optional<Box2d> RendererDriver::filterObjectBounds(
@@ -5285,6 +5293,17 @@ Box2d RendererDriver::maskObjectBounds(Registry& registry,
   return (needsBounds ? objectBoundingBox(registry, styleHandle.entity())
                       : RenderingObjectBoundingBox(registry, styleHandle))
       .value_or(Box2d());
+}
+
+std::span<const std::pair<int, Entity>> RendererDriver::externalUsesInSubtree(
+    Registry& registry, const components::RenderingInstanceComponent& instance) {
+  const std::vector<std::pair<int, Entity>>& uses = externalUseInstances(registry);
+  const auto first =
+      std::lower_bound(uses.begin(), uses.end(), std::pair(instance.drawOrder, Entity()));
+  const int lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
+  const auto last = std::partition_point(
+      first, uses.end(), [lastDrawOrder](const auto& use) { return use.first <= lastDrawOrder; });
+  return std::span<const std::pair<int, Entity>>(first, last);
 }
 
 const std::vector<std::pair<int, Entity>>& RendererDriver::externalUseInstances(
@@ -5311,13 +5330,13 @@ const std::vector<std::pair<int, Entity>>& RendererDriver::externalUseInstances(
 
 void RendererDriver::forgetEffectBounds(const Registry& registry) {
   objectBoundsCache_.erase(&registry);
-  externalUseBoundsCache_.erase(&registry);
+  externalUseGeometryCache_.erase(&registry);
   externalUseInstances_.erase(&registry);
 }
 
 void RendererDriver::forgetAllEffectBounds() {
   objectBoundsCache_.clear();
-  externalUseBoundsCache_.clear();
+  externalUseGeometryCache_.clear();
   externalUseInstances_.clear();
 }
 
@@ -5341,46 +5360,39 @@ void RendererDriver::applyExternalUseClipBounds(
   }
 }
 
-std::optional<Box2d> RendererDriver::externalUseContentBounds(Registry& hostRegistry,
-                                                              Entity hostEntity,
-                                                              const Transform2d& targetFromUse) {
-  std::vector<MeasuredExternalUseBounds>& measured =
-      externalUseBoundsCache_[&hostRegistry][hostEntity];
-  for (const MeasuredExternalUseBounds& entry : measured) {
-    if (entry.targetFromUse == targetFromUse) {
-      return entry.bounds;
-    }
+const std::vector<components::BoundsGeometryPiece>& RendererDriver::externalUseGeometry(
+    Registry& hostRegistry, Entity hostEntity) {
+  if (const auto cached = externalUseGeometryCache_[&hostRegistry].find(hostEntity);
+      cached != externalUseGeometryCache_[&hostRegistry].end()) {
+    return cached->second;
   }
-  const std::optional<Box2d> bounds =
-      measureExternalUseContent(hostRegistry, hostEntity, targetFromUse);
+  std::vector<components::BoundsGeometryPiece> geometry =
+      measureExternalUseGeometry(hostRegistry, hostEntity);
   // Measuring can add entries for other registries, so look this one up again.
-  externalUseBoundsCache_[&hostRegistry][hostEntity].push_back(
-      MeasuredExternalUseBounds{.targetFromUse = targetFromUse, .bounds = bounds});
-  return bounds;
+  return externalUseGeometryCache_[&hostRegistry][hostEntity] = std::move(geometry);
 }
 
-std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostRegistry,
-                                                               Entity hostEntity,
-                                                               const Transform2d& targetFromUse) {
+std::vector<components::BoundsGeometryPiece> RendererDriver::measureExternalUseGeometry(
+    Registry& hostRegistry, Entity hostEntity) {
   const auto& instance = hostRegistry.get<components::RenderingInstanceComponent>(hostEntity);
   const auto* externalUse =
       instance.dataHandle(hostRegistry).try_get<components::ExternalUseComponent>();
   if (externalUse == nullptr || !externalUse->subDocument || externalUse->fragment.empty()) {
-    return std::nullopt;
+    return {};
   }
   const auto& style = instance.styleHandle(hostRegistry).get<components::ComputedStyleComponent>();
   SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
   const auto access = subDocument.writeAccess();
   Registry& child = subDocument.registry();
   if (!beginSubDocumentFontTraversal(subDocument.handle(), hostRegistry, hostEntity)) {
-    return std::nullopt;
+    return {};
   }
   const ActiveFontSubDocument active(*activeFontSubDocuments_, subDocument.handle().get());
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             child);
   const Entity root = components::FindAttachedEntityById(child, externalUse->fragment);
   if (root == entt::null || !style.properties) {
-    return std::nullopt;
+    return {};
   }
   // Lay the fragment out with the occurrence's styles, exactly as drawing it does. Measuring is
   // charged to its own frame allowance rather than the external instance work drawing charges;
@@ -5391,7 +5403,7 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
                               instance.resolvedStroke, externalUseStyleWork_, warningSink_,
                               verbose_, ExternalWorkCharge::Measure);
   if (!scope.installed()) {
-    return std::nullopt;
+    return {};
   }
   const ExternalUseInstanceScope instanceScope(child, root, EntityHandle(hostRegistry, hostEntity));
   // The render tree may hold another occurrence's instance, as drawing finds it.
@@ -5402,14 +5414,15 @@ std::optional<Box2d> RendererDriver::measureExternalUseContent(Registry& hostReg
   forgetEffectBounds(child);
   const EntityHandle target(child, root);
   // The layout helper's result maps the root into the use's space.
-  const Transform2d targetFromRoot =
-      components::LayoutSystem().getEntityFromWorldTransform(target) * targetFromUse;
-  const std::optional<Box2d> bounds =
-      child.all_of<components::RenderingInstanceComponent>(root)
-          ? objectBoundingBoxIn(child, root, targetFromRoot)
-          : components::ShapeSystem().getShapeBoundsIn(target, targetFromRoot);
+  const Transform2d useFromRoot = components::LayoutSystem().getEntityFromWorldTransform(target);
+  std::vector<components::BoundsGeometryPiece> geometry;
+  if (child.all_of<components::RenderingInstanceComponent>(root)) {
+    collectObjectGeometry(child, root, useFromRoot, geometry);
+  } else {
+    (void)components::ShapeSystem().collectShapeGeometry(target, useFromRoot, geometry);
+  }
   forgetEffectBounds(child);
-  return bounds;
+  return geometry;
 }
 
 void RendererDriver::traverseSubDocument(Registry& registry) {

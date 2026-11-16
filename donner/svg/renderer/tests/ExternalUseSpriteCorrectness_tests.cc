@@ -1174,9 +1174,38 @@ TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdate
     MutateSheet(sheet, SheetMutation::OtherTransform, frame);
     renderer.draw(host->document);
   }
-  const auto after = counters();
-  EXPECT_EQ(after.fullRebuilds, before.fullRebuilds);
-  EXPECT_EQ(after.retainedUpdates - before.retainedUpdates, static_cast<uint64_t>(kFrames));
+  using Counters = components::RenderTreeState::Counters;
+  EXPECT_THAT(counters(),
+              testing::AllOf(testing::Field("fullRebuilds", &Counters::fullRebuilds,
+                                            before.fullRebuilds),
+                             testing::Field("retainedUpdates", &Counters::retainedUpdates,
+                                            before.retainedUpdates + kFrames)));
+}
+
+// Once a sheet over the sink limit has delivered its warnings and the truncation, finding them
+// again holds nothing, so a mutation followed by a sinkless draw leaves no held warnings for the
+// next mutation to drop. A transform restyles nothing, so neither draw restyles the sheet.
+TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
+  std::string sheet = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg"
+                      R"svg(<g id="a"><rect id="other" width="4" height="4"/>)svg";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    sheet += "<use href=\"#missing" + std::to_string(i) + "\"/>";
+  }
+  sheet += "</g></svg>";
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(kStyleWarningHost, sheet);
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ParseWarningSink first;
+  renderer.draw(host->document, first);
+  ASSERT_TRUE(first.resourceLimitExceeded());
+
+  RestyleCounter restyles(SpriteSheetOf(*host));
+  MutateSheet(SpriteSheetOf(*host), SheetMutation::OtherTransform, 0);
+  renderer.draw(host->document);
+  MutateSheet(SpriteSheetOf(*host), SheetMutation::OtherTransform, 1);
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_EQ(restyles.restyles(), 0u);
 }
 
 }  // namespace
