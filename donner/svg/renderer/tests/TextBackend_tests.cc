@@ -1164,6 +1164,35 @@ TEST(TextBackendFullCapabilities, TinyFontAdvancesStayInScale) {
       << "simpleAdvance=" << simpleAdvance << ", fullAdvance=" << fullAdvance;
 }
 
+// Unkerned advances are the font's horizontal metrics scaled linearly to the requested size, which
+// the simple backend computes in floating point. Amiri rounds its scaled size to whole pixels per
+// em (head flags bit 3) and Noto Sans does not, so both FreeType scaling paths are covered.
+TEST(TextBackendFullCapabilities, AdvancesKeepFontUnitPrecision) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple simpleBackend(fontManager, registry);
+  TextBackendFull fullBackend(fontManager, registry);
+
+  constexpr std::string_view kText = "Hamburgefonstiv";
+  const std::array<std::array<const char*, 2>, 2> kFonts{{
+      {"Amiri-Regular.ttf", "Amiri"},
+      {"NotoSans-Regular.ttf", "Noto Sans"},
+  }};
+  for (const auto& [file, family] : kFonts) {
+    const FontHandle font = LoadResvgFont(fontManager, file, family);
+    ASSERT_TRUE(static_cast<bool>(font)) << family;
+    for (float size : {14.0f, 14.3f}) {
+      SCOPED_TRACE(testing::Message() << family << " at " << size << " px");
+      const auto simpleShaped = simpleBackend.shapeRunNoKerning(font, size, kText, 0, kText.size(),
+                                                                false, FontVariant::Normal, false);
+      const auto fullShaped = fullBackend.shapeRunNoKerning(font, size, kText, 0, kText.size(),
+                                                            false, FontVariant::Normal, false);
+      ASSERT_THAT(simpleShaped.glyphs, SizeIs(kText.size()));
+      EXPECT_THAT(fullShaped.glyphs, Pointwise(AdvanceNear(1e-3), simpleShaped.glyphs));
+    }
+  }
+}
+
 TEST(TextBackendFullCapabilities, DetectsSmallCapsFeature) {
   Registry registry;
   FontManager fontManager(registry);
