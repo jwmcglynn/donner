@@ -3450,6 +3450,10 @@ RendererFilterPreparationBudget* RendererTinySkia::filterPreparationBudget() {
   return filterPreparationBudget_.get();
 }
 
+void RendererTinySkia::setStrokeOutputPointLimitForTesting(std::size_t maximumPoints) {
+  strokeOutputPointLimit_ = std::min(strokeOutputPointLimit_, maximumPoints);
+}
+
 void RendererTinySkia::setDashWorkBudgetForTesting(std::size_t maximumWorkUnits) {
   dashedPathWorkBudget_->maximumWorkUnits =
       std::min(dashedPathWorkBudget_->maximumWorkUnits, maximumWorkUnits);

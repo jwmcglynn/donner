@@ -271,6 +271,9 @@ public:
 
   /// Reduce generated-dash work for a boundary test.
   void setDashWorkBudgetForTesting(std::size_t maximumWorkUnits);
+  /// Tightens the most outline points one stroke expansion may emit, for a test; this never raises
+  /// the limit.
+  void setStrokeOutputPointLimitForTesting(std::size_t maximumPoints);
   /// Reduce materialized gradient stops for a boundary test.
   void setGradientStopBudgetForTesting(std::size_t maximumStops);
   /// Reduce decoded-outline and path-copy ceilings for a boundary test.
@@ -556,6 +559,8 @@ private:
   bool ownsTextMaterializationBudget_ = true;
   std::size_t frameResourceScopeDepth_ = 0;
   std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
+  /// Most outline points one stroke expansion may emit; a stroke past it rejects the draw budget.
+  std::size_t strokeOutputPointLimit_ = Path::kMaximumStrokeOutputPoints;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;
 

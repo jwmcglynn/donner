@@ -4048,6 +4048,29 @@ TEST(RendererPublicApiTest, GlyphCapIsConfigurableAndSharedWithOffscreenInstance
   EXPECT_FALSE(raised.textMaterializationBudgetRejected);
   EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 60, 0, 90, 30), Gt(0u));
 }
+
+TEST(RendererTinySkiaSecurityTest, GlyphStrokeExpansionStopsAtTheOutputLimit) {
+  // One stroked glyph under scale(100000) emits more outline points than the lowered limit, so
+  // its stroke stops expanding and the draw is rejected. At scale(1) it fits.
+  const auto document = [](std::string_view transform) {
+    return ParseDocument(std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100"
+                                            height="100"><text transform=")") +
+                         std::string(transform) +
+                         R"(" x="10" y="80" font-size="80" fill="none" stroke="black"
+                                stroke-width="2">O</text></svg>)");
+  };
+  SVGDocument extreme = document("scale(100000)");
+  RendererTinySkia renderer;
+  renderer.setStrokeOutputPointLimitForTesting(4096);
+  renderer.draw(extreme);
+  EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
+
+  SVGDocument plain = document("scale(1)");
+  renderer.draw(plain);
+  EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
+  EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 0, 0, 100, 100), Gt(0u));
+}
+
 #else
 TEST(RendererPublicApiTest, GlyphCapIsZeroWithoutText) {
   Renderer renderer;
@@ -4055,6 +4078,33 @@ TEST(RendererPublicApiTest, GlyphCapIsZeroWithoutText) {
   EXPECT_EQ(renderer.maximumGlyphs(), 0u) << "A build without text must report no glyph cap.";
 }
 #endif
+
+/// A stroked circle of four cubics, radius 40 around (50, 50), under \p transform.
+std::string StrokedCubicCircle(std::string_view transform) {
+  return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+             <path transform=")") +
+         std::string(transform) +
+         R"(" fill="none" stroke="black" stroke-width="2"
+                   d="M90 50 C90 72.09 72.09 90 50 90 C27.91 90 10 72.09 10 50
+                      C10 27.91 27.91 10 50 10 C72.09 10 90 27.91 90 50 Z"/>
+           </svg>)";
+}
+
+TEST(RendererTinySkiaSecurityTest, PathStrokeExpansionStopsAtTheOutputLimit) {
+  // Under scale(100000) the stroker emits about 16,000 outline points for this circle, past the
+  // lowered limit, so the stroke stops expanding and the draw is rejected. At scale(1) it fits.
+  SVGDocument extreme = ParseDocument(StrokedCubicCircle("scale(100000)"));
+  RendererTinySkia renderer;
+  renderer.setStrokeOutputPointLimitForTesting(4096);
+  renderer.draw(extreme);
+  EXPECT_TRUE(renderer.resourceStats().drawBudgetRejected);
+
+  SVGDocument plain = ParseDocument(StrokedCubicCircle("scale(1)"));
+  renderer.draw(plain);
+  EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  EXPECT_TRUE(std::ranges::any_of(snapshot.pixels, [](std::uint8_t byte) { return byte != 0; }));
+}
 
 void SetStrokePaint(RendererInterface& renderer) {
   PaintParams paint;
