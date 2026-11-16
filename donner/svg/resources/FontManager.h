@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/Utils.h"
 #include "donner/base/fonts/SfntUtils.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
@@ -190,6 +191,11 @@ public:
   /// not change while a \ref HostFontOverlay is lent or cleared: text prepared under an overlay is
   /// keyed by \ref hostFontKey instead, which the external-use style retention compares.
   uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+  /// The \ref fontResourceRevision at which \ref setDefaultFamily, \ref setGenericFamilyMapping or
+  /// \ref setFontProvider last changed family selection, or 0 if none has. Such a change can move
+  /// any family lookup to another face without leaving a provider dependency behind, so a result
+  /// prepared at an earlier revision is stale.
+  uint64_t familySelectionRevision() const { return familySelectionRevision_; }
   /// Whether bounded dependency collection exceeded its resource limit.
   bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
 
@@ -218,7 +224,8 @@ public:
    * Register a mapping from a CSS generic family name (serif, sans-serif, monospace, cursive,
    * fantasy) to a real font family name registered via `addFontFace()`.
    *
-   * This allows `findFont("sans-serif")` to resolve to the specified family.
+   * This allows `findFont("sans-serif")` to resolve to the specified family. Changing a mapping
+   * advances \ref familySelectionRevision so prepared text is laid out again.
    *
    * @param genericName The CSS generic family name (case-insensitive).
    * @param realFamily The real family name to resolve to.
@@ -321,6 +328,37 @@ public:
 
   /// Lending work done so far.
   const HostFontOverlayStats& hostFontOverlayStats() const { return hostOverlayStats_; }
+
+  /**
+   * Set the user agent's default family, used when no family in a `font-family` list is
+   * available. CSS leaves this face to the user agent. Without a default family, or while the
+   * named family is unavailable, \ref defaultFont answers with \ref fallbackFont. Changing it
+   * advances \ref familySelectionRevision so prepared text is laid out again.
+   *
+   * @param family A family name or CSS generic family name; empty clears the default.
+   */
+  void setDefaultFamily(std::string_view family);
+
+  /**
+   * Returns the best face of the default family set by \ref setDefaultFamily for the requested
+   * attributes, or \ref fallbackFont when no default family is set or it is unavailable.
+   *
+   * @param weight The requested CSS font weight.
+   * @param style The requested font style, as passed to \ref findFont.
+   * @param stretch The requested font stretch, as passed to \ref findFont.
+   */
+  FontHandle defaultFont(int weight = 400, int style = 0, int stretch = 5);
+
+  /// Whether a default family is set by \ref setDefaultFamily and currently available.
+  bool hasDefaultFamily() const;
+
+  /**
+   * The default family set by \ref setDefaultFamily, or empty.
+   *
+   * The reference aliases this manager's storage: it is valid until the next
+   * \ref setDefaultFamily call or until the manager is destroyed. Copy it to keep the name longer.
+   */
+  const std::string& defaultFamily() const UTILS_LIFETIME_BOUND { return defaultFamily_; }
 
   /**
    * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
@@ -544,7 +582,8 @@ public:
       providerDependencies_.clear();
       providerResolvedFamiliesLower_.clear();
       fontDependenciesOverflowed_ = false;
-      ++fontResourceRevision_;
+      // A family the previous provider lacked was resolved without recording a dependency.
+      familySelectionRevision_ = ++fontResourceRevision_;
       cache_.clear();
       clearLentSetCaches();
     }
@@ -817,11 +856,17 @@ private:
       providerDependencies_;
   std::vector<FontFaceDependency>* dependencyCapture_ = nullptr;
   uint64_t fontResourceRevision_ = 0;
+  /// See \ref familySelectionRevision.
+  uint64_t familySelectionRevision_ = 0;
   bool fontDependenciesOverflowed_ = false;
   bool refreshingFonts_ = false;
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;
+
+  /// Family used when no family in a `font-family` list is available; empty selects the embedded
+  /// fallback face.
+  std::string defaultFamily_;
 
   /// Lowercased family names claimed by the `@font-face` rules this instance knows about, so
   /// \ref hasFamily answers without rescanning them. Seeded from the registry at construction and

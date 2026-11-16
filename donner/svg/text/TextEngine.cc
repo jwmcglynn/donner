@@ -393,6 +393,7 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   params.textAnchor = properties.textAnchor.get().value();
   params.direction = properties.direction.get().value();
   params.bidiOverride = OverridesBidi(properties.unicodeBidi.get().value());
+  params.bidiPlaintext = properties.unicodeBidi.get().value() == UnicodeBidi::Plaintext;
   params.writingMode = properties.writingMode.get().value();
   params.fontKerning = properties.fontKerning.get().value();
   params.fontSizeAdjust = properties.fontSizeAdjust.get().value();
@@ -851,6 +852,31 @@ TextAnchor PhysicalTextAnchor(TextAnchor anchor, bool rightToLeft) {
   return anchor == TextAnchor::Start ? TextAnchor::End : TextAnchor::Start;
 }
 
+/// Collects the inline elements from the span's own element up to the text root whose
+/// `unicode-bidi` encloses their content in bidi controls, outermost first.
+void ResolveBidiEmbeddings(Registry& registry, Entity styleEntity,
+                           const TextStyleContext* styleContext,
+                           components::ComputedTextComponent::TextSpan& span) {
+  span.bidiEmbeddings.clear();
+  for (Entity element = styleEntity; element != entt::null;) {
+    if ((styleContext && element == styleContext->rootEntity) ||
+        registry.any_of<components::TextRootComponent>(element)) {
+      break;
+    }
+    if (const auto* style = registry.try_get<components::ComputedStyleComponent>(element);
+        style && style->properties) {
+      const UnicodeBidi value = style->properties->unicodeBidi.get().value();
+      if (value != UnicodeBidi::Normal) {
+        span.bidiEmbeddings.push_back(
+            {element, value, style->properties->direction.get().value() == Direction::Rtl});
+      }
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(element);
+    element = tree ? tree->parent() : entt::null;
+  }
+  std::reverse(span.bidiEmbeddings.begin(), span.bidiEmbeddings.end());
+}
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
                                 const Box2d& viewBox, const FontMetrics& fontMetrics,
                                 const TextStyleContext* styleContext = nullptr) {
@@ -890,6 +916,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.rightToLeftInline = RightToLeftInline(style->properties->direction.get().value(),
                                                style->properties->writingMode.get().value(),
                                                span.pathSpline.has_value());
+    ResolveBidiEmbeddings(registry, styleEntity, styleContext, span);
     span.textAnchor =
         PhysicalTextAnchor(style->properties->textAnchor.get().value(), span.rightToLeftInline);
     span.textDecoration = style->properties->textDecoration.get().value();
@@ -2766,27 +2793,46 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
 
 /// The current text position a chunk leaves for the next chunk without an absolute x.
 ///
-/// Layout records every chunk origin as a left-to-right pen. A right-to-left chunk's pen instead
-/// runs leftward from its origin, so its actual pen end is one chunk width left of that origin;
-/// anchoring applies afterwards and does not move it. `recordedEnd` is the chunk's far edge as laid
-/// out left to right: the gap from it to the next recorded origin, less that chunk's authored
-/// shift, is trailing spacing, which a leftward pen places on the left. After a left-to-right
-/// chunk the next origin keeps its recorded offset, moved by `correction`, the distance between
-/// actual and recorded origins accumulated since the last absolute x.
+/// Layout records every chunk origin as a left-to-right pen. A right-to-left chunk instead runs
+/// leftward from its origin, so before anchoring it spans one chunk width left of that origin, and
+/// a left-to-right chunk spans one width right of it. Unpositioned chunks follow one another in the
+/// paragraph direction: the pen leaves a chunk at its right edge in a left-to-right paragraph and
+/// at its left edge in a right-to-left one, whatever the chunk's own direction. That is the
+/// `<text>` element's direction, or under `unicode-bidi: plaintext` the direction each paragraph
+/// detects. Anchoring applies afterwards and does not move that position.
+///
+/// `recordedEnd` is the chunk's far edge as laid out left to right: the gap from it to the next
+/// recorded origin, less that chunk's authored shift, is trailing spacing, which the pen places on
+/// its side of travel. Between left-to-right chunks of a left-to-right paragraph the next origin
+/// keeps its recorded offset, moved by `correction`, the distance between actual and recorded
+/// origins accumulated since the last absolute x.
 struct PenContinuation {
-  bool rightToLeft = false;
-  double penEnd = 0.0;
+  bool paragraphRightToLeft = false;
+  bool rightToLeft = false;  //!< Direction of the chunk that left this position.
+  double origin = 0.0;       //!< That chunk's origin before anchoring.
+  double width = 0.0;        //!< That chunk's inline extent.
   double recordedEnd = 0.0;
   double correction = 0.0;
 
   /// The actual origin of a following chunk recorded at \p recorded with authored shift
-  /// \p authored.
-  double originFor(double recorded, double authored) const {
-    if (!rightToLeft) {
-      return recorded + correction;
+  /// \p authored, whose direction is \p chunkRightToLeft, inline extent \p chunkWidth and
+  /// paragraph direction \p chunkParagraphRightToLeft.
+  double originFor(double recorded, double authored, bool chunkRightToLeft, double chunkWidth,
+                   bool chunkParagraphRightToLeft) const {
+    double nearEdge = 0.0;
+    if (!paragraphRightToLeft && !rightToLeft) {
+      nearEdge = recorded + correction;
+    } else {
+      const double spacing = recorded - authored - recordedEnd;
+      const double left = rightToLeft ? origin - width : origin;
+      nearEdge =
+          paragraphRightToLeft ? left - spacing + authored : left + width + spacing + authored;
     }
-    const double spacing = recorded - authored - recordedEnd;
-    return penEnd - spacing + authored;
+    // A chunk against its paragraph direction starts its pen at its far side of the near edge.
+    if (chunkRightToLeft != chunkParagraphRightToLeft) {
+      nearEdge += chunkRightToLeft ? chunkWidth : -chunkWidth;
+    }
+    return nearEdge;
   }
 };
 
@@ -2795,7 +2841,8 @@ struct PenContinuation {
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
                      const AnchorExclusions& exclusions, double indent,
                      const std::optional<PenContinuation>& continuation = std::nullopt,
-                     std::optional<PenContinuation>* next = nullptr) {
+                     std::optional<PenContinuation>* next = nullptr,
+                     bool paragraphRightToLeft = false) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
@@ -2813,8 +2860,12 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
     bounds.initial = *range.begin.anchorPosition;
   }
   const double recorded = bounds.initial;
+  const bool chunkParagraphRightToLeft =
+      range.begin.paragraphRightToLeft.value_or(paragraphRightToLeft);
   if (continuation) {
-    bounds.initial = continuation->originFor(recorded, range.begin.authoredShift);
+    bounds.initial =
+        continuation->originFor(recorded, range.begin.authoredShift, range.begin.rightToLeft,
+                                bounds.maximum - bounds.minimum, chunkParagraphRightToLeft);
   }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
@@ -2831,14 +2882,15 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
   if (next) {
     // Anchoring applies last and never moves the current text position.
-    *next =
-        PenContinuation{range.begin.rightToLeft, bounds.initial - (bounds.maximum - bounds.minimum),
-                        bounds.maximum, bounds.initial - recorded};
+    *next = PenContinuation{
+        chunkParagraphRightToLeft,       range.begin.rightToLeft, bounds.initial,
+        bounds.maximum - bounds.minimum, bounds.maximum,          bounds.initial - recorded};
   }
   return true;
 }
 
-/// Gives each chunk the anchor and inline direction of the span holding its first glyph.
+/// Gives each chunk the anchor and inline direction of the span holding its first glyph, or, for a
+/// chunk that carries its paragraph's detected direction, that direction.
 void ResolveChunkStyles(const std::vector<TextRun>& runs,
                         std::vector<ChunkBoundary>& chunkBoundaries,
                         const components::ComputedTextComponent& text) {
@@ -2850,6 +2902,13 @@ void ResolveChunkStyles(const std::vector<TextRun>& runs,
         chunk.rightToLeft = text.spans[ri].rightToLeftInline;
         break;
       }
+    }
+    if (chunk.paragraphRightToLeft) {
+      // The span's anchor is physical for its own direction; `start` and `end` follow the
+      // detected one instead.
+      chunk.textAnchor =
+          PhysicalTextAnchor(chunk.textAnchor, chunk.rightToLeft != *chunk.paragraphRightToLeft);
+      chunk.rightToLeft = *chunk.paragraphRightToLeft;
     }
   }
 }
@@ -2871,7 +2930,8 @@ double TakeFirstLineIndent(std::vector<TextRun>& runs, const TextAnchorRange& ra
 /// Retain original chunk indices until all groups are validated, then compact each run once.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical,
-                     const AnchorExclusions& exclusions, double firstLineIndent) {
+                     const AnchorExclusions& exclusions, double firstLineIndent,
+                     bool paragraphRightToLeft) {
   ResolveChunkStyles(runs, chunkBoundaries, text);
   std::vector<std::vector<bool>> rejected;
   double pendingIndent = firstLineIndent;
@@ -2886,7 +2946,7 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
     const bool continues = !vertical && !range.begin.absoluteX;
     std::optional<PenContinuation> next;
     if (!AnchorTextRange(runs, range, vertical, exclusions, indent,
-                         continues ? continuation : std::nullopt, &next)) {
+                         continues ? continuation : std::nullopt, &next, paragraphRightToLeft)) {
       MarkRejectedAnchorRange(runs, range, rejected);
     }
     continuation = next;
@@ -3632,20 +3692,34 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
   return result;
 }
 
+/// The font manager state a prepared result is checked against.
+struct FontResolutionState {
+  uint64_t revision = 0;                         ///< Current font resource revision.
+  uint64_t familySelectionRevision = 0;          ///< Revision of the last family selection change.
+  uint64_t hostFontKey = 0;                      ///< Identity of the lent host fonts, if any.
+  std::span<const FontFaceDependency> resolved;  ///< Current provider dependencies.
+};
+
 template <typename Geometry>
-bool FontDependenciesChanged(Geometry& geometry, uint64_t revision, uint64_t hostFontKey,
-                             std::span<const FontFaceDependency> resolved) {
+bool FontDependenciesChanged(Geometry& geometry, const FontResolutionState& state) {
   // Prepared under other lent fonts, or none: whatever it resolved may name faces this document
   // does not see now.
-  if (geometry.hostFontKey != hostFontKey) {
-    geometry.hostFontKey = hostFontKey;
-    geometry.fontResourceRevision = revision;
+  if (geometry.hostFontKey != state.hostFontKey) {
+    geometry.hostFontKey = state.hostFontKey;
+    geometry.fontResourceRevision = state.revision;
     return true;
   }
-  if (geometry.fontResourceRevision == revision) {
+  if (geometry.fontResourceRevision == state.revision) {
     return false;
   }
-  geometry.fontResourceRevision = revision;
+  // Family selection can move a lookup to another face without recording any dependency.
+  const bool preparedBeforeSelectionChange =
+      geometry.fontResourceRevision < state.familySelectionRevision;
+  geometry.fontResourceRevision = state.revision;
+  if (preparedBeforeSelectionChange) {
+    return true;
+  }
+  const std::span<const FontFaceDependency> resolved = state.resolved;
   for (const auto& dependency : geometry.fontDependencies) {
     const auto current = std::find_if(resolved.begin(), resolved.end(), [&](const auto& face) {
       return face.family == dependency.family && face.request == dependency.request;
@@ -3659,6 +3733,44 @@ bool FontDependenciesChanged(Geometry& geometry, uint64_t revision, uint64_t hos
     }
   }
   return false;
+}
+
+/// Appends each holder of @p Component whose prepared result is stale under @p state.
+template <typename Component>
+void AppendStaleFontResults(Registry& registry, const FontResolutionState& state,
+                            std::vector<Entity>& stale) {
+  for (auto view = registry.view<Component>(); const Entity entity : view) {
+    if (FontDependenciesChanged(view.template get<Component>(entity), state)) {
+      stale.push_back(entity);
+    }
+  }
+}
+
+/// Marks each stale holder of @p Component dirty with @p flags and appends it to @p changed.
+template <typename Component>
+void MarkStaleFontResults(Registry& registry, const FontResolutionState& state, uint16_t flags,
+                          std::vector<Entity>& changed) {
+  const size_t first = changed.size();
+  AppendStaleFontResults<Component>(registry, state, changed);
+  for (size_t i = first; i < changed.size(); ++i) {
+    registry.get_or_emplace<components::DirtyFlagsComponent>(changed[i]).mark(flags);
+  }
+}
+
+/// The computed shapes whose font-relative lengths may have changed. A `ch` length measured
+/// without a provider face records no dependency, so after a family selection change every
+/// computed shape may have measured the face the change replaced.
+std::vector<Entity> StaleFontMetricShapes(Registry& registry, const FontResolutionState& state,
+                                          bool familySelectionChanged) {
+  std::vector<Entity> shapes;
+  AppendStaleFontResults<components::FontMetricDependenciesComponent>(registry, state, shapes);
+  if (familySelectionChanged) {
+    for (const Entity entity : registry.view<components::ComputedPathComponent>(
+             entt::exclude<components::FontMetricDependenciesComponent>)) {
+      shapes.push_back(entity);
+    }
+  }
+  return shapes;
 }
 
 }  // namespace
@@ -3685,57 +3797,37 @@ bool TextEngine::needsFontResourceRefresh() const {
 
 std::vector<Entity> TextEngine::refreshFontResources() {
   fontManager_.refreshPendingFonts();
-  const uint64_t revision = fontManager_.fontResourceRevision();
-  const uint64_t hostFontKey = fontManager_.hostFontKey();
   const auto resolved = fontManager_.faceDependencies();
+  const FontResolutionState state{.revision = fontManager_.fontResourceRevision(),
+                                  .familySelectionRevision = fontManager_.familySelectionRevision(),
+                                  .hostFontKey = fontManager_.hostFontKey(),
+                                  .resolved = resolved};
 
   std::vector<Entity> changedRoots;
-  for (auto view = registry_.view<components::ComputedTextGeometryComponent>();
-       const Entity root : view) {
-    if (FontDependenciesChanged(view.get<components::ComputedTextGeometryComponent>(root), revision,
-                                hostFontKey, resolved)) {
-      changedRoots.push_back(root);
-    }
-  }
+  AppendStaleFontResults<components::ComputedTextGeometryComponent>(registry_, state, changedRoots);
   for (const Entity root : changedRoots) {
     components::InvalidateTextLayout(EntityHandle(registry_, root));
   }
-  for (auto view = registry_.view<components::FontMetricDependenciesComponent>();
-       const Entity entity : view) {
-    if (!FontDependenciesChanged(view.get<components::FontMetricDependenciesComponent>(entity),
-                                 revision, hostFontKey, resolved)) {
-      continue;
-    }
-    registry_.remove<components::ComputedPathComponent>(entity);
-    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
+  for (const Entity shape : StaleFontMetricShapes(
+           registry_, state, state.familySelectionRevision > observedFontResourceRevision_)) {
+    registry_.remove<components::ComputedPathComponent>(shape);
+    registry_.get_or_emplace<components::DirtyFlagsComponent>(shape).mark(
         components::DirtyFlagsComponent::Shape | components::DirtyFlagsComponent::LayoutCascade |
         components::DirtyFlagsComponent::RenderInstance);
-    changedRoots.push_back(entity);
+    changedRoots.push_back(shape);
   }
-  for (auto view = registry_.view<components::ComputedClipPathsComponent>();
-       const Entity entity : view) {
-    if (!FontDependenciesChanged(view.get<components::ComputedClipPathsComponent>(entity), revision,
-                                 hostFontKey, resolved)) {
-      continue;
-    }
-    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
-        components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Paint |
-        components::DirtyFlagsComponent::RenderInstance);
-    changedRoots.push_back(entity);
-  }
-  for (auto view = registry_.view<components::FontPaintDependenciesComponent>();
-       const Entity entity : view) {
-    if (!FontDependenciesChanged(view.get<components::FontPaintDependenciesComponent>(entity),
-                                 revision, hostFontKey, resolved)) {
-      continue;
-    }
-    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
-        components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Filter |
-        components::DirtyFlagsComponent::RenderInstance);
-    changedRoots.push_back(entity);
-  }
-  observedFontResourceRevision_ = revision;
-  observedHostFontKey_ = hostFontKey;
+  MarkStaleFontResults<components::ComputedClipPathsComponent>(
+      registry_, state,
+      components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Paint |
+          components::DirtyFlagsComponent::RenderInstance,
+      changedRoots);
+  MarkStaleFontResults<components::FontPaintDependenciesComponent>(
+      registry_, state,
+      components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Filter |
+          components::DirtyFlagsComponent::RenderInstance,
+      changedRoots);
+  observedFontResourceRevision_ = state.revision;
+  observedHostFontKey_ = state.hostFontKey;
   return changedRoots;
 }
 
@@ -3842,7 +3934,12 @@ FontHandle ResolveSpanFace(FontManager& fontManager,
       span.fontFamilies.empty() ? families : span.fontFamilies;
   FontHandle spanFont = FindFirstAvailableFont(fontManager, spanFamilies);
   if (!spanFont) {
-    spanFont = fallback;
+    // A list that matches nothing resolves to the user agent's default family at the span's own
+    // weight, style and stretch.
+    spanFont = fontManager.hasDefaultFamily()
+                   ? fontManager.defaultFont(span.fontWeight, static_cast<int>(span.fontStyle),
+                                             static_cast<int>(span.fontStretch))
+                   : fallback;
   }
   if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
       span.fontStretch != FontStretch::Normal) {
@@ -4307,6 +4404,8 @@ public:
     /// Source-order references alias the pre-reserved context storage for this paragraph.
     std::vector<const Context*> logical;
     bool hasAddressable = false;
+    /// Whether the paragraph's resolved base direction is right to left.
+    bool rightToLeft = false;
   };
 
   explicit NormalBidiPlan(Registry& registry, size_t* candidates, bool* preserved,
@@ -4335,6 +4434,7 @@ public:
       return reject();
     }
     resolveParagraphDirection(params);
+    enabled |= hasBidiEmbeddings(text, params);
     if (!enabled) {
       return true;
     }
@@ -4381,7 +4481,7 @@ public:
     if (isVertical(params.writingMode)) {
       return;
     }
-    paragraphBase_ = params.direction == Direction::Rtl ? 1 : 0;
+    paragraphBase_ = params.bidiPlaintext ? 2 : (params.direction == Direction::Rtl ? 1 : 0);
     paragraphOverride_ = params.bidiOverride;
     enabled |= paragraphBase_ != 0 || paragraphOverride_;
   }
@@ -4443,7 +4543,8 @@ public:
   BidiResourceBudget budget;
   TextBackend::ShapingContext::WorkBudget work{0, 0};
   bool enabled = false;
-  /// Explicit base level of every paragraph: 1 for an `rtl` horizontal `<text>`.
+  /// Base level of every paragraph: 1 for an `rtl` horizontal `<text>`, or 2 to detect it from the
+  /// first strong character under `unicode-bidi: plaintext`.
   uint8_t paragraphBase_ = 0;
   /// Whether the `<text>` element overrides every character to the base level.
   bool paragraphOverride_ = false;
@@ -4545,8 +4646,10 @@ private:
     for (size_t index = paragraph.first; index < paragraph.end; ++index) {
       codepoints.push_back(characters[index].codepoint);
     }
+    const auto controls = vertical ? std::vector<BidiParagraph::InjectedControl>()
+                                   : embeddingControls(paragraph, text);
     auto resolved = BidiParagraph::Analyze(std::move(codepoints), budget, paragraphBase_,
-                                           /*forceAnalysis=*/false, paragraphOverride_);
+                                           /*forceAnalysis=*/false, paragraphOverride_, controls);
     if (!resolved) {
       return false;
     }
@@ -4555,7 +4658,92 @@ private:
       return false;
     }
     paragraph.visual = std::move(*runs);
+    paragraph.rightToLeft = resolved->paragraphLevelAt(0) % 2 != 0;
     return prepareRuns(paragraph, text, vertical);
+  }
+
+  /// Whether a horizontal line has inline elements whose `unicode-bidi` adds controls. Vertical
+  /// lines keep a left-to-right base, as for `direction`.
+  static bool hasBidiEmbeddings(const components::ComputedTextComponent& text,
+                                const TextLayoutParams& params) {
+    return !isVertical(params.writingMode) &&
+           std::any_of(text.spans.begin(), text.spans.end(),
+                       [](const TextSpan& span) { return !span.bidiEmbeddings.empty(); });
+  }
+
+  /// Appends the controls that open \p embedding before scalar \p before, by the CSS Writing Modes
+  /// `unicode-bidi` table.
+  static void appendOpeners(const TextSpan::BidiEmbedding& embedding, uint32_t before,
+                            std::vector<BidiParagraph::InjectedControl>& controls) {
+    const bool rtl = embedding.rightToLeft;
+    switch (embedding.unicodeBidi) {
+      case UnicodeBidi::Normal: return;
+      case UnicodeBidi::Embed:
+        controls.push_back({before, rtl ? bidi_control::kRle : bidi_control::kLre});
+        return;
+      case UnicodeBidi::Isolate:
+        controls.push_back({before, rtl ? bidi_control::kRli : bidi_control::kLri});
+        return;
+      case UnicodeBidi::BidiOverride:
+        controls.push_back({before, rtl ? bidi_control::kRlo : bidi_control::kLro});
+        return;
+      case UnicodeBidi::IsolateOverride:
+        controls.push_back({before, bidi_control::kFsi});
+        controls.push_back({before, rtl ? bidi_control::kRlo : bidi_control::kLro});
+        return;
+      case UnicodeBidi::Plaintext: controls.push_back({before, bidi_control::kFsi}); return;
+    }
+  }
+
+  /// Appends the controls that close \p embedding before scalar \p before.
+  static void appendClosers(const TextSpan::BidiEmbedding& embedding, uint32_t before,
+                            std::vector<BidiParagraph::InjectedControl>& controls) {
+    switch (embedding.unicodeBidi) {
+      case UnicodeBidi::Normal: return;
+      case UnicodeBidi::Embed:
+      case UnicodeBidi::BidiOverride: controls.push_back({before, bidi_control::kPdf}); return;
+      case UnicodeBidi::IsolateOverride:
+        controls.push_back({before, bidi_control::kPdf});
+        controls.push_back({before, bidi_control::kPdi});
+        return;
+      case UnicodeBidi::Isolate:
+      case UnicodeBidi::Plaintext: controls.push_back({before, bidi_control::kPdi}); return;
+    }
+  }
+
+  /// Translates the `unicode-bidi` of inline elements into controls around their content in this
+  /// paragraph. An element that spans a paragraph boundary is closed at the end of one paragraph
+  /// and reopened at the start of the next.
+  std::vector<BidiParagraph::InjectedControl> embeddingControls(
+      const Paragraph& paragraph, const components::ComputedTextComponent& text) const {
+    std::vector<BidiParagraph::InjectedControl> controls;
+    std::span<const TextSpan::BidiEmbedding> open;
+    std::optional<size_t> currentSpan;
+    const auto transition = [&](std::span<const TextSpan::BidiEmbedding> next, uint32_t before) {
+      size_t common = 0;
+      while (common < open.size() && common < next.size() &&
+             open[common].element == next[common].element) {
+        ++common;
+      }
+      for (size_t index = open.size(); index > common; --index) {
+        appendClosers(open[index - 1], before, controls);
+      }
+      for (size_t index = common; index < next.size(); ++index) {
+        appendOpeners(next[index], before, controls);
+      }
+      open = next;
+    };
+    for (size_t index = paragraph.first; index < paragraph.end; ++index) {
+      const size_t span = characters[index].span;
+      if (currentSpan != span) {
+        currentSpan = span;
+        const auto& embeddings = text.spans[span].bidiEmbeddings;
+        transition({embeddings.data(), embeddings.size()},
+                   static_cast<uint32_t>(index - paragraph.first));
+      }
+    }
+    transition({}, static_cast<uint32_t>(paragraph.end - paragraph.first));
+    return controls;
   }
 
   std::pair<TextOrientation, bool> orientationKey(const components::ComputedTextComponent& text,
@@ -5192,6 +5380,9 @@ private:
       if (fontManager.hasFamily(family)) {
         add(family);
       }
+    }
+    if (fontManager.hasDefaultFamily()) {
+      add(fontManager.defaultFamily());
     }
     const size_t faceCount = fontManager.numFaces();
     for (size_t index = 0; index < faceCount; ++index) {
@@ -6427,7 +6618,7 @@ private:
   void resolveBaseFont() {
     baseFont_ = FindFirstAvailableFont(fontManager_, params_.fontFamilies);
     if (!baseFont_) {
-      baseFont_ = fontManager_.fallbackFont();
+      baseFont_ = fontManager_.defaultFont();
     }
     baseFontSizePx_ = CheckedFontSizePx(
         params_.fontSize.toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Mixed));
@@ -7536,7 +7727,7 @@ private:
     }
     placeDeferredTextPaths();
     applyTextAnchor(runs_, chunkBoundaries_, text_, vertical, anchorExclusions_,
-                    TextAreaIndent(params_));
+                    TextAreaIndent(params_), params_.direction == Direction::Rtl && !vertical);
   }
 
   struct BidiPlacement {
@@ -7619,6 +7810,10 @@ private:
     const auto& firstVisual = bidiPlacements_[order.front()];
     chunkBoundaries_.back().visualFirstGlyph = std::pair(firstVisual.run, firstVisual.glyph);
     chunkBoundaries_.back().authoredShift = vertical ? initial.dy : initial.dx;
+    if (params_.bidiPlaintext && !vertical) {
+      chunkBoundaries_.back().paragraphRightToLeft =
+          normalBidi_.paragraphs[initial.paragraph].rightToLeft;
+    }
   }
 
   double bidiCrossSpanKern(const BidiPlacement& item, std::optional<size_t> previous) const {
@@ -8002,7 +8197,7 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
     const auto capture = fontManager_.captureDependencies(dependencies);
     FontHandle font = FindFirstAvailableFont(fontManager_, fontFamilies);
     if (!font) {
-      font = fontManager_.fallbackFont();
+      font = fontManager_.defaultFont();
     }
 
     TextBackendSimple measurementBackend(fontManager_, registry_);

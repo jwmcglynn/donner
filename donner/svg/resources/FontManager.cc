@@ -569,7 +569,31 @@ std::string_view FontManager::faceFamilyName(size_t index) const {
 
 void FontManager::setGenericFamilyMapping(std::string_view genericName,
                                           std::string_view realFamily) {
-  genericFamilyMap_[StringUtils::ToLowerAscii(genericName)] = std::string(realFamily);
+  std::string& mapped = genericFamilyMap_[StringUtils::ToLowerAscii(genericName)];
+  if (mapped != realFamily) {
+    mapped = std::string(realFamily);
+    familySelectionRevision_ = ++fontResourceRevision_;
+  }
+}
+
+void FontManager::setDefaultFamily(std::string_view family) {
+  if (defaultFamily_ != family) {
+    defaultFamily_ = std::string(family);
+    familySelectionRevision_ = ++fontResourceRevision_;
+  }
+}
+
+bool FontManager::hasDefaultFamily() const {
+  return !defaultFamily_.empty() && hasFamily(defaultFamily_);
+}
+
+FontHandle FontManager::defaultFont(int weight, int style, int stretch) {
+  if (hasDefaultFamily()) {
+    if (const FontHandle font = findFont(defaultFamily_, weight, style, stretch)) {
+      return font;
+    }
+  }
+  return fallbackFont();
 }
 
 namespace {

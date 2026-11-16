@@ -2015,4 +2015,60 @@ TEST(FontManagerTest, BrokenOwnFaceDoesNotReleaseLentFaces) {
   EXPECT_EQ(manager.hostFontOverlayStats().evictions, 0u);
 }
 
+TEST(FontManagerTest, DefaultFontIsTheEmbeddedFallbackWithoutADefaultFamily) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Mapped Family"));
+
+  EXPECT_EQ(manager.defaultFont(), manager.fallbackFont());
+}
+
+TEST(FontManagerTest, DefaultFontResolvesTheDefaultFamilyThroughGenericNames) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Mapped Family"));
+  manager.setGenericFamilyMapping("serif", "Mapped Family");
+  manager.setDefaultFamily("serif");
+
+  const FontHandle font = manager.defaultFont();
+  EXPECT_EQ(font, manager.findFont("Mapped Family"));
+  EXPECT_NE(font, manager.fallbackFont());
+}
+
+TEST(FontManagerTest, DefaultFontFallsBackWhenTheDefaultFamilyIsUnavailable) {
+  Registry registry;
+  FontManager manager(registry);
+  manager.setDefaultFamily("Missing Family");
+  EXPECT_EQ(manager.defaultFont(), manager.fallbackFont());
+
+  manager.setDefaultFamily("");
+  EXPECT_EQ(manager.defaultFont(), manager.fallbackFont());
+}
+
+TEST(FontManagerTest, FamilySelectionChangesRecordTheirRevision) {
+  const FakeFontProvider provider({"Provided Family"});
+  Registry registry;
+  FontManager manager(registry);
+  EXPECT_EQ(manager.familySelectionRevision(), 0u);
+
+  manager.setDefaultFamily("serif");
+  const uint64_t defaultRevision = manager.fontResourceRevision();
+  EXPECT_GT(defaultRevision, 0u);
+  EXPECT_EQ(manager.familySelectionRevision(), defaultRevision);
+
+  manager.setDefaultFamily("serif");
+  manager.setGenericFamilyMapping("serif", "Mapped Family");
+  const uint64_t mappingRevision = manager.fontResourceRevision();
+  EXPECT_EQ(mappingRevision, defaultRevision + 1);
+  EXPECT_EQ(manager.familySelectionRevision(), mappingRevision);
+
+  manager.setGenericFamilyMapping("SERIF", "Mapped Family");
+  EXPECT_EQ(manager.fontResourceRevision(), mappingRevision);
+  EXPECT_EQ(manager.familySelectionRevision(), mappingRevision);
+
+  manager.setFontProvider(&provider);
+  EXPECT_EQ(manager.familySelectionRevision(), manager.fontResourceRevision());
+  EXPECT_GT(manager.familySelectionRevision(), mappingRevision);
+}
+
 }  // namespace donner::svg

@@ -686,6 +686,24 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "filter_attribute_edit_tests",
+    srcs = ["FilterAttributeEdit_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "geode",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_animation_presentation_tests",
     srcs = [
         "RendererAnimationCoordinateContext_tests.cc",
@@ -759,10 +777,12 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/components/text:components",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/resources:font_manager",
         "//donner/svg/resources:font_metadata",
         "//donner/svg/text:text_engine",

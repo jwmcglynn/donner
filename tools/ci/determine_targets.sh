@@ -27,6 +27,14 @@
 
 set -euo pipefail
 
+# The largest affected-target list, in bytes, that `determine` publishes. The CI lanes receive it
+# in one environment variable and the queries below pass it as one argument, and Linux rejects
+# any single environment or argument string over 128 KiB: a longer one stops every process of the
+# job from starting, from its first step. 96 KiB is above the longest lists recent pull requests
+# selected (about 85 KB, 1700 labels) and leaves room for the queries' quoting, two bytes per
+# label, and their expression text. A longer list selects //... instead.
+readonly kMaxSelectionBytes=98304
+
 # `bazel run` starts in the runfiles tree; the selection reads the checkout.
 if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
   cd "${BUILD_WORKSPACE_DIRECTORY}"
@@ -58,6 +66,18 @@ pr_meta() {
     base_sha="$GITHUB_SHA"
   fi
   echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+}
+
+# Selects //... when the affected-target list is longer than the lanes can receive.
+fall_back_if_too_large() {
+  local LC_ALL=C
+  if (( ${#1} <= kMaxSelectionBytes )); then
+    return 1
+  fi
+  echo "The affected-target list has ${#1} bytes, more than the ${kMaxSelectionBytes} a CI lane" \
+    "can receive in one environment variable; falling back to //...."
+  echo "fallback=true" >> "$GITHUB_OUTPUT"
+  echo "affected=" >> "$GITHUB_OUTPUT"
 }
 
 determine() {
@@ -133,10 +153,14 @@ determine() {
 
   # Workflow logic kept in scripts so the workflow files stay thin. A change to one of
   # them changes what CI runs exactly as a workflow edit does, so it selects the same
-  # coverage as a change to this workflow. List only scripts moved out of a workflow.
+  # coverage as a change to this workflow. List only scripts moved out of a workflow, and the
+  # lane entry point and table that hold the Bazel steps' commands.
   is_workflow_logic() {
     case "$1" in
       tools/ci/bazel_watchdog.sh|tools/ci/determine_targets.sh|tools/ci/fetch_bazel_diff.sh)
+        return 0
+        ;;
+      tools/ci/lane.py|tools/ci/lanes.py)
         return 0
         ;;
     esac
@@ -331,6 +355,12 @@ determine() {
     echo "affected=" >> "$GITHUB_OUTPUT"
     exit 0
   fi
+  # Before the queries that pass the list as one argument. The WebGPU reference is not decided
+  # yet, so it is reported unknown and runs.
+  if fall_back_if_too_large "$affected"; then
+    echo "wgpu_reference_unknown=true" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
 
   # The manual reference is removed from normal affected targets below. Capture its
   # pre-filter impact so only PRs that reach the pixel corpus run its 16 Linux shards.
@@ -432,6 +462,9 @@ determine() {
       done <<< "$manifest_tests"
       affected="$affected ${manifest_labels[*]}"
       echo "Added browser tests for changed dependency manifests: ${manifest_labels[*]}"
+      if fall_back_if_too_large "$affected"; then
+        exit 0
+      fi
     else
       echo "Could not list browser tests for changed dependency manifests; falling back to //...."
       echo "fallback=true" >> "$GITHUB_OUTPUT"

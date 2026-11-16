@@ -2137,6 +2137,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   params.textAnchor = properties.textAnchor.get().value();
   params.direction = properties.direction.get().value();
   params.bidiOverride = OverridesBidi(properties.unicodeBidi.get().value());
+  params.bidiPlaintext = properties.unicodeBidi.get().value() == UnicodeBidi::Plaintext;
   params.textDecoration = properties.textDecoration.get().value();
   params.writingMode = properties.writingMode.get().value();
 
