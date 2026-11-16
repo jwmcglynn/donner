@@ -1872,6 +1872,7 @@ TEST(FontManagerTest, DefaultFontFallsBackWhenTheDefaultFamilyIsUnavailable) {
 }
 
 TEST(FontManagerTest, FamilySelectionChangesRecordTheirRevision) {
+  const FakeFontProvider provider({"Provided Family"});
   Registry registry;
   FontManager manager(registry);
   EXPECT_EQ(manager.familySelectionRevision(), 0u);
@@ -1890,6 +1891,10 @@ TEST(FontManagerTest, FamilySelectionChangesRecordTheirRevision) {
   manager.setGenericFamilyMapping("SERIF", "Mapped Family");
   EXPECT_EQ(manager.fontResourceRevision(), mappingRevision);
   EXPECT_EQ(manager.familySelectionRevision(), mappingRevision);
+
+  manager.setFontProvider(&provider);
+  EXPECT_EQ(manager.familySelectionRevision(), manager.fontResourceRevision());
+  EXPECT_GT(manager.familySelectionRevision(), mappingRevision);
 }
 
 }  // namespace donner::svg

@@ -188,10 +188,10 @@ public:
   bool hasUnresolvedDependencies() const;
   /// Revision advanced when a resolved font change invalidates prepared text geometry.
   uint64_t fontResourceRevision() const { return fontResourceRevision_; }
-  /// The \ref fontResourceRevision at which \ref setDefaultFamily or \ref setGenericFamilyMapping
-  /// last changed family selection, or 0 if neither has. Such a change can move any family
-  /// lookup to another face without leaving a provider dependency behind, so a result prepared at
-  /// an earlier revision is stale.
+  /// The \ref fontResourceRevision at which \ref setDefaultFamily, \ref setGenericFamilyMapping or
+  /// \ref setFontProvider last changed family selection, or 0 if none has. Such a change can move
+  /// any family lookup to another face without leaving a provider dependency behind, so a result
+  /// prepared at an earlier revision is stale.
   uint64_t familySelectionRevision() const { return familySelectionRevision_; }
   /// Whether bounded dependency collection exceeded its resource limit.
   bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
@@ -482,7 +482,8 @@ public:
       providerDependencies_.clear();
       providerResolvedFamiliesLower_.clear();
       fontDependenciesOverflowed_ = false;
-      ++fontResourceRevision_;
+      // A family the previous provider lacked was resolved without recording a dependency.
+      familySelectionRevision_ = ++fontResourceRevision_;
       cache_.clear();
     }
   }
