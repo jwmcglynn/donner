@@ -4162,6 +4162,29 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   return static_cast<int>(chain.size());
 }
 
+void RendererDriver::renderPatternTileContents(RenderingInstanceView& view, Registry& registry,
+                                               Entity pattern,
+                                               const components::SubtreeInfo& subtree,
+                                               bool subtreeAhead) {
+  struct ActivePatternScope {
+    std::vector<Entity>& tiles;
+    ~ActivePatternScope() { tiles.pop_back(); }
+  };
+  activePatternTiles_.push_back(pattern);
+  const ActivePatternScope activePattern{activePatternTiles_};
+  RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_, registry);
+  if (subtreeAhead) {
+    traverseRange(view, registry, subtree.firstRenderedEntity, subtree.lastRenderedEntity);
+  } else {
+    // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
+    // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
+    const RenderingInstanceView::SavedState savedPosition = view.save();
+    view.restore(RenderingInstanceView::SavedState{0});
+    traverseRange(view, registry, subtree.firstRenderedEntity, subtree.lastRenderedEntity);
+    view.restore(savedPosition);
+  }
+}
+
 bool RendererDriver::isActivePatternTile(Entity pattern) const {
   return std::find(activePatternTiles_.begin(), activePatternTiles_.end(), pattern) !=
          activePatternTiles_.end();
@@ -4239,28 +4262,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   const std::optional<Vector2i> savedDrawSurfaceSize =
       std::exchange(drawSurfaceSize_, std::nullopt);
   surfaceFromCanvasTransform_ = placement->patternContentFromPatternTile;
-  {
-    struct ActivePatternScope {
-      std::vector<Entity>& tiles;
-      ~ActivePatternScope() { tiles.pop_back(); }
-    };
-    activePatternTiles_.push_back(target.entity());
-    const ActivePatternScope activePattern{activePatternTiles_};
-    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
-                                                                          registry);
-    if (subtreeAhead) {
-      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                    ref.subtreeInfo->lastRenderedEntity);
-    } else {
-      // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
-      // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
-      const RenderingInstanceView::SavedState savedPosition = view.save();
-      view.restore(RenderingInstanceView::SavedState{0});
-      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                    ref.subtreeInfo->lastRenderedEntity);
-      view.restore(savedPosition);
-    }
-  }
+  renderPatternTileContents(view, registry, target.entity(), *ref.subtreeInfo, subtreeAhead);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
   drawSurfaceSize_ = savedDrawSurfaceSize;

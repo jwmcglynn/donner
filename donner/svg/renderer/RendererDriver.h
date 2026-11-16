@@ -408,6 +408,9 @@ private:
   int renderMask(RenderingInstanceView& view, Registry& registry,
                  const components::RenderingInstanceComponent& instance,
                  const components::ResolvedMask& mask);
+  /// Render a pattern tile's content subtree with \p pattern on the active chain.
+  void renderPatternTileContents(RenderingInstanceView& view, Registry& registry, Entity pattern,
+                                 const components::SubtreeInfo& subtree, bool subtreeAhead);
   /// True when \p pattern's tile is already being rendered further up the active chain.
   bool isActivePatternTile(Entity pattern) const;
   void renderPattern(RenderingInstanceView& view, Registry& registry,

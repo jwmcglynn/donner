@@ -123,6 +123,55 @@ inline std::tuple<Entity, RcString> GetPaintTarget(Registry& registry, Entity li
   return std::make_tuple(entt::null, "");
 }
 
+/**
+ * Check that following a reference to \p targetEntity does not recurse into a shadow host parent or
+ * a reference already followed, and warn when it would.
+ *
+ * @return true when the reference may be followed.
+ */
+bool ValidateNoRecursion(const RcString& href, Entity targetEntity, const RecursionGuard& guard,
+                         const std::set<Entity>& shadowHostParents, ParseWarningSink& warningSink) {
+  if (shadowHostParents.count(targetEntity)) {
+    ParseDiagnostic err;
+    err.reason = std::string(
+        "Shadow tree indirect recursion detected, element "
+        "references a shadow host parent: '" +
+        href + "'");
+    warningSink.add(std::move(err));
+    return false;
+  }
+  if (guard.hasRecursion(targetEntity)) {
+    ParseDiagnostic err;
+    err.reason =
+        std::string("Shadow tree recursion detected, ignoring shadow tree for '" + href + '"');
+    warningSink.add(std::move(err));
+    return false;
+  }
+  return true;
+}
+
+/**
+ * True when a cloned element must be dropped because its own reference of \p branchType's kind
+ * points back at a host parent and would recurse.
+ *
+ * Fill and stroke branches never drop an element for this: there only that paint layer is invalid
+ * (SVG 2 Painting, "Specifying paint"), so the element is cloned and keeps its other layers, and
+ * the renderer stops the reference when its pattern is already on the active render chain. The
+ * element's own paint branch is still rejected by ShadowTreeSystem::populateInstance when it
+ * references itself or a host parent.
+ */
+bool BranchReferenceRecurses(Registry& registry, Entity lightTarget, ShadowBranchType branchType,
+                             const RecursionGuard& guard, const std::set<Entity>& shadowHostParents,
+                             ParseWarningSink& warningSink) {
+  if (branchType == ShadowBranchType::Main || branchType == ShadowBranchType::OffscreenFill ||
+      branchType == ShadowBranchType::OffscreenStroke) {
+    return false;
+  }
+  const auto [targetEntity, href] = GetPaintTarget(registry, lightTarget, branchType);
+  return targetEntity != entt::null &&
+         !ValidateNoRecursion(href, targetEntity, guard, shadowHostParents, warningSink);
+}
+
 std::set<Entity> CollectShadowHostParents(EntityHandle entity) {
   std::set<Entity> parents;
   for (Entity current = entity.get<donner::components::TreeComponent>().parent();
@@ -340,50 +389,17 @@ Entity ShadowTreeSystem::createShadowAndChildren(
     Registry& registry, ShadowBranchType branchType,
     ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard, Entity shadowParent,
     Entity lightTarget, const std::set<Entity>& shadowHostParents, ParseWarningSink& warningSink) {
-  auto validateNoRecursion = [&guard, &shadowHostParents, &warningSink](
-                                 const RcString& href, Entity targetEntity) -> bool {
-    if (shadowHostParents.count(targetEntity)) {
-      ParseDiagnostic err;
-      err.reason = std::string(
-          "Shadow tree indirect recursion detected, element "
-          "references a shadow host parent: '" +
-          href + "'");
-      warningSink.add(std::move(err));
-
-      return false;
-    } else if (guard.hasRecursion(targetEntity)) {
-      ParseDiagnostic err;
-      err.reason =
-          std::string("Shadow tree recursion detected, ignoring shadow tree for '" + href + '"');
-      warningSink.add(std::move(err));
-
-      return false;
-    }
-
-    return true;
-  };
-
-  // A cloned element whose own reference of this branch's kind points back at a host parent would
-  // recurse; drop it. Fill and stroke branches are the exception: there only that paint layer is
-  // invalid (SVG 2 Painting, "Specifying paint"), so the element is cloned and keeps its other
-  // layers, and the renderer stops the reference when its pattern is already on the active render
-  // chain. The element's own paint branch is still rejected by \ref populateInstance when it
-  // references itself or a host parent.
-  if (branchType != ShadowBranchType::Main && branchType != ShadowBranchType::OffscreenFill &&
-      branchType != ShadowBranchType::OffscreenStroke) {
-    if (auto [targetEntity, href] = GetPaintTarget(registry, lightTarget, branchType);
-        targetEntity != entt::null) {
-      if (!validateNoRecursion(href, targetEntity)) {
-        return entt::null;
-      }
-    }
+  if (BranchReferenceRecurses(registry, lightTarget, branchType, guard, shadowHostParents,
+                              warningSink)) {
+    return entt::null;
   }
 
   // Iterate over all children and create Entities and ShadowEntityComponents for each of them for
   // the main shadow tree.
   if (const auto* nestedShadow = registry.try_get<ShadowTreeComponent>(lightTarget)) {
     if (auto targetEntity = nestedShadow->mainTargetEntity(registry)) {
-      if (!validateNoRecursion(nestedShadow->mainHref().value_or(""), targetEntity.value())) {
+      if (!ValidateNoRecursion(nestedShadow->mainHref().value_or(""), targetEntity.value(), guard,
+                               shadowHostParents, warningSink)) {
         return entt::null;
       }
 
