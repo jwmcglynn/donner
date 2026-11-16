@@ -222,7 +222,7 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   });
   assert.doesNotThrow(() =>
     assertListsLoadedFiles("synthetic_lane", target, {
-      runfilesFrom: ["data = [\"playwright.config.js\", \"test-timing.cjs\"],"],
+      runfilesFrom: ["data = [\"playwright.config.js\", \"browser-launch-probe.js\", \"test-timing.cjs\"],"],
     })
   );
 });
@@ -717,6 +717,66 @@ test("every Bazel Playwright config is loaded by a Bazel lane", () => {
   }
   for (const config of bazelConfigs) {
     assert.ok(loaded.has(config), `${config} is loaded by no Bazel lane; delete it with its lane`);
+  }
+});
+
+// A browser that cannot start must fail a Bazel lane once, before its first case, not once per
+// case into the Bazel timeout. The Bazel base config names the launch probe; each lane's config
+// either inherits it or names a setup that runs it. Manual lanes (the performance driver, which
+// runs under its own watchdog, and the font reference probe) are run by hand and keep their own
+// setup.
+test("every Bazel browser lane probes its browser launch before the first case", () => {
+  const base = readFileSync(path.join(testDirectory, "playwright.bazel.config.js"), "utf8");
+  assert.match(base, /\n {2}globalSetup: require\.resolve\("\.\/browser-launch-probe\.js"\),\n/);
+  const probing = new Set(["browser-launch-probe.js", "prepare-browser-archives.js"]);
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const configs = new Set();
+  for (const [, body] of buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)) {
+    const { laneName, tags } = parseBrowserLane(body);
+    if (tags.includes("manual")) continue;
+    const config = /--config=\$\(rootpath :([^)]+)\)/.exec(body)?.[1];
+    assert.ok(config, `${laneName} names its Playwright config`);
+    configs.add(config);
+  }
+  for (const config of configs) {
+    const source = readFileSync(path.join(testDirectory, config), "utf8");
+    const setup = /globalSetup: require\.resolve\("\.\/([^"]+)"\)/.exec(source)?.[1];
+    if (setup === undefined) {
+      assert.match(source, /require\("\.\/playwright\.bazel\.config\.js"\)/, config);
+      assert.match(source, /\.\.\.(?:base|baseConfig),/, `${config} inherits the base setup`);
+      assert.doesNotMatch(source, /globalSetup/, config);
+    } else {
+      assert.ok(probing.has(setup), `${config} global setup ${setup} must probe the launch`);
+    }
+  }
+});
+
+// The probe launches every project of a lane's config. That matches what the lane runs only while
+// no target narrows a probed config with a project filter. The performance targets pass one
+// project each to their driver, whose config runs its own watchdog setup instead of the probe.
+test("no project filter narrows a config that probes the browser launch", () => {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const probing = new Set(["browser-launch-probe.js", "prepare-browser-archives.js"]);
+  const configSetup = (config) => {
+    const source = readFileSync(path.join(testDirectory, config), "utf8");
+    const named = /globalSetup: require\.resolve\("\.\/([^"]+)"\)/.exec(source)?.[1];
+    if (named !== undefined) return named;
+    return /require\("\.\/playwright\.bazel\.config\.js"\)/.test(source)
+      ? "browser-launch-probe.js"
+      : undefined;
+  };
+  // Every BUILD block (a target, or a list of generated targets) that passes --project.
+  const filtered = buildFile.split(/\n\n(?=\S)/).filter((block) => /--project\b/.test(block));
+  assert.ok(filtered.length > 0, "the performance targets pass a project each");
+  for (const block of filtered) {
+    const configs = [...new Set(block.match(/playwright\.[\w.-]+\.config\.js/g) ?? [])];
+    assert.ok(configs.length > 0, `a project filter without a config: ${block.slice(0, 80)}`);
+    for (const config of configs) {
+      assert.ok(
+        !probing.has(configSetup(config)),
+        `${config} probes every project, so no target may filter its projects`,
+      );
+    }
   }
 });
 
