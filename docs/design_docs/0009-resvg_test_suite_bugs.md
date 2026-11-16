@@ -76,11 +76,6 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/marker            | with-an-image-child                   | We (correctly) render the image child                          |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
-| text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
-| text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
-
-`named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
-named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
 
 `with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
 (`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
@@ -96,6 +91,19 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 `with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
+
+### Named font sizes (CSS Fonts 4 table, a maintainer decision)
+
+The absolute-size table in CSS Fonts 4 section 2.5 is a guideline for user agents, not a
+requirement, so these references are not wrong per spec. Donner follows that table (3/5, 3/4,
+8/9, 1, 6/5, 3/2 and 2 times `medium`) by maintainer decision; the vendored PNGs step by 1.2 per
+keyword, as CSS 2 did. `testdata/golden/README.md` has the measured sizes, including the table
+current browsers use.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| text/font-size | named-value | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
+| text/font-size | named-value-without-a-parent | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
 
 ### Allowed nearest-neighbor reference differences
 

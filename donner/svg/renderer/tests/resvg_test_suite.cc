@@ -1442,13 +1442,18 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/font-size",
             {
+                // The PNGs scale named sizes by the CSS 2 factor of 1.2 per step; Donner follows
+                // the CSS Fonts 4 absolute-size table. testdata/golden/README.md has the evidence.
                 {"named-value-without-a-parent.svg",
+                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                            "donner-named-value-without-a-parent.png")
+                     .withReason("Reference disagreement: Donner follows the CSS Fonts 4 "
+                                 "absolute-size table; the PNG steps by 1.2 as CSS 2 did")},
+                {"named-value.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-named-value-without-a-parent.png")
-                     .withReason("Donner uses CSS Fonts Level 4, which has")},
-                {"named-value.svg", Params::WithGoldenOverride(
-                                        "donner/svg/renderer/testdata/golden/resvg-named-value.png")
-                                        .withReason("Donner uses CSS Fonts Level 4, which has")},
+                     "donner/svg/renderer/testdata/golden/donner-named-value.png")
+                     .withReason("Reference disagreement: Donner follows the CSS Fonts 4 "
+                                 "absolute-size table; the PNG steps by 1.2 as CSS 2 did")},
                 {"negative-size.svg", Params::UndefinedBehavior("negative font size")},
             })),
         ValuesIn(ActiveComparisonModes())),

@@ -57,3 +57,40 @@ This reference qualifies the full-text CPU rendering path. Geode currently skips
 bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
+
+## Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent`
+
+`donner-named-value.png` and `donner-named-value-without-a-parent.png` are 500x500 renderings by
+the software renderer with simple text at commit `21c59c75`, at default settings. Full text
+differs from `donner-named-value.png` by 13 pixels and from the other by 0, on macOS and on
+Linux aarch64; Geode does not render these text rows.
+
+Each row sizes rects of `10em` under the named `font-size` keywords. The em sizes in pixels,
+measured from the rect coverage (the SVG sets `font-size="12"` on the group):
+
+| Renderer | xx-small | x-small | small | medium | large | x-large | xx-large |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Donner | 7.2 | 9 | 10.67 | 12 | 14.4 | 18 | 24 |
+| Vendored PNG and resvg v0.49.0 | 6.94 | 8.33 | 10 | 12 | 14.4 | 17.28 | 20.74 |
+| Chromium 147 and Firefox 153 | 9 | 10 | 13 | 16 | 18 | 24 | 32 |
+
+`larger`, `smaller` and percentages agree in all four renderers (14.4, 10 and 6).
+
+Donner applies the absolute-size table of CSS Fonts 4 section 2.5 (3/5, 3/4, 8/9, 1, 6/5, 3/2 and
+2 times `medium`) with `medium` at 12 px. That table is a guideline for user agents, not a
+requirement. The references step by a factor of 1.2 per keyword, the CSS 2 table. The browsers
+resolve the keywords against their own 16 px `medium`, not the inherited 12 px, with the legacy
+integer table (9, 10, 13, 16, 18, 24, 32). `results.csv` records all three browsers passing the
+vendored PNGs; that is a visual verdict. Following CSS Fonts 4 here is a maintainer decision.
+
+| Golden | PNG SHA-256 |
+| --- | --- |
+| `donner-named-value.png` | `7e65b966683f6daad8a6b931d67bc8a61be0de4a29f606071b3967cfa22fd3cf` |
+| `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` |
+
+To regenerate, delete a file and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*TextFontSize*named_value*'
+```
