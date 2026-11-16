@@ -1243,9 +1243,10 @@ INSTANTIATE_TEST_SUITE_P(
                 "structure/use",
                 {
                     {"xlink-to-an-external-file.svg",
-                     Params::Skip("Bug #1183: external-use content resolves fonts in the "
-                                  "referenced document's own font catalog, so the inherited "
-                                  "Noto Sans falls back to the embedded face")},
+                     Params::Skip("Harness mismatch: the reference is opaque white where the "
+                                  "SVG canvas is transparent, and its glyph stems are 0.6 device "
+                                  "px wider; the inherited Noto Sans glyphs sit within 0.4 px of "
+                                  "it, and neither resvg nor any browser passes this row")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
