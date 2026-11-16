@@ -22,6 +22,20 @@
 
 namespace donner::gpu::tests {
 
+/// Blurred alpha the (0.5, -0.5) shadow offset reads for output texel (\p x, \p y) of a 4x4
+/// texture: the mean of texels x - 1 and x in rows y and y + 1, with transparent texels outside.
+/// @param values RGBA texels. @param x Output column. @param y Output row.
+inline float HalfPixelShadowAlpha(const std::array<float, 64>& values, int32_t x, int32_t y) {
+  float sum = 0;
+  for (int32_t sampleY : {y, y + 1}) {
+    for (int32_t sampleX : {x - 1, x}) {
+      const bool inside = sampleX >= 0 && sampleY >= 0 && sampleX < 4 && sampleY < 4;
+      sum += inside ? values[(sampleY * 4 + sampleX) * 4 + 3] : 0.0f;
+    }
+  }
+  return sum / 4;
+}
+
 /// Composes a translucent blue shadow beneath a translucent red source at half-pixel offsets,
 /// which blend the four blurred texels around each shifted position.
 /// @param device Native device with bounded wait/readback support.
@@ -151,18 +165,8 @@ void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView
       for (int32_t x = 0; x < 4; ++x) {
         const size_t offset = (y * 4 + x) * 4;
         std::copy_n(sourceValues.begin() + offset, 4, expected->data().begin() + offset);
-        // The offset (0.5, -0.5) samples the blurred alpha at (x - 0.5, y + 0.5), halfway between
-        // texels x - 1 and x and between rows y and y + 1.
-        const auto& alphaValues = aliasedInputs ? sourceValues : blurredValues;
-        const auto alphaAt = [&](int32_t sampleX, int32_t sampleY) {
-          return sampleX < 0 || sampleY < 0 || sampleX >= 4 || sampleY >= 4
-                     ? 0.0f
-                     : alphaValues[(sampleY * 4 + sampleX) * 4 + 3];
-        };
-        const float upper = alphaAt(x - 1, y) + 0.5f * (alphaAt(x, y) - alphaAt(x - 1, y));
-        const float lower =
-            alphaAt(x - 1, y + 1) + 0.5f * (alphaAt(x, y + 1) - alphaAt(x - 1, y + 1));
-        const float shadowAlpha = 0.5f * (upper + 0.5f * (lower - upper));
+        const float shadowAlpha =
+            0.5f * HalfPixelShadowAlpha(aliasedInputs ? sourceValues : blurredValues, x, y);
         const float remaining = 1 - sourceValues[offset + 3];
         expected->data()[offset + 2] += shadowAlpha * remaining;
         expected->data()[offset + 3] += shadowAlpha * remaining;
