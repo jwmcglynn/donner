@@ -40,6 +40,35 @@ RENDERER_PAYLOAD_CEILINGS = {
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
+# Scripts that hold step bodies moved out of a workflow. The target selection treats a change to
+# one exactly as a change to the CI workflow.
+WORKFLOW_LOGIC_SCRIPTS = ("tools/ci/bazel_watchdog.sh", "tools/ci/determine_targets.sh",
+                          "tools/ci/fetch_bazel_diff.sh")
+# The start of the target selection's list of those scripts.
+WORKFLOW_LOGIC_MARKER = "          # Workflow logic kept in scripts"
+# Other repository scripts the CI workflow and its composite actions run, each with the test
+# target whose data lists it, so bazel-diff selects that test when the script changes. None marks
+# a script no target lists yet; the reason says why that is accepted.
+TRACKED_CI_SCRIPTS = {
+    "tools/browser_gpu_test_summary.py": "//tools:browser_gpu_test_summary_tests",
+    "tools/ci/cmake_consumer.sh": "//tools/ci:cmake_consumer_tests",
+    "tools/ci/free_hosted_macos_disk.sh": "//tools/ci:free_hosted_macos_disk_tests",
+    "tools/ci/gatekeeper.py": "//tools/ci:gatekeeper_tests",
+    "tools/ci_bazel_test.sh": "//tools:ci_bazel_test_tests",
+    "tools/ci_coverage_contract.py": "//tools:ci_coverage_contract_tests",
+    "tools/ci_diagnostics_report.py": "//tools:ci_diagnostics_report_tests",
+    "tools/ci_disk_cache.py": "//tools:ci_disk_cache_tests",
+    "tools/ci_metal_toolchain.py": "//tools:ci_metal_toolchain_tests",
+    "tools/ci_remote_gpu_targets.py": "//tools:ci_remote_gpu_targets",
+    "tools/ci_select_macos_xcode.sh": "//tools:macos_cache_key_parity_tests",
+}
+UNTRACKED_CI_SCRIPTS = {
+    "tools/ci_check_runner_disk.sh":
+        "Fails a step early when the runner's disk is short; no test lists it yet, so a change "
+        "to it is covered only by the runs that use it.",
+}
+_RUN = re.compile(r"^(?P<indent> *)(?P<item>- )?run: *(?P<value>.*)$")
+_SCRIPT_PATH = re.compile(r"(?<![\w/.-])((?:tools|build_defs)/[\w./-]+\.(?:sh|py))\b")
 # How a step rejects a target list that is empty or only whitespace, applied to a variable name.
 EMPTY_SELECTION_GUARD = 'if [[ "$%s" =~ ^[[:space:]]*$ ]]; then'
 # Each Editor WASM build step that runs Bazel or stages an artifact, in workflow order, with the one
@@ -89,6 +118,41 @@ def _declared_payload_ceilings(size_test_arguments, enforced=ENFORCED_PAYLOAD_CE
     return ceilings
 
 
+_HEREDOC_COMMAND = re.compile(r"^\s*(?:cat|tee)\b[^\n]*<<[^\n]*$", re.MULTILINE)
+_FILE_WRITE = re.compile(r"(?:^|\s)(?:>>?|tee)\s*[^\s|&;<>]")
+
+
+def _heredoc_file_writes(text):
+    """Lines that write a heredoc to a file with `cat` or `tee`."""
+    return [line.strip() for line in _HEREDOC_COMMAND.findall(text)
+            if _FILE_WRITE.search(re.sub(r"<<-?\s*\S+", "", line))]
+
+
+def _block_lines(lines, indent):
+    """The leading lines indented past `indent`, as a block scalar's content, without comments."""
+    body = []
+    for line in lines:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        body.append(line)
+    return [line for line in body if not line.lstrip().startswith("#")]
+
+
+def _run_bodies(text):
+    """The commands of every `run:` step in a workflow or action, without comment lines."""
+    lines = text.splitlines()
+    bodies = []
+    for index, line in enumerate(lines):
+        match = _RUN.match(line)
+        value = match.group("value") if match else ""
+        if value in ("|", ">", "|-", ">-"):
+            indent = len(match.group("indent")) + (2 if match.group("item") else 0)
+            bodies.append("\n".join(_block_lines(lines[index + 1:], indent)).rstrip("\n"))
+        elif value:
+            bodies.append(value)
+    return bodies
+
+
 class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_executable_stubs_are_shared_for_the_test_class(self):
         stub = self.fixture_bin / "python3"
@@ -128,6 +192,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/tests/RunEditorWindowVulkanSurfaceTests.sh"
         )
         cls.ci_bazel_test = _repository_text("tools/ci_bazel_test.sh")
+        cls.bazel_watchdog = _repository_text("tools/ci/bazel_watchdog.sh")
+        cls.determine_targets = _repository_text("tools/ci/determine_targets.sh")
 
     def _job_body(self, job, workflow=None):
         workflow = self.main if workflow is None else workflow
@@ -468,8 +534,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(
             "      browser_affected: ${{ steps.determine.outputs.browser_affected }}\n",
             determine)
-        script = determine.split("        name: Determine affected Bazel targets\n", 1)[1]
-        script = script.split("\n      - ", 1)[0]
+        self.assertIn("        name: Determine affected Bazel targets\n        shell: bash\n"
+                      "        run: tools/ci/determine_targets.sh determine\n", determine)
+        script = self._selection_script()
         query = 'attr(\\"tags\\", \\"launches-browser\\", set($affected))'
         self.assertIn(query, script)
         # The query runs on the filtered selection, against the PR's merge graph.
@@ -477,7 +544,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn('cd "$head_dir"', script.split(query, 1)[0].rsplit("if ", 1)[1])
         failed = script.split('echo "Browser target query failed', 1)[1].split("fi\n", 1)[0]
         self.assertIn('echo "browser_affected=true" >> "$GITHUB_OUTPUT"', failed)
-        self.assertEqual(script.count("browser_affected="), 3)
+        # The query's two results, its failure, and a proven empty selection.
+        self.assertEqual(script.count("browser_affected="), 4)
         # Dependency manifests reach Bazel through module extensions, which bazel-diff cannot
         # attribute, so a change to any of them adds every browser test to the selection.
         manifests = script.split("browser_inputs_changed=false\n", 1)[1].split("esac", 1)[0]
@@ -720,14 +788,76 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(list(root.glob("browser-stall-window-*.raw")), [])
 
     def _heartbeat_script(self):
-        match = re.search(
-            r"cat > \"\$DIAG_DIR/run_bazel_with_heartbeat\.sh\" <<'EOF'\n"
-            r"(?P<body>.*?)^\s+EOF$",
-            self.main,
-            re.MULTILINE | re.DOTALL,
-        )
-        self.assertIsNotNone(match, "heartbeat wrapper heredoc not found")
-        return textwrap.dedent(match.group("body"))
+        return self.bazel_watchdog
+
+    def _selection_script(self):
+        """The body of determine_targets.sh's `determine`, indented as a workflow step body.
+
+        Fragments cut from it dedent to the commands the determine-targets job runs.
+        """
+        body = self.determine_targets.split("\ndetermine() {\n", 1)[1].split("\n}\n", 1)[0]
+        return "".join(" " * 8 + line if line.strip() else line
+                       for line in body.splitlines(keepends=True))
+
+    def _workflow_logic_function(self, determine):
+        """The selection's `is_workflow_logic` function, which lists WORKFLOW_LOGIC_SCRIPTS."""
+        start = determine.index(WORKFLOW_LOGIC_MARKER)
+        end = determine.index("\n          }\n", start) + len("\n          }\n")
+        return textwrap.dedent(determine[start:end])
+
+    def test_workflow_logic_scripts_select_workflow_coverage(self):
+        function = self._workflow_logic_function(self._selection_script())
+        listed = [path for arm in re.findall(r"^\s+([\w./|-]+)\)$", function, re.MULTILINE)
+                  for path in arm.split("|")]
+        self.assertEqual(sorted(listed), sorted(WORKFLOW_LOGIC_SCRIPTS))
+        for path in WORKFLOW_LOGIC_SCRIPTS:
+            # Each is a step body some workflow step runs, kept executable.
+            self.assertIn(path, self.main, path)
+            mode = Path(runfiles.Create().Rlocation("donner/" + path)).stat().st_mode
+            self.assertTrue(mode & 0o111, path)
+
+    def test_workflows_do_not_write_scripts_from_heredocs(self):
+        """Step logic lives in tested scripts, not in files a step writes from a heredoc."""
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        paths = (sorted(workflows.glob("*.y*ml"))
+                 + sorted((workflows.parent / "actions").glob("*/action.y*ml")))
+        self.assertGreater(len(paths), 10)
+        for path in paths:
+            self.assertEqual([], _heredoc_file_writes(path.read_text(encoding="utf-8")),
+                             path.name)
+        for line in ('cat > "$DIR/run.sh" <<\'EOF\'', "cat <<EOF > run.sh", "tee run.sh <<EOF",
+                     "cat >>run.sh <<-EOF"):
+            self.assertEqual([line], _heredoc_file_writes("  " + line + "\n"), line)
+        for line in ("python3 - <<'PY'", "echo 'cat > /dev/null'", "cat <<EOF | sort",
+                     "cat run.sh"):
+            self.assertEqual([], _heredoc_file_writes("  " + line + "\n"), line)
+
+    def test_every_script_the_ci_workflow_runs_is_tracked(self):
+        """A script the CI workflow runs must reach the target selection some way.
+
+        Either it holds workflow logic and selects full coverage like a workflow change, or a test
+        target lists it as data, so bazel-diff selects that test when it changes.
+        """
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        texts = [self.main, (workflows / "pr_base_change.yml").read_text(encoding="utf-8")]
+        texts += [path.read_text(encoding="utf-8")
+                  for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
+        invoked = {path for text in texts for body in _run_bodies(text)
+                   for path in _SCRIPT_PATH.findall(body)}
+        self.assertEqual(sorted(invoked), sorted(set(WORKFLOW_LOGIC_SCRIPTS)
+                                                 | set(TRACKED_CI_SCRIPTS)
+                                                 | set(UNTRACKED_CI_SCRIPTS)))
+        builds = {"//tools": _repository_text("tools/BUILD.bazel"),
+                  "//tools/ci": self.ci_target_definitions}
+        for path, target in TRACKED_CI_SCRIPTS.items():
+            with self.subTest(path=path):
+                package, name = target.split(":")
+                self.assertIn('"%s"' % path.rsplit("/", 1)[1], _rule_text(builds[package], name))
+        self.assertEqual(_run_bodies("      - run: tools/a.sh\n        run: |\n          # x\n"
+                                     "          tools/b.sh\n      - name: c\n"),
+                         ["tools/a.sh", "          tools/b.sh"])
 
     def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1126,16 +1256,31 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_bazel_version_change_selects_full_suite_before_graph_hashing(self):
         """A Bazel upgrade changes the query graph, not just two version files."""
-        job = self._job_body("determine-targets")
+        job = self._selection_script()
         start = job.index("          should_fallback=false\n")
         end = job.index('          work_dir="$(mktemp -d)"', start)
         script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        # A full selection still hashes the revision once, so a change that breaks the hashing
+        # fails its own pull request; //tools/ci:determine_targets_tests runs the real call.
+        script += 'generate_hashes() { echo "self_check=hashed" >> "$GITHUB_OUTPUT"; }\n'
+        script += self._workflow_logic_function(job)
         script += textwrap.dedent(job[start:end])
         script += 'echo "incremental=true" >> "$GITHUB_OUTPUT"\n'
+        full = "self_check=hashed\nfallback=true\naffected=\n"
         for changed_files, expected in (
-            (".bazelversion\nexamples/.bazelversion", "fallback=true\naffected=\n"),
-            ("MODULE.bazel", "fallback=true\naffected=\n"),
+            (".bazelversion\nexamples/.bazelversion", full),
+            ("MODULE.bazel", full),
             ("donner/base/Utils.h", "incremental=true\n"),
+            # A script that holds a workflow's step logic selects what a workflow change does;
+            # the rest of tools/ci reaches the build graph and bazel-diff as usual.
+            *[(path, full) for path in WORKFLOW_LOGIC_SCRIPTS],
+            ("tools/ci/lane.sh", "incremental=true\n"),
+            # Rule definitions under build_defs reach every target; its other files are ordinary
+            # sources. Only this workflow and its base-change caller define these lanes.
+            ("build_defs/rules.bzl", full),
+            ("build_defs/check_banned_patterns.py", "incremental=true\n"),
+            (".github/workflows/pr_base_change.yml", full),
+            (".github/workflows/lint.yml", "incremental=true\n"),
         ):
             with self.subTest(changed_files=changed_files):
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -1219,8 +1364,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_linux_wgpu_resvg_reference_is_selected_only_for_relevant_prs(self):
         """The manual comparison and dependency audit stay in the explicit Linux suite."""
-        determine = self._job_body("determine-targets")
-        self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", determine)
+        job = self._job_body("determine-targets")
+        self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", job)
+        determine = self._selection_script()
         start = determine.index("          # The manual reference is removed")
         # The reference selection ends where the macos-metal selection begins.
         end = determine.index("          # BEGIN macos-metal selection", start)
@@ -1275,9 +1421,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(1, empty.returncode)
             self.assertIn("Linux WebGPU resvg suite has no test target", empty.stdout)
 
-        selector = self._step_body(determine, "Select Linux WebGPU resvg reference")
+        selector = self._step_body(job, "Select Linux WebGPU resvg reference")
         self.assertIn("if: github.event_name == 'pull_request'", selector)
-        path_start = determine.index("          # Direct renderer/GPU/image inputs")
+        path_start = determine.index(WORKFLOW_LOGIC_MARKER)
         path_end = determine.index("          should_fallback=false", path_start)
         path_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         path_script += textwrap.dedent(determine[path_start:path_end])
@@ -1291,6 +1437,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             (".github/workflows/main.yml", "true"),
             (".github/workflows/lint.yml", "false"),
             ("donner/base/Utils.h", "false"),
+            *[(path, "true") for path in WORKFLOW_LOGIC_SCRIPTS],
+            ("tools/ci/lane.sh", "false"),
+            # Like the full fallback, only build_defs' rule definitions and BUILD file.
+            ("build_defs/rules.bzl", "true"),
+            ("build_defs/BUILD.bazel", "true"),
+            ("build_defs/check_banned_patterns.py", "false"),
         ):
             with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "outputs"
@@ -1301,7 +1453,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual("wgpu_reference_changed=%s\n" % expected, output.read_text())
 
-        script = textwrap.dedent(selector.split("        run: |\n", 1)[1])
+        self.assertIn("run: tools/ci/determine_targets.sh select-wgpu-reference\n", selector)
+        passed = {"WGPU_REFERENCE_AFFECTED": "wgpu_reference_affected",
+                  "WGPU_REFERENCE_CHANGED": "wgpu_reference_changed",
+                  "WGPU_REFERENCE_UNKNOWN": "wgpu_reference_unknown", "FULL_TEST": "full_test"}
+        for variable, output_name in passed.items():
+            self.assertIn("          %s: ${{ steps.determine.outputs.%s }}\n"
+                          % (variable, output_name), selector)
+        script_path = runfiles.Create().Rlocation("donner/tools/ci/determine_targets.sh")
         for impacted, changed, unknown, full_test, expected in (
             ("true", "false", "", "false", "true"),
             ("", "true", "", "false", "true"),
@@ -1312,18 +1471,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             with self.subTest(impacted=impacted, changed=changed,
                               unknown=unknown, full_test=full_test), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "outputs"
-                configured = script.replace(
-                    "${{ steps.determine.outputs.wgpu_reference_affected }}", impacted
-                ).replace(
-                    "${{ steps.determine.outputs.wgpu_reference_changed }}", changed
-                ).replace(
-                    "${{ steps.determine.outputs.wgpu_reference_unknown }}", unknown
-                ).replace(
-                    "${{ steps.determine.outputs.full_test }}", full_test
-                )
+                values = dict(zip(passed, (impacted, changed, unknown, full_test)))
                 result = self._run_script(
-                    "#!/usr/bin/env bash\n" + configured, [],
-                    env={**os.environ, "GITHUB_OUTPUT": str(output)},
+                    'exec /bin/bash "$1" select-wgpu-reference\n', [script_path],
+                    env={**os.environ, **values, "GITHUB_OUTPUT": str(output)},
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual("run=%s\n" % expected, output.read_text())
@@ -1345,9 +1496,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_native_metal_job_is_selected_only_for_prs_that_reach_its_suites(self):
         """The macos-metal job runs when the affected set reaches its suites, fails closed."""
-        determine = self._job_body("determine-targets")
         self.assertIn("      metal_affected: ${{ steps.determine.outputs.metal_affected }}\n",
-                      determine)
+                      self._job_body("determine-targets"))
+        determine = self._selection_script()
         start = determine.index("          # BEGIN macos-metal selection (metal_affected).\n")
         end = determine.index("          # END macos-metal selection.\n", start)
         # It reads the selection before manual targets are filtered out.

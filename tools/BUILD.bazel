@@ -321,6 +321,7 @@ py_test(
         "test_executable_fixtures.py",
     ],
     data = [
+        "BUILD.bazel",
         "//:.bazelrc",
         "//:.github/actions/apt-install/action.yml",
         "//:.github/workflows/cmake.yml",
@@ -342,7 +343,10 @@ py_test(
         "//tools:coverage.sh",
         "//tools:run-browser-ci.sh",
         "//tools/ci:BUILD.bazel",
+        "//tools/ci:bazel_watchdog.sh",
+        "//tools/ci:determine_targets.sh",
         "//tools/ci:editor_wasm_lane.sh",
+        "//tools/ci:fetch_bazel_diff.sh",
     ],
     imports = ["."],
     deps = [
@@ -350,6 +354,19 @@ py_test(
         ":test_timing",
         "@rules_python//python/runfiles",
     ],
+)
+
+# The measured size of the workflow tree, so growth of logic in workflow YAML is a reviewed edit.
+py_test(
+    name = "workflow_budget_tests",
+    size = "small",
+    srcs = ["workflow_budget_tests.py"],
+    data = [
+        "workflow_budget.json",
+        "//:BUILD.bazel",
+        "//:github_action_definitions",
+    ],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 # Only a newer pull request head commit cancels runs, running or queued, of the earlier head.
@@ -387,6 +404,7 @@ py_test(
         "//tools/ci:docs_lane.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:editor_wasm_stage.py",
+        "//tools/ci:fetch_bazel_diff.sh",
     ],
     deps = [
         ":bcr_preflight",
@@ -1005,9 +1023,12 @@ py_test(
         "run-browser-ci.sh",
         "//:.bazelrc",
         "//:github_action_definitions",
+        "//tools/ci:bazel_watchdog.sh",
         "//tools/ci:coverage_contract.json",
+        "//tools/ci:determine_targets.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:editor_wasm_stage.py",
+        "//tools/ci:fetch_bazel_diff.sh",
     ],
     main = "ci_lane_parity_tests.py",
     deps = [
