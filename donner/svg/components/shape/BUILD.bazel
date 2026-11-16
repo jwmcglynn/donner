@@ -31,9 +31,11 @@ cc_library(
 cc_library(
     name = "shape_system",
     srcs = [
+        "BoundsGeometry.cc",
         "ShapeSystem.cc",
     ],
     hdrs = [
+        "BoundsGeometry.h",
         "ShapeSystem.h",
     ],
     defines = select({
