@@ -695,8 +695,24 @@ private:
   /// Drop every lent set's cached answers.
   void clearLentSetCaches();
 
+  /**
+   * One cached resolution. A catalog provider's answer also records the content it was resolved
+   * from, so each cache judges its own answer against the provider's current content: a change one
+   * cache notices first cannot leave another cache serving the old content.
+   */
+  struct CachedAnswer {
+    FontHandle font;
+    /// Provider content identity the answer was resolved from; empty when no catalog answered.
+    std::string providerContentId;
+    /// Provider content generation the answer was resolved from.
+    uint64_t providerGeneration = 0;
+  };
+
+  /// Resolution answers by query key.
+  using ResolutionCache = std::unordered_map<std::string, CachedAnswer>;
+
   /// Resolution answers for the current overlay, or for this document when none is lent.
-  std::unordered_map<std::string, FontHandle>& resolutionCache();
+  ResolutionCache& resolutionCache();
 
   /**
    * Identity of one provider lookup: the family the provider was asked for, folded the way family
@@ -741,8 +757,9 @@ private:
                                       const FontFaceDependency& dependency) const;
   bool admissionCanProgress(const FontFaceDependency& dependency,
                             const FontFaceAvailability& current) const;
-  void invalidateChangedProviderAnswer(std::string_view family, const ProviderFontKey& key,
-                                       const std::string& cacheKey);
+  /// Whether @p answer still reflects the provider's content for @p family and @p key.
+  bool providerAnswerIsCurrent(std::string_view family, const ProviderFontKey& key,
+                               const CachedAnswer& answer) const;
   void rememberProviderDependency(const ProviderLookup& lookup, FontFaceLoadState state,
                                   FontFaceWaitReason waitReason = FontFaceWaitReason::None);
   FontHandle cachedProviderFont(const ProviderLookup& lookup);
@@ -753,7 +770,7 @@ private:
   bool providerBytesMatch(const ProviderLookup& lookup, std::span<const uint8_t> data) const;
   FontHandle loadProviderFont(const ProviderLookup& lookup, std::span<const uint8_t> data);
   FontHandle cacheProviderFont(const std::string& cacheKey, FontHandle font,
-                               bool documentSourceFailed);
+                               bool documentSourceFailed, const FontFaceAvailability& availability);
   FontHandle findProviderFont(std::string_view family, const ProviderFontKey& dependencyKey,
                               const std::string& cacheKey, bool documentSourceFailed);
 
@@ -765,8 +782,8 @@ private:
   /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 
-  /// Cache: family/style query key → resolved font handle.
-  std::unordered_map<std::string, FontHandle> cache_;
+  /// Cache: family/style query key → resolved font, for this document's own resolution.
+  ResolutionCache cache_;
 
   /// Identity key of every registered `@font-face` rule to the entity holding it. Keeps
   /// re-registration of an unchanged rule from minting a second entity for the same declaration.
@@ -849,7 +866,7 @@ private:
     uint64_t key = 0;
     uint64_t lastLent = 0;
     /// Resolution answers under this overlay.
-    std::unordered_map<std::string, FontHandle> cache;
+    ResolutionCache cache;
   };
 
   /// Retained lent sets by overlay digest; see \ref setHostFontOverlay.

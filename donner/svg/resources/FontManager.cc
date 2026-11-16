@@ -752,7 +752,7 @@ void FontManager::clearLentSetCaches() {
   }
 }
 
-std::unordered_map<std::string, FontHandle>& FontManager::resolutionCache() {
+FontManager::ResolutionCache& FontManager::resolutionCache() {
   LentSet* set = activeLentSet();
   return set ? set->cache : cache_;
 }
@@ -869,17 +869,18 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   const ProviderFontKey dependencyKey{StringUtils::ToLowerAscii(family), weight, style, stretch};
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
-  invalidateChangedProviderAnswer(family, dependencyKey, cacheKey);
   // Answers under an overlay can differ from the document's own, so they are cached apart.
   auto& cache = resolutionCache();
   if (auto it = cache.find(cacheKey); it != cache.end()) {
     // A cached answer outlives many lookups, so confirm the entity behind it is still a live,
-    // loaded font rather than handing back a handle to a destroyed or emptied one. Every answer
-    // this function caches has loaded bytes, so anything else means the entity changed underneath
-    // the cache and the query has to be resolved again.
-    if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
+    // loaded font rather than handing back a handle to a destroyed or emptied one, and that a
+    // catalog's content has not changed since. Every answer this function caches has loaded
+    // bytes, so anything else means the answer is stale and the query has to be resolved again.
+    const FontHandle font = it->second.font;
+    if (isValidHandle(font) && registry_.all_of<LoadedFontComponent>(font.entity()) &&
+        providerAnswerIsCurrent(family, dependencyKey, it->second)) {
       recordDependency(dependencyKey);
-      return it->second;
+      return font;
     }
     cache.erase(it);
   }
@@ -904,14 +905,14 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
       resolvedByRule();
       FontHandle handle(bestEntity);
-      cache[cacheKey] = handle;
+      cache[cacheKey] = CachedAnswer{.font = handle};
       return handle;
     }
 
     if (loadFaceData(bestEntity, matchedFace(match), match.lent)) {
       resolvedByRule();
       FontHandle handle(bestEntity);
-      cache[cacheKey] = handle;
+      cache[cacheKey] = CachedAnswer{.font = handle};
       return handle;
     }
     matchedSourceFailedToLoad = true;
@@ -919,7 +920,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
 
   const auto cacheUnlessRetryable = [&](FontHandle handle) {
     if (!matchedSourceFailedToLoad) {
-      cache[cacheKey] = handle;
+      cache[cacheKey] = CachedAnswer{.font = handle};
     }
     return handle;
   };
@@ -934,21 +935,19 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   return cacheUnlessRetryable(fallbackFont());
 }
 
-void FontManager::invalidateChangedProviderAnswer(std::string_view family,
-                                                  const ProviderFontKey& key,
-                                                  const std::string& cacheKey) {
-  if (!provider_) {
-    return;
+bool FontManager::providerAnswerIsCurrent(std::string_view family, const ProviderFontKey& key,
+                                          const CachedAnswer& answer) const {
+  // Only a catalog identifies its content; other answers stay valid until the provider changes,
+  // which drops every cache.
+  if (provider_ == nullptr || answer.providerContentId.empty()) {
+    return true;
   }
-  const auto dependency = providerDependencies_.find(key);
-  if (dependency == providerDependencies_.end()) {
-    return;
-  }
-  const auto current = provider_->availability(family, dependency->second.request);
-  if (current.contentId != dependency->second.availability.contentId ||
-      current.contentGeneration != dependency->second.availability.contentGeneration) {
-    resolutionCache().erase(cacheKey);
-  }
+  const FontFaceRequest request{.weight = key.weight,
+                                .style = static_cast<FontStyle>(key.style),
+                                .stretch = static_cast<FontStretch>(key.stretch)};
+  const auto current = provider_->availability(family, request);
+  return current.contentId == answer.providerContentId &&
+         current.contentGeneration == answer.providerGeneration;
 }
 
 void FontManager::rememberProviderDependency(const ProviderLookup& lookup, FontFaceLoadState state,
@@ -1085,9 +1084,13 @@ FontHandle FontManager::loadProviderFont(const ProviderLookup& lookup,
 }
 
 FontHandle FontManager::cacheProviderFont(const std::string& cacheKey, FontHandle font,
-                                          bool documentSourceFailed) {
+                                          bool documentSourceFailed,
+                                          const FontFaceAvailability& availability) {
   if (!documentSourceFailed) {
-    resolutionCache()[cacheKey] = font;
+    resolutionCache()[cacheKey] =
+        CachedAnswer{.font = font,
+                     .providerContentId = availability.contentId,
+                     .providerGeneration = availability.contentGeneration};
   }
   return font;
 }
@@ -1108,7 +1111,7 @@ FontHandle FontManager::findProviderFont(std::string_view family,
       .availability = std::move(availability),
   };
   if (const auto font = cachedProviderFont(lookup)) {
-    return cacheProviderFont(cacheKey, font, documentSourceFailed);
+    return cacheProviderFont(cacheKey, font, documentSourceFailed, lookup.availability);
   }
   if (shouldDeferCatalogLookup(lookup) || !catalogFaceFitsConsumer(lookup)) {
     return fallbackFont();
@@ -1133,7 +1136,7 @@ FontHandle FontManager::findProviderFont(std::string_view family,
       return fallbackFont();
     }
     if (const auto font = loadProviderFont(lookup, data)) {
-      return cacheProviderFont(cacheKey, font, documentSourceFailed);
+      return cacheProviderFont(cacheKey, font, documentSourceFailed, lookup.availability);
     }
   }
   return fallbackFont();
