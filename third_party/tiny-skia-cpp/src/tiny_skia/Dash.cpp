@@ -515,8 +515,10 @@ ContourMeasureIter::ContourMeasureIter(const Path& path, float resScale, StrokeL
 // of the curve's coordinates, the curve is measured relative to its first point instead: a curve
 // far from the origin then subdivides at the precision of its own extent, and a coordinate that
 // is large but constant, which subdivision never changes, costs no precision. Lengths and curve
-// parameters do not change under the translation, and the points the dashes are cut from stay
-// the path's own. The tolerance keeps at least one float step of the coordinates measured.
+// parameters are invariant under the translation in exact arithmetic. In float, a coordinate
+// within a factor of two of the first point's translates exactly; one farther away may round, by
+// at most half a float step of the translated coordinates, and the floor below then keeps the
+// tolerance at least one such step. The points the dashes are cut from stay the path's own.
 float ContourMeasureIter::prepareCurve(std::span<Point> points) const {
   // can't use tangents, since we need [0..1..................2] to be seen
   // as definitely not a line (it is when drawn, but not parametrically)

@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
+#include "tiny_skia/Dash.h"
 #include "tiny_skia/Mask.h"
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
@@ -541,6 +543,178 @@ TEST(PathTest, DashMeasuresACurveWithALargeConstantCoordinate) {
     point.x += 4000000.0f;
   }
   EXPECT_THAT(far->points(), testing::ElementsAreArray(moved));
+}
+
+namespace {
+
+/// The quad from \p start through \p control to \p end, as a path.
+tiny_skia::Path QuadPath(tiny_skia::Point start, tiny_skia::Point control, tiny_skia::Point end) {
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(start.x, start.y);
+  builder.quadTo(control.x, control.y, end.x, end.y);
+  return *builder.finish();
+}
+
+/// The point at \p t on the quad with the given points, evaluated in double.
+std::pair<double, double> QuadPoint(tiny_skia::Point start, tiny_skia::Point control,
+                                    tiny_skia::Point end, double t) {
+  const double u = 1.0 - t;
+  return {u * u * start.x + 2.0 * u * t * control.x + t * t * end.x,
+          u * u * start.y + 2.0 * u * t * control.y + t * t * end.y};
+}
+
+/// The largest distance, over every on-curve point of \p outline and seven points inside each of
+/// its quads, from the offset curves at \p radius from the quad through \p start, \p control and
+/// \p end, evaluated in double. The ends of the outline (its caps) are measured too, so the
+/// distance there is from the nearest point of the quad, as it is everywhere else.
+double LargestOffsetError(const tiny_skia::Path& outline, tiny_skia::Point start,
+                          tiny_skia::Point control, tiny_skia::Point end, double radius) {
+  constexpr int kCurveSamples = 20000;
+  std::vector<std::pair<double, double>> curve;
+  curve.reserve(kCurveSamples + 1);
+  for (int i = 0; i <= kCurveSamples; ++i) {
+    curve.push_back(QuadPoint(start, control, end, static_cast<double>(i) / kCurveSamples));
+  }
+  const auto error = [&](double x, double y) {
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const auto& [cx, cy] : curve) {
+      nearest = std::min(nearest, std::hypot(x - cx, y - cy));
+    }
+    return std::abs(nearest - radius);
+  };
+
+  double largest = 0.0;
+  const auto points = outline.points();
+  std::size_t index = 0;
+  for (const tiny_skia::PathVerb verb : outline.verbs()) {
+    switch (verb) {
+      case tiny_skia::PathVerb::Move:
+      case tiny_skia::PathVerb::Line:
+        largest = std::max(largest, error(points[index].x, points[index].y));
+        index += 1;
+        break;
+      case tiny_skia::PathVerb::Quad: {
+        for (int k = 1; k <= 8; ++k) {
+          const auto [x, y] =
+              QuadPoint(points[index - 1], points[index], points[index + 1], k / 8.0);
+          largest = std::max(largest, error(x, y));
+        }
+        index += 2;
+        break;
+      }
+      case tiny_skia::PathVerb::Cubic: index += 3; break;
+      case tiny_skia::PathVerb::Close: break;
+    }
+  }
+  return largest;
+}
+
+}  // namespace
+
+TEST(PathTest, StrokeOfABentQuadFarFromTheOriginKeepsTheUnflooredError) {
+  // A quad four million units out that bends 0.2 over a length of 2, stroked 0.1 wide at a
+  // resolution scale of 1,000, where the stroker's precision floor engages. Its outline stays
+  // within 0.0025 of the offset curves (measured 0.0019, in 5 points); the stroker without the
+  // floor gives the same 5 points and the same error. The error comes from the float step of the
+  // coordinates (0.25 at four million): the same quad at the origin strokes within 1e-4.
+  constexpr float kScale = 1000.0f;
+  constexpr double kRadius = 0.05;
+  tiny_skia::Stroke stroke;
+  stroke.width = 0.1f;
+  ASSERT_THAT(tiny_skia::PrecisionLimitedResScale(kScale, 4000002.05f, 0.25f), testing::Lt(kScale));
+
+  for (const float x : {0.0f, 4000000.0f}) {
+    const tiny_skia::Point start = tiny_skia::Point::fromXY(x, 0.0f);
+    const tiny_skia::Point control = tiny_skia::Point::fromXY(x + 1.0f, 0.2f);
+    const tiny_skia::Point end = tiny_skia::Point::fromXY(x + 2.0f, 0.0f);
+    const std::optional<tiny_skia::Path> outline =
+        QuadPath(start, control, end).stroke(stroke, kScale);
+    ASSERT_THAT(outline, Optional(testing::_)) << "at x " << x;
+    const double error = LargestOffsetError(*outline, start, control, end, kRadius);
+    EXPECT_THAT(error, testing::Le(x == 0.0f ? 1.0e-4 : 0.0025)) << "at x " << x;
+  }
+}
+
+TEST(PathTest, DashOfABentQuadFarFromTheOriginMatchesItAtTheOrigin) {
+  // A quad four million units out that bends by one float step (0.25) and rises 0.8, dashed
+  // `0.05 0.05` at a resolution scale of 1,000. Measured relative to its first point, it dashes to
+  // the 27 points it dashes to at the origin; measured in absolute coordinates under the floor it
+  // dashed to 24.
+  const auto quadAt = [](float x) {
+    return QuadPath(tiny_skia::Point::fromXY(x, 0.0f), tiny_skia::Point::fromXY(x + 0.25f, 0.4f),
+                    tiny_skia::Point::fromXY(x, 0.8f));
+  };
+  const std::optional<tiny_skia::StrokeDash> dash =
+      tiny_skia::StrokeDash::create({0.05f, 0.05f}, 0.0f);
+  ASSERT_THAT(dash, Optional(testing::_));
+  const std::optional<tiny_skia::Path> near = quadAt(0.0f).dash(*dash, 1000.0f);
+  const std::optional<tiny_skia::Path> far = quadAt(4000000.0f).dash(*dash, 1000.0f);
+  ASSERT_THAT(near, Optional(testing::_));
+  ASSERT_THAT(far, Optional(testing::_));
+  EXPECT_EQ(near->points().size(), 27u);
+  EXPECT_EQ(far->points().size(), near->points().size());
+  std::vector<float> nearY;
+  std::vector<float> farY;
+  for (const tiny_skia::Point point : near->points()) {
+    nearY.push_back(point.y);
+  }
+  for (const tiny_skia::Point point : far->points()) {
+    farY.push_back(point.y);
+  }
+  EXPECT_THAT(farY, testing::ElementsAreArray(nearY));
+}
+
+TEST(PathTest, DashMeasureStaysAccurateWhereTheTranslationRounds) {
+  // A quad from x 4,000,000 back to x 1,000,000.0625, measured at a resolution scale of 1,000.
+  // Its end lies more than a factor of two from its first point, so the end relative to the first
+  // point rounds to a float. The measure stays within 1 unit of the quad's exact length (about
+  // 3,209,352, where a float step is 0.25): measured 0.41 long. Measuring in absolute coordinates
+  // under the floor was 2.16 long, and without the floor on the relative coordinates 3.16.
+  const tiny_skia::Point start = tiny_skia::Point::fromXY(4000000.0f, 0.0f);
+  const tiny_skia::Point control = tiny_skia::Point::fromXY(2500000.0f, 1000000.0f);
+  const tiny_skia::Point end = tiny_skia::Point::fromXY(1000000.0625f, 0.0f);
+  ASSERT_NE(static_cast<double>(end.x - start.x),
+            static_cast<double>(end.x) - static_cast<double>(start.x));
+
+  // The exact length, by Simpson's rule over the quad's speed in double.
+  constexpr int kIntervals = 200000;
+  const auto speed = [&](double t) {
+    const double dx = 2.0 * (1.0 - t) * (control.x - static_cast<double>(start.x)) +
+                      2.0 * t * (static_cast<double>(end.x) - control.x);
+    const double dy = 2.0 * (1.0 - t) * (control.y - static_cast<double>(start.y)) +
+                      2.0 * t * (static_cast<double>(end.y) - control.y);
+    return std::hypot(dx, dy);
+  };
+  double integral = speed(0.0) + speed(1.0);
+  for (int i = 1; i < kIntervals; ++i) {
+    integral += (i % 2 == 1 ? 4.0 : 2.0) * speed(static_cast<double>(i) / kIntervals);
+  }
+  const double exactLength = integral / (3.0 * kIntervals);
+
+  const tiny_skia::Path quad = QuadPath(start, control, end);
+  tiny_skia::ContourMeasureIter measure(quad, 1000.0f);
+  const std::optional<tiny_skia::ContourMeasure> contour = measure.next();
+  ASSERT_THAT(contour, Optional(testing::_));
+  EXPECT_THAT(static_cast<double>(contour->length), testing::DoubleNear(exactLength, 1.0));
+}
+
+TEST(PathTest, DashMeasureFloorReappliesToALargeRelativeExtent) {
+  // A quad four million units out that is itself two million units across. Measured relative to
+  // its first point, its coordinates are still large, so the floor applies to them: the
+  // measurement takes the same steps (4,095) at resolution scales of 10^6 and 10^9. Without the
+  // floor on the relative coordinates it took 32,031 and 32,053.
+  const tiny_skia::Path quad = QuadPath(tiny_skia::Point::fromXY(4000000.0f, 0.0f),
+                                        tiny_skia::Point::fromXY(5000000.0f, 1000000.0f),
+                                        tiny_skia::Point::fromXY(6000000.0f, 0.0f));
+  const std::optional<tiny_skia::StrokeDash> dash =
+      tiny_skia::StrokeDash::create({100000.0f, 100000.0f}, 0.0f);
+  ASSERT_THAT(dash, Optional(testing::_));
+  tiny_skia::StrokeLimits million;
+  tiny_skia::StrokeLimits billion;
+  ASSERT_THAT(quad.dash(*dash, 1.0e6f, &million), Optional(testing::_));
+  ASSERT_THAT(quad.dash(*dash, 1.0e9f, &billion), Optional(testing::_));
+  EXPECT_EQ(million.measureSteps, billion.measureSteps);
+  EXPECT_THAT(billion.measureSteps, testing::Lt(65536u));
 }
 
 TEST(PathTest, StrokeAndDashWorkStaysBoundedAtExtremeScales) {
