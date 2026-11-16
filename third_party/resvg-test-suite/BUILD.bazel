@@ -149,9 +149,9 @@ ascent and descent. Their SVG inputs are byte-identical at both revisions.
   tests/painting/visibility/bbox-impact-3.png
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references differed from Donner only along rotated glyph edges; Donner matches
-the v0.49.0 renderings within the default allowance on the CPU and GPU backends. Their SVG
-inputs are byte-identical at both revisions.
+snapshot's references differed from Donner only along rotated glyph edges; Donner matches the
+v0.49.0 renderings within the default allowance on both CPU text tiers and on Geode with Metal
+(the Vulkan lanes were not measured). Their SVG inputs are byte-identical at both revisions.
 
   tests/structure/transform-origin/on-text-path.png
   tests/structure/transform-origin/on-text.png
