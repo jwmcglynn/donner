@@ -597,32 +597,21 @@ INSTANTIATE_TEST_SUITE_P(
                                "375 px, supersampled 302 px; filtered squares compare exactly "
                                "(#1167, #1169)")},
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip("Reference disagreement: the device offset is (10, 12.5); the "
-                              "reference truncates it to (10, 12) as resvg does (dx as i32), "
-                              "while Filter Effects asks for interpolation of a fractional "
-                              "offset and the fractional-offset reference shows it; Donner "
-                              "translates by 12.5 (438 px, Geode 472) "
-                              "(CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
+                 Params::Skip(
+                     "Reference disagreement: resvg truncates the fractional shadow "
+                     "offset (CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip("Reference disagreement: 0.2em 0.3em at font-size 64 is a device "
-                              "offset of (32, 48), which Donner draws exactly; the reference "
-                              "shadow sits at (30, 47), which needs the user lengths truncated "
-                              "to 12 19 and the scaled offset truncated, and differs from the "
-                              "resvg v0.49.0 reference for the same case (6582 px, Geode 6661) "
-                              "(CssFilterContractEmShadowUsesComputedNondefaultFontSize)")},
+                 Params::Skip(
+                     "Reference disagreement: resvg truncates the shadow's user lengths and "
+                     "offset (CssFilterContractEmShadowUsesComputedNondefaultFontSize)")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip("Reference disagreement: 3mm 4mm is a device offset of (28.35, "
-                              "37.80), which Donner translates by exactly; the reference shadow "
-                              "sits at (27, 37), which needs the user lengths truncated to 11 "
-                              "15 and the scaled offset truncated (4269 px, Geode 4311) "
-                              "(CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
+                 Params::Skip(
+                     "Reference disagreement: resvg truncates the shadow's user lengths and "
+                     "offset (CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
                 {"drop-shadow-function.svg",
-                 Params::Skip("Reference disagreement: the device offset is (10, 12.5); the "
-                              "reference truncates it to (10, 12) as resvg does (dx as i32), "
-                              "while Filter Effects asks for interpolation of a fractional "
-                              "offset and the fractional-offset reference shows it; Donner "
-                              "translates by 12.5 (438 px, Geode 472) "
-                              "(CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
+                 Params::Skip(
+                     "Reference disagreement: resvg truncates the fractional shadow "
+                     "offset (CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
                 {"two-exact-urls.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; the valid "
