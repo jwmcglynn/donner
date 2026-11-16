@@ -4201,9 +4201,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     // Sweep axis: x for a run laid out horizontally, y for a vertical one.
     const bool alongY = extent.height() > extent.width();
-    const auto low = [alongY](const Box2d& box) {
-      return alongY ? box.topLeft.y : box.topLeft.x;
-    };
+    const auto low = [alongY](const Box2d& box) { return alongY ? box.topLeft.y : box.topLeft.x; };
     const auto high = [alongY](const Box2d& box) {
       return alongY ? box.bottomRight.y : box.bottomRight.x;
     };
@@ -4213,9 +4211,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     };
     std::vector<std::size_t> order(boxes.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
-    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
-      return low(boxes[a]) < low(boxes[b]);
-    });
+    std::ranges::sort(order,
+                      [&](std::size_t a, std::size_t b) { return low(boxes[a]) < low(boxes[b]); });
     std::vector<std::size_t> open;
     for (const std::size_t index : order) {
       const Box2d& box = boxes[index];

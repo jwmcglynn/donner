@@ -721,9 +721,8 @@ TEST_F(GeodeGlyphInstancingTest, StrokeGroupingStaysLinearInEitherWritingMode) {
         std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
             font-family="Noto Sans" font-size="4" letter-spacing="2"><text x="100" y="2"
             writing-mode=")svg") +
-            std::string(writingMode) +
-            R"svg(" fill="none" stroke="black" stroke-width="0.25">)svg" +
-            std::string(kGlyphs, 'e') + "</text></svg>");
+        std::string(writingMode) + R"svg(" fill="none" stroke="black" stroke-width="0.25">)svg" +
+        std::string(kGlyphs, 'e') + "</text></svg>");
     RendererGeode renderer(sharedDevice());
     const Frame frame = render(renderer, document);
     EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Eq(kGlyphs));
