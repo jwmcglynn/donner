@@ -4793,8 +4793,55 @@ auto FastPathCountersEq(const FastPathCounters& expected) {
                               expected.paintOrderSnapshots);
 }
 
-// Browser telemetry publishes each worker result's own compositor counters, so every result of a
-// masked child's held drag must carry exactly the compositor's counter change for that render.
+/// Matches frame statistics with the given tile counts.
+auto TileCountsAre(int damagePatchTileCount, int cachedTileCount, int immediateTileCount,
+                   int maskedChildComposeTileCount) {
+  return AllOf(
+      Field("damagePatchTileCount", &RenderFrameStats::damagePatchTileCount, damagePatchTileCount),
+      Field("cachedTileCount", &RenderFrameStats::cachedTileCount, cachedTileCount),
+      Field("immediateTileCount", &RenderFrameStats::immediateTileCount, immediateTileCount),
+      Field("maskedChildComposeTileCount", &RenderFrameStats::maskedChildComposeTileCount,
+            maskedChildComposeTileCount));
+}
+
+/// Every compositor render counts exactly one of a fast-path frame, a slow-path frame or a frame
+/// with nothing dirty, so a result's fast-path delta and its render count cover the same renders.
+auto CountsOneFramePerRender() {
+  return ::testing::Truly([](const RenderResult& result) {
+    const FastPathCounters& delta = result.compositorFastPathDelta;
+    return delta.fastPathFrames + delta.slowPathFramesWithDirty + delta.noDirtyFrames ==
+           static_cast<std::uint64_t>(result.compositorRenderCount);
+  });
+}
+
+TEST(AsyncRendererTest, CombineIterationRenderFrameStatsSumsPerRenderWork) {
+  RenderFrameStats earlier;
+  earlier.cachedRasterizeMs = 2.0;
+  earlier.cachedTileCount = 3;
+  earlier.damagePatchTileCount = 1;
+  earlier.immediateTileCount = 1;
+  earlier.offscreenRecycleCount = 4;
+  earlier.offscreenRecycleTotal = 10;
+  RenderFrameStats last;
+  last.cachedRasterizeMs = 0.5;
+  last.cachedTileCount = 1;
+  last.maskedChildComposeTileCount = 1;
+  last.offscreenRecycleCount = 1;
+  last.offscreenRecycleTotal = 11;
+
+  EXPECT_THAT(CombineIterationRenderFrameStats(std::nullopt, last),
+              AllOf(TileCountsAre(0, 1, 0, 1),
+                    Field("offscreenRecycleTotal", &RenderFrameStats::offscreenRecycleTotal, 11)));
+  EXPECT_THAT(CombineIterationRenderFrameStats(earlier, last),
+              AllOf(TileCountsAre(1, 4, 1, 1),
+                    Field("cachedRasterizeMs", &RenderFrameStats::cachedRasterizeMs, 2.5),
+                    Field("offscreenRecycleCount", &RenderFrameStats::offscreenRecycleCount, 5),
+                    Field("offscreenRecycleTotal", &RenderFrameStats::offscreenRecycleTotal, 11)));
+}
+
+// Browser telemetry publishes each worker result's own compositor counters and tile counts, so
+// every result of a masked child's held drag must carry exactly the compositor's work for that
+// result's renders.
 TEST(AsyncRendererTest, MaskedChildHeldDragResultsReportTheirCompositorCounters) {
   svg::Renderer renderer;
   if (!renderer.requiresTextureSnapshotPresentation()) {
@@ -4815,7 +4862,6 @@ TEST(AsyncRendererTest, MaskedChildHeldDragResultsReportTheirCompositorCounters)
   struct Rendered {
     std::optional<RenderResult> result;
     FastPathCounters compositorIncrease;
-    RenderFrameStats frameStats;
   };
   const auto render = [&](svg::compositor::InteractionHint interactionKind,
                           Vector2d dragTranslation) {
@@ -4834,41 +4880,92 @@ TEST(AsyncRendererTest, MaskedChildHeldDragResultsReportTheirCompositorCounters)
     Rendered rendered{.result = WaitForRenderResult(asyncRenderer)};
     rendered.compositorIncrease =
         FastPathCounterIncrease(before, asyncRenderer.compositorFastPathCountersForTesting());
-    rendered.frameStats = asyncRenderer.compositorRenderFrameStats();
     return rendered;
+  };
+  // Checks that a result's counters are the compositor's own for its renders.
+  const auto expectOwnCounters = [](const Rendered& rendered) {
+    EXPECT_THAT(rendered.result->compositorFastPathDelta,
+                FastPathCountersEq(rendered.compositorIncrease));
+    EXPECT_THAT(*rendered.result, CountsOneFramePerRender())
+        << "renders=" << rendered.result->compositorRenderCount
+        << " delta=" << ::testing::PrintToString(rendered.result->compositorFastPathDelta);
   };
 
   const Rendered selected = render(svg::compositor::InteractionHint::Selection, Vector2d::Zero());
   ASSERT_THAT(selected.result, ::testing::Optional(::testing::_));
-  EXPECT_THAT(selected.result->compositorFastPathDelta,
-              FastPathCountersEq(selected.compositorIncrease));
+  expectOwnCounters(selected);
   const Rendered dragStart = render(svg::compositor::InteractionHint::ActiveDrag, Vector2d::Zero());
   ASSERT_THAT(dragStart.result, ::testing::Optional(::testing::_));
+  expectOwnCounters(dragStart);
   EXPECT_THAT(dragStart.result->compositorFastPathDelta,
-              FastPathCountersEq(dragStart.compositorIncrease));
+              ::testing::FieldsAre(0u, 0u, 1u, ::testing::_, ::testing::_))
+      << "the drag start changes nothing";
+  EXPECT_THAT(dragStart.result->compositorFrameStats, TileCountsAre(0, 0, 0, 0))
+      << "the drag start rasterizes no tile";
 
   for (const double x : {4.0, 8.0, 12.0}) {
     SCOPED_TRACE(testing::Message() << "held move to x=" << x);
     SetGraphicsElementTranslation(*target, Vector2d(x, 0.0));
     const Rendered held = render(svg::compositor::InteractionHint::ActiveDrag, Vector2d(x, 0.0));
     ASSERT_THAT(held.result, ::testing::Optional(::testing::_));
-    EXPECT_THAT(held.result->compositorFastPathDelta, FastPathCountersEq(held.compositorIncrease));
+    expectOwnCounters(held);
     EXPECT_THAT(held.result->compositorFastPathDelta,
                 ::testing::FieldsAre(1u, 0u, 0u, ::testing::_, ::testing::_))
         << "a held move of a masked child must take the fast path once, without the slow path";
-    EXPECT_THAT(held.frameStats,
-                AllOf(Field("damagePatchTileCount", &RenderFrameStats::damagePatchTileCount, 1),
-                      Field("cachedTileCount", &RenderFrameStats::cachedTileCount, 1),
-                      Field("immediateTileCount", &RenderFrameStats::immediateTileCount, 0),
-                      Field("maskedChildComposeTileCount",
-                            &RenderFrameStats::maskedChildComposeTileCount, 0)))
+    EXPECT_EQ(held.result->compositorRenderCount, 1);
+    EXPECT_THAT(held.result->compositorFrameStats, TileCountsAre(1, 1, 0, 0))
         << "the held move rasterizes only the damage patch of its owning masked tile";
   }
 
   const Rendered release = render(svg::compositor::InteractionHint::Selection, Vector2d::Zero());
   ASSERT_THAT(release.result, ::testing::Optional(::testing::_));
-  EXPECT_THAT(release.result->compositorFastPathDelta,
-              FastPathCountersEq(release.compositorIncrease));
+  expectOwnCounters(release);
+}
+
+// An iteration that renders the compositor twice reports both renders in its counters and tile
+// counts. A pending style write refuses the promotion until a render has prepared the document, so
+// the worker renders once, promotes the selected shape, and renders again.
+TEST(AsyncRendererTest, TwoRenderIterationReportsBothRenders) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="other" x="40" y="40" width="16" height="16" fill="blue" />
+    <rect id="target" x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(64, 64);
+  const auto target = document.querySelector("#target");
+  const auto other = document.querySelector("#other");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(other.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  RenderRequest cold(renderer, document);
+  cold.version = 1;
+  cold.documentGeneration = 1;
+  asyncRenderer.requestRender(cold);
+  ASSERT_THAT(WaitForRenderResult(asyncRenderer), ::testing::Optional(::testing::_));
+
+  AsGraphicsElement(*other).setStyle("opacity:0.5");
+  RenderRequest selected(renderer, document);
+  selected.version = 2;
+  selected.documentGeneration = 1;
+  selected.selectedEntity = entity;
+  selected.dragPreview = RenderRequest::DragPreview{
+      .entity = entity,
+      .interactionKind = svg::compositor::InteractionHint::Selection,
+  };
+  asyncRenderer.requestRender(selected);
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_THAT(result, ::testing::Optional(::testing::_));
+  EXPECT_EQ(result->compositorRenderCount, 2)
+      << "the selected shape is promoted only after the first render prepares the style write";
+  EXPECT_THAT(*result, CountsOneFramePerRender())
+      << "delta=" << ::testing::PrintToString(result->compositorFastPathDelta);
+  const RenderFrameStats lastRender = asyncRenderer.compositorRenderFrameStats();
+  EXPECT_THAT(result->compositorFrameStats.cachedTileCount +
+                  result->compositorFrameStats.immediateTileCount,
+              Gt(lastRender.cachedTileCount + lastRender.immediateTileCount))
+      << "the result counts the first render's tiles as well as the last render's";
 }
 
 // End-to-end drag-latency harness that FAITHFULLY mirrors the real

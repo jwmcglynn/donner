@@ -245,6 +245,18 @@ struct PresentationSnapshotPlan {
     bool hasCompositedPreview, bool fullCanvasPresentationAllowed,
     bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
+/** Combine the frame statistics of one worker iteration's compositor renders, so they cover the
+ * same renders as \ref RenderResult::compositorFastPathDelta. Per-render costs and tile counts are
+ * summed; the controller-lifetime totals and the pixel-identity outcome come from the last render.
+ * @param earlierRender Statistics of the iteration's first render when it rendered twice.
+ * @param lastRender Statistics of the iteration's last render.
+ * @return The statistics of the whole iteration.
+ */
+[[nodiscard]] svg::compositor::CompositorController::RenderFrameStats
+CombineIterationRenderFrameStats(
+    const std::optional<svg::compositor::CompositorController::RenderFrameStats>& earlierRender,
+    const svg::compositor::CompositorController::RenderFrameStats& lastRender);
+
 /** Capture GPU presentation backing without a CPU fallback.
  * @param renderer Worker renderer that just finished the frame.
  * @param texture Receives the texture, or null on failure; presentation retains its prior frame.
@@ -348,11 +360,15 @@ struct RenderResult {
     /// Legacy device-poll iterations used while waiting for those readbacks.
     int readbackPollIterations = 0;
     /// Cross-thread browser GPU owner dispatches requested by any client thread while this
-    /// iteration ran. Each blocks its thread until the owner runs it. Zero in native builds.
+    /// iteration ran, counted when each is requested. Each blocks its thread until the owner runs
+    /// it. Zero in native builds.
     int gpuOwnerDispatchCount = 0;
-    /// One-millisecond wait slices that expired while those dispatches were pending.
+    /// One-millisecond wait slices that expired while dispatches were pending during this
+    /// iteration.
     int gpuOwnerWaitSliceTimeouts = 0;
-    /// Wall time requesting threads spent blocked on those dispatches.
+    /// Blocked wall time added while this iteration ran, recorded as each dispatch completes. It
+    /// is not paired with `gpuOwnerDispatchCount`: a dispatch requested before the iteration can
+    /// add wait time here, and one still pending at its end adds none.
     double gpuOwnerDispatchWaitMs = 0.0;
     /// True when browser readbacks used the event-driven timed WaitAny path.
     bool usedTimedWaitAny = false;
@@ -460,9 +476,15 @@ struct RenderResult {
       fontDependencies;   //!< Faces pending before final pixel export.
   double workerMs = 0.0;  //!< Worker iteration latency in milliseconds, zero if unavailable.
   WorkerTimingBreakdown workerTiming;  //!< Phase and handoff timings for this worker iteration.
-  /// Increase of each compositor fast-path counter during this worker iteration, which can render
-  /// the compositor more than once. Zero when composited rendering is Off.
+  /// Compositor renders in this worker iteration: one, or two when a layer promotion succeeds only
+  /// after the first render prepared the document. Zero when composited rendering is Off or the
+  /// iteration ended before the compositor ran.
+  int compositorRenderCount = 0;
+  /// Increase of each compositor fast-path counter across this iteration's compositor renders.
   svg::compositor::CompositorController::FastPathCounters compositorFastPathDelta;
+  /// Compositor frame statistics across the same renders; see
+  /// \ref CombineIterationRenderFrameStats.
+  svg::compositor::CompositorController::RenderFrameStats compositorFrameStats;
   std::chrono::steady_clock::time_point workerCompletedAt;  //!< Worker completion timestamp.
 };
 

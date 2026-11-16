@@ -478,8 +478,10 @@ svg::compositor::CompositorController::FastPathCounters FastPathCountersDelta(
 }
 
 #ifdef __EMSCRIPTEN__
-/// Record the browser GPU owner dispatches requested between two totals snapshots. The counters
-/// are unsigned 32-bit, so modular subtraction stays correct across one wrap.
+/// Record the browser GPU owner dispatch activity between two totals snapshots. The request and
+/// wait-slice counts are unsigned 32-bit counters that wrap, so modular subtraction stays correct
+/// across one wrap. The blocked time saturates instead of wrapping, so once saturated its
+/// difference reads zero.
 void ApplyGpuOwnerDispatchDelta(RenderResult::WorkerTimingBreakdown& timing,
                                 const gpu::browser::BrowserGpuOwnerDispatchTotals& before,
                                 const gpu::browser::BrowserGpuOwnerDispatchTotals& after) {
@@ -492,6 +494,33 @@ void ApplyGpuOwnerDispatchDelta(RenderResult::WorkerTimingBreakdown& timing,
 #endif
 
 }  // namespace
+
+svg::compositor::CompositorController::RenderFrameStats CombineIterationRenderFrameStats(
+    const std::optional<svg::compositor::CompositorController::RenderFrameStats>& earlierRender,
+    const svg::compositor::CompositorController::RenderFrameStats& lastRender) {
+  svg::compositor::CompositorController::RenderFrameStats combined = lastRender;
+  if (!earlierRender.has_value()) {
+    return combined;
+  }
+  const auto& earlier = *earlierRender;
+  combined.firstFrameDrawMs += earlier.firstFrameDrawMs;
+  combined.firstFramePlanningMs += earlier.firstFramePlanningMs;
+  combined.firstFrameWarmupMs += earlier.firstFrameWarmupMs;
+  combined.immediateRasterizeMs += earlier.immediateRasterizeMs;
+  combined.cachedRasterizeMs += earlier.cachedRasterizeMs;
+  combined.mainComposeMs += earlier.mainComposeMs;
+  combined.mainComposeCount += earlier.mainComposeCount;
+  combined.immediateTileCount += earlier.immediateTileCount;
+  combined.cachedTileCount += earlier.cachedTileCount;
+  combined.damagePatchTileCount += earlier.damagePatchTileCount;
+  combined.damagePatchGeometryDraws += earlier.damagePatchGeometryDraws;
+  combined.maskedChildComposeTileCount += earlier.maskedChildComposeTileCount;
+  combined.offscreenCreateCount += earlier.offscreenCreateCount;
+  combined.offscreenRecycleCount += earlier.offscreenRecycleCount;
+  combined.textureAllocationFailureCount += earlier.textureAllocationFailureCount;
+  combined.composePayloadRefusalCount += earlier.composePayloadRefusalCount;
+  return combined;
+}
 
 bool CanPresentTilePayload(bool requiresTexturePresentation, const svg::RendererBitmap& bitmap,
                            const std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
@@ -2018,6 +2047,8 @@ void AsyncRenderer::workerLoop() {
 
     const svg::compositor::CompositorController::FastPathCounters fastPathCountersBeforeRender =
         FastPathCountersOf(compositor_);
+    int compositorRenderCount = 0;
+    std::optional<svg::compositor::CompositorController::RenderFrameStats> earlierRenderStats;
     bool renderCompleted = runReplayRenderDelay();
     if (renderCompleted) {
       ZoneScopedN("Compositor::renderFrame");
@@ -2039,6 +2070,7 @@ void AsyncRenderer::workerLoop() {
             }
           };
           renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+          ++compositorRenderCount;
           if (renderCompleted) {
             syncWorkerPromotions();
             bool promotionAddedAfterPrepare = false;
@@ -2056,6 +2088,8 @@ void AsyncRenderer::workerLoop() {
             if (promotionAddedAfterPrepare) {
               compositorEntity_ = compositorEntities_.front();
               compositorInteractionKind_ = desiredKind;
+              earlierRenderStats = compositor_->lastRenderFrameStats();
+              ++compositorRenderCount;
               renderCompleted =
                   compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
               if (renderCompleted) {
@@ -2283,6 +2317,9 @@ void AsyncRenderer::workerLoop() {
           lastCompositorRenderFrameStats_ =
               compositor_ != nullptr ? compositor_->lastRenderFrameStats()
                                      : svg::compositor::CompositorController::RenderFrameStats{};
+          done.result.compositorRenderCount = compositorRenderCount;
+          done.result.compositorFrameStats =
+              CombineIterationRenderFrameStats(earlierRenderStats, lastCompositorRenderFrameStats_);
           if (compositorDiagnosticsEnabled_.load(std::memory_order_acquire)) {
             const auto diagnosticsStart = std::chrono::steady_clock::now();
             if (compositor_ != nullptr) {
