@@ -79,9 +79,18 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+| text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`textPath/mixed-children-1` and `textPath/very-long-text` run against committed Donner
+renders. SVG 2 continues the text after a `textPath` from the end point of the path, and
+CSS Text 3 keeps the textPath's trailing space on the path, so the green `Text` starts at
+the end point; the vendored PNGs continue from the end of the glyphs on the path. Both
+renders match Chrome's ink. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `font-size-adjust/simple-case` runs against a committed Donner render
 (`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
@@ -168,7 +177,6 @@ noted.
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | AA + minor char advance diffs (text vs text-full) |
 | text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | mixed-children-1                         | AA diffs                                          |
 | text/textPath        | nested                                   | Minor char                                        |
 | text/textPath        | path-with-ClosePath                      | Minor char                                        |
 | text/textPath        | simple-case                              | Minor char                                        |
@@ -179,7 +187,6 @@ noted.
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
 | text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | very-long-text                           | AA diffs                                          |
 | text/textPath        | with-baseline-shift                      | Minor char                                        |
 | text/textPath        | with-coordinates-on-text                 | Minor char                                        |
 | text/textPath        | with-coordinates-on-textPath             | Minor char                                        |

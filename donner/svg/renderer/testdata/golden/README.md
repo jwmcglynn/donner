@@ -144,3 +144,43 @@ committing it:
 rm donner/svg/renderer/testdata/golden/resvg-method=stretch.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*method_stretch'
 ```
+
+## Donner-rendered textPath continuation references
+
+`resvg-mixed-children-1.png` and `resvg-very-long-text.png` are Donner's own renderings of
+the unchanged corpus `text/textPath/mixed-children-1.svg` and `very-long-text.svg`. In both,
+a `textPath` ends with a space and a green `Text` follows it.
+[SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules)
+continue the text after a `textPath` from the end point of the path, and
+[CSS Text 3 section 4.1.1](https://www.w3.org/TR/css-text-3/#white-space-phase-1) keeps the
+textPath's trailing space on the path and collapses the space after it, so `Text` starts at
+the end point. The vendored PNGs continue from the end of the glyphs on the path instead.
+
+These images were regenerated when Donner adopted that collapse rule; before it, Donner kept
+the following space and drew `Text` 6.24 user units (15.6 device px) past the end point. Ink
+of the green `Text`, in device px at the 500x500 (2.5x) canvas; the Chrome column is a
+Chrome 157 rendering of the same SVG with the corpus `NotoSans-Regular.ttf` loaded through
+`@font-face`:
+
+| Case             | Path end point | Vendored PNG         | Previous reference | Chrome 157           | This reference       |
+| ---------------- | -------------- | -------------------- | ------------------ | -------------------- | -------------------- |
+| mixed-children-1 | (450, 250)     | x 419-499, y 146-188 | x 466-499          | x 451-499, y 207-249 | x 451-499, y 207-249 |
+| very-long-text   | (250, 250)     | x 290-402, y 210-252 | x 266-378          | x 251-363, y 207-249 | x 251-363, y 207-249 |
+
+`TextEngineScriptedTest.PostTextPathCursorBoundarySpaceStaysOnThePath` pins the collapse
+rule. The images were created from the simple text tier on TinySkia with the suite's
+golden-creation path, at the collapse rule change. The Geode resvg lane skips `text/*` rows
+through its backend feature gate.
+
+| Case             | Corpus SVG SHA-256                                                 | Reference PNG SHA-256                                              |
+| ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| mixed-children-1 | `1d9adcd5eff2c995932b4276b9d22713e470ed75c6168deffd855544bca46fcd` | `2ea922a8be96b59e9ed1950eae3bfcda2368710c80a8a6d4a24eb5db6d92a054` |
+| very-long-text   | `17eba4ca25ea86b8241dab58d646ce9ea5b64411e8e24ff084b1ea209099aa59` | `6392266f206470a9459514291d4b7b811f3a0b9d406c7fc2d81fdb3ded914021` |
+
+To regenerate after an intended rendering change, delete the images, run the command below
+from the repository root, and review the new images before committing them:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png donner/svg/renderer/testdata/golden/resvg-very-long-text.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_1:TextTextPath/*very_long_text'
+```
