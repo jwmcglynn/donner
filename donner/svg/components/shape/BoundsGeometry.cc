@@ -16,16 +16,22 @@ bool IsFinite(const Box2d& box) {
          std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y);
 }
 
+/// The splitmix64 finalizer: every input bit affects every output bit.
+std::uint64_t Avalanche(std::uint64_t value) {
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebull;
+  return value ^ (value >> 31);
+}
+
 /// A hash of @p path's commands and points, equal for paths \ref HasIdenticalPathData matches.
 std::size_t PathDataHash(const Path& path) {
-  // FNV-1a over 64-bit words.
-  std::uint64_t hash = 14695981039346656037ull;
-  const auto mix = [&hash](std::uint64_t word) {
-    hash ^= word;
-    hash *= 1099511628211ull;
-  };
+  // Coordinates of nearby values differ mostly in their high bits, so each word is fully mixed.
+  std::uint64_t hash = 0;
+  const auto mix = [&hash](std::uint64_t word) { hash = Avalanche(hash ^ word); };
   // Adding zero maps -0 to +0, which compare equal.
-  const auto mixCoordinate = [&mix](double value) { mix(std::bit_cast<std::uint64_t>(value + 0.0)); };
+  const auto mixCoordinate = [&mix](double value) {
+    mix(std::bit_cast<std::uint64_t>(value + 0.0));
+  };
   mix(path.commands().size());
   for (const Path::Command& command : path.commands()) {
     mix((static_cast<std::uint64_t>(command.verb) << 33) |
