@@ -443,10 +443,11 @@ TEST(TextToOutlines, TranslucentRunWritesOpacityOnEachOverlappingGlyph) {
   EXPECT_THAT(second->topLeft.x, Lt(first->bottomRight.x));
 }
 
-// A translucent run that both fills and strokes. The path's `opacity` composites fill and stroke
-// as one isolated layer, the spec-correct reading; the text renderer approximates it by folding
-// the span's opacity into the fill and stroke alpha separately, so the two differ where a stroke
-// overlaps its own fill and a pixel identity check cannot hold. Pin the emitted markup instead.
+// A translucent run that both fills and strokes. Its fill and stroke paths sit in a `<g>` whose
+// `opacity` composites them as one isolated layer, the spec-correct reading; the text renderer
+// approximates it by folding the span's opacity into the fill and stroke alpha separately, so the
+// two differ where a stroke overlaps its own fill and a pixel identity check cannot hold. Pin the
+// emitted markup instead.
 TEST(TextToOutlines, StrokedTranslucentRunSerializesOpacityAndStroke) {
   constexpr std::string_view kStrokedSpanSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -460,13 +461,19 @@ TEST(TextToOutlines, StrokedTranslucentRunSerializesOpacityAndStroke) {
   const std::string mergedSource = ApplyConversion(document, text, result);
 
   svg::SVGDocument reparsed = Parse(mergedSource);
+  // The stroked run: a wrapper carrying its opacity, then its glyph's fill-only path and its
+  // chunk's stroke-only path.
   EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "opacity"), Optional(std::string("0.4")));
-  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "stroke"), Optional(std::string("#aa0000")));
-  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "stroke-width"), Optional(std::string("3")));
-  EXPECT_THAT(Attribute(reparsed, "#t_outlines_0", "stroke-opacity"), Optional(std::string("0.8")));
-  // The stroke and the opacity stay on the stroked run only.
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "stroke"), Optional(std::string("none")));
   EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "opacity"), Eq(std::nullopt));
-  EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "stroke"), Eq(std::nullopt));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_2", "fill"), Optional(std::string("none")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_2", "stroke"), Optional(std::string("#aa0000")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_2", "stroke-width"), Optional(std::string("3")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_2", "stroke-opacity"), Optional(std::string("0.8")));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_2", "opacity"), Eq(std::nullopt));
+  // The stroke and the opacity stay on the stroked run only.
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_3", "opacity"), Eq(std::nullopt));
+  EXPECT_THAT(Attribute(reparsed, "#t_outlines_3", "stroke"), Eq(std::nullopt));
 }
 
 // Apply path through AsyncSVGDocument: one replacement command inserts the
@@ -1075,6 +1082,18 @@ TEST(TextToOutlinesPaint, StrokeViaCss) {
 <text style="fill:#0033aa;stroke:#aa0000;stroke-width:3;stroke-opacity:0.8" x="10" y="120" font-size="64">SVG</text>
 </svg>)",
       "paint_matrix_stroke_css");
+}
+
+// A translucent stroke wide enough that the strokes of adjacent glyphs overlap, painted before the
+// fill, over two text chunks (the tspan's `x` starts the second). The text strokes each chunk as
+// one shape, so an overlap is covered once; the outlines must paint the same.
+TEST(TextToOutlinesPaint, OverlappingStrokesPerChunkAndPaintOrder) {
+  ExpectPaintRetained(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5" style="paint-order: stroke">SV<tspan x="110">G</tspan></text>
+</svg>)",
+      "paint_matrix_stroke_chunks_paint_order");
 }
 
 }  // namespace donner::editor

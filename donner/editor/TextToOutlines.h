@@ -88,8 +88,10 @@ struct ConvertTextToOutlinesResult {
   /// `<text>`, then insert each of `outlinePaths` into it in order.
   std::optional<svg::SVGElement> outlineGroup;
 
-  /// Detached `<path>` elements, one per non-empty placed glyph, in paint
-  /// order. Insert into `outlineGroup` in this order.
+  /// Detached elements in paint order: a `<path>` per non-empty placed glyph of
+  /// an unstroked run; for a stroked run, a fill-only `<path>` per glyph and a
+  /// stroke-only `<path>` per text chunk, inside a `<g>` that carries the run's
+  /// `opacity` when it has one. Insert into `outlineGroup` in this order.
   std::vector<svg::SVGElement> outlinePaths;
 
   /// The `id` of the replacement outline `<g>` group. Always populated when
