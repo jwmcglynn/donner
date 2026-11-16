@@ -42,6 +42,10 @@ export const kCompletionChecks = {
   // Masked-child drags render too slowly on the hosted runner to complete a second held position
   // (#2106). Re-enforce once #2106 is fixed.
   heldDragPositions: { browser: "chromium", phases: ["geode-crown"], issue: "#2106" },
+  // At device pixel ratio 1, which only the firefox-dpr1 project runs for this phase, each held
+  // masked-child move rasterizes the whole owning tile instead of patching its damage (#2106).
+  // Re-enforce once #2106 is fixed.
+  heldMaskedDragDamagePatch: { browser: "firefox", phases: ["geode-crown"], issue: "#2106" },
 };
 
 /**

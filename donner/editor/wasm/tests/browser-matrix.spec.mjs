@@ -1683,7 +1683,12 @@ test("completion checks enforce by default and report only tracked misses", asyn
     Object.fromEntries(
       Object.entries(gates.kCompletionChecks).map(([check, { browser }]) => [check, browser]),
     ),
-    { coldZoomPresents: "chromium", dragInputsComplete: "firefox", heldDragPositions: "chromium" },
+    {
+      coldZoomPresents: "chromium",
+      dragInputsComplete: "firefox",
+      heldDragPositions: "chromium",
+      heldMaskedDragDamagePatch: "firefox",
+    },
   );
   assert.deepEqual(
     Object.fromEntries(
@@ -1693,8 +1698,9 @@ test("completion checks enforce by default and report only tracked misses", asyn
       coldZoomPresents: undefined,
       dragInputsComplete: undefined,
       heldDragPositions: ["geode-crown"],
+      heldMaskedDragDamagePatch: ["geode-crown"],
     },
-    "only the masked crown drag phase may report the held-position check",
+    "only the masked crown drag phase may report the held-position and damage patch checks",
   );
   const miss = new Error("every dispatched input must complete\n\nExpected: 60");
   const run = async (mode, browserName, assertion) => {
@@ -1769,6 +1775,14 @@ test("completion checks enforce by default and report only tracked misses", asyn
   assert.equal(gates.completionCheckTracks("dragInputsComplete", "firefox", "any-phase"), true);
   assert.equal(gates.completionCheckTracks("heldDragPositions", "chromium", "geode-crown"), true);
   assert.equal(
+    gates.completionCheckTracks("heldMaskedDragDamagePatch", "firefox", "geode-crown"),
+    true,
+  );
+  assert.equal(
+    gates.completionCheckTracks("heldMaskedDragDamagePatch", "chromium", "geode-crown"),
+    false,
+  );
+  assert.equal(
     gates.completionCheckTracks("heldDragPositions", "chromium", "first-drag-193"),
     false,
   );
@@ -1808,7 +1822,7 @@ test("only the tracked responsiveness checks go through the completion check hel
   const calls = [...spec.matchAll(/completionCheck\(\s*"(\w+)"/g)];
   assert.deepEqual(
     calls.map(([, check]) => check),
-    ["heldDragPositions", "dragInputsComplete", "coldZoomPresents"],
+    ["heldDragPositions", "dragInputsComplete", "coldZoomPresents", "heldMaskedDragDamagePatch"],
   );
   const [held, drag, coldZoom] = calls.map(({ index }) => index);
   assert.equal(

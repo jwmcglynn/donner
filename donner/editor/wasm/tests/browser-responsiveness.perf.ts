@@ -151,6 +151,27 @@ interface Diagnostics extends Window {
   __donnerOverlayStats?: unknown;
   __donnerPresentationRepairStats?: unknown;
   __donnerLastDragStream?: unknown;
+  __donnerWorkerResultCounters?: WorkerResultCounters[];
+}
+
+/** One published worker result's compositor and browser GPU owner counters. */
+interface WorkerResultCounters {
+  completedResults: number;
+  activeDragResult: boolean;
+  fastPathFrames: number;
+  slowPathFramesWithDirty: number;
+  noDirtyFrames: number;
+  damagePatchTileCount: number;
+  maskedChildComposeTileCount: number;
+  cachedTileCount: number;
+  immediateTileCount: number;
+  offscreenRecycleCount: number;
+  mainComposeCount: number;
+  gpuOwnerDispatchCount: number;
+  gpuOwnerWaitSliceTimeouts: number;
+  gpuOwnerDispatchWaitMs: number;
+  workerMs: number;
+  renderFrameMs: number;
 }
 
 async function attachJson(info: import("@playwright/test").TestInfo, name: string, data: unknown) {
@@ -1813,6 +1834,152 @@ test.describe("nominal completed-result handoff", () => {
   }
 });
 
+/**
+ * Record the counters of every worker result published from now on. Frame sampling can miss a
+ * result that is replaced before the next animation frame, so this observes each publication.
+ */
+async function startWorkerResultCounters(page: Page) {
+  await page.evaluate(() => {
+    const state = window as Diagnostics;
+    const records: WorkerResultCounters[] = [];
+    let current = state.__donnerWorkerStats;
+    Object.defineProperty(window, "__donnerWorkerStats", {
+      configurable: true,
+      enumerable: true,
+      get: () => current,
+      set: (stats: Diagnostics["__donnerWorkerStats"]) => {
+        current = stats;
+        if (stats?.publishReason !== "render-result") return;
+        const count = (name: string) => Number(stats[name]);
+        records.push({
+          completedResults: stats.completedResults,
+          activeDragResult: stats.activeDragResult === true,
+          fastPathFrames: count("fastPathFrames"),
+          slowPathFramesWithDirty: count("slowPathFramesWithDirty"),
+          noDirtyFrames: count("noDirtyFrames"),
+          damagePatchTileCount: count("damagePatchTileCount"),
+          maskedChildComposeTileCount: count("maskedChildComposeTileCount"),
+          cachedTileCount: count("cachedTileCount"),
+          immediateTileCount: count("immediateTileCount"),
+          offscreenRecycleCount: count("offscreenRecycleCount"),
+          mainComposeCount: count("mainComposeCount"),
+          gpuOwnerDispatchCount: count("gpuOwnerDispatchCount"),
+          gpuOwnerWaitSliceTimeouts: count("gpuOwnerWaitSliceTimeouts"),
+          gpuOwnerDispatchWaitMs: count("gpuOwnerDispatchWaitMs"),
+          workerMs: stats.workerMs,
+          renderFrameMs: count("renderFrameMs"),
+        });
+      },
+    });
+    state.__donnerWorkerResultCounters = records;
+  });
+}
+
+/** Stop recording and return the counters of the results published since the start. */
+async function stopWorkerResultCounters(page: Page) {
+  return page.evaluate(() => {
+    const state = window as Diagnostics;
+    const current = state.__donnerWorkerStats;
+    delete (window as { __donnerWorkerStats?: unknown }).__donnerWorkerStats;
+    state.__donnerWorkerStats = current;
+    const records = state.__donnerWorkerResultCounters ?? [];
+    delete state.__donnerWorkerResultCounters;
+    return records;
+  });
+}
+
+/**
+ * Split recorded results into those rendered for active drag requests and the release results
+ * published after the last of them.
+ */
+function splitMaskedDragResults(results: WorkerResultCounters[]) {
+  const lastHeld = results.findLastIndex((result) => result.activeDragResult);
+  return {
+    held: results.filter((result) => result.activeDragResult),
+    release: results.slice(lastHeld + 1),
+  };
+}
+
+/** Tiles a result rasterized other than by a damage patch. */
+function unpatchedTileCount(result: WorkerResultCounters) {
+  return result.cachedTileCount + result.immediateTileCount - result.damagePatchTileCount;
+}
+
+/**
+ * As in the native compositor, every result rendered while the masked child is held takes the
+ * fast path (or finds nothing dirty) without a slow-path frame, and rasterizes at most one tile,
+ * by patching only the damaged part of its owner.
+ */
+function expectHeldMaskedDragDamagePatch(held: WorkerResultCounters[]) {
+  expect(
+    held.filter((result) => result.fastPathFrames > 0).length,
+    "the held drag must produce fast-path results",
+  ).toBeGreaterThan(0);
+  const shape = (result: WorkerResultCounters) => ({
+    completedResults: result.completedResults,
+    slowPathFramesWithDirty: result.slowPathFramesWithDirty,
+    fastPathOrClean: result.fastPathFrames + result.noDirtyFrames > 0,
+    damagePatchTileCount: result.damagePatchTileCount,
+    patchesAtMostOneTile: result.damagePatchTileCount <= 1,
+    unpatchedTileCount: unpatchedTileCount(result),
+  });
+  expect(
+    held.map(shape),
+    "every held masked-child result must take the fast path and only patch its owning tile",
+  ).toEqual(
+    held.map((result) => ({
+      ...shape(result),
+      slowPathFramesWithDirty: 0,
+      fastPathOrClean: true,
+      patchesAtMostOneTile: true,
+      unpatchedTileCount: 0,
+    })),
+  );
+}
+
+/**
+ * Drag the selected masked crown face while recording every worker result's counters. The counters
+ * are printed as the held-drag and release baseline, and the held results are checked even when
+ * the drag itself misses a check, so a run reports both.
+ */
+async function maskedCrownDragWithCounters(
+  page: Page,
+  point: { x: number; y: number },
+  sourceVisible: boolean,
+) {
+  const phase = "geode-crown";
+  await startWorkerResultCounters(page);
+  let drag: Awaited<ReturnType<typeof continuousDrag>> | undefined;
+  let dragFailure: unknown;
+  try {
+    drag = await continuousDrag(page, point, 0.25, phase);
+  } catch (error) {
+    dragFailure = error;
+  }
+  const results = splitMaskedDragResults(await stopWorkerResultCounters(page));
+  const baseline = {
+    project: test.info().project.name,
+    raster: await rasterIdentity(page),
+    sourceVisible,
+    ...results,
+  };
+  console.log(`masked-drag-counters ${JSON.stringify(baseline)}`);
+  const unpatched = results.held.filter((result) => unpatchedTileCount(result) > 0).length;
+  const slowPath = results.held.filter((result) => result.slowPathFramesWithDirty > 0).length;
+  let checkFailure: unknown;
+  await completionCheck(
+    "heldMaskedDragDamagePatch",
+    phase,
+    `${results.held.length} held results, ${slowPath} slow path, ${unpatched} rasterized unpatched`,
+    () => expectHeldMaskedDragDamagePatch(results.held),
+  ).catch((error) => {
+    checkFailure = error;
+  });
+  if (dragFailure !== undefined) throw dragFailure;
+  if (checkFailure !== undefined) throw checkFailure;
+  return { drag, workerResults: results };
+}
+
 test.describe("Geode detailed interactions", () => {
   test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 2 });
   for (const sourceVisible of [false, true]) {
@@ -1916,7 +2083,7 @@ test.describe("Geode detailed interactions", () => {
           // Separate selection from the drag press so this does not enter double-click editing.
           await page.waitForTimeout(500);
           report.ownerBeforeDrag = await readGpuOwnerDispatchStats(page);
-          report.drag = await continuousDrag(page, point, 0.25, "geode-crown");
+          Object.assign(report, await maskedCrownDragWithCounters(page, point, sourceVisible));
           report.ownerAfterDrag = await readGpuOwnerDispatchStats(page);
           save("drag finished");
           await page.screenshot({ path: info.outputPath("geode-interaction.png") });
