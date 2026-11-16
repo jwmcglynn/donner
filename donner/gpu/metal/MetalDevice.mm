@@ -280,6 +280,9 @@ struct CompletionState final : DeviceLossRelease {
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
   /// Submissions whose completion handlers have all run, parked ones included. Test observable.
   std::atomic<uint64_t> handlersRun{0};
+  /// Command buffers whose completion handlers have run, which only ever grows. Test observable;
+  /// see \ref MetalDevice::commandBuffersCompletedForTest.
+  std::atomic<uint64_t> commandBuffersCompleted{0};
   /// Loss condition of the backend root, shared with every device over it. A failed command
   /// buffer declares it, so the handler holds it rather than reaching through the device.
   std::shared_ptr<DeviceLostState> rootLoss;
@@ -303,8 +306,9 @@ struct CompletionState final : DeviceLossRelease {
   /// wait for a serial sleep on.
   std::condition_variable completionAdvanced;
   /// Clock a test installed in place of the steady clock; see
-  /// \ref MetalDevice::setProgressClockForTest. Set before the device's first submission and never
-  /// changed afterwards, so the completion handlers that read it need no lock.
+  /// \ref MetalDevice::setProgressClockForTest. Set once, under \ref watermarkMutex, before the
+  /// device's first submission, and never changed afterwards. Completion handlers read it under
+  /// that lock; the device's own thread, which set it, also reads it without the lock.
   std::shared_ptr<TestProgressClock> testClock;
   /// When a wait last found its work pending, as ticks of \ref now, or the lowest value when none
   /// has; see \ref MetalDevice::lastPendingWaitLookForTest.
@@ -509,6 +513,7 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
     if (state.buffersOutstanding > 0) {
       --state.buffersOutstanding;
     }
+    state.commandBuffersCompleted.fetch_add(1, std::memory_order_release);
     state.noteProgressLocked();
     state.completionAdvanced.notify_all();
   }
@@ -1278,6 +1283,10 @@ Status MetalDevice::setProgressClockForTest(std::shared_ptr<TestProgressClock> c
   CompletionState& state = *impl_->completionState;
   {
     std::lock_guard<std::mutex> lock(state.watermarkMutex);
+    if (state.testClock != nullptr) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "a progress clock for a test is already installed on this device"};
+    }
     state.testClock = clock;
   }
   // The wait sleeps under the watermark lock, so an advance that takes the lock to notify cannot
@@ -1307,6 +1316,10 @@ uint64_t MetalDevice::commandBufferRoomWaitsForTest() const {
 
 uint64_t MetalDevice::serialWaitLooksForTest() const {
   return impl_->serialWaitLooks.load(std::memory_order_acquire);
+}
+
+uint64_t MetalDevice::commandBuffersCompletedForTest() const {
+  return impl_->completionState->commandBuffersCompleted.load(std::memory_order_acquire);
 }
 
 uint64_t MetalDevice::commandBuffersInFlightForTest() const {

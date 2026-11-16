@@ -335,6 +335,12 @@ public:
   /// accessor, readable from any thread.
   [[nodiscard]] uint64_t commandBuffersInFlightForTest() const;
 
+  /// Command buffers of this device whose completion handlers have run, counted as they leave
+  /// \ref commandBuffersInFlightForTest. It only ever grows, so a case can wait for released work
+  /// to complete without racing a submission that commits more work meanwhile. Test accessor,
+  /// readable from any thread.
+  [[nodiscard]] uint64_t commandBuffersCompletedForTest() const;
+
   /// How many times serial waits on this device have looked at its completion state, so a case
   /// can tell a wait that looks only when that state changes from one that keeps checking. Test
   /// accessor, readable from any thread.
@@ -351,12 +357,15 @@ public:
    * While \p clock is installed, a wait sleeps until it is woken by a change in completion state
    * or by \ref TestProgressClock::advance, however much real time passes, so a case that forgets
    * to move the clock hangs rather than passing by luck. Install the same clock on every device a
-   * case's waits depend on: a consumer's wait reads its producers' progress. Waits that live in
-   * \ref donner::gpu::Device rather than in this backend still read the steady clock, so a case
-   * that installs a clock does not use them.
+   * case's waits depend on: a consumer's wait reads its producers' progress.
+   *
+   * A device on a test clock must not be used with \ref donner::gpu::Device::waitForTextureSource
+   * or \ref donner::gpu::Device::waitForTextureSourceUnlessStalled: those waits live in the shared
+   * layer and compare the steady clock against progress this device stamps on the test clock.
    *
    * @param clock Clock to judge by.
-   * @return InvalidState once this device has submitted work, which is stamped on the clock it had.
+   * @return InvalidState when \p clock is null, when a clock is already installed, or once this
+   *   device has submitted work, which is stamped on the clock it had.
    */
   Status setProgressClockForTest(std::shared_ptr<TestProgressClock> clock);
 
