@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
 #include <algorithm>
+#include <numeric>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -4162,70 +4163,120 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// \ref kMaximumTextStrokeGroupPoints, unless a test lowers it.
   std::size_t textStrokeGroupPointLimit = kMaximumTextStrokeGroupPoints;
 
-  /**
-   * Returns the end of the group of stroke outlines that starts at \p begin: following outlines
-   * join it while their bounds, grown by a device pixel, meet the group's and its points stay within
-   * \ref textStrokeGroupPointLimit.
-   *
-   * @param outlines Stroke outlines of one text chunk's glyphs, in order.
-   * @param begin First outline of the group.
-   */
-  std::size_t textStrokeGroupEnd(std::span<const Path> outlines, std::size_t begin) const {
+  /// Bounds of each outline, grown by one device pixel, so outlines whose grown bounds do not meet
+  /// share no pixel.
+  std::vector<Box2d> grownTextStrokeBounds(std::span<const Path> outlines) const {
     const Transform2d localFromDevice = deviceFromLocalTransform.inverse();
     const double margin =
         std::max(localFromDevice.transformVector(Vector2d(1.0, 0.0)).length(),
                  localFromDevice.transformVector(Vector2d(0.0, 1.0)).length());
-    Box2d group = outlines[begin].bounds().inflatedBy(margin);
-    std::size_t points = outlines[begin].points().size();
-    std::size_t end = begin + 1;
-    for (; end < outlines.size(); ++end) {
-      const Box2d next = outlines[end].bounds().inflatedBy(margin);
-      const bool touches = next.topLeft.x <= group.bottomRight.x &&
-                           group.topLeft.x <= next.bottomRight.x &&
-                           next.topLeft.y <= group.bottomRight.y &&
-                           group.topLeft.y <= next.bottomRight.y;
-      points += outlines[end].points().size();
-      if (!touches || points > textStrokeGroupPointLimit) {
-        break;
-      }
-      group.addBox(next);
+    std::vector<Box2d> bounds;
+    bounds.reserve(outlines.size());
+    for (const Path& outline : outlines) {
+      bounds.push_back(outline.bounds().inflatedBy(margin));
     }
-    return end;
+    return bounds;
   }
 
   /**
-   * Draws the stroke outlines of one text chunk's glyphs. Outlines that touch are joined into one
-   * NonZero shape, so a pixel where the strokes of adjacent glyphs overlap is covered once. Shapes
-   * more than a device pixel apart share no pixel, so drawing them apart gives the same coverage. A
-   * group past \ref textStrokeGroupPointLimit is split there, and where two groups meet a pixel
-   * both cover is painted twice, as it is for separate shapes. A group the encoder still rejects is
-   * drawn outline by outline; an outline that cannot be encoded rejects the frame, as any path does.
+   * Returns, for each box, a representative of the set of boxes it touches directly or through
+   * other boxes, found by sweeping the boxes from left to right.
    *
-   * @param outlines Stroke outlines of the chunk's glyphs, in order.
+   * @param boxes Boxes to connect.
+   */
+  static std::vector<std::size_t> TouchingBoxSets(std::span<const Box2d> boxes) {
+    std::vector<std::size_t> parent(boxes.size());
+    std::iota(parent.begin(), parent.end(), std::size_t{0});
+    const auto find = [&parent](std::size_t index) {
+      while (parent[index] != index) {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+      }
+      return index;
+    };
+    std::vector<std::size_t> byLeft(boxes.size());
+    std::iota(byLeft.begin(), byLeft.end(), std::size_t{0});
+    std::ranges::sort(byLeft, [&boxes](std::size_t a, std::size_t b) {
+      return boxes[a].topLeft.x < boxes[b].topLeft.x;
+    });
+    std::vector<std::size_t> open;
+    for (const std::size_t index : byLeft) {
+      const Box2d& box = boxes[index];
+      std::erase_if(open, [&](std::size_t other) { return boxes[other].bottomRight.x < box.topLeft.x; });
+      for (const std::size_t other : open) {
+        if (boxes[other].topLeft.y <= box.bottomRight.y && box.topLeft.y <= boxes[other].bottomRight.y) {
+          parent[find(index)] = find(other);
+        }
+      }
+      open.push_back(index);
+    }
+    for (std::size_t index = 0; index < parent.size(); ++index) {
+      parent[index] = find(index);
+    }
+    return parent;
+  }
+
+  /**
+   * Groups the stroke outlines of one text chunk into shapes. Outlines whose bounds, grown by a
+   * device pixel, touch, directly or through other outlines of the chunk, form one group, wherever
+   * they are in the run; outlines in different groups share no pixel. A group is split, in run
+   * order, where its outline points would pass \ref textStrokeGroupPointLimit, and a pixel two
+   * parts both cover is then painted twice.
+   *
+   * @param outlines Stroke outlines of one text chunk's glyphs, in run order.
+   * @return Each group's outline indices, in run order.
+   */
+  std::vector<std::vector<std::size_t>> textStrokeGroups(std::span<const Path> outlines) const {
+    const std::vector<std::size_t> sets = TouchingBoxSets(grownTextStrokeBounds(outlines));
+    constexpr std::size_t kNoGroup = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> openGroupOfSet(outlines.size(), kNoGroup);
+    std::vector<std::vector<std::size_t>> groups;
+    std::vector<std::size_t> groupPoints;
+    for (std::size_t index = 0; index < outlines.size(); ++index) {
+      std::size_t& group = openGroupOfSet[sets[index]];
+      const std::size_t points = outlines[index].points().size();
+      if (group == kNoGroup || groupPoints[group] + points > textStrokeGroupPointLimit) {
+        group = groups.size();
+        groups.emplace_back();
+        groupPoints.push_back(0);
+      }
+      groups[group].push_back(index);
+      groupPoints[group] += points;
+    }
+    return groups;
+  }
+
+  /**
+   * Draws the stroke outlines of one text chunk's glyphs, joining each group from
+   * \ref textStrokeGroups into one NonZero shape, so a pixel where the strokes of touching glyphs
+   * overlap is covered once. A group the encoder rejects is drawn outline by outline, so overlaps
+   * inside it are painted twice, as when every glyph was its own shape; an outline that cannot be
+   * encoded on its own rejects the frame, as any path does.
+   *
+   * @param outlines Stroke outlines of the chunk's glyphs, in run order.
    * @param draw Paints a shape: called with the joined outline and its encoding.
    */
   template <typename DrawFn>
   void drawTextStrokeOutlines(std::span<const Path> outlines, const DrawFn& draw) {
-    for (std::size_t begin = 0; begin < outlines.size();) {
-      const std::size_t end = textStrokeGroupEnd(outlines, begin);
-      if (end - begin == 1) {
-        draw(outlines[begin], encodeTransientGeometry(outlines[begin], FillRule::NonZero));
-      } else {
-        PathBuilder builder;
-        for (const Path& outline : outlines.subspan(begin, end - begin)) {
-          builder.addPath(outline);
-        }
-        const Path joined = builder.build();
-        if (const geode::EncodedPath* encoded =
-                encodeTransientGeometryOrSplit(joined, FillRule::NonZero)) {
-          draw(joined, encoded);
-        } else {
-          for (const Path& outline : outlines.subspan(begin, end - begin)) {
-            draw(outline, encodeTransientGeometry(outline, FillRule::NonZero));
-          }
-        }
+    for (const std::vector<std::size_t>& group : textStrokeGroups(outlines)) {
+      if (group.size() == 1) {
+        const Path& outline = outlines[group.front()];
+        draw(outline, encodeTransientGeometry(outline, FillRule::NonZero));
+        continue;
       }
-      begin = end;
+      PathBuilder builder;
+      for (const std::size_t index : group) {
+        builder.addPath(outlines[index]);
+      }
+      const Path joined = builder.build();
+      if (const geode::EncodedPath* encoded =
+              encodeTransientGeometryOrSplit(joined, FillRule::NonZero)) {
+        draw(joined, encoded);
+        continue;
+      }
+      for (const std::size_t index : group) {
+        draw(outlines[index], encodeTransientGeometry(outlines[index], FillRule::NonZero));
+      }
     }
   }
 
@@ -6410,11 +6461,13 @@ void RendererGeode::setGeometryBudgetForTesting(std::size_t maximumDraws, std::s
 }
 
 void RendererGeode::setPathEncoderItemLimitForTesting(std::size_t maximumItems) {
-  impl_->pathEncoderLimits.maximumEncodedGeometryItems = maximumItems;
+  impl_->pathEncoderLimits.maximumEncodedGeometryItems =
+      std::min(geode::GeodePathEncoder::Limits{}.maximumEncodedGeometryItems, maximumItems);
 }
 
 void RendererGeode::setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints) {
-  impl_->textStrokeGroupPointLimit = maximumPoints;
+  impl_->textStrokeGroupPointLimit =
+      std::min(Impl::kMaximumTextStrokeGroupPoints, maximumPoints);
 }
 
 void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
