@@ -167,7 +167,11 @@ private:
 
 /// Resolves the face the text pipeline actually uses for the first `<text>` element in @p svg,
 /// exercising the same family-list cascade as rendering.
-SelectedFace ResolveDocumentFace(std::string_view svg) {
+///
+/// @param svg Document under test.
+/// @param defaultFamily Replaces the suite's default family when set; empty clears it.
+SelectedFace ResolveDocumentFace(std::string_view svg,
+                                 std::optional<std::string_view> defaultFamily = std::nullopt) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   parser::SVGParser::Options options;
   auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
@@ -178,6 +182,9 @@ SelectedFace ResolveDocumentFace(std::string_view svg) {
 
   SVGDocument document = std::move(result.result());
   RegisterFontsFromDirectoryForTesting(document, TestFontsDir());
+  if (defaultFamily) {
+    document.registry().ctx().get<FontManager>().setDefaultFamily(*defaultFamily);
+  }
 
   std::optional<SVGElement> textElement = document.querySelector("text");
   EXPECT_TRUE(textElement.has_value()) << "SVG under test has no <text> element";
@@ -298,6 +305,38 @@ TEST(FontSelection, DocumentBoldGenericFamilyResolvesToTheBoldFace) {
 // list that matches nothing renders in the serif face rather than the product's embedded face.
 TEST(FontSelection, UnmatchedFamilyListUsesTheSuiteDefaultFamily) {
   EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid")), FaceFrom("NotoSerif-Regular.ttf"));
+}
+
+TEST(FontSelection, FullyUnknownFamilyListFallsBackToTheEmbeddedFace) {
+  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid"), ""), FaceFrom(kEmbeddedFallback));
+}
+
+TEST(FontSelection, UnmatchedFamilyListUsesTheDefaultFamilyFaceForTheRequest) {
+  EXPECT_THAT(
+      ResolveDocumentFace(TextSvgWithFamily("Invalid", R"(font-weight="bold")"), "Noto Sans"),
+      FaceFrom("NotoSans-Bold.ttf"));
+  EXPECT_THAT(
+      ResolveDocumentFace(TextSvgWithFamily("Invalid", R"(font-style="italic")"), "Noto Sans"),
+      FaceFrom("NotoSans-Italic.ttf"));
+  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid"), "Noto Sans"),
+              FaceFrom("NotoSans-Regular.ttf"));
+}
+
+TEST(FontSelection, ChUnitOfAnUnmatchedFamilyListUsesTheDefaultFamily) {
+  HermeticFontSet fonts;
+  FontManager& fontManager = fonts.fontManager();
+  TextEngine engine(fontManager, fonts.registry());
+  const std::vector<RcString> unmatched = {RcString("Invalid")};
+  const std::vector<RcString> mono = {RcString("Noto Mono")};
+
+  fontManager.setDefaultFamily("monospace");
+  const std::optional<double> defaultCh = engine.measureChUnitInEm(unmatched);
+  const std::optional<double> monoCh = engine.measureChUnitInEm(mono);
+  ASSERT_THAT(defaultCh, testing::Optional(testing::Gt(0.0)));
+  EXPECT_THAT(defaultCh, testing::Eq(monoCh));
+
+  fontManager.setDefaultFamily("");
+  EXPECT_THAT(engine.measureChUnitInEm(unmatched), testing::Ne(monoCh));
 }
 
 TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {

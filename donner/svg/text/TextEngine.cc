@@ -3833,7 +3833,12 @@ FontHandle ResolveSpanFace(FontManager& fontManager,
       span.fontFamilies.empty() ? families : span.fontFamilies;
   FontHandle spanFont = FindFirstAvailableFont(fontManager, spanFamilies);
   if (!spanFont) {
-    spanFont = fallback;
+    // A list that matches nothing resolves to the user agent's default family at the span's own
+    // weight, style and stretch.
+    spanFont = fontManager.hasDefaultFamily()
+                   ? fontManager.defaultFont(span.fontWeight, static_cast<int>(span.fontStyle),
+                                             static_cast<int>(span.fontStretch))
+                   : fallback;
   }
   if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
       span.fontStretch != FontStretch::Normal) {
@@ -5184,6 +5189,9 @@ private:
         add(family);
       }
     }
+    if (fontManager.hasDefaultFamily()) {
+      add(fontManager.defaultFamily());
+    }
     const size_t faceCount = fontManager.numFaces();
     for (size_t index = 0; index < faceCount; ++index) {
       add(fontManager.faceFamilyName(index));
@@ -6296,7 +6304,7 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
   span.fontStyle = properties.fontStyle.get().value();
   span.fontStretch = static_cast<FontStretch>(properties.fontStretch.get().value());
   FontHandle font =
-      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.defaultFont());
+      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.fallbackFont());
   font = selectBackendSafeFont(*backend_, fontManager_, font);
   const float size = CheckedFontSizePx(
       properties.fontSize.get().value().toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));

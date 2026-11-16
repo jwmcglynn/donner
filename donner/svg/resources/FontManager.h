@@ -225,7 +225,8 @@ public:
   /**
    * Set the user agent's default family, used when no family in a `font-family` list is
    * available. CSS leaves this face to the user agent. Without a default family, or while the
-   * named family is unavailable, \ref defaultFont answers with \ref fallbackFont.
+   * named family is unavailable, \ref defaultFont answers with \ref fallbackFont. Changing it
+   * advances \ref fontResourceRevision so prepared text is laid out again.
    *
    * @param family A family name or CSS generic family name; empty clears the default.
    */
@@ -240,6 +241,12 @@ public:
    * @param stretch The requested font stretch, as passed to \ref findFont.
    */
   FontHandle defaultFont(int weight = 400, int style = 0, int stretch = 5);
+
+  /// Whether a default family is set by \ref setDefaultFamily and currently available.
+  bool hasDefaultFamily() const;
+
+  /// The default family set by \ref setDefaultFamily, or empty.
+  const std::string& defaultFamily() const { return defaultFamily_; }
 
   /**
    * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
