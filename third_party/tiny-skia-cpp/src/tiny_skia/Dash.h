@@ -97,8 +97,9 @@ class ContourMeasureIter {
 
  private:
   PathSegmentsIter iter_;
-  /// Donner addition: the curve tolerance for a segment with control points \p points.
-  [[nodiscard]] float toleranceFor(std::span<const Point> points) const;
+  /// Donner addition: the curve tolerance for a curve with control points \p points, which it may
+  /// translate so the curve is measured relative to its first point.
+  [[nodiscard]] float prepareCurve(std::span<Point> points) const;
 
   float resScale_ = 1.0f;
   StrokeLimits* limits_ = nullptr;

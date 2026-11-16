@@ -519,6 +519,30 @@ TEST(PathTest, PrecisionFloorIsPerSegment) {
               testing::ElementsAreArray(curveDashPoints));
 }
 
+TEST(PathTest, DashMeasuresACurveWithALargeConstantCoordinate) {
+  // A quad four million units out whose x never changes, rising 0.2 and returning, measured at a
+  // resolution scale of 1,000. Only its y moves, and y is small, so it measures as it does at the
+  // origin, 0.4 long, and dashes to the same dashes moved four million units.
+  const auto quadAt = [](float x) {
+    tiny_skia::PathBuilder builder;
+    builder.moveTo(x, 0.0f);
+    builder.quadTo(x, 0.4f, x, 0.0f);
+    return *builder.finish();
+  };
+  const std::optional<tiny_skia::StrokeDash> dash =
+      tiny_skia::StrokeDash::create({0.05f, 0.05f}, 0.0f);
+  ASSERT_THAT(dash, Optional(testing::_));
+  const std::optional<tiny_skia::Path> near = quadAt(0.0f).dash(*dash, 1000.0f);
+  const std::optional<tiny_skia::Path> far = quadAt(4000000.0f).dash(*dash, 1000.0f);
+  ASSERT_THAT(near, Optional(testing::_));
+  ASSERT_THAT(far, Optional(testing::_));
+  std::vector<tiny_skia::Point> moved(near->points().begin(), near->points().end());
+  for (tiny_skia::Point& point : moved) {
+    point.x += 4000000.0f;
+  }
+  EXPECT_THAT(far->points(), testing::ElementsAreArray(moved));
+}
+
 TEST(PathTest, StrokeAndDashWorkStaysBoundedAtExtremeScales) {
   // Past the precision of the coordinates, every larger resolution scale subdivides to the same
   // tolerance: the stroke's outline and the dash's measurement steps are the same at 10^6 and 10^9,
