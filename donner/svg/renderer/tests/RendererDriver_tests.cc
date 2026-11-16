@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1808,6 +1809,49 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
   driver.draw(document);
   EXPECT_EQ(driver.textPreparationStatsForTesting().fullElementStylePasses, 2u);
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 26u);
+}
+
+TEST_F(RendererDriverTest, TextSpansShareOneResolvedDashListPerStyle) {
+  // Each text node, and each empty child element, becomes a span, and every one of them takes the
+  // text's dash list, by inheritance for the children. The spans hold one resolved copy of that
+  // list between them, so the retained dash payload stays at one list however many spans the text
+  // has.
+  constexpr int kTextNodeCount = 200;
+  constexpr std::size_t kDashCount = 1000;
+  std::string content;
+  for (int node = 0; node < kTextNodeCount; ++node) {
+    content += "l<tspan/>";
+  }
+  std::string dashes;
+  for (std::size_t dash = 0; dash < kDashCount; ++dash) {
+    dashes += "1 ";
+  }
+  SVGDocument document = makeDocument(
+      R"svg(<text x="10" y="60" font-family="sans-serif" font-size="12" stroke="black" stroke-dasharray=")svg" +
+          dashes + R"svg(">)svg" + content + "</text>",
+      Vector2i(200, 200));
+
+  std::size_t spanCount = 0;
+  std::size_t retainedDashBytes = 0;
+  ON_CALL(renderer, drawText(_, _, _))
+      .WillByDefault(
+          [&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+            std::vector<const double*> lists;
+            for (const auto& span : text.spans) {
+              ++spanCount;
+              const std::span<const double> lengths = span.strokeDashLengths();
+              if (!lengths.empty() &&
+                  std::find(lists.begin(), lists.end(), lengths.data()) == lists.end()) {
+                lists.push_back(lengths.data());
+                retainedDashBytes += lengths.size_bytes();
+              }
+            }
+          });
+
+  driver.draw(document);
+
+  ASSERT_GE(spanCount, static_cast<std::size_t>(kTextNodeCount));
+  EXPECT_EQ(retainedDashBytes, kDashCount * sizeof(double));
 }
 
 TEST_F(RendererDriverTest, FilteredTextSpansBoundObjectBoxWorkPerRoot) {

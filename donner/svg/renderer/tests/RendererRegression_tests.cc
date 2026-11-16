@@ -1974,46 +1974,107 @@ TEST_F(RendererRegressionTests, DashedTextStrokeMatchesDashedGlyphOutlines) {
   }
 }
 
+/// Strokes of a "Te<tspan>xt</tspan>" text element and of the `<path>` that must draw the same
+/// pixels.
+struct SpanStrokeCase {
+  std::string_view label;
+  std::string_view textAttributes;   ///< Attributes of the `<text>`.
+  std::string_view spanAttributes;   ///< Attributes of the `<tspan>` around "xt".
+  std::string_view groupAttributes;  ///< Attributes of the `<g>` around both expected paths.
+  std::string_view textStroke;       ///< Attributes of the path of the "Te" outlines.
+  std::string_view spanStroke;       ///< Attributes of the path of the "xt" outlines.
+};
+
+/// Renders \p testCase's text and compares it with a `<path>` of the "Te" glyph outlines and one of
+/// the "xt" outlines, stroked as the case states.
+void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
+  SCOPED_TRACE(testCase.label);
+  SVGDocument textDocument = instantiateSubtree(
+      R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
+          std::string(testCase.textAttributes) + ">Te<tspan " +
+          std::string(testCase.spanAttributes) + ">xt</tspan></text>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+  const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
+  ASSERT_THAT(outlines, testing::SizeIs(4));
+  const std::vector<Path> textOutlines(outlines.begin(), outlines.begin() + 2);
+  const std::vector<Path> spanOutlines(outlines.begin() + 2, outlines.end());
+  SVGDocument pathDocument = instantiateSubtree(
+      "<g " + std::string(testCase.groupAttributes) + "><path " + std::string(testCase.textStroke) +
+          " d=\"" + JoinedPathData(textOutlines) + "\"/><path " + std::string(testCase.spanStroke) +
+          " d=\"" + JoinedPathData(spanOutlines) + "\"/></g>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+  AssertVisibleFixture(expected, "span_stroke_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected,
+                                       "span_stroke_" + std::string(testCase.label),
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, TextSpanResolvesItsOwnStrokeDash) {
   // Each span strokes with its own computed stroke-dasharray and stroke-dashoffset: "Te" takes the
-  // text's dash and "xt" its tspan's. Each matches a `<path>` of its glyph outlines with that
-  // span's dash.
-  struct Case {
-    std::string_view label;
-    std::string_view textDash;
-    std::string_view spanDash;
-  };
-  constexpr std::array<Case, 3> kCases = {{
-      {"span_none", R"svg(stroke-dasharray="6 4")svg", R"svg(stroke-dasharray="none")svg"},
-      {"span_pattern", "", R"svg(stroke-dasharray="3 2")svg"},
-      {"span_offset", R"svg(stroke-dasharray="6 4")svg", R"svg(stroke-dashoffset="3")svg"},
+  // text's dash and "xt" its tspan's.
+  constexpr std::string_view kStroke = R"svg(fill="none" stroke="black" stroke-width="2")svg";
+  const std::array<SpanStrokeCase, 3> cases = {{
+      {"span_none", R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(stroke-dasharray="none")svg", kStroke, R"svg(stroke-dasharray="6 4")svg", ""},
+      {"span_pattern", kStroke, R"svg(stroke-dasharray="3 2")svg", kStroke, "",
+       R"svg(stroke-dasharray="3 2")svg"},
+      {"span_offset", R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(stroke-dashoffset="3")svg", kStroke, R"svg(stroke-dasharray="6 4")svg",
+       R"svg(stroke-dasharray="6 4" stroke-dashoffset="3")svg"},
   }};
-  for (const Case& testCase : kCases) {
-    SCOPED_TRACE(testCase.label);
-    const std::string common = R"svg(fill="none" stroke="black" stroke-width="2" )svg";
-    SVGDocument textDocument = instantiateSubtree(
-        R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" + common +
-            std::string(testCase.textDash) + ">Te<tspan " + std::string(testCase.spanDash) +
-            ">xt</tspan></text>",
-        parser::SVGParser::Options(), Vector2i(200, 200));
-    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
-    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
 
-    const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
-    ASSERT_THAT(outlines, testing::SizeIs(4));
-    const std::vector<Path> textOutlines(outlines.begin(), outlines.begin() + 2);
-    const std::vector<Path> spanOutlines(outlines.begin() + 2, outlines.end());
-    SVGDocument pathDocument = instantiateSubtree(
-        "<g " + common + std::string(testCase.textDash) + "><path d=\"" +
-            JoinedPathData(textOutlines) + "\"/><path " + std::string(testCase.spanDash) + " d=\"" +
-            JoinedPathData(spanOutlines) + "\"/></g>",
-        parser::SVGParser::Options(), Vector2i(200, 200));
-    const RendererBitmap expected =
-        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
-    AssertVisibleFixture(expected, "text_span_dash_visible");
-    editor::tests::CompareBitmapToBitmap(actual, expected,
-                                         "text_span_dash_" + std::string(testCase.label),
-                                         editor::tests::PixelmatchIdentityParams());
+TEST_F(RendererRegressionTests, TextSpanStrokeLengthsResolveAgainstTheSpanFontSize) {
+  // Font-relative stroke-width, stroke-dasharray and stroke-dashoffset resolve against the font
+  // size of the element that styles the span: 60 for the text, 40 for a tspan that sets its own.
+  // An ex is half an em.
+  constexpr std::string_view kPaint = R"svg(fill="none" stroke="black")svg";
+  const std::array<SpanStrokeCase, 3> cases = {{
+      {"em",
+       R"svg(fill="none" stroke="black" stroke-width="0.04em" stroke-dasharray="0.1em 0.05em" stroke-dashoffset="0.05em")svg",
+       "", kPaint, R"svg(stroke-width="2.4" stroke-dasharray="6 3" stroke-dashoffset="3")svg",
+       R"svg(stroke-width="2.4" stroke-dasharray="6 3" stroke-dashoffset="3")svg"},
+      {"ex",
+       R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="0.2ex 0.1ex" stroke-dashoffset="0.1ex")svg",
+       "", kPaint, R"svg(stroke-width="2" stroke-dasharray="6 3" stroke-dashoffset="3")svg",
+       R"svg(stroke-width="2" stroke-dasharray="6 3" stroke-dashoffset="3")svg"},
+      {"span_font_size",
+       R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(font-size="40" stroke-width="0.05em" stroke-dasharray="0.1em 0.05em" stroke-dashoffset="0.05em")svg",
+       kPaint, R"svg(stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(stroke-width="2" stroke-dasharray="4 2" stroke-dashoffset="2")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
+TEST_F(RendererRegressionTests, NonScalingTextStrokeKeepsEachSpanAtItsAuthoredLengths) {
+  // Under `vector-effect: non-scaling-stroke` the text's stroke width and dash lengths stay at
+  // their authored values on the canvas, for the text's own pattern and a tspan's, as for a
+  // `<path>` of the same outlines under the same transform.
+  constexpr std::string_view kText =
+      R"svg(transform="scale(1.5) translate(-15 -60)" vector-effect="non-scaling-stroke" fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4" stroke-dashoffset="2")svg";
+  constexpr std::string_view kGroup =
+      R"svg(transform="scale(1.5) translate(-15 -60)" fill="none" stroke="black" stroke-width="2")svg";
+  const std::array<SpanStrokeCase, 2> cases = {{
+      {"text_pattern", kText, "", kGroup,
+       R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg",
+       R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg"},
+      {"span_pattern", kText,
+       R"svg(stroke-width="3" stroke-dasharray="3 2" stroke-dashoffset="1")svg", kGroup,
+       R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg",
+       R"svg(vector-effect="non-scaling-stroke" stroke-width="3" stroke-dasharray="3 2" stroke-dashoffset="1")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
   }
 }
 

@@ -217,6 +217,9 @@ struct ComputedTextComponent {
     /// Stroke dash offset in user units for this span (`stroke-dashoffset`).
     double strokeDashOffset = 0.0;
 
+    /// The span's stroke dash lengths in user units; empty for a solid stroke.
+    [[nodiscard]] std::span<const double> strokeDashLengths() const { return strokeDashArray; }
+
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
     int fontWeight = 400;
