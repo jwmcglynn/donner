@@ -57,3 +57,49 @@ This reference qualifies the full-text CPU rendering path. Geode currently skips
 bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
+
+## Donner-rendered font-size-adjust reference
+
+`resvg-font-size-adjust-simple-case.png` is Donner's own rendering of the unchanged
+corpus `text/font-size-adjust/simple-case.svg`. It is used because no valid
+upstream rendering exists: the vendored PNG kerns `Text` but centers it on the
+unkerned advance, and resvg v0.49.0 does not implement `font-size-adjust` (it draws
+the text at 64px).
+
+Evidence, measured as ink centroids of the two vertical stems in a band below the
+T crossbar, in device px at the 500x500 (2.5x) canvas:
+
+| Stem | Vendored PNG | This reference | Offset |
+| ---- | ------------ | -------------- | ------ |
+| T    | 184.89       | 188.92         | 4.03   |
+| t    | 311.83       | 315.86         | 4.03   |
+
+The stem-to-stem distance is equal within 0.01 px, so both images draw the same
+adjusted size (64 * 0.3 / 0.536 = 35.82, from Noto Sans's OS/2 x-height of 536
+units) and the same kerned advances. Noto Sans shapes `Text` to 2010 units unkerned
+and 1920 kerned (T-e -70, e-x -20). Half of the 90 units of kerning is
+45 * 35.82 / 1000 = 1.61 user units = 4.03 device px, the whole offset.
+[SVG 2 text-anchor](https://www.w3.org/TR/SVG2/text.html#TextAnchoringProperties)
+centers the chunk on its shaped advance. `text/text-anchor/middle-on-text`, the
+same kerned string centered without `font-size-adjust`, matches its upstream
+reference at default settings, and
+`RendererRegressionTests.FontSizeAdjustMatchesExplicitUsedSize` requires the
+adjusted rendering to equal the text drawn at the explicit used size.
+
+The image was created from the simple text tier on TinySkia with the suite's
+golden-creation path, with the renderer sources of main at
+`21c59c7588b1f64ecd4df30496e975544d194c61`. The suite compares it at default settings on both CPU text
+tiers; the Geode resvg lane skips `text/*` rows through its backend feature gate.
+
+Corpus SVG SHA-256: `db28cd3a01650a98afe5d8f7a718434c1e71802b68b8b7a3d8d2feb8f97f11ea`.
+
+Reference PNG SHA-256: `7493132a5ca79910e11d3ece3c025cab71a14360162feb6e1e550df1c2762abb`.
+
+To regenerate after an intended rendering change, delete the image, run the
+command below from the repository root, and review the new image before
+committing it:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=*TextFontSizeAdjust*'
+```

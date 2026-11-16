@@ -209,7 +209,7 @@ class SpanCapture {
   /// baked into the recorded runs. See Painter::strokePath and fillRect's return value.
   bool strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                   const Stroke& stroke, Transform transform = Transform::identity(),
-                  const Mask* mask = nullptr);
+                  const Mask* mask = nullptr, StrokeOutputLimit* limit = nullptr);
 
   /// The runs the last successful capture recorded, in device space.
   [[nodiscard]] const CapturedSpans& spans() const { return spans_; }

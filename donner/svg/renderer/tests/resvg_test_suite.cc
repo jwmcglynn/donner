@@ -723,8 +723,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"out-of-order-referencing.svg",
                      Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
-                    {"patternContentUnits-with-viewBox.svg",
-                     Params::WithThreshold(kDefaultThreshold, 150, "Pattern AA drift")},
                     {"recursive-on-child.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
@@ -739,14 +737,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150,
                                            "Reference resamples a rasterized pattern tile")},
-                    {"transform-and-patternTransform.svg",
-                     Params{}.withGeodeGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/geode/"
-                         "paint-servers_pattern_transform-and-patternTransform.png",
-                         "Geode analytic dual-ray Slug coverage (0041 §6) on the rotated rounded "
-                         "rect edge diverges from the resvg finite-sample reference by a ~1px edge "
-                         "band, interacting with the pattern tile seams; the exact backend golden "
-                         "keeps the case gated without a threshold exception")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -896,9 +886,6 @@ INSTANTIATE_TEST_SUITE_P(
             "painting/marker",
             {
                 {"default-clip.svg", WithMaxPixels(300, "Marker clip edge AA")},
-                {"marker-on-circle.svg", WithMaxPixels(160,
-                                                       "Circle stroke edge: cross-GPU coverage "
-                                                       "fringe, 122px on Mesa lavapipe vs golden")},
                 {"orient=auto-on-M-C-C-4.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
@@ -950,14 +937,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-paint-order-on-tspan.png")
                      .withReason("Preserve cross-span kerning across a paint-only tspan boundary")},
-                {"on-text.svg",
-                 Params{}.withGeodeGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/geode/"
-                     "painting_paint-order_on-text.png",
-                     "Geode's whole-run stroke-then-fill order is covered independently; its "
-                     "analytic glyph edge coverage differs from resvg's finite-sample text "
-                     "rasterization, so this exact backend golden preserves a zero-tolerance "
-                     "oracle without masking paint-order behavior.")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -972,11 +951,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke",
                 {
-                    // Geode's analytic stroke coverage for this near-degenerate cubic is visibly
-                    // close, but differs by 410 pixels on Linux aarch64.
-                    {"control-points-clamping-1.svg",
-                     WithMaxPixels(150, "Stroke control-point clamping edge coverage")
-                         .withGeodeMaxPixelsDifferent(500)},
                     // Both vendored references map a stroke paint server's objectBoundingBox units
                     // through the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..
                     // 110.40 user units at font-size 60) instead of its glyph cells: advance width
@@ -1268,9 +1242,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "structure/use",
                 {
                     {"xlink-to-an-external-file.svg",
-                     Params::Skip("Reference qualification: local fragment renders; the "
-                                  "opaque reference background differs from the "
-                                  "transparent SVG canvas")},
+                     Params::Skip("Bug #1183: external-use content resolves fonts in the "
+                                  "referenced document's own font catalog, so the inherited "
+                                  "Noto Sans falls back to the embedded face")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1409,14 +1383,9 @@ INSTANTIATE_TEST_SUITE_P(
                 // family resolves to is asserted directly in FontSelection_tests.cc.
                 {"bold-sans-serif.svg", Params().setCanvasSize(300, 300)},
                 {"cursive.svg", Params().setCanvasSize(300, 300)},
-                // resvg's harness resolves an all-unknown family list to its default family,
-                // drawn here in Noto Serif; Donner's last-resort face is the embedded Public Sans
-                // (FontSelection.UnknownFamilyFallsBackToTheEmbeddedFace).
-                {"fallback-1.svg",
-                 Params::Skip("Harness mismatch: resvg falls back to Noto Serif for an unknown "
-                              "family, Donner to its embedded Public Sans (445 simple, 444 full "
-                              "px against resvg v0.49.0) (#1167)")
-                     .setCanvasSize(300, 300)},
+                // An all-unknown family list resolves to the harness's default family, serif, as
+                // in resvg's harness (FontSelection.UnmatchedFamilyListUsesTheSuiteDefaultFamily).
+                {"fallback-1.svg", Params().setCanvasSize(300, 300)},
                 {"fantasy.svg", Params().setCanvasSize(300, 300)},
                 {"monospace.svg", Params().setCanvasSize(300, 300)},
                 {"sans-serif.svg", Params().setCanvasSize(300, 300)},
@@ -1455,17 +1424,16 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontSizeAdjust, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/font-size-adjust",
-            {{"simple-case.svg",
-              Params::Skip(
-                  "Reference places the adjusted text about 4 device px left of center. Both "
-                  "renderings use the same adjusted size, 64 * 0.3 / (536/1000) = 35.8, and the "
-                  "same glyph advances; only the anchor origin differs, and Donner's text-anchor "
-                  "placement for this string and face is exact where font-size-adjust is absent "
-                  "(#1173)")}})),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/font-size-adjust",
+                // The PNG centers the kerned text on its unkerned advance (4.03 device px left), so
+                // the golden is Donner's rendering; testdata/golden/README.md has the evidence.
+                {{"simple-case.svg",
+                  Params::WithGoldenOverride(
+                      "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png")
+                      .withReason("Reference disagreement: text-anchor centers the shaped "
+                                  "(kerned) advance (#1173)")}})),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextFontStretch, ImageComparisonTestFixture,
@@ -1723,15 +1691,13 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/textPath",
             {
+                // The 300x300 resvg v0.49.0 rendering; the superseded reference was opaque.
+                {"link-to-rect.svg", ResvgV049Reference()},
                 // Pixelmatch 2.0 checkerboard exposes the transparent-vs-white
                 // background convention (Donner renders no background; the
                 // reference is opaque). Each threshold is the measured minimal
                 // passing hundredth at the existing pixel allowance (PR #1285, see
                 // README_pixelmatch_2.md).
-                {"link-to-rect.svg",
-                 Params::WithThreshold(
-                     0.89f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes background convention; measured minimal")},
                 {"with-path-and-xlink-href.svg",
                  Params::WithThreshold(
                      0.89f, kDefaultMismatchedPixels,
