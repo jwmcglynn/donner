@@ -2,10 +2,13 @@
 /// @file
 /// \c donner::gpu::metal::MetalDevice - the Metal backend for the Donner GPU runtime.
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -14,6 +17,48 @@
 #include "donner/gpu/GpuLimits.h"
 
 namespace donner::gpu::metal {
+
+class MetalDevice;
+
+/**
+ * A steady clock that a test moves by hand, in place of the system's steady clock, for the devices
+ * it is installed on with \ref MetalDevice::setProgressClockForTest.
+ *
+ * It starts at the steady clock's reading when it is constructed and then moves only when
+ * \ref advance is called, so a case decides exactly how much time a wait sees pass between the
+ * events it orders, however slowly a loaded machine runs them. Advancing it wakes every wait on
+ * the devices it is installed on, which then judges its bounds again at the new time.
+ *
+ * Thread-safe: any thread may read or advance it, including the GPU's completion handlers, which
+ * read it to stamp progress.
+ */
+class TestProgressClock {
+public:
+  using Clock = std::chrono::steady_clock;  //!< The clock whose time points it reports.
+
+  TestProgressClock();
+
+  TestProgressClock(const TestProgressClock&) = delete;
+  TestProgressClock& operator=(const TestProgressClock&) = delete;
+
+  /// The current time on this clock.
+  [[nodiscard]] Clock::time_point now() const;
+
+  /// Moves this clock forward by \p duration, then wakes every wait on the devices it is installed
+  /// on. When this returns, any look a wait takes at the time it judges by sees the new time.
+  /// @param duration How far to move; a negative duration is ignored.
+  void advance(Clock::duration duration);
+
+private:
+  friend class MetalDevice;
+
+  /// Registers \p wake, run after each \ref advance. @param wake Wakes one device's waits.
+  void addWaker(std::function<void()> wake);
+
+  std::atomic<Clock::rep> ticks_;              //!< Current time, as steady-clock ticks.
+  std::mutex wakersMutex_;                     //!< Guards \ref wakers_.
+  std::vector<std::function<void()>> wakers_;  //!< One per device the clock is installed on.
+};
 
 /**
  * Metal backend of the Donner GPU runtime.
@@ -294,6 +339,33 @@ public:
   /// can tell a wait that looks only when that state changes from one that keeps checking. Test
   /// accessor, readable from any thread.
   [[nodiscard]] uint64_t serialWaitLooksForTest() const;
+
+  /**
+   * Puts every wait of this device that is bounded in time on \p clock instead of the system's
+   * steady clock: the progress clock that a wait for room, a serial wait that gives up on a stall
+   * and a present judge a stall by, the cap on a wait for room, and the budget of a serial wait.
+   * Progress is stamped on \p clock as well. A test seam: a case moves \p clock by hand, so the
+   * bounds it checks are met at the events it orders rather than whenever a loaded machine
+   * reaches them.
+   *
+   * While \p clock is installed, a wait sleeps until it is woken by a change in completion state
+   * or by \ref TestProgressClock::advance, however much real time passes, so a case that forgets
+   * to move the clock hangs rather than passing by luck. Install the same clock on every device a
+   * case's waits depend on: a consumer's wait reads its producers' progress. Waits that live in
+   * \ref donner::gpu::Device rather than in this backend still read the steady clock, so a case
+   * that installs a clock does not use them.
+   *
+   * @param clock Clock to judge by.
+   * @return InvalidState once this device has submitted work, which is stamped on the clock it had.
+   */
+  Status setProgressClockForTest(std::shared_ptr<TestProgressClock> clock);
+
+  /// When a wait on this device last looked at its completion state and found its work still
+  /// pending, on the device's progress clock, or nothing when none has. Once this reaches a time
+  /// a case moved the progress clock to, every wait on the device has judged its bounds at that
+  /// time and is asleep again. Test accessor, readable from any thread.
+  [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> lastPendingWaitLookForTest()
+      const;
 
   /// Waits until \p count submissions have had all their completion handlers run on this device,
   /// parked ones included. Test seam for ordering completions deterministically.
