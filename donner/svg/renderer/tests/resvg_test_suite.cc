@@ -129,18 +129,9 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
-                "filters/enable-background",
-                {
-                    // With enable-background ignored (SVG 2), these match the reference.
-                    {"accumulate.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"new-with-invalid-region-1.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"new-with-invalid-region-2.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"new-with-invalid-region-3.svg",
-                     Params().withReason("SVG 2 ignores enable-background; output matches")},
-                },
+                "filters/enable-background", {},
+                // The references take BackgroundImage from an enable-background snapshot, which
+                // SVG 2 removed; Donner reads the Filter Effects isolation-group backdrop instead.
                 Params::DeprecatedInSVG2("enable-background / BackgroundImage (SVG 1.1, removed "
                                          "in SVG 2)"))),
             ValuesIn(ActiveComparisonModes())),
@@ -522,9 +513,18 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
+                // The backdrop square and the filtered square coincide, so this row's alpha must
+                // equal in=BackgroundImage's, which compares with default parameters. Donner's two
+                // renders do share one alpha; the two references do not. This one reaches full
+                // alpha about 2 px further inside the blurred edge, so a ring 3 px wide, 25 px
+                // inside each edge, reads 254 where Donner and the BackgroundImage reference read
+                // 255. Near black that one level exceeds the perceptual threshold: 1,176 px on
+                // every backend, none differing by more than 4 levels (#1185).
                 {"in=BackgroundAlpha.svg",
-                 Params::Skip("Not impl: Filter Effects BackgroundAlpha from the isolation-group "
-                              "backdrop")},
+                 WithMaxPixels(1200,
+                               "Reference blur reaches full alpha 2 px later than the "
+                               "identical-alpha in=BackgroundImage reference; 1,176 px "
+                               "ring of one alpha level near black (#1185)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

@@ -31,10 +31,12 @@ namespace tiny_skia::filter {
 
 /// Standard named inputs available to filter primitives.
 enum class StandardInput : std::uint8_t {
-  SourceGraphic,  ///< The original element rendering.
-  SourceAlpha,    ///< Alpha channel of SourceGraphic (RGB = 0).
-  FillPaint,      ///< The element's fill paint.
-  StrokePaint,    ///< The element's stroke paint.
+  SourceGraphic,    ///< The original element rendering.
+  SourceAlpha,      ///< Alpha channel of SourceGraphic (RGB = 0).
+  FillPaint,        ///< The element's fill paint.
+  StrokePaint,      ///< The element's stroke paint.
+  BackgroundImage,  ///< The backdrop beneath the element, from \ref FilterGraph::backgroundInput.
+  BackgroundAlpha,  ///< Alpha channel of BackgroundImage (RGB = 0).
 };
 
 /// Identifies the input to a filter primitive node.
@@ -265,6 +267,9 @@ struct FilterGraph {
 
   std::optional<Pixmap> fillPaintInput;    ///< Optional FillPaint standard input (uint8 sRGB).
   std::optional<Pixmap> strokePaintInput;  ///< Optional StrokePaint standard input (uint8 sRGB).
+  /// Optional BackgroundImage standard input (uint8 sRGB), with the source graphic's dimensions.
+  /// BackgroundImage and BackgroundAlpha read transparent black when it is absent.
+  std::optional<Pixmap> backgroundInput;
 
   /// Filter region in pixel space (clips subregions). If not set, uses full pixmap extent.
   std::optional<PixelRect> filterRegion;

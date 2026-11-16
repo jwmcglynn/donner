@@ -1494,12 +1494,7 @@ bool EditorControlSession::applyStylePropertyForReplay(std::string_view property
   } else if (propertyName == "stroke") {
     app_.setActiveStroke(propertyValue);
   } else if (propertyName == "stroke-width") {
-    char* end = nullptr;
-    const std::string value(propertyValue);
-    const double strokeWidth = std::strtod(value.c_str(), &end);
-    if (end != value.c_str()) {
-      app_.setActiveStrokeWidth(strokeWidth);
-    }
+    (void)app_.setActiveStrokeWidthFromText(propertyValue);
   }
 
   return app_.setStylePropertyOnSelection(propertyName, propertyValue);

@@ -2870,7 +2870,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(filterStages);
+    pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
+                                 static_cast<std::uint32_t>(maskDepth));
 
     if (const auto* fillRef =
             std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
@@ -3225,11 +3226,15 @@ const std::vector<components::FilterGraph>* RendererDriver::preparedFilterStages
   return nullptr;
 }
 
-void RendererDriver::pushFilterStages(const std::vector<components::FilterGraph>* stages) {
-  if (stages) {
-    for (auto it = stages->rbegin(); it != stages->rend(); ++it) {
-      renderer_.pushFilterLayer(*it, it->filterRegion);
-    }
+void RendererDriver::pushFilterStages(Entity entity, std::uint32_t elementLayers) {
+  const auto prepared = preparedFilterGraphs_.find(entity);
+  if (prepared == preparedFilterGraphs_.end()) {
+    return;
+  }
+  std::uint32_t backdropLayerSkip = elementLayers;
+  for (auto it = prepared->second.rbegin(); it != prepared->second.rend(); ++it) {
+    it->backdropLayerSkip = backdropLayerSkip++;
+    renderer_.pushFilterLayer(*it, it->filterRegion);
   }
 }
 
@@ -3567,7 +3572,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(filterStages);
+    pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
+                                 static_cast<std::uint32_t>(maskDepth));
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =
@@ -3805,7 +3811,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushClip(entityClip);
     }
 
-    pushFilterStages(filterStages);
+    pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
+                                 static_cast<std::uint32_t>(maskDepth));
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =

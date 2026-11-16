@@ -144,10 +144,10 @@ surprising when comparing against a tool that interpolates in a different color 
 
 The behavioral differences, beyond sub-pixel variation:
 
-- **`enable-background` / `BackgroundImage` / `BackgroundAlpha` do nothing.** These SVG 1.1 filter
-  inputs were removed in SVG 2. Donner treats them as unresolved references, which produce
-  transparent black. Use CSS `mix-blend-mode` and `isolation` for backdrop effects. See
-  \ref faq-unsupported.
+- **`enable-background` does nothing.** It was removed in SVG 2. `BackgroundImage` and
+  `BackgroundAlpha` read the Filter Effects backdrop instead: what the nearest isolation group
+  painted beneath the element, not an `enable-background` snapshot. Use `isolation: isolate` to
+  bound that backdrop. See \ref faq-unsupported.
 - **The filter region is bounded.** Region expansion is capped at 4096px and extreme blur radii and
   convolution kernels are clamped, as a resource-exhaustion guard. A filter that expands the region
   without bound in a browser may be clipped in Donner.
@@ -258,8 +258,8 @@ Removed or deprecated in SVG 2, and intentionally not implemented:
 - **`<tref>`** and **`<cursor>`**: not implemented; use plain text and the CSS `cursor` property.
 - **The CSS 2 `clip: rect(...)` property:** not implemented. Use `clip-path` with an `inset()`
   shape.
-- **`enable-background`, `BackgroundImage`, `BackgroundAlpha`:** removed filter inputs; they resolve
-  to transparent black. See \ref faq-filter-chrome.
+- **`enable-background`:** removed; `BackgroundImage` and `BackgroundAlpha` read the
+  isolation-group backdrop instead of its snapshot. See \ref faq-filter-chrome.
 - **`xml:base`:** removed and not implemented (`xml:space` is honored for `<text>` whitespace).
 
 Other current-feature gap:

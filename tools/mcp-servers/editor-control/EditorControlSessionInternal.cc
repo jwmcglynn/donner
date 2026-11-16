@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -64,7 +65,7 @@ std::uint64_t HashUint64(std::uint64_t hash, std::uint64_t value) {
 }
 
 std::string HexHash(std::uint64_t hash) {
-  std::ostringstream out;
+  std::ostringstream out = MakeClassicNumberStream();
   out << "0x" << std::hex << std::setw(16) << std::setfill('0') << hash;
   return out.str();
 }
@@ -436,7 +437,7 @@ std::string ReproContentHash(std::string_view source) {
     hash = HashByte(hash, byte);
   }
 
-  std::ostringstream out;
+  std::ostringstream out = MakeClassicNumberStream();
   out << "fnv1a64:" << std::hex << std::setw(16) << std::setfill('0') << hash;
   return out.str();
 }

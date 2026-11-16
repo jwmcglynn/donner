@@ -1449,6 +1449,22 @@ TEST_F(TextEditorTests, HoveredTextPositionRejectsOutOfTextAndHiddenPlaceholderR
   EXPECT_FALSE(editor.hoveredTextPosition().has_value());
 }
 
+// A byte that cannot start a UTF-8 sequence (a stray continuation byte or 0xF8-0xFF) still
+// advances text layout, drawing and hit testing by one byte, so rendering it terminates.
+TEST_F(TextEditorTests, RendersAndHitTestsBytesThatCannotStartASequence) {
+  editor.setText("a\377b\200c");
+  for (const bool wrap : {false, true}) {
+    SCOPED_TRACE(wrap ? "word wrap" : "no word wrap");
+    editor.setWordWrapEnabled(wrap);
+    RenderEditorFrame(ImVec2(300.0f, 160.0f));
+
+    const ImVec2 pastLineEnd =
+        ScreenPointAtUnwrappedVisualLine(/*visualLine=*/0, /*columnPixels=*/200.0f);
+    RenderEditorFrameWithMouse(pastLineEnd, /*mouseDown=*/false, ImVec2(300.0f, 160.0f));
+    EXPECT_EQ(editor.getText(), "a\377b\200c");
+  }
+}
+
 TEST_F(TextEditorTests, HoverSourceRangesAreClampedAndDeduplicated) {
   editor.setText("abcdef");
 
@@ -4215,6 +4231,25 @@ TEST_F(TextEditorTests, FocusReferenceSourceUnderlineHandlesDelimitersAndInvalid
   EXPECT_FLOAT_EQ(underline->start.x, ScreenPointAtCoordinates(Coordinates(0, 10)).x);
   EXPECT_FLOAT_EQ(underline->end.x, ScreenPointAtCoordinates(Coordinates(0, 15)).x);
   EXPECT_GT(underline->end.x, underline->start.x);
+}
+
+TEST_F(TextEditorTests, FocusReferenceSourceUnderlineCoversNonAsciiIds) {
+  // "caf\303\251" is "cafe" with an acute accent: one column per character, two bytes for the
+  // accented one.
+  editor.setText("fill=\"url(#caf\303\251)\";\n");
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+
+  const auto underline = FocusReferenceSourceUnderlineDirect(SourcePoint{.line = 0, .column = 10});
+
+  using Underline = decltype(underline)::value_type;
+  EXPECT_THAT(underline,
+              testing::Optional(AllOf(
+                  Field("start", &Underline::start,
+                        Field("x", &ImVec2::x,
+                              testing::FloatEq(ScreenPointAtCoordinates(Coordinates(0, 10)).x))),
+                  Field("end", &Underline::end,
+                        Field("x", &ImVec2::x,
+                              testing::FloatEq(ScreenPointAtCoordinates(Coordinates(0, 15)).x))))));
 }
 
 TEST_F(TextEditorTests, FocusReferenceSourceUnderlineSanitizesExtremeColumns) {

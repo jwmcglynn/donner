@@ -1178,18 +1178,25 @@ donner_cc_test(
 donner_cc_test(
     name = "text_editor_core_tests",
     srcs = ["TextEditorCore_tests.cc"],
+    # A hung case (such as a glyph walk that stops advancing) fails within the Bazel timeout.
+    args = ["--donner_test_timeout_seconds=20"],
     deps = [
+        "//donner/base:base_test_utils",
+        "//donner/base:gtest_timeout_main",
         "//donner/editor:text_editor_core",
-        "@com_google_gtest//:gtest_main",
+        "@com_google_gtest//:gtest",
     ],
 )
 
 donner_cc_test(
     name = "text_editor_tests",
     srcs = ["TextEditor_tests.cc"],
+    # A hung case (such as a glyph walk that stops advancing) fails within the Bazel timeout.
+    args = ["--donner_test_timeout_seconds=20"],
     deps = [
+        "//donner/base:gtest_timeout_main",
         "//donner/editor:text_editor",
-        "@com_google_gtest//:gtest_main",
+        "@com_google_gtest//:gtest",
         "@imgui",
     ],
 )
@@ -1580,6 +1587,7 @@ donner_cc_test(
     deps = [
         ":bitmap_golden_compare",
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:overlay_renderer",
         "//donner/editor:viewport_state",
         "//donner/editor:viewport_svg_export",
@@ -1784,6 +1792,7 @@ donner_cc_test(
     ],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:canvas_scrollbars",
         "//donner/editor:dialog_presenter",
         "//donner/editor:drag_coalesce",

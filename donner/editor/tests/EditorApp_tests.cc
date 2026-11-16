@@ -12,6 +12,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/svg/DonnerController.h"
@@ -1161,6 +1162,52 @@ TEST(EditorAppTest, SetActiveStrokeWidthClampsNegativeValues) {
   app.setActiveStrokeWidth(-4.0);
 
   EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(0.0));
+}
+
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextReadsTheLeadingNumber) {
+  EditorApp app;
+
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText("2.5px"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText("wide"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+}
+
+// Style values from replayed actions and the editor-control tool can carry whitespace before the
+// number, which CSS ignores, so the active width must follow the value the selection receives.
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextSkipsLeadingWhitespace) {
+  EditorApp app;
+
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText(" 2.5px"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText("\t\n\f\r 3"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(3.0));
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText(" \t"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(3.0));
+}
+
+// Only a CSS number sets the width, so non-finite words leave it unchanged instead of producing an
+// infinite or undefined stroke.
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextRejectsNonFiniteWords) {
+  EditorApp app;
+  ASSERT_TRUE(app.setActiveStrokeWidthFromText("2"));
+
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText("inf"));
+  EXPECT_FALSE(app.setActiveStrokeWidthFromText(" nan"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.0));
+}
+
+// Replayed stroke widths read with the locale-independent parser, so a comma-decimal C locale does
+// not truncate "2.5" to 2.
+TEST(EditorAppTest, SetActiveStrokeWidthFromTextIgnoresACommaDecimalCLocale) {
+  const ScopedCommaDecimalNumericLocale locale;
+  if (!locale.applied()) {
+    GTEST_SKIP() << "No comma-decimal locale is installed";
+  }
+  EditorApp app;
+
+  EXPECT_TRUE(app.setActiveStrokeWidthFromText("2.5"));
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(2.5));
 }
 
 TEST(EditorAppTest, PathOperationAvailabilityReportsNoDocument) {

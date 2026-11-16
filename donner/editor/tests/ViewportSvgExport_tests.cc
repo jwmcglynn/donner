@@ -16,6 +16,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/ScopedCommaDecimalGlobalLocale.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -29,6 +30,8 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::Field;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
@@ -124,6 +127,28 @@ TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   EXPECT_THAT(result.value, HasSubstr("viewBox=\"60 70 200 150\""));
   // Output dimensions follow the cropped portion of the original document.
   EXPECT_THAT(result.value, HasSubstr("<svg width=\"200\" height=\"150\""));
+}
+
+// Exported numbers use the classic locale whatever the global C++ locale is.
+TEST(ViewportSvgExportTest, ExportedNumbersIgnoreTheGlobalLocale) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1500.5\" height=\"400\" "
+      "viewBox=\"0 0 1500.5 400\"><rect width=\"1500.5\" height=\"400\"/></svg>");
+  const ViewportState viewport =
+      MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(0.0, 0.0),
+                   /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                   /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(2000.0, 500.0));
+
+  const ScopedCommaDecimalGlobalLocale locale;
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(2000, 500)), ViewportExportOptions{});
+  using ExportResult = Result<std::string, std::string>;
+  EXPECT_THAT(
+      result,
+      AllOf(Field("error", &ExportResult::error, IsEmpty()),
+            Field("isOk", &ExportResult::isOk, true),
+            Field("value", &ExportResult::value,
+                  AllOf(HasSubstr("1500.5"), Not(HasSubstr("1500,5")), Not(HasSubstr("1.500"))))));
 }
 
 TEST(ViewportSvgExportTest, FullyVisibleDocumentKeepsOriginalBoundsAndDimensions) {
