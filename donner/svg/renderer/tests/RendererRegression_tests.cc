@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
@@ -1980,6 +1981,84 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesEachChunkAsItsOwnShape) {
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "text_stroke_chunk_outlines_" + std::string(paint.label),
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// One text element of the editor's "Text and Style" sample: its attributes and content.
+struct EditorSampleText {
+  std::string_view attributes;  //!< Attributes, without `id`.
+  std::string_view content;     //!< Character data.
+};
+
+/// The editor's "Text and Style" sample at \p width x \p height device pixels, with \p stroke
+/// inherited by every text element. Each text element is drawn by \p drawText from its index and
+/// definition. Its `Inter, sans-serif` family falls back to the embedded Public Sans, as in the
+/// editor.
+std::string EditorTextStyleSample(
+    int width, int height, std::string_view stroke,
+    const std::function<std::string(size_t, const EditorSampleText&)>& drawText) {
+  constexpr std::array<EditorSampleText, 4> kTexts = {{
+      {R"svg(class="heading" x="48" y="110")svg", "Donner editor"},
+      {R"svg(class="body" x="48" y="158")svg", "Text and style inspection"},
+      {R"svg(x="48" y="270" fill="#f8f9fa" font-family="Inter, sans-serif" font-size="24px")svg",
+       "Editable SVG source"},
+      {R"svg(x="48" y="310" fill="#aeb6bf" font-family="Inter, sans-serif" font-size="18px")svg"
+       R"svg( font-style="italic")svg",
+       "Selectors, inheritance, and typography"},
+  }};
+  std::ostringstream svg;
+  svg << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width=")svg" << width
+      << R"svg(" height=")svg" << height << R"svg(" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#17202a"/>
+  <style>
+    .heading { fill: #f8f9fa; font-family: Inter, sans-serif; font-size: 42px; font-weight: bold; }
+    .body { fill: #9fe3c0; font-family: Inter, sans-serif; font-size: 22px; }
+    .rule { stroke: #f0b429; stroke-width: 5; }
+  </style>
+  <g )svg"
+      << stroke << ">";
+  for (size_t i = 0; i < kTexts.size(); ++i) {
+    svg << drawText(i, kTexts[i]);
+  }
+  svg << R"svg(</g>
+  <line class="rule" x1="48" y1="202" x2="592" y2="202"/>
+</svg>)svg";
+  return svg.str();
+}
+
+TEST_F(RendererRegressionTests, EditorTextSampleStrokeMatchesStrokedGlyphOutlines) {
+  // Adding a stroke to this sample was reported to draw the lowercase t crossbar as a rectangle
+  // detached from its stem. Each text element's stroke, with its fill removed, must render exactly
+  // like the stroke of a path made of its glyph outlines, at the sample's own size and at twice
+  // that.
+  const std::array<std::pair<Vector2i, std::string_view>, 4> cases = {{
+      {Vector2i(640, 360), "1"},
+      {Vector2i(640, 360), "2"},
+      {Vector2i(640, 360), "4"},
+      {Vector2i(1280, 720), "2"},
+  }};
+  for (const auto& [size, strokeWidth] : cases) {
+    SCOPED_TRACE(testing::Message() << size << " stroke-width=" << strokeWidth);
+    const std::string stroke =
+        std::string(R"svg(stroke="#e8590c" stroke-width=")svg") + std::string(strokeWidth) + "\"";
+    SVGDocument textDocument = ParseSvg(EditorTextStyleSample(
+        size.x, size.y, stroke, [](size_t index, const EditorSampleText& text) {
+          return "<text id=\"t" + std::to_string(index) + "\" style=\"fill: none\" " +
+                 std::string(text.attributes) + ">" + std::string(text.content) + "</text>";
+        }));
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+    SVGDocument pathDocument = ParseSvg(EditorTextStyleSample(
+        size.x, size.y, stroke, [&textDocument](size_t index, const EditorSampleText& text) {
+          return "<path d=\"" + GlyphOutlinePathData(textDocument, "#t" + std::to_string(index)) +
+                 "\" style=\"fill: none\" " + std::string(text.attributes) + "/>";
+        }));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "editor_text_sample_outlines_visible");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected,
+        "editor_text_sample_stroke_" + std::to_string(size.x) + "_" + std::string(strokeWidth),
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 
