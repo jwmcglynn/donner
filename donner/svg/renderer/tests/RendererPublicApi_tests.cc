@@ -3534,6 +3534,38 @@ TEST(RendererPublicApiTest, ManyOccurrencesOfOneHostKeepTheLendingFastPath) {
   EXPECT_EQ(fonts->hostFontOverlayStats().rebuilds, rebuilds);
 }
 
+// A bounds query between frames measures external text with the host's fonts as they are then,
+// not the overlay the last frame built: here the host's face is edited after a frame.
+TEST(RendererPublicApiTest, BoundsQueryAfterAFrameBuildsTheHostsCurrentFonts) {
+  SharedDocuments shared({{"external.svg", std::string(kHostFaceResource)}});
+  SVGDocument document = shared.parse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
+        <style id="faces">)svg" +
+      HostFaceRule("Yellowtail-Regular.ttf") +
+      R"svg(</style><filter id="f"><feOffset/></filter>
+        <g id="effect" filter="url(#f)"><use href="external.svg#label" fill="green"
+          font-size="24" font-family="HostFace"/></g></svg>)svg");
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  driver.draw(document);
+  const std::size_t builds = driver.textPreparationStatsForTesting().hostFontOverlayBuilds;
+  ASSERT_GT(builds, 0u);
+
+  auto faces = document.querySelector("#faces");
+  ASSERT_THAT(faces, testing::Optional(testing::_));
+  faces->cast<SVGStyleElement>().setContents(HostFaceRule("NotoSerif-Regular.ttf"));
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  auto effect = document.querySelector("#effect");
+  ASSERT_THAT(effect, testing::Optional(testing::_));
+  const Entity entity = effect->entityHandle().entity();
+  const auto bounds = driver.computeEntityRangeBounds(
+      document.registry(), entity, entity, RenderViewport{.size = Vector2d(96, 40)}, Transform2d());
+  ASSERT_THAT(bounds, testing::Optional(testing::_));
+  EXPECT_GT(driver.textPreparationStatsForTesting().hostFontOverlayBuilds, builds)
+      << "the query builds the edited host's overlay instead of reusing the last frame's";
+}
+
 // An occurrence the frame's external work allowance refuses lends nothing and builds nothing.
 TEST(RendererPublicApiTest, RefusedExternalOccurrenceLendsNoFonts) {
   std::string resource = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
@@ -3553,8 +3585,9 @@ TEST(RendererPublicApiTest, RefusedExternalOccurrenceLendsNoFonts) {
   EXPECT_EQ(driver.textPreparationStatsForTesting().hostFontOverlayBuilds, 0u);
   EXPECT_THAT(NormalizeSnapshot(renderer.takeSnapshot()).pixels, testing::Each(0));
   if (const SVGDocumentHandle child = shared.handle("external.svg")) {
-    const auto* fonts = child->registry().ctx().find<FontManager>();
-    EXPECT_TRUE(fonts == nullptr || fonts->hostFontOverlayStats().rebuilds == 0);
+    if (const auto* fonts = child->registry().ctx().find<FontManager>()) {
+      EXPECT_EQ(fonts->hostFontOverlayStats().rebuilds, 0u);
+    }
   }
 }
 
@@ -3592,7 +3625,7 @@ TEST(RendererPublicApiTest, ExternalTextFollowsAnEditedHostFontFace) {
       RenderPublicDocument(host), HostFaceInline(HostFaceStyle("Yellowtail-Regular.ttf")),
       "edited_host_font_before", editor::tests::PixelmatchIdentityParams());
   auto faces = host.querySelector("#faces");
-  ASSERT_THAT(faces.has_value(), testing::IsTrue());
+  ASSERT_THAT(faces, testing::Optional(testing::_));
   faces->cast<SVGStyleElement>().setContents(HostFaceRule("NotoSerif-Regular.ttf"));
   editor::tests::CompareBitmapToBitmap(
       RenderPublicDocument(host), HostFaceInline(HostFaceStyle("NotoSerif-Regular.ttf")),
@@ -3626,6 +3659,82 @@ TEST(RendererPublicApiTest, NestedExternalTextDrawsTheOuterHostsFontFace) {
                                          "nested_external_host_font_" + std::to_string(frame++),
                                          editor::tests::PixelmatchIdentityParams());
   }
+}
+
+/// A referenced document whose `#tile` draws text that lives outside the fragment, in @p defs, in
+/// `HostFace`.
+std::string OutsideTextResource(std::string_view defs, std::string_view tile) {
+  return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40"><defs>)svg" +
+         std::string(defs) + "</defs>" + std::string(tile) + "</svg>";
+}
+
+/// Draw @p resource's `#tile` through hosts lending Yellowtail, then Noto Serif, then Yellowtail
+/// again, then the document on its own; each must match the same content drawn in one document.
+void ExpectOutsideTextFollowsEachHost(const std::string& label, std::string_view defs,
+                                      std::string_view tile) {
+  const std::string resource = OutsideTextResource(defs, tile);
+  SharedDocuments shared({{"external.svg", resource}});
+  const std::string yellowtail = HostFaceStyle("Yellowtail-Regular.ttf");
+  const std::string serif = HostFaceStyle("NotoSerif-Regular.ttf");
+  const auto host = [&](const std::string& style) {
+    return shared.parse(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" +
+                        style + R"svg(<use href="external.svg#tile"/></svg>)svg");
+  };
+  const auto inlineExpected = [&](const std::string& style) {
+    return RenderInlineDocument(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + style +
+        "<defs>" + std::string(defs) + "</defs>" + std::string(tile) + "</svg>");
+  };
+  SVGDocument first = host(yellowtail);
+  SVGDocument second = host(serif);
+  const RendererBitmap firstExpected = inlineExpected(yellowtail);
+  const RendererBitmap secondExpected = inlineExpected(serif);
+  ASSERT_THAT(firstExpected.pixels, testing::Ne(secondExpected.pixels));
+  int frame = 0;
+  for (const auto& [document, expected] :
+       {std::pair{&first, &firstExpected}, std::pair{&second, &secondExpected},
+        std::pair{&first, &firstExpected}}) {
+    editor::tests::CompareBitmapToBitmap(RenderPublicDocument(*document), *expected,
+                                         label + "_" + std::to_string(frame++),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  // Drawn on its own, the document resolves only its own fonts.
+  const SVGDocumentHandle child = shared.handle("external.svg");
+  ASSERT_THAT(child, testing::NotNull());
+  SVGDocument standalone = SVGDocument::CreateFromHandle(child);
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(standalone),
+                                       RenderInlineDocument(resource), label + "_standalone",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+constexpr std::string_view kOutsideText =
+    R"svg(<text x="4" y="28" font-size="24" fill="green" font-family="HostFace">Map</text>)svg";
+
+// Text in a pattern outside the referenced fragment is laid out again for each host's fonts, and
+// for the document's own fonts when it is drawn alone.
+TEST(RendererPublicApiTest, PatternTextOutsideTheFragmentFollowsEachHost) {
+  ExpectOutsideTextFollowsEachHost(
+      "outside_pattern_text",
+      R"svg(<pattern id="p" patternUnits="userSpaceOnUse" width="96" height="40">)svg" +
+          std::string(kOutsideText) + "</pattern>",
+      R"svg(<rect id="tile" width="96" height="40" fill="url(#p)"/>)svg");
+}
+
+// The same for text in a marker.
+TEST(RendererPublicApiTest, MarkerTextOutsideTheFragmentFollowsEachHost) {
+  ExpectOutsideTextFollowsEachHost(
+      "outside_marker_text",
+      R"svg(<marker id="m" markerUnits="userSpaceOnUse" markerWidth="96" markerHeight="40"
+                    overflow="visible">)svg" +
+          std::string(kOutsideText) + "</marker>",
+      R"svg(<path id="tile" d="M0 0 L1 0" stroke="none" marker-start="url(#m)"/>)svg");
+}
+
+// The same for text in a clip path.
+TEST(RendererPublicApiTest, ClipPathTextOutsideTheFragmentFollowsEachHost) {
+  ExpectOutsideTextFollowsEachHost(
+      "outside_clip_text", R"svg(<clipPath id="c">)svg" + std::string(kOutsideText) + "</clipPath>",
+      R"svg(<rect id="tile" width="96" height="40" fill="green" clip-path="url(#c)"/>)svg");
 }
 
 // In one frame, an occurrence of a document lends it the host's fonts and an `<image>` of the same

@@ -1948,4 +1948,71 @@ TEST(FontManagerTest, IdleLentFacesYieldTheBudgetToTheDocumentsOwnFaces) {
   EXPECT_TRUE(static_cast<bool>(manager.findFont("LentA")));
 }
 
+/// Builds an overlay lending @p count faces named `<prefix><i>`, each with its own payload.
+std::shared_ptr<const FontManager::HostFontOverlay> ManyFaceOverlay(const std::string& prefix,
+                                                                    int count) {
+  std::vector<css::FontFace> faces;
+  for (int i = 0; i < count; ++i) {
+    faces.push_back(MakeEmbeddedFace(prefix + std::to_string(i)));
+  }
+  return FontManager::HostFontOverlay::Make(faces, nullptr);
+}
+
+/// Releasing an overlay's faces changes its key when it is lent again, and leaves the key of an
+/// overlay that kept its faces alone. Two full overlays alternating keep both lent sets.
+TEST(FontManagerTest, HostFontKeyChangesOnlyForOverlaysThatLostFaces) {
+  Registry registry;
+  FontManager manager(registry);
+  const auto small = ManyFaceOverlay("Small", 1);
+  const auto first = ManyFaceOverlay("First", static_cast<int>(FontManager::kMaximumLentFaces));
+  const auto second = ManyFaceOverlay("Second", static_cast<int>(FontManager::kMaximumLentFaces));
+
+  manager.setHostFontOverlay(first);
+  const uint64_t firstKey = manager.hostFontKey();
+  manager.setHostFontOverlay(second);
+  const uint64_t secondKey = manager.hostFontKey();
+  const size_t rebuilds = manager.hostFontOverlayStats().rebuilds;
+  for (int i = 0; i < 4; ++i) {
+    manager.setHostFontOverlay(first);
+    EXPECT_EQ(manager.hostFontKey(), firstKey);
+    manager.setHostFontOverlay(second);
+    EXPECT_EQ(manager.hostFontKey(), secondKey);
+  }
+  EXPECT_EQ(manager.hostFontOverlayStats().rebuilds, rebuilds)
+      << "two full overlays alternate without rebuilding either lent set";
+  EXPECT_EQ(manager.hostFontOverlayStats().evictions, 0u);
+
+  // One more overlay exceeds the bound and releases the least recently lent set, which is minted
+  // afresh when lent again; the overlay that kept its faces keeps its key.
+  manager.setHostFontOverlay(small);
+  EXPECT_GT(manager.hostFontOverlayStats().evictions, 0u);
+  manager.setHostFontOverlay(second);
+  EXPECT_EQ(manager.hostFontKey(), secondKey);
+  manager.setHostFontOverlay(first);
+  EXPECT_NE(manager.hostFontKey(), firstKey);
+}
+
+/// A document face that fails for any reason other than the budget does not release lent faces.
+TEST(FontManagerTest, BrokenOwnFaceDoesNotReleaseLentFaces) {
+  Registry registry;
+  FontManager manager(registry);
+  const css::FontFace faces[] = {MakeEmbeddedFace("Lent")};
+  manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+  ASSERT_TRUE(static_cast<bool>(manager.findFont("Lent")));
+  manager.setHostFontOverlay(nullptr);
+
+  css::FontFace broken;
+  broken.familyName = RcString("Broken");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload =
+      std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>{'b', 'a', 'd', '!'});
+  broken.sources.push_back(std::move(source));
+  manager.addFontFace(broken);
+  for (int i = 0; i < 3; ++i) {
+    (void)manager.findFont("Broken");
+  }
+  EXPECT_EQ(manager.hostFontOverlayStats().evictions, 0u);
+}
+
 }  // namespace donner::svg
