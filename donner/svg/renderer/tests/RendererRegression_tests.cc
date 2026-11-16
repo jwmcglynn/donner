@@ -4648,7 +4648,7 @@ TEST_F(RendererRegressionTests, FeImageFragmentRedrawFollowsItsTarget) {
   renderer->draw(document);
   const RendererBitmap first = renderer->takeSnapshot();
   ASSERT_FALSE(first.empty());
-  EXPECT_EQ(PixelAt(first, 8, 8), (std::array<uint8_t, 4>{255, 0, 0, 255}));
+  EXPECT_THAT(PixelAt(first, 8, 8), test::RgbaEq(255, 0, 0, 255));
   renderer->draw(document);
   editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
                                        "feimage_fragment_second_draw",
@@ -4659,7 +4659,7 @@ TEST_F(RendererRegressionTests, FeImageFragmentRedrawFollowsItsTarget) {
   target->setAttribute("fill", "blue");
   renderer->draw(document);
   const RendererBitmap mutated = renderer->takeSnapshot();
-  EXPECT_EQ(PixelAt(mutated, 8, 8), (std::array<uint8_t, 4>{0, 0, 255, 255}));
+  EXPECT_THAT(PixelAt(mutated, 8, 8), test::RgbaEq(0, 0, 255, 255));
   EXPECT_EQ(FeImageBranchCount(document), 1u);
 
   std::string blueMarkup(kFeImageFragment);
@@ -4762,7 +4762,7 @@ TEST_F(RendererRegressionTests, FeImageFragmentInstancesAreNotReturnedByRectQuer
   for (int draw = 0; draw < 3; ++draw) {
     renderer->draw(document);
   }
-  EXPECT_EQ(renderingContext.findIntersectingRect(canvas), beforeDraw);
+  EXPECT_THAT(renderingContext.findIntersectingRect(canvas), testing::ElementsAreArray(beforeDraw));
 }
 
 }  // namespace
