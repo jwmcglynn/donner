@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/Utils.h"
 #include "donner/base/fonts/SfntUtils.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
@@ -245,8 +246,13 @@ public:
   /// Whether a default family is set by \ref setDefaultFamily and currently available.
   bool hasDefaultFamily() const;
 
-  /// The default family set by \ref setDefaultFamily, or empty.
-  const std::string& defaultFamily() const { return defaultFamily_; }
+  /**
+   * The default family set by \ref setDefaultFamily, or empty.
+   *
+   * The reference aliases this manager's storage: it is valid until the next
+   * \ref setDefaultFamily call or until the manager is destroyed. Copy it to keep the name longer.
+   */
+  const std::string& defaultFamily() const UTILS_LIFETIME_BOUND { return defaultFamily_; }
 
   /**
    * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
