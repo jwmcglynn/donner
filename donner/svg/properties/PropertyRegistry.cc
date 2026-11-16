@@ -1862,7 +1862,7 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
 // nearly forty branches did not. CSS keywords are case-insensitive, so entries
 // are matched with `equalsLowercase` rather than looked up in a case-sensitive
 // map.
-constexpr auto kCursorKeywords = std::to_array<std::pair<std::string_view, CursorType>>({
+constexpr std::pair<std::string_view, CursorType> kCursorKeywords[] = {
     {"auto", CursorType::Auto},
     {"default", CursorType::Default},
     {"none", CursorType::None},
@@ -1899,7 +1899,7 @@ constexpr auto kCursorKeywords = std::to_array<std::pair<std::string_view, Curso
     {"all-scroll", CursorType::AllScroll},
     {"zoom-in", CursorType::ZoomIn},
     {"zoom-out", CursorType::ZoomOut},
-});
+};
 
 ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -2423,7 +2423,7 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr auto kValidPresentationAttributeEntries = std::to_array<std::pair<std::string_view, bool>>({
+constexpr std::pair<std::string_view, bool> kValidPresentationAttributeEntries[] = {
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -2499,10 +2499,10 @@ constexpr auto kValidPresentationAttributeEntries = std::to_array<std::pair<std:
     {"white-space", true},
     {"word-spacing", true},
     {"writing-mode", true},
-});
+};
 
 DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
-    makeCompileTimeMap(kValidPresentationAttributeEntries);
+    makeCompileTimeMap(std::to_array(kValidPresentationAttributeEntries));
 
 std::optional<ParseDiagnostic> ParseOverflowWrap(PropertyRegistry& registry,
                                                  const parser::PropertyParseFnParams& params) {
