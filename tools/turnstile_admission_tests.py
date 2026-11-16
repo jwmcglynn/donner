@@ -341,7 +341,45 @@ class ShadowUpstreamTests(unittest.TestCase):
 
     def test_a_run_without_shadow_jobs_releases_the_slot_after_the_grace(self):
         self.assertEqual(admission.ABSENT, self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:02:56Z"))
-        self.assertEqual(admission.CLEAR, self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:07:00Z"))
+        # Released, not clear: provisional, so the wait loop reads the run again every poll.
+        self.assertEqual(admission.RELEASED,
+                         self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:07:00Z"))
+
+    def test_the_grace_runs_from_the_last_upstream_completion(self):
+        # The Linux lane ended ten minutes ago, the shadow turnstile admitted it one minute ago:
+        # its shadow job may appear any moment.
+        payload = {"jobs": [
+            _job(_LINUX_LANE, "completed", "success", "2026-11-16T01:00:00Z",
+                 "2026-11-16T01:20:00Z"),
+            _job(_SHADOW_LANE + "-turnstile", "completed", "success", "2026-11-16T01:20:02Z",
+                 "2026-11-16T01:29:00Z")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T01:30:00Z"))
+
+    def test_a_cancelled_linux_lane_never_holds_the_slot(self):
+        payload = {"jobs": [_job(_LINUX_LANE, "completed", "cancelled", "2026-11-16T01:00:00Z",
+                                 "2026-11-16T01:10:00Z")]}
+        self.assertEqual(admission.CLEAR, self._state(payload, "2026-11-16T01:10:01Z"))
+
+    def test_jobs_of_an_earlier_attempt_are_ignored(self):
+        # A rerun: the first attempt's shadow jobs were skipped; the second is in its Linux lane.
+        payload = {"jobs": [
+            dict(_job(_LINUX_LANE, "completed", "success", None, "2026-11-16T01:00:00Z"),
+                 run_attempt=1),
+            dict(_job(_SHADOW_LANE, "completed", "skipped", None, "2026-11-16T01:00:00Z"),
+                 run_attempt=1),
+            dict(_job(_LINUX_LANE, "in_progress"), run_attempt=2)]}
+        self.assertEqual(admission.CLEAR, self._state(payload, "2026-11-16T03:00:00Z"))
+        self.assertEqual(admission.ABSENT, self._state(admission.current_attempt(payload, 2),
+                                                       "2026-11-16T03:00:00Z"))
+
+    def test_a_jobs_listing_missing_a_page_holds_the_slot(self):
+        payload = dict(_MAIN_PUSH, total_count=150)
+        self.assertEqual(admission.ACTIVE, self._state(payload, "2026-11-16T01:12:10Z"))
+        self.assertEqual(admission.ACTIVE, admission.pool_state(payload, [_LINUX_LANE]))
+        # A complete listing, as the pool workflows' 10 to 13 jobs are today, reads as before.
+        complete = dict(_MAIN_PUSH, total_count=len(_MAIN_PUSH["jobs"]))
+        self.assertEqual(admission.CLEAR, self._state(complete, "2026-11-16T01:12:10Z"))
+        self.assertEqual(admission.CLEAR, admission.pool_state(complete, [_LINUX_LANE]))
 
     def test_an_opted_out_run_lists_skipped_shadow_jobs(self):
         self.assertEqual(admission.CLEAR, self._state(_OPTED_OUT, "2026-11-15T23:38:15Z"))

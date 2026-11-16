@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -84,6 +85,22 @@ def _environ(**values):
                if not name.startswith(_SCRUBBED_PREFIXES) and name not in _SCRUBBED_NAMES}
     environ.update(values)
     return environ
+
+
+class _GatedClock:
+    """Stands still until `ready()` holds, then jumps far past any deadline set from it: a test's
+    deadline is reached only once the state it observes exists, however slowly the host starts
+    processes."""
+
+    def __init__(self, ready):
+        self.ready = ready
+        self.start = time.monotonic()
+        self.jumped = False
+
+    def __call__(self):
+        if not self.jumped and self.ready():
+            self.jumped = True
+        return self.start + (10 ** 9 if self.jumped else 0)
 
 
 def _read(path):
@@ -418,6 +435,12 @@ class WorkflowTest(unittest.TestCase):
 
     def test_the_lane_budget_leaves_room_to_report_inside_the_job_timeout(self):
         self.assertEqual([], budget_problems(self.text))
+        # The margin covers the worst case after the budget: stopping the command, shutting the
+        # server down twice and the uploads.
+        worst = (sum(lane.STOP_GRACE) + lane.STOP_KILL_SECONDS + 2 * lane.SHUTDOWN_SECONDS +
+                 lane.UPLOAD_MINUTES * 60)
+        self.assertEqual(150, sum(lane.STOP_GRACE) + lane.STOP_KILL_SECONDS)
+        self.assertLessEqual(worst, lane.REPORT_MARGIN_MINUTES * 60)
         for old, new in (("--budget-minutes 70", "--budget-minutes 80"),
                          (" --budget-minutes 70", ""),
                          ("--budget-minutes 70", "--budget-minutes 10"),
@@ -970,17 +993,39 @@ class LaneRunTest(unittest.TestCase):
         self.assertIn("| native | 0 |", outputs["report"])
 
     def test_a_phase_past_the_budget_is_stopped_and_the_lane_still_reports(self):
-        pid_file = Path(tempfile.mkdtemp()) / "pid"
-        self.addCleanup(shutil.rmtree, pid_file.parent)
-        result, out, summary_file, calls = self._run(
-            "--budget-minutes", "0.1", FAKE_EXECUTOR="grpcs://executor.invalid",
-            FAKE_KEEP_RUNNING_NATIVE="1", FAKE_PID_FILE=str(pid_file))
-        self.assertEqual(lane.OUT_OF_TIME_STATUS, result.returncode, result.stdout + result.stderr)
+        import contextlib
+        import io
+        from unittest import mock
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        out, pid_file, summary_file = root / "out", root / "pid", root / "step-summary.md"
+        environ = _environ(FAKE_LOG=str(root / "calls"), FAKE_KEEP_RUNNING_NATIVE="1",
+                           FAKE_PID_FILE=str(pid_file), GITHUB_STEP_SUMMARY=str(summary_file),
+                           BAZEL_HEARTBEAT_INTERVAL_SECONDS="1")
+        args = lane.parse_args(["--out", str(out), "--fallback", "true", "--bazel", self.bazel,
+                                "--budget-minutes", "60"], {})
+        real = lane.run_phase
+
+        def gated(command, environment, console, **kwargs):
+            # The budget runs out once the phase is running and has completed actions.
+            kwargs.update(poll=0.2, limit=10 ** 12, clock=_GatedClock(
+                lambda: pid_file.exists() and lane.progress(lane._tail(console)) is not None))
+            return real(command, environment, console, **kwargs)
+
+        with mock.patch.object(lane, "_preflight", return_value=(None, 0)), \
+                mock.patch.object(lane, "run_phase", side_effect=gated), \
+                contextlib.redirect_stdout(io.StringIO()):
+            status = lane.run(args, environ)
+        self.assertEqual(lane.OUT_OF_TIME_STATUS, status)
         # A failure status, so the upload steps keyed on the lane step's outcome run.
-        self.assertNotEqual(0, result.returncode)
-        # Preflight, routing probe and the native phase; the gpu phase never starts.
-        self.assertEqual(5, len(calls), calls)
-        self.assertTrue(calls[-1].endswith("shutdown"))
+        self.assertNotEqual(0, status)
+        calls = (root / "calls").read_text(encoding="utf-8").splitlines()
+        # The native phase, a shutdown that completes its build events, the final shutdown; the
+        # gpu phase never starts.
+        self.assertEqual(3, len(calls), calls)
+        self.assertIn("--config=remote-macos ", calls[0] + " ")
+        self.assertEqual(["shutdown"] * 2, [call.split()[-1] for call in calls[1:]])
         summary = json.loads((out / "shadow-summary.json").read_text(encoding="utf-8"))
         native = summary["phases"]["native"]
         self.assertEqual(lane.OUT_OF_TIME, native["outcome"])
@@ -1002,6 +1047,32 @@ class LaneRunTest(unittest.TestCase):
         pid = int(pid_file.read_text())
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
+
+    def test_a_preflight_or_routing_probe_out_of_time_is_labelled_and_exits_124(self):
+        import contextlib
+        import io
+        from unittest import mock
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out)
+        probes = [(0, "grpcs://executor.invalid", None), (0, "", None)]
+        cases = {
+            "preflight": [mock.patch.object(lane, "_run_captured",
+                                            return_value=(lane.OUT_OF_TIME_STATUS, "", True))],
+            "routing probe": [mock.patch.object(lane, "_probe", side_effect=list(probes)),
+                              mock.patch.object(lane, "run_phase", return_value=(
+                                  lane.OUT_OF_TIME_STATUS, lane.OUT_OF_TIME))]}
+        for name, patches in cases.items():
+            with self.subTest(command=name):
+                args = lane.parse_args(["--out", str(out / name.replace(" ", "-")), "--fallback",
+                                        "true", "--budget-minutes", "60"], {})
+                with contextlib.ExitStack() as stack:
+                    for patch in patches + [mock.patch.object(lane, "_shutdown")]:
+                        stack.enter_context(patch)
+                    stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                    status = lane.run(args, {})
+                self.assertEqual(lane.OUT_OF_TIME_STATUS, status)
+                summary = json.loads((Path(args.out) / "shadow-summary.json").read_text())
+                self.assertIn("%s was stopped: out of time" % name, summary["problem"])
 
     def test_a_budget_that_is_not_reached_changes_nothing(self):
         result, out, _, calls = self._run("--budget-minutes", "60",
@@ -1190,12 +1261,15 @@ class StarvationGuardTest(unittest.TestCase):
 
         args = lane.parse_args(["--out", str(self.directory / "out"), "--fallback", "true"], {})
         with mock.patch.object(lane, "_preflight", return_value=(None, 0)), \
-                mock.patch.object(lane, "run_phase", side_effect=fake_phase):
+                mock.patch.object(lane, "run_phase", side_effect=fake_phase), \
+                mock.patch.object(lane, "_shutdown") as shutdown:
             import contextlib
             import io
             with contextlib.redirect_stdout(io.StringIO()):
                 status = lane.run(args, {})
         self.assertEqual(lane.STARVED_STATUS, status)
+        # Once after the stopped phase, before its build events are read, and once at the end.
+        self.assertEqual(2, shutdown.call_count)
         self.assertEqual(1, len(calls))
         summary = json.loads((self.directory / "out" / "shadow-summary.json").read_text())
         self.assertEqual(lane.STARVED, summary["phases"]["native"]["outcome"])
@@ -1213,8 +1287,12 @@ class StarvationGuardTest(unittest.TestCase):
             return lane.STARVED_STATUS, lane.STARVED
 
         args = lane.parse_args(["--out", str(self.directory / "out")], {})
-        with mock.patch.object(lane, "run_phase", side_effect=fake_phase):
-            problem = lane._routing_problem(args, {})
+        with mock.patch.object(lane, "run_phase", side_effect=fake_phase), \
+                mock.patch.object(lane, "_shutdown") as shutdown:
+            problem, status = lane._routing_problem(args, {})
+        self.assertEqual(2, status)
+        # The server is shut down before the stopped probe's build events are read.
+        self.assertEqual(1, shutdown.call_count)
         self.assertEqual(lane.ROUTING_STARVED_SECONDS, seen["limit"])
         self.assertLessEqual(lane.ROUTING_STARVED_SECONDS, 10 * 60)
         self.assertIn("not scheduled within 10 minutes", problem)
@@ -1247,19 +1325,18 @@ class StarvationGuardTest(unittest.TestCase):
         pids = self.directory / "pids"
         command = [sys.executable, str(self.script), "spawning", str(self.console), "0.05",
                    str(pids)]
-        started = time.monotonic()
+        clock = _GatedClock(lambda: pids.exists() and lane.progress(lane._tail(self.console)))
         with contextlib.redirect_stdout(io.StringIO()) as printed:
-            status, stop = lane.run_phase(command, _environ(), self.console, limit=30, poll=30,
-                                          grace=(2, 2, 2), deadline=time.monotonic() + 1.5)
-        # The poll is cut short at the deadline rather than waiting out its 30 seconds.
-        self.assertLess(time.monotonic() - started, 15)
+            # The deadline is half a second ahead on the stopped clock, so each poll is cut to
+            # half a second; an uncut poll of 60 seconds would outlast the stand-in, which ends
+            # on its own after 30 seconds.
+            status, stop = lane.run_phase(command, _environ(), self.console, limit=10 ** 12,
+                                          poll=60, grace=(5, 5, 5), clock=clock,
+                                          deadline=clock() + 0.5)
         self.assertEqual((lane.OUT_OF_TIME_STATUS, lane.OUT_OF_TIME), (status, stop))
         self.assertIn("the lane's budget ran out", printed.getvalue())
         own, child = (int(value) for value in pids.read_text().split())
         self.assertFalse(self._alive(own))
-        bound = time.monotonic() + 10
-        while self._alive(child) and time.monotonic() < bound:
-            time.sleep(0.1)
         self.assertFalse(self._alive(child), "the stopped command left a process behind")
 
     def test_starvation_still_stops_first_when_nothing_completes(self):
@@ -1275,16 +1352,47 @@ class StarvationGuardTest(unittest.TestCase):
     def test_a_preflight_command_is_stopped_at_the_deadline(self):
         import contextlib
         import io
-        command = [sys.executable, "-c", "import time; print('probing', flush=True); "
-                   "time.sleep(30)"]
-        started = time.monotonic()
+        command = [sys.executable, "-c", "import time; time.sleep(60)"]
         with contextlib.redirect_stdout(io.StringIO()):
-            status, output = lane._run_captured(command, _environ(), self.directory / "probe.log",
-                                                time.monotonic() + 1, grace=(2, 2, 2))
-        self.assertEqual(lane.OUT_OF_TIME_STATUS, status)
-        self.assertIn("probing", output)
-        self.assertLess(time.monotonic() - started, 15)
+            status, _, stopped = lane._run_captured(command, _environ(),
+                                                    self.directory / "probe.log",
+                                                    time.monotonic() + 1, grace=(5, 5, 5))
+        self.assertEqual((lane.OUT_OF_TIME_STATUS, True), (status, stopped))
         self.assertFalse((self.directory / "probe.log").exists())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual((3, "", False), lane._run_captured(
+                [sys.executable, "-c", "raise SystemExit(3)"], _environ(),
+                self.directory / "probe.log", time.monotonic() + 600))
+
+    def test_a_stop_ends_what_the_command_leaves_behind(self):
+        # A shell background job ignores interrupts, as the stall watchdog's heartbeat does.
+        pid_file = self.directory / "background"
+        process = subprocess.Popen(
+            ["bash", "-c", 'sleep 60 & echo $! > "$1"; sleep 60', "bash", str(pid_file)],
+            start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        bound = time.monotonic() + 60
+        while not (pid_file.exists() and pid_file.read_text().strip()) and \
+                time.monotonic() < bound:
+            time.sleep(0.05)
+        background = int(pid_file.read_text())
+        lane._stop(process, grace=(30, 30, 30))
+        self.assertIsNotNone(process.returncode)
+        self.assertFalse(self._alive(background), "the interrupt-immune job was left running")
+
+    def test_a_group_already_gone_is_reaped_without_a_kill(self):
+        from unittest import mock
+        process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        sent = []
+
+        def killpg(group, sig):
+            sent.append(sig)
+            raise ProcessLookupError
+
+        with mock.patch.object(lane.os, "killpg", side_effect=killpg):
+            lane._stop(process)
+        self.assertEqual([signal.SIGINT], sent)
+        self.assertIsNotNone(process.returncode)
 
     def test_bound_exceeds_the_longest_test_timeout(self):
         # `long` (900 s) is the longest effective test timeout in the tree; see STARVED_SECONDS.

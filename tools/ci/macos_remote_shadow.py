@@ -298,15 +298,25 @@ def probe_ran_and_failed(lines):
 
 
 def _routing_problem(args, environment):
-    """Why the routing probe does not prove the lane's actions run on macOS arm64, or None."""
+    """(why the routing probe does not prove the lane's actions run on macOS arm64, exit status)
+    or (None, 0)."""
     command, events, console = routing_command(args.bazel, args.startup_option, args.rc_option,
                                                args.out)
     status, stop = run_phase(command, environment, console, limit=ROUTING_STARVED_SECONDS,
                              deadline=args.deadline)
+    if stop is not None:
+        # The server finishes the cancelled command and its build event file only now.
+        _shutdown(args, environment)
     lines = _read_lines(events) or []
     events.unlink(missing_ok=True)
     if stop == OUT_OF_TIME:
-        return "the routing probe ran out of the lane's budget (%s)." % OUT_OF_TIME
+        return ("the routing probe was stopped: %s (the lane's budget ran out)." % OUT_OF_TIME,
+                OUT_OF_TIME_STATUS)
+    return _routing_result(stop, status, lines), 2
+
+
+def _routing_result(stop, status, lines):
+    """Why the routing probe's result does not prove where the lane's actions run, or None."""
     if stop:
         return ("this runner is not configured for the remote macOS lane: the routing probe was "
                 "not scheduled within %d minutes (%s)." % (ROUTING_STARVED_SECONDS // 60, STARVED))
@@ -384,10 +394,10 @@ def _preflight(args, environment):
     statuses, executors = {}, {}
     for probe, (command, events) in preflight_commands(
             args.bazel, args.startup_option, args.rc_option, args.out).items():
-        statuses[probe], executors[probe], repository = _probe(command, events, environment,
-                                                               args.deadline)
-        if repository:
-            return _REPOSITORY_PROBLEM % statuses[probe], statuses[probe]
+        statuses[probe], executors[probe], stopped = _probe(command, events, environment,
+                                                            args.deadline)
+        if stopped:
+            return stopped, statuses[probe]
         if statuses[probe] != 0:
             # A later probe would only repeat the failure, or run a no-target build for nothing.
             break
@@ -395,23 +405,27 @@ def _preflight(args, environment):
     failed = [status for status in statuses.values() if status != 0]
     if problem:
         return problem, (failed[0] if failed else 2)
-    return _routing_problem(args, environment), 2
+    return _routing_problem(args, environment)
 
 
 def _probe(command, events, environment, deadline=None):
-    """Runs one preflight probe: (exit status, executor or None when unreadable, whether a
-    repository rule failed on the client). Its build event file is deleted at once, since it
-    records the runner's effective options."""
+    """Runs one preflight probe: (exit status, executor or None when unreadable, a problem for a
+    probe that ran out of time or whose repository rule failed on the client, or None). Its
+    build event file is deleted at once, since it records the runner's effective options."""
     events.parent.mkdir(parents=True, exist_ok=True)
-    status, output = _run_captured(command, environment, events.with_suffix(".log"), deadline)
-    repository = status != 0 and any(marker in output for marker in _REPOSITORY_FAILURES)
+    status, output, stopped = _run_captured(command, environment, events.with_suffix(".log"),
+                                            deadline)
+    problem = ("the preflight was stopped: %s (the lane's budget ran out)." % OUT_OF_TIME
+               if stopped else None)
+    if problem is None and status != 0 and any(marker in output for marker in _REPOSITORY_FAILURES):
+        problem = _REPOSITORY_PROBLEM % status
     lines = _read_lines(events)
     events.unlink(missing_ok=True)
     try:
         executor = None if lines is None else effective_executor(lines)
     except Exception:  # Any unreadable event file is reported as unreadable.
         executor = None
-    return status, executor, repository
+    return status, executor, problem
 
 
 def _int(value):
@@ -797,11 +811,14 @@ STARVED = "executor starved or unavailable"
 # deadline on this advisory lane's runtime, so that the lane stops itself and reports before the
 # job's timeout-minutes cancels it with nothing written; it is not a deadline on any test or on
 # correctness. When it runs out, the running Bazel command is stopped like a starved phase and the
-# later phase is skipped. REPORT_MARGIN_MINUTES is what the job still needs after the budget:
-# up to two minutes of interrupts to stop Bazel, staging, the summary, up to two minutes to shut
-# the server down, and the upload steps. The workflow's budget plus this margin stays below the
-# job's timeout-minutes (//tools:ci_macos_remote_shadow_tests).
+# later phase is skipped. REPORT_MARGIN_MINUTES is what the job still needs after the budget, at
+# worst: STOP_GRACE plus STOP_KILL_SECONDS to stop the command (150 s), SHUTDOWN_SECONDS to shut
+# the server down so its build event file is complete, SHUTDOWN_SECONDS again for the final
+# shutdown, then staging, the summary and UPLOAD_MINUTES for the upload steps: 12.5 minutes in
+# all. The workflow's budget plus this margin stays below the job's timeout-minutes, and the margin
+# covers that sum (//tools:ci_macos_remote_shadow_tests).
 REPORT_MARGIN_MINUTES = 15
+UPLOAD_MINUTES = 5
 OUT_OF_TIME = "out of time"
 OUT_OF_TIME_STATUS = 124
 _STOP_STATUS = {STARVED: STARVED_STATUS, OUT_OF_TIME: OUT_OF_TIME_STATUS}
@@ -868,36 +885,64 @@ def _tail(path, size=65536):
         return ""
 
 
-def _stop(process, grace=(60, 30, 30)):
+# Interrupts sent to a command's process group before it is killed, and the wait after the kill.
+STOP_GRACE = (60, 30, 30)
+STOP_KILL_SECONDS = 30
+# Once the command exited: how long the rest of its group may take to finish, then after a
+# terminate, then after a kill. The worst case of a stop stays STOP_GRACE plus STOP_KILL_SECONDS.
+_LEFTOVER_SECONDS = 10
+
+
+def _stop(process, grace=STOP_GRACE):
     """Interrupts the command's process group as Ctrl-C would, up to three times (Bazel cancels
-    the invocation on the first and kills its server on the third), then kills what is left. It
-    returns only once every process of the group has exited, so no wrapper or Bazel client is
-    left behind, still writing the build event file the lane reads next."""
+    the invocation on the first and kills its server on the third), then kills the group. Once
+    the command itself has exited, what is left of its group is terminated: the stall watchdog's
+    heartbeat is a shell background job, which ignores interrupts and would otherwise linger
+    until its next heartbeat. The Bazel server is not in the group; it finishes cancelling the
+    command and writing the build event file on its own, so callers shut it down before they
+    read that file."""
     for seconds in grace:
         try:
             os.killpg(process.pid, signal.SIGINT)
         except ProcessLookupError:
-            break
-        if _group_gone(process, seconds):
+            process.wait()
             return
+        try:
+            process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            continue
+        _end_group(process.pid)
+        return
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    _group_gone(process, 30)
+    _group_gone(process.pid, STOP_KILL_SECONDS)
     process.wait()
 
 
-def _group_gone(process, seconds):
-    """Waits up to `seconds` for every process of the command's process group to exit, reaping
-    the command itself; returns whether the group is gone."""
+def _end_group(group):
+    """Lets what is left of a process group whose leader exited finish (a Bazel client still
+    completing its cancel), then terminates it, then kills it: _LEFTOVER_SECONDS for each."""
+    if _group_gone(group, _LEFTOVER_SECONDS):
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(group, sig)
+        except ProcessLookupError:
+            return
+        if _group_gone(group, _LEFTOVER_SECONDS):
+            return
+
+
+def _group_gone(group, seconds):
+    """Waits up to `seconds` for every process of a process group to exit; returns whether it
+    has. The group leader must already be reaped or exiting."""
     bound = time.monotonic() + seconds
     while True:
-        process.poll()
         try:
-            os.killpg(process.pid, 0)
+            os.killpg(group, 0)
         except ProcessLookupError:
-            process.wait()
             return True
         if time.monotonic() >= bound:
             return False
@@ -938,9 +983,10 @@ def _stop_reason(guard, console, clock, deadline):
     return None
 
 
-def _run_captured(command, environment, console, deadline=None, grace=(60, 30, 30)):
-    """(exit status, console output) of a command; the output is also printed, as it would be.
-    Past `deadline` (time.monotonic) it is stopped like a phase and reports OUT_OF_TIME_STATUS."""
+def _run_captured(command, environment, console, deadline=None, grace=STOP_GRACE):
+    """(exit status, console output, stopped) of a command; the output is also printed, as it
+    would be. Past `deadline` (time.monotonic) it is stopped like a phase: OUT_OF_TIME_STATUS,
+    and stopped is True."""
     print("+ " + shlex.join(command), flush=True)
     with open(console, "w", encoding="utf-8") as handle:
         process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=handle,
@@ -953,10 +999,12 @@ def _run_captured(command, environment, console, deadline=None, grace=(60, 30, 3
                   "command (%s)." % OUT_OF_TIME, flush=True)
             _stop(process, grace)
             status = OUT_OF_TIME_STATUS
+        stopped = status == OUT_OF_TIME_STATUS and deadline is not None and \
+            time.monotonic() >= deadline
     output = Path(console).read_text(encoding="utf-8", errors="replace")
     Path(console).unlink(missing_ok=True)
     print(output, end="", flush=True)
-    return status, output
+    return status, output, stopped
 
 
 def _read_lines(path):
@@ -1051,6 +1099,10 @@ def _run_one_phase(args, environment, targets, phase, budget):
     status, stop = run_phase(phase_command(phase, args.bazel, args.startup_option,
                                            args.rc_option, args.out, targets),
                              environment, files["console"], deadline=args.deadline)
+    if stop is not None:
+        # The server finishes the cancelled command and its build event file only now; no later
+        # phase runs after a stop, so its analysis cache is not needed.
+        _shutdown(args, environment)
     lines = _read_lines(files["bep"]) or []
     try:
         entry = summarize(lines)

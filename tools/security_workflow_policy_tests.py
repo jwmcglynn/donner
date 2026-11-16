@@ -2169,9 +2169,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             result = subprocess.run(
                 ["bash", "-c", textwrap.dedent(scripts[0])],
                 cwd=workspace,
-                # The collector reads its tree from TESTLOGS, which GitHub passes empty when the
-                # input is omitted; an ambient value must not choose another tree.
-                env={**os.environ, "RUNNER_TEMP": str(runner), "TESTLOGS": ""},
+                # An explicit environment: an ambient TESTLOGS, RUNNER_* or GITHUB_* value must
+                # not choose another tree. GitHub passes an omitted input as empty.
+                env={"PATH": os.environ.get("PATH", os.defpath), "RUNNER_TEMP": str(runner),
+                     "TESTLOGS": ""},
                 capture_output=True,
                 text=True,
                 timeout=test_timing.STALL_GUARD_SECONDS,

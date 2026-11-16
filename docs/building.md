@@ -547,19 +547,20 @@ event that started the run: add it before pushing; a rerun does not read labels 
 
 **Admission and its cost.** The lane starts only after its run's `linux-self-hosted` job has
 finished, whether that passed or failed, so it never delays its own run's gating job. While it runs
-it occupies one runner of the self-hosted Linux class outside the Linux lane's admission
-accounting, so an admitted Linux job of another run can wait for a runner for up to the shadow's
-duration: at most its 90-minute budget, and a starved executor stops a phase after 20 minutes. A
-turnstile with a pool of one runs a single shadow at a time against the macOS executor. It fails
-closed: after 30 minutes without admission the shadow lane is skipped. An older run still in its
-Linux lane counts against that pool until its own shadow job is created or skipped, so under load a
-shadow run can wait and then be skipped this way. A run that can no longer create a shadow job
-does not count: one whose Linux lane was skipped or cancelled, such as a push to `main`, and one
-with no shadow job 5 minutes after its Linux lane and shadow turnstile ended, such as a pull request
-from a branch without this lane (the turnstile's `pool-upstream` and `upstream-grace-minutes`
-inputs). An unreadable run still counts. That cost is why the lane is opt-in per pull
-request, and turning it on for every trusted pull request should wait for dedicated runner capacity.
-While the shadow lane runs, the pull request's checks stay pending.
+it occupies one runner of the self-hosted Linux class outside the Linux lane's admission accounting,
+so an admitted Linux job of another run can wait for a runner for up to the shadow's duration: at
+most its 90-minute budget, and a starved executor stops a phase after 20 minutes. A turnstile with a
+pool of one runs a single shadow at a time against the macOS executor. It fails closed: after 30
+minutes without admission the shadow lane is skipped. An older run still in its Linux lane counts
+against that pool until its own shadow job is created or skipped, so under load a shadow run can
+wait and then be skipped this way. A run that can no longer create a shadow job does not count: one
+whose Linux lane was skipped or cancelled, such as a push to `main`, and one with no shadow job 5
+minutes after its Linux lane and shadow turnstile ended, such as a pull request from a branch
+without this lane (the turnstile's `pool-upstream` and `upstream-grace-minutes` inputs). A run
+released only because that grace passed is read again on every poll, since its shadow job may still
+appear; an unreadable or partly listed run still counts. That cost is why the lane is opt-in per
+pull request, and turning it on for every trusted pull request should wait for dedicated runner
+capacity. While the shadow lane runs, the pull request's checks stay pending.
 
 `tools/ci/macos_remote_shadow.py` is the whole lane (`--dry-run` prints its commands):
 
@@ -615,9 +616,13 @@ stopped the same way, the later phase is skipped, and the lane still stages fail
 writes its report, summary and job summary, and exits with a failure status so the upload steps
 run. A stopped phase's line in the report gives the actions and tests completed of their totals,
 actions per minute, and the executed actions and action cache hits from its build events, so a
-cold cache reads differently from a starved executor. The budget plus a 15-minute margin for
-stopping Bazel, the summary and the uploads stays below the job's 90-minute timeout, so the runner
-never cancels the job before the lane has reported.
+cold cache reads differently from a starved executor. A stop interrupts the command's process
+group, then ends what is left of it, and the lane shuts the Bazel server down before it reads the
+stopped command's build events: the server, outside that group, finishes the cancelled command and
+its build event file first. A stop in the preflight or the routing probe is reported as out of time
+in the same way. The budget plus a 15-minute margin for stopping Bazel (at most 150 seconds),
+shutting the server down, the summary and the uploads stays below the job's 90-minute timeout, so
+the runner never cancels the job before the lane has reported.
 
 **How a result shows.** The lane never fails a pull request or the coverage contract, which does
 not read it:

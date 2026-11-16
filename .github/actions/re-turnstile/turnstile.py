@@ -183,15 +183,22 @@ class Turnstile:
             except rate.ApiError:
                 # Unreadable counts as executing: an API hiccup narrows the pool.
                 jobs = None
-            if not isinstance(jobs, dict):
-                jobs = None
+            jobs = admission.current_attempt(jobs, attempt) if isinstance(jobs, dict) else None
+            # Only a final clear is remembered: a run released by the upstream grace is read
+            # again on every poll, since its pool job may still be listed.
             if jobs is not None and admission.pool_state(
-                    jobs, self.pool, self.upstream, self.clock(), self.grace) == admission.CLEAR:
+                    jobs, self.pool, self.upstream, self.now(), self.grace) == admission.CLEAR:
                 self.finished[run_id] = attempt
                 continue
             entries.append({"id": run_id, "jobs": jobs})
         return {"capacity": self.capacity, "me": self.me, "pool": self.pool, "runs": entries,
-                "upstream": self.upstream, "grace_seconds": self.grace, "now": self.clock()}
+                "upstream": self.upstream, "grace_seconds": self.grace, "now": self.now()}
+
+    def now(self) -> float:
+        """GitHub's time, from the last response's Date header, which the upstream grace compares
+        with GitHub's job timestamps; the local clock when no response carried one."""
+        server = getattr(self.client, "server_time", None)
+        return server if isinstance(server, (int, float)) else self.clock()
 
     def run(self) -> int:
         workflow_ids = self._resolve()

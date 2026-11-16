@@ -378,6 +378,83 @@ class ShadowUpstreamWaitTests(unittest.TestCase):
         self.assertGreaterEqual(sum(self.clock.slept), 4 * 60)
         self.assertIn("200 (absent)", "".join(self.logged))
 
+    def _shadow_turnstile(self, api, **environ):
+        values = dict(TURNSTILE_LANE=self._SHADOW, TURNSTILE_POOL=self._SHADOW,
+                      TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="10",
+                      TURNSTILE_TIMEOUT_RESULT="skip",
+                      TURNSTILE_POOL_UPSTREAM=_LANE + " " + self._SHADOW + "-turnstile",
+                      TURNSTILE_UPSTREAM_GRACE_MINUTES="5")
+        values.update(environ)
+        with tempfile.TemporaryDirectory() as directory:
+            output = directory + "/output"
+            status = turnstile.Turnstile(_environ(GITHUB_OUTPUT=output, **values), api,
+                                         sleep=self.clock.sleep, clock=self.clock,
+                                         jitter=lambda: 0, log=self.logged.append).run()
+            return status, open(output, encoding="utf-8").read()
+
+    def _jobs_api(self, payload_for, attempts=None):
+        """A fake API whose jobs payload for a run comes from payload_for(run, poll)."""
+        attempts = attempts or {}
+        api = FakeActions(self.clock, {200: (attempts.get(200, 1), None), _ME: (1, None)})
+        original, polls = api.get_json, {}
+
+        def get_json(url):
+            jobs = re.search(r"actions/runs/(\d+)/jobs\?per_page=100$", url)
+            if jobs:
+                original(url)
+                run = int(jobs.group(1))
+                polls[run] = polls.get(run, 0) + 1
+                if run == _ME:
+                    return {"jobs": [{"name": self._SHADOW + "-turnstile",
+                                      "status": "in_progress"}]}
+                return {"jobs": payload_for(run, polls[run])}
+            return original(url)
+        api.get_json = get_json
+        return api, polls
+
+    def test_a_run_released_by_the_grace_is_read_again_and_can_take_the_slot_back(self):
+        linux = {"name": _LANE, "status": "completed", "conclusion": "success",
+                 "completed_at": _stamp(self.clock.now - 600)}
+
+        def payload(run, poll):
+            # Clear by the grace on the first poll; its shadow job is running from the second.
+            return [linux] + ([] if poll == 1 else
+                              [{"name": self._SHADOW, "status": "in_progress"}])
+        api, polls = self._jobs_api(payload)
+        self.assertEqual((0, "admitted=false\n"), self._shadow_turnstile(api))
+        self.assertGreater(polls[200], 2)
+        self.assertIn("200 (active)", "".join(self.logged))
+
+    def test_jobs_of_an_earlier_attempt_do_not_release_the_slot(self):
+        finished = _stamp(self.clock.now - 600)
+
+        def payload(run, poll):
+            return [{"name": _LANE, "status": "completed", "conclusion": "success",
+                     "completed_at": finished, "run_attempt": 1},
+                    {"name": self._SHADOW, "status": "completed", "conclusion": "skipped",
+                     "completed_at": finished, "run_attempt": 1},
+                    {"name": _LANE, "status": "in_progress", "run_attempt": 2}]
+        api, _ = self._jobs_api(payload, attempts={200: 2})
+        self.assertEqual((0, "admitted=false\n"), self._shadow_turnstile(api))
+        self.assertIn("200 (absent)", "".join(self.logged))
+
+    def test_the_grace_is_measured_on_githubs_clock(self):
+        # The runner's clock is ten minutes fast: by GitHub's clock the Linux lane ended two
+        # minutes ago, well inside the grace.
+        github_now = self.clock.now - 600
+        linux = {"name": _LANE, "status": "completed", "conclusion": "success",
+                 "completed_at": _stamp(github_now - 120)}
+        api, _ = self._jobs_api(lambda run, poll: [linux])
+        api.server_time = github_now
+        self.assertEqual((0, "admitted=false\n"),
+                         self._shadow_turnstile(api, TURNSTILE_TIMEOUT_MINUTES="2"))
+        self.assertIn("200 (absent)", "".join(self.logged))
+        # By the runner's own clock the same run would have been released at once.
+        self.logged.clear()
+        api, _ = self._jobs_api(lambda run, poll: [linux])
+        self.assertEqual((0, "admitted=true\n"),
+                         self._shadow_turnstile(api, TURNSTILE_TIMEOUT_MINUTES="2"))
+
     def test_without_upstream_they_hold_it_until_the_safety_timeout(self):
         self.assertEqual((0, "admitted=false\n"), self._run())
         self.assertIn("100 (absent), 200 (absent)", "".join(self.logged))
