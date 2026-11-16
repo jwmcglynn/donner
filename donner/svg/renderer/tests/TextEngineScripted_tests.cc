@@ -4888,10 +4888,10 @@ TEST(TextEngineScriptedTest, PostTextPathCursorSpaceAfterThePathStartsAtTheEndpo
   EXPECT_THAT(glyphs[2], GlyphXPositionIs(Gt(100.0)));
 }
 
-// The collapsed leading space is not addressable, so the following element's first per-character
-// value goes to its first remaining character. Chrome 157 gives B dx[0] (absorbed by the end
-// point, as PostTextPathCursorFirstRelativeShiftIsAbsorbedByEndpoint pins) and C dx[1], and gives
-// B rotate[0] and C rotate[1].
+// White-space processing discards the collapsed leading space, so it is not an addressable
+// character, and SVG 2 assigns per-character values only to addressable characters, in order.
+// B takes dx[0] and rotate[0], and C takes dx[1] and rotate[1]. The end point absorbs B's dx, as
+// PostTextPathCursorFirstRelativeShiftIsAbsorbedByEndpoint pins.
 TEST(TextEngineScriptedTest, PostTextPathCursorCollapsedBoundarySpaceTakesNoPositionValue) {
   constexpr int kBGlyph = 'B' + 1;
   constexpr int kCGlyph = 'C' + 1;
@@ -4909,8 +4909,9 @@ TEST(TextEngineScriptedTest, PostTextPathCursorCollapsedBoundarySpaceTakesNoPosi
   EXPECT_THAT(rotated[3], AllOf(GlyphIndexIs(Eq(kCGlyph)), GlyphRotateDegreesIs(DoubleEq(60.0))));
 }
 
-// Between two textPaths the first keeps its trailing space on its path, and the inter-element
-// space and the second path's leading space collapse, as in Chrome 157.
+// Between two textPaths the first keeps its trailing space on its path. The inter-element space
+// and the second path's leading space each follow a collapsible space, so CSS Text 3 section 4.1.1
+// removes them.
 TEST(TextEngineScriptedTest, AdjacentTextPathsKeepOnlyTheFirstPathsBoundarySpace) {
   constexpr int kSpaceGlyph = ' ' + 1;
   constexpr int kBGlyph = 'B' + 1;
@@ -4923,9 +4924,9 @@ TEST(TextEngineScriptedTest, AdjacentTextPathsKeepOnlyTheFirstPathsBoundarySpace
                                GlyphYPositionIs(DoubleEq(80.0))));
 }
 
-// A textPath whose reference does not resolve is not rendered. Chrome 157 still counts its
-// characters, so its trailing space collapses the following one: the visible text is "X", one
-// space, then B.
+// A textPath whose reference does not resolve is not rendered, but its characters still take part
+// in white-space processing, so its trailing space collapses the following one: the visible text
+// is "X", one space, then B.
 TEST(TextEngineScriptedTest, UnresolvedTextPathBoundaryKeepsOneVisibleSpace) {
   constexpr int kXGlyph = 'X' + 1;
   constexpr int kSpaceGlyph = ' ' + 1;

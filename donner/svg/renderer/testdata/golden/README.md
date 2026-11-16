@@ -156,16 +156,20 @@ continue the text after a `textPath` from the end point of the path, and
 textPath's trailing space on the path and collapses the space after it, so `Text` starts at
 the end point. The vendored PNGs continue from the end of the glyphs on the path instead.
 
-These images were regenerated when Donner adopted that collapse rule; before it, Donner kept
-the following space and drew `Text` 6.24 user units (15.6 device px) past the end point. Ink
-of the green `Text`, in device px at the 500x500 (2.5x) canvas; the Chrome column is a
+Ink of the green `Text`, in device px at the 500x500 (2.5x) canvas; the Chrome column is a
 Chrome 157 rendering of the same SVG with the corpus `NotoSans-Regular.ttf` loaded through
 `@font-face`:
 
-| Case             | Path end point | Vendored PNG         | Previous reference | Chrome 157           | This reference       |
-| ---------------- | -------------- | -------------------- | ------------------ | -------------------- | -------------------- |
-| mixed-children-1 | (450, 250)     | x 419-499, y 146-188 | x 466-499          | x 451-499, y 207-249 | x 451-499, y 207-249 |
-| very-long-text   | (250, 250)     | x 290-402, y 210-252 | x 266-378          | x 251-363, y 207-249 | x 251-363, y 207-249 |
+| Case             | Path end point | Vendored PNG         | Chrome 157           | This reference       |
+| ---------------- | -------------- | -------------------- | -------------------- | -------------------- |
+| mixed-children-1 | (450, 250)     | x 419-499, y 146-188 | x 451-499, y 207-249 | x 451-499, y 207-249 |
+| very-long-text   | (250, 250)     | x 290-402, y 210-252 | x 251-363, y 207-249 | x 251-363, y 207-249 |
+
+Rendered headless at 500x500 with the suite fonts and compared at the suite's default settings,
+Chromium 151 differs from these references by 67 pixels (mixed-children-1) and 31 pixels
+(very-long-text), all on glyph edges. Firefox 153 differs by 589 and 1,197 pixels, all at the
+green `Text`, because it does not continue the text after a `textPath` from the path's end
+point.
 
 `TextEngineScriptedTest.PostTextPathCursorBoundarySpaceStaysOnThePath` pins the collapse
 rule. The images were created from the simple text tier on TinySkia with the suite's
