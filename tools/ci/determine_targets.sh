@@ -32,6 +32,23 @@ if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
   cd "${BUILD_WORKSPACE_DIRECTORY}"
 fi
 
+# Writes the bazel-diff hash of every target in the workspace $1 to the file $2. Every hashing
+# runs through here, with the same options:
+# - --no-keep_going: a query error fails the hashing, so no selection rests on a partial graph.
+# - --excludeExternalTargets: do not query //external:all-targets. That package does not exist
+#   when WORKSPACE is disabled, as it is here, and the query fails. bazel-diff skips it by itself
+#   only when `bazel mod graph` succeeds, and that command evaluates the module extensions of
+#   the whole dependency graph, including ones no build here loads, so it fails on this
+#   workspace. With --keep_going the failed query was ignored, so skipping it hashes exactly
+#   what was hashed before.
+generate_hashes() {
+  java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+    --includeTargetType --no-keep_going --excludeExternalTargets \
+    -w "$1" \
+    -b bazelisk \
+    "$2"
+}
+
 pr_meta() {
   base_sha=""
   if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
@@ -55,11 +72,13 @@ determine() {
       if [[ ! -f "$cached" ]]; then
         echo "Pre-warming bazel-diff hash cache for $GITHUB_SHA."
         mkdir -p "$(dirname "$cached")"
-        java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-    --includeTargetType --no-keep_going \
-          -w "$GITHUB_WORKSPACE" \
-          -b bazelisk \
-          "$cached" || rm -f "$cached"
+        # A failure fails the job: hashing that fails here fails for every pull request against
+        # this commit, so main turns red instead of the selection breaking silently.
+        if ! generate_hashes "$GITHUB_WORKSPACE" "$cached"; then
+          rm -f "$cached"
+          echo "::error::bazel-diff could not hash $GITHUB_SHA; the target selection is broken."
+          exit 1
+        fi
       fi
     fi
     exit 0
@@ -196,6 +215,18 @@ determine() {
   done <<< "$changed_files"
 
   if [[ "$should_fallback" == "true" ]]; then
+    # A full selection skips the graph diff, so without this a change to an input of the
+    # hashing itself (these scripts, this workflow, which pins bazel-diff, or Bazel's version,
+    # configuration, modules and rules) would first fail on main. Hash this revision once, fail
+    # on error, and discard the hashes. It costs one query of the graph.
+    echo "Checking that bazel-diff can hash this revision."
+    self_check="$(mktemp)"
+    if ! generate_hashes "$PWD" "$self_check"; then
+      rm -f "$self_check"
+      echo "::error::bazel-diff could not hash this revision; the target selection is broken."
+      exit 1
+    fi
+    rm -f "$self_check"
     echo "fallback=true" >> "$GITHUB_OUTPUT"
     echo "affected=" >> "$GITHUB_OUTPUT"
     exit 0
@@ -255,21 +286,13 @@ determine() {
     cp "$cached_base" "$work_dir/base-hashes.json"
   else
     git worktree add --detach "$base_dir" "$BASE_SHA"
-    java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-    --includeTargetType --no-keep_going \
-      -w "$base_dir" \
-      -b bazelisk \
-      "$work_dir/base-hashes.json"
+    generate_hashes "$base_dir" "$work_dir/base-hashes.json"
     # Save for subsequent pushes to this PR (post-job cache step).
     mkdir -p "$(dirname "$cached_base")"
     cp "$work_dir/base-hashes.json" "$cached_base"
   fi
 
-  java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-    --includeTargetType --no-keep_going \
-    -w "$head_dir" \
-    -b bazelisk \
-    "$work_dir/head-hashes.json"
+  generate_hashes "$head_dir" "$work_dir/head-hashes.json"
 
   java -jar "$RUNNER_TEMP/bazel-diff.jar" get-impacted-targets \
     -tt Rule \
