@@ -1,12 +1,14 @@
 #include "donner/svg/renderer/RendererTinySkia.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <utility>
@@ -43,6 +45,7 @@
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
+#include "tiny_skia/Stroker.h"
 #include "tiny_skia/filter/ColorSpace.h"
 #include "tiny_skia/shaders/Shaders.h"
 
@@ -288,6 +291,104 @@ std::vector<tiny_skia::Path> JoinTinyPathsByChunk(std::span<const tiny_skia::Pat
     }
   }
   return joined;
+}
+
+/**
+ * Whether the stroke of \p glyph can reach the \p width x \p height target: its bounds, grown
+ * by the farthest a join or cap can reach from the outline, mapped by \p transform.
+ */
+bool TinyStrokeMayReachTarget(const tiny_skia::Path& glyph, const tiny_skia::Stroke& stroke,
+                              const tiny_skia::Transform& transform, float width, float height) {
+  const tiny_skia::Rect bounds = glyph.bounds();
+  const float reach =
+      0.5f * stroke.width * std::max(stroke.miterLimit, std::numbers::sqrt2_v<float>);
+  std::array<tiny_skia::Point, 4> corners = {
+      tiny_skia::Point::fromXY(bounds.left() - reach, bounds.top() - reach),
+      tiny_skia::Point::fromXY(bounds.right() + reach, bounds.top() - reach),
+      tiny_skia::Point::fromXY(bounds.right() + reach, bounds.bottom() + reach),
+      tiny_skia::Point::fromXY(bounds.left() - reach, bounds.bottom() + reach)};
+  transform.mapPoints(corners);
+  float left = corners[0].x;
+  float right = corners[0].x;
+  float top = corners[0].y;
+  float bottom = corners[0].y;
+  for (const tiny_skia::Point& corner : corners) {
+    left = std::min(left, corner.x);
+    right = std::max(right, corner.x);
+    top = std::min(top, corner.y);
+    bottom = std::max(bottom, corner.y);
+  }
+  // A pixel of margin keeps anti-aliased edges that touch the target.
+  return !(right < -1.0f || bottom < -1.0f || left > width + 1.0f || top > height + 1.0f);
+}
+
+/**
+ * Expands the strokes of one text chunk's glyphs into one path. Each glyph is expanded on its own
+ * (stroking a path strokes its contours independently, so this equals stroking the joined chunk)
+ * and its expansion is charged to \p textBudget before it is kept; glyphs whose stroke cannot
+ * reach the target are not expanded.
+ *
+ * @return The joined expansion, empty when nothing is kept, or std::nullopt when a charge fails.
+ */
+std::optional<std::optional<tiny_skia::Path>> ExpandTinyTextChunkStroke(
+    std::span<const tiny_skia::Path> glyphs, const tiny_skia::Stroke& stroke,
+    const tiny_skia::Transform& transform, float resScale, float width, float height,
+    RendererTextMaterializationBudget& textBudget) {
+  tiny_skia::PathBuilder joined;
+  for (const tiny_skia::Path& glyph : glyphs) {
+    if (!TinyStrokeMayReachTarget(glyph, stroke, transform, width, height)) {
+      continue;
+    }
+    std::optional<tiny_skia::Path> expanded = glyph.stroke(stroke, resScale);
+    if (!expanded.has_value()) {
+      continue;
+    }
+    const std::size_t points = expanded->points().size();
+    const std::size_t verbs = expanded->verbs().size();
+    if (!textBudget.reserve({.commands = verbs,
+                             .points = points,
+                             .bytes = points * sizeof(tiny_skia::Point) + verbs})) {
+      return std::nullopt;
+    }
+    joined.pushPath(*expanded);
+  }
+  return joined.finish();
+}
+
+/**
+ * Strokes a text run one chunk at a time, as resvg strokes the part of a span in one chunk: where
+ * the strokes of adjacent glyphs overlap, the overlap is covered once. A hairline stroke is drawn
+ * by the rasterizer without expansion. Otherwise each chunk's glyph strokes are expanded and
+ * charged one by one (see \ref ExpandTinyTextChunkStroke) and filled together; a charge that
+ * fails rejects \p drawBudget and stops before any further expansion is kept.
+ */
+void StrokeTinyTextRun(tiny_skia::MutablePixmapView& pixmap,
+                       std::span<const tiny_skia::Path> glyphs, const TextChunkRanges& chunks,
+                       const tiny_skia::Paint& paint, const tiny_skia::Stroke& stroke,
+                       const tiny_skia::Transform& transform, const tiny_skia::Mask* mask,
+                       RendererTextMaterializationBudget& textBudget,
+                       RendererDrawBudget& drawBudget) {
+  if (tiny_skia::detail::treatAsHairline(paint, stroke.width, transform).has_value()) {
+    for (const tiny_skia::Path& chunk : JoinTinyPathsByChunk(glyphs, chunks)) {
+      tiny_skia::Painter::strokePath(pixmap, chunk, paint, stroke, transform, mask);
+    }
+    return;
+  }
+  const float resScale = tiny_skia::PathStroker::computeResolutionScale(transform);
+  const auto width = static_cast<float>(pixmap.width());
+  const auto height = static_cast<float>(pixmap.height());
+  for (const auto& [begin, end] : chunks.ranges(glyphs.size())) {
+    const std::optional<std::optional<tiny_skia::Path>> expanded = ExpandTinyTextChunkStroke(
+        glyphs.subspan(begin, end - begin), stroke, transform, resScale, width, height, textBudget);
+    if (!expanded.has_value()) {
+      drawBudget.reject();
+      return;
+    }
+    if (expanded->has_value()) {
+      tiny_skia::Painter::fillPath(pixmap, **expanded, paint, tiny_skia::FillRule::Winding,
+                                   transform, mask);
+    }
+  }
 }
 
 #endif
@@ -3376,10 +3477,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // One path for each text chunk of the run, as resvg strokes the part of a span in one
       // chunk: where the strokes of adjacent glyphs overlap, the overlap is covered once instead
       // of composited per glyph. Separate chunks are separate shapes.
-      for (const tiny_skia::Path& chunkPath : JoinTinyPathsByChunk(runGlyphPaths, runChunks)) {
-        tiny_skia::Painter::strokePath(pixmapView, chunkPath, *spanStrokePaint, spanTinyStroke,
-                                       toTinyTransform(deviceFromLocalTransform_), mask);
-      }
+      StrokeTinyTextRun(pixmapView, runGlyphPaths, runChunks, *spanStrokePaint, spanTinyStroke,
+                        toTinyTransform(deviceFromLocalTransform_), mask,
+                        *textMaterializationBudget_, *drawBudget_);
     };
 
     bool fillDrawn = false;
