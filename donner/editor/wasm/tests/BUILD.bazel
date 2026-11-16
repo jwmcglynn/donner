@@ -196,9 +196,11 @@ RESPONSIVENESS_PERF_PROJECTS = [
     for project in RESPONSIVENESS_PERF_PROJECTS
 ]
 
+# Medium: the suite takes 20 to 35 s, and a case whose 30 s stall guard fires must still report its
+# reason inside the Bazel timeout rather than end as a target TIMEOUT.
 js_test(
     name = "browser_watchdog_tests",
-    size = "small",
+    size = "medium",
     copy_data_to_bin = False,
     data = [
         "browser-application-heartbeat.mjs",
@@ -392,6 +394,7 @@ js_test(
         "pipeline-compile-readiness.mjs",
         "smoke.spec.ts",
         "standalone-geode-browser-renderer.spec.ts",
+        "test-timing.cjs",
     ],
     entry_point = "browser-stall-diagnostics.spec.mjs",
     node_options = ["--test"],
