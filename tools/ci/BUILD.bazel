@@ -427,7 +427,10 @@ py_library(
     name = "lane_view",
     testonly = True,
     srcs = ["lane_view.py"],
-    deps = [":lanes"],
+    deps = [
+        ":lanes",
+        "//tools:bazelrc_configs",
+    ],
 )
 
 # Runs lane phases against recording stand-ins for bazelisk and the helper scripts.

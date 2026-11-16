@@ -485,6 +485,7 @@ py_library(
     name = "bazelrc_configs",
     testonly = 1,
     srcs = ["bazelrc_configs.py"],
+    visibility = ["//tools/ci:__pkg__"],
 )
 
 py_test(
@@ -1197,7 +1198,8 @@ py_test(
         "//tools/ci:lanes.py",
     ],
     deps = [
-        "//tools/ci:lanes",
+        ":bazelrc_configs",
+        "//tools/ci:lane_view",
         "@rules_python//python/runfiles",
     ],
 )

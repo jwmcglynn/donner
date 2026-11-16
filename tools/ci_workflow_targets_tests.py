@@ -6,7 +6,8 @@ import re
 import unittest
 
 from python.runfiles import runfiles
-from tools.ci import lane as lane_entry
+from tools import bazelrc_configs
+from tools.ci import lane_view
 from tools.ci import lanes
 
 
@@ -29,19 +30,20 @@ def individual_targets(source):
     return findings
 
 
-def lane_commands(lane, *commands):
-    """The argv of every Bazel command a lane's phases run, from their dry runs; with `commands`,
-    only those Bazel commands (build, test)."""
-    found = []
-    for phase in lanes.LANES[lane].phases:
-        for action in lane_entry.dry_run(lane, phase, {})["actions"]:
-            if action["action"] != "bazel":
-                continue
-            argv = action["argv"][action["argv"].index("bazelisk"):]
-            command = next(word for word in argv[1:] if not word.startswith("--"))
-            if not commands or command in commands:
-                found.append(argv)
-    return found
+def lane_commands(lane, *commands, expand=True):
+    """Every Bazel command a lane's phases run, from their dry runs, without wrappers and, unless
+    `expand` is false, with the repository's .bazelrc configs expanded; with `commands`, only
+    those Bazel commands (build, test)."""
+    configs = expand and bazelrc_configs.parse(
+        Path(runfiles.Create().Rlocation("donner/.bazelrc")).read_text(encoding="utf-8")) or None
+    found = [argv[argv.index("bazelisk"):] for phase in lanes.LANES[lane].phases
+             for argv in lane_view.phase_commands(lane, phase, configs) if "bazelisk" in argv]
+    return [argv for argv in found if _command(argv) != "query"
+            and (not commands or _command(argv) in commands)]
+
+
+def _command(argv):
+    return next(word for word in argv[1:] if not word.startswith("--"))
 
 
 class WorkflowTargetsTest(unittest.TestCase):
@@ -115,7 +117,7 @@ class WorkflowTargetsTest(unittest.TestCase):
             self.assertNotIn("--//build_defs:metal_shader_validation=off", command)
         self.assertNotIn("continue-on-error:", native)
         self.assertIn("macos-metal", jobs["coverage-contract"].split("steps:", 1)[0])
-        commands = lane_commands("macos-self-hosted", "test", "build")
+        commands = lane_commands("macos-self-hosted", "test", "build", expand=False)
         self.assertGreaterEqual(len(commands), 6)
         for command in commands:
             self.assertIn("--config=macos-vm", command)

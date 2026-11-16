@@ -8,9 +8,11 @@ test that reads steps, conditions and commands from workflow text reads what eac
 The edit helpers change the lane table for a test's negative controls.
 """
 
+import itertools
 import re
 from unittest import mock
 
+from tools import bazelrc_configs
 from tools.ci import lane
 from tools.ci import lanes
 
@@ -53,6 +55,32 @@ def with_dry_runs(workflow, environ=None):
         return match.group("indent") + "run: |" + "".join("\n" + indent + line
                                                             for line in lines)
     return _LANE_STEP.sub(expand, workflow)
+
+
+def expanded(argv, configs):
+    """A command's argv with each repository config (bazelrc_configs.parse) replaced by its
+    flags, as Bazel applies them; wrappers, startup options and a query stay as written."""
+    start = argv.index("bazelisk") + 1
+    startup = list(itertools.takewhile(lambda word: word.startswith("--"), argv[start:]))
+    command = argv[start + len(startup)]
+    options = argv[start + len(startup) + 1:]
+    if command != "query":
+        options = bazelrc_configs.expand(command, options, configs)
+    return argv[:start] + startup + [command] + options
+
+
+def phase_commands(lane_name, phase_name, configs=None, environ=None):
+    """The argv of each command a phase runs, from its dry run; with `configs`, Bazel commands
+    have their repository configs expanded."""
+    commands = []
+    for action in lane.dry_run(lane_name, phase_name, environ or {})["actions"]:
+        if "argv" not in action:
+            continue
+        argv = action["argv"]
+        if configs is not None and action["action"] == "bazel":
+            argv = expanded(argv, configs)
+        commands.append(argv)
+    return commands
 
 
 def replacing(old, *new):

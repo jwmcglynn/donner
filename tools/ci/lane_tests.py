@@ -134,8 +134,8 @@ class LaneTest(unittest.TestCase):
                                        BAZEL_MACOS_BUILD_FLAGS="--xcode_version=26.1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.bazel_calls(calls), [[
-            "bazelisk", "build", "--config=ci", "--config=ci-macos", "--macos_minimum_os=13.3",
-            "--xcode_version=26.1", "//a:a", "//b:b", "//c:c"]])
+            "bazelisk", "build", "--config=ci", "--config=lane-macos", "--xcode_version=26.1",
+            "//a:a", "//b:b", "//c:c"]])
         self.reset()
         result, calls = self.run_phase("macos", "build", TARGETS_FALLBACK="true",
                                        TARGETS_AFFECTED="//a:a")

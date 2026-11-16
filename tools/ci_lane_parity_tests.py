@@ -14,7 +14,6 @@ that no longer matches a difference also fails, so the lists shrink as gaps clos
 import copy
 import functools
 import hashlib
-import itertools
 import json
 from pathlib import Path
 import re
@@ -944,21 +943,12 @@ def step_invocations(step, environment, scenario=None):
 LANE_GOLDEN = "tools/ci/lane_commands.golden.json"
 
 
-def _expanded(argv):
-    """A Bazel command line with each repository config replaced by its flags, so a change that
-    moves flags into a .bazelrc config shows as no change here."""
-    words = argv[argv.index("bazelisk") + 1:]
-    startup = [word for word in itertools.takewhile(lambda word: word.startswith("--"), words)]
-    command, options = words[len(startup)], words[len(startup) + 1:]
-    return shlex.join(argv[:argv.index("bazelisk") + 1] + startup + [command] + (
-        options if command == "query" else
-        bazelrc_configs.expand(command, options, _repository_configs())))
-
-
 def _golden_action(action):
     action = dict(action)
     if action["action"] in ("bazel", "query"):
-        action["expanded"] = _expanded(action["argv"])
+        # So a change that only moves flags into a .bazelrc config shows as no change here.
+        action["expanded"] = shlex.join(lane_view.expanded(action["argv"],
+                                                           _repository_configs()))
     if "argv" in action:
         action["argv"] = shlex.join(action["argv"])
     return action
@@ -1923,6 +1913,17 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(phase=key):
                 self.assertEqual(golden[key], observed[key],
                                  "regenerate %s with --update-lane-golden" % LANE_GOLDEN)
+
+    def test_every_lane_config_is_used_by_the_lane_table(self):
+        # A `lane-*` config exists only for the lane table, so removing a lane or phase cannot
+        # leave its config behind, and the table names no lane config the .bazelrc lacks.
+        defined = {name for name in _repository_configs() if name.startswith("lane-")}
+        named = {word.split("=", 1)[1] for lane_name, entry in lanes.LANES.items()
+                 for phase in entry.phases for action in lane_entry.dry_run(
+                     lane_name, phase, {})["actions"]
+                 for word in action.get("argv", ()) if word.startswith("--config=lane-")}
+        self.assertTrue(defined)
+        self.assertEqual(defined, named)
 
     def test_every_lane_phase_runs_in_one_step_of_its_job(self):
         # A phase runs in the job of its lane's name, in the step its table entry names; a step
