@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -23,6 +24,28 @@ struct Placement {
   Transform2d targetFromTexel;
   const char* description;
 };
+
+/// The bit patterns of \p values, so that +0 and -0 compare unequal.
+template <std::size_t N>
+std::array<std::uint32_t, N> Bits(const std::array<float, N>& values) {
+  std::array<std::uint32_t, N> bits{};
+  for (std::size_t i = 0; i < N; ++i) {
+    bits[i] = std::bit_cast<std::uint32_t>(values[i]);
+  }
+  return bits;
+}
+
+/// The transform x' = a x + c y + e, y' = b x + d y + f.
+Transform2d FromCoefficients(double a, double b, double c, double d, double e, double f) {
+  Transform2d result;
+  result.data[0] = a;
+  result.data[1] = b;
+  result.data[2] = c;
+  result.data[3] = d;
+  result.data[4] = e;
+  result.data[5] = f;
+  return result;
+}
 
 tiny_skia::Transform ToTinyTransform(const Transform2d& transform) {
   return tiny_skia::Transform::fromRow(
@@ -62,13 +85,23 @@ TEST(GeodeNearestSamplingTest, RowsAreTheSoftwareRenderersSinglePrecisionInverse
     ASSERT_THAT(expected, testing::Ne(std::nullopt));
     const std::optional<NearestTexelRows> rows = NearestTexelRowsFor(placement.targetFromTexel);
     ASSERT_THAT(rows, testing::Ne(std::nullopt));
-    EXPECT_THAT(rows->texelX, testing::ElementsAre(expected->sx, expected->kx, expected->tx));
-    EXPECT_THAT(rows->texelY, testing::ElementsAre(expected->ky, expected->sy, expected->ty));
+    EXPECT_THAT(Bits(rows->texelX),
+                testing::Eq(Bits(std::array{expected->sx, expected->kx, expected->tx})));
+    EXPECT_THAT(Bits(rows->texelY),
+                testing::Eq(Bits(std::array{expected->ky, expected->sy, expected->ty})));
   }
 }
 
 TEST(GeodeNearestSamplingTest, SingularPlacementHasNoRows) {
-  EXPECT_THAT(NearestTexelRowsFor(Transform2d::Scale(0.0, 1.0)), testing::Eq(std::nullopt));
+  // A zero scale fails the reciprocal; a skewed transform whose determinant is below the
+  // software renderer's singularity tolerance fails the general inverse.
+  for (const Transform2d& targetFromTexel :
+       {Transform2d::Scale(0.0, 1.0), FromCoefficients(1.0, 0.5, 2.0, 1.0, 3.0, 4.0),
+        FromCoefficients(1e-4, 1e-4, 1e-4, 1.000001e-4, 0.0, 0.0)}) {
+    SCOPED_TRACE(testing::Message() << targetFromTexel);
+    EXPECT_THAT(ToTinyTransform(targetFromTexel).invert(), testing::Eq(std::nullopt));
+    EXPECT_THAT(NearestTexelRowsFor(targetFromTexel), testing::Eq(std::nullopt));
+  }
 }
 
 /// The texel column tiny-skia samples at each pixel of row 0 when it draws a \p texels x 1 image

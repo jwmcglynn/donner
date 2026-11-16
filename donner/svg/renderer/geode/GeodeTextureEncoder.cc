@@ -237,8 +237,8 @@ bool AllocateQuadUniforms(gpu::Device& device, GeodeTransientResources& resource
 void GeodeTextureEncoder::BuildClipFromLocal(const Transform2d& targetFromLocal,
                                              uint32_t targetWidth, uint32_t targetHeight,
                                              float out16[16]) {
-  // First: convert path-space → pixel space via targetFromLocal.
-  // Then: pixel space → clip space.
+  // First: convert path-space -> pixel space via targetFromLocal.
+  // Then: pixel space -> clip space.
   //   x_clip =  2 * x_pixel / width  - 1
   //   y_clip = -2 * y_pixel / height + 1   (Y flip for top-left origin)
 
