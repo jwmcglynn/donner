@@ -1990,10 +1990,10 @@ struct EditorSampleText {
   std::string_view content;     //!< Character data.
 };
 
-/// The editor's "Text and Style" sample at \p width x \p height device pixels, with \p stroke
-/// inherited by every text element. Each text element is drawn by \p drawText from its index and
-/// definition. Its `Inter, sans-serif` family falls back to the embedded Public Sans, as in the
-/// editor.
+/// The editor's "Text and Style" sample (`donner/editor/art/samples/text-style.svg`) at \p width x
+/// \p height device pixels, with \p stroke inherited by every text element. Each text element is
+/// drawn by \p drawText from its index and definition. Its `Inter, sans-serif` family falls back
+/// to the embedded Public Sans, as in the editor.
 std::string EditorTextStyleSample(
     int width, int height, std::string_view stroke,
     const std::function<std::string(size_t, const EditorSampleText&)>& drawText) {
@@ -2028,9 +2028,9 @@ std::string EditorTextStyleSample(
 
 TEST_F(RendererRegressionTests, EditorTextSampleStrokeMatchesStrokedGlyphOutlines) {
   // Adding a stroke to this sample was reported to draw the lowercase t crossbar as a rectangle
-  // detached from its stem. Each text element's stroke, with its fill removed, must render exactly
-  // like the stroke of a path made of its glyph outlines, at the sample's own size and at twice
-  // that.
+  // detached from its stem; no detached crossbar reproduces here. What this checks is that each
+  // text element's stroke, with its fill removed, renders exactly like the stroke of a path made of
+  // its glyph outlines, at the sample's own size and at twice that.
   const std::array<std::pair<Vector2i, std::string_view>, 4> cases = {{
       {Vector2i(640, 360), "1"},
       {Vector2i(640, 360), "2"},
