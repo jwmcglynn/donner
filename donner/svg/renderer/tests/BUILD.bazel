@@ -754,10 +754,12 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/components/text:components",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/resources:font_manager",
         "//donner/svg/resources:font_metadata",
         "//donner/svg/text:text_engine",

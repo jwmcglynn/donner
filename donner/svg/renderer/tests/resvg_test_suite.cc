@@ -1410,14 +1410,9 @@ INSTANTIATE_TEST_SUITE_P(
                 // family resolves to is asserted directly in FontSelection_tests.cc.
                 {"bold-sans-serif.svg", Params().setCanvasSize(300, 300)},
                 {"cursive.svg", Params().setCanvasSize(300, 300)},
-                // resvg's harness resolves an all-unknown family list to its default family,
-                // drawn here in Noto Serif; Donner's last-resort face is the embedded Public Sans
-                // (FontSelection.UnknownFamilyFallsBackToTheEmbeddedFace).
-                {"fallback-1.svg",
-                 Params::Skip("Harness mismatch: resvg falls back to Noto Serif for an unknown "
-                              "family, Donner to its embedded Public Sans (445 simple, 444 full "
-                              "px against resvg v0.49.0) (#1167)")
-                     .setCanvasSize(300, 300)},
+                // An all-unknown family list resolves to the harness's default family, serif, as
+                // in resvg's harness (FontSelection.UnmatchedFamilyListUsesTheSuiteDefaultFamily).
+                {"fallback-1.svg", Params().setCanvasSize(300, 300)},
                 {"fantasy.svg", Params().setCanvasSize(300, 300)},
                 {"monospace.svg", Params().setCanvasSize(300, 300)},
                 {"sans-serif.svg", Params().setCanvasSize(300, 300)},

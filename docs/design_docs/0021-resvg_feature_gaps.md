@@ -126,7 +126,7 @@ bottom for completeness.
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
 | F10 | Remaining `textPath` vertical and kerning cases                         |                              2 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
+| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -303,7 +303,7 @@ now removed). The remaining structural cluster is below.
 ### B7: text reference qualification
 
 **Status:** the font-family allowances are gone. Every `text/font-family/` case
-except `fallback-1` compares at default settings in both CPU text tiers, as do
+compares at default settings in both CPU text tiers, as do
 `text/text/xml-lang=ja`, `text/letter-spacing/non-ASCII-character` and
 `structure/defs/style-inheritance-on-text`. Face
 selection for these cases is asserted directly in `FontSelection_tests.cc`.
@@ -335,9 +335,12 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   and 52. They compare with a 390-pixel label glyph budget (see
   [Reference label glyph budgets](#reference-label-glyph-budgets)).
 - **Remaining:** `text/font/simple-case` disagrees on the unitless
-  `font` shorthand (see the reference qualification table). `fallback-1` is a
-  harness mismatch: resvg's harness falls back to Noto Serif for an unknown
-  family and Donner to its embedded Public Sans (445 simple, 444 full pixels).
+  `font` shorthand (see the reference qualification table).
+- **Default family:** CSS leaves the face for a family list that matches nothing
+  to the user agent. resvg appends its default family, serif, to every list, so
+  the comparison harness sets serif as `FontManager`'s default family and
+  `fallback-1` draws Noto Serif like the reference; the product default remains
+  the embedded Public Sans.
 
 > The remaining sub-1000-px CPU thresholds (feColorMatrix matrix/saturate variants,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
