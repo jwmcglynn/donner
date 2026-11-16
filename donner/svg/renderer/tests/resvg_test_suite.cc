@@ -1269,9 +1269,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "structure/use",
                 {
                     {"xlink-to-an-external-file.svg",
-                     Params::Skip("Reference qualification: local fragment renders; the "
-                                  "opaque reference background differs from the "
-                                  "transparent SVG canvas")},
+                     Params::Skip("Bug #1183: external-use content resolves fonts in the "
+                                  "referenced document's own font catalog, so the inherited "
+                                  "Noto Sans falls back to the embedded face")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
