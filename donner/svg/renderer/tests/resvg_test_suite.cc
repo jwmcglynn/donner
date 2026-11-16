@@ -1211,19 +1211,26 @@ INSTANTIATE_TEST_SUITE_P(
                 {"not-UTF-8-encoding.svg",
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                               "and update the encoding declaration")},
+                // These references hold the frame's exact edge coverage, which Geode matches; the
+                // CPU budgets are the measured residual of its quarter-pixel edge rows (#1185).
                 {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-                 Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
+                 WithMaxPixels(735, "CPU scan conversion snaps edge rows to quarter pixels")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=none.svg",
-                 Params::WithThreshold(0.13f, 1000, "Viewport edge AA")},
+                 WithMaxPixels(1478, "CPU scan conversion snaps edge rows to quarter pixels")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=xMaxYMax.svg",
-                 Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
+                 WithMaxPixels(737, "CPU scan conversion snaps edge rows to quarter pixels")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=xMidYMid.svg",
-                 Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
+                 WithMaxPixels(736, "CPU scan conversion snaps edge rows to quarter pixels")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=xMinYMin.svg",
-                 Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                       "Has anti-aliasing artifacts.")},
-                {"proportional-viewBox.svg", Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                                                   "Has anti-aliasing artifacts.")},
+                 WithMaxPixels(736, "CPU scan conversion snaps edge rows to quarter pixels")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
+                {"proportional-viewBox.svg",
+                 WithMaxPixels(736, "CPU scan conversion snaps edge rows to quarter pixels")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
 
                 {"funcIRI-with-quotes.svg", Params{}},
                 {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
