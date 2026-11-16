@@ -8336,8 +8336,12 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
       return;
     }
     const Box2d extent = transformed.bounds();
-    cache.glyphs.push_back(
-        {.sourceEntity = span.sourceEntity, .path = std::move(transformed), .extent = extent});
+    // The renderers draw no `.notdef`, so its outline is not cached with the ones they draw. Its
+    // extent still counts toward the ink bounds and the character's extent.
+    if (glyph.glyphIndex != 0) {
+      cache.glyphs.push_back(
+          {.sourceEntity = span.sourceEntity, .path = std::move(transformed), .extent = extent});
+    }
     addBox(cache.inkBounds, hasInkBounds, extent);
     addBox(charGeom.extent, charGeom.hasExtent, extent);
   } else if (const auto extent = BitmapGlyphExtent(
@@ -8413,19 +8417,23 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& 
   }
   const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
   CachedRunOutlineTagger tagger(runIndex);
+  // The cached outlines are the ones the renderers draw: every glyph of the run but `.notdef` (see
+  // PopulateCachedGlyph), whether or not it maps to an addressable character. A glyph that maps to
+  // none still gets its outline, against character geometry that is not kept.
+  components::ComputedTextGeometryComponent::CharacterGeometry unaddressed;
   for (const auto& glyph : run.glyphs) {
     tagger.noteGlyph(glyph);
     const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
                                       ? apiMappings.byteToFirstUnit[glyph.cluster]
                                       : 0;
-    if (localCharIndex < localCharCount) {
-      const std::size_t outlinesBefore = cache.glyphs.size();
-      PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
-                          runFontSizePx, hasPaintedGlyphs, vertical,
-                          cache.characters[charBaseIndex + localCharIndex], cache, hasInkBounds,
-                          stretchedCacheReservation);
-      tagger.tagNewOutline(cache, outlinesBefore);
-    }
+    auto& charGeom = localCharIndex < localCharCount
+                         ? cache.characters[charBaseIndex + localCharIndex]
+                         : (unaddressed = {});
+    const std::size_t outlinesBefore = cache.glyphs.size();
+    PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
+                        runFontSizePx, hasPaintedGlyphs, vertical, charGeom, cache, hasInkBounds,
+                        stretchedCacheReservation);
+    tagger.tagNewOutline(cache, outlinesBefore);
   }
   ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
 }
