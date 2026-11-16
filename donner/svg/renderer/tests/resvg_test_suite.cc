@@ -1466,12 +1466,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(
         ValuesIn(getTestsInCategory(
             "text/font-size-adjust",
-            // The PNG kerns "Text" (T-e -70 and e-x -20 font units) but centers the chunk on its
-            // unkerned advance: its T and t stems sit 4.03 and 4.05 device px left of Donner's,
-            // half of 90 units at the adjusted 35.82px size and 2.5x scale, while the stem-to-stem
-            // distance agrees within 0.01 px. text/text-anchor/middle-on-text centers the same
-            // kerned string on its kerned advance and compares at default. resvg v0.49.0 ignores
-            // font-size-adjust, so no upstream reference renders this case.
+            // The PNG kerns "Text" but centers it on the unkerned advance, 4.03 device px left.
             {{"simple-case.svg",
               Params::Skip("Reference disagreement: the PNG centers the kerned text on its "
                            "unkerned advance, 1.61 user units left of the kerned center; text "
