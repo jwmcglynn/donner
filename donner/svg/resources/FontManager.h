@@ -188,6 +188,11 @@ public:
   bool hasUnresolvedDependencies() const;
   /// Revision advanced when a resolved font change invalidates prepared text geometry.
   uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+  /// The \ref fontResourceRevision at which \ref setDefaultFamily or \ref setGenericFamilyMapping
+  /// last changed family selection, or 0 if neither has. Such a change can move any family
+  /// lookup to another face without leaving a provider dependency behind, so a result prepared at
+  /// an earlier revision is stale.
+  uint64_t familySelectionRevision() const { return familySelectionRevision_; }
   /// Whether bounded dependency collection exceeded its resource limit.
   bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
 
@@ -216,7 +221,8 @@ public:
    * Register a mapping from a CSS generic family name (serif, sans-serif, monospace, cursive,
    * fantasy) to a real font family name registered via `addFontFace()`.
    *
-   * This allows `findFont("sans-serif")` to resolve to the specified family.
+   * This allows `findFont("sans-serif")` to resolve to the specified family. Changing a mapping
+   * advances \ref familySelectionRevision so prepared text is laid out again.
    *
    * @param genericName The CSS generic family name (case-insensitive).
    * @param realFamily The real family name to resolve to.
@@ -227,7 +233,7 @@ public:
    * Set the user agent's default family, used when no family in a `font-family` list is
    * available. CSS leaves this face to the user agent. Without a default family, or while the
    * named family is unavailable, \ref defaultFont answers with \ref fallbackFont. Changing it
-   * advances \ref fontResourceRevision so prepared text is laid out again.
+   * advances \ref familySelectionRevision so prepared text is laid out again.
    *
    * @param family A family name or CSS generic family name; empty clears the default.
    */
@@ -691,6 +697,8 @@ private:
       providerDependencies_;
   std::vector<FontFaceDependency>* dependencyCapture_ = nullptr;
   uint64_t fontResourceRevision_ = 0;
+  /// See \ref familySelectionRevision.
+  uint64_t familySelectionRevision_ = 0;
   bool fontDependenciesOverflowed_ = false;
   bool refreshingFonts_ = false;
 

@@ -562,14 +562,14 @@ void FontManager::setGenericFamilyMapping(std::string_view genericName,
   std::string& mapped = genericFamilyMap_[StringUtils::ToLowerAscii(genericName)];
   if (mapped != realFamily) {
     mapped = std::string(realFamily);
-    ++fontResourceRevision_;
+    familySelectionRevision_ = ++fontResourceRevision_;
   }
 }
 
 void FontManager::setDefaultFamily(std::string_view family) {
   if (defaultFamily_ != family) {
     defaultFamily_ = std::string(family);
-    ++fontResourceRevision_;
+    familySelectionRevision_ = ++fontResourceRevision_;
   }
 }
 
