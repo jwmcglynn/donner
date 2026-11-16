@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -21,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
@@ -33,6 +35,7 @@
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/geode/GeodeNearestSampling.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -416,10 +419,26 @@ TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDec
   ExpectBitmapsIdentical(actual, expected, "obsolete_icc_declaration_rejected");
 }
 
-// The font presentation shorthand is a supported Donner extension.
-TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
+// SVG 2 has no `font` presentation attribute, so the attribute leaves the cascade unchanged.
+TEST_F(RendererRegressionTests, ReferenceContractFontAttributeIsIgnored) {
+  SVGDocument attribute = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-family="Noto Sans" font="bold italic 28px Noto Sans">Ab</text>)svg",
+                                             {}, Vector2i(64, 64));
+  SVGDocument plain = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-family="Noto Sans">Ab</text>)svg",
+                                         {}, Vector2i(64, 64));
+  RegisterFontsFromDirectoryForTesting(attribute, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(attribute, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "font_attribute_visible");
+  editor::tests::CompareBitmapToBitmap(
+      actual, RenderDocumentWithBackend(plain, ActiveRendererBackend()), "font_attribute_ignored",
+      editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"svg(
-    <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>)svg",
+    <text x="4" y="38" style="font: bold italic 28px Noto Sans">Ab</text>)svg",
                                              {}, Vector2i(64, 64));
   SVGDocument expanded = instantiateSubtree(R"svg(
     <text x="4" y="38" font-style="italic" font-weight="bold" font-size="28"
@@ -428,9 +447,10 @@ TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLon
   RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
   RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
   const auto actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
-  ExpectVisibleBitmap(actual, "unitless_font_shorthand_visible");
-  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
-                         "unitless_font_shorthand_longhands");
+  ExpectVisibleBitmap(actual, "style_font_shorthand_visible");
+  editor::tests::CompareBitmapToBitmap(
+      actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
+      "style_font_shorthand_longhands", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit) {
@@ -1924,6 +1944,75 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
   }
 }
 
+TEST_F(RendererRegressionTests, TextStrokeMatchesItsOutlinesWhereGlyphsMeetTheTargetEdge) {
+  // The CPU backend does not expand a text chunk whose glyph strokes cannot reach the drawing
+  // target. These runs place glyphs across and just beyond the target's edge, under rotation and
+  // skew, with miter joins and square caps that reach farther than the stroke's half width, and
+  // inside a pattern tile, a filter and a mask, whose targets are their own surfaces, and as a
+  // hairline. Each must match a `<path>` of the same glyph outlines, which is never culled.
+  struct Case {
+    std::string_view label;
+    std::string_view defs;
+    std::string_view open;
+    std::string_view close;
+    std::string_view text;
+  };
+  constexpr std::array<Case, 6> kCases = {{
+      {"rotated_miter", "", R"svg(<g transform="rotate(25 100 100) skewX(15)">)svg", "</g>",
+       R"svg(x="150" y="60" font-size="60" stroke-width="8" stroke-linejoin="miter"
+             stroke-miterlimit="10">WWWW)svg"},
+      {"skewed_square_cap", "", R"svg(<g transform="skewY(-20)">)svg", "</g>",
+       R"svg(x="-30" y="215" font-size="60" stroke-width="10" stroke-linecap="square">x-x)svg"},
+      {"pattern",
+       R"svg(<pattern id="tile" width="40" height="40" patternUnits="userSpaceOnUse">CONTENT</pattern>)svg",
+       R"svg(<rect width="200" height="200" fill="url(#tile)"/>)svg", "",
+       R"svg(x="20" y="30" font-size="40" stroke-width="3">WW)svg"},
+      {"filter", R"svg(<filter id="soft"><feGaussianBlur stdDeviation="1"/></filter>)svg",
+       R"svg(<g filter="url(#soft)">)svg", "</g>",
+       R"svg(x="120" y="120" font-size="80" stroke-width="4">WW)svg"},
+      {"mask", R"svg(<mask id="clipper"><rect width="150" height="150" fill="white"/></mask>)svg",
+       R"svg(<g mask="url(#clipper)">)svg", "</g>",
+       R"svg(x="100" y="160" font-size="80" stroke-width="4">WW)svg"},
+      {"hairline", "", "", "", R"svg(x="10" y="120" font-size="40" stroke-width="0.4">Text)svg"},
+  }};
+  for (const Case& testCase : kCases) {
+    SCOPED_TRACE(testCase.label);
+    const auto document = [&](const std::string& content) {
+      std::string defs(testCase.defs);
+      std::string body = "<defs>";
+      const std::size_t marker = defs.find("CONTENT");
+      if (marker != std::string::npos) {
+        defs.replace(marker, std::string("CONTENT").size(), content);
+        body += defs + "</defs>" + std::string(testCase.open) + std::string(testCase.close);
+      } else {
+        body +=
+            defs + "</defs>" + std::string(testCase.open) + content + std::string(testCase.close);
+      }
+      return body;
+    };
+    SVGDocument textDocument = instantiateSubtree(
+        document(R"svg(<text id="text" font-family="Noto Sans" fill="none" stroke="black" )svg" +
+                 std::string(testCase.text) + "</text>"),
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    const std::string text(testCase.text);
+    const std::string strokeAttributes =
+        text.substr(text.find("stroke-width"), text.find('>') - text.find("stroke-width"));
+    SVGDocument pathDocument =
+        instantiateSubtree(document("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") +
+                                    "\" fill=\"none\" stroke=\"black\" " + strokeAttributes + "/>"),
+                           parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_target_edge_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_target_edge_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, TextStrokeCoversOverlapsOfNonAdjacentGlyphsOnce) {
   // Glyphs whose strokes overlap without being neighbours in the run: `dx`/`dy` move "x" back
   // onto "T" while "e" touches neither, and in a mixed-direction run the right-to-left glyphs are
@@ -2640,6 +2729,252 @@ TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
         expected, "image_translated_nearest_" + ImageRenderingLabel(imageRendering),
         editor::tests::PixelmatchIdentityParams());
   }
+}
+
+TEST_F(RendererRegressionTests, ImageNearestAtFractionalScalesSamplesTexelUnderPixelCenter) {
+  // Each placement stretches the 8x8 image by non-integer factors from integer edges, so no edge
+  // pixel is covered partially. At 3.75, 2.5 and 0.75 device pixels per texel, texel boundaries
+  // fall exactly on pixel centers, where the selected texel depends on how the inverse transform
+  // rounds.
+  const std::array<Box2d, 5> placements = {
+      Box2d::FromXYWH(8, 8, 30, 30), Box2d::FromXYWH(8, 8, 20, 20), Box2d::FromXYWH(8, 8, 6, 6),
+      Box2d::FromXYWH(8, 8, 30, 20), Box2d::FromXYWH(3, 5, 52, 46)};
+  for (const Box2d& placement : placements) {
+    const RendererBitmap expected = TinySkiaImageReference(GradientPixels(), 8, 8, placement,
+                                                           tiny_skia::FilterQuality::Nearest);
+    for (std::string_view imageRendering : {"optimizeSpeed", "crisp-edges"}) {
+      SCOPED_TRACE(testing::Message()
+                   << placement << " image-rendering=\"" << imageRendering << "\"");
+      std::ostringstream markup;
+      markup << "<image x=\"" << placement.topLeft.x << "\" y=\"" << placement.topLeft.y
+             << "\" width=\"" << placement.width() << "\" height=\"" << placement.height()
+             << "\" preserveAspectRatio=\"none\"" << ImageRenderingAttribute(imageRendering)
+             << " href=\"" << kGradientImageDataUri << "\"/>";
+      std::ostringstream label;
+      label << "image_nearest_" << placement.width() << "x" << placement.height() << "_"
+            << imageRendering;
+      editor::tests::CompareBitmapToBitmap(RenderImageOverGray(markup.str()), expected, label.str(),
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+/// A PNG data URI for \p width x \p height opaque texels, each a distinct color.
+std::string DistinctTexelImageDataUri(int width, int height) {
+  std::vector<std::uint8_t> pixels;
+  for (int i = 0; i < width * height; ++i) {
+    pixels.insert(pixels.end(), {std::uint8_t(i * 53 % 256), std::uint8_t(i * 101 % 256),
+                                 std::uint8_t(i * 197 % 256), 255});
+  }
+  const std::vector<std::uint8_t> png =
+      RendererImageIO::writeRgbaPixelsToPngMemory(pixels, width, height);
+  constexpr std::string_view kAlphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string uri = "data:image/png;base64,";
+  for (std::size_t i = 0; i < png.size(); i += 3) {
+    const std::uint32_t chunk = (std::uint32_t(png[i]) << 16) |
+                                (i + 1 < png.size() ? std::uint32_t(png[i + 1]) << 8 : 0u) |
+                                (i + 2 < png.size() ? std::uint32_t(png[i + 2]) : 0u);
+    uri += kAlphabet[(chunk >> 18) & 63];
+    uri += kAlphabet[(chunk >> 12) & 63];
+    uri += i + 1 < png.size() ? kAlphabet[(chunk >> 6) & 63] : '=';
+    uri += i + 2 < png.size() ? kAlphabet[chunk & 63] : '=';
+  }
+  return uri;
+}
+
+/// The texel coordinate `x * row[0] + (y * row[1] + row[2])` with the inner and outer
+/// multiply-adds each fused or rounded after the multiply.
+float NearestTexelCoordinate(const std::array<float, 3>& row, float x, float y, bool fusedInner,
+                             bool fusedOuter) {
+  volatile float yProduct = y * row[1];
+  const float inner = fusedInner ? std::fma(y, row[1], row[2]) : yProduct + row[2];
+  volatile float xProduct = x * row[0];
+  return fusedOuter ? std::fma(x, row[0], inner) : xProduct + inner;
+}
+
+/// Whether \p row's texel at pixel center (\p x, \p y) depends on the evaluation order: some
+/// fused or unfused order floors differently, or, for a row with a nonzero \p crossTerm, which a
+/// compiler may also reassociate, the coordinate lies within 1/1024 texel of a texel boundary.
+bool NearestTexelIsOrderDependent(const std::array<float, 3>& row, float crossTerm, float x,
+                                  float y) {
+  constexpr float kBoundaryMargin = 1.0f / 1024.0f;
+  const float reference = NearestTexelCoordinate(row, x, y, false, false);
+  for (const auto [fusedInner, fusedOuter] : {std::pair(false, false), std::pair(false, true),
+                                              std::pair(true, false), std::pair(true, true)}) {
+    const float value = NearestTexelCoordinate(row, x, y, fusedInner, fusedOuter);
+    const bool nearBoundary =
+        crossTerm != 0.0f && std::abs(value - std::round(value)) < kBoundaryMargin;
+    if (std::floor(value) != std::floor(reference) || nearBoundary) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// The first pixel center of the \p size region at \p origin where nearest sampling through
+/// \p targetFromTexel could select a different texel depending on how the GPU evaluates the
+/// mapping, or `std::nullopt` when there is none. The software renderer evaluates it with a fused
+/// multiply-add on some targets and without on others, and so may a GPU shader compiler; where the
+/// orders disagree, the selected texel depends on the platform, and the two renderers cannot be
+/// compared there. See \ref NearestTexelIsOrderDependent.
+std::optional<Vector2i> FirstContractionDependentPixel(const Transform2d& targetFromTexel,
+                                                       Vector2i origin, Vector2i size) {
+  const std::optional<geode::NearestTexelRows> rows = geode::NearestTexelRowsFor(targetFromTexel);
+  if (!rows.has_value()) {
+    return origin;
+  }
+  for (int py = origin.y; py < origin.y + size.y; ++py) {
+    for (int px = origin.x; px < origin.x + size.x; ++px) {
+      const float x = static_cast<float>(px) + 0.5f;
+      const float y = static_cast<float>(py) + 0.5f;
+      // The cross term is the y coefficient of the x row and the x coefficient of the y row.
+      if (NearestTexelIsOrderDependent(rows->texelX, rows->texelX[1], x, y) ||
+          NearestTexelIsOrderDependent(rows->texelY, rows->texelY[0], x, y)) {
+        return Vector2i(px, py);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/// The \p size region at \p origin of \p svg rendered by the active backend and by the
+/// software renderer, whose image sampling resvg shares.
+struct RenderedImageRegions {
+  RendererBitmap active;    //!< Rendered by the active backend.
+  RendererBitmap software;  //!< Rendered by the software renderer.
+};
+
+RenderedImageRegions RenderImageRegions(std::string_view svg, Vector2i origin, Vector2i size) {
+  SVGDocument softwareDocument = ParseSvg(svg);
+  SVGDocument activeDocument = ParseSvg(svg);
+  return RenderedImageRegions{
+      editor::tests::CropBitmap(RenderDocumentWithBackend(activeDocument, ActiveRendererBackend()),
+                                origin, size),
+      editor::tests::CropBitmap(
+          RenderDocumentWithBackend(softwareDocument, RendererBackend::TinySkia), origin, size)};
+}
+
+/// An `<image>` element drawing \p href into \p placement with nearest sampling.
+std::string NearestImageMarkup(const Box2d& placement, std::string_view href) {
+  std::ostringstream markup;
+  markup << "<image x=\"" << placement.topLeft.x << "\" y=\"" << placement.topLeft.y
+         << "\" width=\"" << placement.width() << "\" height=\"" << placement.height()
+         << R"svg(" preserveAspectRatio="none" image-rendering="optimizeSpeed" href=")svg" << href
+         << "\"/>";
+  return markup.str();
+}
+
+TEST_F(RendererRegressionTests, ImageNearestSweepMatchesSoftwareRendererTexels) {
+  // One row per placement: a W x 1 image stretched to each integer width from integer edges, so no
+  // pixel is covered partially and, for even W, many texel boundaries pass through pixel centers.
+  // A row with an order-dependent texel (see FirstContractionDependentPixel) is left out.
+  constexpr int kMaxWidth = 80;
+  int compared = 0;
+  for (const int imageWidth : {2, 4, 8, 16}) {
+    SCOPED_TRACE(testing::Message() << imageWidth << " texels");
+    const std::string href = DistinctTexelImageDataUri(imageWidth, 1);
+    std::ostringstream svg;
+    svg << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width=")svg" << kMaxWidth + 2
+        << R"svg(" height=")svg" << kMaxWidth * 2 << "\">";
+    for (int width = 1; width <= kMaxWidth; ++width) {
+      const Box2d placement = Box2d::FromXYWH(1, (width - 1) * 2, width, 2);
+      if (!FirstContractionDependentPixel(
+               Transform2d::Scale(placement.width() / imageWidth, placement.height()) *
+                   Transform2d::Translate(placement.topLeft),
+               Vector2i(1, (width - 1) * 2), Vector2i(width, 2))
+               .has_value()) {
+        svg << NearestImageMarkup(placement, href);
+        ++compared;
+      }
+    }
+    svg << "</svg>";
+    const RenderedImageRegions regions =
+        RenderImageRegions(svg.str(), Vector2i(0, 0), Vector2i(kMaxWidth + 2, kMaxWidth * 2));
+    const std::string label = "image_nearest_sweep_" + std::to_string(imageWidth);
+    AssertVisibleFixture(regions.software, label + "_visible");
+    editor::tests::CompareBitmapToBitmap(regions.active, regions.software, label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  EXPECT_THAT(compared, testing::Gt(250));
+}
+
+TEST_F(RendererRegressionTests, ImageNearestAtAFarOriginMatchesSoftwareRendererTexels) {
+  // Far from the origin, the inverse's rounding decides texels a double-precision inverse would
+  // not. The compared region excludes the right edge column, which the image covers partially.
+  const Box2d placement = Box2d::FromXYWH(1003, 2, 30.75, 4);
+  ASSERT_THAT(
+      FirstContractionDependentPixel(Transform2d::Scale(placement.width() / 3, placement.height()) *
+                                         Transform2d::Translate(placement.topLeft),
+                                     Vector2i(1003, 2), Vector2i(30, 4)),
+      testing::Eq(std::nullopt));
+  const RenderedImageRegions regions = RenderImageRegions(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="8">)svg" +
+          NearestImageMarkup(placement, DistinctTexelImageDataUri(3, 1)) + "</svg>",
+      Vector2i(1003, 2), Vector2i(30, 4));
+  const std::string label = "image_nearest_far_origin";
+  AssertVisibleFixture(regions.software, label + "_visible");
+  editor::tests::CompareBitmapToBitmap(regions.active, regions.software, label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, ImageNearestUnderTransformsMatchesSoftwareRendererTexels) {
+  struct TransformCase {
+    Transform2d deviceFromUser;
+    std::string_view transform;
+    std::string_view label;
+    Vector2i interiorOrigin;
+    Vector2i interiorSize;
+  };
+  // Rotation and skew use both off-diagonal terms of the inverse; the flip has a negative scale.
+  // Each compared interior holds only pixels the 44-unit image covers completely: the software
+  // renderer gives pixels an image edge crosses partial coverage, while Geode's image quad covers
+  // a pixel fully or not at all. Under skewX(20) the right edge is x = 46 + 0.364 y, so row 12
+  // keeps columns up to 49.
+  const std::array<TransformCase, 4> cases = {{
+      {Transform2d::Translate(-32, -32) * Transform2d::Rotate(MathConstants<double>::kPi / 6) *
+           Transform2d::Translate(32, 32),
+       "rotate(30 32 32)", "rotated", Vector2i(18, 18), Vector2i(28, 28)},
+      {Transform2d::SkewX(MathConstants<double>::kPi / 9) * Transform2d::Translate(-6, 0),
+       "translate(-6 0) skewX(20)", "skewed_x", Vector2i(20, 12), Vector2i(30, 36)},
+      {Transform2d::SkewY(MathConstants<double>::kPi / 12) * Transform2d::Translate(0, -6),
+       "translate(0 -6) skewY(15)", "skewed_y", Vector2i(12, 16), Vector2i(36, 33)},
+      {Transform2d::Scale(-1, 1) * Transform2d::Translate(61, 0), "translate(61 0) scale(-1 1)",
+       "flipped", Vector2i(0, 0), Vector2i(64, 64)},
+  }};
+  const Box2d placement = Box2d::FromXYWH(8, 8, 44, 44);
+  for (const TransformCase& transformCase : cases) {
+    SCOPED_TRACE(transformCase.label);
+    ASSERT_THAT(FirstContractionDependentPixel(
+                    Transform2d::Scale(placement.width() / 8, placement.height() / 8) *
+                        Transform2d::Translate(placement.topLeft) * transformCase.deviceFromUser,
+                    transformCase.interiorOrigin, transformCase.interiorSize),
+                testing::Eq(std::nullopt));
+    const RenderedImageRegions regions = RenderImageRegions(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><g transform=")svg" +
+            std::string(transformCase.transform) + "\">" +
+            NearestImageMarkup(placement, kGradientImageDataUri) + "</g></svg>",
+        transformCase.interiorOrigin, transformCase.interiorSize);
+    const std::string label = "image_nearest_" + std::string(transformCase.label);
+    AssertVisibleFixture(regions.software, label + "_visible");
+    editor::tests::CompareBitmapToBitmap(regions.active, regions.software, label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  // The viewBox scale makes 28.125 device pixels per texel from integer device edges.
+  const Box2d viewBoxPlacement = Box2d::FromXYWH(8, 8, 60, 60);
+  ASSERT_THAT(FirstContractionDependentPixel(
+                  Transform2d::Scale(viewBoxPlacement.width() / 8, viewBoxPlacement.height() / 8) *
+                      Transform2d::Translate(viewBoxPlacement.topLeft) * Transform2d::Scale(3.75),
+                  Vector2i(0, 0), Vector2i(300, 300)),
+              testing::Eq(std::nullopt));
+  const RenderedImageRegions regions = RenderImageRegions(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 80 80">)svg" +
+          NearestImageMarkup(viewBoxPlacement, kGradientImageDataUri) + "</svg>",
+      Vector2i(0, 0), Vector2i(300, 300));
+  const std::string label = "image_nearest_viewbox_scaled";
+  AssertVisibleFixture(regions.software, label + "_visible");
+  editor::tests::CompareBitmapToBitmap(regions.active, regions.software, label,
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 // The feImage oracles are `<image>` drawn by tiny-skia, whose sampling resvg shares. Both

@@ -30,6 +30,7 @@
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/TextTransform.h"
+#include "donner/svg/core/UnicodeBidi.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WhiteSpace.h"
 #include "donner/svg/text/TextTypes.h"
@@ -311,6 +312,17 @@ struct ComputedTextComponent {
     /// horizontal line that is not on a path. Its chunks anchor from their right edge, and the
     /// current text position after them is their left edge.
     bool rightToLeftInline = false;
+
+    /// An element whose `unicode-bidi` places bidi controls around its content.
+    struct BidiEmbedding {
+      entt::entity element = entt::null;              ///< Element enclosing the span.
+      UnicodeBidi unicodeBidi = UnicodeBidi::Normal;  ///< The element's `unicode-bidi`.
+      bool rightToLeft = false;                       ///< Whether its `direction` is `rtl`.
+    };
+    /// Elements between the text root and this span, the span's own element included, whose
+    /// `unicode-bidi` is not `normal`, outermost first. The text root's own value applies to its
+    /// whole paragraph instead.
+    SmallVector<BidiEmbedding, 1> bidiEmbeddings;
 
     /// Whitespace policy resolved when source text is normalized.
     WhiteSpace whiteSpace = WhiteSpace::Normal;
