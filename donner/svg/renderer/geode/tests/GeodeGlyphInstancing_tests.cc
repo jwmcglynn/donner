@@ -730,6 +730,22 @@ TEST_F(GeodeGlyphInstancingTest, StrokeGroupingStaysLinearInEitherWritingMode) {
   }
 }
 
+/// Each glyph stroke of a run whose glyphs overlap is tested against at least its predecessor, so
+/// the bounds-test counter sees every overlap the sweep visits.
+TEST_F(GeodeGlyphInstancingTest, OverlappingGlyphStrokesAreEachTestedForContact) {
+  constexpr std::size_t kGlyphs = 20;
+  SVGDocument document =
+      parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+          font-family="Noto Sans" font-size="16" letter-spacing="-4"><text x="10" y="100"
+          fill="none" stroke="black" stroke-width="1">)svg") +
+            std::string(kGlyphs, 'e') + "</text></svg>");
+  RendererGeode renderer(sharedDevice());
+  const Frame frame = render(renderer, document);
+  EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Eq(kGlyphs));
+  EXPECT_THAT(frame.counters.textStrokeBoundsTests,
+              testing::AllOf(testing::Ge(kGlyphs - 1), testing::Le(2 * kGlyphs)));
+}
+
 /// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
 /// lower cap rejects all of that frame's text before any glyph is looked up.
 TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejectsTheText) {
