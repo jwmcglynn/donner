@@ -201,14 +201,6 @@ tiny_skia::Path AbsorbedCurves(int curveCount) {
   return *builder.finish();
 }
 
-/// \p path followed by a copy of it moved 100 units right, as a second contour.
-tiny_skia::Path WithMovedCopy(const tiny_skia::Path& path) {
-  tiny_skia::PathBuilder builder;
-  builder.pushPath(path);
-  builder.pushPath(*path.transform(tiny_skia::Transform::fromTranslate(100.0f, 0.0f)));
-  return *builder.finish();
-}
-
 /// The `4 4` dash pattern the dash tests use.
 tiny_skia::StrokeDash FourFourDash() {
   return *tiny_skia::StrokeDash::create({4.0f, 4.0f}, 0.0f);
@@ -328,13 +320,17 @@ TEST(PathTest, DashMeasureLimitCountsStepsWhoseLengthIsAbsorbed) {
 }
 
 TEST(PathTest, DashMeasureLimitIsSharedByEveryContour) {
-  // The limit bounds the dash as a whole: two contours that each fit it alone pass it together.
+  // The limit bounds the dash as a whole: two copies of a contour, which each fit it alone, pass
+  // it together.
   const tiny_skia::Path circle = CubicCircle();
   const tiny_skia::StrokeDash dash = FourFourDash();
   tiny_skia::StrokeLimits one;
   ASSERT_THAT(circle.dash(dash, 100.0f, &one), Optional(testing::_));
 
-  const tiny_skia::Path twoCircles = WithMovedCopy(circle);
+  tiny_skia::PathBuilder builder;
+  builder.pushPath(circle);
+  builder.pushPath(circle);
+  const tiny_skia::Path twoCircles = *builder.finish();
   tiny_skia::StrokeLimits both{.maxMeasureSteps = one.measureSteps + one.measureSteps / 2};
   EXPECT_THAT(twoCircles.dash(dash, 100.0f, &both), testing::Eq(std::nullopt));
   EXPECT_TRUE(both.exceeded);
@@ -376,6 +372,33 @@ TEST(PathTest, ExceededLimitsStopLaterDashesAndStrokes) {
   EXPECT_THAT(circle.stroke(stroke, 1.0f, &limits), testing::Eq(std::nullopt));
   EXPECT_EQ(limits.measureSteps, 0u);
   EXPECT_EQ(limits.outlinePoints, 0u);
+}
+
+TEST(PathTest, MiterLimitDoesNotLowerTheStrokeResolution) {
+  // The precision floor depends on the coordinates the curve offsetting works in, which stay
+  // within the stroke radius of the path, not on the miter limit: a curve without corners strokes
+  // to the same outline under any miter limit.
+  const tiny_skia::Path circle = CubicCircle();
+  tiny_skia::Stroke usual;
+  usual.width = 10.0f;
+  tiny_skia::Stroke huge = usual;
+  huge.miterLimit = 1.0e9f;
+  for (const float scale : {1.0f, 100.0f}) {
+    SCOPED_TRACE(scale);
+    const std::optional<tiny_skia::Path> expected = circle.stroke(usual, scale);
+    const std::optional<tiny_skia::Path> actual = circle.stroke(huge, scale);
+    ASSERT_THAT(expected, Optional(testing::_));
+    ASSERT_THAT(actual, Optional(testing::_));
+    EXPECT_THAT(actual->points(), testing::ElementsAreArray(expected->points()));
+  }
+}
+
+TEST(PathTest, ResolutionScaleFloorHandlesTheLargestFloat) {
+  // The largest finite float has no float step above it; the floor still yields a positive scale.
+  const float scale =
+      tiny_skia::PrecisionLimitedResScale(1.0f, std::numeric_limits<float>::max(), 0.25f);
+  EXPECT_THAT(scale, testing::Gt(0.0f));
+  EXPECT_THAT(scale, testing::Le(1.0f));
 }
 
 TEST(PathTest, ResolutionScaleStaysAboveCoordinatePrecision) {

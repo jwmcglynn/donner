@@ -4247,6 +4247,23 @@ TEST(RendererTinySkiaSecurityTest, StrokePaintPassSharesTheStrokeLimits) {
   }
 }
 
+TEST(RendererTinySkiaSecurityTest, MiterLimitLeavesCurvedStrokesUnchanged) {
+  // A curved path without corners draws the same under a miter limit of 4 and of 10^9.
+  const auto render = [](std::string_view miterLimit) {
+    SVGDocument document = HundredSquareDocument(
+        R"svg(<path transform="translate(10 50)" )svg" + std::string(kCubicCircleData) +
+        R"svg( fill="none" stroke="black" stroke-width="10" stroke-miterlimit=")svg" +
+        std::string(miterLimit) + "\"/>");
+    RendererTinySkia renderer;
+    renderer.draw(document);
+    EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
+    return renderer.takeSnapshot();
+  };
+  const RendererBitmap expected = render("4");
+  EXPECT_THAT(CoveredPixels(expected, 0, 0, 100, 100), Gt(0u));
+  EXPECT_TRUE(render("1e9").pixels == expected.pixels);
+}
+
 TEST(RendererTinySkiaSecurityTest, ExtremeMagnificationStrokesWithinTheLimits) {
   // Past the precision of the circle's coordinates, a larger magnification no longer subdivides
   // its curves further: magnified 10^7 times, the solid and the dashed circle fit the default

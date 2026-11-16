@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numbers>
 #include <utility>
 
 #include "tiny_skia/Math.h"
@@ -612,11 +613,12 @@ std::optional<Path> PathStroker::stroke(const Path& path, const Stroke& stroke,
   if (stroke.width <= 0.0f || !std::isfinite(stroke.width)) {
     return std::nullopt;
   }
-  // Donner addition: keep the curve tolerance above the precision of the outline's coordinates,
-  // which reach past the path by the stroke radius, or the miter length at a join.
+  // Donner addition: keep the curve tolerance above the precision of the coordinates the curve
+  // offsetting works in. The tolerance governs only that subdivision, whose points lie within the
+  // stroke radius of the path; miter tips and caps are computed directly. A square cap's corner
+  // reaches sqrt(2) radii.
   resolutionScale = PrecisionLimitedResScale(
-      resolutionScale,
-      MaxAbsCoordinate(path, stroke.width * 0.5f * std::max(stroke.miterLimit, 1.0f)),
+      resolutionScale, MaxAbsCoordinate(path, stroke.width * 0.5f * std::numbers::sqrt2_v<float>),
       kStrokeToleranceAtUnitScale);
   limits_ = limits;
   std::optional<Path> outline = strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap,

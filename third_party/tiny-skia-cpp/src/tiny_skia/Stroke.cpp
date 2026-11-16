@@ -41,10 +41,15 @@ float PrecisionLimitedResScale(float resScale, float maxCoordinate, float tolera
   if (!std::isfinite(maxCoordinate) || !(maxCoordinate > 0.0f) || !(resScale > 0.0f)) {
     return resScale;
   }
-  const float step =
+  float step =
       std::nextafter(maxCoordinate, std::numeric_limits<float>::infinity()) - maxCoordinate;
+  if (!std::isfinite(step)) {
+    // The largest finite float has no step above it; the one below is as wide.
+    step = maxCoordinate - std::nextafter(maxCoordinate, 0.0f);
+  }
   const float maxResScale = toleranceAtUnitScale / (kToleranceSteps * step);
-  return std::isfinite(maxResScale) ? std::min(resScale, maxResScale) : resScale;
+  return std::isfinite(maxResScale) && maxResScale > 0.0f ? std::min(resScale, maxResScale)
+                                                          : resScale;
 }
 
 float MaxAbsCoordinate(const Path& path, float reach) {
