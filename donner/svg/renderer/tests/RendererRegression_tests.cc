@@ -1925,53 +1925,74 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
 
 TEST_F(RendererRegressionTests, DashedTextStrokeMatchesDashedGlyphOutlines) {
   // stroke-dasharray and stroke-dashoffset apply to text as to any shape: the stroked run matches
-  // a `<path>` of the same glyph outlines with the same dashed stroke.
-  constexpr std::string_view kStroke =
-      R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4"
-          stroke-dashoffset="2")svg";
-  SVGDocument textDocument = instantiateSubtree(
-      R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
-          std::string(kStroke) + ">Text</text>",
-      parser::SVGParser::Options(), Vector2i(200, 200));
-  RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
-  const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+  // a `<path>` of the same glyph outlines with the same dashed stroke. "5 0" has only zero-length
+  // gaps, so each dash still ends with a cap where a contour starts.
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 2> kDashes = {{
+      {"gaps", R"svg(stroke-dasharray="6 4" stroke-dashoffset="2")svg"},
+      {"zero_gaps", R"svg(stroke-dasharray="5 0" stroke-linecap="square")svg"},
+  }};
+  for (const auto& [label, dash] : kDashes) {
+    SCOPED_TRACE(label);
+    const std::string stroke =
+        R"svg(fill="none" stroke="black" stroke-width="2" )svg" + std::string(dash);
+    SVGDocument textDocument = instantiateSubtree(
+        R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" + stroke +
+            ">Text</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
 
-  SVGDocument pathDocument =
-      instantiateSubtree("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " +
-                             std::string(kStroke) + "/>",
-                         parser::SVGParser::Options(), Vector2i(200, 200));
-  const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
-  AssertVisibleFixture(expected, "dashed_text_stroke_visible");
-  editor::tests::CompareBitmapToBitmap(actual, expected, "dashed_text_stroke",
-                                       editor::tests::PixelmatchIdentityParams());
+    SVGDocument pathDocument = instantiateSubtree(
+        "<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " + stroke + "/>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "dashed_text_stroke_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "dashed_text_stroke_" + std::string(label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST_F(RendererRegressionTests, DashedTextStrokeIsChargedToTheFrameDashBudget) {
   // A dashed text stroke spends the frame's dash work budget as a dashed path does. Each "l"
-  // here (an 88 x 760 font-unit rectangle, 33.92 units round at font-size 20) dashes into about
-  // 678,000 segments, so each of the three chunks is under the rasterizer's per-path dash limit,
+  // here (an 88 x 760 font-unit rectangle, 1696 units round at font-size 1000) dashes into about
+  // 424,000 segments, so each of the three chunks is under the rasterizer's per-path dash limit,
   // while the three together pass the frame's one-million-unit dash budget. The text is then
-  // rejected exactly as a `<path>` of the same outlines is.
+  // rejected exactly as a `<path>` of the same outlines is, its fill included when the stroke is
+  // painted first. One "l" alone stays under the budget and draws.
   if (ActiveRendererBackend() != RendererBackend::TinySkia) {
     GTEST_SKIP() << "The dash work budget is the CPU renderer's";
   }
   constexpr std::string_view kStroke =
-      R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="0.000025")svg";
-  SVGDocument textDocument = instantiateSubtree(
-      R"svg(<text id="text" x="20 25.16 30.32" y="120" font-family="Noto Sans" font-size="20" )svg" +
-          std::string(kStroke) + ">lll</text>",
-      parser::SVGParser::Options(), Vector2i(200, 200));
-  RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
-  const RendererBitmap actual = RenderDocumentWithBackend(textDocument, RendererBackend::TinySkia);
+      R"svg(stroke="black" stroke-width="2" stroke-dasharray="0.002")svg";
+  const auto render = [](const std::string& body) {
+    SVGDocument document =
+        instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+    return RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  };
+  const std::string text =
+      R"svg(<text x="20" y="120" font-family="Noto Sans" font-size="1000" )svg" +
+      std::string(kStroke) + R"svg( fill="none">l</text>)svg";
+  AssertVisibleFixture(render(text), "dashed_text_stroke_under_budget_visible");
 
-  SVGDocument pathDocument =
-      instantiateSubtree("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " +
-                             std::string(kStroke) + "/>",
-                         parser::SVGParser::Options(), Vector2i(200, 200));
-  const RendererBitmap expected =
-      RenderDocumentWithBackend(pathDocument, RendererBackend::TinySkia);
-  editor::tests::CompareBitmapToBitmap(actual, expected, "dashed_text_stroke_dash_budget",
-                                       editor::tests::PixelmatchIdentityParams());
+  for (const std::string_view fill :
+       {R"svg(fill="none")svg", R"svg(fill="green" paint-order="stroke")svg"}) {
+    SCOPED_TRACE(fill);
+    SVGDocument textDocument = instantiateSubtree(
+        R"svg(<text id="text" x="20 278 536" y="120" font-family="Noto Sans" font-size="1000" )svg" +
+            std::string(kStroke) + " " + std::string(fill) + ">lll</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual =
+        RenderDocumentWithBackend(textDocument, RendererBackend::TinySkia);
+    const RendererBitmap expected =
+        render("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " +
+               std::string(kStroke) + " " + std::string(fill) + "/>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "dashed_text_stroke_dash_budget",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST_F(RendererRegressionTests, TextStrokeCoversOverlapsOfNonAdjacentGlyphsOnce) {
