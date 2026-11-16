@@ -117,10 +117,11 @@ steps: green falls from 13 to 0 where the source runs 12, 10, 9, 8, 7, 6, 5 and 
 uses the same tables.
 
 results.csv records Chrome, Firefox and resvg passing all seven vendored references, and Safari
-passing four of them (it fails type=matrix with empty, short and long value lists). A visual grade
-checks that the gradient is drawn unchanged; steps of a few levels in its darkest band, the
-largest from 0 to 13, are not what such a grade can see, so the browsers passing the reference
-does not show that they reproduce its 8-bit steps.
+passing four of them (it fails type=matrix with empty, short and long value lists). Rendered
+headless at 500x500, each browser draws all seven rows identically, and the two browsers split.
+Chromium 151 matches this golden (0 pixels at the suite's default settings). Firefox 153
+reproduces the references' 8-bit linearRGB steps, with the same dark-band green levels, and
+differs from this golden by 796 pixels in two single columns.
 
 PNG SHA-256: `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916`.
 
