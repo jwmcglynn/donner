@@ -746,6 +746,45 @@ TEST_F(GeodeGlyphInstancingTest, OverlappingGlyphStrokesAreEachTestedForContact)
               testing::AllOf(testing::Ge(kGlyphs - 1), testing::Le(2 * kGlyphs)));
 }
 
+/// Grouping the strokes of a run whose glyphs all overlap, here every "e" drawn at the same place
+/// because letter-spacing cancels its 0.564 em advance, costs a linear number of bounds tests,
+/// not one for every pair of glyphs.
+TEST_F(GeodeGlyphInstancingTest, CoincidentGlyphStrokesGroupInLinearBoundsTests) {
+  constexpr std::size_t kGlyphs = 3000;
+  SVGDocument document =
+      parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+          font-family="Noto Sans" font-size="10" letter-spacing="-5.64"><text x="100" y="100"
+          fill="none" stroke="black" stroke-width="0.5">)svg") +
+            std::string(kGlyphs, 'e') + "</text></svg>");
+  RendererGeode renderer(sharedDevice());
+  const Frame frame = render(renderer, document);
+  EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Eq(kGlyphs));
+  EXPECT_THAT(frame.counters.textStrokeBoundsTests, testing::Le(4 * kGlyphs));
+}
+
+/// Expanded glyph strokes are charged to the frame geometry budget as each is produced, so a long
+/// run with a fine dash array is rejected after a bounded amount of expansion instead of expanding
+/// every glyph first.
+TEST_F(GeodeGlyphInstancingTest, DashedTextStrokeExpansionIsChargedAsItIsProduced) {
+  constexpr std::size_t kGlyphs = 400;
+  SVGDocument document =
+      parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+          font-family="Noto Sans" font-size="16"><text x="10" y="100" fill="none" stroke="black"
+          stroke-width="0.5" stroke-dasharray="0.05 0.05">)svg") +
+            std::string(kGlyphs, 'e') + "</text></svg>");
+  RendererGeode renderer(sharedDevice());
+  constexpr std::uint64_t kFrameBytes = std::uint64_t{1} << 20;
+  renderer.setGeometryBudgetForTesting(
+      std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max(), kFrameBytes,
+      std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::uint64_t>::max());
+  const Frame frame = render(renderer, document);
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Lt(kGlyphs))
+      << "Expansion stops once the expanded strokes exhaust the frame budget.";
+  EXPECT_THAT(frame.counters.strokeOutlinePoints * sizeof(Vector2d), testing::Lt(4 * kFrameBytes))
+      << "Expanded stroke points stay within a few times the frame budget.";
+}
+
 /// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
 /// lower cap rejects all of that frame's text before any glyph is looked up.
 TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejectsTheText) {
