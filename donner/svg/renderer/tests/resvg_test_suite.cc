@@ -1463,8 +1463,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {{"simple-case.svg",
                   Params::WithGoldenOverride(
                       "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png")
-                      .withReason("Donner reference: text-anchor centers the shaped (kerned) "
-                                  "advance (#1173)")}})),
+                      .withReason("Reference disagreement: text-anchor centers the shaped "
+                                  "(kerned) advance (#1173)")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
