@@ -1133,18 +1133,19 @@ TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
   ASSERT_THAT(gap, testing::Gt(1.0)) << "letter-spacing must leave a visible gap";
   EXPECT_THAT(rtlSpaced.aStart - rtlSpaced.dEnd, testing::DoubleNear(gap, 1e-6));
 
-  // Later left-to-right chunks keep continuing from the corrected position: EF follows CD.
+  // Unpositioned ltr chunks in an rtl paragraph still follow the paragraph leftward: CD ends at
+  // AB's left edge, and EF ends at CD's left edge.
   {
     SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 80">
       <text id="t" x="200" y="20" font-family="fallback-font" font-size="12px" direction="rtl">AB<tspan
         direction="ltr" y="40">CD</tspan><tspan direction="ltr" y="60">EF</tspan></text></svg>)-");
     const auto text = document.querySelector("#t")->cast<SVGTextElement>();
-    EXPECT_THAT(text.getStartPositionOfChar(2).x,
+    EXPECT_THAT(text.getEndPositionOfChar(3).x,
                 testing::DoubleNear(text.getStartPositionOfChar(0).x, 1e-6))
-        << "an ltr chunk after AB starts at AB's pen end, its left edge";
-    EXPECT_THAT(text.getStartPositionOfChar(4).x,
-                testing::DoubleNear(text.getEndPositionOfChar(3).x, 1e-6))
-        << "EF continues where CD ends";
+        << "CD ends at AB's pen end, its left edge";
+    EXPECT_THAT(text.getEndPositionOfChar(5).x,
+                testing::DoubleNear(text.getStartPositionOfChar(2).x, 1e-6))
+        << "EF ends where CD starts";
   }
 
   // dx is a physical shift: it moves CD right even in an rtl paragraph.
@@ -1152,6 +1153,271 @@ TEST(SVGTextElementPublicApiTests, RtlChunkWithoutAbsoluteXContinuesLeftward) {
   EXPECT_THAT(shifted.dEnd, testing::DoubleNear(start.dEnd + 5.0, 1e-6));
   EXPECT_THAT(shifted.dEnd - shifted.cStart, testing::DoubleNear(widthCD, 1e-6));
 }
+
+// Unpositioned chunks follow the paragraph direction of the `<text>` element, not their own: in a
+// left-to-right paragraph an rtl chunk without an absolute x starts at the current text position
+// and extends rightward, and the pen leaves it at its right edge.
+TEST(SVGTextElementPublicApiTests, RtlChunkInLtrParagraphContinuesRightward) {
+  SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 80">
+    <text id="t" x="20" y="20" font-family="fallback-font" font-size="12px">AB<tspan
+      direction="rtl" y="40">CD</tspan><tspan y="60">EF</tspan></text></svg>)-");
+  const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+  const double abEnd = text.getEndPositionOfChar(1).x;
+  const double cdLeft = std::min(text.getStartPositionOfChar(2).x, text.getEndPositionOfChar(3).x);
+  const double cdRight = std::max(text.getStartPositionOfChar(2).x, text.getEndPositionOfChar(3).x);
+  EXPECT_THAT(cdLeft, testing::DoubleNear(abEnd, 1e-6)) << "CD starts at AB's right edge";
+  EXPECT_THAT(text.getStartPositionOfChar(4).x, testing::DoubleNear(cdRight, 1e-6))
+      << "EF continues at CD's right edge";
+}
+
+#ifdef DONNER_TEXT_ENABLED
+MATCHER(IsInIncreasingOrder, "is in increasing order") {
+  return std::is_sorted(arg.begin(), arg.end());
+}
+
+/// The horizontal center of each of the first \p count characters of the `#t` element. Centers do
+/// not depend on which edge a right-to-left character reports as its start.
+std::vector<double> CharacterCenters(SVGDocument& document, long count) {
+  const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+  std::vector<double> centers;
+  for (long index = 0; index < count; ++index) {
+    const Box2d extent = text.getExtentOfChar(index);
+    centers.push_back((extent.topLeft.x + extent.bottomRight.x) / 2.0);
+  }
+  return centers;
+}
+
+// `unicode-bidi` on a `tspan` places bidi controls around its content, as the CSS Writing Modes
+// table defines; `direction` picks each control's direction.
+TEST(SVGTextElementPublicApiTests, TspanUnicodeBidiEnclosesItsContentInControls) {
+  // Returns the centers of the six characters of "ab" + "cd" (the tspan) + "ef".
+  const auto layOut = [](std::string_view textAttributes, std::string_view tspanAttributes) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 40"><text id="t" x="20" y="20" )-") +
+        R"-(font-family="fallback-font" font-size="12px" )-" + std::string(textAttributes) +
+        R"-(>ab<tspan )-" + std::string(tspanAttributes) + R"-(>cd</tspan>ef</text></svg>)-");
+    return CharacterCenters(document, 6);
+  };
+
+  ASSERT_THAT(layOut("", ""), IsInIncreasingOrder());
+  // `direction` alone, or `unicode-bidi: normal`, adds no controls around Latin letters.
+  EXPECT_THAT(layOut("", R"(direction="rtl")"), IsInIncreasingOrder());
+  EXPECT_THAT(layOut("", R"(direction="rtl" unicode-bidi="embed")"), IsInIncreasingOrder())
+      << "an rtl embedding keeps left-to-right letters in order";
+
+  for (const std::string_view value : {"bidi-override", "isolate-override"}) {
+    SCOPED_TRACE(value);
+    const auto x =
+        layOut("", std::string(R"(direction="rtl" unicode-bidi=")") + std::string(value) + "\"");
+    // Only the tspan's own letters run right to left, between `b` and `e`.
+    EXPECT_THAT(x[3], testing::Lt(x[2])) << "d is left of c";
+    EXPECT_THAT(x[1], testing::Lt(x[3])) << "the override stays after b";
+    EXPECT_THAT(x[2], testing::Lt(x[4])) << "and before e";
+  }
+
+  // A left-to-right override inside a right-to-left override keeps its own letters in order.
+  {
+    SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 40"><text id="t" x="200"
+      y="20" font-family="fallback-font" font-size="12px" direction="rtl"
+      unicode-bidi="bidi-override">ab<tspan direction="ltr" unicode-bidi="isolate-override">cd</tspan>ef</text></svg>)-");
+    const auto x = CharacterCenters(document, 4);
+    EXPECT_THAT(x[3], testing::Gt(x[2])) << "d stays right of c";
+    EXPECT_THAT(x[1], testing::Lt(x[0])) << "the enclosing override still reverses ab";
+  }
+}
+
+// `unicode-bidi: plaintext` on a `tspan` isolates its content with a direction detected from its
+// first strong character (FSI ... PDI), where `isolate` uses the element's `direction`.
+TEST(SVGTextElementPublicApiTests, PlaintextTspanIsolatesWithItsDetectedDirection) {
+  const auto layOut = [](std::string_view unicodeBidi) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 40"><text id="t" x="20" y="20" )-") +
+        R"-(font-family="fallback-font" font-size="12px">ab<tspan direction="rtl" )-" +
+        "unicode-bidi=\"" + std::string(unicodeBidi) + R"-(">!c</tspan></text></svg>)-");
+    return CharacterCenters(document, 4);
+  };
+  // In an rtl isolate the leading `!` takes the isolate's direction and lands right of `c`.
+  const auto isolated = layOut("isolate");
+  EXPECT_THAT(isolated[2], testing::Gt(isolated[3])) << "! is right of c";
+  // Plaintext detects `c`, a left-to-right letter, so `!` stays before it.
+  EXPECT_THAT(layOut("plaintext"), IsInIncreasingOrder());
+}
+
+// Embeddings nested past the UAX #9 maximum depth of 125 overflow: the innermost override no
+// longer opens a level, while the same override at a shallow depth still reverses its letters.
+TEST(SVGTextElementPublicApiTests, OverrideNestedPastTheMaximumDepthIsIgnored) {
+  const auto layOut = [](int depth) {
+    std::string markup = R"-(<svg viewBox="0 0 300 40"><text id="t" x="20" y="20" )-"
+                         R"-(font-family="fallback-font" font-size="12px">)-";
+    for (int level = 0; level < depth; ++level) {
+      markup += level % 2 == 0 ? R"(<tspan direction="rtl" unicode-bidi="embed">)"
+                               : R"(<tspan direction="ltr" unicode-bidi="embed">)";
+    }
+    markup += R"(<tspan direction="rtl" unicode-bidi="bidi-override">ab</tspan>)";
+    for (int level = 0; level < depth; ++level) {
+      markup += "</tspan>";
+    }
+    markup += "</text></svg>";
+    SVGDocument document = instantiateSubtree(markup);
+    return CharacterCenters(document, 2);
+  };
+  const auto shallow = layOut(3);
+  EXPECT_THAT(shallow[1], testing::Lt(shallow[0])) << "the override reverses ab";
+  EXPECT_THAT(layOut(130), IsInIncreasingOrder()) << "the overflowing override is ignored";
+}
+
+// An element whose override spans an absolute position closes its controls at the end of one
+// paragraph and reopens them in the next, so both chunks run right to left.
+TEST(SVGTextElementPublicApiTests, TspanOverrideReopensAcrossChunks) {
+  SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 40"><text id="t" x="20"
+    y="20" font-family="fallback-font" font-size="12px"><tspan direction="rtl"
+    unicode-bidi="bidi-override" x="20 120">abc</tspan></text></svg>)-");
+  const auto x = CharacterCenters(document, 3);
+  EXPECT_THAT(x[1], testing::Gt(100.0)) << "b is in the second chunk";
+  EXPECT_THAT(x[2], testing::Lt(x[1])) << "c is left of b inside the second chunk";
+}
+
+// `unicode-bidi: plaintext` on the `<text>` element takes each paragraph's base direction from
+// its first strong character instead of `direction`.
+TEST(SVGTextElementPublicApiTests, PlaintextDetectsTheParagraphBaseDirection) {
+  // Returns the start positions of `b` and of the period in "ab.".
+  const auto layOut = [](std::string_view attributes) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"-(<svg viewBox="0 0 300 40"><text id="t" x="100" y="20" )-") +
+        R"-(font-family="fallback-font" font-size="12px" )-" + std::string(attributes) +
+        R"-(>ab.</text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    return std::pair(text.getStartPositionOfChar(1).x, text.getStartPositionOfChar(2).x);
+  };
+  {
+    const auto [b, period] = layOut("");
+    EXPECT_THAT(period, testing::Gt(b)) << "the period follows the word";
+  }
+  {
+    // An rtl base sends the trailing neutral to the visual start of the line.
+    const auto [b, period] = layOut(R"(direction="rtl")");
+    EXPECT_THAT(period, testing::Lt(b)) << "the period moves left of the word";
+  }
+  {
+    // Plaintext finds `a`, a left-to-right letter, first, so the period stays after the word.
+    const auto [b, period] = layOut(R"(direction="rtl" unicode-bidi="plaintext")");
+    EXPECT_THAT(period, testing::Gt(b)) << "the period follows the word";
+  }
+}
+
+// Under `unicode-bidi: plaintext`, `text-anchor` and the continuation of an unpositioned chunk
+// follow each paragraph's detected direction, as CSS resolves `start` and `end` against the
+// paragraph's direction, not the `direction` property.
+TEST(SVGTextElementPublicApiTests, PlaintextAnchorsAndContinuesInTheDetectedDirection) {
+  {
+    // Both paragraphs detect left to right despite `direction="rtl"`: "ab" starts at x and "cd",
+    // a chunk without an absolute x, continues rightward from its right edge.
+    SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 80">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px" direction="rtl"
+        unicode-bidi="plaintext">ab<tspan y="40">cd</tspan></text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    EXPECT_THAT(text.getStartPositionOfChar(0).x, testing::DoubleNear(100.0, 1e-6))
+        << "ab starts at x";
+    EXPECT_THAT(text.getStartPositionOfChar(2).x,
+                testing::DoubleNear(text.getEndPositionOfChar(1).x, 1e-6))
+        << "cd continues at ab's right edge";
+  }
+  {
+    // A Hebrew paragraph detects right to left despite the default `direction="ltr"`, so its
+    // start, the right edge, sits at x.
+    SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px"
+        unicode-bidi="plaintext">&#x5d0;&#x5d1;</text></svg>)-");
+    const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+    const std::vector<double> edges{
+        text.getStartPositionOfChar(0).x, text.getEndPositionOfChar(0).x,
+        text.getStartPositionOfChar(1).x, text.getEndPositionOfChar(1).x};
+    const auto [left, right] = std::minmax_element(edges.begin(), edges.end());
+    ASSERT_THAT(*right - *left, testing::Gt(1.0)) << "the letters have advances";
+    EXPECT_THAT(*right, testing::DoubleNear(100.0, 1e-6)) << "the word's right edge is at x";
+  }
+}
+
+/// The leftmost and rightmost start or end position of characters [first, first + count) of the
+/// `#t` element.
+std::pair<double, double> HorizontalSpan(SVGDocument& document, long first, long count) {
+  const auto text = document.querySelector("#t")->cast<SVGTextElement>();
+  std::vector<double> edges;
+  for (long index = first; index < first + count; ++index) {
+    edges.push_back(text.getStartPositionOfChar(index).x);
+    edges.push_back(text.getEndPositionOfChar(index).x);
+  }
+  const auto [left, right] = std::minmax_element(edges.begin(), edges.end());
+  return {*left, *right};
+}
+
+/// Lays out \p content in a `<text>` at x = 100 with `unicode-bidi: plaintext` and \p attributes.
+SVGDocument LayOutPlaintext(std::string_view attributes, std::string_view content) {
+  return instantiateSubtree(
+      std::string(R"-(<svg viewBox="0 0 300 80"><text id="t" x="100" y="20" )-") +
+      R"-(font-family="fallback-font" font-size="12px" unicode-bidi="plaintext" )-" +
+      std::string(attributes) + ">" + std::string(content) + "</text></svg>");
+}
+
+// With no strong character, UAX #9 rule P3 gives a plaintext paragraph level 0, left to right,
+// whatever `direction` says: the neutral text starts at x as a left-to-right chunk does.
+TEST(SVGTextElementPublicApiTests, PlaintextWithoutStrongCharactersIsLeftToRight) {
+  SVGDocument plaintext = LayOutPlaintext(R"(direction="rtl")", "!?");
+  const auto [left, right] = HorizontalSpan(plaintext, 0, 2);
+  ASSERT_THAT(right - left, testing::Gt(1.0)) << "the characters have advances";
+  EXPECT_THAT(left, testing::DoubleNear(100.0, 1e-6)) << "the text starts at x";
+
+  SVGDocument rtl = instantiateSubtree(R"-(<svg viewBox="0 0 300 40"><text id="t" x="100"
+    y="20" font-family="fallback-font" font-size="12px" direction="rtl">!?</text></svg>)-");
+  EXPECT_THAT(HorizontalSpan(rtl, 0, 2).second, testing::DoubleNear(100.0, 1e-6))
+      << "without plaintext the rtl base ends the text at x";
+}
+
+// `middle` centers a chunk on x in either detected direction, and `end` names the edge opposite
+// the detected start: the left edge of a right-to-left paragraph, the right edge of a
+// left-to-right one, whatever `direction` says.
+TEST(SVGTextElementPublicApiTests, PlaintextMiddleAndEndAnchorsFollowTheDetectedDirection) {
+  {
+    SVGDocument document = LayOutPlaintext(R"(text-anchor="end")", "&#x5d0;&#x5d1;");
+    const auto [left, right] = HorizontalSpan(document, 0, 2);
+    ASSERT_THAT(right - left, testing::Gt(1.0));
+    EXPECT_THAT(left, testing::DoubleNear(100.0, 1e-6)) << "an rtl paragraph ends at its left";
+  }
+  {
+    SVGDocument document = LayOutPlaintext(R"(text-anchor="end" direction="rtl")", "ab");
+    EXPECT_THAT(HorizontalSpan(document, 0, 2).second, testing::DoubleNear(100.0, 1e-6))
+        << "an ltr paragraph ends at its right";
+  }
+  for (const std::string_view content : {"ab", "&#x5d0;&#x5d1;"}) {
+    SCOPED_TRACE(content);
+    SVGDocument document = LayOutPlaintext(R"(text-anchor="middle" direction="rtl")", content);
+    const auto [left, right] = HorizontalSpan(document, 0, 2);
+    EXPECT_THAT((left + right) / 2.0, testing::DoubleNear(100.0, 1e-6)) << "centered on x";
+  }
+}
+
+// SVG does not define how an unpositioned chunk continues from a paragraph of the opposite
+// direction. Donner leaves the pen where the previous paragraph's direction ends it and starts
+// the next chunk there at its own start edge, so the two chunks share that edge.
+TEST(SVGTextElementPublicApiTests, PlaintextChunksOfOppositeDirectionsShareAnEdge) {
+  {
+    // "ab" ends at its right edge; the Hebrew chunk starts there with its right edge.
+    SVGDocument document = LayOutPlaintext("", R"(ab<tspan y="40">&#x5d0;&#x5d1;</tspan>)");
+    const auto latin = HorizontalSpan(document, 0, 2);
+    const auto hebrew = HorizontalSpan(document, 2, 2);
+    EXPECT_THAT(latin.first, testing::DoubleNear(100.0, 1e-6));
+    EXPECT_THAT(hebrew.second, testing::DoubleNear(latin.second, 1e-6));
+  }
+  {
+    // The Hebrew chunk ends at its left edge; "ab" starts there with its left edge.
+    SVGDocument document = LayOutPlaintext("", R"(&#x5d0;&#x5d1;<tspan y="40">ab</tspan>)");
+    const auto hebrew = HorizontalSpan(document, 0, 2);
+    const auto latin = HorizontalSpan(document, 2, 2);
+    EXPECT_THAT(hebrew.second, testing::DoubleNear(100.0, 1e-6));
+    EXPECT_THAT(latin.first, testing::DoubleNear(hebrew.first, 1e-6));
+  }
+}
+#endif
 
 // `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
 // the same override on an enclosing group leaves the text's normal reordering alone.
