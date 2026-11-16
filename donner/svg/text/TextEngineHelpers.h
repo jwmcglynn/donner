@@ -127,9 +127,12 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 
 /// Fix up chunk anchors and apply the existing per-line anchor profile.
 /// firstLineIndent contributes its signed leading margin only to the first flat chunk.
+/// paragraphRightToLeft gives the `<text>` element's paragraph direction, in which chunks without
+/// an absolute x continue from the previous chunk.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical,
-                     const AnchorExclusions& exclusions = {}, double firstLineIndent = 0.0);
+                     const AnchorExclusions& exclusions = {}, double firstLineIndent = 0.0,
+                     bool paragraphRightToLeft = false);
 
 /// Apply whitespace-dependent line layout along the inline axis, before text-anchor adjustment.
 /// Each line/chunk uses its first addressable character's anchor; lines advance along the block

@@ -8,6 +8,8 @@
 
 namespace donner::svg {
 namespace {
+using testing::AllOf;
+using testing::Contains;
 using testing::ElementsAre;
 using testing::Field;
 using testing::IsTrue;
@@ -177,6 +179,91 @@ TEST(BidiParagraphTest, ParagraphAdmissionPrecedesAnalysisAndAlsoChargesTheFastP
     accepted.remaining.paragraphs = 1;
     EXPECT_THAT(BidiParagraph::Analyze({'a'}, accepted, 0, force).has_value(), IsTrue());
     EXPECT_THAT(accepted.remaining.paragraphs, testing::Eq(0u));
+  }
+}
+
+TEST(BidiParagraphTest, InjectedOverrideReordersOnlyItsScalars) {
+  // "ab cd" with an injected RLO before `c` and PDF after `d`, as `unicode-bidi: bidi-override;
+  // direction: rtl` on an element holding "cd".
+  const std::vector<BidiParagraph::InjectedControl> controls{{3, 0x202e}, {5, 0x202c}};
+  BidiResourceBudget budget;
+  auto paragraph = BidiParagraph::Analyze({'a', 'b', ' ', 'c', 'd'}, budget, /*base=*/0,
+                                          /*forceAnalysis=*/false, /*override=*/false, controls);
+  ASSERT_THAT(paragraph.has_value(), IsTrue());
+  const auto runs = paragraph->visualRuns(0, 5, budget);
+  ASSERT_THAT(runs.has_value(), IsTrue());
+  EXPECT_THAT(VisualOrder(*runs), ElementsAre(0u, 1u, 2u, 4u, 3u));
+  EXPECT_THAT((std::vector<uint8_t>{paragraph->levelAt(0), paragraph->levelAt(2),
+                                    paragraph->levelAt(3), paragraph->levelAt(4)}),
+              ElementsAre(0, 0, 1, 1));
+  EXPECT_THAT(paragraph->paragraphLevelAt(4), testing::Eq(0));
+}
+
+TEST(BidiParagraphTest, InjectedIsolateResolvesItsContentAtItsOwnLevel) {
+  // An `rtl` isolate (RLI ... PDI) around "ab" in a left-to-right paragraph raises the Latin
+  // letters to level 2 and keeps them in order; the digit after it stays at the paragraph level.
+  const std::vector<BidiParagraph::InjectedControl> isolate{{1, 0x2067}, {3, 0x2069}};
+  BidiResourceBudget budget;
+  auto paragraph = BidiParagraph::Analyze({'x', 'a', 'b', '1'}, budget, 0, false, false, isolate);
+  ASSERT_THAT(paragraph.has_value(), IsTrue());
+  const auto runs = paragraph->visualRuns(0, 4, budget);
+  ASSERT_THAT(runs.has_value(), IsTrue());
+  EXPECT_THAT(VisualOrder(*runs), ElementsAre(0u, 1u, 2u, 3u));
+  EXPECT_THAT((std::vector<uint8_t>{paragraph->levelAt(0), paragraph->levelAt(1),
+                                    paragraph->levelAt(2), paragraph->levelAt(3)}),
+              ElementsAre(0, 2, 2, 0));
+}
+
+TEST(BidiParagraphTest, InjectedIsolateInsideParagraphOverrideKeepsItsOwnOrder) {
+  // A right-to-left paragraph override reverses "xy " but not the left-to-right isolate around
+  // "ab": isolates do not inherit the enclosing override.
+  const std::vector<BidiParagraph::InjectedControl> isolate{{3, 0x2066}, {5, 0x2069}};
+  const std::u32string_view source = U"xy ab";
+  BidiResourceBudget budget;
+  auto paragraph = BidiParagraph::Analyze({source.begin(), source.end()}, budget, /*base=*/1,
+                                          /*forceAnalysis=*/false, /*override=*/true, isolate);
+  ASSERT_THAT(paragraph.has_value(), IsTrue());
+  const auto runs = paragraph->visualRuns(0, 5, budget);
+  ASSERT_THAT(runs.has_value(), IsTrue());
+  EXPECT_THAT(VisualOrder(*runs), ElementsAre(3u, 4u, 2u, 1u, 0u));
+  // The paragraph override resolves through a leading RLO, one embedding above the base level
+  // with the same parity, and the isolate opens the next even level inside it.
+  EXPECT_THAT(paragraph->levelAt(0), testing::Eq(3));
+  EXPECT_THAT(paragraph->levelAt(3), testing::Eq(4));
+  EXPECT_THAT(paragraph->paragraphLevelAt(0), testing::Eq(1));
+}
+
+TEST(BidiParagraphTest, OverrideWithInjectedControlsStillSplitsScriptRuns) {
+  // The paragraph override around mixed Latin and Arabic still shapes each script separately.
+  const std::vector<BidiParagraph::InjectedControl> isolate{{0, 0x2066}, {1, 0x2069}};
+  const std::u32string_view source = U"zab مر";
+  BidiResourceBudget budget;
+  auto paragraph =
+      BidiParagraph::Analyze({source.begin(), source.end()}, budget, 1, false, true, isolate);
+  ASSERT_THAT(paragraph.has_value(), IsTrue());
+  const auto runs = paragraph->visualRuns(0, source.size(), budget);
+  ASSERT_THAT(runs.has_value(), IsTrue());
+  EXPECT_THAT(VisualOrder(*runs), ElementsAre(5u, 4u, 3u, 2u, 1u, 0u));
+  EXPECT_THAT(*runs, Contains(AllOf(Field(&BidiParagraph::Run::start, 4u),
+                                    Field(&BidiParagraph::Run::end, 6u))))
+      << "the Arabic letters form their own run";
+}
+
+TEST(BidiParagraphTest, InjectedControlsAreBudgetedAndValidated) {
+  const std::vector<BidiParagraph::InjectedControl> controls{{0, 0x202e}, {2, 0x202c}};
+  BidiResourceBudget tight;
+  tight.remaining.codepoints = 3;
+  EXPECT_THAT(BidiParagraph::Analyze({'a', 'b'}, tight, 0, false, false, controls).has_value(),
+              testing::IsFalse());
+  EXPECT_THAT(tight.rejected, IsTrue());
+
+  for (const auto& invalid :
+       {std::vector<BidiParagraph::InjectedControl>{{0, 'a'}},
+        std::vector<BidiParagraph::InjectedControl>{{3, 0x202c}},
+        std::vector<BidiParagraph::InjectedControl>{{2, 0x202e}, {1, 0x202c}}}) {
+    BidiResourceBudget budget;
+    EXPECT_THAT(BidiParagraph::Analyze({'a', 'b'}, budget, 0, false, false, invalid).has_value(),
+                testing::IsFalse());
   }
 }
 
