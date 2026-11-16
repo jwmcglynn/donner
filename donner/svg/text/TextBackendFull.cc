@@ -132,11 +132,12 @@ constexpr double kScalableFaceOversample = 16.0;
  */
 constexpr double kMaximumOversampledFaceSizePx = 2048.0;
 
-/// The face size multiple for text of \p textSizePx: as fine as the face size limit allows, and
-/// never coarser than the text size itself, where 1/64 pixel is negligible for large text.
+/// The face size multiple for text of \p textSizePx: the largest whole multiple the face size
+/// limit allows, and never coarser than the text size itself, where 1/64 pixel is negligible for
+/// large text. A whole multiple keeps every coordinate exact that is exact at the text size.
 double ScalableFaceOversample(float textSizePx) {
-  return std::clamp(kMaximumOversampledFaceSizePx / static_cast<double>(textSizePx), 1.0,
-                    kScalableFaceOversample);
+  return std::clamp(std::floor(kMaximumOversampledFaceSizePx / static_cast<double>(textSizePx)),
+                    1.0, kScalableFaceOversample);
 }
 
 /**

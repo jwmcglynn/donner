@@ -1226,8 +1226,8 @@ MATCHER_P2(BoxNear, expected, tolerance,
 
 /// Bound on the full tier's error for one advance or outline coordinate at \p sizePx, with
 /// margin. FreeType rounds to 1/64 pixel of the face, which is 16 times text up to 128 px (an
-/// error of at most 1/2048 px), and otherwise at least 2048 px or the text size, whichever is
-/// larger (at most 1/128 px).
+/// error of at most 1/2048 px), and otherwise a whole multiple of the text size (at most
+/// 1/128 px).
 double FullTierPrecisionPx(double sizePx) {
   return sizePx <= 128.0 ? 1.0 / 512.0 : 1.0 / 64.0;
 }
