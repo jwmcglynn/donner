@@ -2179,6 +2179,33 @@ TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
   }
 }
 
+TEST_F(RendererRegressionTests, ImageNearestAtFractionalScalesSamplesTexelUnderPixelCenter) {
+  // Each placement stretches the 8x8 image by non-integer factors from integer edges, so no edge
+  // pixel is covered partially. At 3.75, 2.5 and 0.75 device pixels per texel, texel boundaries
+  // fall exactly on pixel centers, where the texel at or right of the center is the one sampled.
+  const std::array<Box2d, 5> placements = {
+      Box2d::FromXYWH(8, 8, 30, 30), Box2d::FromXYWH(8, 8, 20, 20), Box2d::FromXYWH(8, 8, 6, 6),
+      Box2d::FromXYWH(8, 8, 30, 20), Box2d::FromXYWH(3, 5, 52, 46)};
+  for (const Box2d& placement : placements) {
+    const RendererBitmap expected = TinySkiaImageReference(GradientPixels(), 8, 8, placement,
+                                                           tiny_skia::FilterQuality::Nearest);
+    for (std::string_view imageRendering : {"optimizeSpeed", "crisp-edges"}) {
+      SCOPED_TRACE(testing::Message()
+                   << placement << " image-rendering=\"" << imageRendering << "\"");
+      std::ostringstream markup;
+      markup << "<image x=\"" << placement.topLeft.x << "\" y=\"" << placement.topLeft.y
+             << "\" width=\"" << placement.width() << "\" height=\"" << placement.height()
+             << "\" preserveAspectRatio=\"none\"" << ImageRenderingAttribute(imageRendering)
+             << " href=\"" << kGradientImageDataUri << "\"/>";
+      std::ostringstream label;
+      label << "image_nearest_" << placement.width() << "x" << placement.height() << "_"
+            << imageRendering;
+      editor::tests::CompareBitmapToBitmap(RenderImageOverGray(markup.str()), expected, label.str(),
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
 // The feImage oracles are `<image>` drawn by tiny-skia, whose sampling resvg shares. Both
 // backends' feImage samplers evaluate the kernels exactly, while Geode's own `<image>` blit
 // differs from tiny-skia by one 8-bit step in places (hardware bilinear subtexel precision, and
