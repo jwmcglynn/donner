@@ -199,6 +199,40 @@ TEST(CatalogEncodedFontStoreTest, TerminalDecodeFailureIsMemoizedPerContentGener
   EXPECT_EQ(manager.compressedFontDecompressionAttempts(), 2u);
 }
 
+// A catalog face's new content generation reaches every resolution cache, whichever of them
+// notices it first: the document's own answers and those cached while a host lends fonts.
+TEST(CatalogEncodedFontStoreTest, GenerationChangeReachesEveryResolutionCache) {
+  Registry hostRegistry;
+  FontManager host(hostRegistry);
+  host.setGenericFamilyMapping("fantasy", "Inter");
+  const auto overlay = FontManager::HostFontOverlay::Make({}, &host);
+  ASSERT_THAT(overlay, testing::NotNull());
+  for (const bool lentLookupNoticesFirst : {true, false}) {
+    SCOPED_TRACE(lentLookupNoticesFirst ? "lent lookup notices the change"
+                                        : "document lookup notices the change");
+    AlteredCatalogProvider provider;
+    provider.corrupt = false;
+    Registry registry;
+    FontManager manager(registry);
+    manager.setFontProvider(&provider);
+    const auto lend = [&](bool lent) { manager.setHostFontOverlay(lent ? overlay : nullptr); };
+
+    lend(false);
+    const FontHandle first = manager.findFont("Inter");
+    ASSERT_NE(first, manager.fallbackFont());
+    lend(true);
+    ASSERT_EQ(manager.findFont("Inter"), first) << "both caches answer the first generation";
+
+    ++provider.generation;
+    lend(lentLookupNoticesFirst);
+    const FontHandle second = manager.findFont("Inter");
+    EXPECT_NE(second, first);
+    lend(!lentLookupNoticesFirst);
+    EXPECT_EQ(manager.findFont("Inter"), second)
+        << "the other cache must not keep serving the first generation";
+  }
+}
+
 TEST(CatalogEncodedFontStoreTest, ConsumerBudgetPressureDefersWithoutPoisoningTheAsset) {
   EmbeddedFontProvider provider;
   Registry registry;
