@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 
 #include "donner/base/tests/BaseTestUtils.h"
@@ -658,6 +659,38 @@ TEST(SVGPatternElementTests, PatternLongAcyclicChainTerminates) {
   const AsciiImage first = RendererTestUtils::renderToAsciiImage(document);
   const AsciiImage second = RendererTestUtils::renderToAsciiImage(document);
   EXPECT_EQ(first.generated, second.generated);
+}
+
+/**
+ * Binary fan-out: each pattern's tile holds two rects filled with the next pattern, scaled by half
+ * so every tile has the same raster size. Rendering it fully would draw 2^20 tiles. Every tile
+ * reserves from the per-frame surface budget (256 surfaces, 256 MiB): the CPU backend keeps each
+ * tile's reservation until the frame ends, and Geode reserves through the same budget when it
+ * acquires tile textures. The budget latches (measured from 10 levels on both backends) and the
+ * frame finishes.
+ */
+TEST(SVGPatternElementTests, PatternFanOutLatchesTheSurfaceBudget) {
+  constexpr int kDepth = 20;
+  std::string svg;
+  for (int i = 0; i < kDepth; ++i) {
+    svg += "<pattern id=\"p" + std::to_string(i) +
+           "\" patternUnits=\"userSpaceOnUse\" width=\"8\" height=\"8\"" +
+           (i == 0 ? std::string() : std::string(" patternTransform=\"scale(0.5)\"")) + ">";
+    if (i + 1 < kDepth) {
+      const std::string next = "url(#p" + std::to_string(i + 1) + ")";
+      svg += "<rect width=\"4\" height=\"8\" fill=\"" + next + "\" />";
+      svg += "<rect x=\"4\" width=\"4\" height=\"8\" fill=\"" + next + "\" />";
+    } else {
+      svg += "<rect width=\"8\" height=\"8\" fill=\"black\" />";
+    }
+    svg += "</pattern>";
+  }
+  svg += "<rect width=\"16\" height=\"16\" fill=\"url(#p0)\" />";
+
+  SVGDocument document = instantiateSubtree(svg);
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  renderer->draw(document);
+  EXPECT_TRUE(renderer->resourceStats().surfaceBudgetRejected);
 }
 
 /**
