@@ -1211,25 +1211,27 @@ INSTANTIATE_TEST_SUITE_P(
                 {"not-UTF-8-encoding.svg",
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                               "and update the encoding declaration")},
-                // These references hold the frame's exact edge coverage, which Geode matches; the
-                // CPU budgets are the measured residual of its quarter-pixel edge rows (#1185).
+                // These references hold the frame's exact edge coverage, which Geode matches. The
+                // CPU backend quantizes horizontal edges to quarter-pixel sub-scanlines; each CPU
+                // budget is the measured residual (identical on macOS and Linux) plus 3%, rounded
+                // up to 5 pixels.
                 {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-                 WithMaxPixels(735, "CPU scan conversion snaps edge rows to quarter pixels")
+                 WithMaxPixels(760, "Bug #2347: CPU scan conversion quantizes horizontal edges to quarter pixels")
                      .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=none.svg",
-                 WithMaxPixels(1478, "CPU scan conversion snaps edge rows to quarter pixels")
+                 WithMaxPixels(1525, "Bug #2347: CPU scan conversion quantizes horizontal edges to quarter pixels")
                      .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=xMaxYMax.svg",
-                 WithMaxPixels(737, "CPU scan conversion snaps edge rows to quarter pixels")
+                 WithMaxPixels(760, "Bug #2347: CPU scan conversion quantizes horizontal edges to quarter pixels")
                      .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=xMidYMid.svg",
-                 WithMaxPixels(736, "CPU scan conversion snaps edge rows to quarter pixels")
+                 WithMaxPixels(760, "Bug #2347: CPU scan conversion quantizes horizontal edges to quarter pixels")
                      .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"preserveAspectRatio=xMinYMin.svg",
-                 WithMaxPixels(736, "CPU scan conversion snaps edge rows to quarter pixels")
+                 WithMaxPixels(760, "Bug #2347: CPU scan conversion quantizes horizontal edges to quarter pixels")
                      .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"proportional-viewBox.svg",
-                 WithMaxPixels(736, "CPU scan conversion snaps edge rows to quarter pixels")
+                 WithMaxPixels(760, "Bug #2347: CPU scan conversion quantizes horizontal edges to quarter pixels")
                      .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
 
                 {"funcIRI-with-quotes.svg", Params{}},

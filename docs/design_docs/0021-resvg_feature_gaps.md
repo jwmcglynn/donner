@@ -351,7 +351,9 @@ edges with tiny-skia's 4x4 supersampling, so partial alphas fall on 1/16 steps; 
 Donner's analytic coverage. The difference is largest on the 1.25-pixel crosshair most text tests
 draw at x=250: analytic coverage splits it 160/160 across two columns, 4x4 coverage 128/192, so a
 whole reference can differ by about 400 pixels with identical layout. Donner keeps analytic
-coverage on both the CPU and GPU backends, so these references cannot match exactly.
+coverage across each pixel row on both the CPU and GPU backends, so these references cannot match
+exactly. Vertically the CPU backend is not analytic: it quantizes horizontal edges to quarter-pixel
+sub-scanlines (Bug #2347), which leaves vertical edges such as the crosshair unaffected.
 
 A case may carry a pixel budget for this cause, with a reason starting `Reference rasterizer
 generation:`, only when all of the following hold:
