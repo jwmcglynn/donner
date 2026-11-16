@@ -199,9 +199,8 @@ INSTANTIATE_TEST_SUITE_P(
                     // (slug_fill 4-sample vs tiny-skia analytic), which the kernel
                     // spreads above threshold - the same root cause as the structure/svg
                     // and feImage/svg parity gaps. Not the color-space round-trip.
-                    // References below refreshed to resvg v0.49.0; see
-                    // third_party/resvg-test-suite/BUILD.bazel. edgeMode=wrap keeps the
-                    // snapshot reference: against v0.49.0 it differs by 107 px.
+                    // References refreshed to resvg v0.49.0 except edgeMode=wrap; see
+                    // third_party/resvg-test-suite/BUILD.bazel.
                     {"edgeMode=none.svg", ResvgV049Reference()},
                     {"edgeMode=wrap.svg",
                      Params::WithThreshold(
