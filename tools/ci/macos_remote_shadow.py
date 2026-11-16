@@ -10,8 +10,8 @@ what happened in the job summary and in a derived summary file instead.
 It runs, in order:
 
   preflight  `bazel build --nobuild` with and without the config, then an uncached run of a
-             one-line routing probe test under the config. Fails at once, with a message that
-             names no endpoint, when the runner's rc files configure no remote executor for the
+             one-line routing probe test under the config. Fails at once, with a message of its
+             own, when the runner's rc files configure no remote executor for the
              config, the same executor as without it, or one that does not run the probe on
              macOS arm64 in this invocation.
   native     `bazel test --config=remote-macos` of the selection: builds every selected target and
@@ -145,6 +145,9 @@ LANE_FLAGS = (CLIENT_REPO_ENV,) + CI_FLAGS + (
     r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$",
     TEST_LANE_CONFIG,
     "--test_output=errors",
+    # The lane is advisory: one failed action, even an executor-side error, must not hide the
+    # result of everything that does not depend on it. The gating lanes stop at the first error.
+    "--keep_going",
     # Test results of this lane are its own; build actions are shared.
     LANE_TEST_ENV,
 )
@@ -454,6 +457,12 @@ def _int(value):
 
 _PASSED = ("PASSED",)
 _FLAKY = ("FLAKY",)
+# Tests that never ran: not built (a build failure, which with --keep_going fails only the targets
+# that depend on the failed action) or never started.
+_NOT_RUN = ("NO_STATUS", "FAILED_TO_BUILD", "TOOL_HALTED_BEFORE_TESTING")
+# Exit codes Bazel gives an action that failed in remote execution or the remote cache rather than
+# by its own exit status: REMOTE_ERROR (34) and REMOTE_CACHE_EVICTED (39).
+_REMOTE_EXIT_CODES = (34, 39)
 
 
 def _metrics(metrics):
@@ -468,6 +477,19 @@ def _metrics(metrics):
                         for runner in actions.get("runnerCount", [])
                         if runner.get("name") not in (None, "", "total")},
             "wall_time_seconds": None if wall is None else round(_int(wall) / 1000.0, 1)}
+
+
+def _on_action(event, state):
+    """Counts a failed action as a remote execution error or a failure of its own. Bazel reports
+    an action that failed in remote execution with a remote exit code, and its failure detail as
+    a remoteExecution one; an action whose own command failed has that command's exit status."""
+    action = event.get("action")
+    if not isinstance(action, dict) or action.get("success") is True:
+        return
+    detail = action.get("failureDetail")
+    remote = action.get("exitCode") in _REMOTE_EXIT_CODES or (
+        isinstance(detail, dict) and "remoteExecution" in detail)
+    state["failed_actions"]["remote" if remote else "own"] += 1
 
 
 def _on_target(event, state):
@@ -498,7 +520,8 @@ def _on_metrics(event, state):
     state["result"].update(_metrics(event.get("buildMetrics", {})))
 
 
-_HANDLERS = {"targetCompleted": _on_target, "testSummary": _on_test_summary,
+_HANDLERS = {"actionCompleted": _on_action, "targetCompleted": _on_target,
+             "testSummary": _on_test_summary,
              "testResult": _on_test_result, "buildFinished": _on_finished,
              "buildMetrics": _on_metrics}
 
@@ -506,7 +529,7 @@ _HANDLERS = {"targetCompleted": _on_target, "testSummary": _on_test_summary,
 def summarize(lines):
     """Counts of one phase's build event file. Option values are never read into it."""
     state = {"targets": {"succeeded": 0, "failed": 0}, "tests": {}, "executed": set(),
-             "result": dict(_metrics({}), exit=None)}
+             "failed_actions": {"remote": 0, "own": 0}, "result": dict(_metrics({}), exit=None)}
     for event in _decoded(lines):
         handler = _HANDLERS.get(next(iter(event.get("id", {})), None))
         if handler:
@@ -519,12 +542,14 @@ def summarize(lines):
         "total": len(statuses),
         "passed": sum(status in _PASSED for status in statuses),
         "flaky": sum(status in _FLAKY for status in statuses),
-        "failed": sum(status not in _PASSED + _FLAKY for status in statuses),
+        "failed": sum(status not in _PASSED + _FLAKY + _NOT_RUN for status in statuses),
+        "not_run": sum(status in _NOT_RUN for status in statuses),
         "executed": executed,
         "cached": len(statuses) - executed,
     }
     result["failed_tests"] = sorted(label for label, status in tests.items()
-                                    if status not in _PASSED + _FLAKY)
+                                    if status not in _PASSED + _FLAKY + _NOT_RUN)
+    result["failed_actions"] = state["failed_actions"]
     return result
 
 
@@ -756,20 +781,20 @@ def _stage_output(stage_root, key, path, label, output_root, remaining):
 
 
 _HEADER = ("| Phase | Exit status | Bazel result | Wall time (s) | Targets built | "
-           "Targets failed | Tests | Passed | Flaky | Failed | Executed | Cached | Actions run | "
-           "Action cache hits |")
+           "Targets failed | Tests | Passed | Flaky | Failed | Not run | Executed | Cached | "
+           "Actions run | Action cache hits |")
 
 
 def _row(phase, entry):
     if not entry:
-        return "| %s | - | not run |%s" % (phase, " |" * 11)
+        return "| %s | - | not run |%s" % (phase, " |" * 12)
     tests, targets = entry["tests"], entry["targets"]
     wall = entry["wall_time_seconds"]
     return "| %s | %s | %s | %s | %s |" % (
         phase, entry["status"], entry["exit"] or "-", "-" if wall is None else wall,
         " | ".join(str(value) for value in (
             targets["succeeded"], targets["failed"], tests["total"], tests["passed"],
-            tests["flaky"], tests["failed"], tests["executed"], tests["cached"],
+            tests["flaky"], tests["failed"], tests["not_run"], tests["executed"], tests["cached"],
             entry["actions_executed"], entry["action_cache_hits"])))
 
 
@@ -794,9 +819,17 @@ def _details(phase, entry):
     if entry.get("runners"):
         lines.append("- %s spawns by runner: %s" % (phase, ", ".join(
             "%s %d" % (name, count) for name, count in sorted(entry["runners"].items()))))
+    if any((entry.get("failed_actions") or {}).values()):
+        lines.append("- %s: %s" % (phase, failed_actions_line(entry["failed_actions"])))
     if entry.get("failed_tests"):
         lines.append("- %s failed tests: %s" % (phase, " ".join(entry["failed_tests"])))
     return lines
+
+
+def failed_actions_line(failed):
+    """How a phase's failed actions failed, so an executor fault is not read as a build break."""
+    return ("%d actions failed with a remote execution error (executor side), %d with their own "
+            "exit status" % (failed["remote"], failed["own"]))
 
 
 def report(summary):
@@ -807,7 +840,7 @@ def report(summary):
              ""]
     if summary.get("problem"):
         lines += ["**Stopped:** %s" % summary["problem"], ""]
-    lines += [_HEADER, "|" + "---|" * 14]
+    lines += [_HEADER, "|" + "---|" * 15]
     lines += [_row(phase, summary["phases"].get(phase)) for phase in PHASES]
     lines.append("")
     for phase in PHASES:
@@ -1165,6 +1198,9 @@ def _run_one_phase(args, environment, targets, phase, budget):
         print("::warning::macOS remote shadow lane: the %s phase's build event file could "
               "not be summarized (%s)." % (phase, type(error).__name__))
         entry = summarize([])
+    if any(entry["failed_actions"].values()):
+        print("::warning::macOS remote shadow lane: in the %s phase, %s." % (
+            phase, failed_actions_line(entry["failed_actions"])))
     used = _stage_phase(args, lines, phase, budget, status, entry["targets"]["failed"])
     entry["status"] = status
     if entry["wall_time_seconds"] is None:
@@ -1229,9 +1265,8 @@ def _stage_phase(args, lines, phase, budget, status, build_failures=0):
               "downloaded or do not lie below the lane's output root." % (phase, failed))
     if build_failures:
         print("::warning::macOS remote shadow lane: the %s phase failed to build %d targets, so "
-              "their tests did not run. This lane does not publish build output, which can name "
-              "runner paths and the remote executor; the failed actions are listed above by "
-              "label, to reproduce on the gating lanes." % (phase, build_failures))
+              "their tests did not run; the failing actions' output is above in this log." % (
+                  phase, build_failures))
     return staged["bytes"]
 
 

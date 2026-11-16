@@ -594,6 +594,18 @@ class LaneCommandTest(unittest.TestCase):
         self.assertEqual(self.TARGETS, native[-2:])
         self.assertEqual(self.TARGETS, gpu[-2:])
 
+    def test_both_phases_keep_going_past_a_failed_action(self):
+        # An advisory lane: one failed action must not hide everything that does not depend on it.
+        for phase in lane.PHASES:
+            self.assertIn("--keep_going", _bazel_part(self.commands[phase]), phase)
+            # Nothing the config expands to turns it off again.
+            settings = [word for word in self._expanded(phase)
+                        if re.fullmatch(r"--(?:no)?keep_going(?:=.*)?|-k", word)]
+            self.assertEqual("--keep_going", settings[-1], phase)
+        # Only the phases: a failed preflight probe stops the lane at once anyway.
+        for command in [_routing(self.OUT)] + list(_preflights(self.OUT)):
+            self.assertNotIn("--keep_going", command)
+
     def test_phases_run_under_the_empty_selection_wrapper_and_the_watchdog(self):
         for phase in lane.PHASES:
             with self.subTest(phase=phase):
@@ -899,6 +911,12 @@ else:
         result = {"status": "FAILED" if status else "PASSED", "testActionOutput": [
             {"name": name.replace("/", "__"), "uri": "file://" + os.path.join(directory, name)}
             for name in [*files, "test.outputs_manifest/MANIFEST"]]}
+    if os.environ.get("FAKE_REMOTE_ERROR_" + phase.upper()):
+        # An action the executor failed, as Bazel reports it: its exit code is REMOTE_ERROR.
+        status = 34
+        lines.append({"id": {"actionCompleted": {"label": "//fake:lib", "primaryOutput": "x"}},
+                      "action": {"success": False, "exitCode": 34, "type": "CppCompile",
+                                 "failureDetail": {"message": "Remote Execution Failure"}}})
     lines += [{"id": {"targetCompleted": {"label": label}}, "completed": {"success": True}},
               {"id": {"testResult": {"label": label}}, "testResult": result},
               {"id": {"testSummary": {"label": label}},
@@ -1054,8 +1072,9 @@ class LaneRunTest(unittest.TestCase):
         for phase in lane.PHASES:
             entry = summary["phases"][phase]
             self.assertEqual(0, entry["status"])
-            self.assertEqual({"total": 1, "passed": 1, "flaky": 0, "failed": 0, "executed": 1,
-                              "cached": 0}, entry["tests"])
+            self.assertEqual({"total": 1, "passed": 1, "flaky": 0, "failed": 0, "not_run": 0,
+                              "executed": 1, "cached": 0}, entry["tests"])
+            self.assertEqual({"remote": 0, "own": 0}, entry["failed_actions"])
             self.assertEqual({"remote": 7}, entry["runners"])
             self.assertEqual(1.5, entry["wall_time_seconds"])
         self.assertIn("| native | 0 |", outputs["report"])
@@ -1151,6 +1170,19 @@ class LaneRunTest(unittest.TestCase):
             self.assertNotIn("outcome", summary["phases"][phase])
             self.assertEqual(0, summary["phases"][phase]["status"])
         self.assertNotIn("out of time", result.stdout)
+
+    def test_a_remote_execution_error_is_told_apart_from_a_build_break(self):
+        result, out, summary_file, _ = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
+                                                 FAKE_REMOTE_ERROR_NATIVE="1")
+        self.assertEqual(34, result.returncode, result.stdout + result.stderr)
+        self.assertIn("::warning::macOS remote shadow lane: in the native phase, 1 actions failed "
+                      "with a remote execution error (executor side), 0 with their own exit "
+                      "status.", result.stdout)
+        self.assertNotIn("in the gpu phase", result.stdout)
+        summary = json.loads((out / "shadow-summary.json").read_text(encoding="utf-8"))
+        self.assertEqual({"remote": 1, "own": 0}, summary["phases"]["native"]["failed_actions"])
+        self.assertIn("- native: 1 actions failed with a remote execution error (executor side)",
+                      summary_file.read_text(encoding="utf-8"))
 
     def test_failed_phase_is_reported_and_the_other_phase_still_runs(self):
         result, out, summary_file, calls = self._run(
@@ -1612,6 +1644,41 @@ class BuildEventTest(unittest.TestCase):
         self.assertFalse(lane.probe_executed_remotely(junk))
         self.assertFalse(lane.probe_ran_and_failed(junk))
 
+    def test_failed_actions_and_tests_that_never_ran_are_told_apart(self):
+        # Action events in the shapes Bazel 8.8.2 wrote: a remote execution error (exit 34 and a
+        # remoteExecution failure detail), an action that failed by its own exit status, and a
+        # remote error known only by its exit code, as the executor's own failures report it.
+        def action(label, exit_code, detail, success=False):
+            return {"id": {"actionCompleted": {"label": label, "primaryOutput": "x"}},
+                    "action": {"success": success, "exitCode": exit_code, "label": label,
+                               "type": "CppCompile", "failureDetail": detail}}
+
+        events = _events(
+            action("//a:remote", 34, {"message": "refused",
+                                      "remoteExecution": {"code": "CAPABILITIES_QUERY_FAILURE"}}),
+            action("//a:own", 1, {"message": "error", "spawn": {"code": "NON_ZERO_EXIT"}}),
+            action("//a:executor", 34, {"message": "Remote Execution Failure"}),
+            action("//a:evicted", 39, {"message": "lost inputs"}),
+            # A remote execution failure detail without a remote exit code is one too.
+            action("//a:detail", 0,
+                   {"message": "x", "remoteExecution": {"code": "EXECUTION_FAILED"}}),
+            action("//a:ok", 0, None, success=True),
+            {"id": {"actionCompleted": {"label": "//a:odd"}}, "action": "x"},
+            *({"id": {"testSummary": {"label": "//a:t%d" % index}},
+               "testSummary": {"overallStatus": status}}
+              for index, status in enumerate(("FAILED_TO_BUILD", "NO_STATUS", "FAILED", "PASSED"))))
+        summary = lane.summarize(events)
+        self.assertEqual({"remote": 4, "own": 1}, summary["failed_actions"])
+        self.assertEqual({"total": 4, "passed": 1, "flaky": 0, "failed": 1, "not_run": 2,
+                          "executed": 0, "cached": 4}, summary["tests"])
+        self.assertEqual(["//a:t2"], summary["failed_tests"])
+        summary.update(status=1, wall_time_seconds=1.0)
+        report = lane.report({"phases": {"native": summary}})
+        self.assertIn("- native: 4 actions failed with a remote execution error (executor side), "
+                      "1 with their own exit status", report)
+        self.assertIn("| Failed | Not run |", report)
+        self.assertIn("| 1 | 2 |", report)
+
     def test_summary_counts_targets_tests_cache_and_runners(self):
         events = _events(
             {"id": {"targetCompleted": {"label": "//a:lib"}}, "completed": {"success": True}},
@@ -1635,8 +1702,8 @@ class BuildEventTest(unittest.TestCase):
                 "timingMetrics": {"wallTimeInMs": "65432"}}})
         summary = lane.summarize(events)
         self.assertEqual({"succeeded": 1, "failed": 1}, summary["targets"])
-        self.assertEqual({"total": 3, "passed": 1, "flaky": 1, "failed": 1, "executed": 1,
-                          "cached": 2}, summary["tests"])
+        self.assertEqual({"total": 3, "passed": 1, "flaky": 1, "failed": 1, "not_run": 0,
+                          "executed": 1, "cached": 2}, summary["tests"])
         self.assertEqual(["//a:t3"], summary["failed_tests"])
         self.assertEqual("TESTS_FAILED (3)", summary["exit"])
         self.assertEqual((12, 30, 4), (summary["actions_executed"], summary["action_cache_hits"],
@@ -1912,7 +1979,8 @@ class StagingTest(unittest.TestCase):
             lane._stage_phase(args, _events(*never_ran), "native",
                               lane.MAX_ARTIFACT_TOTAL_BYTES, 1, build_failures=60)
         self.assertNotIn("staged no output files", printed.getvalue())
-        self.assertIn("the native phase failed to build 60 targets, so their tests did not run",
+        self.assertIn("the native phase failed to build 60 targets, so their tests did not run; "
+                      "the failing actions' output is above in this log",
                       printed.getvalue())
 
     def test_the_run_cap_carries_across_phases(self):

@@ -596,7 +596,10 @@ analysis caches between runs; the lane shuts its server down when it ends. It pa
 `--config=ci-test-lane`, the test-lane config that `ci` composes, for the editor's fixed
 placeholder commit, so the editor's build-information action runs remotely. It never passes
 `--config=ci`, which on a self-hosted Linux runner carries the Linux lane's executor; it passes the
-parts of `ci` it needs itself. Every command also passes
+parts of `ci` it needs itself. Both phases pass `--keep_going`, unlike the gating lanes: the lane
+is advisory, so one failed action, an executor-side error included, must not hide the result of
+everything that does not depend on it. A broken build can then run longer, within the lane's
+budget. Every command also passes
 `--incompatible_repo_env_ignores_action_env`: repository rules and module extensions run on the
 Linux runner, and without it Bazel 8 also hands them each `--action_env` value of the config (the
 macOS `PATH` of `ci-macos`, and any variable a runner's rc empties for the executor), so a fetch
@@ -635,12 +638,17 @@ not read it:
   job: that check entry is red or cancelled, and the workflow run still succeeds, because both
   jobs continue on error.
 
-Each run writes a table to the job summary (targets built, tests run, passed, flaky, failed,
-executed and cached, actions, cache hits, spawns by runner, wall time) and uploads it, with
-`shadow-summary.json` and the Bazel profiles, as the `macos-remote-shadow-<attempt>` artifact. The
-profiles are uploaded as Bazel wrote them: they record absolute paths on the runner, the URL of
-each repository download and local command lines, and their remote events can name the executor's
-host. The build event and execution logs and any stall note stay on the runner.
+Each run writes a table to the job summary (targets built and failed, tests run, passed, flaky,
+failed, not run, executed and cached, actions, cache hits, spawns by runner, wall time). Tests that
+were not built or never started count as not run, apart from tests that ran and failed. Failed
+actions are split by their build events into remote execution errors (Bazel's remote exit codes or
+a remote execution failure detail: an executor-side fault, not a macOS build break) and actions
+that failed with their own exit status; a phase with either says so in a warning and in the job
+summary. The table is uploaded, with `shadow-summary.json` and the Bazel profiles, as the
+`macos-remote-shadow-<attempt>` artifact. The profiles are uploaded as Bazel wrote them: they
+record absolute paths on the runner, the URL of each repository download and local command lines,
+and their remote events can name the executor's host. The build event and execution logs and any
+stall note stay on the runner.
 
 **What the job log shows.** The job log shows the build's normal output, as in the other lanes:
 progress, warnings, errors with the compiler or tool output that explains them, the messages a
