@@ -9,12 +9,17 @@
 #include <string_view>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Transform.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/ScopedCommaDecimalNumericLocale.h"
 #include "donner/svg/parser/TransformParser.h"
 
 namespace donner::editor {
 namespace {
 
+using ::testing::_;
+using ::testing::Eq;
 using ::testing::Optional;
 
 constexpr double kDeg = MathConstants<double>::kDegToRad;
@@ -40,6 +45,34 @@ std::string Reserialize(std::string_view author, const Transform2d& target) {
   auto result = reserializeTransformPreservingSyntax(author, target);
   EXPECT_TRUE(result.has_value()) << "expected preservation for author '" << author << "'";
   return result.has_value() ? std::string(std::string_view(*result)) : std::string();
+}
+
+// Numbers are read with the locale-independent parser, so a comma-decimal process locale does not
+// truncate `1.5` to `1`.
+TEST(TransformSyntaxPreserving, ReadsDecimalNumbersInACommaDecimalLocale) {
+  const ScopedCommaDecimalNumericLocale locale;
+  if (!locale.applied()) {
+    GTEST_SKIP() << "No comma-decimal locale is installed";
+  }
+  const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
+  EXPECT_THAT(reserializeTransformPreservingSyntax("translate(1.5, 2.5)", target),
+              Optional(Eq(RcString("translate(15, 27)"))));
+}
+
+// Whitespace around arguments is skipped before each number is read, so it never reaches the
+// number parser.
+TEST(TransformSyntaxPreserving, ReadsNumbersSurroundedByWhitespace) {
+  const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
+  EXPECT_THAT(reserializeTransformPreservingSyntax("translate( \t1.5 ,\n2.5 )", target),
+              Optional(Eq(RcString("translate(15, 27)"))));
+}
+
+// `5.` is not a number token, and the document's transform parser rejects it as well, so
+// preservation declines and the caller writes canonical syntax.
+TEST(TransformSyntaxPreserving, DeclinesANumberWithATrailingDecimalPoint) {
+  EXPECT_THAT(svg::parser::TransformParser::Parse("translate(5., 3)"), ParseErrorIs(_));
+  const Transform2d target = Transform2d::Translate(Vector2d(15.0, 27.0));
+  EXPECT_THAT(reserializeTransformPreservingSyntax("translate(5., 3)", target), Eq(std::nullopt));
 }
 
 // --- rotate-only ----------------------------------------------------------
