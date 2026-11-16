@@ -19,6 +19,7 @@
 #include "donner/svg/SVGStopElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -1155,6 +1156,33 @@ TEST(ExternalUseWarningReplayTest, HeldWarningsKeepTheSinkLimit) {
   EXPECT_TRUE(later.resourceLimitExceeded());
 }
 
+// A sheet whose warning is held keeps the retained update path while frames that collect nothing
+// move one of its elements: dropping the held warning does not force a full rebuild.
+TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdates) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
+  ASSERT_THAT(host, testing::Optional(testing::_));
+  Renderer renderer;
+  renderer.draw(host->document);
+  renderer.draw(host->document);
+  SVGDocument sheet = SpriteSheetOf(*host);
+  const auto counters = [&] {
+    return sheet.registry().ctx().get<components::RenderTreeState>().counters;
+  };
+  const auto before = counters();
+  constexpr int kFrames = 6;
+  for (int frame = 0; frame < kFrames; ++frame) {
+    MutateSheet(sheet, SheetMutation::OtherTransform, frame);
+    renderer.draw(host->document);
+  }
+  using Counters = components::RenderTreeState::Counters;
+  EXPECT_THAT(
+      counters(),
+      testing::AllOf(testing::Field("fullRebuilds", &Counters::fullRebuilds, before.fullRebuilds),
+                     testing::Field("retainedUpdates", &Counters::retainedUpdates,
+                                    before.retainedUpdates + kFrames)));
+}
+
 /// A sheet whose `#a` holds `#other` and one more unresolved use than a sink keeps warnings for.
 std::string SheetPastTheSinkLimit() {
   std::string sheet = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg"
@@ -1195,8 +1223,9 @@ TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
   EXPECT_EQ(restyles.restyles(), 0u);
   // Every warning a preparation can find again was already delivered.
   EXPECT_THAT(later.warnings(), testing::IsEmpty());
-  // Preparing the moved sheet again finds the truncation again, which the sink receives.
-  EXPECT_TRUE(later.resourceLimitExceeded());
+  // The moved sheet takes the retained update path, which prepares nothing, so the sink receives
+  // no truncation either.
+  EXPECT_FALSE(later.resourceLimitExceeded());
 }
 
 // A sheet that has delivered its warnings and the truncation, then finds a new warning without a
