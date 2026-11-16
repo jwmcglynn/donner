@@ -2012,10 +2012,10 @@ TEST(SubDocumentWarningsTest, BatchesDifferingOnlyInLineInfoAreBothHeld) {
   SVGDocument subDocument;
   const ParseWarningSink first = WarningOnLine(1);
   const ParseWarningSink second = WarningOnLine(2);
-  HoldSubDocumentWarnings(subDocument.registry(), first);
-  HoldSubDocumentWarnings(subDocument.registry(), second);
+  details::HoldSubDocumentWarnings(subDocument.registry(), first);
+  details::HoldSubDocumentWarnings(subDocument.registry(), second);
   ParseWarningSink host;
-  DeliverHeldSubDocumentWarnings(subDocument.registry(), host);
+  details::DeliverHeldSubDocumentWarnings(subDocument.registry(), host);
   EXPECT_THAT(host.warnings(),
               testing::ElementsAre(first.warnings().front(), second.warnings().front()));
 }

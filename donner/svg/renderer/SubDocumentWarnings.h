@@ -1,10 +1,32 @@
 #pragma once
 /// @file
+/// Renderer-internal delivery of the warnings an external sub-document's preparation finds.
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 
-namespace donner::svg {
+namespace donner::svg::details {
+
+/**
+ * Drop held warnings found before the sub-document was last mutated, and mark it so the next
+ * collecting draw restyles it to find its current warnings. A draw that does not collect never
+ * restyles for this. A document-level warning reported once per document is let through again,
+ * since the copy that reported it is dropped.
+ *
+ * @param registry The sub-document's registry.
+ */
+void DropStaleSubDocumentWarnings(Registry& registry);
+
+/**
+ * Deliver @p warnings from preparing a sub-document to @p hostSink, skipping warnings already
+ * delivered for that sub-document and marking @p hostSink truncated when any were dropped.
+ *
+ * @param registry The sub-document's registry, which records the delivered warnings.
+ * @param warnings Warnings collected while preparing the sub-document.
+ * @param hostSink The host's collecting sink.
+ */
+void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings,
+                               ParseWarningSink& hostSink);
 
 /**
  * Hold @p warnings found while preparing a sub-document without a collecting host sink, for the
@@ -28,4 +50,4 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
  */
 void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSink);
 
-}  // namespace donner::svg
+}  // namespace donner::svg::details

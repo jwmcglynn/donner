@@ -4653,186 +4653,12 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
   return *fontCollectionCache_;
 }
 
-namespace {
-
-/**
- * Preparation warnings a sub-document has already delivered to a host sink. A child document is
- * prepared again for each external-use occurrence and each frame, and those preparations can repeat
- * the same warnings. Each warning, matched by its text and location, is delivered once per loaded
- * sub-document instead, so identical warnings without a location are merged.
- */
-struct ReportedSubDocumentWarnings {
-  std::unordered_set<std::string> keys;
-  /// Whether the host sink was marked truncated for this sub-document's warnings.
-  bool truncationReported = false;
-
-  /// Whether delivering @p key would only drop it, after the truncation it causes was reported.
-  bool dropsAfterTruncation(const std::string& key) const {
-    return truncationReported && keys.size() >= ParseWarningSink::kMaximumWarnings &&
-           !keys.contains(key);
-  }
-};
-
-/**
- * Warnings a sub-document found while no collecting host sink was installed, held for the next
- * draw with one. A retained render tree is not prepared again, so it does not find them again.
- * Held warnings are matched like \ref ReportedSubDocumentWarnings and bounded by the sink's limits.
- * Present only while it holds a warning or a truncation mark.
- */
-struct PendingSubDocumentWarnings {
-  ParseWarningSink warnings;
-  std::unordered_set<std::string> keys;
-  /// The sub-document's mutation revision when the warnings were found.
-  std::uint64_t documentRevision = 0;
-};
-
-/// Marks a sub-document whose held warnings a mutation dropped, so the next draw with a collecting
-/// host sink restyles it to find its current warnings.
-struct RediscoverSubDocumentWarnings {};
-
-/// The last warnings a preparation without a collecting host sink found, once each of them was
-/// delivered or held, so finding exactly the same warnings again needs no matching or formatting.
-struct HeldSubDocumentWarningBatch {
-  std::vector<ParseDiagnostic> warnings;  //!< The batch's warnings, in order.
-  bool truncated = false;                 //!< Whether the batch was truncated.
-
-  /// Whether @p batch holds exactly these warnings and truncation.
-  bool matches(const ParseWarningSink& batch) const {
-    return truncated == batch.resourceLimitExceeded() && warnings == batch.warnings();
-  }
-};
-
-std::string SubDocumentWarningKey(const ParseDiagnostic& warning) {
-  std::ostringstream key;
-  key << warning;
-  return std::move(key).str();
-}
-
-std::uint64_t SubDocumentRevision(const Registry& registry) {
-  return registry.ctx().get<components::SVGDocumentContext>().mutationRevision();
-}
-
-/**
- * Drop held warnings found before the sub-document was last mutated, and mark it so the next
- * collecting draw restyles it to find its current warnings. A draw that does not collect never
- * restyles for this. A document-level warning reported once per document is let through again,
- * since the copy that reported it is dropped.
- *
- * @param registry The sub-document's registry.
- */
-void DropStaleSubDocumentWarnings(Registry& registry) {
-  const auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  if (pending == nullptr || pending->documentRevision == SubDocumentRevision(registry)) {
-    return;
-  }
-  registry.ctx().erase<PendingSubDocumentWarnings>();
-  registry.ctx().erase<HeldSubDocumentWarningBatch>();
-  registry.ctx().insert_or_assign(RediscoverSubDocumentWarnings{});
-  components::ForgetMissingFallbackFontReport(registry);
-}
-
-/// The held set @p pending points to, created for the current revision if there is none yet.
-PendingSubDocumentWarnings& EnsureHeldWarnings(Registry& registry,
-                                               PendingSubDocumentWarnings*& pending) {
-  if (pending == nullptr) {
-    PendingSubDocumentWarnings fresh;
-    fresh.documentRevision = SubDocumentRevision(registry);
-    pending = &registry.ctx().insert_or_assign(std::move(fresh));
-  }
-  return *pending;
-}
-
-/// Hold @p warning unless it was already delivered or held, or delivering it would only drop it,
-/// creating the held set on first use.
-void HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
-                            PendingSubDocumentWarnings*& pending, const ParseDiagnostic& warning) {
-  std::string key = SubDocumentWarningKey(warning);
-  if ((reported != nullptr &&
-       (reported->keys.contains(key) || reported->dropsAfterTruncation(key))) ||
-      (pending != nullptr && pending->keys.contains(key))) {
-    return;
-  }
-  PendingSubDocumentWarnings& held = EnsureHeldWarnings(registry, pending);
-  const std::size_t count = held.warnings.warnings().size();
-  held.warnings.add(ParseDiagnostic(warning));
-  if (held.warnings.warnings().size() > count) {
-    held.keys.insert(std::move(key));
-  }
-}
-
-/**
- * Deliver @p warnings from preparing a sub-document to @p hostSink, skipping warnings already
- * delivered for that sub-document and marking @p hostSink truncated when any were dropped.
- *
- * @param registry The sub-document's registry, which records the delivered warnings.
- * @param warnings Warnings collected while preparing the sub-document.
- * @param hostSink The host's collecting sink.
- */
-void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings,
-                               ParseWarningSink& hostSink) {
-  auto& reported = registry.ctx().emplace<ReportedSubDocumentWarnings>();
-  bool truncated = warnings.resourceLimitExceeded();
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    std::string key = SubDocumentWarningKey(warning);
-    if (reported.keys.contains(key)) {
-      continue;
-    }
-    if (reported.keys.size() >= ParseWarningSink::kMaximumWarnings) {
-      truncated = true;
-      continue;
-    }
-    reported.keys.insert(std::move(key));
-    hostSink.add(ParseDiagnostic(warning));
-  }
-  if (truncated) {
-    hostSink.markResourceLimitExceeded();
-    reported.truncationReported = true;
-  }
-}
-
-}  // namespace
-
-void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warnings) {
-  if (!warnings.hasWarnings() && !warnings.resourceLimitExceeded()) {
-    return;
-  }
-  DropStaleSubDocumentWarnings(registry);
-  const auto* last = registry.ctx().find<HeldSubDocumentWarningBatch>();
-  if (last != nullptr && last->matches(warnings)) {
-    return;
-  }
-  const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
-  auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
-      break;
-    }
-    HoldSubDocumentWarning(registry, reported, pending, warning);
-  }
-  if (warnings.resourceLimitExceeded() && (reported == nullptr || !reported->truncationReported)) {
-    EnsureHeldWarnings(registry, pending).warnings.markResourceLimitExceeded();
-  }
-  registry.ctx().insert_or_assign(HeldSubDocumentWarningBatch{
-      .warnings = warnings.warnings(), .truncated = warnings.resourceLimitExceeded()});
-}
-
-void DeliverHeldSubDocumentWarnings(Registry& registry, ParseWarningSink& hostSink) {
-  if (registry.ctx().erase<RediscoverSubDocumentWarnings>()) {
-    components::ExternalUseStyleRetention::ScheduleFullRestyle(registry);
-  }
-  if (auto* pending = registry.ctx().find<PendingSubDocumentWarnings>()) {
-    const PendingSubDocumentWarnings held = std::move(*pending);
-    registry.ctx().erase<PendingSubDocumentWarnings>();
-    ReportSubDocumentWarnings(registry, held.warnings, hostSink);
-  }
-}
-
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
   textFrameCache_->roots.erase(&registry);
   textFrameCache_->shadowStyles.erase(&registry);
-  DropStaleSubDocumentWarnings(registry);
+  details::DropStaleSubDocumentWarnings(registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
@@ -4845,13 +4671,13 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   // repeat them for every traversal.
   const bool collecting = warningSink_ != nullptr && warningSink_->isEnabled();
   if (collecting) {
-    DeliverHeldSubDocumentWarnings(registry, *warningSink_);
+    details::DeliverHeldSubDocumentWarnings(registry, *warningSink_);
   }
   const auto deliver = [&](const ParseWarningSink& warnings) {
     if (collecting) {
-      ReportSubDocumentWarnings(registry, warnings, *warningSink_);
+      details::ReportSubDocumentWarnings(registry, warnings, *warningSink_);
     } else {
-      HoldSubDocumentWarnings(registry, warnings);
+      details::HoldSubDocumentWarnings(registry, warnings);
     }
   };
   ParseWarningSink warnings;
