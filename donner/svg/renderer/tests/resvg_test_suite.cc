@@ -734,8 +734,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"self-recursive.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
+                    // The reference resamples a rasterized pattern tile, so only the tile's thin
+                    // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
-                     Params::WithThreshold(0.5f, 1150, "AA artifacts + quad glyph outlines")},
+                     Params::WithThreshold(0.5f, 1150,
+                                           "Reference resamples a rasterized pattern tile")},
                     {"transform-and-patternTransform.svg",
                      Params{}.withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/geode/"
@@ -991,8 +994,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                            "Reference uses text ink extents for stroke paint")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
-                    {"pattern-on-text.svg",
-                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
                      Params::Skip("Reference disagreement: appears to use ink extents; "
                                   "SVG2 text paint uses glyph-cell bounds")},
