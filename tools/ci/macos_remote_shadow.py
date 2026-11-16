@@ -7,9 +7,6 @@ cache reuse and failures can be compared with the self-hosted macOS lane before 
 on it. It never gates a pull request: the workflow job ignores its result, and this script reports
 what happened in the job summary and in a derived summary file instead.
 
-The job log is public, so the lane prints only its own messages and allow-listed Bazel lines, cut
-down and scrubbed; each command's whole console stays on the runner (see "What the lane prints").
-
 It runs, in order:
 
   preflight  `bazel build --nobuild` with and without the config, then an uncached run of a
@@ -57,8 +54,6 @@ runs nothing.
 """
 
 import argparse
-import builtins
-import ipaddress
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -70,200 +65,10 @@ import stat
 import subprocess
 import sys
 import time
-import traceback
 from urllib.parse import unquote, urlparse
 
 # Not resolved: under Bazel the script runs from its runfiles tree, beside its data files.
 ROOT = Path(os.path.abspath(__file__)).parents[2]
-
-# --- What the lane prints. -----------------------------------------------------------------------
-#
-# The job log is public, and Bazel's own messages can name the remote executor's endpoint: a
-# connection error quotes its host name, address and port. So the lane never copies Bazel's output
-# to the job log. Each command's whole console stays in files on the runner, in the lane's output
-# directory, which is never uploaded. The job log gets only lines of an allow-listed shape, cut
-# down to their counters, labels and statuses (public_line), and then scrubbed (scrub). Everything
-# the lane itself writes for the public, its own messages and annotations, report.md, the summary
-# JSON and the step summary, is scrubbed too: the module's print is replaced by one that scrubs.
-# Compiler and action output is never published by this lane; a failed action is named by its
-# label, to reproduce on the gating lanes.
-
-_REDACTED = "[redacted]"
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
-_IPV4 = r"(?:\d{1,3}\.){3}\d{1,3}"
-# A host name or address quoted with its address, as Java prints a socket address (`host/ip:port`).
-_IPV6_SHAPE = r"\[?[0-9A-Fa-f]*:[0-9A-Fa-f]*:[0-9A-Fa-f:.]*\]?"
-_HOST_AND_ADDRESS = re.compile(r"[\w.-]*/(?:%s|%s)(?::\d+)?" % (_IPV4, _IPV6_SHAPE))
-_IPV4_PORT = re.compile(r"(?<![\d.])%s(?::\d+)?(?!\d)" % _IPV4)
-# Candidates for an IPv6 literal, checked with ipaddress so that times such as 12:34:56 stay.
-_IPV6_CANDIDATE = re.compile(
-    r"(?<![0-9A-Fa-f:.])\[?[0-9A-Fa-f:]*:[0-9A-Fa-f:]*:[0-9A-Fa-f:.%\w]*\]?(?::\d+)?")
-# host:port, but not a label (`//pkg:name`) or a time. A file name with a line number reads as a
-# host and port too, and is redacted with them.
-_HOST_PORT = re.compile(r"(?<![\w.:@-])[A-Za-z][\w.-]*:\d{1,5}(?![\w.:])")
-# An absolute path; a doubled slash before a system directory is one too, not a label.
-_ABSOLUTE_PATH = re.compile(
-    r"(?<![\w.:/@~-])(?:/(?!/)|//(?=(?:home|var|tmp|private|Users|opt|usr|etc|nix|mnt|Volumes|"
-    r"root|run|srv)/))[^\s'\"(),;:\]\[]+")
-
-
-def _ipv6(match):
-    text = match.group(0)
-    address = re.sub(r":\d+$", "", text) if text.startswith("[") else text
-    try:
-        ipaddress.IPv6Address(address.strip("[]").split("%", 1)[0])
-    except ValueError:
-        return text
-    return _REDACTED
-
-
-def _path(match, workspace):
-    path = "/" + match.group(0).lstrip("/")
-    if path == workspace:
-        return "."
-    if path.startswith(workspace + "/"):
-        return path[len(workspace) + 1:]
-    if "/bazel-out/" in path:
-        return "bazel-out/" + path.split("/bazel-out/", 1)[1]
-    return _REDACTED
-
-
-def scrub(text, workspace=None):
-    """`text` without URLs, host:port pairs, IPv4 or IPv6 literals, or absolute paths outside the
-    workspace and bazel-out; a workspace path becomes relative."""
-    workspace = str(workspace or ROOT).rstrip("/")
-    text = _ANSI.sub("", str(text))
-    text = _URL.sub(_REDACTED, text)
-    text = _HOST_AND_ADDRESS.sub(_REDACTED, text)
-    text = _IPV4_PORT.sub(_REDACTED, text)
-    text = _IPV6_CANDIDATE.sub(_ipv6, text)
-    text = _HOST_PORT.sub(_REDACTED, text)
-    return _ABSOLUTE_PATH.sub(lambda match: _path(match, workspace), text)
-
-
-def scrub_data(value, workspace=None):
-    """Every string in a JSON-like value, scrubbed."""
-    if isinstance(value, str):
-        return scrub(value, workspace)
-    if isinstance(value, list):
-        return [scrub_data(item, workspace) for item in value]
-    if isinstance(value, dict):
-        return {scrub(key, workspace): scrub_data(item, workspace) for key, item in value.items()}
-    return value
-
-
-def print(*values, **options):  # noqa: A001 -- every line the lane prints is scrubbed.
-    builtins.print(*(scrub(value) for value in values), **options)
-
-
-_LABEL = r"@{0,2}[\w.+~-]*//[\w/.+~@=,-]*(?::[\w/.+~@=,!-]+)?"
-_TARGET = re.compile(r"%s|[\w.+~@-][\w/.+~@=-]*" % _LABEL)
-_PROGRESS_LINE = re.compile(
-    r"^(?:\(\d\d:\d\d:\d\d(?:\.\d+)?\) )?(?P<counter>\[[\d,]+ / [\d,]+\])"
-    r"(?: (?P<tests>[\d,]+ / [\d,]+ tests?);)?"
-    r"(?: (?P<verb>[A-Z][a-z]+(?: [a-z_]+)?) (?P<target>\S+?)(?: \[[^\]]*\])?(?:,[^;]*)?;)?"
-    r"(?: (?P<elapsed>\d+s)\b)?")
-_RESULT_LINE = re.compile(
-    r"^(?P<label>%s)\s+(?P<cached>\(cached\) )?(?P<status>PASSED|FAILED TO BUILD|FAILED|"
-    r"TIMEOUT|FLAKY|NO STATUS|SKIPPED|INCOMPLETE|REMOTE FAILURE)(?: in (?P<time>[\d.]+s))?"
-    % _LABEL)
-_ERROR_LINE = re.compile(
-    r"^ERROR: (?P<path>\S+?):(?P<line>\d+):\d+: (?P<what>[A-Z][A-Za-z_]*(?: [a-z_]+)?) "
-    r"(?P<label>%s)(?: \[for [a-z]+\])? failed(?P<rest>.*)$" % _LABEL)
-_EXIT = re.compile(r"\(Exit (\d+)\)")
-# Lines kept whole: the build's end, the watchdog's heartbeat, the empty-selection wrapper.
-_WHOLE_LINES = re.compile(
-    r"^(?:INFO: Build completed(?: successfully|, \d+ tests? FAILED)?, [\d,]+ total actions?"
-    r"|INFO: Elapsed time: [\d.]+s, Critical Path: [\d.]+s"
-    r"|INFO: Found [\d,]+ (?:test )?targets?(?: and [\d,]+ test targets?)?\.\.\."
-    r"|INFO: Analyzed [\d,]+ targets? \([\d,]+ packages? loaded, [\d,]+ targets? configured\)\."
-    r"|(?:ERROR|FAILED): Build did NOT complete successfully"
-    r"|Executed \d+ out of \d+ tests?: [\w ,.]+"
-    r"|::notice::Bazel command still running for \d+s(?: \(no new progress for \d+s\))?"
-    r"|Bazel made no observable progress for \d+s \(limit \d+s\)\.)$")
-_STALL = re.compile(r"^::error::Bazel stalled for (\d+)s on: ")
-
-
-def _progress_line(match):
-    parts = [match.group("counter")]
-    if match.group("tests"):
-        parts[0] += " %s;" % match.group("tests")
-    target = match.group("target")
-    # A label, or a workspace-relative path; never an absolute path.
-    if target and _TARGET.fullmatch(target) and (target.startswith("//") or
-                                                 not target.startswith("/")):
-        parts.append("%s %s;" % (match.group("verb"), target))
-    if match.group("elapsed"):
-        parts.append(match.group("elapsed"))
-    return " ".join(parts)
-
-
-def _result_line(match):
-    return "%s %s%s%s" % (match.group("label"), match.group("cached") or "",
-                          match.group("status"),
-                          " in " + match.group("time") if match.group("time") else "")
-
-
-def _error_line(match):
-    code = _EXIT.search(match.group("rest"))
-    return "ERROR: %s (line %s): %s %s failed%s" % (
-        match.group("path"), match.group("line"), match.group("what"), match.group("label"),
-        " (exit %s)" % code.group(1) if code else "")
-
-
-def public_line(line, workspace=None):
-    """A Bazel console line cut down to what the public job log may show, scrubbed, or None to
-    withhold it. An allow-list: a line of no known shape is withheld."""
-    line = _ANSI.sub("", line).rstrip("\r\n")
-    for pattern, render in ((_PROGRESS_LINE, _progress_line), (_RESULT_LINE, _result_line),
-                            (_ERROR_LINE, _error_line)):
-        match = pattern.match(line)
-        if match:
-            return scrub(render(match), workspace)
-    if _WHOLE_LINES.fullmatch(line):
-        return scrub(line, workspace)
-    stall = _STALL.match(line)
-    if stall:
-        return "::error::Bazel stalled for %ss" % stall.group(1)
-    return None
-
-
-class _Relay:
-    """Prints the public lines of a growing console file, keeping count of the rest."""
-
-    def __init__(self, path):
-        self.path = Path(path)
-        self.offset = 0
-        self.withheld = 0
-        self.partial = b""
-
-    def drain(self, final=False):
-        try:
-            with open(self.path, "rb") as handle:
-                handle.seek(self.offset)
-                data = handle.read()
-        except OSError:
-            data = b""
-        self.offset += len(data)
-        data = self.partial + data
-        lines = data.split(b"\n")
-        self.partial = b"" if final else lines.pop()
-        for raw in lines:
-            if not raw and final:
-                continue
-            shown = public_line(raw.decode("utf-8", "replace"))
-            if shown is None:
-                self.withheld += 1
-            else:
-                builtins.print(shown, flush=True)
-
-    def close(self):
-        self.drain(final=True)
-        if self.withheld:
-            builtins.print("macOS remote shadow lane: %d lines of this command's console are not "
-                           "shown here; the whole console stays in the lane's output directory "
-                           "on the runner." % self.withheld, flush=True)
 
 CONFIG = "remote-macos"
 GPU_CONFIG = "remote-macos-gpu"
@@ -294,10 +99,6 @@ EXCLUDED_TAGS = (
     "no-remote-exec",
 )
 
-# Messages a remote backend attaches to failed actions can name it. The job log never shows them
-# anyway (see "What the lane prints"); this keeps them out of the console kept on the runner too.
-# Every lane command passes it.
-QUIET_REMOTE_MESSAGES = "--remote_print_execution_messages=success"
 SHUTDOWN_SECONDS = 120
 MAX_IDLE = "--max_idle_secs=600"
 
@@ -344,7 +145,6 @@ LANE_FLAGS = (CLIENT_REPO_ENV,) + CI_FLAGS + (
     r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$",
     TEST_LANE_CONFIG,
     "--test_output=errors",
-    QUIET_REMOTE_MESSAGES,
     # Test results of this lane are its own; build actions are shared.
     LANE_TEST_ENV,
 )
@@ -436,7 +236,7 @@ def preflight_commands(bazel, startup, rc_options, out):
         events = Path(out) / "preflight" / ("%s.json" % probe)
         config = ["--config=" + CONFIG, *rc_options] if probe == "lane" else []
         commands[probe] = ([bazel, *startup, "build", *config, CLIENT_REPO_ENV, *CI_FLAGS,
-                            QUIET_REMOTE_MESSAGES, "--nobuild",
+                            "--nobuild",
                             "--build_event_json_file=%s" % events], events)
     return commands
 
@@ -466,7 +266,7 @@ def routing_command(bazel, startup, rc_options, out):
              CLIENT_REPO_ENV, *CI_FLAGS,
              # The native phase's analysis options, so that phase reuses this analysis.
              TEST_LANE_CONFIG, LANE_TEST_ENV,
-             QUIET_REMOTE_MESSAGES, "--nocache_test_results", "--test_tag_filters=",
+             "--nocache_test_results", "--test_tag_filters=",
              "--test_output=errors", "--build_event_json_file=%s" % events, ROUTING_PROBE],
             events, console)
 
@@ -1176,24 +976,19 @@ def run_phase(command, environment, console, limit=STARVED_SECONDS, poll=POLL_SE
     own, so a stop reaches the wrappers and the Bazel client together; the lane shuts the
     server down at its end."""
     print("+ " + shlex.join(command), flush=True)
-    relay = _Relay(Path(str(console) + ".all"))
-    with open(relay.path, "wb") as output:
-        process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=output,
-                                   stderr=subprocess.STDOUT, start_new_session=True)
-    try:
-        return _wait_phase(process, console, relay, limit, poll, clock, grace, deadline)
-    finally:
-        relay.close()
+    process = subprocess.Popen(command, cwd=ROOT, env=environment, start_new_session=True)
+    return _wait_phase(process, console, limit, poll, clock, grace, deadline)
 
 
-def _wait_phase(process, console, relay, limit, poll, clock, grace, deadline):
+def _wait_phase(process, console, limit, poll, clock, grace, deadline):
+    """Waits for a running phase command, polling the starvation guard and the deadline."""
     guard = StarvationGuard(clock(), limit)
     while True:
         wait = poll if deadline is None else max(0.0, min(poll, deadline - clock()))
         try:
             return process.wait(timeout=wait), None
         except subprocess.TimeoutExpired:
-            relay.drain()
+            pass
         stop = _stop_reason(guard, console, clock, deadline)
         if stop is not None:
             print("::warning::macOS remote shadow lane: %s; stopping the command (%s)." % (
@@ -1214,9 +1009,9 @@ def _stop_reason(guard, console, clock, deadline):
 
 
 def _run_captured(command, environment, console, deadline=None, grace=STOP_GRACE):
-    """(exit status, console output, stopped) of a command. Its console stays in `console` on the
-    runner; only its public lines are printed. Past `deadline` (time.monotonic) it is stopped like
-    a phase: OUT_OF_TIME_STATUS, and stopped is True."""
+    """(exit status, console output, stopped) of a command; the output is also printed, as it
+    would be. Past `deadline` (time.monotonic) it is stopped like a phase: OUT_OF_TIME_STATUS,
+    and stopped is True."""
     print("+ " + shlex.join(command), flush=True)
     with open(console, "w", encoding="utf-8") as handle:
         process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=handle,
@@ -1232,8 +1027,8 @@ def _run_captured(command, environment, console, deadline=None, grace=STOP_GRACE
         stopped = status == OUT_OF_TIME_STATUS and deadline is not None and \
             time.monotonic() >= deadline
     output = Path(console).read_text(encoding="utf-8", errors="replace")
-    relay = _Relay(console)
-    relay.close()
+    Path(console).unlink(missing_ok=True)
+    print(output, end="", flush=True)
     return status, output, stopped
 
 
@@ -1246,10 +1041,9 @@ def _read_lines(path):
 
 def _finish(out, summary, environment):
     Path(out).mkdir(parents=True, exist_ok=True)
-    summary = scrub_data(summary)
     (Path(out) / "shadow-summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    text = scrub(report(summary))
+    text = report(summary)
     (Path(out) / "report.md").write_text(text, encoding="utf-8")
     print(text)
     step_summary = environment.get("GITHUB_STEP_SUMMARY")
@@ -1276,14 +1070,9 @@ def run(args, environment):
 
 def _shutdown(args, environment):
     """Leaves no Bazel server behind on the runner, even after a starvation stop."""
-    console = Path(args.out) / "shutdown.log"
     try:
-        console.parent.mkdir(parents=True, exist_ok=True)
-        with open(console, "ab") as output:
-            subprocess.run(shutdown_command(args.bazel, args.startup_option), cwd=ROOT,
-                           env=environment, check=False, timeout=SHUTDOWN_SECONDS,
-                           stdout=output, stderr=subprocess.STDOUT)
-        _Relay(console).close()
+        subprocess.run(shutdown_command(args.bazel, args.startup_option), cwd=ROOT,
+                       env=environment, check=False, timeout=SHUTDOWN_SECONDS)
     except (subprocess.TimeoutExpired, OSError) as error:
         print("::warning::macOS remote shadow lane: the Bazel server was not shut down (%s)."
               % type(error).__name__)
@@ -1416,16 +1205,8 @@ def _stage_phase(args, lines, phase, budget, status, build_failures=0):
     return staged["bytes"]
 
 
-class _Parser(argparse.ArgumentParser):
-    """Usage and argument errors go through the lane's scrubbed print."""
-
-    def _print_message(self, message, file=None):
-        if message:
-            print(message, end="", file=file)
-
-
 def parse_args(argv, environ):
-    parser = _Parser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--out", default="",
                         help="the output directory; default $RUNNER_TEMP/" + OUT_NAME)
@@ -1466,30 +1247,19 @@ def main(argv=None, environ=None):
     if args.dry_run:
         targets = selection(args.fallback, args.affected, args.targets) or \
             ["<empty selection>"]
-        builtins.print("%s=%s" % (IDENTITY, identity))
+        print("%s=%s" % (IDENTITY, identity))
         for command, _ in preflight_commands(args.bazel, args.startup_option, args.rc_option,
                                              args.out).values():
-            builtins.print(shlex.join(command))
-        builtins.print(shlex.join(routing_command(args.bazel, args.startup_option, args.rc_option,
+            print(shlex.join(command))
+        print(shlex.join(routing_command(args.bazel, args.startup_option, args.rc_option,
                                          args.out)[0]))
         for phase in PHASES:
-            builtins.print(shlex.join(phase_command(phase, args.bazel, args.startup_option,
+            print(shlex.join(phase_command(phase, args.bazel, args.startup_option,
                                            args.rc_option, args.out, targets)))
-        builtins.print(shlex.join(shutdown_command(args.bazel, args.startup_option)))
+        print(shlex.join(shutdown_command(args.bazel, args.startup_option)))
         return 0
     return run(args, environ)
 
 
-def _main_scrubbed():
-    """main, with an uncaught error printed scrubbed rather than as a raw traceback."""
-    try:
-        return main()
-    except SystemExit:
-        raise
-    except BaseException:  # A traceback can quote paths and Bazel messages.
-        print(traceback.format_exc(), file=sys.stdout)
-        return 1
-
-
 if __name__ == "__main__":
-    sys.exit(_main_scrubbed())
+    sys.exit(main())

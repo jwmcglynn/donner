@@ -117,31 +117,6 @@ class _GatedClock:
         return self.start + (10 ** 9 if self.jumped else 0)
 
 
-# Anything that could name a host: an address, a host:port pair (not a file:line:column), a URL,
-# the stand-in domain or a runner path.
-# Runner path prefixes, built at run time so that no tracked line reads as a home directory.
-_RUNNER_ROOTS = "|".join("/%s/" % root for root in ("home", "var", "private", "Users"))
-_LEAK = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}"
-                   r"|[A-Za-z][\w.-]*\.[A-Za-z]{2,}:\d+(?!\d|:\d)|[A-Za-z][A-Za-z0-9+.-]*://"
-                   r"|example\.invalid|" + _RUNNER_ROOTS)
-_IPV6_LEAK = re.compile(r"(?<![\w:])[0-9A-Fa-f:]*::?[0-9A-Fa-f:]*:[0-9A-Fa-f:]*(?![\w:])")
-
-
-def _endpoint_leaks(text):
-    import ipaddress
-    leaks = set(_LEAK.findall(text))
-    for candidate in _IPV6_LEAK.findall(text):
-        if not any(character.isdigit() for character in candidate):
-            continue
-        try:
-            ipaddress.IPv6Address(candidate.strip(":") if candidate.count("::") == 0
-                                  else candidate)
-        except ValueError:
-            continue
-        leaks.add(candidate)
-    return sorted(leaks)
-
-
 def _read(path):
     return Path(runfiles.Create().Rlocation("donner/%s" % path)).read_text(encoding="utf-8")
 
@@ -563,7 +538,6 @@ class WorkflowTest(unittest.TestCase):
                        "RUNNER_TOOL_CACHE", "within 10 minutes", "should prune",
                        "--max_idle_secs=600",
                        "checks stay pending", "fails closed", "the workflow run still succeeds",
-                       "--remote_print_execution_messages=success",
                        lane.ROUTING_PROBE, lane.STARVED, "--config=ci-test-lane",
                        "20 minutes", "90-minute", "--budget-minutes 70",
                        "%d-minute margin" % lane.REPORT_MARGIN_MINUTES) + lane.EXCLUDED_TAGS + \
@@ -680,15 +654,16 @@ class LaneCommandTest(unittest.TestCase):
         # No other lane passes it: it is not in the repository's rc.
         self.assertNotIn("repo_env_ignores_action_env", _read(".bazelrc"))
 
-    def test_remote_execution_messages_are_printed_only_for_successes(self):
-        # Messages a backend attaches to failed remote actions can name it; the log is public.
+    def test_remote_execution_messages_of_failures_are_printed(self):
+        # Bazel's default prints the messages a backend attaches to a failed remote action, which
+        # are often what explains it; no lane command quiets them.
         commands = dict((phase, self.commands[phase]) for phase in lane.PHASES)
         commands.update(lane_probe=_preflights(self.OUT)[0], plain_probe=_preflights(self.OUT)[1],
                         routing=_routing(self.OUT))
         for name, command in commands.items():
             values = [flag for flag in command
                       if flag.startswith("--remote_print_execution_messages")]
-            self.assertEqual(["--remote_print_execution_messages=success"], values, name)
+            self.assertEqual([], values, name)
 
     def test_every_bazel_command_uses_the_lanes_own_output_root_and_idle_limit(self):
         environ = {"FALLBACK": "true"}
@@ -834,20 +809,6 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(" ".join(args) + "\n")
-if os.environ.get("FAKE_HOSTILE"):
-    # What Bazel printed when the remote executor refused connections, with documentation-range
-    # stand-ins: the endpoint in an action error, a socket exception and a stack frame.
-    for stream in (sys.stdout, sys.stderr):
-        stream.write(
-            "ERROR: %s/BUILD.bazel:3:9: Executing genrule //fake:gen failed: Failed to query "
-            "remote execution capabilities: UNAVAILABLE: io exception\n"
-            "Caused by: io.netty.channel.AbstractChannel$AnnotatedConnectException: "
-            "finishConnect(..) failed: Connection refused: executor.example.invalid/"
-            "192.0.2.10:8980\n"
-            "\tat io.grpc.Status.asRuntimeException(Status.java:532)\n"
-            "WARNING: Remote Cache: grpcs://executor.example.invalid:8980 is unreachable\n"
-            % os.getcwd())
-        stream.flush()
 if "shutdown" in args:
     sys.exit(0)
 if any(a.startswith("--config=remote-macos") for a in args) and (
@@ -1241,27 +1202,6 @@ class LaneRunTest(unittest.TestCase):
             self.assertIn("staged 0 output files (0 bytes) for %s." % phase, result.stdout)
         self.assertNotIn("::warning::", result.stdout)
 
-    def test_nothing_the_lane_prints_names_the_executor_endpoint(self):
-        result, out, summary_file, calls = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
-                                                     FAKE_STATUS_NATIVE="3", FAKE_HOSTILE="1")
-        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
-        public = {"stdout": result.stdout, "stderr": result.stderr,
-                  "step summary": summary_file.read_text(encoding="utf-8"),
-                  "report": (out / "report.md").read_text(encoding="utf-8"),
-                  "summary": (out / "shadow-summary.json").read_text(encoding="utf-8")}
-        for name, text in public.items():
-            with self.subTest(output=name):
-                self.assertEqual([], _endpoint_leaks(text))
-        # The action error is reduced to its file, label and outcome; the rest stays behind.
-        self.assertIn("ERROR: BUILD.bazel (line 3): Executing genrule //fake:gen failed",
-                      result.stdout)
-        self.assertIn("lines of this command's console are not shown here", result.stdout)
-        # The whole console, unfiltered, stays in the lane's output directory on the runner.
-        consoles = "".join(path.read_text(encoding="utf-8", errors="replace")
-                           for path in out.rglob("*") if path.is_file() and
-                           path.suffix in (".all", ".log"))
-        self.assertIn("executor.example.invalid/192.0.2.10:8980", consoles)
-
     def test_empty_selection_fails_before_bazel(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -1381,11 +1321,10 @@ class StarvationGuardTest(unittest.TestCase):
         from unittest import mock
         clock = _StepClock()
         process = _ScriptedPhase(self.console, script, clock)
-        relay = lane._Relay(self.directory / "unread")
         with mock.patch.object(lane, "_stop") as stop, \
                 contextlib.redirect_stdout(io.StringIO()) as printed:
-            status, stopped = lane._wait_phase(process, self.console, relay, self.BOUND,
-                                               self.POLL, clock, (2, 2, 2), None)
+            status, stopped = lane._wait_phase(process, self.console, self.BOUND, self.POLL,
+                                               clock, (2, 2, 2), None)
         return status, stopped, clock.now, stop.call_count, printed.getvalue()
 
     def test_frozen_counter_with_a_growing_elapsed_time_is_starved_at_the_bound(self):
@@ -1523,10 +1462,8 @@ class StarvationGuardTest(unittest.TestCase):
         clock = _StepClock()
         process = _ScriptedPhase(self.console, [_progress(5, 10)] * 40, clock)
         with mock.patch.object(lane, "_stop"), contextlib.redirect_stdout(io.StringIO()):
-            status, stop = lane._wait_phase(process, self.console,
-                                            lane._Relay(self.directory / "unread"), self.BOUND,
-                                            self.POLL, clock, (2, 2, 2),
-                                            self.POLL + self.BOUND)
+            status, stop = lane._wait_phase(process, self.console, self.BOUND, self.POLL, clock,
+                                            (2, 2, 2), self.POLL + self.BOUND)
         self.assertEqual((lane.STARVED_STATUS, lane.STARVED), (status, stop))
         self.assertEqual(self.POLL + self.BOUND, clock.now)
 
@@ -1539,8 +1476,7 @@ class StarvationGuardTest(unittest.TestCase):
                                                     self.directory / "probe.log",
                                                     time.monotonic() + 1, grace=(5, 5, 5))
         self.assertEqual((lane.OUT_OF_TIME_STATUS, True), (status, stopped))
-        # The probe's console stays on the runner.
-        self.assertTrue((self.directory / "probe.log").exists())
+        self.assertFalse((self.directory / "probe.log").exists())
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual((3, "", False), lane._run_captured(
                 [sys.executable, "-c", "raise SystemExit(3)"], _environ(),
@@ -2080,150 +2016,6 @@ class StagingTest(unittest.TestCase):
         self.assertEqual({"pkg/test/test.log": "from bazel-testlogs",
                           "pkg/test/test.outputs/actual.png": "image"},
                          _collect(self, "", cwd=str(workspace)))
-
-
-# The shapes of the lines a failed run printed when the macOS executor refused connections, with
-# the endpoint replaced by documentation addresses (RFC 5737, RFC 3849) and example.invalid.
-_EXECUTOR_FAILURE_LINES = (
-    "INFO: Invocation ID: ff992a73-1c53-48c9-8bf5-ced628a285c8",
-    "2026/11/16 00:16:40 Downloading https://releases.bazel.build/8.8.2/release/bazel-8.8.2",
-    "Starting local Bazel server (8.8.2) and connecting to it...",
-    "INFO: Repository imgui+ instantiated at:",
-    "  /var/cache/runner/work/donner/donner/MODULE.bazel:12:4: in <toplevel>",
-    "ERROR: /var/cache/runner/work/donner/donner/third_party/BUILD.bazel:321:9: Executing "
-    "apple_genrule @@apple_support+//crosstool:exec_wrapped_clang_pp.target_config [for tool] "
-    "failed: Failed to query remote execution capabilities: UNAVAILABLE: io exception",
-    "Caused by: io.grpc.StatusRuntimeException: UNAVAILABLE: io exception",
-    "Caused by: io.netty.channel.AbstractChannel$AnnotatedConnectException: finishConnect(..) "
-    "failed: Connection refused: executor.example.invalid/192.0.2.10:8980",
-    "Caused by: java.net.ConnectException: finishConnect(..) failed: Connection refused",
-    "\tat io.netty.channel.unix.Errors.newConnectException0(Errors.java:166)",
-    "ERROR: Failed to query remote execution capabilities: finishConnect(..) failed: Connection "
-    "refused: executor.example.invalid/[2001:db8::10]:8980",
-    "WARNING: Remote Cache: connection to grpcs://executor.example.invalid:8980 failed",
-    "(12:34:56) [16,831 / 24,130] 63 / 841 tests; Testing //donner/svg:svg_tests; 37s remote, "
-    "remote-cache, executor.example.invalid:8980 ... (6 actions running)",
-    "//donner/svg:svg_tests                    (cached) PASSED in 2.3s",
-    "//tools:terminal_image_viewer_tests_text_full FAILED TO BUILD",
-    "Executed 0 out of 63 tests: 3 tests pass and 60 were skipped.",
-    "FAILED: Build did NOT complete successfully",
-    "::error::Bazel stalled for 900s on: [1 / 2] Testing //x:y; 900s remote 198.51.100.7:443",
-)
-
-
-class PublicOutputTest(unittest.TestCase):
-    """The job log is public: only allow-listed shapes, cut down and scrubbed, reach it."""
-
-    WORKSPACE = "/var/cache/runner/work/donner/donner"
-
-    def _public(self, line):
-        return lane.public_line(line, self.WORKSPACE)
-
-    def test_a_refused_executor_run_shows_no_endpoint(self):
-        shown = [self._public(line) for line in _EXECUTOR_FAILURE_LINES]
-        self.assertEqual([], _endpoint_leaks("\n".join(filter(None, shown))))
-        self.assertEqual([
-            None, None, None, None, None,
-            "ERROR: third_party/BUILD.bazel (line 321): Executing apple_genrule "
-            "@@apple_support+//crosstool:exec_wrapped_clang_pp.target_config failed",
-            None, None, None, None, None, None,
-            "[16,831 / 24,130] 63 / 841 tests; Testing //donner/svg:svg_tests; 37s",
-            "//donner/svg:svg_tests (cached) PASSED in 2.3s",
-            "//tools:terminal_image_viewer_tests_text_full FAILED TO BUILD",
-            "Executed 0 out of 63 tests: 3 tests pass and 60 were skipped.",
-            "FAILED: Build did NOT complete successfully",
-            "::error::Bazel stalled for 900s"], shown)
-
-    def test_an_action_error_keeps_its_exit_code_and_drops_its_message(self):
-        line = ("ERROR: /var/cache/runner/work/donner/donner/donner/base/BUILD.bazel:7:12: "
-                "Compiling donner/base/a.cc failed: (Exit 1): clang failed: error executing "
-                "CppCompile command /private/var/tmp/x.cc 192.0.2.10:8980")
-        self.assertIsNone(self._public(line))
-        line = ("ERROR: %s/donner/base/BUILD.bazel:7:12: Linking //donner/base:a failed: "
-                "(Exit 1): ld failed at 192.0.2.10:8980" % self.WORKSPACE)
-        self.assertEqual("ERROR: donner/base/BUILD.bazel (line 7): Linking //donner/base:a "
-                         "failed (exit 1)", self._public(line))
-
-    def test_the_scrubber_removes_endpoints_and_outside_paths(self):
-        cases = {
-            "grpcs://executor.example.invalid:8980/x": "[redacted]",
-            "at executor.example.invalid/192.0.2.10:8980 now": "at [redacted] now",
-            "192.0.2.10 and 198.51.100.7:443": "[redacted] and [redacted]",
-            "[2001:db8::10]:8980 and fe80::1": "[redacted] and [redacted]",
-            "executor.example.invalid:8980": "[redacted]",
-            "--output_user_root=/var/cache/tool/out": "--output_user_root=[redacted]",
-            "%s/tools/ci/x.py" % WORKSPACE_PLACEHOLDER: "tools/ci/x.py",
-            "/tmp/obase/execroot/_main/bazel-out/k8/testlogs/a/test.log":
-                "bazel-out/k8/testlogs/a/test.log",
-            # Kept: a time and a label with a name of hex digits. A file name with a line number
-            # cannot be told from a host and port, so it goes too.
-            "(12:34:56) //pkg:a1b2 donner/a.cc:12": "(12:34:56) //pkg:a1b2 donner/[redacted]",
-            "//home/runner/work/x and //donner/base:base": "[redacted] and //donner/base:base",
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(expected, lane.scrub(
-                    text.replace(WORKSPACE_PLACEHOLDER, self.WORKSPACE), self.WORKSPACE))
-
-    def test_generated_lines_never_leak_an_endpoint(self):
-        import random
-        generator = random.Random(2322)
-        heads = ("[1 / 2] ", "[1 / 2] 3 / 4 tests; Testing //a:b; 5s ", "//a:b PASSED in 1.0s ",
-                 "ERROR: %s/BUILD.bazel:1:2: Executing genrule //a:b failed: " % self.WORKSPACE,
-                 "INFO: Build completed successfully, 3 total actions", "Caused by: ", "",
-                 "::error::Bazel stalled for 9s on: ", "WARNING: ", "Executed 1 out of 1 test: ")
-        leaks = ("grpcs://executor.example.invalid:8980", "executor.example.invalid/192.0.2.10:443",
-                 "192.0.2.%d:%d", "[2001:db8::%x]:8980", "2001:db8::%x", "198.51.100.%d",
-                 "/home/runner/work/x", "executor.example.invalid:%d", "http://192.0.2.1/")
-        for _ in range(3000):
-            leak = generator.choice(leaks)
-            if "%" in leak:
-                leak = leak % tuple(generator.randrange(1, 250) for _ in range(leak.count("%")))
-            line = generator.choice(heads) + generator.choice((" ", " x ", "; ", " (")) + leak + \
-                generator.choice(("", " tail", ";", ")"))
-            shown = self._public(line)
-            with self.subTest(line=line):
-                self.assertEqual([], _endpoint_leaks(shown or ""))
-                self.assertEqual([], _endpoint_leaks(lane.scrub(line, self.WORKSPACE)))
-
-    def test_the_summary_report_and_annotations_are_scrubbed(self):
-        summary = {"problem": "refused by executor.example.invalid/192.0.2.10:8980",
-                   "phases": {"native": {"failed_tests": ["//a:b"],
-                                         "note": "grpcs://executor.example.invalid:8980"}}}
-        self.assertEqual([], _endpoint_leaks(json.dumps(lane.scrub_data(summary))))
-        with contextlib.redirect_stdout(io.StringIO()) as printed:
-            lane.print("::warning::macOS remote shadow lane: 192.0.2.10:8980 refused")
-        self.assertEqual("::warning::macOS remote shadow lane: [redacted] refused\n",
-                         printed.getvalue())
-
-    def test_every_file_the_lane_finishes_with_is_scrubbed(self):
-        from unittest import mock
-        summary = {"version": 1, "targets": 1, "fallback": False, "phases": {},
-                   "problem": "refused by executor.example.invalid/192.0.2.10:8980",
-                   "note": "grpcs://executor.example.invalid:8980"}
-
-        def finish(report=lane.report):
-            with tempfile.TemporaryDirectory() as temporary:
-                out, step = Path(temporary) / "out", Path(temporary) / "step-summary.md"
-                with contextlib.redirect_stdout(io.StringIO()) as printed, \
-                        mock.patch.object(lane, "report", report):
-                    lane._finish(str(out), json.loads(json.dumps(summary)),
-                                 {"GITHUB_STEP_SUMMARY": str(step)})
-                return {"shadow-summary.json": (out / "shadow-summary.json").read_text("utf-8"),
-                        "report.md": (out / "report.md").read_text("utf-8"),
-                        "step summary": step.read_text("utf-8"), "printed": printed.getvalue()}
-
-        written = finish()
-        self.assertIn("**Stopped:** refused by [redacted]", written["report.md"])
-        # The report is scrubbed on its own too, whatever the renderer adds.
-        added = finish(report=lambda summary: "added from 198.51.100.7:443\n")
-        self.assertEqual("added from [redacted]\n", added["report.md"])
-        for name, text in list(written.items()) + list(added.items()):
-            with self.subTest(file=name):
-                self.assertEqual([], _endpoint_leaks(text))
-
-
-WORKSPACE_PLACEHOLDER = "@WORKSPACE@"
 
 
 if __name__ == "__main__":

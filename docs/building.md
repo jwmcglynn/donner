@@ -596,9 +596,7 @@ analysis caches between runs; the lane shuts its server down when it ends. It pa
 `--config=ci-test-lane`, the test-lane config that `ci` composes, for the editor's fixed
 placeholder commit, so the editor's build-information action runs remotely. It never passes
 `--config=ci`, which on a self-hosted Linux runner carries the Linux lane's executor; it passes the
-parts of `ci` it needs itself. It passes `--remote_print_execution_messages=success`, because
-messages a remote backend attaches to a failed action can name the backend and the job log is
-public. Every command also passes
+parts of `ci` it needs itself. Every command also passes
 `--incompatible_repo_env_ignores_action_env`: repository rules and module extensions run on the
 Linux runner, and without it Bazel 8 also hands them each `--action_env` value of the config (the
 macOS `PATH` of `ci-macos`, and any variable a runner's rc empties for the executor), so a fetch
@@ -644,19 +642,10 @@ profiles are uploaded as Bazel wrote them: they record absolute paths on the run
 each repository download and local command lines, and their remote events can name the executor's
 host. The build event and execution logs and any stall note stay on the runner.
 
-**What the job log shows.** The job log is public, and Bazel's own messages can name the remote
-executor's endpoint, for example in a connection error. So the lane never copies Bazel's output to
-the job log: each command's whole console stays in the lane's output directory on the runner, and
-is never uploaded. The job log shows only the lane's own messages and Bazel lines of a few known
-shapes, cut down: progress lines to their counters, the action and its label, and the elapsed
-time; test result lines to label, status and time; an action error to its file, line, label and
-exit code, without its message; and the build's closing summary. Every other line is withheld,
-and the lane says how many. Whatever is shown, and the report, the summary JSON and the step
-summary, also has URLs, host and port pairs, IP addresses and absolute paths outside the workspace
-removed. Compiler and action output is therefore not published by this lane, since it can name
-runner paths and the remote executor: a test's own log and outputs are in the failed-test
-artifact, and a failed build action is named by its label so that it can be reproduced on the
-gating lanes.
+**What the job log shows.** The job log shows the build's normal output, as in the other lanes:
+progress, warnings, errors with the compiler or tool output that explains them, the messages a
+remote backend attaches to a failed action, and test results. It can include the remote
+executor's host name and absolute paths on the runner and on the executor.
 
 When a phase has a test that did not pass, the lane copies the `test.log`, `test.xml` and undeclared
 outputs (`test.outputs/outputs.zip`, such as a pixel comparison's actual, expected and diff images)
@@ -674,10 +663,9 @@ outputs with `--remote_download_outputs=minimal` plus a `--remote_download_regex
 three files come back for every test the lane runs, and nothing else does.
 
 This makes the job upload output produced on the remote executor as a public artifact, where
-before everything from the executor stayed on the runner. These files are uploaded as produced:
-the job log filter above does not apply to them, and a failed test's log, XML and zipped
-undeclared outputs can include host names, the executor's absolute working-directory paths and
-anything the test prints.
+before everything from the executor stayed on the runner. These files are uploaded as produced: a
+failed test's log, XML and zipped undeclared outputs can include host names, the executor's
+absolute working-directory paths and anything the test prints.
 
 A runner must provide, in its own rc files under `build:remote-macos-base`:
 
@@ -697,9 +685,9 @@ in a runner's system rc: the config expands those after the system rc's `remote-
 so they would win. Do not enable `--enable_platform_specific_config` in a runner rc line that
 applies after the config. Emptying a variable for the executor with `--action_env=NAME=` is fine;
 do not take a variable the runner's own tools need away from repository rules with `--repo_env`.
-Bazel can print the executor address in a connection error, so bind it
-under a name that reveals nothing about the network behind it, and keep any build event service
-out of the config.
+Bazel can print the executor address in a connection error, and the job log is public, so keep
+credentials out of the executor and cache URLs (use TLS client files, a credential helper or
+headers in the rc instead) and keep any build event service out of the config.
 
 ## Frequently Asked Questions (FAQ)
 
