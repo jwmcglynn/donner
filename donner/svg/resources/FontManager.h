@@ -432,7 +432,7 @@ public:
   /**
    * Get the family names of the registered `@font-face` rules in declaration order, one per rule:
    * the rule registered first comes first, and a family with several rules repeats. Rules that two
-   * managers on the same registry numbered alike keep entity order.
+   * managers on the same registry numbered alike sort by entity identifier.
    */
   std::vector<RcString> faceFamilyNamesInDeclarationOrder() const;
 

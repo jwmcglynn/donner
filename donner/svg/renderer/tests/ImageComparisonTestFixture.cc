@@ -123,7 +123,10 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
   std::error_code listError;
   const std::vector<std::filesystem::path> fontPaths = ListFontFilesSorted(fontsDir, listError);
   if (listError) {
+    // Not cached, so every test that needs this directory reports why its fonts are missing.
     ADD_FAILURE() << "Cannot list test fonts in " << fontsDir << ": " << listError.message();
+    static const std::vector<css::FontFace> kNoFaces;
+    return kNoFaces;
   }
 
   std::vector<css::FontFace> faces;

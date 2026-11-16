@@ -1521,7 +1521,8 @@ TEST(FontManagerTest, FaceFamilyNamesEnumerateInDeclarationOrder) {
 }
 
 /// Each manager numbers its own registrations, so a second manager on the same registry repeats the
-/// first manager's sequence numbers. The order stays total: equal numbers follow entity creation.
+/// first manager's sequence numbers. The order stays total: equal numbers sort by entity
+/// identifier.
 TEST(FontManagerTest, FaceFamilyNamesBreakSequenceTiesByEntity) {
   Registry registry;
   FontManager first(registry);
@@ -1530,7 +1531,8 @@ TEST(FontManagerTest, FaceFamilyNamesBreakSequenceTiesByEntity) {
   FontManager second(registry);
   second.addFontFace(MakeEmbeddedFace("Charlie"));
 
-  // Alpha and Charlie both carry sequence 0; Alpha's entity was created first.
+  // Alpha and Charlie both carry sequence 0; Alpha has the lower entity identifier in this fresh
+  // registry.
   const auto expected = testing::ElementsAre("Alpha", "Charlie", "Bravo");
   EXPECT_THAT(DeclaredFamilies(first), expected);
   EXPECT_THAT(DeclaredFamilies(second), expected);
