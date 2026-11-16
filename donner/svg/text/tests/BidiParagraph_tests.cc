@@ -340,6 +340,37 @@ TEST(BidiParagraphTest, EmbeddingsPastTheMaximumDepthOverflowWithoutRejection) {
               testing::Eq(BidiResourceBudget::Limits{}.codepoints - 2 - controls.size()));
 }
 
+// An override injected for an inline element gives its mixed Latin and Arabic content one level,
+// so its runs still split at the script boundary, as a paragraph override's do; otherwise the
+// Arabic letters would shape inside a Latin run and lose their joining. Isolate overrides and an
+// override nested in another one behave the same way.
+TEST(BidiParagraphTest, InjectedOverrideStillSplitsScriptRuns) {
+  const std::u32string_view source = U"ab \u0645\u0631";
+  const std::vector<std::vector<BidiParagraph::InjectedControl>> cases{
+      {{0, bidi_control::kRlo}, {5, bidi_control::kPdf}},
+      {{0, bidi_control::kFsi},
+       {0, bidi_control::kRlo},
+       {5, bidi_control::kPdf},
+       {5, bidi_control::kPdi}},
+      {{0, bidi_control::kLro},
+       {0, bidi_control::kRlo},
+       {5, bidi_control::kPdf},
+       {5, bidi_control::kPdf}},
+  };
+  for (const auto& controls : cases) {
+    SCOPED_TRACE(controls.size());
+    BidiResourceBudget budget;
+    auto paragraph =
+        BidiParagraph::Analyze({source.begin(), source.end()}, budget, 0, false, false, controls);
+    ASSERT_NE(paragraph, std::nullopt);
+    const auto runs = paragraph->visualRuns(0, source.size(), budget);
+    EXPECT_THAT(runs, Optional(ResultOf(VisualOrder, ElementsAre(4u, 3u, 2u, 1u, 0u))));
+    EXPECT_THAT(runs, Optional(Contains(AllOf(Field(&BidiParagraph::Run::start, 3u),
+                                              Field(&BidiParagraph::Run::end, 5u)))))
+        << "the Arabic letters form their own run";
+  }
+}
+
 TEST(BidiParagraphTest, InjectedControlsAreBudgetedAndValidated) {
   const std::vector<BidiParagraph::InjectedControl> controls{{0, bidi_control::kRlo},
                                                              {2, bidi_control::kPdf}};
