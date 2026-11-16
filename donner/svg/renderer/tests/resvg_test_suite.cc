@@ -1369,24 +1369,23 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFont, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/font",
-            {
-                // The 300x300 resvg v0.49.0 rendering; the superseded PNG's 4x4 supersampled
-                // crosshair coverage differed from Donner's by 386 px.
-                {"font-shorthand.svg", ResvgV049Reference()},
-                // SVG 2 has no `font` presentation attribute, so the case draws the initial
-                // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
-                // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail it
-                // in results.csv.
-                {"simple-case.svg",
-                 Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
-                              "which SVG 2 does not list as a presentation attribute (#1167, "
-                              "#1173, #1186)")
-                     .setCanvasSize(400, 400)},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/font",
+                {
+                    // The 300x300 resvg v0.49.0 rendering; the superseded PNG's 4x4 supersampled
+                    // crosshair coverage differed from Donner's by 386 px.
+                    {"font-shorthand.svg", ResvgV049Reference()},
+                    // SVG 2 has no `font` presentation attribute, so the case draws the initial
+                    // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
+                    // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail
+                    // it in results.csv.
+                    {"simple-case.svg",
+                     Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
+                                  "which SVG 2 does not list as a presentation attribute (#1167, "
+                                  "#1173, #1186)")
+                         .setCanvasSize(400, 400)},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
