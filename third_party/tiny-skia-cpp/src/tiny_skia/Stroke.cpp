@@ -35,9 +35,9 @@ std::optional<StrokeDash> StrokeDash::create(std::vector<float> dashArray, float
 
 // Donner addition: the precision floor on a stroke or dash tolerance (see Stroke.h).
 float PrecisionLimitedResScale(float resScale, float maxCoordinate, float toleranceAtUnitScale) {
-  // Float steps of the largest coordinate the tolerance must stay above. A few steps leave room
-  // for the rounding of the subdivision arithmetic itself.
-  constexpr float kToleranceSteps = 4.0f;
+  // Float steps of the largest coordinate the tolerance must stay above. One is the smallest that
+  // keeps subdivision bounded (half a step does not); every further step is visible error.
+  constexpr float kToleranceSteps = 1.0f;
   if (!std::isfinite(maxCoordinate) || !(maxCoordinate > 0.0f) || !(resScale > 0.0f)) {
     return resScale;
   }

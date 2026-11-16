@@ -57,11 +57,12 @@ struct StrokeLimits {
 };
 
 /// Lowers \p resScale, if need be, so that the curve tolerance `toleranceAtUnitScale / resScale`
-/// a stroke or dash derives from it stays a few float steps above the precision of the largest
-/// coordinate it works with, \p maxCoordinate. Not in upstream tiny-skia: below that precision a
-/// smaller tolerance changes no output point, while curve subdivision chases rounding error until
-/// its depth limits. At ordinary scales the tolerance is far above the bound and \p resScale is
-/// returned unchanged.
+/// a stroke or dash derives from it stays at least one float step of the largest coordinate it
+/// works with, \p maxCoordinate. Not in upstream tiny-skia: below that precision a smaller
+/// tolerance changes no output point, while curve subdivision chases rounding error until its
+/// depth limits. The scale is lowered only above `toleranceAtUnitScale / step(maxCoordinate)`;
+/// there the tolerance stays one float step, an error of about `step(maxCoordinate) * resScale`
+/// device pixels.
 [[nodiscard]] float PrecisionLimitedResScale(float resScale, float maxCoordinate,
                                              float toleranceAtUnitScale);
 
