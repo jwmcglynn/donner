@@ -998,8 +998,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                            "Reference uses text ink extents for stroke paint")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
-                    {"pattern-on-text.svg",
-                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
                      Params::Skip("Reference disagreement: appears to use ink extents; "
                                   "SVG2 text paint uses glyph-cell bounds")},
