@@ -165,6 +165,8 @@ std::vector<EditCase> EditCases() {
       // referencing filter, and so does an edit of that href.
       {"href-chain-primitive", HrefChainOf("<feOffset id='p' in='SourceGraphic'/>", "#b"), "dx",
        "3", HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#b")},
+      {"href-chain-subregion", HrefChainOf("<feFlood id='p' flood-color='blue'/>", "#b"), "x", "8",
+       HrefChainOf("<feFlood flood-color='blue' x='8'/>", "#b")},
       {"href-chain-link", HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#b"), "href", "#c",
        HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#c"), "#f"},
   };
