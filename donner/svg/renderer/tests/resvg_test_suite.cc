@@ -192,13 +192,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
                     {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
                     {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
-                    // The convolve math (window, 180° flip, target offset, divisor,
-                    // preserveAlpha, linearRGB) is byte-equivalent to tiny-skia. The
-                    // remaining Geode diff is a ~1px positional band per convolved
-                    // feature, traced to the opacity-0.75 pattern *input* edge coverage
-                    // (slug_fill 4-sample vs tiny-skia analytic), which the kernel
-                    // spreads above threshold - the same root cause as the structure/svg
-                    // and feImage/svg parity gaps. Not the color-space round-trip.
                     // References refreshed to resvg v0.49.0 except edgeMode=wrap; see
                     // third_party/resvg-test-suite/BUILD.bazel.
                     {"edgeMode=none.svg", ResvgV049Reference()},
@@ -319,17 +312,14 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feMorphology",
-                {
-                    // Pixelmatch 2.0 checkerboard exposes the transparent-vs-white
-                    // background convention at eroded-shape boundaries. Each threshold
-                    // is the measured minimal passing hundredth at the existing pixel
-                    // allowance (PR #1285, see README_pixelmatch_2.md).
-                    {"radius=0.5.svg", ResvgV049Reference()},
-                    {"radius=1-10.svg", ResvgV049Reference()},
-                    {"radius=10-1.svg", ResvgV049Reference()},
-                })),
+    Combine(ValuesIn(getTestsInCategory("filters/feMorphology",
+                                        {
+                                            // References refreshed to resvg v0.49.0; see
+                                            // third_party/resvg-test-suite/BUILD.bazel.
+                                            {"radius=0.5.svg", ResvgV049Reference()},
+                                            {"radius=1-10.svg", ResvgV049Reference()},
+                                            {"radius=10-1.svg", ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -354,11 +344,8 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "filters/feSpecularLighting",
                 {
-                    // Pixelmatch 2.0 checkerboard exposes pre-existing
-                    // specular-lighting output alpha deltas vs resvg that
-                    // white-blending masked. Each threshold is the measured minimal
-                    // passing hundredth at the existing pixel allowance (PR #1285, see
-                    // README_pixelmatch_2.md).
+                    // Spot-light references refreshed to resvg v0.49.0; see
+                    // third_party/resvg-test-suite/BUILD.bazel.
                     {"with-feSpotLight-and-specular-and-exponent.svg", ResvgV049Reference()},
                     {"with-feSpotLight-and-specularConstant=5.svg", ResvgV049Reference()},
                     {"with-fePointLight.svg",
