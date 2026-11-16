@@ -187,6 +187,8 @@ void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::pa
   fontManager.setGenericFamilyMapping("monospace", "Noto Mono");
   fontManager.setGenericFamilyMapping("cursive", "Yellowtail");
   fontManager.setGenericFamilyMapping("fantasy", "Sedgwick Ave Display");
+  // resvg's harness resolves a family list that matches nothing to its default serif family.
+  fontManager.setDefaultFamily("serif");
 }
 
 /**

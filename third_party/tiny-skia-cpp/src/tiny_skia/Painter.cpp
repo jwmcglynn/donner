@@ -237,7 +237,7 @@ void Painter::applyMask(MutablePixmapView& pixmap, const Mask& mask) {
 
 void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                          const Stroke& stroke, Transform transform, const Mask* mask,
-                         BlitterWrapper* wrapper) {
+                         BlitterWrapper* wrapper, StrokeOutputLimit* limit) {
   if (stroke.width < 0.0f) {
     return;
   }
@@ -322,7 +322,7 @@ void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Pain
     }
   } else {
     // Thick stroke: stroke the path into a filled outline, then fill it.
-    auto strokedPath = pathPtr->stroke(stroke, resScale);
+    auto strokedPath = pathPtr->stroke(stroke, resScale, limit);
     if (!strokedPath.has_value()) {
       return;
     }

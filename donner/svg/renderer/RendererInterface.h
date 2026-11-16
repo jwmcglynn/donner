@@ -414,6 +414,11 @@ public:
   static constexpr std::size_t kMaximumImageDraws = 128;
   /// Maximum image bytes admitted for drawing in one frame.
   static constexpr std::uint64_t kMaximumImageBytes = 256ULL * 1024 * 1024;
+  /// Maximum outline points stroke expansions may emit in one frame. Each stroke is also bounded
+  /// by Path::kMaximumStrokeOutputPoints; this bounds how many such strokes one frame runs. About
+  /// 25 times what a dense page emits: 11,800 glyphs and 4,000 circles stroked 2 units wide emit
+  /// about 650,000 points on the CPU backend.
+  static constexpr std::size_t kMaximumStrokeOutputPoints = 16 * 1024 * 1024;
 
   /// Work charged to the shared budget by one draw operation or batch.
   struct Cost {
@@ -445,6 +450,7 @@ public:
   void reset() {
     drawCalls_ = 0;
     pathCommands_ = 0;
+    strokeOutputPoints_ = 0;
     pathMeasurementWorkUnits_ = 0;
     gradientStops_ = 0;
     imageDraws_ = 0;
@@ -457,6 +463,27 @@ public:
   /// Tightens the gradient-stop cap for a test without raising it.
   void setGradientStopLimitForTesting(std::size_t maximum) {
     gradientStopLimit_ = std::min(gradientStopLimit_, maximum);
+  }
+  /// Tightens the frame's stroke-output cap for a test without raising it.
+  void setStrokeOutputPointLimitForTesting(std::size_t maximum) {
+    strokeOutputPointLimit_ = std::min(strokeOutputPointLimit_, maximum);
+  }
+
+  /// Stroke outline points the frame may still emit; zero once the budget is rejected.
+  [[nodiscard]] std::size_t remainingStrokeOutputPoints() const {
+    return rejected_ || strokeOutputPoints_ >= strokeOutputPointLimit_
+               ? 0
+               : strokeOutputPointLimit_ - strokeOutputPoints_;
+  }
+
+  /// Charges outline points a stroke expansion emitted, or latches rejection past the frame cap.
+  [[nodiscard]] bool reserveStrokeOutputPoints(std::size_t points) {
+    if (rejected_ || points > remainingStrokeOutputPoints()) {
+      rejected_ = true;
+      return false;
+    }
+    strokeOutputPoints_ += points;
+    return true;
   }
 
   /// Charges a draw cost, or latches rejection if any aggregate cap is exceeded.
@@ -542,6 +569,8 @@ public:
   [[nodiscard]] std::size_t imageDraws() const { return imageDraws_; }
   /// Image bytes charged in this frame.
   [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
+  /// Stroke outline points charged in this frame.
+  [[nodiscard]] std::size_t strokeOutputPoints() const { return strokeOutputPoints_; }
   /// Whether any draw charge or external draw work failed.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
@@ -552,7 +581,9 @@ private:
   std::size_t gradientStops_ = 0;
   std::size_t imageDraws_ = 0;
   std::uint64_t imageBytes_ = 0;
+  std::size_t strokeOutputPoints_ = 0;
   std::size_t gradientStopLimit_ = kMaximumGradientStops;
+  std::size_t strokeOutputPointLimit_ = kMaximumStrokeOutputPoints;
   bool pathMeasurementReservationActive_ = false;
   bool rejected_ = false;
 };
@@ -767,6 +798,7 @@ struct RendererResourceStats {
   std::size_t gradientStops = 0;
   std::size_t imageDraws = 0;
   std::uint64_t imageBytes = 0;
+  std::size_t strokeOutputPoints = 0;
   bool drawBudgetRejected = false;
   bool textMaterializationBudgetSupported = false;
   std::size_t textUniqueOutlines = 0;

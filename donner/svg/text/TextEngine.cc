@@ -3692,13 +3692,26 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
   return result;
 }
 
+/// The font manager state a prepared result is checked against.
+struct FontResolutionState {
+  uint64_t revision = 0;                         ///< Current font resource revision.
+  uint64_t familySelectionRevision = 0;          ///< Revision of the last family selection change.
+  std::span<const FontFaceDependency> resolved;  ///< Current provider dependencies.
+};
+
 template <typename Geometry>
-bool FontDependenciesChanged(Geometry& geometry, uint64_t revision,
-                             std::span<const FontFaceDependency> resolved) {
-  if (geometry.fontResourceRevision == revision) {
+bool FontDependenciesChanged(Geometry& geometry, const FontResolutionState& state) {
+  if (geometry.fontResourceRevision == state.revision) {
     return false;
   }
-  geometry.fontResourceRevision = revision;
+  // Family selection can move a lookup to another face without recording any dependency.
+  const bool preparedBeforeSelectionChange =
+      geometry.fontResourceRevision < state.familySelectionRevision;
+  geometry.fontResourceRevision = state.revision;
+  if (preparedBeforeSelectionChange) {
+    return true;
+  }
+  const std::span<const FontFaceDependency> resolved = state.resolved;
   for (const auto& dependency : geometry.fontDependencies) {
     const auto current = std::find_if(resolved.begin(), resolved.end(), [&](const auto& face) {
       return face.family == dependency.family && face.request == dependency.request;
@@ -3712,6 +3725,44 @@ bool FontDependenciesChanged(Geometry& geometry, uint64_t revision,
     }
   }
   return false;
+}
+
+/// Appends each holder of @p Component whose prepared result is stale under @p state.
+template <typename Component>
+void AppendStaleFontResults(Registry& registry, const FontResolutionState& state,
+                            std::vector<Entity>& stale) {
+  for (auto view = registry.view<Component>(); const Entity entity : view) {
+    if (FontDependenciesChanged(view.template get<Component>(entity), state)) {
+      stale.push_back(entity);
+    }
+  }
+}
+
+/// Marks each stale holder of @p Component dirty with @p flags and appends it to @p changed.
+template <typename Component>
+void MarkStaleFontResults(Registry& registry, const FontResolutionState& state, uint16_t flags,
+                          std::vector<Entity>& changed) {
+  const size_t first = changed.size();
+  AppendStaleFontResults<Component>(registry, state, changed);
+  for (size_t i = first; i < changed.size(); ++i) {
+    registry.get_or_emplace<components::DirtyFlagsComponent>(changed[i]).mark(flags);
+  }
+}
+
+/// The computed shapes whose font-relative lengths may have changed. A `ch` length measured
+/// without a provider face records no dependency, so after a family selection change every
+/// computed shape may have measured the face the change replaced.
+std::vector<Entity> StaleFontMetricShapes(Registry& registry, const FontResolutionState& state,
+                                          bool familySelectionChanged) {
+  std::vector<Entity> shapes;
+  AppendStaleFontResults<components::FontMetricDependenciesComponent>(registry, state, shapes);
+  if (familySelectionChanged) {
+    for (const Entity entity : registry.view<components::ComputedPathComponent>(
+             entt::exclude<components::FontMetricDependenciesComponent>)) {
+      shapes.push_back(entity);
+    }
+  }
+  return shapes;
 }
 
 }  // namespace
@@ -3738,55 +3789,35 @@ bool TextEngine::needsFontResourceRefresh() const {
 
 std::vector<Entity> TextEngine::refreshFontResources() {
   fontManager_.refreshPendingFonts();
-  const uint64_t revision = fontManager_.fontResourceRevision();
   const auto resolved = fontManager_.faceDependencies();
+  const FontResolutionState state{.revision = fontManager_.fontResourceRevision(),
+                                  .familySelectionRevision = fontManager_.familySelectionRevision(),
+                                  .resolved = resolved};
 
   std::vector<Entity> changedRoots;
-  for (auto view = registry_.view<components::ComputedTextGeometryComponent>();
-       const Entity root : view) {
-    if (FontDependenciesChanged(view.get<components::ComputedTextGeometryComponent>(root), revision,
-                                resolved)) {
-      changedRoots.push_back(root);
-    }
-  }
+  AppendStaleFontResults<components::ComputedTextGeometryComponent>(registry_, state, changedRoots);
   for (const Entity root : changedRoots) {
     components::InvalidateTextLayout(EntityHandle(registry_, root));
   }
-  for (auto view = registry_.view<components::FontMetricDependenciesComponent>();
-       const Entity entity : view) {
-    if (!FontDependenciesChanged(view.get<components::FontMetricDependenciesComponent>(entity),
-                                 revision, resolved)) {
-      continue;
-    }
-    registry_.remove<components::ComputedPathComponent>(entity);
-    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
+  for (const Entity shape : StaleFontMetricShapes(
+           registry_, state, state.familySelectionRevision > observedFontResourceRevision_)) {
+    registry_.remove<components::ComputedPathComponent>(shape);
+    registry_.get_or_emplace<components::DirtyFlagsComponent>(shape).mark(
         components::DirtyFlagsComponent::Shape | components::DirtyFlagsComponent::LayoutCascade |
         components::DirtyFlagsComponent::RenderInstance);
-    changedRoots.push_back(entity);
+    changedRoots.push_back(shape);
   }
-  for (auto view = registry_.view<components::ComputedClipPathsComponent>();
-       const Entity entity : view) {
-    if (!FontDependenciesChanged(view.get<components::ComputedClipPathsComponent>(entity), revision,
-                                 resolved)) {
-      continue;
-    }
-    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
-        components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Paint |
-        components::DirtyFlagsComponent::RenderInstance);
-    changedRoots.push_back(entity);
-  }
-  for (auto view = registry_.view<components::FontPaintDependenciesComponent>();
-       const Entity entity : view) {
-    if (!FontDependenciesChanged(view.get<components::FontPaintDependenciesComponent>(entity),
-                                 revision, resolved)) {
-      continue;
-    }
-    registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
-        components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Filter |
-        components::DirtyFlagsComponent::RenderInstance);
-    changedRoots.push_back(entity);
-  }
-  observedFontResourceRevision_ = revision;
+  MarkStaleFontResults<components::ComputedClipPathsComponent>(
+      registry_, state,
+      components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Paint |
+          components::DirtyFlagsComponent::RenderInstance,
+      changedRoots);
+  MarkStaleFontResults<components::FontPaintDependenciesComponent>(
+      registry_, state,
+      components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Filter |
+          components::DirtyFlagsComponent::RenderInstance,
+      changedRoots);
+  observedFontResourceRevision_ = state.revision;
   return changedRoots;
 }
 
@@ -3893,7 +3924,12 @@ FontHandle ResolveSpanFace(FontManager& fontManager,
       span.fontFamilies.empty() ? families : span.fontFamilies;
   FontHandle spanFont = FindFirstAvailableFont(fontManager, spanFamilies);
   if (!spanFont) {
-    spanFont = fallback;
+    // A list that matches nothing resolves to the user agent's default family at the span's own
+    // weight, style and stretch.
+    spanFont = fontManager.hasDefaultFamily()
+                   ? fontManager.defaultFont(span.fontWeight, static_cast<int>(span.fontStyle),
+                                             static_cast<int>(span.fontStretch))
+                   : fallback;
   }
   if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
       span.fontStretch != FontStretch::Normal) {
@@ -5335,6 +5371,9 @@ private:
         add(family);
       }
     }
+    if (fontManager.hasDefaultFamily()) {
+      add(fontManager.defaultFamily());
+    }
     const size_t faceCount = fontManager.numFaces();
     for (size_t index = 0; index < faceCount; ++index) {
       add(fontManager.faceFamilyName(index));
@@ -6569,7 +6608,7 @@ private:
   void resolveBaseFont() {
     baseFont_ = FindFirstAvailableFont(fontManager_, params_.fontFamilies);
     if (!baseFont_) {
-      baseFont_ = fontManager_.fallbackFont();
+      baseFont_ = fontManager_.defaultFont();
     }
     baseFontSizePx_ = CheckedFontSizePx(
         params_.fontSize.toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Mixed));
@@ -8148,7 +8187,7 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
     const auto capture = fontManager_.captureDependencies(dependencies);
     FontHandle font = FindFirstAvailableFont(fontManager_, fontFamilies);
     if (!font) {
-      font = fontManager_.fallbackFont();
+      font = fontManager_.defaultFont();
     }
 
     TextBackendSimple measurementBackend(fontManager_, registry_);

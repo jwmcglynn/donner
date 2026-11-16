@@ -280,6 +280,9 @@ struct CompletionState final : DeviceLossRelease {
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
   /// Submissions whose completion handlers have all run, parked ones included. Test observable.
   std::atomic<uint64_t> handlersRun{0};
+  /// Command buffers whose completion handlers have run, which only ever grows. Test observable;
+  /// see \ref MetalDevice::commandBuffersCompletedForTest.
+  std::atomic<uint64_t> commandBuffersCompleted{0};
   /// Loss condition of the backend root, shared with every device over it. A failed command
   /// buffer declares it, so the handler holds it rather than reaching through the device.
   std::shared_ptr<DeviceLostState> rootLoss;
@@ -302,11 +305,42 @@ struct CompletionState final : DeviceLossRelease {
   /// advances or the root is declared lost, which is what a submission waiting for room and a
   /// wait for a serial sleep on.
   std::condition_variable completionAdvanced;
+  /// Clock a test installed in place of the steady clock; see
+  /// \ref MetalDevice::setProgressClockForTest. Set once, under \ref watermarkMutex, before the
+  /// device's first submission, and never changed afterwards. Completion handlers read it under
+  /// that lock. Threads that submit or wait read it without the lock; the install happens before
+  /// any of them, since it must precede the first submission.
+  std::shared_ptr<TestProgressClock> testClock;
+  /// When a wait last found its work pending, as ticks of \ref now, or the lowest value when none
+  /// has; see \ref MetalDevice::lastPendingWaitLookForTest.
+  std::atomic<std::chrono::steady_clock::rep> pendingWaitLookTicks{
+      std::numeric_limits<std::chrono::steady_clock::rep>::min()};
+
+  /// The time every bounded wait of this device judges by: the steady clock, or \ref testClock.
+  std::chrono::steady_clock::time_point now() const {
+    return testClock ? testClock->now() : std::chrono::steady_clock::now();
+  }
+
+  /// Records that a wait looked at \p at and found its work pending, then sleeps until
+  /// \ref completionAdvanced is notified or, without a \ref testClock, until \p deadline. Under a
+  /// test clock no real deadline applies: the wait sleeps until a completion or a clock advance
+  /// notifies it. Requires \p lock on \ref watermarkMutex.
+  /// @param lock Lock held on \ref watermarkMutex. @param at When the wait looked, on \ref now.
+  /// @param deadline When the wait next has to judge its bounds, on \ref now.
+  void sleepUntilLocked(std::unique_lock<std::mutex>& lock,
+                        std::chrono::steady_clock::time_point at,
+                        std::chrono::steady_clock::time_point deadline) {
+    pendingWaitLookTicks.store(at.time_since_epoch().count(), std::memory_order_release);
+    if (testClock) {
+      completionAdvanced.wait(lock);
+    } else {
+      completionAdvanced.wait_until(lock, deadline);
+    }
+  }
 
   /// Records the current time as this device's last progress. Requires \ref watermarkMutex.
   void noteProgressLocked() {
-    lastProgressTicks.store(std::chrono::steady_clock::now().time_since_epoch().count(),
-                            std::memory_order_release);
+    lastProgressTicks.store(now().time_since_epoch().count(), std::memory_order_release);
   }
 
   /// When this device last made progress; see \ref lastProgressTicks.
@@ -481,6 +515,8 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
       --state.buffersOutstanding;
     }
     state.noteProgressLocked();
+    // After the progress stamp, so a case that sees the count also sees the progress it made.
+    state.commandBuffersCompleted.fetch_add(1, std::memory_order_release);
     state.completionAdvanced.notify_all();
   }
   if (bufferError != nil) {
@@ -1015,7 +1051,7 @@ struct MetalDevice::Impl {
         return *outcome ? ProgressWaitEnd::Met : ProgressWaitEnd::Failed;
       }
       const Clock::time_point progressAt = latestProgressLocked();
-      const Clock::time_point now = Clock::now();
+      const Clock::time_point now = completionState->now();
       if (cap.has_value() && now - waitStart >= *cap) {
         return ProgressWaitEnd::Capped;
       }
@@ -1023,8 +1059,8 @@ struct MetalDevice::Impl {
         return ProgressWaitEnd::Stalled;
       }
       const Clock::time_point stallDeadline = progressAt + stallBound;
-      completionState->completionAdvanced.wait_until(
-          lock, cap.has_value() ? std::min(stallDeadline, waitStart + *cap) : stallDeadline);
+      completionState->sleepUntilLocked(
+          lock, now, cap.has_value() ? std::min(stallDeadline, waitStart + *cap) : stallDeadline);
     }
   }
 
@@ -1213,12 +1249,79 @@ void MetalDevice::setSubmissionWaitCapForTest(std::chrono::milliseconds timeout)
                                         : kSubmissionWaitCapSeconds;
 }
 
+TestProgressClock::TestProgressClock() : ticks_(Clock::now().time_since_epoch().count()) {}
+
+TestProgressClock::Clock::time_point TestProgressClock::now() const {
+  return Clock::time_point(Clock::duration(ticks_.load(std::memory_order_acquire)));
+}
+
+void TestProgressClock::advance(Clock::duration duration) {
+  if (duration > Clock::duration::zero()) {
+    ticks_.fetch_add(duration.count(), std::memory_order_acq_rel);
+  }
+  std::vector<std::function<void()>> wakers;
+  {
+    std::lock_guard<std::mutex> lock(wakersMutex_);
+    wakers = wakers_;
+  }
+  for (const std::function<void()>& wake : wakers) {
+    wake();
+  }
+}
+
+void TestProgressClock::addWaker(std::function<void()> wake) {
+  std::lock_guard<std::mutex> lock(wakersMutex_);
+  wakers_.push_back(std::move(wake));
+}
+
+Status MetalDevice::setProgressClockForTest(std::shared_ptr<TestProgressClock> clock) {
+  if (clock == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "a progress clock for a test cannot be null"};
+  }
+  if (lastSubmittedSerial() != 0) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "a progress clock for a test must be installed before the first submission"};
+  }
+  CompletionState& state = *impl_->completionState;
+  {
+    std::lock_guard<std::mutex> lock(state.watermarkMutex);
+    if (state.testClock != nullptr) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "a progress clock for a test is already installed on this device"};
+    }
+    state.testClock = clock;
+  }
+  // The wait sleeps under the watermark lock, so an advance that takes the lock to notify cannot
+  // fall between a wait's look and its sleep.
+  clock->addWaker([weakState = std::weak_ptr<CompletionState>(impl_->completionState)] {
+    if (const std::shared_ptr<CompletionState> woken = weakState.lock()) {
+      std::lock_guard<std::mutex> lock(woken->watermarkMutex);
+      woken->completionAdvanced.notify_all();
+    }
+  });
+  return OkStatus();
+}
+
+std::optional<std::chrono::steady_clock::time_point> MetalDevice::lastPendingWaitLookForTest()
+    const {
+  const std::chrono::steady_clock::rep ticks =
+      impl_->completionState->pendingWaitLookTicks.load(std::memory_order_acquire);
+  if (ticks == std::numeric_limits<std::chrono::steady_clock::rep>::min()) {
+    return std::nullopt;
+  }
+  return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(ticks));
+}
+
 uint64_t MetalDevice::commandBufferRoomWaitsForTest() const {
   return impl_->commandBufferRoomWaits.load(std::memory_order_acquire);
 }
 
 uint64_t MetalDevice::serialWaitLooksForTest() const {
   return impl_->serialWaitLooks.load(std::memory_order_acquire);
+}
+
+uint64_t MetalDevice::commandBuffersCompletedForTest() const {
+  return impl_->completionState->commandBuffersCompleted.load(std::memory_order_acquire);
 }
 
 uint64_t MetalDevice::commandBuffersInFlightForTest() const {
@@ -1290,10 +1393,10 @@ uint64_t MetalDevice::completedSerial() const {
 }
 
 bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(timeoutSeconds));
   CompletionState& state = *impl_->completionState;
+  const auto deadline =
+      state.now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<double>(timeoutSeconds));
   // Each change that can end the wait notifies under this lock: a serial published, or a loss
   // declared over the root, which a failure always declares before it sets the error flag.
   std::unique_lock<std::mutex> lock(state.watermarkMutex);
@@ -1314,19 +1417,20 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
     if (isLost()) {
       return false;
     }
-    if (std::chrono::steady_clock::now() >= deadline) {
+    const auto now = state.now();
+    if (now >= deadline) {
       return false;
     }
-    state.completionAdvanced.wait_until(lock, deadline);
+    state.sleepUntilLocked(lock, now, deadline);
   }
 }
 
 SerialWaitResult MetalDevice::onWaitForSerialUnlessStalled(uint64_t serial,
                                                            std::chrono::milliseconds stallBound) {
   using Clock = std::chrono::steady_clock;
-  const Clock::time_point waitStart = Clock::now();
-  impl_->pruneOutstandingSources();
   CompletionState& state = *impl_->completionState;
+  const Clock::time_point waitStart = state.now();
+  impl_->pruneOutstandingSources();
   Impl::ProgressWaitEnd end = Impl::ProgressWaitEnd::Failed;
   {
     std::unique_lock<std::mutex> lock(state.watermarkMutex);
@@ -1349,7 +1453,7 @@ SerialWaitResult MetalDevice::onWaitForSerialUnlessStalled(uint64_t serial,
         stallBound, std::nullopt, waitStart);
   }
   const auto waited =
-      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - waitStart);
+      std::chrono::duration_cast<std::chrono::milliseconds>(state.now() - waitStart);
   switch (end) {
     case Impl::ProgressWaitEnd::Met: return {SerialWaitEnd::Completed, waited};
     case Impl::ProgressWaitEnd::Stalled:
@@ -2681,7 +2785,7 @@ Status MetalDevice::Impl::waitForCommandBufferRoom(const MetalDevice& device,
       std::chrono::duration<double>(submissionStallTimeoutSeconds));
   const auto cap = std::chrono::duration_cast<Clock::duration>(
       std::chrono::duration<double>(submissionWaitCapSeconds));
-  const Clock::time_point waitStart = Clock::now();
+  const Clock::time_point waitStart = state.now();
   ProgressWaitEnd end = ProgressWaitEnd::Failed;
   {
     std::unique_lock<std::mutex> lock(state.watermarkMutex);
@@ -2712,7 +2816,7 @@ Status MetalDevice::Impl::waitForCommandBufferRoom(const MetalDevice& device,
   // it.
   device.markLostAfterWaitTimeout(
       DeviceLostWaitSite::QueueIdle,
-      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - waitStart),
+      std::chrono::duration_cast<std::chrono::milliseconds>(state.now() - waitStart),
       capped ? "a Metal submission waited for room in flight longer than its cap"
              : "no Metal command buffer in flight, nor work it waits on, completed within the "
                "stall bound");
