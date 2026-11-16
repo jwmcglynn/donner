@@ -75,13 +75,13 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
-| structure/image            | embedded-svg-with-text                | Donner rendering; reference coverage quantized to quarters     |
+| structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 
-`structure/image/embedded-svg-with-text` runs against a Donner CPU rendering
-(`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test fonts by the
-harness; see [0021](0021-resvg_feature_gaps.md) and
+`structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
+rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
+fonts by the harness; see [0021](0021-resvg_feature_gaps.md) and
 [`testdata/golden/README.md`](../../donner/svg/renderer/testdata/golden/README.md).
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of

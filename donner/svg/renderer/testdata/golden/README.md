@@ -60,11 +60,11 @@ cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 
 ## structure/image: embedded SVG with text
 
-`resvg-embedded-svg-with-text.png` is a Donner CPU rendering of the unchanged corpus file
-`tests/structure/image/embedded-svg-with-text.svg`, at the 500x500 size of its vendored reference,
-rendered by the resvg suite harness (which gives SVG image documents the corpus fonts as a system
-font set) at the commit that adds it. Both CPU text tiers match it exactly; Geode differs by 2
-pixels, within the default settings.
+Disposition: harness mismatch. `resvg-embedded-svg-with-text.png` is a Donner CPU rendering of the
+unchanged corpus file `tests/structure/image/embedded-svg-with-text.svg`, at the 500x500 size of its
+vendored reference, rendered by the resvg suite harness (which gives SVG image documents the corpus
+fonts as a system font set) at the commit that adds it. Both CPU text tiers match it exactly; Geode
+differs by 2 pixels, within the default settings.
 
 The upstream references are not used. The vendored reference omits the embedded document's text,
 which browsers and resvg draw. The resvg v0.49.0 rendering (300x300) draws it, but differs from

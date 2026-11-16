@@ -1159,12 +1159,15 @@ INSTANTIATE_TEST_SUITE_P(
                     {"no-width-and-height-on-svg.svg",
                      Params::UndefinedBehavior("No width and height")},
                     {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
-                    // Donner rendering: the references omit the text or quantize the frame lines'
-                    // coverage to quarters; see testdata/golden/README.md.
+                    // Harness mismatch: the harness gives SVG image documents the suite's test
+                    // fonts as a stand-in for system fonts, so the row compares against a Donner
+                    // rendering of that configuration. The vendored reference omits the embedded
+                    // text and the resvg v0.49.0 one quantizes the frame lines' coverage to
+                    // quarters; see testdata/golden/README.md.
                     {"embedded-svg-with-text.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-embedded-svg-with-text.png")
-                         .withReason("Donner rendering; reference coverage quantized to quarters")},
+                         .withReason("Harness mismatch: SVG images get the suite's test fonts")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
