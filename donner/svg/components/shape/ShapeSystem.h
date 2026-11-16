@@ -2,9 +2,11 @@
 /// @file
 
 #include <span>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/svg/components/shape/BoundsGeometry.h"
 #include "donner/svg/components/shape/CircleComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/EllipseComponent.h"
@@ -121,6 +123,20 @@ public:
    * @param handle Entity handle to get the bounds for
    */
   std::optional<Box2d> getShapeBounds(EntityHandle handle);
+
+  /**
+   * Collect the geometry \ref getShapeBounds bounds, placed in a measurement space, so that its
+   * bounds in any later target space follow from \ref BoundGeometryPieces without visiting the
+   * entity again.
+   *
+   * @param handle Entity handle to collect the geometry of
+   * @param spaceFromEntity Transform from the entity's local space to the measurement space
+   * @param collector Receives the geometry. A path whose copy does not fit its allowance is
+   *   collected as its bounding box
+   * @return False, leaving the collected pieces unchanged, when the geometry cannot be bounded
+   */
+  bool collectShapeGeometry(EntityHandle handle, const Transform2d& spaceFromEntity,
+                            const BoundsGeometryCollector& collector);
 
   /// Return the SVG stroke-shape bounds, including descendant object and stroke geometry.
   /// @param handle Element whose local reference box is required.

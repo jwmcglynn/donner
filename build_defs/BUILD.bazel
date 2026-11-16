@@ -57,6 +57,7 @@ py_test(
         "//donner/svg/renderer/geode:BUILD.bazel",
     ],
     main = "geode_test_scheduling_tests.py",
+    deps = ["//tools/ci:lane_view"],
 )
 
 py_test(
