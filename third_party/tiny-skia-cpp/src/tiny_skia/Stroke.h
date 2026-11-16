@@ -3,6 +3,7 @@
 /// @file Stroke.h
 /// @brief Stroke properties and dash patterns.
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -32,6 +33,15 @@ struct StrokeDash {
                                                         float dashOffset);
 
   friend bool operator==(const StrokeDash&, const StrokeDash&) = default;
+};
+
+/// Bounds the outline a stroke expansion may emit. Not in upstream tiny-skia: Donner renders
+/// untrusted documents, and under an extreme transform the stroker can emit millions of points
+/// for one curve. A stroke whose outline passes \ref maxPoints stops expanding as soon as it does,
+/// produces no outline, and sets \ref exceeded.
+struct StrokeOutputLimit {
+  std::size_t maxPoints = 0;  ///< Most outline points the expansion may emit.
+  bool exceeded = false;      ///< Set when an expansion stopped at \ref maxPoints.
 };
 
 /// Stroke properties for Painter::strokePath.
