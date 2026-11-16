@@ -29,6 +29,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
@@ -1582,8 +1583,8 @@ struct BoxSweepAxis {
  */
 class BoxSweepGrouping {
 public:
-  /// @param boxes Boxes to group.
-  explicit BoxSweepGrouping(std::span<const Box2d> boxes)
+  /// @param boxes Boxes to group. The grouping borrows them, so they must outlive it.
+  explicit BoxSweepGrouping(std::span<const Box2d> boxes UTILS_LIFETIME_BOUND)
       : boxes_(boxes), axis_(BoxSweepAxis::LongerExtentOf(boxes)), parent_(boxes.size()) {
     std::iota(parent_.begin(), parent_.end(), std::size_t{0});
   }
@@ -1669,7 +1670,7 @@ private:
     open_.emplace(key, merged);
   }
 
-  std::span<const Box2d> boxes_;
+  std::span<const Box2d> boxes_;  //!< The boxes passed to the constructor, borrowed.
   BoxSweepAxis axis_;
   std::vector<std::size_t> parent_;
   std::map<double, Group> open_;  //!< Open groups by their low cross extent.
