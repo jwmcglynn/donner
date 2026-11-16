@@ -372,6 +372,22 @@ class ShadowUpstreamTests(unittest.TestCase):
         self.assertEqual(admission.ABSENT, self._state(admission.current_attempt(payload, 2),
                                                        "2026-11-16T03:00:00Z"))
 
+    def test_a_complete_listing_filtered_to_the_current_attempt_stays_complete(self):
+        # As the API lists a rerun: three jobs of three, one of them of the current attempt.
+        payload = {"total_count": 3, "jobs": [
+            dict(_job(_LINUX_LANE, "completed", "success", None, "2026-11-16T01:00:00Z"),
+                 run_attempt=1),
+            dict(_job(_SHADOW_LANE, "completed", "skipped", None, "2026-11-16T01:00:00Z"),
+                 run_attempt=1),
+            dict(_job(_LINUX_LANE, "in_progress"), run_attempt=2)]}
+        current = admission.current_attempt(payload, 2)
+        self.assertEqual(1, len(current["jobs"]))
+        self.assertEqual(admission.ABSENT, self._state(current, "2026-11-16T03:00:00Z"))
+        # A listing missing a page still holds the slot once filtered.
+        missing = dict(payload, total_count=4)
+        self.assertEqual(admission.ACTIVE, self._state(admission.current_attempt(missing, 2),
+                                                       "2026-11-16T03:00:00Z"))
+
     def test_a_jobs_listing_missing_a_page_holds_the_slot(self):
         payload = dict(_MAIN_PUSH, total_count=150)
         self.assertEqual(admission.ACTIVE, self._state(payload, "2026-11-16T01:12:10Z"))
