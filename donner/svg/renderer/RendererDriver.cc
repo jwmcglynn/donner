@@ -167,6 +167,13 @@ private:
   std::shared_ptr<components::DocumentResourceFamilyBudget> family_;
 };
 
+/// Record which font state @p paint's dependencies were captured under.
+void StampFontIdentity(const FontManager* manager,
+                       components::FontPaintDependenciesComponent& paint) {
+  paint.fontResourceRevision = manager ? manager->fontResourceRevision() : 0;
+  paint.hostFontKey = manager ? manager->hostFontKey() : 0;
+}
+
 class CapturePaintFontDependencies {
 public:
   CapturePaintFontDependencies(Registry& registry, Entity host, bool preparesReferences)
@@ -187,7 +194,7 @@ public:
     auto& paint = registry_.get_or_emplace<components::FontPaintDependenciesComponent>(host_);
     const bool preparationChanged = preparesReferences_ && !paint.prepared;
     if (preparationChanged || !dependencies_.empty()) {
-      paint.fontResourceRevision = manager_ ? manager_->fontResourceRevision() : 0;
+      StampFontIdentity(manager_, paint);
     }
     const auto before = paint.fontDependencies;
     paint.prepared |= preparesReferences_;
@@ -2186,6 +2193,26 @@ Entity InstanceTextRootEntity(Registry& registry,
 }
 
 #ifdef DONNER_TEXT_ENABLED
+/// The laid-out runs for @p textRootHandle: its cached geometry when that is current for the fonts
+/// lent now, otherwise a fresh layout.
+std::vector<TextRun> TextRootRuns(Registry& registry, TextEngine& textEngine,
+                                  EntityHandle textRootHandle,
+                                  const components::ComputedTextComponent& text,
+                                  const TextParams& params) {
+  const auto* fonts = registry.ctx().find<FontManager>();
+  const uint64_t hostFontKey = fonts ? fonts->hostFontKey() : 0;
+  const auto* cached =
+      registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
+  if (cached == nullptr) {
+    return textEngine.layout(text, ToTextLayoutParams(params));
+  }
+  // Laid out under other lent fonts, its runs may name faces this occurrence does not see.
+  if (cached->hostFontKey != hostFontKey || cached->retryAfterTextPathWorkRejection) {
+    return textEngine.ensureComputedTextGeometryComponent(textRootHandle).runs;
+  }
+  return cached->runs.empty() ? textEngine.layout(text, ToTextLayoutParams(params)) : cached->runs;
+}
+
 void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
                      components::ComputedTextComponent& text, const TextParams& params,
                      RendererDriverTextFrameCache::Root& preparedRoot,
@@ -2193,16 +2220,8 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
   ++stats.fullElementStylePasses;
   TextEngine& textEngine = registry.ctx().get<TextEngine>();
   textEngine.resolvePerSpanLayoutStyles(textRootHandle, text);
-  std::vector<TextRun> runs;
-  if (const auto* cached =
-          registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
-      cached != nullptr && !cached->retryAfterTextPathWorkRejection && !cached->runs.empty()) {
-    runs = cached->runs;
-  } else if (cached != nullptr && cached->retryAfterTextPathWorkRejection) {
-    runs = textEngine.ensureComputedTextGeometryComponent(textRootHandle).runs;
-  } else {
-    runs = textEngine.layout(text, ToTextLayoutParams(params));
-  }
+  const std::vector<TextRun> runs =
+      TextRootRuns(registry, textEngine, textRootHandle, text, params);
   preparedRoot.elementBounds = ComputeTextBounds(textEngine, runs);
 
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
@@ -3269,7 +3288,9 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry
     std::fprintf(stderr, "[bounds] --- computeEntityRangeBounds(first=%u, last=%u) ---\n",
                  static_cast<unsigned>(firstEntity), static_cast<unsigned>(lastEntity));
   }
-  // Bounds measured here describe the document as it is now, not as the last frame drew it.
+  // Bounds measured here describe the document as it is now, not as the last frame drew it, so
+  // the hosts' fonts are gathered again too.
+  textFrameCache_->hostFonts.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
@@ -3284,6 +3305,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry
       FinalizeRangeBounds(ScanRangeBounds(registry, view, lastEntity, surfaceFromCanvas, context),
                           canvasSize, options.clipToCanvas);
   forgetAllEffectBounds();
+  textFrameCache_->hostFonts.clear();
   return bounds;
 }
 
@@ -4822,6 +4844,8 @@ public:
     manager_.setHostFontOverlay(std::move(overlay));
   }
 
+  // Restoring a non-null previous overlay is unreachable today: a document is never re-entered
+  // while one of its occurrences is drawing. It is restored anyway so nesting stays correct.
   ~ExternalUseHostFontScope() { manager_.setHostFontOverlay(std::move(previous_)); }
 
   ExternalUseHostFontScope(const ExternalUseHostFontScope&) = delete;
@@ -4962,8 +4986,9 @@ private:
 std::shared_ptr<const FontManager::HostFontOverlay> RendererDriver::hostFontOverlay(
     Registry& host, Registry& child) {
 #ifdef DONNER_TEXT_ENABLED
-  // Only text reads lent fonts, and a `<use>` may pass them on to a document it references; the
-  // check is per document and constant time.
+  // Text reads lent fonts, and a `<use>` may pass them on to a document it references; the check
+  // is per document and constant time. Font-relative shape lengths (`ex`, `ch`) also read fonts:
+  // in a document with neither text nor `<use>` they resolve against its own fonts only.
   if (child.storage<components::TextComponent>().empty() &&
       child.storage<components::ShadowTreeComponent>().empty()) {
     return nullptr;

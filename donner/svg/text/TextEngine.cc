@@ -3633,8 +3633,15 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
 }
 
 template <typename Geometry>
-bool FontDependenciesChanged(Geometry& geometry, uint64_t revision,
+bool FontDependenciesChanged(Geometry& geometry, uint64_t revision, uint64_t hostFontKey,
                              std::span<const FontFaceDependency> resolved) {
+  // Prepared under other lent fonts, or none: whatever it resolved may name faces this document
+  // does not see now.
+  if (geometry.hostFontKey != hostFontKey) {
+    geometry.hostFontKey = hostFontKey;
+    geometry.fontResourceRevision = revision;
+    return true;
+  }
   if (geometry.fontResourceRevision == revision) {
     return false;
   }
@@ -3673,19 +3680,20 @@ TextEngine::~TextEngine() = default;
 
 bool TextEngine::needsFontResourceRefresh() const {
   return fontManager_.fontResourceRevision() != observedFontResourceRevision_ ||
-         fontManager_.needsResourceRefresh();
+         fontManager_.hostFontKey() != observedHostFontKey_ || fontManager_.needsResourceRefresh();
 }
 
 std::vector<Entity> TextEngine::refreshFontResources() {
   fontManager_.refreshPendingFonts();
   const uint64_t revision = fontManager_.fontResourceRevision();
+  const uint64_t hostFontKey = fontManager_.hostFontKey();
   const auto resolved = fontManager_.faceDependencies();
 
   std::vector<Entity> changedRoots;
   for (auto view = registry_.view<components::ComputedTextGeometryComponent>();
        const Entity root : view) {
     if (FontDependenciesChanged(view.get<components::ComputedTextGeometryComponent>(root), revision,
-                                resolved)) {
+                                hostFontKey, resolved)) {
       changedRoots.push_back(root);
     }
   }
@@ -3695,7 +3703,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::FontMetricDependenciesComponent>();
        const Entity entity : view) {
     if (!FontDependenciesChanged(view.get<components::FontMetricDependenciesComponent>(entity),
-                                 revision, resolved)) {
+                                 revision, hostFontKey, resolved)) {
       continue;
     }
     registry_.remove<components::ComputedPathComponent>(entity);
@@ -3707,7 +3715,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::ComputedClipPathsComponent>();
        const Entity entity : view) {
     if (!FontDependenciesChanged(view.get<components::ComputedClipPathsComponent>(entity), revision,
-                                 resolved)) {
+                                 hostFontKey, resolved)) {
       continue;
     }
     registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
@@ -3718,7 +3726,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::FontPaintDependenciesComponent>();
        const Entity entity : view) {
     if (!FontDependenciesChanged(view.get<components::FontPaintDependenciesComponent>(entity),
-                                 revision, resolved)) {
+                                 revision, hostFontKey, resolved)) {
       continue;
     }
     registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
@@ -3727,6 +3735,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
     changedRoots.push_back(entity);
   }
   observedFontResourceRevision_ = revision;
+  observedHostFontKey_ = hostFontKey;
   return changedRoots;
 }
 
@@ -8010,7 +8019,8 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
       registry_.remove<components::FontMetricDependenciesComponent>(geometryOwner);
     } else {
       registry_.emplace_or_replace<components::FontMetricDependenciesComponent>(
-          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision());
+          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision(),
+          fontManager_.hostFontKey());
     }
   }
   return measured;
@@ -8564,7 +8574,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
     const bool workCanRetry =
         !TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
-    if (!existing->retryAfterTextPathWorkRejection || !workCanRetry) {
+    const bool sameLentFonts = existing->hostFontKey == fontManager_.hostFontKey();
+    if (sameLentFonts && (!existing->retryAfterTextPathWorkRejection || !workCanRetry)) {
       fontManager_.recordDependencies(existing->fontDependencies);
       return *existing;
     }
@@ -8594,6 +8605,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     runs = const_cast<TextEngine*>(this)->layout(styledText, params);
   }
   cache.fontResourceRevision = fontManager_.fontResourceRevision();
+  cache.hostFontKey = fontManager_.hostFontKey();
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
   std::size_t stretchedCacheReservation = 0u;

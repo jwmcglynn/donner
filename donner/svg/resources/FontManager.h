@@ -271,19 +271,20 @@ public:
   /// back as it would without the host.
   static constexpr size_t kMaximumLentFaces = 256;
 
-  /// Most lent faces a manager keeps loaded while no overlay lends them, so that lending the same
-  /// host again reuses their bytes. The least recently lent beyond this are released.
-  static constexpr size_t kMaximumIdleLentFaces = 64;
+  /// Most lent faces a manager keeps across the lent sets it retains. Twice one overlay's limit, so
+  /// two full overlays alternating over one document keep both sets. The least recently lent sets
+  /// beyond this are released, except the one lent now.
+  static constexpr size_t kMaximumRetainedLentFaces = 2 * kMaximumLentFaces;
 
-  /// Most overlays whose resolution answers a manager keeps cached at once.
-  static constexpr size_t kMaximumOverlayCaches = 8;
+  /// Most lent sets a manager retains, whatever their size.
+  static constexpr size_t kMaximumLentSets = 8;
 
   /// Lending work a manager has done, for regression tests.
   struct HostFontOverlayStats {
-    /// Overlays installed whose content differed from the last one lent, which rebuilds the lent
-    /// face set. Lending the same content again is constant time and is not counted.
+    /// Overlays installed with content no retained lent set holds, which builds a lent set.
+    /// Lending content a retained set holds is constant time and is not counted.
     size_t rebuilds = 0;
-    /// Lent faces released, by the idle bound or to make room for this document's own faces.
+    /// Lent faces released, by the retention bounds or to make room for this document's own faces.
     size_t evictions = 0;
   };
 
@@ -293,28 +294,29 @@ public:
    * While lent, \ref findFont and \ref hasFamily resolve a family in this order: this manager's own
    * `@font-face` rules, the overlay's faces, the attached provider, then the packaged fallback. A
    * CSS generic name this manager does not map uses the overlay's mapping. Answers given under an
-   * overlay are cached apart from this manager's own answers, so clearing the overlay restores the
-   * document's own resolution without reloading anything.
+   * overlay are cached with its lent set, apart from this manager's own answers, so clearing the
+   * overlay restores the document's own resolution without reloading anything.
    *
    * Lent bytes are loaded into this manager's registry and charged to its budget, like its own
-   * faces; the entity shares the host's immutable payload rather than copying it. Clearing the
-   * overlay keeps the lent set, so lending the same content again is constant time. Faces no
-   * overlay lends stay loaded up to \ref kMaximumIdleLentFaces, least recently lent released first,
-   * and all of them are released when this document's own face does not fit its budget. Releasing
-   * a face changes \ref hostFontKey, so nothing prepared with it is drawn again.
+   * faces; the entity shares the host's immutable payload rather than copying it. Each distinct
+   * overlay gets a lent set, retained after it is cleared or replaced so lending the same content
+   * again is constant time, up to \ref kMaximumRetainedLentFaces and \ref kMaximumLentSets. A face
+   * is released with the last retained set holding it, and every retained set except the one lent
+   * now is released when this document's own face is refused by its budget. A released face is
+   * minted afresh, with a new serial, if lent again, which changes that overlay's
+   * \ref hostFontKey, so nothing prepared with the released face is drawn again.
    *
    * @param overlay Fonts to lend, or nullptr to stop lending.
    */
   void setHostFontOverlay(std::shared_ptr<const HostFontOverlay> overlay);
 
   /// The overlay currently lent, or nullptr.
-  std::shared_ptr<const HostFontOverlay> hostFontOverlay() const {
-    return hostOverlayActive_ ? hostOverlay_ : nullptr;
-  }
+  std::shared_ptr<const HostFontOverlay> hostFontOverlay() const;
 
-  /// Identity of the fonts lent now: zero when none are, otherwise a value that differs whenever
-  /// the overlay's content differs or a lent face has been released. It is an identity, not a
-  /// monotonic counter.
+  /// Identity of the fonts lent now: zero when none are. It differs between overlays with
+  /// different content, and for one overlay whose faces were released and minted again; it is an
+  /// identity, not a monotonic counter. Text, clip and paint preparations record it, and one
+  /// recorded under another key is stale.
   uint64_t hostFontKey() const;
 
   /// Lending work done so far.
@@ -544,7 +546,7 @@ public:
       fontDependenciesOverflowed_ = false;
       ++fontResourceRevision_;
       cache_.clear();
-      overlayCaches_.clear();
+      clearLentSetCaches();
     }
   }
 
@@ -581,7 +583,8 @@ private:
                       bool* validationWorkLimitExceeded = nullptr,
                       bool* retainedBudgetExceeded = nullptr);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData,
-                      FontDataTrust trust, bool* validationWorkLimitExceeded = nullptr);
+                      FontDataTrust trust, bool* validationWorkLimitExceeded = nullptr,
+                      bool* retainedBudgetExceeded = nullptr);
 
   /** Return the registry budget when installed, otherwise this manager's private candidate. */
   std::shared_ptr<const FontBudgetState> budgetStateForRead() const;
@@ -601,7 +604,7 @@ private:
                        bool* retainedBudgetExceeded = nullptr);
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data,
-                                    FontDataTrust trust);
+                                    FontDataTrust trust, bool* retainedBudgetExceeded = nullptr);
   bool isValidationRejectedSource(const std::shared_ptr<const std::vector<uint8_t>>& data,
                                   const std::shared_ptr<FontBudgetState>& budgetState) const;
   bool exhaustedValidationBudgetRejects(std::span<const uint8_t> data, FontDataTrust trust,
@@ -612,7 +615,7 @@ private:
   std::optional<fonts::SfntFont> validateSfntForLoad(
       Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
       const std::shared_ptr<FontBudgetState>& budgetState,
-      bool* validationWorkLimitExceeded = nullptr);
+      bool* validationWorkLimitExceeded = nullptr, bool* retainedBudgetExceeded = nullptr);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
@@ -622,7 +625,8 @@ private:
    * @return True on success.
    */
   bool loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
-                 bool* validationWorkLimitExceeded = nullptr);
+                 bool* validationWorkLimitExceeded = nullptr,
+                 bool* retainedBudgetExceeded = nullptr);
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
@@ -672,12 +676,24 @@ private:
   /// The face declaration of a \ref FaceMatch.
   const css::FontFace& matchedFace(const FaceMatch& match) const;
 
-  /// Load @p face's `data` sources into @p entity; when none fits this document's budget and lent
-  /// faces sit idle, release them and try once more.
+  /// Load @p face's `data` sources into @p entity. When this document's own face is refused by
+  /// its budget and lent sets other than the current one are retained, release them and try once
+  /// more; any other failure releases nothing.
   bool loadFaceData(Entity entity, const css::FontFace& face, bool lent);
 
-  /// Release idle lent faces beyond @p keep, least recently lent first; returns how many.
-  size_t evictIdleLentFaces(size_t keep);
+  struct LentSet;
+
+  /// The lent set of the overlay lent now, or nullptr.
+  const LentSet* activeLentSet() const;
+  LentSet* activeLentSet();
+
+  /// Release the least recently lent sets other than the current one while more than
+  /// @p maximumFaces faces, or more than \ref kMaximumLentSets sets, are retained. Returns the
+  /// number of faces released.
+  size_t releaseLentSets(size_t maximumFaces);
+
+  /// Drop every lent set's cached answers.
+  void clearLentSetCaches();
 
   /// Resolution answers for the current overlay, or for this document when none is lent.
   std::unordered_map<std::string, FontHandle>& resolutionCache();
@@ -805,38 +821,50 @@ private:
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;
 
-  /// The overlay last lent; see \ref setHostFontOverlay. Kept while cleared, so lending the same
-  /// content again is constant time.
-  std::shared_ptr<const HostFontOverlay> hostOverlay_;
-
-  /// Whether \ref hostOverlay_ is lent now.
+  /// Whether an overlay is lent now; its set is `lentSets_[activeDigest_]`.
   bool hostOverlayActive_ = false;
+  uint64_t activeDigest_ = 0;
 
-  /// A lent face's entity and when it was last part of a lent set.
+  /// A host face loaded or lendable here, held by every retained lent set that lends it.
   struct LentFace {
     Entity entity = entt::null;
-    uint64_t lastLent = 0;
+    /// Minted with the entity; part of the key of every overlay lending it.
+    uint64_t serial = 0;
+    /// Retained lent sets holding this face.
+    size_t sets = 0;
   };
 
-  /// Identity key of each loaded or lendable host face to its entity. Holds the current overlay's
-  /// faces plus at most \ref kMaximumIdleLentFaces idle ones.
+  /// Identity key of each host face to its entity.
   std::unordered_map<std::string, LentFace> lentFaces_;
 
-  /// Advanced each time a different overlay is installed; a face lent at this time is active.
+  /// The faces one distinct overlay lends, retained so lending it again is constant time.
+  struct LentSet {
+    std::shared_ptr<const HostFontOverlay> overlay;
+    /// Each lent face's entity and position in the overlay, which breaks ties between equally
+    /// good faces in favour of the one the host declared last.
+    std::vector<std::pair<Entity, uint64_t>> faces;
+    /// Lowercased family names the faces claim, for \ref hasFamily.
+    std::unordered_set<std::string> familiesLower;
+    /// The overlay's \ref hostFontKey: its digest mixed with the serials of its faces.
+    uint64_t key = 0;
+    uint64_t lastLent = 0;
+    /// Resolution answers under this overlay.
+    std::unordered_map<std::string, FontHandle> cache;
+  };
+
+  /// Retained lent sets by overlay digest; see \ref setHostFontOverlay.
+  std::unordered_map<uint64_t, LentSet> lentSets_;
+
+  /// The least recently lent retained set other than the one lent now, or end.
+  std::unordered_map<uint64_t, LentSet>::iterator leastRecentlyLentSet();
+
+  /// Release one lent set and every face no other retained set holds; returns how many faces.
+  size_t releaseLentSet(std::unordered_map<uint64_t, LentSet>::iterator set);
+
+  /// Faces summed over \ref lentSets_.
+  size_t lentSetFaces_ = 0;
   uint64_t lentClock_ = 0;
-
-  /// Advanced each time a lent face is released; part of \ref hostFontKey.
-  uint64_t lentGeneration_ = 0;
-
-  /// Entities of the faces the last overlay lends, with each face's position in the overlay,
-  /// which breaks ties between equally good faces in favour of the one the host declared last.
-  std::vector<std::pair<Entity, uint64_t>> activeHostFaces_;
-
-  /// Lowercased family names the last overlay's faces claim, for \ref hasFamily.
-  std::unordered_set<std::string> hostFamiliesLower_;
-
-  /// Resolution answers per overlay digest; at most \ref kMaximumOverlayCaches.
-  std::unordered_map<uint64_t, std::unordered_map<std::string, FontHandle>> overlayCaches_;
+  uint64_t lentSerial_ = 0;
 
   HostFontOverlayStats hostOverlayStats_;
 

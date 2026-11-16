@@ -1922,8 +1922,8 @@ TEST(FontManagerTest, HostFontOverlayKeepsLendingAfterManyDistinctFaces) {
     ASSERT_NE(lent, fallback) << i;
     manager.setHostFontOverlay(nullptr);
   }
-  // Faces no overlay lends are released beyond the idle bound.
-  EXPECT_LE(manager.numLoadedFonts(), FontManager::kMaximumIdleLentFaces + 2);
+  // Lent sets beyond the retention bounds are released with their faces.
+  EXPECT_LE(manager.numLoadedFonts(), FontManager::kMaximumRetainedLentFaces + 2);
   EXPECT_GT(manager.hostFontOverlayStats().evictions, 0u);
 }
 
