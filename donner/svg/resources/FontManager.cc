@@ -7,12 +7,15 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/fonts/SfntUtils.h"
@@ -216,6 +219,12 @@ struct FontManager::FontFaceComponent {
   /// Registration order. CSS resolves a tie between equally good faces in favour of the one
   /// declared last, and storage order is not a contract, so the winner is chosen on this instead.
   uint64_t sequence = 0;
+};
+
+/// A face lent by a host document's \ref FontManager::HostFontOverlay. A distinct component, so
+/// the manager's own rules, counts and family index never include it.
+struct FontManager::HostFontFaceComponent : FontManager::FontFaceComponent {
+  using FontFaceComponent::FontFaceComponent;
 };
 
 struct FontManager::FontBudgetState {
@@ -562,15 +571,173 @@ void FontManager::setGenericFamilyMapping(std::string_view genericName,
   genericFamilyMap_[StringUtils::ToLowerAscii(genericName)] = std::string(realFamily);
 }
 
-bool FontManager::hasFamily(std::string_view family) const {
+namespace {
+
+/// Mix @p value into @p hash.
+uint64_t MixHash(uint64_t hash, uint64_t value) {
+  return hash ^ (value + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2));
+}
+
+/// @p face reduced to the sources a host can lend, or nullopt when none of them is already data.
+std::optional<css::FontFace> LendableFace(const css::FontFace& face) {
+  css::FontFace lent = face;
+  std::erase_if(lent.sources, [](const css::FontFaceSource& source) {
+    return source.kind != css::FontFaceSource::Kind::Data;
+  });
+  if (lent.sources.empty()) {
+    return std::nullopt;
+  }
+  return lent;
+}
+
+/// The generic mappings a host lends: its own, then those it was lent for names it does not map,
+/// sorted by generic name.
+std::vector<std::pair<std::string, std::string>> LentGenericFamilies(
+    const std::unordered_map<std::string, std::string>& own,
+    const FontManager::HostFontOverlay* inherited) {
+  std::vector<std::pair<std::string, std::string>> result(own.begin(), own.end());
+  if (inherited) {
+    std::copy_if(inherited->genericFamilies.begin(), inherited->genericFamilies.end(),
+                 std::back_inserter(result),
+                 [&](const auto& mapping) { return !own.contains(mapping.first); });
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+}  // namespace
+
+std::shared_ptr<const FontManager::HostFontOverlay> FontManager::HostFontOverlay::Make(
+    std::span<const css::FontFace> faces, const FontManager* hostFonts) {
+  auto overlay = std::make_shared<HostFontOverlay>();
+  uint64_t digest = 0;
+  // A host that is itself referenced passes on what its own host lent it. Those faces come first,
+  // so on a tie the nearer host's face, declared later, wins.
+  const HostFontOverlay* inherited = hostFonts ? hostFonts->hostFontOverlay() : nullptr;
+  if (inherited) {
+    overlay->faces = inherited->faces;
+    digest = inherited->digest;
+  }
+  for (const css::FontFace& face : faces) {
+    if (auto lent = LendableFace(face)) {
+      digest = MixHash(digest, std::hash<std::string>{}(css::FontFaceIdentityKey(*lent)));
+      overlay->faces.push_back(std::move(*lent));
+    }
+  }
+  if (hostFonts) {
+    // The nearer host's mapping for a generic name wins over the one it was lent.
+    overlay->genericFamilies = LentGenericFamilies(hostFonts->genericFamilyMappings(), inherited);
+  }
+  for (const auto& [generic, realFamily] : overlay->genericFamilies) {
+    digest = MixHash(digest, std::hash<std::string>{}(generic));
+    digest = MixHash(digest, std::hash<std::string>{}(realFamily));
+  }
+  if (overlay->faces.empty() && overlay->genericFamilies.empty()) {
+    return nullptr;
+  }
+  // Zero is reserved for "no overlay" in revision mixing.
+  overlay->digest = digest == 0 ? 1 : digest;
+  return overlay;
+}
+
+uint64_t FontManager::fontResourceRevision() const {
+  return hostOverlay_ ? MixHash(fontResourceRevision_, hostOverlay_->digest)
+                      : fontResourceRevision_;
+}
+
+void FontManager::setHostFontOverlay(std::shared_ptr<const HostFontOverlay> overlay) {
+  if (overlay && hostOverlay_ && overlay->digest == hostOverlay_->digest) {
+    hostOverlay_ = std::move(overlay);
+    return;
+  }
+  hostOverlay_ = std::move(overlay);
+  activeHostFaces_.clear();
+  hostFamiliesLower_.clear();
+  if (!hostOverlay_) {
+    return;
+  }
+  uint64_t position = 0;
+  for (const css::FontFace& face : hostOverlay_->faces) {
+    std::string key = css::FontFaceIdentityKey(face);
+    auto it = hostFaceEntities_.find(key);
+    if (it == hostFaceEntities_.end()) {
+      if (hostFaceEntities_.size() >= kMaximumHostFaces) {
+        continue;
+      }
+      const Entity entity = registry_.create();
+      registry_.emplace<HostFontFaceComponent>(entity, face, 0);
+      it = hostFaceEntities_.emplace(std::move(key), entity).first;
+    }
+    activeHostFaces_.emplace_back(it->second, position++);
+    hostFamiliesLower_.insert(StringUtils::ToLowerAscii(face.familyName));
+  }
+}
+
+std::string_view FontManager::resolveGenericFamily(std::string_view family) const {
   const std::string familyLower = StringUtils::ToLowerAscii(family);
-  const auto generic = genericFamilyMap_.find(familyLower);
-  const bool isGeneric = generic != genericFamilyMap_.end();
-  const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
-  const std::string resolvedLower = isGeneric ? StringUtils::ToLowerAscii(resolved) : familyLower;
+  if (const auto generic = genericFamilyMap_.find(familyLower);
+      generic != genericFamilyMap_.end()) {
+    return generic->second;
+  }
+  if (hostOverlay_) {
+    for (const auto& [generic, realFamily] : hostOverlay_->genericFamilies) {
+      if (generic == familyLower) {
+        return realFamily;
+      }
+    }
+  }
+  return family;
+}
+
+FontManager::FaceMatch FontManager::bestFace(std::string_view family, int weight, int style,
+                                             int stretch) const {
+  // CSS font matching: width first, then style, then weight.
+  FaceMatch best;
+  std::optional<FontMatchScore> bestScore;
+  uint64_t bestSequence = 0;
+  const auto consider = [&](Entity entity, const css::FontFace& face, uint64_t sequence,
+                            bool lent) {
+    if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
+      return;
+    }
+    const FontMatchScore score = RankFontFace(face, weight, style, stretch);
+
+    // Equally good faces resolve to the one declared last, per CSS. The scan runs to completion
+    // rather than stopping at the first exact match, because a later declaration can tie it and
+    // then has to win.
+    if (!bestScore || score < *bestScore || (score == *bestScore && sequence > bestSequence)) {
+      bestScore = score;
+      bestSequence = sequence;
+      best = FaceMatch{entity, lent};
+    }
+  };
+
+  auto view = registry_.view<FontFaceComponent>();
+  for (const Entity entity : view) {
+    const FontFaceComponent& component = view.get<FontFaceComponent>(entity);
+    consider(entity, component.face, component.sequence, false);
+  }
+  // The document's own rules win; a lent host face only answers a family they do not declare.
+  if (best.entity == entt::null) {
+    for (const auto& [entity, position] : activeHostFaces_) {
+      consider(entity, registry_.get<HostFontFaceComponent>(entity).face, position, true);
+    }
+  }
+  return best;
+}
+
+const css::FontFace& FontManager::matchedFace(const FaceMatch& match) const {
+  return match.lent ? registry_.get<HostFontFaceComponent>(match.entity).face
+                    : registry_.get<FontFaceComponent>(match.entity).face;
+}
+
+bool FontManager::hasFamily(std::string_view family) const {
+  const std::string_view resolved = resolveGenericFamily(family);
+  const std::string resolvedLower = StringUtils::ToLowerAscii(resolved);
 
   if (registeredFamiliesLower_.count(resolvedLower) != 0 ||
-      providerResolvedFamiliesLower_.count(resolvedLower) != 0) {
+      providerResolvedFamiliesLower_.count(resolvedLower) != 0 ||
+      hostFamiliesLower_.count(resolvedLower) != 0) {
     return true;
   }
 
@@ -589,14 +756,14 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   weight = std::clamp(weight, 1, 1000);
   stretch = std::clamp(stretch, 1, 9);
   // Resolve CSS generic family names to real family names.
-  const std::string familyLower = StringUtils::ToLowerAscii(family);
-  if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
-    family = it->second;
-  }
+  family = resolveGenericFamily(family);
 
   const ProviderFontKey dependencyKey{StringUtils::ToLowerAscii(family), weight, style, stretch};
-  const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
-                               std::to_string(style) + ":" + std::to_string(stretch);
+  // Answers under an overlay can differ from the document's own, so they are cached apart.
+  const std::string cacheKey =
+      (hostOverlay_ ? std::to_string(hostOverlay_->digest) + "|" : std::string()) +
+      std::string(family) + ":" + std::to_string(weight) + ":" + std::to_string(style) + ":" +
+      std::to_string(stretch);
   invalidateChangedProviderAnswer(family, dependencyKey, cacheKey);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {
     // A cached answer outlives many lookups, so confirm the entity behind it is still a live,
@@ -611,30 +778,8 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   }
 
   // Walk @font-face rules looking for the best match.
-  // CSS font matching: width first, then style, then weight.
-  Entity bestEntity = entt::null;
-  std::optional<FontMatchScore> bestScore;
-  uint64_t bestSequence = 0;
-
-  auto view = registry_.view<FontFaceComponent>();
-  for (const Entity entity : view) {
-    const FontFaceComponent& component = view.get<FontFaceComponent>(entity);
-    const css::FontFace& face = component.face;
-    if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
-      continue;
-    }
-    const FontMatchScore score = RankFontFace(face, weight, style, stretch);
-
-    // Equally good faces resolve to the one declared last, per CSS. The scan runs to completion
-    // rather than stopping at the first exact match, because a later declaration can tie it and
-    // then has to win.
-    if (!bestScore || score < *bestScore ||
-        (score == *bestScore && component.sequence > bestSequence)) {
-      bestScore = score;
-      bestSequence = component.sequence;
-      bestEntity = entity;
-    }
-  }
+  const FaceMatch match = bestFace(family, weight, style, stretch);
+  const Entity bestEntity = match.entity;
 
   // Set when something claimed this family but could not be turned into loaded bytes this time,
   // whether that was an `@font-face` rule or the external provider. The failure can be transient
@@ -643,21 +788,27 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   bool matchedSourceFailedToLoad = false;
 
   if (bestEntity != entt::null) {
+    // A provider answer recorded for the document itself still stands when a lent face answers.
+    const auto resolvedByRule = [&] {
+      if (!match.lent) {
+        providerDependencies_.erase(dependencyKey);
+      }
+    };
     if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
-      providerDependencies_.erase(dependencyKey);
+      resolvedByRule();
       FontHandle handle(bestEntity);
       cache_[cacheKey] = handle;
       return handle;
     }
 
-    const auto& face = registry_.get<FontFaceComponent>(bestEntity).face;
+    const auto& face = matchedFace(match);
     for (const auto& source : face.sources) {
       if (source.kind == css::FontFaceSource::Kind::Data) {
         const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
         const FontDataTrust trust =
             source.trusted ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
         if (loadFontDataSharedIntoEntity(bestEntity, dataPtr, trust)) {
-          providerDependencies_.erase(dependencyKey);
+          resolvedByRule();
           FontHandle handle(bestEntity);
           cache_[cacheKey] = handle;
           return handle;

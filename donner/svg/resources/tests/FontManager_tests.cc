@@ -1841,4 +1841,63 @@ TEST(FontManagerTest, FamilyAvailabilityResolvesGenericNames) {
   EXPECT_FALSE(manager.hasFamily("cursive"));
 }
 
+/// A lent host face answers only while lent, after the manager's own rules, and leaves the
+/// manager's own answers and revision as they were once the overlay is cleared.
+TEST(FontManagerTest, HostFontOverlayLendsFacesOnlyWhileInstalled) {
+  Registry hostRegistry;
+  FontManager host(hostRegistry);
+  host.setGenericFamilyMapping("cursive", "Lent");
+  const css::FontFace hostFaces[] = {MakeEmbeddedFace("Lent"), MakeEmbeddedFace("Own")};
+  auto overlay = FontManager::HostFontOverlay::Make(hostFaces, &host);
+  ASSERT_THAT(overlay, testing::NotNull());
+
+  Registry registry;
+  FontManager manager(registry);
+  manager.addFontFace(MakeEmbeddedFace("Own"));
+  const FontHandle own = manager.findFont("Own");
+  const FontHandle fallback = manager.findFont("Lent");
+  const uint64_t revision = manager.fontResourceRevision();
+  EXPECT_FALSE(manager.hasFamily("Lent"));
+
+  manager.setHostFontOverlay(overlay);
+  EXPECT_TRUE(manager.hasFamily("Lent"));
+  EXPECT_TRUE(manager.hasFamily("cursive"));
+  const FontHandle lent = manager.findFont("Lent");
+  EXPECT_NE(lent, fallback);
+  EXPECT_EQ(manager.findFont("cursive"), lent);
+  EXPECT_EQ(manager.findFont("Own"), own) << "the manager's own rule outranks a lent face";
+  EXPECT_NE(manager.fontResourceRevision(), revision);
+  const uint64_t lentRevision = manager.fontResourceRevision();
+  EXPECT_EQ(manager.numFaces(), 1u) << "lent faces are not the manager's own rules";
+
+  manager.setHostFontOverlay(nullptr);
+  EXPECT_FALSE(manager.hasFamily("Lent"));
+  EXPECT_EQ(manager.findFont("Lent"), fallback);
+  EXPECT_EQ(manager.fontResourceRevision(), revision);
+
+  // Lending the same content again reuses the loaded face and the same revision.
+  manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(hostFaces, &host));
+  EXPECT_EQ(manager.findFont("Lent"), lent);
+  EXPECT_EQ(manager.fontResourceRevision(), lentRevision);
+}
+
+/// Only sources the host already holds as bytes are lent, and a host with nothing to lend lends
+/// nothing.
+TEST(FontManagerTest, HostFontOverlayLendsOnlyDataSources) {
+  css::FontFace urlOnly;
+  urlOnly.familyName = RcString("Remote");
+  css::FontFaceSource url;
+  url.kind = css::FontFaceSource::Kind::Url;
+  url.payload = RcString("https://example.invalid/remote.ttf");
+  urlOnly.sources.push_back(std::move(url));
+  const css::FontFace faces[] = {urlOnly};
+  EXPECT_THAT(FontManager::HostFontOverlay::Make(faces, nullptr), testing::IsNull());
+
+  const css::FontFace mixed[] = {urlOnly, MakeEmbeddedFace("Local")};
+  const auto overlay = FontManager::HostFontOverlay::Make(mixed, nullptr);
+  ASSERT_THAT(overlay, testing::NotNull());
+  ASSERT_EQ(overlay->faces.size(), 1u);
+  EXPECT_EQ(overlay->faces[0].familyName, RcString("Local"));
+}
+
 }  // namespace donner::svg

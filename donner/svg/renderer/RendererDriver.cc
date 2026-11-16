@@ -4797,6 +4797,37 @@ bool ReserveExternalWork(components::StyleResourceBudget& work, ExternalWorkChar
                                             : work.reserveExternalMeasureWork(entities);
 }
 
+/// Lends the host document's fonts to the referenced document for one occurrence; see
+/// \ref FontManager::HostFontOverlay. Nothing is lent to a document rendered as an image.
+class ExternalUseHostFontScope {
+public:
+  ExternalUseHostFontScope(Registry& child, Registry& host) {
+    const auto* resources = host.ctx().find<components::ResourceManagerContext>();
+    auto overlay = FontManager::HostFontOverlay::Make(
+        resources ? std::span<const css::FontFace>(resources->fontFaces())
+                  : std::span<const css::FontFace>(),
+        host.ctx().find<FontManager>());
+    if (!overlay) {
+      return;
+    }
+    manager_ = child.ctx().contains<FontManager>() ? &child.ctx().get<FontManager>()
+                                                   : &child.ctx().emplace<FontManager>(child);
+    manager_->setHostFontOverlay(std::move(overlay));
+  }
+
+  ~ExternalUseHostFontScope() {
+    if (manager_) {
+      manager_->setHostFontOverlay(nullptr);
+    }
+  }
+
+  ExternalUseHostFontScope(const ExternalUseHostFontScope&) = delete;
+  ExternalUseHostFontScope& operator=(const ExternalUseHostFontScope&) = delete;
+
+private:
+  FontManager* manager_ = nullptr;
+};
+
 class ExternalUseStyleScope {
 public:
   ExternalUseStyleScope(Registry& child, Entity root, Registry& host,
@@ -4809,8 +4840,8 @@ public:
       : registry_(child),
         warningSink_(warningSink),
         verbose_(verbose),
-        hostLease_(
-            EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
+        hostLease_(EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)),
+        hostFonts_(child, host) {
     if (!style.properties || child.ctx().contains<components::ExternalUseStyleContext>() ||
         !ReserveExternalWork(*work, charge,
                              child.storage<donner::components::TreeComponent>().size())) {
@@ -4868,6 +4899,7 @@ private:
   ParseWarningSink* warningSink_;
   bool verbose_;
   ElementAnchor hostLease_;
+  ExternalUseHostFontScope hostFonts_;
   std::array<ElementAnchor, 2> resourceLeases_;
   bool installed_ = false;
 };

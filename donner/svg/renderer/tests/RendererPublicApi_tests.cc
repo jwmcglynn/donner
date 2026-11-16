@@ -3311,11 +3311,14 @@ TEST(RendererPublicApiTest, ExternalUseTextFragmentUsesHostStyleAndTransparentCa
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// The faces below arrive as untrusted `data:` URLs, which only the full text tier loads; the
+// simple tier renders them with the fallback, so these comparisons cannot tell host fonts apart.
+#ifdef DONNER_TEXT_FULL
 /// A `data:` URL for one face from the hermetic resvg test font set, so a document can declare it
 /// in a stylesheet. Yellowtail is a script face that looks nothing like the packaged fallback.
 std::string HermeticFontDataUrl(std::string_view file) {
-  const std::filesystem::path path(Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/fonts/" + std::string(file)));
+  const std::filesystem::path path(
+      Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/" + std::string(file)));
   std::ifstream stream(path, std::ios::binary);
   const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stream)),
                                    std::istreambuf_iterator<char>());
@@ -3369,6 +3372,60 @@ TEST(RendererPublicApiTest, ExternalUseTextResolvesHostFontFace) {
                                          editor::tests::PixelmatchIdentityParams());
   }
 }
+
+// The referenced document's own `@font-face` rule for a family outranks the host's rule for it, the
+// same precedence its own rules have over a font provider.
+TEST(RendererPublicApiTest, ExternalUseTextPrefersReferencedDocumentFontFace) {
+  const std::string ownStyle = "<style>@font-face { font-family: HostFace; src: url(" +
+                               HermeticFontDataUrl("NotoSerif-Regular.ttf") + "); }</style>";
+  const std::string host =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
+      R"svg(<use href="external.svg#label" fill="green" font-size="24" font-family="HostFace"/>
+      </svg>)svg";
+  const std::string resource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + ownStyle +
+      R"svg(<text id="label" x="4" y="28">Map</text></svg>)svg";
+  const RendererBitmap expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + ownStyle +
+      R"svg(<text x="4" y="28" fill="green" font-size="24" font-family="HostFace">Map</text>
+      </svg>)svg");
+  ASSERT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  const auto actual = RenderExternalUse(host, resource);
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external_text_own_font_wins",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Host fonts are lent only for an occurrence of an external `<use>`: the same document drawn as an
+// `<image>` of the host, and drawn on its own after the occurrence, resolves only its own fonts.
+TEST(RendererPublicApiTest, ExternalSvgImageAndStandaloneDrawDoNotSeeHostFontFace) {
+  constexpr std::string_view kResource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
+        <text id="label" x="4" y="28" fill="green" font-size="24" font-family="HostFace">Map</text>
+      </svg>)svg";
+  const RendererBitmap standalone = RenderInlineDocument(kResource);
+  ASSERT_THAT(standalone.pixels, testing::Contains(Gt(0)));
+
+  auto image = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
+          R"svg(<image href="external.svg" width="96" height="40"/></svg>)svg",
+      kResource);
+  const RendererBitmap imageBitmap = RenderPublicDocument(image.document);
+  editor::tests::CompareBitmapToBitmap(imageBitmap, standalone, "external_image_no_host_font",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  auto use = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
+          R"svg(<use href="external.svg#label"/></svg>)svg",
+      kResource);
+  const RendererBitmap occurrence = RenderPublicDocument(use.document);
+  ASSERT_THAT(occurrence.pixels, testing::Ne(standalone.pixels));
+  ASSERT_THAT(use.child->get(), testing::NotNull());
+  SVGDocument child = SVGDocument::CreateFromHandle(*use.child);
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(child), standalone,
+                                       "external_standalone_after_occurrence",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+#endif  // DONNER_TEXT_FULL
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
   const auto actual = RenderExternalUse(

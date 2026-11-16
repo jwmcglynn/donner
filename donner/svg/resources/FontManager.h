@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -185,8 +186,10 @@ public:
   bool needsResourceRefresh() const;
   /// Whether current face dependencies still have unresolved states.
   bool hasUnresolvedDependencies() const;
-  /// Revision advanced when a resolved font change invalidates prepared text geometry.
-  uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+  /// Revision advanced when a resolved font change invalidates prepared text geometry. While a
+  /// \ref HostFontOverlay is lent, the revision also identifies that overlay, so geometry prepared
+  /// with one host's fonts is never reused for another host or for the document alone.
+  uint64_t fontResourceRevision() const;
   /// Whether bounded dependency collection exceeded its resource limit.
   bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
 
@@ -221,6 +224,68 @@ public:
    * @param realFamily The real family name to resolve to.
    */
   void setGenericFamilyMapping(std::string_view genericName, std::string_view realFamily);
+
+  /// The CSS generic family mappings registered with \ref setGenericFamilyMapping, keyed by the
+  /// lowercased generic name.
+  const std::unordered_map<std::string, std::string>& genericFamilyMappings() const {
+    return genericFamilyMap_;
+  }
+
+  /**
+   * Fonts a document lends to a document it references with an external `<use>`, for one
+   * occurrence of that `<use>`.
+   *
+   * The referenced element renders as an instance of the `<use>`, so its text resolves families the
+   * host declares, as it would if the element were in the host. The overlay holds only `data`
+   * sources: sources the host already turned into bytes. Lending fonts therefore fetches nothing
+   * on the referenced document's behalf, and a face whose bytes the host has not loaded is not
+   * lent.
+   */
+  struct HostFontOverlay {
+    /// The host's `@font-face` rules, each reduced to its `data` sources, in declaration order,
+    /// after any faces the host was itself lent.
+    std::vector<css::FontFace> faces;
+    /// The host's CSS generic family mappings, as (lowercased generic name, family) pairs sorted
+    /// by generic name.
+    std::vector<std::pair<std::string, std::string>> genericFamilies;
+    /// Digest of \ref faces and \ref genericFamilies. Overlays with equal content have equal
+    /// digests, since face identity follows \ref css::FontFaceIdentityKey.
+    uint64_t digest = 0;
+
+    /**
+     * Build the overlay a host lends.
+     *
+     * @param faces The host's `@font-face` rules.
+     * @param hostFonts The host's font manager, for its generic family mappings and any overlay
+     *   the host is itself lent. May be nullptr.
+     * @return The overlay, or nullptr when the host has nothing to lend.
+     */
+    static std::shared_ptr<const HostFontOverlay> Make(std::span<const css::FontFace> faces,
+                                                       const FontManager* hostFonts);
+  };
+
+  /// Most distinct host faces one manager keeps registered across every overlay it was lent. Faces
+  /// beyond this are not lent, so their text falls back as it would without the host.
+  static constexpr size_t kMaximumHostFaces = 256;
+
+  /**
+   * Lend @p overlay's fonts to lookups until it is replaced, or cleared with nullptr.
+   *
+   * While lent, \ref findFont and \ref hasFamily resolve a family in this order: this manager's own
+   * `@font-face` rules, the overlay's faces, the attached provider, then the packaged fallback. A
+   * CSS generic name this manager does not map uses the overlay's mapping. Answers given under an
+   * overlay are cached apart from this manager's own answers, so clearing the overlay restores the
+   * document's own resolution without reloading anything.
+   *
+   * Host faces keep their entities across overlays, so lending the same host again reuses the
+   * bytes loaded for it. Loading them charges this manager's registry budget like any other face.
+   *
+   * @param overlay Fonts to lend, or nullptr to stop lending.
+   */
+  void setHostFontOverlay(std::shared_ptr<const HostFontOverlay> overlay);
+
+  /// The overlay currently lent, or nullptr.
+  const HostFontOverlay* hostFontOverlay() const { return hostOverlay_.get(); }
 
   /**
    * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
@@ -464,6 +529,7 @@ public:
 
 private:
   struct FontFaceComponent;
+  struct HostFontFaceComponent;
   struct LoadedFontComponent;
   struct FontBudgetContext;
   struct FontBudgetState;
@@ -556,6 +622,21 @@ private:
 
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;
+
+  /// The family a CSS generic name maps to, by this manager's mapping or else the lent overlay's;
+  /// any other name is returned unchanged.
+  std::string_view resolveGenericFamily(std::string_view family) const;
+
+  /// The best `@font-face` match for a query: this manager's own rules first, then, only when none
+  /// of them declares the family, the faces the current overlay lends.
+  struct FaceMatch {
+    Entity entity = entt::null;  ///< Matched face entity, or null.
+    bool lent = false;           ///< Whether the face is a lent host face.
+  };
+  FaceMatch bestFace(std::string_view family, int weight, int style, int stretch) const;
+
+  /// The face declaration of a \ref FaceMatch.
+  const css::FontFace& matchedFace(const FaceMatch& match) const;
 
   /**
    * Identity of one provider lookup: the family the provider was asked for, folded the way family
@@ -679,6 +760,20 @@ private:
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;
+
+  /// The overlay currently lent; see \ref setHostFontOverlay.
+  std::shared_ptr<const HostFontOverlay> hostOverlay_;
+
+  /// Identity key of every host face ever lent to the entity holding it, so lending the same face
+  /// again reuses its loaded bytes. Bounded by \ref kMaximumHostFaces.
+  std::unordered_map<std::string, Entity> hostFaceEntities_;
+
+  /// Entities of the faces the current overlay lends, with each face's position in the overlay,
+  /// which breaks ties between equally good faces in favour of the one the host declared last.
+  std::vector<std::pair<Entity, uint64_t>> activeHostFaces_;
+
+  /// Lowercased family names the current overlay's faces claim, for \ref hasFamily.
+  std::unordered_set<std::string> hostFamiliesLower_;
 
   /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
   const FontFamilyProvider* provider_ = nullptr;
