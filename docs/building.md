@@ -640,7 +640,9 @@ not read it:
 Each run writes a table to the job summary (targets built, tests run, passed, flaky, failed,
 executed and cached, actions, cache hits, spawns by runner, wall time) and uploads it, with
 `shadow-summary.json` and the Bazel profiles, as the `macos-remote-shadow-<attempt>` artifact. The
-build event and execution logs and any stall note stay on the runner.
+profiles are uploaded as Bazel wrote them: they record absolute paths on the runner, the URL of
+each repository download and local command lines, and their remote events can name the executor's
+host. The build event and execution logs and any stall note stay on the runner.
 
 **What the job log shows.** The job log is public, and Bazel's own messages can name the remote
 executor's endpoint, for example in a connection error. So the lane never copies Bazel's output to
@@ -672,9 +674,10 @@ outputs with `--remote_download_outputs=minimal` plus a `--remote_download_regex
 three files come back for every test the lane runs, and nothing else does.
 
 This makes the job upload output produced on the remote executor as a public artifact, where
-before everything from the executor stayed on the runner: a failed test's log, XML and zipped
-undeclared outputs can include the executor's working-directory paths and anything the test
-prints.
+before everything from the executor stayed on the runner. These files are uploaded as produced:
+the job log filter above does not apply to them, and a failed test's log, XML and zipped
+undeclared outputs can include host names, the executor's absolute working-directory paths and
+anything the test prints.
 
 A runner must provide, in its own rc files under `build:remote-macos-base`:
 
