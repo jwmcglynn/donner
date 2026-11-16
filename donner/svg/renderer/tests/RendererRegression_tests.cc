@@ -425,8 +425,9 @@ TEST_F(RendererRegressionTests, ReferenceContractFontAttributeIsIgnored) {
   RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
   const auto actual = RenderDocumentWithBackend(attribute, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, "font_attribute_visible");
-  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(plain, ActiveRendererBackend()),
-                         "font_attribute_ignored");
+  editor::tests::CompareBitmapToBitmap(
+      actual, RenderDocumentWithBackend(plain, ActiveRendererBackend()), "font_attribute_ignored",
+      editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLonghands) {
@@ -441,8 +442,9 @@ TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLongha
   RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
   const auto actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, "style_font_shorthand_visible");
-  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
-                         "style_font_shorthand_longhands");
+  editor::tests::CompareBitmapToBitmap(
+      actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
+      "style_font_shorthand_longhands", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit) {
