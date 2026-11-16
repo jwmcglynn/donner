@@ -4142,20 +4142,22 @@ TEST_F(RendererRegressionTests, SkewedBlurCropsSourceToFilterRegion) {
   }
 }
 
-/// Renders \p markup on a 64x64 canvas and again shifted 32 device pixels right on a 96x64 canvas,
-/// and checks the two agree over the shared 64x64 window. The shifted copy keeps everything the
-/// filter reads on the canvas, so a difference means the capture near the left edge fell short.
+/// Renders \p markup on a 64x64 canvas and again shifted 64 device pixels right on a 128x64
+/// canvas, and checks the two agree over the shared 64x64 window. The shift is a whole multiple of
+/// the capture granularity, so both renders resample on the same pixel phase. The shifted copy
+/// keeps everything the filter reads on the canvas, so a difference means the capture near the left
+/// edge fell short.
 void ExpectFilterMatchesRenderWithRoom(std::string_view markup, std::string_view label) {
   SVGDocument atEdge = instantiateSubtree(markup, {}, Vector2i(64, 64));
   SVGDocument withRoom = instantiateSubtree(
-      std::string(R"svg(<g transform="translate(32 0)">)svg") + std::string(markup) + "</g>", {},
-      Vector2i(96, 64));
+      std::string(R"svg(<g transform="translate(64 0)">)svg") + std::string(markup) + "</g>", {},
+      Vector2i(128, 64));
   const RendererBitmap actual = RenderDocumentWithBackend(atEdge, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, std::string(label) + "_visible");
   editor::tests::CompareBitmapToBitmap(
       actual,
       editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
-                                Vector2i(32, 0), Vector2i(64, 64)),
+                                Vector2i(64, 0), Vector2i(64, 64)),
       label, editor::tests::PixelmatchIdentityParams());
 }
 
@@ -4172,6 +4174,50 @@ TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachPastTheCanvasEdge) 
           offsets + R"svg(</filter>
       <g filter="url(#f)"><rect x="-8" y="8" width="8" height="16" fill="lime"/></g>)svg",
       "chained_fractional_offsets");
+}
+
+// Under a skew the transformed blur path runs offsets on a local raster whose axes are the filter
+// axes. Eight half-pixel offsets along the unskewed X axis move content 4 device pixels and read 8,
+// so content just past the left edge renders as it does with room around it. Half pixels are exact
+// in single precision at any position, so both renders resample identically.
+TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachPastTheCanvasEdge) {
+  std::string primitives;
+  for (int i = 0; i < 8; ++i) {
+    primitives += R"svg(<feOffset dx="0.5"/>)svg";
+  }
+  primitives += R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg";
+  ExpectFilterMatchesRenderWithRoom(
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-100" y="0" width="200" height="64">)svg" +
+          primitives + R"svg(</filter>
+      <g transform="matrix(1 0 1 1 0 0)" filter="url(#f)">
+        <rect x="-44" y="36" width="8" height="12" fill="lime"/>
+      </g>)svg",
+      "skewed_local_raster_offsets");
+}
+
+// A fractional offset blends neighboring colors in the primitive's color-interpolation-filters
+// space. Shifting a red and blue seam by a quarter pixel leaves the seam pixel a quarter red and
+// three quarters blue: sRGB (137, 0, 225) when the blend runs in linearRGB, the default, and
+// (64, 0, 191) when the filter interpolates in sRGB.
+TEST_F(RendererRegressionTests, FractionalOffsetBlendsInTheInterpolationSpace) {
+  const auto seam = [](std::string_view space) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64"
+                                height="64" color-interpolation-filters=")svg") +
+            std::string(space) + R"svg("><feOffset dx="0.25"/></filter>
+          <g filter="url(#f)"><rect x="8" y="8" width="16" height="16" fill="red"/>
+            <rect x="24" y="8" width="16" height="16" fill="blue"/></g>)svg",
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const RendererBitmap linear = seam("linearRGB");
+  const RendererBitmap srgb = seam("sRGB");
+  WriteBitmapToTestOutputs(linear, "fractional_offset_seam_linear");
+  WriteBitmapToTestOutputs(srgb, "fractional_offset_seam_srgb");
+  EXPECT_THAT(PixelAt(linear, 24, 16), test::RgbaEq(137, 0, 225, 255));
+  EXPECT_THAT(PixelAt(srgb, 24, 16), test::RgbaEq(64, 0, 191, 255));
+  EXPECT_THAT(PixelAt(linear, 16, 16), test::RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(linear, 32, 16), test::RgbaEq(0, 0, 255, 255));
 }
 
 // A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom

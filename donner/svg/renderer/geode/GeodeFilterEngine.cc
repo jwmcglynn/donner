@@ -2188,8 +2188,14 @@ FilterTexture FilterNodeExecution::apply(const fp::Offset& primitive) {
   fp::Offset scaled = primitive;
   scaled.dx = svg::BoundedFilterOffsetPixels(offset.x);
   scaled.dy = svg::BoundedFilterOffsetPixels(offset.y);
-  outputLinear = arena.isLinearRgb(input);
-  return engine.applyOffset(arena, input, scaled);
+  // A whole-pixel shift only moves pixels, so it keeps its input's space. A fractional shift
+  // blends neighboring colors, which happens in this primitive's color-interpolation-filters
+  // space.
+  if (scaled.dx == std::floor(scaled.dx) && scaled.dy == std::floor(scaled.dy)) {
+    outputLinear = arena.isLinearRgb(input);
+    return engine.applyOffset(arena, input, scaled);
+  }
+  return engine.applyOffset(arena, toNodeSpace(input), scaled);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::ColorMatrix& primitive) {

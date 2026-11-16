@@ -608,11 +608,19 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Offset>) {
-            // Pure pixel mover: the result is the input's pixels in the input's space, so it
-            // needs no conversion in either direction.
             auto fpOut = createTransparentFloat(w, h);
-            filter::offset(input->spaceAgnostic(), fpOut, primitive.dx, primitive.dy);
-            output = input->describe(std::move(fpOut));
+            if (primitive.dx == std::floor(primitive.dx) &&
+                primitive.dy == std::floor(primitive.dy)) {
+              // A whole-pixel shift only moves pixels: the result is the input's pixels in the
+              // input's space, so it needs no conversion in either direction.
+              filter::offset(input->spaceAgnostic(), fpOut, primitive.dx, primitive.dy);
+              output = input->describe(std::move(fpOut));
+            } else {
+              // A fractional shift blends neighboring colors, which happens in this node's
+              // interpolation space.
+              filter::offset(input->in(nodeLinearRGB), fpOut, primitive.dx, primitive.dy);
+              output = NodeOutput{std::move(fpOut), nodeLinearRGB};
+            }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Composite>) {
             SpacedPixmap* input2 = resolveInput(inputOrDefault(node, 1));
