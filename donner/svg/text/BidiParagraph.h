@@ -48,6 +48,13 @@ public:
     uint8_t level = 0;
   };
 
+  /// A control that an inline element's `unicode-bidi` places around its content. It takes part in
+  /// analysis but occupies no scalar index, so levels and runs describe only the scalars.
+  struct InjectedControl {
+    uint32_t before = 0;     //!< Scalar index the control precedes; the scalar count for the end.
+    char32_t codepoint = 0;  //!< An explicit embedding, override, isolate or pop control.
+  };
+
   /// Analyze Donner-decoded scalars. Base 0/1 is explicit; 2 requests first-strong detection.
   /// @param codepoints Owned scalars, which remain pinned throughout analysis and line queries.
   /// @param budget Cumulative admission shared by the caller's layout.
@@ -56,9 +63,15 @@ public:
   /// @param override Whether every scalar takes the explicit base level without reordering by
   ///   bidi type, as `unicode-bidi: bidi-override` on the paragraph's block container. Requires
   ///   base 0 or 1.
+  /// @param controls Injected controls in nondecreasing \ref InjectedControl::before order. Each
+  ///   counts against the scalar budget, as does the leading control that carries a paragraph
+  ///   override when anything is injected. Controls nested inside an override, injected or in
+  ///   the source, still open levels. With no scalars the controls enclose nothing and are
+  ///   dropped.
   static std::optional<BidiParagraph> Analyze(std::vector<char32_t> codepoints,
                                               BidiResourceBudget& budget, uint8_t base = 0,
-                                              bool forceAnalysis = false, bool override = false);
+                                              bool forceAnalysis = false, bool override = false,
+                                              std::span<const InjectedControl> controls = {});
   ~BidiParagraph();
   BidiParagraph(BidiParagraph&&) noexcept;
   BidiParagraph& operator=(BidiParagraph&&) noexcept;
@@ -85,6 +98,9 @@ public:
   static char32_t Mirror(char32_t codepoint);
 
 private:
+  /// Number of scalars, excluding injected controls.
+  uint32_t scalarCount() const;
+
   struct State;
   explicit BidiParagraph(std::unique_ptr<State> state);
   std::unique_ptr<State> state_;

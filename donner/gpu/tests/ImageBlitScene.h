@@ -44,6 +44,7 @@ enum class Case {
   Pixelated,
   Cubic,
   CubicTranslucent,
+  NearestCropped,
   Cropped,
   Straight,
   Premultiplied,
@@ -61,6 +62,21 @@ struct Scenario {
   uint32_t height() const { return kind == Case::Pixelated ? 5 : 4; }
   bool textured() const { return kind <= Case::Cropped; }
 };
+
+/// Whether \p kind samples the nearest texel.
+inline bool SamplesNearest(Case kind) {
+  return kind == Case::Nearest || kind == Case::NearestCropped;
+}
+
+/// Whether \p kind draws a sub-rectangle of the source into a sub-rectangle of the target.
+inline bool UsesCroppedRects(Case kind) {
+  return kind == Case::Cropped || kind == Case::NearestCropped;
+}
+
+/// The sampler filter for \p kind's source texture.
+inline FilterMode SamplerFilter(Case kind) {
+  return SamplesNearest(kind) ? FilterMode::Nearest : FilterMode::Linear;
+}
 
 inline Pixel SourcePixel(const Scenario& scenario, uint32_t x, uint32_t y) {
   return scenario.kind == Case::CubicTranslucent ? kTranslucentCorners[y * 2 + x]
@@ -86,7 +102,7 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.srcRect[2] = result.srcRect[3] = 1.0f;
   result.opacity = scenario.textured() ? 1.0f : 0.75f;
   result.sourceIsPremult = scenario.kind != Case::Straight;
-  result.samplingMode = scenario.kind == Case::Nearest     ? 1u
+  result.samplingMode = SamplesNearest(scenario.kind)      ? 1u
                         : scenario.kind == Case::Pixelated ? 2u
                         : scenario.kind == Case::Cubic || scenario.kind == Case::CubicTranslucent
                             ? 3u
@@ -103,11 +119,23 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.maskBounds[3] = 3.0f;
   result.hasClipMask = scenario.kind == Case::PathClip;
   result.blendMode = scenario.blendMode;
-  if (scenario.kind == Case::Cropped) {
+  if (UsesCroppedRects(scenario.kind)) {
     const std::array<float, 4> dest{2, 1, 6, 3}, src{0.25f, 0.25f, 0.75f, 0.75f};
     std::copy(dest.begin(), dest.end(), result.destRect);
     std::copy(src.begin(), src.end(), result.srcRect);
   }
+  // Nearest sampling maps pixel centers through the inverse placement of the 2x2 source.
+  constexpr float kSourceTexels = 2.0f;
+  const float texelsPerPixelX = (result.srcRect[2] - result.srcRect[0]) * kSourceTexels /
+                                (result.destRect[2] - result.destRect[0]);
+  const float texelsPerPixelY = (result.srcRect[3] - result.srcRect[1]) * kSourceTexels /
+                                (result.destRect[3] - result.destRect[1]);
+  result.texelFromTargetX[0] = texelsPerPixelX;
+  result.texelFromTargetX[2] =
+      result.srcRect[0] * kSourceTexels - result.destRect[0] * texelsPerPixelX;
+  result.texelFromTargetY[1] = texelsPerPixelY;
+  result.texelFromTargetY[2] =
+      result.srcRect[1] * kSourceTexels - result.destRect[1] * texelsPerPixelY;
   return result;
 }
 
@@ -191,9 +219,22 @@ inline FloatPixel SampleLinear(const ExpandedImage& image, float x, float y) {
 /// Samples the independently expanded CPU image, with clamp-to-edge addressing.
 inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
   const ExpandedImage image = ExpandSource(scenario);
-  if (scenario.kind == Case::Nearest) {
-    const Pixel value =
-        image.texel(int(std::floor(u * image.width)), int(std::floor(v * image.height)));
+  if (SamplesNearest(scenario.kind)) {
+    // Nearest sampling stays inside the texels of the source rectangle: its origin and extent are
+    // rounded to whole texels.
+    const auto params = Parameters(scenario);
+    const int originX =
+        std::clamp(int(std::floor(params.srcRect[0] * image.width + 0.5f)), 0, image.width - 1);
+    const int originY =
+        std::clamp(int(std::floor(params.srcRect[1] * image.height + 0.5f)), 0, image.height - 1);
+    const int sizeX =
+        std::max(int(std::floor((params.srcRect[2] - params.srcRect[0]) * image.width + 0.5f)), 1);
+    const int sizeY =
+        std::max(int(std::floor((params.srcRect[3] - params.srcRect[1]) * image.height + 0.5f)), 1);
+    const Pixel value = image.texel(std::clamp(int(std::floor(u * image.width)), originX,
+                                               std::min(originX + sizeX, image.width) - 1),
+                                    std::clamp(int(std::floor(v * image.height)), originY,
+                                               std::min(originY + sizeY, image.height) - 1));
     FloatPixel result{};
     for (size_t c = 0; c < 4; ++c) {
       result[c] = value[c] / 255.0f;
@@ -371,8 +412,7 @@ void CheckImageBlit(DeviceType& device, const shader::CompiledShaderView& shader
     textures.push_back(std::move(texture).result());
     views.push_back(std::move(view).result());
   }
-  const FilterMode filter =
-      scenario.kind == Case::Nearest ? FilterMode::Nearest : FilterMode::Linear;
+  const FilterMode filter = SamplerFilter(scenario.kind);
   auto sampler = device.createSampler({"image sampler", filter, filter});
   ASSERT_THAT(sampler, HasResult());
   ASSERT_NE(shader.resource("imageSampler"), nullptr);

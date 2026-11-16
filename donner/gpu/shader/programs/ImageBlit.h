@@ -24,8 +24,10 @@ struct alignas(16) ImageBlitParams {
   uint32_t blendPadding;                //!< Reserved shader padding.
   float pixelatedScale[2];              //!< Device pixels per source texel.
   uint32_t samplingPadding[2];          //!< Reserved shader padding.
+  float texelFromTargetX[4];  //!< Nearest sampling: x, y and constant terms of the texel x.
+  float texelFromTargetY[4];  //!< Nearest sampling: x, y and constant terms of the texel y.
 };
-static_assert(sizeof(ImageBlitParams) == 176);
+static_assert(sizeof(ImageBlitParams) == 208);
 /// Returns authored WGSL and reflected image-blit interfaces.
 /// @return Stable view into a process-lifetime artifact.
 const CompiledShaderView& ImageBlitShader();
