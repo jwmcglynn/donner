@@ -1900,4 +1900,37 @@ TEST(FontManagerTest, HostFontOverlayLendsOnlyDataSources) {
   EXPECT_EQ(overlay->faces[0].familyName, RcString("Local"));
 }
 
+/// Hosts come and go over a document's lifetime, each with new faces (an editor re-parsing a
+/// `data:` font mints a new identity each time), and the newest host's face still resolves.
+TEST(FontManagerTest, HostFontOverlayKeepsLendingAfterManyDistinctFaces) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle fallback = manager.fallbackFont();
+  for (int i = 0; i < 300; ++i) {
+    const std::string family = "Lent" + std::to_string(i);
+    const css::FontFace faces[] = {MakeEmbeddedFace(family)};
+    manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+    const FontHandle lent = manager.findFont(family);
+    ASSERT_TRUE(static_cast<bool>(lent)) << i;
+    ASSERT_NE(lent, fallback) << i;
+    manager.setHostFontOverlay(nullptr);
+  }
+}
+
+/// Faces a host lent and no longer lends do not keep this document's own face out of its budget.
+TEST(FontManagerTest, IdleLentFacesYieldTheBudgetToTheDocumentsOwnFaces) {
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes, 2);
+  const css::FontFace faces[] = {MakeEmbeddedFace("LentA"), MakeEmbeddedFace("LentB")};
+  manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+  ASSERT_TRUE(static_cast<bool>(manager.findFont("LentA")));
+  ASSERT_TRUE(static_cast<bool>(manager.findFont("LentB")));
+  manager.setHostFontOverlay(nullptr);
+
+  manager.addFontFace(MakeEmbeddedFace("Own"));
+  const FontHandle own = manager.findFont("Own");
+  ASSERT_TRUE(static_cast<bool>(own));
+  EXPECT_FALSE(manager.fontData(own).empty());
+}
+
 }  // namespace donner::svg
