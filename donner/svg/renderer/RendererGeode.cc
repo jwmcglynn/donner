@@ -8,12 +8,14 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <queue>
 #include <span>
 #include <thread>
 #include <type_traits>
@@ -1558,11 +1560,121 @@ struct BoxSweepAxis {
   /// Returns the high end of \p box along the sweep axis.
   double high(const Box2d& box) const { return alongY ? box.bottomRight.y : box.bottomRight.x; }
 
-  /// Returns true if \p a and \p b overlap across the sweep axis.
-  bool crossOverlaps(const Box2d& a, const Box2d& b) const {
-    return alongY ? a.topLeft.x <= b.bottomRight.x && b.topLeft.x <= a.bottomRight.x
-                  : a.topLeft.y <= b.bottomRight.y && b.topLeft.y <= a.bottomRight.y;
+  /// Returns the low end of \p box across the sweep axis.
+  double crossLow(const Box2d& box) const { return alongY ? box.topLeft.x : box.topLeft.y; }
+
+  /// Returns the high end of \p box across the sweep axis.
+  double crossHigh(const Box2d& box) const {
+    return alongY ? box.bottomRight.x : box.bottomRight.y;
   }
+};
+
+/**
+ * Groups boxes by sweeping them along the longer extent of their union. Each open group keeps the
+ * union of its boxes' bounds, and a box joins every open group whose bounds it touches, merging
+ * them. Boxes that touch, directly or through other boxes, therefore share a group; a group can
+ * also take in a box that touches only the union of the group's bounds, not any one box of it.
+ *
+ * Open groups' bounds stay pairwise disjoint, and every open group reaches the sweep position, so
+ * their extents across the sweep axis are disjoint intervals: the groups a box touches are one
+ * contiguous run of them. Each box is tested against the groups it merges plus at most one more,
+ * and every merge removes a group, so N boxes cost fewer than 2N tests, wherever the boxes are.
+ */
+class BoxSweepGrouping {
+public:
+  /// @param boxes Boxes to group.
+  explicit BoxSweepGrouping(std::span<const Box2d> boxes)
+      : boxes_(boxes), axis_(BoxSweepAxis::LongerExtentOf(boxes)), parent_(boxes.size()) {
+    std::iota(parent_.begin(), parent_.end(), std::size_t{0});
+  }
+
+  /**
+   * Returns, for each box, a representative of its group.
+   *
+   * @param tests Incremented once for each box tested against an open group's bounds.
+   */
+  std::vector<std::size_t> groups(std::uint64_t& tests) {
+    std::vector<std::size_t> order(boxes_.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+      return axis_.low(boxes_[a]) < axis_.low(boxes_[b]);
+    });
+    for (const std::size_t index : order) {
+      closeGroupsEndingBefore(axis_.low(boxes_[index]));
+      add(index, tests);
+    }
+    for (std::size_t index = 0; index < parent_.size(); ++index) {
+      parent_[index] = find(index);
+    }
+    return std::move(parent_);
+  }
+
+private:
+  /// An open group: the union of its boxes' bounds and one of its boxes.
+  struct Group {
+    Box2d bounds;          //!< Union of the group's boxes.
+    std::size_t member;    //!< Index of one box of the group.
+    std::uint64_t serial;  //!< Identifies this group among the closing entries.
+  };
+
+  /// A group's sweep end, for closing it once the sweep passes it.
+  struct Closing {
+    double high;           //!< The group's high end along the sweep axis.
+    double key;            //!< The group's key in \ref open_.
+    std::uint64_t serial;  //!< The group's \ref Group::serial.
+
+    bool operator>(const Closing& other) const { return high > other.high; }
+  };
+
+  std::size_t find(std::size_t index) {
+    while (parent_[index] != index) {
+      parent_[index] = parent_[parent_[index]];
+      index = parent_[index];
+    }
+    return index;
+  }
+
+  /// Closes the open groups whose sweep end is before \p low; merged-away groups are skipped.
+  void closeGroupsEndingBefore(double low) {
+    while (!closing_.empty() && closing_.top().high < low) {
+      const Closing entry = closing_.top();
+      closing_.pop();
+      const auto it = open_.find(entry.key);
+      if (it != open_.end() && it->second.serial == entry.serial) {
+        open_.erase(it);
+      }
+    }
+  }
+
+  /// Adds box \p index, merging it with every open group whose bounds it touches.
+  void add(std::size_t index, std::uint64_t& tests) {
+    Group merged{boxes_[index], index, nextSerial_++};
+    // Every open group starts at or before this box and ends at or after it along the sweep, so
+    // a group touches the box exactly when their extents across the sweep meet. Groups are sorted
+    // by their low cross extent and disjoint, so walk left from the last one starting at or before
+    // the box's high cross extent until one ends before the merged low cross extent.
+    auto it = open_.upper_bound(axis_.crossHigh(merged.bounds));
+    while (it != open_.begin()) {
+      const auto previous = std::prev(it);
+      ++tests;
+      if (axis_.crossHigh(previous->second.bounds) < axis_.crossLow(merged.bounds)) {
+        break;
+      }
+      merged.bounds.addBox(previous->second.bounds);
+      parent_[find(previous->second.member)] = find(index);
+      it = open_.erase(previous);
+    }
+    const double key = axis_.crossLow(merged.bounds);
+    closing_.push({axis_.high(merged.bounds), key, merged.serial});
+    open_.emplace(key, merged);
+  }
+
+  std::span<const Box2d> boxes_;
+  BoxSweepAxis axis_;
+  std::vector<std::size_t> parent_;
+  std::map<double, Group> open_;  //!< Open groups by their low cross extent.
+  std::priority_queue<Closing, std::vector<Closing>, std::greater<Closing>> closing_;
+  std::uint64_t nextSerial_ = 0;
 };
 
 }  // namespace
@@ -4209,54 +4321,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /**
-   * Returns, for each box, a representative of the set of boxes it touches directly or through
-   * other boxes. The boxes are swept along their longer extent, so a run in either writing mode
-   * only tests boxes that overlap along it; each test is counted in
-   * `counters.textStrokeBoundsTests`.
+   * Returns, for each box, a representative of its group from \ref BoxSweepGrouping: boxes that
+   * touch, directly or through other boxes, share a group. Each box tested against a group's
+   * bounds is counted in `counters.textStrokeBoundsTests`.
    *
-   * @param boxes Boxes to connect.
+   * @param boxes Boxes to group.
    */
   std::vector<std::size_t> touchingBoxSets(std::span<const Box2d> boxes) {
-    std::vector<std::size_t> parent(boxes.size());
-    std::iota(parent.begin(), parent.end(), std::size_t{0});
-    const auto find = [&parent](std::size_t index) {
-      while (parent[index] != index) {
-        parent[index] = parent[parent[index]];
-        index = parent[index];
-      }
-      return index;
-    };
-    const BoxSweepAxis axis = BoxSweepAxis::LongerExtentOf(boxes);
-    std::vector<std::size_t> order(boxes.size());
-    std::iota(order.begin(), order.end(), std::size_t{0});
-    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
-      return axis.low(boxes[a]) < axis.low(boxes[b]);
-    });
-    std::vector<std::size_t> open;
-    for (const std::size_t index : order) {
-      const Box2d& box = boxes[index];
-      std::erase_if(open,
-                    [&](std::size_t other) { return axis.high(boxes[other]) < axis.low(box); });
-      counters.textStrokeBoundsTests += open.size();
-      for (const std::size_t other : open) {
-        if (axis.crossOverlaps(boxes[other], box)) {
-          parent[find(index)] = find(other);
-        }
-      }
-      open.push_back(index);
-    }
-    for (std::size_t index = 0; index < parent.size(); ++index) {
-      parent[index] = find(index);
-    }
-    return parent;
+    return BoxSweepGrouping(boxes).groups(counters.textStrokeBoundsTests);
   }
 
   /**
    * Groups the stroke outlines of one text chunk into shapes. Outlines whose bounds, grown by a
    * device pixel, touch, directly or through other outlines of the chunk, form one group, wherever
-   * they are in the run; outlines in different groups share no pixel. A group is split, in run
-   * order, where its outline points would pass \ref textStrokeGroupPointLimit, and a pixel two
-   * parts both cover is then painted twice.
+   * they are in the run; outlines in different groups share no pixel. A group can also take in an
+   * outline that touches only the union of the group's bounds (see \ref BoxSweepGrouping); that
+   * outline shares no pixel with the group, so joining it changes how many shapes are drawn, not
+   * which pixels are covered or how often. A group is split, in run order, where its outline
+   * points would pass \ref textStrokeGroupPointLimit, and a pixel two parts both cover is then
+   * painted twice.
    *
    * @param outlines Stroke outlines of one text chunk's glyphs, in run order.
    * @return Each group's outline indices, in run order.
