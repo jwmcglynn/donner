@@ -930,6 +930,164 @@ test("a trim deadline holds an issued delete lock and never follows it with a pu
   assert.deepEqual(operations, ["delete"]);
 });
 
+// Web Locks resolves the request with the callback's promise only after the callback returns,
+// and the browser runs a microtask checkpoint in between. A callback promise that is already
+// rejected at that checkpoint has no reaction yet and is reported as an uncaught page error.
+function browserLockManager() {
+  const grants = [];
+  const lockManager = {
+    held: false,
+    request(name, options, callback) {
+      assert.equal(options.ifAvailable, true);
+      const released = deferred();
+      grants.push(() => {
+        lockManager.held = true;
+        const result = callback({ name });
+        lockManager.result = result;
+        setImmediate(() => {
+          const waiting = Promise.resolve(result).finally(() => {
+            lockManager.held = false;
+          });
+          released.resolve(waiting);
+        });
+        return result;
+      });
+      return released.promise;
+    },
+    grant() {
+      assert.equal(grants.length, 1, "exactly one lock request must be pending");
+      return grants.shift()();
+    },
+  };
+  return lockManager;
+}
+
+function manualTimers() {
+  const delayed = [];
+  return {
+    delayed,
+    setTimeout(callback, ms) {
+      const timer = { callback, ms };
+      delayed.push(timer);
+      return timer;
+    },
+    clearTimeout(timer) {
+      timer.cancelled = true;
+    },
+  };
+}
+
+function collectUnhandledRejections(t) {
+  const reasons = [];
+  const record = (reason) => reasons.push(reason);
+  process.on("unhandledRejection", record);
+  t.after(() => process.off("unhandledRejection", record));
+  return reasons;
+}
+
+function settlement(promise) {
+  return Promise.resolve(promise).then(() => "fulfilled", (error) => `rejected: ${error?.message}`);
+}
+
+async function macrotasks(count = 3) {
+  for (let index = 0; index < count; ++index) await new Promise(setImmediate);
+}
+
+test("a persistence lock granted after its deadline issues no write and reports no error", async (t) => {
+  const unhandled = collectUnhandledRejections(t);
+  const timers = manualTimers();
+  const locks = browserLockManager();
+  let opens = 0;
+  const { broker, asset, bytes } = setup(t, {
+    storage: {
+      open: async () => {
+        ++opens;
+        return { keys: async () => [], put: async () => {} };
+      },
+    },
+    lockManager: locks,
+    timers,
+  });
+  broker.persist(asset, bytes);
+  timers.delayed.find((timer) => timer.ms === 250).callback();
+  await broker.cacheWork;
+  assert.equal(broker.cacheWritePending, false);
+  // The browser grants the queued lock request only now, after cacheWork stopped listening.
+  const result = locks.grant();
+  await macrotasks();
+  assert.deepEqual(unhandled.map((reason) => reason?.message), []);
+  assert.equal(await settlement(result), "fulfilled", "a lock callback must never reject");
+  assert.equal(opens, 0, "a grant after the deadline must not open the cache");
+  assert.equal(locks.held, false);
+});
+
+// Grants the persistence lock at once and stops the write with its deadline once `operations`
+// shows the cache step the case waits for.
+async function deadlineDuringLockedWrite(t, cache, operations, step) {
+  const unhandled = collectUnhandledRejections(t);
+  const timers = manualTimers();
+  const locks = browserLockManager();
+  const { broker, asset, bytes } = setup(t, {
+    storage: { open: async () => cache },
+    lockManager: locks,
+    timers,
+  });
+  broker.persist(asset, bytes);
+  const result = locks.grant();
+  await macrotasks();
+  assert.equal(operations.at(-1), step, "the write must be in flight when the deadline lands");
+  timers.delayed.find((timer) => timer.ms === 250).callback();
+  await broker.cacheWork;
+  await macrotasks();
+  return { unhandled, locks, result };
+}
+
+test("a deadline during an issued cache put keeps the lock until it settles, without an error", async (t) => {
+  const putting = deferred();
+  t.after(() => putting.resolve());
+  const operations = [];
+  const cache = {
+    keys: async () => {
+      operations.push("keys");
+      return [];
+    },
+    put: () => {
+      operations.push("put");
+      return putting.promise;
+    },
+  };
+  const { unhandled, locks, result } = await deadlineDuringLockedWrite(t, cache, operations, "put");
+  assert.equal(locks.held, true, "an issued mutation must retain its cross-tab lock");
+  assert.deepEqual(operations, ["keys", "put"]);
+  putting.resolve();
+  await macrotasks();
+  assert.deepEqual(unhandled.map((reason) => reason?.message), []);
+  assert.equal(await settlement(result), "fulfilled", "a lock callback must never reject");
+  assert.equal(locks.held, false);
+  assert.deepEqual(operations, ["keys", "put"]);
+});
+
+test("a deadline during a locked cache scan releases the lock without a write or an error", async (t) => {
+  const listing = deferred();
+  t.after(() => listing.resolve([]));
+  const operations = [];
+  const cache = {
+    keys: () => {
+      operations.push("keys");
+      return listing.promise;
+    },
+    put: async () => operations.push("put"),
+  };
+  const { unhandled, locks, result } = await deadlineDuringLockedWrite(t, cache, operations, "keys");
+  // Only issued mutations hold the lock; an outstanding read is abandoned at the deadline.
+  assert.equal(locks.held, false);
+  assert.deepEqual(unhandled.map((reason) => reason?.message), []);
+  assert.equal(await settlement(result), "fulfilled", "a lock callback must never reject");
+  listing.resolve([]);
+  await macrotasks();
+  assert.deepEqual(operations, ["keys"], "a cancelled write must not reach put");
+});
+
 const bridgeSource = await readFile(
   new URL("../../WholeAppWorkerBridge.cc", import.meta.url),
   "utf8",

@@ -1,13 +1,16 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "tiny_skia/Mask.h"
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
+#include "tiny_skia/Stroke.h"
 
 using ::testing::Optional;
 
@@ -155,4 +158,52 @@ TEST(PathTest, ConvexClassificationRequiresFiniteTurns) {
     ASSERT_THAT(path, Optional(testing::_));
     EXPECT_THAT(path->isConvex(), testing::Eq(scale == 1.0f));
   }
+}
+
+namespace {
+
+/// A circle of four cubics, radius 40 around (50, 50).
+tiny_skia::Path CubicCircle() {
+  constexpr float kKappa = 0.5522847f;
+  constexpr float kCenter = 50.0f;
+  constexpr float kRadius = 40.0f;
+  constexpr float kHandle = kKappa * kRadius;
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(kCenter + kRadius, kCenter);
+  builder.cubicTo(kCenter + kRadius, kCenter + kHandle, kCenter + kHandle, kCenter + kRadius,
+                  kCenter, kCenter + kRadius);
+  builder.cubicTo(kCenter - kHandle, kCenter + kRadius, kCenter - kRadius, kCenter + kHandle,
+                  kCenter - kRadius, kCenter);
+  builder.cubicTo(kCenter - kRadius, kCenter - kHandle, kCenter - kHandle, kCenter - kRadius,
+                  kCenter, kCenter - kRadius);
+  builder.cubicTo(kCenter + kHandle, kCenter - kRadius, kCenter + kRadius, kCenter - kHandle,
+                  kCenter + kRadius, kCenter);
+  builder.close();
+  return *builder.finish();
+}
+
+}  // namespace
+
+TEST(PathTest, StrokeStopsAtTheOutputLimit) {
+  // At a resolution scale of 100,000 the stroker emits about 16,000 outline points for this
+  // circle. A limit below that stops the expansion and produces no outline.
+  const tiny_skia::Path circle = CubicCircle();
+  tiny_skia::Stroke stroke;
+  stroke.width = 2.0f;
+
+  tiny_skia::StrokeOutputLimit tight{.maxPoints = 4096};
+  EXPECT_THAT(circle.stroke(stroke, 100000.0f, &tight), testing::Eq(std::nullopt));
+  EXPECT_TRUE(tight.exceeded);
+
+  tiny_skia::StrokeOutputLimit ample{.maxPoints = std::size_t{1} << 20};
+  const std::optional<tiny_skia::Path> outline = circle.stroke(stroke, 100000.0f, &ample);
+  ASSERT_THAT(outline, Optional(testing::_));
+  EXPECT_FALSE(ample.exceeded);
+  EXPECT_THAT(outline->points().size(),
+              testing::AllOf(testing::Gt(4096u), testing::Le(ample.maxPoints)));
+
+  // Without a limit the stroke is unchanged.
+  const std::optional<tiny_skia::Path> unlimited = circle.stroke(stroke, 100000.0f);
+  ASSERT_THAT(unlimited, Optional(testing::_));
+  EXPECT_THAT(unlimited->points().size(), testing::Eq(outline->points().size()));
 }
