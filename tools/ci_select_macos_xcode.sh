@@ -175,7 +175,9 @@ fi
   echo "DEVELOPER_DIR=${developer_dir}"
   echo "DONNER_CI_XCODE_IDENTITY=${version}-${build}"
   echo "CCACHE_NAMESPACE=donner-xcode-${version}-${build}"
-  echo "BAZEL_MACOS_BUILD_FLAGS=${BAZEL_MACOS_BUILD_FLAGS:-} --xcode_version=${version}"
+  # Only the flag this selection adds: the lane phases pass the key-affecting flags themselves
+  # (tools/ci/lanes.py), and a value left in a persistent runner's environment must not reach them.
+  echo "BAZEL_MACOS_BUILD_FLAGS=--xcode_version=${version}"
 } >> "${GITHUB_ENV}"
 echo "cache_partition=macos-${RUNNER_ARCH:-unknown}-xcode-${version}-${build}" >> "${GITHUB_OUTPUT}"
 echo "Selected the approved Xcode ${version} (${build})."
