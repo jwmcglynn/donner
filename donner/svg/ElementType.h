@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
@@ -96,35 +98,35 @@ std::ostream& operator<<(std::ostream& os, ElementType type);
  * @param type Element type.
  */
 constexpr bool IsFilterElementFamily(ElementType type) {
-  switch (type) {
-    case ElementType::Filter:
-    case ElementType::FeBlend:
-    case ElementType::FeColorMatrix:
-    case ElementType::FeComponentTransfer:
-    case ElementType::FeComposite:
-    case ElementType::FeConvolveMatrix:
-    case ElementType::FeDiffuseLighting:
-    case ElementType::FeDisplacementMap:
-    case ElementType::FeDistantLight:
-    case ElementType::FeDropShadow:
-    case ElementType::FeFlood:
-    case ElementType::FeFuncA:
-    case ElementType::FeFuncB:
-    case ElementType::FeFuncG:
-    case ElementType::FeFuncR:
-    case ElementType::FeGaussianBlur:
-    case ElementType::FeImage:
-    case ElementType::FeMerge:
-    case ElementType::FeMergeNode:
-    case ElementType::FeMorphology:
-    case ElementType::FeOffset:
-    case ElementType::FePointLight:
-    case ElementType::FeSpecularLighting:
-    case ElementType::FeSpotLight:
-    case ElementType::FeTile:
-    case ElementType::FeTurbulence: return true;
-    default: return false;
-  }
+  constexpr std::array kFilterElementFamily = {
+      ElementType::Filter,
+      ElementType::FeBlend,
+      ElementType::FeColorMatrix,
+      ElementType::FeComponentTransfer,
+      ElementType::FeComposite,
+      ElementType::FeConvolveMatrix,
+      ElementType::FeDiffuseLighting,
+      ElementType::FeDisplacementMap,
+      ElementType::FeDistantLight,
+      ElementType::FeDropShadow,
+      ElementType::FeFlood,
+      ElementType::FeFuncA,
+      ElementType::FeFuncB,
+      ElementType::FeFuncG,
+      ElementType::FeFuncR,
+      ElementType::FeGaussianBlur,
+      ElementType::FeImage,
+      ElementType::FeMerge,
+      ElementType::FeMergeNode,
+      ElementType::FeMorphology,
+      ElementType::FeOffset,
+      ElementType::FePointLight,
+      ElementType::FeSpecularLighting,
+      ElementType::FeSpotLight,
+      ElementType::FeTile,
+      ElementType::FeTurbulence,
+  };
+  return std::ranges::find(kFilterElementFamily, type) != kFilterElementFamily.end();
 }
 
 /**
