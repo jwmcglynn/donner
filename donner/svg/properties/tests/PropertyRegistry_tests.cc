@@ -844,11 +844,12 @@ TEST(PropertyRegistry, FontShorthandRejectsConflictsWithoutPartialMutation) {
   EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("preserved"))));
 }
 
-TEST(PropertyRegistry, FontShorthandPresentationAttributeAcceptsUserUnitSize) {
+// SVG 2 lists the font longhands as presentation attributes, but not the `font` shorthand.
+TEST(PropertyRegistry, FontShorthandIsNotAPresentationAttribute) {
   PropertyRegistry registry;
-  EXPECT_THAT(registry.parsePresentationAttribute("font", "50 Noto Sans"), ParseResultIs(true));
-  EXPECT_THAT(registry.fontSize.get(), Optional(Lengthd(50, Lengthd::Unit::None)));
-  EXPECT_THAT(registry.fontFamily.get(), Optional(testing::ElementsAre(RcString("Noto Sans"))));
+  EXPECT_THAT(registry.parsePresentationAttribute("font", "50px Noto Sans"), ParseResultIs(false));
+  EXPECT_EQ(registry.numPropertiesSet(), 0);
+  EXPECT_THAT(PropertyRegistry::isPresentationAttributeName("font"), testing::IsFalse());
 }
 
 TEST(PropertyRegistry, FontShorthandAcceptsSizeKeywordsStretchAndLineHeight) {

@@ -413,10 +413,25 @@ TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDec
   ExpectBitmapsIdentical(actual, expected, "obsolete_icc_declaration_rejected");
 }
 
-// The font presentation shorthand is a supported Donner extension.
-TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
+// SVG 2 has no `font` presentation attribute, so the attribute leaves the cascade unchanged.
+TEST_F(RendererRegressionTests, ReferenceContractFontAttributeIsIgnored) {
+  SVGDocument attribute = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-family="Noto Sans" font="bold italic 28px Noto Sans">Ab</text>)svg",
+                                             {}, Vector2i(64, 64));
+  SVGDocument plain = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-family="Noto Sans">Ab</text>)svg",
+                                         {}, Vector2i(64, 64));
+  RegisterFontsFromDirectoryForTesting(attribute, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(plain, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(attribute, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "font_attribute_visible");
+  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(plain, ActiveRendererBackend()),
+                         "font_attribute_ignored");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"svg(
-    <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>)svg",
+    <text x="4" y="38" style="font: bold italic 28px Noto Sans">Ab</text>)svg",
                                              {}, Vector2i(64, 64));
   SVGDocument expanded = instantiateSubtree(R"svg(
     <text x="4" y="38" font-style="italic" font-weight="bold" font-size="28"
@@ -425,9 +440,9 @@ TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLon
   RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
   RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
   const auto actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
-  ExpectVisibleBitmap(actual, "unitless_font_shorthand_visible");
+  ExpectVisibleBitmap(actual, "style_font_shorthand_visible");
   ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
-                         "unitless_font_shorthand_longhands");
+                         "style_font_shorthand_longhands");
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit) {

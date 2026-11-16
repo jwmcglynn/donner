@@ -2455,7 +2455,6 @@ constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAt
     {"flood-color", true},
     {"flood-opacity", true},
     {"font-family", true},
-    {"font", true},
     {"font-size", true},
     {"font-size-adjust", true},
     {"font-stretch", true},
