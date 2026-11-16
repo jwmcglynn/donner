@@ -206,6 +206,18 @@ public:
    */
   void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 
+  /**
+   * Recreate the computed layout of one entity that \ref invalidate dropped while its viewport
+   * stayed the same (for example after a transform write), matching what \ref
+   * instantiateAllComputedComponents computes for it: its computed size, local transform and
+   * viewBox. Descendants keep their computed layout; only their absolute transforms were dropped,
+   * and those are recomputed on demand.
+   *
+   * @param entity Entity whose layout was invalidated. Must have a computed style.
+   * @param warningSink Output vector of parse errors, if any.
+   */
+  void recomputeInvalidatedLayout(EntityHandle entity, ParseWarningSink& warningSink);
+
   /** Apply the size-property cascade while preserving unresolved lengths.
    * @param sizeProperties Typed properties, including their cascade specificity.
    * @param unparsedProperties CSS declarations to apply.

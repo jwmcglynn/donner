@@ -322,6 +322,8 @@ class RemoteMacosConfigTest(unittest.TestCase):
         github = main.parent.parent
         files = sorted((github / "workflows").glob("*.y*ml")) + sorted(
             (github / "actions").glob("*/action.y*ml"))
+        # The lane table holds the Bazel commands of main.yml's steps.
+        files.append(Path(runfiles.Create().Rlocation("donner/tools/ci/lanes.py")))
         self.assertTrue(files)
         for path in files:
             with self.subTest(path=path.name):
