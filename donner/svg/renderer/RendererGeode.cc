@@ -1534,6 +1534,37 @@ struct DocumentResidency {
   geode::GeodePerDevice<DocumentDeviceResidency> devices;  //!< Residence per drawing device.
 };
 
+/// The axis a set of boxes is swept along: their longer extent, so a text run in either writing
+/// mode is swept along its advance.
+struct BoxSweepAxis {
+  bool alongY = false;  //!< True to sweep along y, false along x.
+
+  /// Returns the axis along the longer side of the boxes' union.
+  /// @param boxes Boxes to sweep.
+  static BoxSweepAxis LongerExtentOf(std::span<const Box2d> boxes) {
+    if (boxes.empty()) {
+      return {};
+    }
+    Box2d extent = boxes.front();
+    for (const Box2d& box : boxes) {
+      extent.addBox(box);
+    }
+    return {.alongY = extent.height() > extent.width()};
+  }
+
+  /// Returns the low end of \p box along the sweep axis.
+  double low(const Box2d& box) const { return alongY ? box.topLeft.y : box.topLeft.x; }
+
+  /// Returns the high end of \p box along the sweep axis.
+  double high(const Box2d& box) const { return alongY ? box.bottomRight.y : box.bottomRight.x; }
+
+  /// Returns true if \p a and \p b overlap across the sweep axis.
+  bool crossOverlaps(const Box2d& a, const Box2d& b) const {
+    return alongY ? a.topLeft.x <= b.bottomRight.x && b.topLeft.x <= a.bottomRight.x
+                  : a.topLeft.y <= b.bottomRight.y && b.topLeft.y <= a.bottomRight.y;
+  }
+};
+
 }  // namespace
 
 /// Gate for ordered cross-entity batching. Enabled: a batch's single draw can
@@ -4195,31 +4226,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
       return index;
     };
-    Box2d extent = boxes.empty() ? Box2d() : boxes.front();
-    for (const Box2d& box : boxes) {
-      extent.addBox(box);
-    }
-    // Sweep axis: x for a run laid out horizontally, y for a vertical one.
-    const bool alongY = extent.height() > extent.width();
-    const auto low = [alongY](const Box2d& box) { return alongY ? box.topLeft.y : box.topLeft.x; };
-    const auto high = [alongY](const Box2d& box) {
-      return alongY ? box.bottomRight.y : box.bottomRight.x;
-    };
-    const auto crossOverlaps = [alongY](const Box2d& a, const Box2d& b) {
-      return alongY ? a.topLeft.x <= b.bottomRight.x && b.topLeft.x <= a.bottomRight.x
-                    : a.topLeft.y <= b.bottomRight.y && b.topLeft.y <= a.bottomRight.y;
-    };
+    const BoxSweepAxis axis = BoxSweepAxis::LongerExtentOf(boxes);
     std::vector<std::size_t> order(boxes.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
-    std::ranges::sort(order,
-                      [&](std::size_t a, std::size_t b) { return low(boxes[a]) < low(boxes[b]); });
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+      return axis.low(boxes[a]) < axis.low(boxes[b]);
+    });
     std::vector<std::size_t> open;
     for (const std::size_t index : order) {
       const Box2d& box = boxes[index];
-      std::erase_if(open, [&](std::size_t other) { return high(boxes[other]) < low(box); });
+      std::erase_if(open,
+                    [&](std::size_t other) { return axis.high(boxes[other]) < axis.low(box); });
       counters.textStrokeBoundsTests += open.size();
       for (const std::size_t other : open) {
-        if (crossOverlaps(boxes[other], box)) {
+        if (axis.crossOverlaps(boxes[other], box)) {
           parent[find(index)] = find(other);
         }
       }
