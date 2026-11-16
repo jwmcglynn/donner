@@ -871,8 +871,7 @@ TEST(SubDocumentFiltersTest, PathComparisonsStayLinearInTheOccurrences) {
   const auto measure = [&](int uses, bool distinct) {
     SVGDocument document = Parse(SizedUsesHost(uses, distinct), documents);
     RendererBitmap bitmap;
-    const auto work =
-        DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap);
+    const auto work = DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap);
     return Work{.copyBytes = work->externalMeasureGeometryBytes(),
                 .comparisons = work->externalMeasureGeometryComparisons()};
   };
