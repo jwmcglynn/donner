@@ -125,14 +125,14 @@ TEST(FilterPrecisionParity, NearHalfPixelOffsetsMatchSoftwareRenderer) {
 }
 
 // A rotated element runs its filter through the transformed path, whose fractional offsets
-// resample on a local raster. A quarter turn keeps every edge on the pixel grid, so the software
+// resample on a local raster; the offsets are not dyadic, so any per-pixel weight drift shows. A quarter turn keeps every edge on the pixel grid, so the software
 // and GPU renderings must agree exactly, seam colors included.
 TEST(FilterPrecisionParity, RotatedFractionalOffsetsMatchSoftwareRenderer) {
   static const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
   const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
       <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
-        <feOffset dx="2.25" dy="-1.5"/><feGaussianBlur stdDeviation="0.01"/></filter></defs>
+        <feOffset dx="2.3" dy="-0.6"/><feGaussianBlur stdDeviation="0.01"/></filter></defs>
       <g transform="rotate(90 16 16)" filter="url(#f)">
         <rect x="6" y="8" width="8" height="12" fill="red"/>
         <rect x="14" y="8" width="8" height="12" fill="blue"/></g></svg>)svg";

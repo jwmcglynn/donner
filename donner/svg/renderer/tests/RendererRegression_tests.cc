@@ -4142,22 +4142,22 @@ TEST_F(RendererRegressionTests, SkewedBlurCropsSourceToFilterRegion) {
   }
 }
 
-/// Renders \p markup on a 64x64 canvas and again shifted 64 device pixels right on a 128x64
-/// canvas, and checks the two agree over the shared 64x64 window. The shift is a whole multiple of
-/// the capture granularity, so both renders resample on the same pixel phase. The shifted copy
+/// Renders \p markup on a 64x64 canvas and again shifted 32 device pixels right on a 96x64 canvas,
+/// and checks the two agree over the shared 64x64 window. Offsets blend by a weight fixed per
+/// shift, so the same content resamples identically wherever it sits on the raster. The shifted copy
 /// keeps everything the filter reads on the canvas, so a difference means the capture near the left
 /// edge fell short.
 void ExpectFilterMatchesRenderWithRoom(std::string_view markup, std::string_view label) {
   SVGDocument atEdge = instantiateSubtree(markup, {}, Vector2i(64, 64));
   SVGDocument withRoom = instantiateSubtree(
-      std::string(R"svg(<g transform="translate(64 0)">)svg") + std::string(markup) + "</g>", {},
-      Vector2i(128, 64));
+      std::string(R"svg(<g transform="translate(32 0)">)svg") + std::string(markup) + "</g>", {},
+      Vector2i(96, 64));
   const RendererBitmap actual = RenderDocumentWithBackend(atEdge, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, std::string(label) + "_visible");
   editor::tests::CompareBitmapToBitmap(
       actual,
       editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
-                                Vector2i(64, 0), Vector2i(64, 64)),
+                                Vector2i(32, 0), Vector2i(64, 64)),
       label, editor::tests::PixelmatchIdentityParams());
 }
 
@@ -4177,20 +4177,20 @@ TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachPastTheCanvasEdge) 
 }
 
 // Under a skew the transformed blur path runs offsets on a local raster whose axes are the filter
-// axes. Eight half-pixel offsets along the unskewed X axis move content 4 device pixels and read 8,
-// so content just past the left edge renders as it does with room around it. Half pixels are exact
-// in single precision at any position, so both renders resample identically.
+// axes. Under matrix(1 0 1 1 0 0) each fractional (0.6, -0.6) offset blends local pixels on both
+// sides of its shift, so 24 of them, with the blur that selects the transformed path, read content
+// well past the left edge; that content renders as it does with room around it.
 TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachPastTheCanvasEdge) {
   std::string primitives;
-  for (int i = 0; i < 8; ++i) {
-    primitives += R"svg(<feOffset dx="0.5"/>)svg";
+  for (int i = 0; i < 24; ++i) {
+    primitives += R"svg(<feOffset dx="0.6" dy="-0.6"/>)svg";
   }
   primitives += R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg";
   ExpectFilterMatchesRenderWithRoom(
       R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-100" y="0" width="200" height="64">)svg" +
           primitives + R"svg(</filter>
       <g transform="matrix(1 0 1 1 0 0)" filter="url(#f)">
-        <rect x="-44" y="36" width="8" height="12" fill="lime"/>
+        <rect x="-40" y="36" width="8" height="12" fill="lime"/>
       </g>)svg",
       "skewed_local_raster_offsets");
 }
