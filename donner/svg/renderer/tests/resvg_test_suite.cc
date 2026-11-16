@@ -1458,11 +1458,13 @@ INSTANTIATE_TEST_SUITE_P(
     TextFontSizeAdjust, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "text/font-size-adjust",
-                // The PNG kerns "Text" but centers it on the unkerned advance, 4.03 device px left.
+                // The PNG centers the kerned text on its unkerned advance (4.03 device px left), so
+                // the golden is Donner's rendering; testdata/golden/README.md has the evidence.
                 {{"simple-case.svg",
-                  Params::Skip("Reference disagreement: the PNG centers the kerned text on its "
-                               "unkerned advance, 1.61 user units left of the kerned center; text "
-                               "anchoring uses the shaped advance (#1173)")}})),
+                  Params::WithGoldenOverride(
+                      "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png")
+                      .withReason("Donner reference: text-anchor centers the shaped (kerned) "
+                                  "advance (#1173)")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
