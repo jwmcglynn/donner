@@ -464,16 +464,6 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
 
   const std::vector<Path> paths = textElement.convertToPath();
   EXPECT_FALSE(paths.empty());
-  // NOTE: branches on the compile-time DONNER_TEXT_FULL flag, not
-  // ActiveRendererSupportsFeature(TextFull). That runtime query answers a
-  // different question for the Geode backend: GeodeSupportsFeature always
-  // reports TextFull as unsupported so the resvg golden-image suite skips
-  // categories where Geode is not yet Multisample-tuned to match tiny-skia
-  // (see RendererTestBackendGeode.cc). This assertion is a plain (non
-  // golden-image) glyph-metrics check: what matters here is whether HarfBuzz
-  // + FreeType shaping was actually compiled in for this variant, which is
-  // exactly what DONNER_TEXT_FULL means, independent of which backend is
-  // active.
   // Both text tiers scale the font's unrounded advances and outlines to the requested size.
   const Box2d inkBounds = textElement.inkBoundingBox();
   EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.204), Vector2Near(34.36, 20.12)));

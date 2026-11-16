@@ -87,6 +87,8 @@ protected:
           <text id="fallback-auto" font-family="PrimaryMissing,sans-serif" font-style="italic">&#x3a9;</text>
           <text id="fallback-none" font-family="PrimaryMissing,sans-serif" font-style="italic" style="font-synthesis-style:none">&#x3a9;</text>
           <text id="document" font-family="DocumentFace" font-style="italic">A</text>
+          <text id="stem" font-size="64.3">l</text>
+          <text id="bold-stem" font-size="64.3" font-weight="bold">l</text>
         </g>
       </svg>)",
                                               warnings);
@@ -329,6 +331,17 @@ TEST_F(FontSynthesisStyleTest, ExistingDocumentFaceWithoutSynthesisKeepsItsGeome
   EXPECT_THAT(original.outline.points(), ElementsAreArray(observe("regular").outline.points()));
   setPolicy("document", "none");
   EXPECT_THAT(observe("document").outline.points(), ElementsAreArray(original.outline.points()));
+}
+
+// Synthesized bold widens each outline by 3% of the text size, however finely the face is sized
+// to keep a fractional size's precision. A straight stem widens by exactly the embolden strength.
+TEST_F(FontSynthesisStyleTest, SyntheticBoldStrengthIsAFractionOfTheTextSize) {
+  const auto regular = observe("stem");
+  const auto bold = observe("bold-stem");
+  const Box2d regularBounds = regular.outline.bounds();
+  const Box2d boldBounds = bold.outline.bounds();
+  ASSERT_THAT(regularBounds.width(), testing::Gt(1.0));
+  EXPECT_THAT(boldBounds.width() - regularBounds.width(), testing::DoubleNear(64.3 * 0.03, 0.01));
 }
 
 }  // namespace

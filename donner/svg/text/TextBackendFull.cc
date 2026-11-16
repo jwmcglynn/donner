@@ -594,7 +594,10 @@ std::optional<SubSuperMetrics> TextBackendFull::subSuperMetrics(FontHandle font)
 int TextBackendFull::outlineLoadFlags(FontHandle font, bool allowSyntheticOblique) const {
   const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
   const bool suppressOblique = !allowSyntheticOblique && entry && entry->syntheticOblique;
-  return FreeTypeLoadFlags(fontManager_, font) | (suppressOblique ? FT_LOAD_IGNORE_TRANSFORM : 0);
+  // An outline load never wants an embedded bitmap strike that happens to match the face size;
+  // bitmap-only faces take the separate bitmap glyph path.
+  return FreeTypeLoadFlags(fontManager_, font) | FT_LOAD_NO_BITMAP |
+         (suppressOblique ? FT_LOAD_IGNORE_TRANSFORM : 0);
 }
 
 Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
