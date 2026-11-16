@@ -3721,6 +3721,27 @@ void ExpectTinyStrokeLimitIsExact(std::string_view body, TinyStrokeLimit limit,
   }
 }
 
+/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
+/// snapshot. An empty snapshot fails the calling test instead of covering no pixel of the rect.
+std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1,
+                          std::source_location caller = std::source_location::current()) {
+  if (!test::ExpectSnapshotHasPixels(snapshot, caller)) {
+    return 0;
+  }
+  const RendererBitmap normalized = NormalizeSnapshot(snapshot);
+  std::size_t covered = 0;
+  for (int y = std::max(y0, 0); y < std::min(y1, normalized.dimensions.y); ++y) {
+    for (int x = std::max(x0, 0); x < std::min(x1, normalized.dimensions.x); ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * normalized.rowBytes + static_cast<std::size_t>(x) * 4u + 3u;
+      if (normalized.pixels[offset] != 0) {
+        ++covered;
+      }
+    }
+  }
+  return covered;
+}
+
 /// Magnifies 100,000 times about the canvas center.
 constexpr std::string_view kMagnify = R"svg(transform="translate(50 50) scale(100000)")svg";
 
@@ -3778,27 +3799,6 @@ TEST(RendererTinySkiaSecurityTest, TextReservesAStrokeDrawCallOnlyWhenStroked) {
          </svg>)");
   renderer.draw(spanStroked);
   EXPECT_EQ(renderer.resourceStats().drawCalls, 4u) << "A span's stroke paint counts too.";
-}
-
-/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
-/// snapshot. An empty snapshot fails the calling test instead of covering no pixel of the rect.
-std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1,
-                          std::source_location caller = std::source_location::current()) {
-  if (!test::ExpectSnapshotHasPixels(snapshot, caller)) {
-    return 0;
-  }
-  const RendererBitmap normalized = NormalizeSnapshot(snapshot);
-  std::size_t covered = 0;
-  for (int y = std::max(y0, 0); y < std::min(y1, normalized.dimensions.y); ++y) {
-    for (int x = std::max(x0, 0); x < std::min(x1, normalized.dimensions.x); ++x) {
-      const std::size_t offset =
-          static_cast<std::size_t>(y) * normalized.rowBytes + static_cast<std::size_t>(x) * 4u + 3u;
-      if (normalized.pixels[offset] != 0) {
-        ++covered;
-      }
-    }
-  }
-  return covered;
 }
 
 TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
@@ -4265,6 +4265,22 @@ TEST(RendererTinySkiaStrokeAccuracyTest, MiterLimitLeavesCurvedStrokesUnchanged)
   EXPECT_THAT(CoveredPixels(expected, 0, 0, 100, 100), Gt(0u));
   editor::tests::CompareBitmapToBitmap(render("1e9"), expected, "miter_limit_curved_stroke",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererTinySkiaStrokeAccuracyTest, PrecisionFloorKeepsShortLinesOfWideStrokes) {
+  // A line 0.01 long stroked 10^10 wide under matrix(1000 0 0 1e-8 0 50) covers the device
+  // rectangle from (0, 0) to (10, 100). The stroke radius puts the precision floor's coordinate
+  // at 5 x 10^9, which coarsens the curve tolerance, but the test for a zero-length line keeps the
+  // caller's resolution, so the line is still stroked.
+  SVGDocument document = HundredSquareDocument(
+      R"svg(<path transform="matrix(1000 0 0 1e-8 0 50)" d="M0 0 L0.01 0" fill="none"
+              stroke="black" stroke-width="1e10"/>)svg");
+  RendererTinySkia renderer;
+  renderer.draw(document);
+  EXPECT_FALSE(renderer.resourceStats().drawBudgetRejected);
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  EXPECT_THAT(CoveredPixels(snapshot, 0, 0, 10, 100), testing::AllOf(Gt(900u), testing::Le(1000u)));
+  EXPECT_EQ(CoveredPixels(snapshot, 11, 0, 100, 100), 0u);
 }
 
 TEST(RendererTinySkiaStrokeAccuracyTest, LargeCoordinateCurvesMatchTheirGoldenAtModestZoom) {
