@@ -31,6 +31,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -783,6 +784,37 @@ TEST_F(GeodeGlyphInstancingTest, DashedTextStrokeExpansionIsChargedAsItIsProduce
       << "Expansion stops once the expanded strokes exhaust the frame budget.";
   EXPECT_THAT(frame.counters.strokeOutlinePoints * sizeof(Vector2d), testing::Lt(4 * kFrameBytes))
       << "Expanded stroke points stay within a few times the frame budget.";
+}
+
+/// A stroke whose bounds touch only the union of a group's bounds, not any one member's, joins
+/// the group's shape. Its ink is more than two device pixels from every member's, so no pixel has
+/// coverage from both, and the joined shape paints exactly what drawing it on its own paints, even
+/// with a translucent stroke.
+TEST_F(GeodeGlyphInstancingTest, StrokeJoinedThroughGroupBoundsPaintsAsItsOwnShape) {
+  // Periods at font-size 100 (ink 72..196 x -14..121 font units, advance 26.8). The first two
+  // touch diagonally. The third sits above the second and right of the first, inside the pair's
+  // bounds but more than a device pixel from either; the fourth, far to the right, makes the run
+  // wider than it is tall, so the sweep runs along x and reaches the third while the pair's group
+  // is open. Pen positions only increase, so anchoring does not move the chunk.
+  constexpr std::string_view kHead =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" font-family="Noto Sans"
+          font-size="100" fill="none" stroke="black" stroke-width="2" stroke-opacity="0.5">)svg";
+  SVGDocument joined =
+      parse(std::string(kHead) +
+            R"svg(<text x="20" y="100" dx="0 -16.8 -18.8 85.2" dy="0 12 -19 7">....</text>
+            </svg>)svg");
+  SVGDocument separate = parse(std::string(kHead) +
+                               R"svg(<text x="20" y="100" dx="0 -16.8 93.2" dy="0 12 -12">...</text>
+            <text x="38" y="93">.</text></svg>)svg");
+  RendererGeode renderer(sharedDevice());
+  const Frame joinedFrame = render(renderer, joined);
+  const Frame separateFrame = render(renderer, separate);
+  EXPECT_THAT(joinedFrame.counters.drawCalls, testing::Eq(separateFrame.counters.drawCalls - 1))
+      << "The third period joins the pair's shape instead of being drawn on its own.";
+  EXPECT_THAT(joinedFrame.counters.strokeOutlineFlattens, testing::Eq(4u));
+  editor::tests::CompareBitmapToBitmap(joinedFrame.bitmap, separateFrame.bitmap,
+                                       "stroke_joined_through_group_bounds",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
