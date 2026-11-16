@@ -57,3 +57,54 @@ This reference qualifies the full-text CPU rendering path. Geode currently skips
 bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
+
+## Donner renderings of text references with an opaque background
+
+The vendored PNGs for the rows below are opaque white, while every other vendored reference
+and Donner's canvas are transparent. Under the comparator's checkerboard blending that
+background alone counts about 235,000 pixels. No resvg v0.49.0 reference fixes them: the
+upstream renderings at that release draw something different (see each row). The goldens are
+Donner renderings at commit `21c59c75`, made with the software renderer and simple text at
+default settings. Full text renders both within 1 pixel of them. These rows are text, so the
+Geode lane does not run them. A self-rendered golden cannot prove itself correct, so each row
+records the independent evidence.
+
+### `text/text-anchor/coordinates-list`
+
+`donner-coordinates-list.png` (500x500). The red `T` plus `<tspan y="120">ext</tspan>` must be
+covered by the black `Text` with `y="100 120"`. In both texts, `ext` starts a new anchored chunk
+because a `y` value alone starts one (SVG 2, Text layout algorithm, "Resolve character
+positioning": the chunk count is the larger of the `x` and `y` list lengths). Anchoring is
+applied after positioning ("Apply anchoring"), so `ext` is centered on its unanchored start,
+the end of the unshifted `T`. Two pieces of evidence agree with Donner:
+- Glyph placement. Flattened onto white, Donner's rendering matches the vendored PNG's glyph
+  placement: the `T` ink centroid is identical, and the `ext` centroid is 0.36 px to the right.
+  results.csv records Chrome and Safari passing that reference.
+- Glyph edges. Flattened, 406 pixels (simple text) and 408 (full text) still differ. They lie on
+  the glyph edges of `T` and `ext`, where the red text shows through the anti-aliased edges of
+  the black text in both images (257 red-tinted pixels in Donner's, 230 in the PNG).
+
+resvg v0.49.0 centers `ext` on the end of the already anchored `T`, about 6 user units further
+left, and Donner differs from it by 245 pixels at 300x300.
+
+PNG SHA-256: `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb`.
+
+### `text/textPath/with-path` and `with-path-and-xlink-href`
+
+Both rows compare against `donner-textPath-with-path.png` (500x500). Their text follows the
+SVG 2 `path` attribute of `textPath`, which takes precedence over `href` (SVG 2, Text,
+"The 'path' attribute"), so the two files draw the same picture. Flattened onto white, Donner's
+rendering differs from each vendored PNG by 38 pixels (simple text) and 33 (full text), inside
+the default allowance. results.csv records Firefox passing the vendored PNGs. resvg v0.49.0
+does not implement the attribute: its references draw only the guide path and frame, and
+results.csv records resvg failing both rows.
+
+PNG SHA-256: `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7`.
+
+To regenerate one of these goldens, delete the file and run this from the repository root,
+with the filter naming the row:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*TextTextPath*with_path*'
+```
