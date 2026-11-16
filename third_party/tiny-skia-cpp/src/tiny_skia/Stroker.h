@@ -77,10 +77,15 @@ class PathStroker {
 
   static float computeResolutionScale(const Transform& ts);
 
-  /// Strokes \p path. With \p limit, stops and returns no path once the emitted outline passes
-  /// `limit->maxPoints`, setting `limit->exceeded` (a Donner addition; see StrokeOutputLimit).
+  /// The curve tolerance of a stroke at a resolution scale of 1; the stroker divides it by the
+  /// scale. The '4' matches the fill scan converter's error term.
+  static constexpr float kStrokeToleranceAtUnitScale = 0.25f;
+
+  /// Strokes \p path. \p resolutionScale is lowered as \ref PrecisionLimitedResScale states (a
+  /// Donner addition). With \p limits, stops and returns no path once the emitted outline passes
+  /// `limits->maxOutlinePoints`, setting `limits->exceeded` (a Donner addition; see StrokeLimits).
   std::optional<Path> stroke(const Path& path, const Stroke& stroke, float resolutionScale,
-                             StrokeOutputLimit* limit = nullptr);
+                             StrokeLimits* limits = nullptr);
 
  private:
   std::optional<Path> strokeInner(const Path& path, float width, float miterLimit, LineCap lineCap,
@@ -124,6 +129,8 @@ class PathStroker {
 
   std::optional<Path> finish(bool isLine);
   bool exceedsOutputLimit();
+  std::size_t pendingPoints() const;
+  bool passesOutlineLimit(std::size_t emitted) const;
   bool hasOnlyMoveTo() const;
   bool isCurrentContourEmpty() const;
 
@@ -159,8 +166,8 @@ class PathStroker {
   bool foundTangents_ = false;
   bool joinCompleted_ = false;
 
-  // Donner addition: the caller's output bound, if any (see StrokeOutputLimit).
-  StrokeOutputLimit* outputLimit_ = nullptr;
+  // Donner addition: the caller's bounds, if any (see StrokeLimits).
+  StrokeLimits* limits_ = nullptr;
 };
 
 // Free functions used by the stroker.

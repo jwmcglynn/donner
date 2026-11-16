@@ -11,6 +11,7 @@
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
 #include "tiny_skia/Stroke.h"
+#include "tiny_skia/Transform.h"
 
 using ::testing::Optional;
 
@@ -182,30 +183,60 @@ tiny_skia::Path CubicCircle() {
   return *builder.finish();
 }
 
+/// A path whose contour has already measured far enough that float rounding absorbs the length
+/// of every measured piece of the small curves that follow: 200 trips along a 20,000-unit line
+/// (a distance of 8,000,000, where a float step is 0.5) and then \p curveCount loops 0.5 units
+/// tall, each subdivided into pieces about 0.1 long.
+tiny_skia::Path AbsorbedCurves(int curveCount) {
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(0.0f, 0.0f);
+  for (int trip = 0; trip < 200; ++trip) {
+    builder.lineTo(20000.0f, 0.0f);
+    builder.lineTo(0.0f, 0.0f);
+  }
+  for (int curve = 0; curve < curveCount; ++curve) {
+    builder.cubicTo(0.0f, 0.5f, 0.1f, 0.5f, 0.1f, 0.0f);
+    builder.cubicTo(0.1f, -0.5f, 0.0f, -0.5f, 0.0f, 0.0f);
+  }
+  return *builder.finish();
+}
+
+/// \p path followed by a copy of it moved 100 units right, as a second contour.
+tiny_skia::Path WithMovedCopy(const tiny_skia::Path& path) {
+  tiny_skia::PathBuilder builder;
+  builder.pushPath(path);
+  builder.pushPath(*path.transform(tiny_skia::Transform::fromTranslate(100.0f, 0.0f)));
+  return *builder.finish();
+}
+
+/// The `4 4` dash pattern the dash tests use.
+tiny_skia::StrokeDash FourFourDash() {
+  return *tiny_skia::StrokeDash::create({4.0f, 4.0f}, 0.0f);
+}
+
 }  // namespace
 
 TEST(PathTest, StrokeStopsAtTheOutputLimit) {
-  // At a resolution scale of 100,000 the stroker emits about 16,000 outline points for this
-  // circle. A limit below that stops the expansion and produces no outline.
+  // A limit below the outline a stroke emits stops the expansion and produces no outline; a limit
+  // at it changes nothing.
   const tiny_skia::Path circle = CubicCircle();
   tiny_skia::Stroke stroke;
   stroke.width = 2.0f;
 
-  tiny_skia::StrokeOutputLimit tight{.maxPoints = 4096};
-  EXPECT_THAT(circle.stroke(stroke, 100000.0f, &tight), testing::Eq(std::nullopt));
+  const std::optional<tiny_skia::Path> unlimited = circle.stroke(stroke, 1000.0f);
+  ASSERT_THAT(unlimited, Optional(testing::_));
+  const std::size_t points = unlimited->points().size();
+
+  tiny_skia::StrokeLimits tight{.maxOutlinePoints = points - 1};
+  EXPECT_THAT(circle.stroke(stroke, 1000.0f, &tight), testing::Eq(std::nullopt));
   EXPECT_TRUE(tight.exceeded);
 
-  tiny_skia::StrokeOutputLimit ample{.maxPoints = std::size_t{1} << 20};
-  const std::optional<tiny_skia::Path> outline = circle.stroke(stroke, 100000.0f, &ample);
+  tiny_skia::StrokeLimits exact{.maxOutlinePoints = points};
+  const std::optional<tiny_skia::Path> outline = circle.stroke(stroke, 1000.0f, &exact);
   ASSERT_THAT(outline, Optional(testing::_));
-  EXPECT_FALSE(ample.exceeded);
-  EXPECT_THAT(outline->points().size(),
-              testing::AllOf(testing::Gt(4096u), testing::Le(ample.maxPoints)));
-
-  // Without a limit the stroke is unchanged.
-  const std::optional<tiny_skia::Path> unlimited = circle.stroke(stroke, 100000.0f);
-  ASSERT_THAT(unlimited, Optional(testing::_));
-  EXPECT_THAT(unlimited->points().size(), testing::Eq(outline->points().size()));
+  EXPECT_FALSE(exact.exceeded);
+  EXPECT_EQ(exact.outlinePoints, points);
+  EXPECT_EQ(outline->points().size(), points);
 }
 
 TEST(PathTest, StrokeOutputLimitHoldsForTheFinishedOutline) {
@@ -233,16 +264,151 @@ TEST(PathTest, StrokeOutputLimitHoldsForTheFinishedOutline) {
     const std::optional<tiny_skia::Path> full = path.stroke(stroke, 1.0f);
     ASSERT_THAT(full, Optional(testing::_));
     const std::size_t points = full->points().size();
-    tiny_skia::StrokeOutputLimit tight{.maxPoints = points - 1};
+    tiny_skia::StrokeLimits tight{.maxOutlinePoints = points - 1};
     EXPECT_THAT(path.stroke(stroke, 1.0f, &tight), testing::Eq(std::nullopt));
     EXPECT_TRUE(tight.exceeded);
-    tiny_skia::StrokeOutputLimit exact{.maxPoints = points};
+    tiny_skia::StrokeLimits exact{.maxOutlinePoints = points};
     EXPECT_THAT(path.stroke(stroke, 1.0f, &exact), Optional(testing::_));
     EXPECT_FALSE(exact.exceeded);
-    EXPECT_EQ(exact.emittedPoints, points);
+    EXPECT_EQ(exact.outlinePoints, points);
   }
 
-  tiny_skia::StrokeOutputLimit tiny{.maxPoints = 4};
+  tiny_skia::StrokeLimits tiny{.maxOutlinePoints = 4};
   EXPECT_THAT(line.stroke(roundCaps, 1.0f, &tiny), testing::Eq(std::nullopt));
   EXPECT_TRUE(tiny.exceeded);
+}
+
+TEST(PathTest, DashStopsAtTheMeasureLimit) {
+  // Measuring a dashed curve subdivides it to the device tolerance, so the steps it takes grow
+  // with the resolution scale. A limit below what the measurement takes stops it and produces no
+  // dashed path; a limit at it changes nothing.
+  const tiny_skia::Path circle = CubicCircle();
+  const tiny_skia::StrokeDash dash = FourFourDash();
+  std::size_t previous = 0;
+  for (const float scale : {1.0f, 100.0f}) {
+    tiny_skia::StrokeLimits measured;
+    ASSERT_THAT(circle.dash(dash, scale, &measured), Optional(testing::_));
+    EXPECT_THAT(measured.measureSteps, testing::Gt(previous));
+    previous = measured.measureSteps;
+  }
+  tiny_skia::StrokeLimits ample;
+  const std::optional<tiny_skia::Path> dashed = circle.dash(dash, 10000.0f, &ample);
+  ASSERT_THAT(dashed, Optional(testing::_));
+  EXPECT_THAT(ample.measureSteps, testing::Gt(previous));
+  const std::optional<tiny_skia::Path> unlimited = circle.dash(dash, 10000.0f);
+  ASSERT_THAT(unlimited, Optional(testing::_));
+  EXPECT_EQ(dashed->points().size(), unlimited->points().size());
+
+  tiny_skia::StrokeLimits tight{.maxMeasureSteps = ample.measureSteps - 1};
+  EXPECT_THAT(circle.dash(dash, 10000.0f, &tight), testing::Eq(std::nullopt));
+  EXPECT_TRUE(tight.exceeded);
+  tiny_skia::StrokeLimits exact{.maxMeasureSteps = ample.measureSteps};
+  EXPECT_THAT(circle.dash(dash, 10000.0f, &exact), Optional(testing::_));
+  EXPECT_FALSE(exact.exceeded);
+}
+
+TEST(PathTest, DashMeasureLimitCountsStepsWhoseLengthIsAbsorbed) {
+  // Every measured piece of the small curves adds a length that float rounding absorbs into the
+  // contour's distance, so none of them becomes a measured segment, yet measuring them still takes
+  // time. The limit counts each step, so these curves pass a limit far below the steps they take.
+  constexpr int kCurveCount = 1000;
+  const tiny_skia::Path path = AbsorbedCurves(kCurveCount);
+  const std::optional<tiny_skia::StrokeDash> dash =
+      tiny_skia::StrokeDash::create({100000.0f, 1.0f}, 0.0f);
+  ASSERT_THAT(dash, Optional(testing::_));
+
+  tiny_skia::StrokeLimits ample;
+  ASSERT_THAT(path.dash(*dash, 64.0f, &ample), Optional(testing::_));
+  // More than one step per curve beyond the 400 lines.
+  EXPECT_THAT(ample.measureSteps, testing::Gt(400u + 2u * 2u * kCurveCount));
+
+  tiny_skia::StrokeLimits tight{.maxMeasureSteps = 2000};
+  EXPECT_THAT(path.dash(*dash, 64.0f, &tight), testing::Eq(std::nullopt));
+  EXPECT_TRUE(tight.exceeded);
+}
+
+TEST(PathTest, DashMeasureLimitIsSharedByEveryContour) {
+  // The limit bounds the dash as a whole: two contours that each fit it alone pass it together.
+  const tiny_skia::Path circle = CubicCircle();
+  const tiny_skia::StrokeDash dash = FourFourDash();
+  tiny_skia::StrokeLimits one;
+  ASSERT_THAT(circle.dash(dash, 100.0f, &one), Optional(testing::_));
+
+  const tiny_skia::Path twoCircles = WithMovedCopy(circle);
+  tiny_skia::StrokeLimits both{.maxMeasureSteps = one.measureSteps + one.measureSteps / 2};
+  EXPECT_THAT(twoCircles.dash(dash, 100.0f, &both), testing::Eq(std::nullopt));
+  EXPECT_TRUE(both.exceeded);
+
+  tiny_skia::StrokeLimits ample;
+  ASSERT_THAT(twoCircles.dash(dash, 100.0f, &ample), Optional(testing::_));
+  EXPECT_EQ(ample.measureSteps, 2 * one.measureSteps);
+}
+
+TEST(PathTest, DashMeasureLimitHoldsForAContourThatEndsTheDash) {
+  // A contour whose length overflows to infinity ends the dash once it is measured, without
+  // reaching the dashing loop. When the step that passes the limit falls in that contour, after
+  // its length has overflowed, the dash still returns nothing, although every contour the loop
+  // saw fit.
+  tiny_skia::PathBuilder builder;
+  builder.pushPath(CubicCircle());
+  builder.moveTo(-3.0e38f, 0.0f);
+  builder.lineTo(3.0e38f, 0.0f);
+  builder.lineTo(0.0f, 0.0f);
+  const tiny_skia::Path path = *builder.finish();
+  const tiny_skia::StrokeDash dash = FourFourDash();
+
+  tiny_skia::StrokeLimits ample;
+  ASSERT_THAT(path.dash(dash, 1.0f, &ample), Optional(testing::_));
+  ASSERT_THAT(ample.measureSteps, testing::Gt(1u));
+
+  tiny_skia::StrokeLimits allButLast{.maxMeasureSteps = ample.measureSteps - 1};
+  EXPECT_THAT(path.dash(dash, 1.0f, &allButLast), testing::Eq(std::nullopt));
+  EXPECT_TRUE(allButLast.exceeded);
+}
+
+TEST(PathTest, ExceededLimitsStopLaterDashesAndStrokes) {
+  // Once a limit is exceeded, nothing more is dashed or stroked under it.
+  const tiny_skia::Path circle = CubicCircle();
+  tiny_skia::Stroke stroke;
+  stroke.width = 2.0f;
+  tiny_skia::StrokeLimits limits{.exceeded = true};
+  EXPECT_THAT(circle.dash(FourFourDash(), 1.0f, &limits), testing::Eq(std::nullopt));
+  EXPECT_THAT(circle.stroke(stroke, 1.0f, &limits), testing::Eq(std::nullopt));
+  EXPECT_EQ(limits.measureSteps, 0u);
+  EXPECT_EQ(limits.outlinePoints, 0u);
+}
+
+TEST(PathTest, ResolutionScaleStaysAboveCoordinatePrecision) {
+  // At ordinary scales the resolution scale is unchanged. Far past the point where the curve
+  // tolerance falls under the precision of the coordinates, it stops growing.
+  EXPECT_EQ(tiny_skia::PrecisionLimitedResScale(1.0f, 100.0f, 0.25f), 1.0f);
+  EXPECT_EQ(tiny_skia::PrecisionLimitedResScale(1000.0f, 100.0f, 0.25f), 1000.0f);
+  const float limited = tiny_skia::PrecisionLimitedResScale(1.0e9f, 100.0f, 0.25f);
+  EXPECT_THAT(limited, testing::AllOf(testing::Gt(1000.0f), testing::Lt(1.0e5f)));
+  EXPECT_EQ(tiny_skia::PrecisionLimitedResScale(1.0e12f, 100.0f, 0.25f), limited);
+  // Larger coordinates have coarser precision and a lower bound.
+  EXPECT_THAT(tiny_skia::PrecisionLimitedResScale(1.0e9f, 10000.0f, 0.25f), testing::Lt(limited));
+}
+
+TEST(PathTest, StrokeAndDashWorkStaysBoundedAtExtremeScales) {
+  // Past the precision of the coordinates, a larger resolution scale no longer subdivides further:
+  // the stroke's outline and the dash's measurement steps are the same at 10^6 and 10^9, and the
+  // stroke still has an outline.
+  const tiny_skia::Path circle = CubicCircle();
+  tiny_skia::Stroke stroke;
+  stroke.width = 2.0f;
+  const std::optional<tiny_skia::Path> atMillion = circle.stroke(stroke, 1.0e6f);
+  const std::optional<tiny_skia::Path> atBillion = circle.stroke(stroke, 1.0e9f);
+  ASSERT_THAT(atMillion, Optional(testing::_));
+  ASSERT_THAT(atBillion, Optional(testing::_));
+  EXPECT_EQ(atMillion->points().size(), atBillion->points().size());
+  EXPECT_THAT(atBillion->points().size(), testing::Lt(16384u));
+
+  const tiny_skia::StrokeDash dash = FourFourDash();
+  tiny_skia::StrokeLimits million;
+  tiny_skia::StrokeLimits billion;
+  ASSERT_THAT(circle.dash(dash, 1.0e6f, &million), Optional(testing::_));
+  ASSERT_THAT(circle.dash(dash, 1.0e9f, &billion), Optional(testing::_));
+  EXPECT_EQ(million.measureSteps, billion.measureSteps);
+  EXPECT_THAT(billion.measureSteps, testing::Lt(65536u));
 }

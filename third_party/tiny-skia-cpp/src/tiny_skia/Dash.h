@@ -58,6 +58,11 @@ struct ContourMeasure {
   std::vector<Point> points;
   float length = 0.0f;
   bool isClosed = false;
+  /// Donner addition: the caller's bounds, if any (see StrokeLimits).
+  StrokeLimits* limits = nullptr;
+
+  /// Donner addition: counts one measurement step against \ref limits; false once it is exceeded.
+  [[nodiscard]] bool takeMeasureStep() const;
 
   /// Push a sub-range of this contour [startD, stopD] into a PathBuilder.
   void pushSegment(float startD, float stopD, bool startWithMoveTo, PathBuilder& pb) const;
@@ -81,7 +86,9 @@ struct ContourMeasure {
 /// Iterator that yields ContourMeasure for each contour in a path.
 class ContourMeasureIter {
  public:
-  ContourMeasureIter(const Path& path, float resScale);
+  /// \p resScale is lowered as \ref PrecisionLimitedResScale states (a Donner addition).
+  /// @param limits Optional bound on the measurement steps (a Donner addition; see StrokeLimits).
+  ContourMeasureIter(const Path& path, float resScale, StrokeLimits* limits = nullptr);
 
   /// Yield the next measured contour, skipping zero-length contours.
   std::optional<ContourMeasure> next();
@@ -89,11 +96,16 @@ class ContourMeasureIter {
  private:
   PathSegmentsIter iter_;
   float tolerance_;
+  StrokeLimits* limits_ = nullptr;
 };
 
 /// Apply the dash pattern to src, returning a new dashed path.
 /// Returns std::nullopt when more than 1,000,000 dashes would be produced
 /// or when the final path has an invalid bounding box.
-[[nodiscard]] std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resScale);
+/// With \p limits, also returns std::nullopt once the curve measurement passes
+/// `limits->maxMeasureSteps`, or when `limits->exceeded` is already set (a Donner addition; see
+/// StrokeLimits).
+[[nodiscard]] std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resScale,
+                                           StrokeLimits* limits = nullptr);
 
 }  // namespace tiny_skia

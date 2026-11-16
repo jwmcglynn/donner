@@ -121,12 +121,13 @@ class Painter {
   /// Strokes a path with the given stroke settings.
   ///
   /// @param wrapper See fillRect.
-  /// @param limit Optional bound on the stroke's expanded outline (a Donner addition; see
-  ///   StrokeOutputLimit). A stroke past it draws nothing and sets `limit->exceeded`.
+  /// @param limits Optional bounds on the stroke's dash measurement and expanded outline (a Donner
+  ///   addition; see StrokeLimits). A stroke past either draws nothing and sets
+  ///   `limits->exceeded`.
   static void strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                          const Stroke& stroke, Transform transform = Transform::identity(),
                          const Mask* mask = nullptr, BlitterWrapper* wrapper = nullptr,
-                         StrokeOutputLimit* limit = nullptr);
+                         StrokeLimits* limits = nullptr);
 
  private:
   /// @internal

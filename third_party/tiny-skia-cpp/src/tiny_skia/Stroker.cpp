@@ -608,27 +608,32 @@ float PathStroker::computeResolutionScale(const Transform& ts) {
 }
 
 std::optional<Path> PathStroker::stroke(const Path& path, const Stroke& stroke,
-                                        float resolutionScale, StrokeOutputLimit* limit) {
+                                        float resolutionScale, StrokeLimits* limits) {
   if (stroke.width <= 0.0f || !std::isfinite(stroke.width)) {
     return std::nullopt;
   }
-  outputLimit_ = limit;
+  // Donner addition: keep the curve tolerance above the precision of the outline's coordinates,
+  // which reach past the path by the stroke radius, or the miter length at a join.
+  resolutionScale = PrecisionLimitedResScale(
+      resolutionScale,
+      MaxAbsCoordinate(path, stroke.width * 0.5f * std::max(stroke.miterLimit, 1.0f)),
+      kStrokeToleranceAtUnitScale);
+  limits_ = limits;
   std::optional<Path> outline = strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap,
                                             stroke.lineJoin, resolutionScale);
-  if (limit != nullptr) {
-    limit->emittedPoints = outline.has_value() ? outline->points().size()
-                                               : outer_.points().size() + inner_.points().size() +
-                                                     cusper_.points().size();
+  if (limits != nullptr) {
+    const std::size_t emitted = outline.has_value() ? outline->points().size() : pendingPoints();
     // Finishing the last contour adds its caps or closing join and appends its inner side after
     // the last check above, so the finished outline is checked exactly before it is returned.
-    if (outline.has_value() && outline->points().size() > limit->maxPoints) {
-      limit->exceeded = true;
+    if (outline.has_value() && passesOutlineLimit(emitted)) {
+      limits->exceeded = true;
     }
-    if (limit->exceeded) {
+    limits->outlinePoints += emitted;
+    if (limits->exceeded) {
       outline.reset();
     }
   }
-  outputLimit_ = nullptr;
+  limits_ = nullptr;
   return outline;
 }
 
@@ -749,17 +754,27 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
   return finish(lastSegmentIsLine);
 }
 
-// Donner addition: true once the outline emitted so far passes the caller's limit.
+// Donner addition: outline points emitted by the stroke in progress.
+std::size_t PathStroker::pendingPoints() const {
+  return outer_.points().size() + inner_.points().size() + cusper_.points().size();
+}
+
+// Donner addition: whether \p emitted more points pass the caller's outline bound.
+bool PathStroker::passesOutlineLimit(std::size_t emitted) const {
+  return limits_->outlinePoints > limits_->maxOutlinePoints ||
+         emitted > limits_->maxOutlinePoints - limits_->outlinePoints;
+}
+
+// Donner addition: true once the outline emitted so far passes the caller's limit, or the limit
+// was already exceeded.
 bool PathStroker::exceedsOutputLimit() {
-  if (outputLimit_ == nullptr) {
+  if (limits_ == nullptr) {
     return false;
   }
-  if (!outputLimit_->exceeded &&
-      outer_.points().size() + inner_.points().size() + cusper_.points().size() >
-          outputLimit_->maxPoints) {
-    outputLimit_->exceeded = true;
+  if (!limits_->exceeded && passesOutlineLimit(pendingPoints())) {
+    limits_->exceeded = true;
   }
-  return outputLimit_->exceeded;
+  return limits_->exceeded;
 }
 
 SwappableBuilders PathStroker::builders() { return SwappableBuilders{&inner_, &outer_}; }
@@ -1408,10 +1423,9 @@ bool PathStroker::isCurrentContourEmpty() const {
 // Path::stroke
 // ---------------------------------------------------------------------------
 
-std::optional<Path> Path::stroke(const Stroke& stroke, float resScale,
-                                 StrokeOutputLimit* limit) const {
+std::optional<Path> Path::stroke(const Stroke& stroke, float resScale, StrokeLimits* limits) const {
   PathStroker stroker;
-  return stroker.stroke(*this, stroke, resScale, limit);
+  return stroker.stroke(*this, stroke, resScale, limits);
 }
 
 }  // namespace tiny_skia

@@ -399,7 +399,27 @@ std::optional<std::pair<std::size_t, NormalizedF32>> ContourMeasure::distanceToS
   return std::make_pair(uindex, *tNorm);
 }
 
+// Donner addition: counts one measurement step against the caller's limit, if any, and returns
+// false once the limit is exceeded. Every call of computeLineSeg, computeQuadSegs and
+// computeCubicSegs is a step, whether it subdivides, adds a segment, or adds nothing because float
+// rounding absorbed its length into the distance so far, so the count bounds the time measuring
+// takes and not only the segments it keeps.
+bool ContourMeasure::takeMeasureStep() const {
+  if (limits == nullptr) {
+    return true;
+  }
+  if (limits->exceeded || limits->measureSteps >= limits->maxMeasureSteps) {
+    limits->exceeded = true;
+    return false;
+  }
+  limits->measureSteps += 1;
+  return true;
+}
+
 float ContourMeasure::computeLineSeg(Point p0, Point p1, float distance, std::size_t pointIndex) {
+  if (!takeMeasureStep()) {
+    return distance;  // Donner addition: stop measuring once the measurement limit is passed.
+  }
   float d = p0.distance(p1);
   assert(d >= 0.0f);
   float prevD = distance;
@@ -419,6 +439,9 @@ float ContourMeasure::computeLineSeg(Point p0, Point p1, float distance, std::si
 float ContourMeasure::computeQuadSegs(Point p0, Point p1, Point p2, float distance,
                                       std::uint32_t minT, std::uint32_t maxT,
                                       std::size_t pointIndex, float tolerance) {
+  if (!takeMeasureStep()) {
+    return distance;  // Donner addition: stop subdividing once the measurement limit is passed.
+  }
   if (tSpanBigEnough(maxT - minT) != 0 && quadTooCurvy(p0, p1, p2, tolerance)) {
     Point tmp[5];
     std::uint32_t halfT = (minT + maxT) >> 1;
@@ -449,6 +472,9 @@ float ContourMeasure::computeQuadSegs(Point p0, Point p1, Point p2, float distan
 float ContourMeasure::computeCubicSegs(Point p0, Point p1, Point p2, Point p3, float distance,
                                        std::uint32_t minT, std::uint32_t maxT,
                                        std::size_t pointIndex, float tolerance) {
+  if (!takeMeasureStep()) {
+    return distance;  // Donner addition: stop subdividing once the measurement limit is passed.
+  }
   if (tSpanBigEnough(maxT - minT) != 0 && cubicTooCurvy(p0, p1, p2, p3, tolerance)) {
     Point tmp[7];
     std::uint32_t halfT = (minT + maxT) >> 1;
@@ -480,12 +506,15 @@ float ContourMeasure::computeCubicSegs(Point p0, Point p1, Point p2, Point p3, f
 // ContourMeasureIter
 // ---------------------------------------------------------------------------
 
-ContourMeasureIter::ContourMeasureIter(const Path& path, float resScale) : iter_(path) {
+ContourMeasureIter::ContourMeasureIter(const Path& path, float resScale, StrokeLimits* limits)
+    : iter_(path), limits_(limits) {
   // can't use tangents, since we need [0..1..................2] to be seen
   // as definitely not a line (it is when drawn, but not parametrically)
   // so we compare midpoints
   constexpr float kCheapDistLimit = 0.5f;  // just made this value up
 
+  // Donner addition: keep the tolerance above the precision of the path's coordinates.
+  resScale = PrecisionLimitedResScale(resScale, MaxAbsCoordinate(path, 0.0f), kCheapDistLimit);
   float invResScale = (resScale != 0.0f) ? (1.0f / resScale) : 1.0f;
   tolerance_ = kCheapDistLimit * invResScale;
 }
@@ -499,6 +528,7 @@ std::optional<ContourMeasure> ContourMeasureIter::next() {
   // We do this check below, and in computeQuadSegs and computeCubicSegs
 
   ContourMeasure contour;
+  contour.limits = limits_;
 
   std::size_t pointIndex = 0;
   float distance = 0.0f;
@@ -586,7 +616,13 @@ std::optional<ContourMeasure> ContourMeasureIter::next() {
 // dashImpl
 // ---------------------------------------------------------------------------
 
-std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resScale) {
+std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resScale,
+                             StrokeLimits* limits) {
+  // Donner addition: nothing more is dashed once the caller's limit is exceeded.
+  const auto exceeded = [limits] { return limits != nullptr && limits->exceeded; };
+  if (exceeded()) {
+    return std::nullopt;
+  }
   // We do not support the `cull_path` branch here.
   // Skia has a lot of code for cases when a path contains only a single
   // zero-length line or when a path is a rect. Not sure why.
@@ -602,8 +638,11 @@ std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resS
   PathBuilder pb;
   float dashCount = 0.0f;
 
-  ContourMeasureIter contourIter(src, resScale);
+  ContourMeasureIter contourIter(src, resScale, limits);
   while (auto contour = contourIter.next()) {
+    if (exceeded()) {
+      return std::nullopt;  // Donner addition: the measurement passed the caller's limit.
+    }
     bool skipFirstSegment = contour->isClosed;
     bool addedSegment = false;
     float length = contour->length;
@@ -661,6 +700,11 @@ std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resS
     }
   }
 
+  // Donner addition: the iterator also measures contours it then skips, such as one whose length
+  // is zero or not finite, so the limit can be passed after the last contour returned.
+  if (exceeded()) {
+    return std::nullopt;
+  }
   return pb.finish();
 }
 
@@ -668,8 +712,9 @@ std::optional<Path> dashImpl(const Path& src, const StrokeDash& dash, float resS
 // Path::dash
 // ---------------------------------------------------------------------------
 
-std::optional<Path> Path::dash(const StrokeDash& dashPattern, float resScale) const {
-  return dashImpl(*this, dashPattern, resScale);
+std::optional<Path> Path::dash(const StrokeDash& dashPattern, float resScale,
+                               StrokeLimits* limits) const {
+  return dashImpl(*this, dashPattern, resScale, limits);
 }
 
 }  // namespace tiny_skia

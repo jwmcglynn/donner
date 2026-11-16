@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -35,17 +36,37 @@ struct StrokeDash {
   friend bool operator==(const StrokeDash&, const StrokeDash&) = default;
 };
 
-/// Bounds the outline a stroke expansion may emit. Not in upstream tiny-skia: Donner renders
-/// untrusted documents, and under an extreme transform the stroker can emit millions of points
-/// for one curve. A stroke whose outline passes \ref maxPoints stops expanding as soon as it does,
-/// produces no outline, and sets \ref exceeded. The finished outline is checked exactly, so no
-/// outline over \ref maxPoints is returned. A limit whose \ref exceeded is already set produces no
-/// outline at all.
-struct StrokeOutputLimit {
-  std::size_t maxPoints = 0;      ///< Most outline points the expansion may emit.
-  bool exceeded = false;          ///< Set when an expansion stopped at \ref maxPoints.
-  std::size_t emittedPoints = 0;  ///< Outline points the expansion emitted, set by the stroker.
+/// Bounds the geometry generating one stroke may take: the curve measurement its dash pattern
+/// performs and the outline its expansion emits. Not in upstream tiny-skia: Donner renders
+/// untrusted documents, and under an extreme transform one curve can take millions of measurement
+/// steps or outline points.
+///
+/// The counts are totals over every dash and stroke run under the limit. A dash or stroke whose
+/// count passes its bound stops as soon as it does, produces no path, and sets \ref exceeded; the
+/// finished outline is checked exactly, so no outline that passes \ref maxOutlinePoints is
+/// returned. Once \ref exceeded is set, nothing more is dashed or stroked under the limit.
+struct StrokeLimits {
+  /// Most curve-measurement steps dashing may take: every subdivision step of a curve, and every
+  /// line, counts as one, whether or not it adds a measured segment.
+  std::size_t maxMeasureSteps = std::numeric_limits<std::size_t>::max();
+  /// Most outline points stroke expansion may emit.
+  std::size_t maxOutlinePoints = std::numeric_limits<std::size_t>::max();
+  std::size_t measureSteps = 0;   ///< Curve-measurement steps taken, counted by the dasher.
+  std::size_t outlinePoints = 0;  ///< Outline points emitted, counted by the stroker.
+  bool exceeded = false;          ///< Set when a dash or stroke stopped at its bound.
 };
+
+/// Lowers \p resScale, if need be, so that the curve tolerance `toleranceAtUnitScale / resScale`
+/// a stroke or dash derives from it stays a few float steps above the precision of the largest
+/// coordinate it works with, \p maxCoordinate. Not in upstream tiny-skia: below that precision a
+/// smaller tolerance changes no output point, while curve subdivision chases rounding error until
+/// its depth limits. At ordinary scales the tolerance is far above the bound and \p resScale is
+/// returned unchanged.
+[[nodiscard]] float PrecisionLimitedResScale(float resScale, float maxCoordinate,
+                                             float toleranceAtUnitScale);
+
+/// The largest absolute coordinate of \p path's control points, grown by \p reach.
+[[nodiscard]] float MaxAbsCoordinate(const Path& path, float reach);
 
 /// Stroke properties for Painter::strokePath.
 struct Stroke {
