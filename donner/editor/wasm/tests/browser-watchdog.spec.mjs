@@ -18,6 +18,27 @@ import {
 } from "./browser-watchdog.mjs";
 
 const { kStallGuardMs } = createRequire(import.meta.url)("./test-timing.cjs");
+// The test deadline in a case that asserts a different outcome (a stopped heartbeat, a teardown
+// cap, a clean exit) is only a backstop for a hang. It must never win the race against the
+// behavior under test, whatever the host load: a real Playwright run or a child start can take
+// several seconds on a busy CI runner. It also keeps a hang a failure of its own case, with a
+// reason, instead of the 900 s production default running into the Bazel timeout. Cases that rely
+// on the deadline firing use 150 ms.
+const kBackstopDeadlineMs = kStallGuardMs;
+// `supervise` with the backstop deadline unless the case passes its own.
+const superviseCase = (executable, args, options) =>
+  supervise(executable, args, { deadlineMs: kBackstopDeadlineMs, ...options });
+// Polls the heartbeat until `ready` holds or the stall guard runs out, and returns the last one
+// read. The application pulse runs every 1000 ms; a fixed wait just past one pulse races a loaded
+// host. Heartbeat writes are atomic renames, so every read is a whole heartbeat.
+async function heartbeatWhen(file, ready) {
+  const deadline = Date.now() + kStallGuardMs;
+  for (;;) {
+    const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (ready(heartbeat) || Date.now() >= deadline) return heartbeat;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
 const directory = () =>
   fs.mkdtempSync(path.join(process.env.TEST_TMPDIR ?? os.tmpdir(), "watchdog-"));
 test("ownership excludes unrelated processes and follows descendants", () => {
@@ -180,7 +201,7 @@ test("malformed Linux process identity fails closed", () => {
 });
 
 test("normal exit preserves status and bounded evidence", async () => {
-  const result = await supervise(process.execPath, [
+  const result = await superviseCase(process.execPath, [
     "-e",
     "setTimeout(() => process.exit(17), 100)",
   ], {
@@ -192,7 +213,7 @@ test("normal exit preserves status and bounded evidence", async () => {
   assert.ok(result.samples.length <= 360);
 });
 test("external watchdog stops a child that does not service its event loop", async () => {
-  const result = await supervise(process.execPath, ["-e", "while (true) {}"], {
+  const result = await superviseCase(process.execPath, ["-e", "while (true) {}"], {
     outputDir: directory(),
     intervalMs: 20,
     deadlineMs: 150,
@@ -201,7 +222,7 @@ test("external watchdog stops a child that does not service its event loop", asy
   assert.equal(result.exit.signal, "SIGKILL");
 });
 test("memory limit stops the owned tree before allocating a stress workload", async () => {
-  const result = await supervise(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  const result = await superviseCase(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     outputDir: directory(),
     intervalMs: 20,
     memoryLimit: 1,
@@ -213,10 +234,10 @@ test("memory limit stops the owned tree before allocating a stress workload", as
 test("a stopped heartbeat is detected independently of a live test process", async () => {
   const outputDir = directory();
   const heartbeatFile = path.join(outputDir, "heartbeat");
-  const result = await supervise(process.execPath, [
+  const result = await superviseCase(process.execPath, [
     "-e",
     "require('node:fs').writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT, 'ready'); setInterval(() => {}, 1000)",
-  ], { outputDir, heartbeatFile, intervalMs: 100, deadlineMs: 7000 });
+  ], { outputDir, heartbeatFile, intervalMs: 100 });
   assert.equal(result.reason, "test heartbeat stopped");
   assert.equal(result.exit.signal, "SIGKILL");
 });
@@ -227,11 +248,10 @@ test("fresh file writes cannot refresh a stale application response", async () =
   const script = `const fs=require('node:fs'); const atMs=Date.now()-6000;
     setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,
       JSON.stringify({phase:'active',sessionId:'stale',atMs})),20);`;
-  const result = await supervise(process.execPath, ["-e", script], {
+  const result = await superviseCase(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
     intervalMs: 20,
-    deadlineMs: 2000,
   });
   assert.equal(result.reason, "test heartbeat stopped");
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
@@ -248,11 +268,10 @@ test("malformed evidence after a live application response fails closed", async 
   const script = `const fs=require('node:fs');
     setInterval(()=>{ if(fs.existsSync(${JSON.stringify(corrupt)}))
       fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,'{'); },20);`;
-  const result = await supervise(process.execPath, ["-e", script], {
+  const result = await superviseCase(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
     intervalMs: 20,
-    deadlineMs: 2000,
     writeReceipt: () => {
       if (fs.existsSync(heartbeatFile)) {
         try {
@@ -280,11 +299,10 @@ for (
     const script = `const fs=require('node:fs');
       setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,
         JSON.stringify({phase:'active',sessionId:'invalid',atMs:${timestamp}})),20);`;
-    const result = await supervise(process.execPath, ["-e", script], {
+    const result = await superviseCase(process.execPath, ["-e", script], {
       outputDir,
       heartbeatFile,
       intervalMs: 20,
-      deadlineMs: 2000,
     });
     assert.match(result.reason, /invalid application heartbeat/);
     assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
@@ -298,13 +316,13 @@ test("fast launcher exit cannot orphan its detached child", async () => {
     `const cp=require('node:child_process'); const c=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'}); require('node:fs').writeFileSync(${
       JSON.stringify(pidFile)
     }, String(c.pid)); c.unref();`;
-  const result = await supervise(process.execPath, ["-e", script], { outputDir });
+  const result = await superviseCase(process.execPath, ["-e", script], { outputDir });
   assert.equal(result.exit.code, 0);
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
   assert.throws(() => process.kill(Number(fs.readFileSync(pidFile, "utf8")), 0), { code: "ESRCH" });
 });
 test("reporting failure still terminates the owned process group", async () => {
-  const result = await supervise(process.execPath, ["-e", "while(true){}"], {
+  const result = await superviseCase(process.execPath, ["-e", "while(true){}"], {
     outputDir: directory(),
     intervalMs: 20,
     writeReceipt: () => {
@@ -315,7 +333,7 @@ test("reporting failure still terminates the owned process group", async () => {
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 test("process measurement failure does not prevent termination", async () => {
-  const result = await supervise(process.execPath, ["-e", "while(true){}"], {
+  const result = await superviseCase(process.execPath, ["-e", "while(true){}"], {
     outputDir: directory(),
     intervalMs: 20,
     heartbeatLimitMs: 200,
@@ -329,7 +347,7 @@ test("process measurement failure does not prevent termination", async () => {
 test("one failed process sample does not stop a healthy run", async () => {
   // A loaded host can make one `ps` call exceed its timeout.
   let calls = 0;
-  const result = await supervise(process.execPath, [
+  const result = await superviseCase(process.execPath, [
     "-e",
     "setTimeout(() => process.exit(17), 300)",
   ], {
@@ -350,7 +368,7 @@ test("supervisor termination kills its owned group before returning", async () =
   const outputDir = directory();
   const timer = setTimeout(() => process.kill(process.pid, "SIGTERM"), 200);
   try {
-    const result = await supervise(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    const result = await superviseCase(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       outputDir,
       intervalMs: 20,
     });
@@ -370,7 +388,7 @@ test("group accounting includes reparented members and excludes unrelated groups
   assert.deepEqual(ownedGroup(rows, 20), rows.slice(0, 2));
 });
 test("a reparented group member is subject to the RSS limit on its first sample", async () => {
-  const result = await supervise(process.execPath, ["-e", "setInterval(() => {},1000)"], {
+  const result = await superviseCase(process.execPath, ["-e", "setInterval(() => {},1000)"], {
     outputDir: directory(),
     intervalMs: 20,
     memoryLimit: 1024 * 1024 * 1024,
@@ -432,6 +450,8 @@ test("application heartbeat preserves presentation diagnostics without refreshin
     const before = JSON.parse(fs.readFileSync(heartbeat, "utf8"));
     assert.deepEqual(before.presentation, presentation);
     worker.evaluate = () => new Promise(() => {});
+    // A fixed wait, not a poll: the claim is that nothing changes, so there is no state to wait
+    // for. 1700 ms spans at least one 1000 ms pulse.
     await new Promise((resolve) => setTimeout(resolve, 1700));
     assert.deepEqual(JSON.parse(fs.readFileSync(heartbeat, "utf8")), before);
   } finally {
@@ -451,8 +471,8 @@ test("unavailable page diagnostics cannot stop a live application heartbeat", as
   try {
     const before = JSON.parse(fs.readFileSync(heartbeat, "utf8"));
     assert.deepEqual(before.presentation, { unavailable: true });
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    assert.ok(JSON.parse(fs.readFileSync(heartbeat, "utf8")).atMs > before.atMs);
+    const after = await heartbeatWhen(heartbeat, (current) => current.atMs > before.atMs);
+    assert.ok(after.atMs > before.atMs, "a later pulse refreshes the heartbeat");
   } finally {
     stop();
   }
@@ -473,12 +493,11 @@ test("fresh late samples cannot erase a latched teardown deadline", async () => 
     setInterval(()=>{if(fs.existsSync(${JSON.stringify(acknowledged)}))
       writeHeartbeat(process.env.DONNER_WATCHDOG_HEARTBEAT,
         {phase:'active',sessionId:'same',atMs:Date.now()});},20);`;
-  const result = await supervise(process.execPath, ["-e", script], {
+  const result = await superviseCase(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
     intervalMs: 20,
     teardownLimitMs: 200,
-    deadlineMs: 2000,
     writeReceipt: () => fs.writeFileSync(acknowledged, "observed"),
   });
   assert.equal(result.reason, "browser teardown deadline exceeded");
@@ -497,12 +516,11 @@ test("a later session's launch ends the previous session's teardown deadline", a
     },20);`;
   let samples = 0;
   let secondLaunchAtMs;
-  const result = await supervise(process.execPath, ["-e", script], {
+  const result = await superviseCase(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
     intervalMs: 20,
     teardownLimitMs: 200,
-    deadlineMs: 5000,
     sampleProcesses: () => {
       const rows = processRows();
       // Keep child startup and process-listing latency outside the teardown transition.
@@ -538,7 +556,7 @@ test("termination is issued once even when the stop and exit paths both run", as
     return original.call(this, pid, signal);
   };
   try {
-    const result = await supervise(process.execPath, ["-e", "while(true){}"], {
+    const result = await superviseCase(process.execPath, ["-e", "while(true){}"], {
       outputDir: directory(),
       intervalMs: 20,
       deadlineMs: 150,
@@ -562,7 +580,7 @@ async function superviseWithDeniedGroupProbe(options, code = "EPERM") {
     return original.call(this, pid, signal);
   };
   try {
-    return await supervise(process.execPath, ["-e", "process.exit(0)"], {
+    return await superviseCase(process.execPath, ["-e", "process.exit(0)"], {
       outputDir: directory(),
       intervalMs: 20,
       ...options,
@@ -642,7 +660,7 @@ async function superviseWithDeniedGroupKill(t, args, options) {
     return original.call(this, pid, signal);
   };
   try {
-    return await supervise(process.execPath, args, {
+    return await superviseCase(process.execPath, args, {
       outputDir: directory(),
       intervalMs: 20,
       ...options,
@@ -751,9 +769,8 @@ test("a rejected worker diagnostic remains unavailable for known GPU ownership",
   const stop = await startApplicationHeartbeat({ workers: () => [surface, owner] }, heartbeat);
   try {
     assert.deepEqual(JSON.parse(fs.readFileSync(heartbeat, "utf8")).workers[1].gpu, gpu);
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    const unavailable = JSON.parse(fs.readFileSync(heartbeat, "utf8")).workers[1];
-    assert.equal(unavailable.unavailable, true);
+    const after = await heartbeatWhen(heartbeat, (current) => current.workers[1].unavailable);
+    assert.equal(after.workers[1].unavailable, true);
   } finally {
     stop();
   }
@@ -782,21 +799,20 @@ test("normal Playwright webserver teardown succeeds under supervision", async ()
       )
     },wait:{stdout:/SERVER_READY/}}};`,
   );
-  const result = await supervise(process.execPath, [
+  const result = await superviseCase(process.execPath, [
     require.resolve("@playwright/test/cli"),
     "test",
     `--config=${config}`,
   ], {
     outputDir,
     intervalMs: 20,
-    deadlineMs: 8000,
   });
   assert.equal(result.reason, null, `reporting error: ${result.reportingError}`);
   assert.equal(result.exit.code, 0);
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 test("final cleanup enumeration failure cannot report success", async () => {
-  const result = await supervise(process.execPath, ["-e", "process.exit(0)"], {
+  const result = await superviseCase(process.execPath, ["-e", "process.exit(0)"], {
     outputDir: directory(),
     intervalMs: 5000,
     cleanupProcesses: () => {
@@ -813,7 +829,7 @@ test("final cleanup enumeration failure cannot report success", async () => {
 });
 test("one failed final cleanup enumeration is retried", async () => {
   let calls = 0;
-  const result = await supervise(process.execPath, ["-e", "process.exit(0)"], {
+  const result = await superviseCase(process.execPath, ["-e", "process.exit(0)"], {
     outputDir: directory(),
     intervalMs: 5000,
     cleanupProcesses: () => {
@@ -825,7 +841,7 @@ test("one failed final cleanup enumeration is retried", async () => {
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 test("final receipt failure cannot report success", async () => {
-  const result = await supervise(process.execPath, ["-e", "process.exit(0)"], {
+  const result = await superviseCase(process.execPath, ["-e", "process.exit(0)"], {
     outputDir: directory(),
     intervalMs: 5000,
     writeReceipt: () => {
@@ -987,7 +1003,8 @@ const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
 child.once("exit", (code, signal) => { console.log("child " + signal); process.exit(0); });
 setTimeout(() => process.kill(-child.pid, "SIGTERM"), 100);
-setTimeout(() => process.exit(3), 5000);
+// Backstop only: the child normally exits within a second.
+setTimeout(() => process.exit(3), ${kStallGuardMs});
 `;
 test("the driver preload tracks a spawned child through one failed process listing", async () => {
   const result = await runUnderDriverPreload(kSpawnAndStop, [1]);
