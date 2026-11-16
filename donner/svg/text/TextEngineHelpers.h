@@ -90,6 +90,9 @@ struct ChunkBoundary {
   bool rightToLeft = false;
   /// Authored inline shift (`dx` in horizontal text) included in the chunk's origin.
   double authoredShift = 0.0;
+  /// Base direction the chunk's paragraph detected under `unicode-bidi: plaintext`, which then
+  /// replaces the span's `direction` for anchoring and continuation; unset otherwise.
+  std::optional<bool> paragraphRightToLeft;
 };
 
 /// An authored inline displacement consumed by one positioned glyph group.
@@ -128,7 +131,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 /// Fix up chunk anchors and apply the existing per-line anchor profile.
 /// firstLineIndent contributes its signed leading margin only to the first flat chunk.
 /// paragraphRightToLeft gives the `<text>` element's paragraph direction, in which chunks without
-/// an absolute x continue from the previous chunk.
+/// an absolute x continue from the previous chunk, unless a chunk carries its own detected one.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical,
                      const AnchorExclusions& exclusions = {}, double firstLineIndent = 0.0,

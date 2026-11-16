@@ -63,8 +63,11 @@ public:
   /// @param override Whether every scalar takes the explicit base level without reordering by
   ///   bidi type, as `unicode-bidi: bidi-override` on the paragraph's block container. Requires
   ///   base 0 or 1.
-  /// @param controls Injected controls in nondecreasing \ref InjectedControl::before order; each
-  ///   counts against the scalar budget. Controls nested inside an override still open levels.
+  /// @param controls Injected controls in nondecreasing \ref InjectedControl::before order. Each
+  ///   counts against the scalar budget, as does the leading control that carries a paragraph
+  ///   override when anything is injected. Controls nested inside an override, injected or in
+  ///   the source, still open levels. With no scalars the controls enclose nothing and are
+  ///   dropped.
   static std::optional<BidiParagraph> Analyze(std::vector<char32_t> codepoints,
                                               BidiResourceBudget& budget, uint8_t base = 0,
                                               bool forceAnalysis = false, bool override = false,

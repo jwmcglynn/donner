@@ -860,7 +860,7 @@ void ResolveBidiEmbeddings(Registry& registry, Entity styleEntity,
   span.bidiEmbeddings.clear();
   for (Entity element = styleEntity; element != entt::null;) {
     if ((styleContext && element == styleContext->rootEntity) ||
-        (!styleContext && registry.any_of<components::TextRootComponent>(element))) {
+        registry.any_of<components::TextRootComponent>(element)) {
       break;
     }
     if (const auto* style = registry.try_get<components::ComputedStyleComponent>(element);
@@ -2796,9 +2796,10 @@ bool ContributesToAnchorExtent(const TextGlyph& glyph, bool vertical) {
 /// Layout records every chunk origin as a left-to-right pen. A right-to-left chunk instead runs
 /// leftward from its origin, so before anchoring it spans one chunk width left of that origin, and
 /// a left-to-right chunk spans one width right of it. Unpositioned chunks follow one another in the
-/// paragraph direction of the `<text>` element: the pen leaves a chunk at its right edge in a
-/// left-to-right paragraph and at its left edge in a right-to-left one, whatever the chunk's own
-/// direction. Anchoring applies afterwards and does not move that position.
+/// paragraph direction: the pen leaves a chunk at its right edge in a left-to-right paragraph and
+/// at its left edge in a right-to-left one, whatever the chunk's own direction. That is the
+/// `<text>` element's direction, or under `unicode-bidi: plaintext` the direction each paragraph
+/// detects. Anchoring applies afterwards and does not move that position.
 ///
 /// `recordedEnd` is the chunk's far edge as laid out left to right: the gap from it to the next
 /// recorded origin, less that chunk's authored shift, is trailing spacing, which the pen places on
@@ -2814,9 +2815,10 @@ struct PenContinuation {
   double correction = 0.0;
 
   /// The actual origin of a following chunk recorded at \p recorded with authored shift
-  /// \p authored, whose direction is \p chunkRightToLeft and inline extent \p chunkWidth.
-  double originFor(double recorded, double authored, bool chunkRightToLeft,
-                   double chunkWidth) const {
+  /// \p authored, whose direction is \p chunkRightToLeft, inline extent \p chunkWidth and
+  /// paragraph direction \p chunkParagraphRightToLeft.
+  double originFor(double recorded, double authored, bool chunkRightToLeft, double chunkWidth,
+                   bool chunkParagraphRightToLeft) const {
     double nearEdge = 0.0;
     if (!paragraphRightToLeft && !rightToLeft) {
       nearEdge = recorded + correction;
@@ -2826,8 +2828,8 @@ struct PenContinuation {
       nearEdge =
           paragraphRightToLeft ? left - spacing + authored : left + width + spacing + authored;
     }
-    // A chunk against the paragraph direction starts its pen at its far side of the near edge.
-    if (chunkRightToLeft != paragraphRightToLeft) {
+    // A chunk against its paragraph direction starts its pen at its far side of the near edge.
+    if (chunkRightToLeft != chunkParagraphRightToLeft) {
       nearEdge += chunkRightToLeft ? chunkWidth : -chunkWidth;
     }
     return nearEdge;
@@ -2858,10 +2860,12 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
     bounds.initial = *range.begin.anchorPosition;
   }
   const double recorded = bounds.initial;
+  const bool chunkParagraphRightToLeft =
+      range.begin.paragraphRightToLeft.value_or(paragraphRightToLeft);
   if (continuation) {
     bounds.initial =
         continuation->originFor(recorded, range.begin.authoredShift, range.begin.rightToLeft,
-                                bounds.maximum - bounds.minimum);
+                                bounds.maximum - bounds.minimum, chunkParagraphRightToLeft);
   }
   const double shift =
       bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
@@ -2878,14 +2882,15 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
                      [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
   if (next) {
     // Anchoring applies last and never moves the current text position.
-    *next = PenContinuation{paragraphRightToLeft, range.begin.rightToLeft,
-                            bounds.initial,       bounds.maximum - bounds.minimum,
-                            bounds.maximum,       bounds.initial - recorded};
+    *next = PenContinuation{
+        chunkParagraphRightToLeft,       range.begin.rightToLeft, bounds.initial,
+        bounds.maximum - bounds.minimum, bounds.maximum,          bounds.initial - recorded};
   }
   return true;
 }
 
-/// Gives each chunk the anchor and inline direction of the span holding its first glyph.
+/// Gives each chunk the anchor and inline direction of the span holding its first glyph, or, for a
+/// chunk that carries its paragraph's detected direction, that direction.
 void ResolveChunkStyles(const std::vector<TextRun>& runs,
                         std::vector<ChunkBoundary>& chunkBoundaries,
                         const components::ComputedTextComponent& text) {
@@ -2897,6 +2902,13 @@ void ResolveChunkStyles(const std::vector<TextRun>& runs,
         chunk.rightToLeft = text.spans[ri].rightToLeftInline;
         break;
       }
+    }
+    if (chunk.paragraphRightToLeft) {
+      // The span's anchor is physical for its own direction; `start` and `end` follow the
+      // detected one instead.
+      chunk.textAnchor =
+          PhysicalTextAnchor(chunk.textAnchor, chunk.rightToLeft != *chunk.paragraphRightToLeft);
+      chunk.rightToLeft = *chunk.paragraphRightToLeft;
     }
   }
 }
@@ -4346,6 +4358,8 @@ public:
     /// Source-order references alias the pre-reserved context storage for this paragraph.
     std::vector<const Context*> logical;
     bool hasAddressable = false;
+    /// Whether the paragraph's resolved base direction is right to left.
+    bool rightToLeft = false;
   };
 
   explicit NormalBidiPlan(Registry& registry, size_t* candidates, bool* preserved,
@@ -4598,6 +4612,7 @@ private:
       return false;
     }
     paragraph.visual = std::move(*runs);
+    paragraph.rightToLeft = resolved->paragraphLevelAt(0) % 2 != 0;
     return prepareRuns(paragraph, text, vertical);
   }
 
@@ -7746,6 +7761,10 @@ private:
     const auto& firstVisual = bidiPlacements_[order.front()];
     chunkBoundaries_.back().visualFirstGlyph = std::pair(firstVisual.run, firstVisual.glyph);
     chunkBoundaries_.back().authoredShift = vertical ? initial.dy : initial.dx;
+    if (params_.bidiPlaintext && !vertical) {
+      chunkBoundaries_.back().paragraphRightToLeft =
+          normalBidi_.paragraphs[initial.paragraph].rightToLeft;
+    }
   }
 
   double bidiCrossSpanKern(const BidiPlacement& item, std::optional<size_t> previous) const {

@@ -67,27 +67,44 @@ A second slice adds the typed inherited `direction` and non-inherited `unicode-b
   its right edge on a horizontal line. This applies to all horizontal text that is not on a path,
   including wrapped and preserved-line text, which still keep left-to-right visual order.
 - The `<text>` element's own `bidi-override` or `isolate-override` gives every character the
-  paragraph level, split into script runs so each shapes with its own script. Explicit bidi
-  controls in the source are ignored under the override.
+  paragraph level, split into script runs so each shapes with its own script.
 - A right-to-left chunk's pen runs leftward from its origin, so the current text position after
   it is one chunk width left of that origin; anchoring applies afterwards and does not move it. A
   following unwrapped chunk without an absolute `x`, for example after a `tspan` that sets only
   `y`, continues from there, with trailing spacing on the left and `dx` kept as a physical shift.
-  The continuation follows the direction of the previous chunk's first span, not the paragraph.
   Wrapped text lays out its own lines and does not use it.
 - The paragraph level comes from the `<text>` element. A `tspan` with a different `direction`
   mirrors its own chunk's anchor but does not change the paragraph level.
 
-Known gaps of this slice:
+A third slice injects controls for inline elements and adds `plaintext`.
 
-- `unicode-bidi: plaintext` on the `<text>` element behaves as `normal`; it should detect the base
-  direction from the first strong character.
-- `unicode-bidi` on a `tspan` (control injection, Milestone 3), right-to-left vertical text and
-  textPath, direction-aware `dx` and `textLength` carry, and visual caret movement remain separate
-  work. The simple tier gains ordering and mirroring, not Arabic
-joining. The three normal mixed-script resvg cases are the initial convergence target; this slice
-does not complete the full design or tracking issue. Existing package and module limits remain
-unchanged and must be checked on the actual configured products.
+- An inline element's `unicode-bidi` places the controls of the CSS Writing Modes table around its
+  content in the paragraph's analysis buffer, with the element's `direction`; the controls occupy
+  no character position. An element that spans a paragraph boundary is closed at the end of one
+  paragraph and reopened at the start of the next. Embeddings nested past the UAX #9 maximum depth
+  of 125 overflow as the algorithm defines.
+- Under a paragraph override that has anything to inject, the override becomes a leading override
+  control, so nested elements still open their own levels. Explicit controls in the source are
+  honored in the same way, with or without injected controls.
+- `unicode-bidi: plaintext` on the `<text>` element detects each paragraph's base direction from
+  its first strong character (UAX #9 P2 and P3). `start` and `end` anchors and the continuation of
+  unpositioned chunks then follow that detected direction instead of `direction`.
+- Unpositioned chunks follow one another in their paragraph's direction rather than the previous
+  chunk's: the pen leaves a chunk at its right edge in a left-to-right paragraph and at its left
+  edge in a right-to-left one, and a chunk against that direction ends at the current text
+  position instead of starting there. An `rtl` chunk in an `ltr` paragraph therefore extends
+  rightward from the current text position.
+
+Known gaps:
+
+- Right-to-left vertical text and textPath, direction-aware `dx` and `textLength` carry, and visual
+  caret movement remain separate work. Vertical lines ignore `direction` and `unicode-bidi`, and
+  `plaintext` applies only to text laid out through the paragraph plan (not wrapped, preserved-line
+  or textPath text). The simple tier gains ordering and mirroring, not Arabic joining.
+
+The three normal mixed-script resvg cases are the initial convergence target; these slices do not
+complete the full design or tracking issue. Existing package and module limits remain unchanged
+and must be checked on the actual configured products.
 
 ## Goals
 
@@ -242,8 +259,8 @@ belongs to a later milestone (1b, 1c, or 2).
   - [ ] Measure the editor Geode package (compressed, raw, data segments) and the standalone
         renderer module against their ceilings before publication.
 - [ ] Milestone 3: `unicode-bidi` and cross-span shaping (medium, about 600 lines)
-  - [ ] Add the typed non-inherited `unicode-bidi` property and per-span open and close markers.
-  - [ ] Inject CSS bidi controls into the analysis buffer, closing and reopening them at paragraph
+  - [x] Add the typed non-inherited `unicode-bidi` property and per-span open and close markers.
+  - [x] Inject CSS bidi controls into the analysis buffer, closing and reopening them at paragraph
         boundaries.
   - [ ] Shape items with the level run as HarfBuzz context so joining continues across `tspan`
         boundaries, and prove the context is pixel-neutral for left-to-right scripts.
