@@ -1081,11 +1081,38 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
                                    (extent.height + shape.y - 1) / shape.y);
 }
 
+/// Pointer to \p value's texture, or null when it is absent.
+const FilterTexture* OptionalTexture(const std::optional<FilterTexture>& value) {
+  return value ? &*value : nullptr;
+}
+
+/// Textures the standard filter inputs resolve to; an absent derived input reads the source.
+struct StandardInputTextures {
+  FilterTexture sourceGraphic;                   //!< SourceGraphic.
+  const FilterTexture* sourceAlpha = nullptr;    //!< SourceAlpha, when prepared.
+  const FilterTexture* backdrop = nullptr;       //!< BackgroundImage, when prepared.
+  const FilterTexture* backdropAlpha = nullptr;  //!< BackgroundAlpha, when prepared.
+};
+
+/// Resolve a standard input keyword to a texture.
+FilterTexture resolveStandardInput(svg::components::FilterStandardInput input,
+                                   const StandardInputTextures& textures) {
+  using svg::components::FilterStandardInput;
+  const FilterTexture* prepared = nullptr;
+  if (input == FilterStandardInput::SourceAlpha) {
+    prepared = textures.sourceAlpha;
+  } else if (input == FilterStandardInput::BackgroundImage) {
+    prepared = textures.backdrop;
+  } else if (input == FilterStandardInput::BackgroundAlpha) {
+    prepared = textures.backdropAlpha;
+  }
+  return prepared != nullptr ? *prepared : textures.sourceGraphic;
+}
+
 /// Resolve an input reference to a texture.
 FilterTexture resolveInput(const svg::components::FilterInput& input,
                            const std::unordered_map<std::string, FilterTexture>& namedBuffers,
-                           FilterTexture currentBuffer, FilterTexture sourceGraphic,
-                           const FilterTexture* sourceAlpha) {
+                           FilterTexture currentBuffer, const StandardInputTextures& standard) {
   using namespace svg::components;
   if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
     auto it = namedBuffers.find(named->name.str());
@@ -1095,13 +1122,7 @@ FilterTexture resolveInput(const svg::components::FilterInput& input,
   } else if (std::holds_alternative<FilterInput::Previous>(input.value)) {
     return currentBuffer;
   } else if (const auto* stdIn = std::get_if<FilterStandardInput>(&input.value)) {
-    if (*stdIn == FilterStandardInput::SourceGraphic) {
-      return sourceGraphic;
-    }
-    if (*stdIn == FilterStandardInput::SourceAlpha && sourceAlpha != nullptr) {
-      return *sourceAlpha;
-    }
-    return sourceGraphic;
+    return resolveStandardInput(*stdIn, standard);
   }
   return currentBuffer;
 }
@@ -1383,10 +1404,12 @@ struct FilterGraphExecution {
                        FilterTextureAllocator& textureAllocator,
                        svg::components::FilterExecutionBudget* executionBudget,
                        std::optional<FilterTilePlan> admittedPlan,
-                       FrameCommandBufferSink* frameSink)
+                       FrameCommandBufferSink* frameSink,
+                       std::optional<FilterTexture> backdropSource)
       : engine(engine),
         graph(graph),
         sourceGraphic(sourceGraphic),
+        backdropSource(backdropSource),
         executionBudget(executionBudget),
         admittedPlan(admittedPlan),
         arena(engine.device_, textureAllocator, *engine.resourceCache_,
@@ -1400,6 +1423,21 @@ struct FilterGraphExecution {
   FilterTexture run();
   FilterTexture runNodes();
   FilterTexture runTiled(const FilterTilePlan& plan);
+  bool prepareBackdrop();
+
+  /// A full texture and the tile buffer one tile of it is copied into.
+  template <typename Texture>
+  struct TileCopyOf {
+    Texture full;  //!< Texture the tile is read from.
+    Texture tile;  //!< Buffer the tile is copied into.
+  };
+  using TileCopy = TileCopyOf<FilterTexture>;
+  using OptionalTileCopy = TileCopyOf<std::optional<FilterTexture>>;
+  bool createTileBuffers(const FilterTilePlan& plan, FilterTexture fullSource,
+                         const std::optional<FilterTexture>& fullBackdrop, FilterTexture& tileInput,
+                         std::optional<FilterTexture>& tileBackdrop);
+  bool loadTile(const FilterTilePlan& plan, gpu::Origin2d origin, TileCopy source,
+                OptionalTileCopy backdropCopy);
   FilterTexture inputFor(const svg::components::FilterNode& node, size_t index) const;
   FilterTexture clip(FilterTexture input, const Box2d& region, bool transformed,
                      bool resolve = false);
@@ -1411,6 +1449,8 @@ struct FilterGraphExecution {
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
   FilterTexture sourceGraphic;
+  /// Unclipped BackgroundImage input for the current tile, when the caller supplied one.
+  std::optional<FilterTexture> backdropSource;
   Vector2d tileOrigin = Vector2d::Zero();
   svg::components::FilterExecutionBudget* executionBudget;
   std::optional<FilterTilePlan> admittedPlan;
@@ -1418,6 +1458,8 @@ struct FilterGraphExecution {
   FilterExecutionCoordinates coordinates;
   FilterTexture currentBuffer;
   std::optional<FilterTexture> sourceAlpha;
+  std::optional<FilterTexture> backdrop;       //!< BackgroundImage, clipped to the filter region.
+  std::optional<FilterTexture> backdropAlpha;  //!< BackgroundAlpha derived from \ref backdrop.
   std::unordered_map<std::string, FilterTexture> namedBuffers;
   std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
@@ -1788,7 +1830,8 @@ FilterExecutionResult GeodeFilterEngine::execute(
     const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
     const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
     svg::components::FilterExecutionBudget* executionBudget,
-    std::optional<FilterTilePlan> admittedPlan, FrameCommandBufferSink* frameSink) {
+    std::optional<FilterTilePlan> admittedPlan, FrameCommandBufferSink* frameSink,
+    const gpu::Texture* backdrop, const gpu::TextureDescriptor* backdropDesc) {
   // Loss is terminal for this runtime. Refuse before the graph can allocate textures or record
   // another chunk, which also bounds backing retained by an earlier uncertain execution.
   if (device_.isDeviceLost()) {
@@ -1797,8 +1840,16 @@ FilterExecutionResult GeodeFilterEngine::execute(
   // Borrowed for the call: the caller owns the source graphic and its descriptor, and both
   // outlive the execution.
   const FilterTexture source{&sourceGraphic, &sourceGraphicDesc};
+  // A backdrop that does not share the source's extent cannot be placed in its raster.
+  std::optional<FilterTexture> backdropSource;
+  if (backdrop != nullptr && backdropDesc != nullptr && backdrop->isValid() &&
+      backdropDesc->size.width == sourceGraphicDesc.size.width &&
+      backdropDesc->size.height == sourceGraphicDesc.size.height) {
+    backdropSource = FilterTexture{backdrop, backdropDesc};
+  }
   FilterGraphExecution execution(*this, graph, source, filterRegion, deviceFromFilter,
-                                 textureAllocator, executionBudget, admittedPlan, frameSink);
+                                 textureAllocator, executionBudget, admittedPlan, frameSink,
+                                 backdropSource);
   const FilterTexture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
@@ -1829,8 +1880,10 @@ FilterExecutionResult GeodeFilterEngine::execute(
 
 FilterTexture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
                                              size_t index) const {
+  const StandardInputTextures standard{sourceGraphic, OptionalTexture(sourceAlpha),
+                                       OptionalTexture(backdrop), OptionalTexture(backdropAlpha)};
   return resolveInput(svg::FilterInputOrDefault(node, index), namedBuffers, currentBuffer,
-                      sourceGraphic, sourceAlpha ? &*sourceAlpha : nullptr);
+                      standard);
 }
 
 FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& region, bool transformed,
@@ -1868,6 +1921,11 @@ void FilterGraphExecution::retainLiveValues(size_t nodeIndex) {
   SmallVector<FilterTexture, 8> live{sourceGraphic, currentBuffer};
   if (sourceAlpha) {
     live.push_back(*sourceAlpha);
+  }
+  for (const auto* value : {&backdropSource, &backdrop, &backdropAlpha}) {
+    if (*value) {
+      live.push_back(**value);
+    }
   }
   for (const auto& [name, texture] : namedBuffers) {
     live.push_back(texture);
@@ -1928,15 +1986,11 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   if (!output) {
     return {};
   }
-  // The tile buffer is filled by copying from the source, and a texture-to-texture copy requires
-  // both sides to have one format, so it takes the source's rather than the intermediate one: an
-  // embedder surface can be BGRA.
-  const FilterTexture tileInput =
-      arena.createRuntimeTexture({"FilterTileInput",
-                                  {plan.tileWidth, plan.tileHeight},
-                                  fullSource.format(),
-                                  gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!tileInput) {
+  // A backdrop is tiled alongside the source graphic.
+  const std::optional<FilterTexture> fullBackdrop = backdropSource;
+  FilterTexture tileInput;
+  std::optional<FilterTexture> tileBackdrop;
+  if (!createTileBuffers(plan, fullSource, fullBackdrop, tileInput, tileBackdrop)) {
     return {};
   }
   const uint32_t haloX = (plan.tileWidth - plan.coreWidth) / 2;
@@ -1945,13 +1999,14 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
     for (uint32_t x = 0; x < plan.width; x += plan.coreWidth) {
       const uint32_t originX = std::min(x > haloX ? x - haloX : 0, plan.width - plan.tileWidth);
       const uint32_t originY = std::min(y > haloY ? y - haloY : 0, plan.height - plan.tileHeight);
-      if (!arena.copyTexture(fullSource, tileInput, {plan.tileWidth, plan.tileHeight},
-                             {originX, originY}, {})) {
+      if (!loadTile(plan, {originX, originY}, {fullSource, tileInput},
+                    {fullBackdrop, tileBackdrop})) {
         return {};
       }
       arena.resetLogicalValues();
       sourceGraphic = currentBuffer = tileInput;
       sourceAlpha.reset();
+      backdropSource = tileBackdrop;
       namedBuffers.clear();
       coordinates.namedSubregions.clear();
       coordinates.previousOutputSubregion = coordinates.filterRegion;
@@ -1968,6 +2023,62 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
   return output;
 }
 
+/// Creates the tile buffers a tiled execution copies the source, and any backdrop, into. A copy
+/// requires one format on both sides, so each buffer takes its full texture's format: an embedder
+/// surface can be BGRA.
+bool FilterGraphExecution::createTileBuffers(const FilterTilePlan& plan, FilterTexture fullSource,
+                                             const std::optional<FilterTexture>& fullBackdrop,
+                                             FilterTexture& tileInput,
+                                             std::optional<FilterTexture>& tileBackdrop) {
+  const auto create = [&](const char* label, FilterTexture full) {
+    return arena.createRuntimeTexture({label,
+                                       {plan.tileWidth, plan.tileHeight},
+                                       full.format(),
+                                       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  };
+  tileInput = create("FilterTileInput", fullSource);
+  if (fullBackdrop) {
+    tileBackdrop = create("FilterTileBackdrop", *fullBackdrop);
+    return tileInput && *tileBackdrop;
+  }
+  return static_cast<bool>(tileInput);
+}
+
+/// Copies one tile of the source, and of any backdrop, from \p origin into the tile buffers.
+bool FilterGraphExecution::loadTile(const FilterTilePlan& plan, gpu::Origin2d origin,
+                                    TileCopy source, OptionalTileCopy backdropCopy) {
+  const gpu::Extent2d extent{plan.tileWidth, plan.tileHeight};
+  if (!arena.copyTexture(source.full, source.tile, extent, origin, {})) {
+    return false;
+  }
+  return !backdropCopy.full ||
+         arena.copyTexture(*backdropCopy.full, *backdropCopy.tile, extent, origin, {});
+}
+
+/// Clips the current tile's backdrop to the filter region and derives its alpha, when the graph
+/// reads them. Without a supplied backdrop both inputs are transparent black.
+bool FilterGraphExecution::prepareBackdrop() {
+  using namespace svg::components;
+  backdrop.reset();
+  backdropAlpha.reset();
+  const bool readsAlpha = graphUsesStandardInput(graph, FilterStandardInput::BackgroundAlpha);
+  if (!readsAlpha && !graphUsesStandardInput(graph, FilterStandardInput::BackgroundImage)) {
+    return true;
+  }
+  backdrop = backdropSource ? clip(*backdropSource, coordinates.filterRegion, !axisAligned)
+                            : createTransparentIntermediateTexture(arena, sourceGraphic.width(),
+                                                                   sourceGraphic.height(),
+                                                                   "FilterTransparentBackdrop");
+  if (!*backdrop) {
+    return false;
+  }
+  if (readsAlpha) {
+    backdropAlpha = engine.applySourceAlpha(arena, *backdrop);
+    return static_cast<bool>(*backdropAlpha);
+  }
+  return true;
+}
+
 FilterTexture FilterGraphExecution::runNodes() {
   using namespace svg::components;
   ++executedTiles;
@@ -1976,6 +2087,9 @@ FilterTexture FilterGraphExecution::runNodes() {
     if (!*sourceAlpha) {
       return {};
     }
+  }
+  if (!prepareBackdrop()) {
+    return {};
   }
   findLastNamedUses();
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
@@ -2092,9 +2206,15 @@ FilterTexture FilterNodeExecution::apply(const fp::Flood& primitive) {
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Merge&) {
-  return engine.applyMerge(arena, node, execution.namedBuffers, execution.currentBuffer,
-                           execution.sourceGraphic,
-                           execution.sourceAlpha ? &*execution.sourceAlpha : nullptr, linearRgb);
+  // feMerge reads every child, so each resolves like any other primitive input. The graph bounds
+  // the child count before execution.
+  SmallVector<FilterTexture, 8> inputs;
+  for (size_t index = 0; index < node.inputs.size(); ++index) {
+    inputs.push_back(execution.inputFor(node, index));
+  }
+  return engine.applyMerge(arena, std::span<const FilterTexture>(inputs.data(), inputs.size()),
+                           execution.currentBuffer.width(), execution.currentBuffer.height(),
+                           linearRgb);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Composite& primitive) {
@@ -2508,14 +2628,10 @@ FilterTexture GeodeFilterEngine::applyFlood(
   return output;
 }
 
-FilterTexture GeodeFilterEngine::applyMerge(
-    FilterResourceArena& arena, const svg::components::FilterNode& node,
-    const std::unordered_map<std::string, FilterTexture>& namedBuffers, FilterTexture currentBuffer,
-    FilterTexture sourceGraphic, const FilterTexture* sourceAlpha, bool linearRGB) {
-  const uint32_t width = currentBuffer.width();
-  const uint32_t height = currentBuffer.height();
-
-  if (node.inputs.empty()) {
+FilterTexture GeodeFilterEngine::applyMerge(FilterResourceArena& arena,
+                                            std::span<const FilterTexture> inputs, uint32_t width,
+                                            uint32_t height, bool linearRGB) {
+  if (inputs.empty()) {
     svg::components::filter_primitive::Flood transparent;
     transparent.floodColor = css::Color(css::RGBA(0, 0, 0, 0));
     transparent.floodOpacity = 0.0;
@@ -2527,17 +2643,15 @@ FilterTexture GeodeFilterEngine::applyMerge(
   };
 
   // Resolve first input as the initial accumulator.
-  FilterTexture accumulator = inWorkingSpace(
-      resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
+  FilterTexture accumulator = inWorkingSpace(inputs[0]);
 
   if (!accumulator) {
     return {};
   }
 
   // Alpha-over composite each subsequent input on top.
-  for (size_t i = 1; i < node.inputs.size(); ++i) {
-    FilterTexture src = inWorkingSpace(
-        resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
+  for (size_t i = 1; i < inputs.size(); ++i) {
+    FilterTexture src = inWorkingSpace(inputs[i]);
     accumulator = runMergePass(arena, src, accumulator, width, height);
     if (!accumulator) {
       return {};

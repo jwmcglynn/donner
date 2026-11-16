@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string_view>
 #include <type_traits>
 
@@ -376,6 +377,11 @@ public:
    * @param frameSink Collection point for the caller's open frame, or null when the execution
    *   submits on its own. When given, the caller must have closed its own recording into that
    *   frame before the call, so the source rendering this graph samples is ordered ahead of it.
+   * @param backdrop Optional BackgroundImage input with \p sourceGraphic's extent and texel
+   *   layout, which the filter region clips like the source. Without it BackgroundImage and
+   *   BackgroundAlpha read transparent black. Tiled execution copies from it, so it needs
+   *   `CopySrc` usage. The caller owns it for the call.
+   * @param backdropDesc Descriptor \p backdrop was allocated with; ignored without \p backdrop.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
   FilterExecutionResult execute(const svg::components::FilterGraph& graph,
@@ -385,7 +391,9 @@ public:
                                 FilterTextureAllocator& textureAllocator,
                                 svg::components::FilterExecutionBudget* executionBudget = nullptr,
                                 std::optional<FilterTilePlan> admittedPlan = std::nullopt,
-                                FrameCommandBufferSink* frameSink = nullptr);
+                                FrameCommandBufferSink* frameSink = nullptr,
+                                const gpu::Texture* backdrop = nullptr,
+                                const gpu::TextureDescriptor* backdropDesc = nullptr);
 
   /**
    * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.
@@ -497,18 +505,14 @@ private:
                            const svg::components::filter_primitive::Flood& primitive);
 
   /// Alpha-over composite of N input textures via sequential compute dispatches.
-  /// @param node The feMerge filter node (inputs resolve to merge children).
-  /// @param namedBuffers Named intermediate textures.
-  /// @param currentBuffer The "previous" output buffer.
-  /// @param sourceGraphic The original source-graphic texture.
+  /// @param inputs The resolved merge children, bottom first; empty yields transparent black.
+  /// @param width Output width. @param height Output height.
   /// @param linearRGB If true, composite in linearRGB: convert each input
   ///   sRGB→linear before the alpha-over passes and convert the result
   ///   linear→sRGB (matches tiny-skia's `color-interpolation-filters` handling).
   /// @return The composited texture.
-  FilterTexture applyMerge(FilterResourceArena& arena, const svg::components::FilterNode& node,
-                           const std::unordered_map<std::string, FilterTexture>& namedBuffers,
-                           FilterTexture currentBuffer, FilterTexture sourceGraphic,
-                           const FilterTexture* sourceAlpha, bool linearRGB);
+  FilterTexture applyMerge(FilterResourceArena& arena, std::span<const FilterTexture> inputs,
+                           uint32_t width, uint32_t height, bool linearRGB);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.
