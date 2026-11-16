@@ -1072,6 +1072,11 @@ EXCLUDE               += donner/gpu/shader/wgsl/Number.h \
 EXCLUDE               += donner/svg/renderer/benchmarks/AllocationTracker.h \
                          donner/gpu/shader/programs/SlugFillArtifactValidation.h
 
+# SubDocumentWarnings holds the renderer's package-private delivery of external
+# sub-document warnings, in a target visible only to the renderer package and
+# its tests. It takes registries and is not a public interface.
+EXCLUDE               += donner/svg/renderer/SubDocumentWarnings.h
+
 # The EXCLUDE_SYMLINKS tag can be used to select whether or not files or
 # directories that are symbolic links (a Unix file system feature) are excluded
 # from the input.

@@ -280,7 +280,7 @@ build --host_action_env=DONNER_CI_XCODE_IDENTITY
 test --test_env=DONNER_CI_XCODE_IDENTITY
 
 # macOS CI lanes selecting the same approved tuple can share a remote cache.
-# The main.yml lanes pass --config=ci-macos through BAZEL_MACOS_BUILD_FLAGS
+# The main.yml lanes pass --config=ci-macos through --config=lane-macos
 # so GitHub-hosted and self-hosted runners on that tuple compute identical keys. Without a fixed PATH, Bazel copies the client's PATH into every action
 # environment, and it differs per runner (runner home directories, image tool
 # paths and the Bazelisk download directory, which Bazelisk prepends), so no
@@ -694,6 +694,37 @@ test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak
 build:macos-vm --jobs=32
 build:macos-vm --local_resources=cpu=6
 build:macos-vm --local_resources=memory=6144
+
+# The macOS VM qualification job runs four concurrent instances on one host, each bounded to its own
+# share of 6 CPUs and 6144 MiB, with --jobs at that CPU budget. They change no action key.
+build:macos-vm-qualification --jobs=6
+build:macos-vm-qualification --local_resources=cpu=6
+build:macos-vm-qualification --local_resources=memory=6144
+
+# The key-affecting flags of every macOS CI lane (tools/ci/lanes.py), one set for all of them, so
+# lanes that select the same approved Xcode compute identical action keys
+# (//tools:macos_cache_key_parity_tests). The Xcode selection adds --xcode_version after them.
+build:lane-macos --config=ci-macos
+build:lane-macos --macos_minimum_os=13.3
+
+# Each macOS CI lane's test environment. It names the lane (DONNER_CI_MACOS_LANE), so test
+# results, which depend on the runner's GPU, are never shared between lanes. Tests get HOME from
+# --config=ci-macos, never from the runner. Only the native Metal lane turns Metal's
+# texture usage validation on; the virtual GPUs of the hosted and VM lanes cannot run shader
+# validation, and the VM lanes request API validation only (docs/metal_validation.md). Test
+# environment only: no build action changes.
+test:lane-macos-hosted --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0
+test:lane-macos-hosted --test_env=DONNER_CI_MACOS_LANE=hosted
+test:lane-macos-browser --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0
+test:lane-macos-browser --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser
+test:lane-macos-vm --//build_defs:metal_shader_validation=off
+test:lane-macos-vm --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0
+test:lane-macos-vm --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm
+test:lane-macos-vm-qualification --//build_defs:metal_shader_validation=off
+test:lane-macos-vm-qualification --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0
+test:lane-macos-vm-qualification --test_env=DONNER_CI_MACOS_LANE=vm-qualification
+test:lane-macos-metal --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1
+test:lane-macos-metal --test_env=DONNER_CI_MACOS_LANE=native-metal
 
 # Browser cases quarantined on main's hosted macOS job only (#1691, #1702): their GPU work can miss
 # its budget on that runner. Only the jobs that reproduce that job's test environment pass it;

@@ -306,9 +306,10 @@ bool SpanCapture::fillPath(MutablePixmapView& pixmap, const Path& path, const Pa
 }
 
 bool SpanCapture::strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
-                             const Stroke& stroke, Transform transform, const Mask* mask) {
+                             const Stroke& stroke, Transform transform, const Mask* mask,
+                             StrokeOutputLimit* limit) {
   return capture(pixmap, paint, [&](BlitterWrapper* wrapper) {
-    Painter::strokePath(pixmap, path, paint, stroke, transform, mask, wrapper);
+    Painter::strokePath(pixmap, path, paint, stroke, transform, mask, wrapper, limit);
   });
 }
 
