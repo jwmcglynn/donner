@@ -1924,11 +1924,11 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
 }
 
 TEST_F(RendererRegressionTests, TextStrokeMatchesItsOutlinesWhereGlyphsMeetTheTargetEdge) {
-  // The CPU backend does not expand the stroke of a glyph that cannot reach the drawing target.
-  // These runs place glyphs across and just beyond the target's edge, under rotation and skew, with
-  // miter joins and square caps that reach farther than the stroke's half width, and inside a
-  // pattern tile, a filter and a mask, whose targets are their own surfaces, and as a hairline.
-  // Each must match a `<path>` of the same glyph outlines, which is never culled.
+  // The CPU backend does not expand a text chunk whose glyph strokes cannot reach the drawing
+  // target. These runs place glyphs across and just beyond the target's edge, under rotation and
+  // skew, with miter joins and square caps that reach farther than the stroke's half width, and
+  // inside a pattern tile, a filter and a mask, whose targets are their own surfaces, and as a
+  // hairline. Each must match a `<path>` of the same glyph outlines, which is never culled.
   struct Case {
     std::string_view label;
     std::string_view defs;

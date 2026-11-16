@@ -375,9 +375,11 @@ void KeepTinyStrokeExpansion(tiny_skia::Path expanded, TinyTextChunkExpansion& e
 
 /**
  * Expands the strokes of one text chunk's glyphs, each on its own, charging each expansion before
- * it is kept (see \ref KeepTinyStrokeExpansion); glyphs whose stroke cannot reach the target are
- * not expanded. Stroking a path strokes its contours independently, so filling the kept pieces
- * together equals stroking the joined chunk.
+ * it is kept (see \ref KeepTinyStrokeExpansion). Stroking a path strokes its contours
+ * independently, so filling the kept pieces together equals stroking the joined chunk. A chunk
+ * none of whose glyph strokes can reach the target is not expanded at all; otherwise every glyph
+ * is, because the CPU rasterizer's coverage of one contour depends on the other contours of the
+ * path it fills, so leaving a glyph out would change the edges of the others.
  */
 TinyTextChunkExpansion ExpandTinyTextChunkStroke(std::span<const tiny_skia::Path> glyphs,
                                                  const tiny_skia::Stroke& stroke,
@@ -385,10 +387,12 @@ TinyTextChunkExpansion ExpandTinyTextChunkStroke(std::span<const tiny_skia::Path
                                                  float resScale, float width, float height,
                                                  RendererTextMaterializationBudget& textBudget) {
   TinyTextChunkExpansion expansion;
+  if (std::ranges::none_of(glyphs, [&](const tiny_skia::Path& glyph) {
+        return TinyStrokeMayReachTarget(glyph, stroke, transform, width, height);
+      })) {
+    return expansion;
+  }
   for (const tiny_skia::Path& glyph : glyphs) {
-    if (!TinyStrokeMayReachTarget(glyph, stroke, transform, width, height)) {
-      continue;
-    }
     if (std::optional<tiny_skia::Path> expanded = glyph.stroke(stroke, resScale)) {
       KeepTinyStrokeExpansion(std::move(*expanded), expansion, textBudget);
       if (expansion.rejected) {

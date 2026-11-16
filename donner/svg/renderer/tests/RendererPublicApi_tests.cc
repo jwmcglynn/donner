@@ -3753,14 +3753,15 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionIsChargedBeforeTheChunkIsK
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeChunkStopsAtTheStrokeOutputCap) {
-  // One chunk of 10,000 stroked "O"s, all drawn at one place (letter-spacing cancels the 0.741 em
-  // advance of the bundled font's "O"), expands into more than Path::kMaximumStrokeOutputPoints
-  // outline points; its stroke is rejected at that cap, well below the text budget's own limits.
-  const std::string glyphs(10000, 'O');
+  // One chunk of 30,000 stroked "O"s with round joins, all drawn at one place (letter-spacing
+  // cancels the 0.741 em advance of the bundled font's "O"), expands into more than
+  // Path::kMaximumStrokeOutputPoints outline points; its stroke is rejected at that cap, well below
+  // the text budget's own limits.
+  const std::string glyphs(30000, 'O');
   SVGDocument document = ParseDocument(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
            <text x="10" y="60" font-size="40" letter-spacing="-29.64" fill="none" stroke="black"
-                 stroke-width="2">)" +
+                 stroke-width="2" stroke-linejoin="round">)" +
       glyphs + "</text></svg>");
   RendererTinySkia renderer;
   renderer.draw(document);
@@ -3798,13 +3799,13 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionsOfSeparateTextsShareTheBu
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeIsNotExpandedForGlyphsOutsideTheCanvas) {
-  // A glyph whose stroke cannot reach the canvas is not expanded: moving the second "O" of the
-  // chunk far off the canvas charges only the visible glyph's expansion.
+  // A chunk whose glyph strokes cannot reach the canvas is not expanded: starting a second chunk
+  // far off the canvas charges only the visible chunk's expansion.
   const auto expansionPoints = [](std::string_view glyphs) {
     const auto points = [&](std::string_view stroke) {
       SVGDocument document = ParseDocument(
           std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60">
-                           <text x="2" y="44" dx="0 5000" font-size="40" fill="none" )") +
+                           <text y="44" x="2 5000" font-size="40" fill="none" )") +
           std::string(stroke) + ">" + std::string(glyphs) + "</text></svg>");
       RendererTinySkia renderer;
       renderer.draw(document);
