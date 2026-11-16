@@ -108,6 +108,24 @@ bool HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarning
   return false;
 }
 
+/**
+ * Hold each of @p warnings with \ref HoldSubDocumentWarning until the held set is truncated.
+ *
+ * @return True when one of @p warnings is new but delivering it would only drop it.
+ */
+bool HoldEachSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarnings* reported,
+                                PendingSubDocumentWarnings*& pending,
+                                const ParseWarningSink& warnings) {
+  bool dropsNewWarning = false;
+  for (const ParseDiagnostic& warning : warnings.warnings()) {
+    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
+      break;
+    }
+    dropsNewWarning |= HoldSubDocumentWarning(registry, reported, pending, warning);
+  }
+  return dropsNewWarning;
+}
+
 }  // namespace
 
 void DropStaleSubDocumentWarnings(Registry& registry) {
@@ -154,13 +172,7 @@ void HoldSubDocumentWarnings(Registry& registry, const ParseWarningSink& warning
   }
   const auto* reported = registry.ctx().find<ReportedSubDocumentWarnings>();
   auto* pending = registry.ctx().find<PendingSubDocumentWarnings>();
-  bool dropsNewWarning = false;
-  for (const ParseDiagnostic& warning : warnings.warnings()) {
-    if (pending != nullptr && pending->warnings.resourceLimitExceeded()) {
-      break;
-    }
-    dropsNewWarning |= HoldSubDocumentWarning(registry, reported, pending, warning);
-  }
+  const bool dropsNewWarning = HoldEachSubDocumentWarning(registry, reported, pending, warnings);
   // A truncation the host already received is held again only when this batch found a warning it
   // has not received, which the next collecting sink would otherwise look complete without.
   const bool truncationDelivered = reported != nullptr && reported->truncationReported;
