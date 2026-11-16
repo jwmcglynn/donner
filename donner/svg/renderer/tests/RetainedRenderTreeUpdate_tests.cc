@@ -347,7 +347,8 @@ void ExpectSpriteFieldFramesMatchFullRebuild(SpriteFieldChange change, std::stri
   constexpr SpriteFieldOptions kField{.sprites = 16, .sheets = 3, .spritesPerSheet = 5};
   std::optional<SpriteFieldScene> retained = MakeSpriteFieldScene(kField);
   std::optional<SpriteFieldScene> reference = MakeSpriteFieldScene(kField);
-  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ASSERT_THAT(retained, testing::Optional(testing::_));
+  ASSERT_THAT(reference, testing::Optional(testing::_));
 
   const auto advance = [&](SVGDocument& document, int frame) {
     SpriteFieldScene& scene = document == retained->document ? *retained : *reference;
@@ -388,7 +389,8 @@ TEST(RetainedRenderTreeUpdateTest, ConcurrentDomFramesMatchFullRebuild) {
 TEST(RetainedRenderTreeUpdateTest, RetargetingToTheSameDocumentTakesTheFullRebuild) {
   std::optional<SpriteFieldScene> retained = MakeSpriteFieldScene({.sprites = 4, .sheets = 2});
   std::optional<SpriteFieldScene> reference = MakeSpriteFieldScene({.sprites = 4, .sheets = 2});
-  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ASSERT_THAT(retained, testing::Optional(testing::_));
+  ASSERT_THAT(reference, testing::Optional(testing::_));
   // A same-document target creates a shadow tree, which only the full rebuild instantiates.
   const auto retarget = [](SVGDocument& document, int frame) {
     document.querySelector("#u1")->cast<SVGUseElement>().setHref(
@@ -485,7 +487,7 @@ void ExpectUseViewportEditsMatchFreshDocuments(
     GeometryWrite write, std::string_view label,
     std::optional<ExpectedPath> expected = std::nullopt) {
   std::optional<SVGDocument> edited = makeDocument(kUseGeometries[0]);
-  ASSERT_TRUE(edited.has_value());
+  ASSERT_THAT(edited, testing::Optional(testing::_));
   Renderer editedRenderer;
   editedRenderer.draw(*edited);
   const RenderTreeState::Counters before = ReadCounters(*edited);
@@ -497,7 +499,7 @@ void ExpectUseViewportEditsMatchFreshDocuments(
     editedRenderer.draw(*edited);
 
     std::optional<SVGDocument> fresh = makeDocument(kUseGeometries[frame]);
-    ASSERT_TRUE(fresh.has_value());
+    ASSERT_THAT(fresh, testing::Optional(testing::_));
     Renderer freshRenderer;
     freshRenderer.draw(*fresh);
     // Both instances must have drawn something, or a blank pair would compare equal.
@@ -574,7 +576,7 @@ TEST(RetainedRenderTreeUpdateTest, ExternalUseRefusedReadmissionAfterResizeDraws
         R"(<use id="use" href="sprites.svg#a" width="8" height="8"/></svg>)",
         R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)"
         R"(<rect id="a" width="16" height="16" fill="red"/></svg>)");
-    ASSERT_TRUE(host.has_value());
+    ASSERT_THAT(host, testing::Optional(testing::_));
     if (path == ExpectedPath::FullRebuild) {
       DisableRetainedUpdates(host->document);
     }
@@ -745,7 +747,8 @@ TEST(RetainedRenderTreeUpdateTest, HrefSelectorsTakeTheFullRebuild) {
   constexpr std::string_view kStyle = R"(use[href$="sprite-1"] { fill: red; })";
   std::optional<SVGDocument> retained = MakeStyledSpriteHost(kStyle);
   std::optional<SVGDocument> reference = MakeStyledSpriteHost(kStyle);
-  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ASSERT_THAT(retained, testing::Optional(testing::_));
+  ASSERT_THAT(reference, testing::Optional(testing::_));
   ExpectFramesMatchFullRebuild(*retained, *reference, kNextSprite, ExpectedPath::FullRebuild,
                                "href-selector");
 }
@@ -754,7 +757,8 @@ TEST(RetainedRenderTreeUpdateTest, OtherAttributeSelectorsKeepRetargetsRetained)
   constexpr std::string_view kStyle = R"([data-kind="hero"] { fill: red; })";
   std::optional<SVGDocument> retained = MakeStyledSpriteHost(kStyle);
   std::optional<SVGDocument> reference = MakeStyledSpriteHost(kStyle);
-  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ASSERT_THAT(retained, testing::Optional(testing::_));
+  ASSERT_THAT(reference, testing::Optional(testing::_));
   ExpectFramesMatchFullRebuild(*retained, *reference, kNextSprite, ExpectedPath::Retained,
                                "other-selector");
 }
@@ -765,7 +769,8 @@ TEST(RetainedRenderTreeUpdateTest, CrossDocumentRetargetsMatchFullRebuild) {
   constexpr SpriteFieldOptions kField{.sprites = 2, .sheets = 3, .spritesPerSheet = 4};
   std::optional<SpriteFieldScene> retained = MakeSpriteFieldScene(kField);
   std::optional<SpriteFieldScene> reference = MakeSpriteFieldScene(kField);
-  ASSERT_TRUE(retained.has_value() && reference.has_value());
+  ASSERT_THAT(retained, testing::Optional(testing::_));
+  ASSERT_THAT(reference, testing::Optional(testing::_));
   const FrameEdit hop = [](SVGDocument& document, int frame) {
     const int sheet = (frame + 1) % 3;
     document.querySelector("#u0")->cast<SVGUseElement>().setHref(
@@ -819,7 +824,8 @@ TEST(RetainedRenderTreeUpdateTest, PromotedExternalUseResizeMatchesUncachedRende
       MakeCompositedHost(R"(href="sprites.svg#symbol" x="4" y="4" width="20" height="20")");
   std::optional<SVGDocument> fresh =
       MakeCompositedHost(R"(href="sprites.svg#symbol" x="4" y="4" width="50" height="30")");
-  ASSERT_TRUE(edited.has_value() && fresh.has_value());
+  ASSERT_THAT(edited, testing::Optional(testing::_));
+  ASSERT_THAT(fresh, testing::Optional(testing::_));
   const RendererBitmap actual = CompositeAfterPromotion(
       *edited,
       [](SVGUseElement& use) {
@@ -838,7 +844,8 @@ TEST(RetainedRenderTreeUpdateTest, PromotedExternalUseMoveMatchesUncachedRender)
   std::optional<SVGDocument> fresh =
       MakeCompositedHost(R"svg(href="sprites.svg#symbol" x="4" y="4" width="20" height="20" )svg"
                          R"svg(transform="translate(30 12)")svg");
-  ASSERT_TRUE(edited.has_value() && fresh.has_value());
+  ASSERT_THAT(edited, testing::Optional(testing::_));
+  ASSERT_THAT(fresh, testing::Optional(testing::_));
   const RendererBitmap actual = CompositeAfterPromotion(
       *edited,
       [](SVGUseElement& use) { use.setTransform(Transform2d::Translate(Vector2d(30, 12))); },
@@ -853,7 +860,8 @@ TEST(RetainedRenderTreeUpdateTest, PromotingAJustRetargetedExternalUseMatchesUnc
       MakeCompositedHost(R"(href="sprites.svg#symbol" width="40" height="40")");
   std::optional<SVGDocument> fresh =
       MakeCompositedHost(R"(href="sprites.svg#plain" width="40" height="40")");
-  ASSERT_TRUE(edited.has_value() && fresh.has_value());
+  ASSERT_THAT(edited, testing::Optional(testing::_));
+  ASSERT_THAT(fresh, testing::Optional(testing::_));
   // Promotion happens between the retarget and the next prepare, while the instance is stale.
   const RendererBitmap actual = CompositeAfterPromotion(
       *edited, [](SVGUseElement& use) { use.setHref(RcString("sprites.svg#plain")); },

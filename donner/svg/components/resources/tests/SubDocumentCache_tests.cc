@@ -1,5 +1,6 @@
 #include "donner/svg/components/resources/SubDocumentCache.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -998,14 +999,15 @@ TEST_F(ResourceManagerContextTest, LoadAdmittedExternalSvgAdmitsOncePerPass) {
   resourceManager_->beginExternalSVGAdmissionPass();
   auto first = resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink);
   auto second = resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink);
-  ASSERT_TRUE(first.has_value());
-  ASSERT_TRUE(second.has_value());
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
   EXPECT_EQ(*first, *second);
   const auto& cache = registry_.ctx().get<SubDocumentCache>();
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 0u);
 
   resourceManager_->beginExternalSVGAdmissionPass();
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 1u);
 }
 
@@ -1020,7 +1022,8 @@ TEST_F(ResourceManagerContextTest, LoadAdmittedExternalSvgAdmitsAgainWhenTheFami
 
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   resourceManager_->beginExternalSVGAdmissionPass();
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   const auto& cache = registry_.ctx().get<SubDocumentCache>();
 
   // Another document joins the family with tighter limits, which can refuse an earlier admission.
@@ -1031,9 +1034,11 @@ TEST_F(ResourceManagerContextTest, LoadAdmittedExternalSvgAdmitsAgainWhenTheFami
       other.ctx().emplace<SubDocumentCache>(SubDocumentCache::Limits{.maximumDocuments = 32});
   ASSERT_TRUE(otherCache.bindFamily(other));
 
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 1u);
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 1u);
 }
 
@@ -1058,22 +1063,25 @@ TEST_F(ResourceManagerContextTest, LoadAdmittedExternalSvgAdmitsAgainWhenTheDocu
   resourceManager_->beginExternalSVGAdmissionPass();
   std::optional<SVGDocumentHandle> admitted =
       resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink);
-  ASSERT_TRUE(admitted.has_value());
+  ASSERT_THAT(admitted, testing::Optional(testing::_));
   const auto& cache = registry_.ctx().get<SubDocumentCache>();
 
   // The admitted document joins another family, whose budget its next admission must also fit.
   Registry other;
   AdmitIntoNewFamily(other, *admitted);
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 1u);
 
   // The admitted document grows.
   (void)(*admitted)->registry().create();
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 2u);
 
   // Nothing changed since.
-  ASSERT_TRUE(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager_->loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 2u);
 }
 
@@ -1090,13 +1098,15 @@ TEST(ResourceManagerContextFamilyTest, LoadAdmittedExternalSvgAdmitsAgainWhenThe
 
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   resourceManager.beginExternalSVGAdmissionPass();
-  ASSERT_TRUE(resourceManager.loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager.loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   const auto& cache = host.registry().ctx().get<SubDocumentCache>();
 
   // The host is admitted into another document's family, which the sheet must now fit as well.
   Registry parent;
   AdmitIntoNewFamily(parent, host.handle());
-  ASSERT_TRUE(resourceManager.loadAdmittedExternalSVG("test.svg", disabledSink).has_value());
+  ASSERT_THAT(resourceManager.loadAdmittedExternalSVG("test.svg", disabledSink),
+              testing::Optional(testing::_));
   EXPECT_EQ(cache.cachedDocumentAdmissions(), 1u);
 }
 

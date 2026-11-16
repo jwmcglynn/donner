@@ -1161,7 +1161,7 @@ TEST(ExternalUseWarningReplayTest, HeldWarningsKeepTheSinkLimit) {
 TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdates) {
   std::optional<ExternalUseDocument> host =
       MakeExternalUseDocument(kStyleWarningHost, std::string(kStyleWarningSheet));
-  ASSERT_TRUE(host.has_value());
+  ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);

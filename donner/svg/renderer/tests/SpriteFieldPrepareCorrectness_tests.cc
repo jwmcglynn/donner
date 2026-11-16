@@ -112,7 +112,7 @@ void ExpectOnlyRetainedUpdates(const WorkCounters& before, const WorkCounters& a
 TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
@@ -127,7 +127,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, MovingFramesKeepTheRenderTree) {
 TEST(SpriteFieldPrepareCorrectnessTest, OpacityFramesAdmitEachSheetOncePerRebuild) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   // An opacity write still takes the full rebuild, which admits each sheet once, not once per use.
   const WorkCounters before = ReadCounters(scene->document);
@@ -144,7 +144,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, OpacityFramesAdmitEachSheetOncePerRebuil
 TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUses) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   const WorkCounters before = ReadCounters(scene->document);
   RestyleCounter restyles(scene->document);
@@ -163,7 +163,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, RetargetFramesAttachOnlyTheRetargetedUse
 TEST(SpriteFieldPrepareCorrectnessTest, GameFramesBetweenFadesKeepTheRenderTree) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   // The measured frames move and retarget sprites; none of them is a fade frame.
   const WorkCounters before = ReadCounters(scene->document);
@@ -179,7 +179,7 @@ TEST(SpriteFieldPrepareCorrectnessTest, GameFramesBetweenFadesKeepTheRenderTree)
 TEST(SpriteFieldPrepareCorrectnessTest, FullRebuildAdmitsEachSheetOnce) {
   Renderer renderer;
   std::optional<SpriteFieldScene> scene = WarmField(renderer);
-  ASSERT_TRUE(scene.has_value());
+  ASSERT_THAT(scene, testing::Optional(testing::_));
 
   scene->document.registry().ctx().get<RenderTreeState>().retainedUpdatesEnabled = false;
   const WorkCounters before = ReadCounters(scene->document);
