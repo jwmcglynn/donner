@@ -34,6 +34,17 @@
 common --repo_env=DO_NOT_TRACK=1
 common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
 
+# Keep Bazel's profiler from sampling the system network counters. On macOS, Bazel 8 reads the
+# interface table with two sysctl(NET_RT_IFLIST2) calls, one for its size and one to fill it. If
+# network interfaces change on the build machine between the two (for example a virtual machine
+# starting), the second call fails with ENOMEM, which Bazel raises as an OutOfMemoryError: the
+# server crashes and the command exits with code 33. Bazel 9 retries the call
+# (https://github.com/bazelbuild/bazel/pull/26599, commit a7cdbeb7f2da). The flag only removes
+# the network usage counters from the JSON profile; it does not change any action key. It is
+# `common` so that fetch, query and mod also skip the sampling. Remove this when the repository
+# moves to Bazel 9; //tools:remote_cache_config_tests keeps it in place until then.
+common --noexperimental_collect_system_network_usage
+
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
 build --enable_platform_specific_config
 
