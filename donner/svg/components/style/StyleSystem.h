@@ -204,6 +204,9 @@ public:
    * @return True when the bytes fit the remaining allowance.
    */
   bool reserveExternalMeasureGeometryBytes(std::size_t bytes) {
+    if (bytes > limits_.externalMeasureGeometryBytes - externalMeasureGeometryBytes_) {
+      return false;
+    }
     externalMeasureGeometryBytes_ += bytes;
     return true;
   }

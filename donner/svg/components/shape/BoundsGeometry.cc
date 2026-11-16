@@ -48,8 +48,17 @@ bool HasIdenticalPathData(const Path& first, const Path& second) {
 std::shared_ptr<const Path> BoundsGeometryPaths::share(const Registry& registry, Entity source,
                                                        const Path& path,
                                                        StyleResourceBudget& budget) {
-  (void)budget.reserveExternalMeasureGeometryBytes(path.retainedBytes().value_or(0));
-  return paths_[{&registry, source}].emplace_back(std::make_shared<const Path>(path));
+  std::vector<std::shared_ptr<const Path>>& copies = paths_[{&registry, source}];
+  for (const std::shared_ptr<const Path>& copy : copies) {
+    if (HasIdenticalPathData(*copy, path)) {
+      return copy;
+    }
+  }
+  const std::optional<std::size_t> bytes = path.retainedBytes();
+  if (!bytes || !budget.reserveExternalMeasureGeometryBytes(*bytes)) {
+    return nullptr;
+  }
+  return copies.emplace_back(std::make_shared<const Path>(path));
 }
 
 }  // namespace donner::svg::components
