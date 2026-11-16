@@ -8,11 +8,13 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/Length.h"
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -208,6 +210,22 @@ struct ComputedTextComponent {
 
     /// Stroke miter limit used for text outlines in this span.
     double strokeMiterLimit = 4.0;
+
+    /// Stroke dash lengths in user units for this span (`stroke-dasharray`), shared by every span
+    /// styled by the same element so a text of many chunks holds one copy; null for a solid
+    /// stroke.
+    std::shared_ptr<const std::vector<double>> strokeDashArray;
+
+    /// Stroke dash offset in user units for this span (`stroke-dashoffset`).
+    double strokeDashOffset = 0.0;
+
+    /// The span's stroke dash lengths in user units; empty for a solid stroke. The view borrows the
+    /// dash list this span holds, so it is valid only while this span, or another span sharing the
+    /// same list, keeps it.
+    [[nodiscard]] std::span<const double> strokeDashLengths() const UTILS_LIFETIME_BOUND {
+      return strokeDashArray ? std::span<const double>(*strokeDashArray)
+                             : std::span<const double>();
+    }
 
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
