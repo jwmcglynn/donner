@@ -1183,17 +1183,31 @@ TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdate
                                     before.retainedUpdates + kFrames)));
 }
 
-// Once a sheet over the sink limit has delivered its warnings and the truncation, finding them
-// again holds nothing, so a mutation followed by a sinkless draw leaves no held warnings for the
-// next mutation to drop. A transform restyles nothing, so neither draw restyles the sheet.
-TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
+/// A sheet whose `#a` holds `#other` and one more unresolved use than a sink keeps warnings for.
+std::string SheetPastTheSinkLimit() {
   std::string sheet = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg"
                       R"svg(<g id="a"><rect id="other" width="4" height="4"/>)svg";
   for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
     sheet += "<use href=\"#missing" + std::to_string(i) + "\"/>";
   }
-  sheet += "</g></svg>";
-  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(kStyleWarningHost, sheet);
+  return sheet + "</g></svg>";
+}
+
+/// Insert an unresolved use the sheet's earlier warnings do not include as the first child of the
+/// `#a` of \ref SheetPastTheSinkLimit.
+void InsertNewUnresolvedUse(SVGDocument sprites) {
+  SVGUseElement added = SVGUseElement::Create(sprites);
+  added.setHref(RcString("#missing-new"));
+  SVGElement group = *sprites.querySelector("#a");
+  group.insertBefore(added, group.firstChild());
+}
+
+// Once a sheet over the sink limit has delivered its warnings and the truncation, finding them
+// again holds nothing, so a mutation followed by a sinkless draw leaves no held warnings for the
+// next mutation to drop. A transform restyles nothing, so neither draw restyles the sheet.
+TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, SheetPastTheSinkLimit());
   ASSERT_TRUE(host.has_value());
   Renderer renderer;
   ParseWarningSink first;
@@ -1209,19 +1223,36 @@ TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
   EXPECT_EQ(restyles.restyles(), 0u);
   // Every warning a preparation can find again was already delivered.
   EXPECT_THAT(later.warnings(), testing::IsEmpty());
+  // The moved sheet takes the retained update path, which prepares nothing, so the sink receives
+  // no truncation either.
+  EXPECT_FALSE(later.resourceLimitExceeded());
 }
 
 // A sheet that has delivered its warnings and the truncation, then finds a new warning without a
 // sink, marks the next collecting sink truncated: that sink would drop the new warning, and must
 // not look complete.
 TEST(ExternalUseWarningReplayTest, NewWarningPastADeliveredTruncationMarksTheLaterSink) {
-  std::string sheet = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg"
-                      R"svg(<g id="a"><rect id="other" width="4" height="4"/>)svg";
-  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
-    sheet += "<use href=\"#missing" + std::to_string(i) + "\"/>";
-  }
-  sheet += "</g></svg>";
-  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(kStyleWarningHost, sheet);
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, SheetPastTheSinkLimit());
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ParseWarningSink first;
+  renderer.draw(host->document, first);
+  ASSERT_TRUE(first.resourceLimitExceeded());
+
+  InsertNewUnresolvedUse(SpriteSheetOf(*host));
+  renderer.draw(host->document);
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_TRUE(later.resourceLimitExceeded());
+}
+
+// A new warning that a delivered truncation dropped counts as delivered: frames that move an
+// element and alternate sinkless and collecting draws find it again without holding it, so after
+// the draw that delivers it they neither restyle the sheet nor find a warning to deliver.
+TEST(ExternalUseWarningReplayTest, NewWarningDroppedByADeliveredTruncationIsNotHeldAgain) {
+  std::optional<ExternalUseDocument> host =
+      MakeExternalUseDocument(kStyleWarningHost, SheetPastTheSinkLimit());
   ASSERT_TRUE(host.has_value());
   Renderer renderer;
   ParseWarningSink first;
@@ -1229,14 +1260,24 @@ TEST(ExternalUseWarningReplayTest, NewWarningPastADeliveredTruncationMarksTheLat
   ASSERT_TRUE(first.resourceLimitExceeded());
 
   SVGDocument sprites = SpriteSheetOf(*host);
-  SVGUseElement added = SVGUseElement::Create(sprites);
-  added.setHref(RcString("#missing-new"));
-  SVGElement group = *sprites.querySelector("#a");
-  group.insertBefore(added, group.firstChild());
-  renderer.draw(host->document);
+  InsertNewUnresolvedUse(sprites);
+  int frame = 0;
+  // One sinkless draw then one collecting draw, each after moving `#other`.
+  const auto drawCycle = [&](ParseWarningSink& collecting) {
+    MutateSheet(sprites, SheetMutation::OtherTransform, frame++);
+    renderer.draw(host->document);
+    MutateSheet(sprites, SheetMutation::OtherTransform, frame++);
+    renderer.draw(host->document, collecting);
+  };
+  ParseWarningSink delivered;
+  drawCycle(delivered);
+  ASSERT_TRUE(delivered.resourceLimitExceeded());
+
+  RestyleCounter restyles(sprites);
   ParseWarningSink later;
-  renderer.draw(host->document, later);
-  EXPECT_TRUE(later.resourceLimitExceeded());
+  drawCycle(later);
+  EXPECT_THAT(later.warnings(), testing::IsEmpty());
+  EXPECT_EQ(restyles.restyles(), 0u);
 }
 
 }  // namespace

@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -45,7 +46,8 @@ bool HasIdenticalPathData(const Path& first, const Path& second);
 /**
  * Path copies that collected geometry holds, shared between pieces that hold the same path, such as
  * the pieces of every external `<use>` of one fragment. Each distinct copy is charged to a byte
- * allowance.
+ * allowance. Copies are found by a hash of their contents, so sharing a path costs one full
+ * comparison at most however many different copies its source element has.
  */
 class BoundsGeometryPaths {
 public:
@@ -57,7 +59,8 @@ public:
    * @param source Entity whose geometry @p path is.
    * @param path Path to share.
    * @param budget Allowance a new copy's bytes are charged to.
-   * @return The shared copy, or nullptr when a new copy does not fit the allowance.
+   * @return The shared copy, or nullptr when no copy is shared: once a new copy has not fit the
+   *   allowance, or when a different copy of @p source has the same hash.
    */
   std::shared_ptr<const Path> share(const Registry& registry, Entity source, const Path& path,
                                     StyleResourceBudget& budget);
@@ -66,7 +69,10 @@ public:
   void clear() { paths_.clear(); }
 
 private:
-  std::map<std::pair<const Registry*, Entity>, std::vector<std::shared_ptr<const Path>>> paths_;
+  /// One source element's copies by the hash of their contents, one copy per hash.
+  using CopiesByHash = std::unordered_map<std::size_t, std::shared_ptr<const Path>>;
+
+  std::map<std::pair<const Registry*, Entity>, CopiesByHash> paths_;
 };
 
 /// Where collected geometry goes: its pieces, the shared path copies they hold, and the allowance

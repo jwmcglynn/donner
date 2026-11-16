@@ -23,13 +23,22 @@ namespace {
  */
 struct ReportedSubDocumentWarnings {
   std::unordered_set<std::string> keys;
+  /// Warnings dropped past the limit while the host sink was marked truncated for them, bounded
+  /// like \ref keys. The host has received the truncation that stands for each of them.
+  std::unordered_set<std::string> droppedKeys;
   /// Whether the host sink was marked truncated for this sub-document's warnings.
   bool truncationReported = false;
 
-  /// Whether delivering @p key would only drop it, after the truncation it causes was reported.
+  /// Whether the host received @p key, or the truncation that stands for it.
+  bool received(const std::string& key) const {
+    return keys.contains(key) || droppedKeys.contains(key);
+  }
+
+  /// Whether delivering @p key would only drop it, after the truncation it causes was reported,
+  /// and that truncation was not already reported for it.
   bool dropsAfterTruncation(const std::string& key) const {
     return truncationReported && keys.size() >= ParseWarningSink::kMaximumWarnings &&
-           !keys.contains(key);
+           !received(key);
   }
 };
 
@@ -95,7 +104,7 @@ bool HoldSubDocumentWarning(Registry& registry, const ReportedSubDocumentWarning
   if (reported != nullptr && reported->dropsAfterTruncation(key)) {
     return true;
   }
-  if ((reported != nullptr && reported->keys.contains(key)) ||
+  if ((reported != nullptr && reported->received(key)) ||
       (pending != nullptr && pending->keys.contains(key))) {
     return false;
   }
@@ -150,6 +159,9 @@ void ReportSubDocumentWarnings(Registry& registry, const ParseWarningSink& warni
     }
     if (reported.keys.size() >= ParseWarningSink::kMaximumWarnings) {
       truncated = true;
+      if (reported.droppedKeys.size() < ParseWarningSink::kMaximumWarnings) {
+        reported.droppedKeys.insert(std::move(key));
+      }
       continue;
     }
     reported.keys.insert(std::move(key));
