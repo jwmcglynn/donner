@@ -146,17 +146,16 @@ public:
       parseEditedElementContents;
 
   /**
-   * Re-derives the type-specific state of a filter element (`filter`, a filter primitive, or a
-   * light source, transfer function or merge node inside one) after a mutation set or removed one
-   * of its attributes, the way the parser that built this document does. The element's typed
-   * filter state is reset to its defaults and its stored type-specific attributes are parsed
-   * again, so a removed or invalid attribute takes its default exactly as a fresh parse gives.
-   * Only the one element is reparsed; its subtree and presentation attributes are untouched.
-   * Unset for documents the parser did not build.
+   * Re-derives the state of one type-specific attribute of a filter element (`filter`, a filter
+   * primitive, or a light source, transfer function or merge node inside one) after a mutation set
+   * or removed it, the way the parser that built this document does: a removed or invalid value
+   * takes its default exactly as a fresh parse gives. Every other attribute's state, including
+   * values set through the typed setters, is untouched. Unset for documents the parser did not
+   * build.
    *
    * Takes the current document source, the element and the edited attribute's name, and returns
    * whether that attribute is one of the element's type-specific attributes and, if its new value
-   * did not parse, the error.
+   * did not parse, the error or warning.
    */
   std::function<TypedFilterAttributeEdit(std::string_view, const SVGElement&,
                                          const xml::XMLQualifiedNameRef&)>

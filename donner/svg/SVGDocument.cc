@@ -867,7 +867,7 @@ bool SVGDocument::endAnimation(const SVGElement& animation, double offset) {
 namespace {
 
 /**
- * Re-derives a filter element's typed state after one of its attributes was set or removed, and
+ * Re-derives the typed state of a filter element's attribute after it was set or removed, and
  * when the attribute is type-specific, drops the owning filter's computed graph and invalidates
  * the render tree so the next frame rebuilds it, as the typed setters such as setX do. The generic
  * attribute projection stores these attributes without interpreting them, and a computed filter

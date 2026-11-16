@@ -49,12 +49,12 @@ public:
 
   /**
    * After \p editedName was set on or removed from a filter element (see
-   * \ref IsFilterElementFamily), reset the element's typed filter state to its defaults and parse
-   * its stored type-specific attributes again, as a fresh parse of the element would. Presentation
-   * and generic attributes are not touched, and nothing happens when \p editedName is not one of
-   * the element's type-specific attributes.
+   * \ref IsFilterElementFamily), parse that attribute's stored value again, or its absence, so its
+   * typed state matches a fresh parse of the element. Other attributes' state, including values set
+   * through the typed setters, is not touched, and nothing happens when \p editedName is not one
+   * of the element's type-specific attributes.
    *
-   * @param context Parser context; its warning sink receives the reparsed attributes' warnings.
+   * @param context Parser context; its warning sink receives the attribute's warnings.
    * @param element The edited element.
    * @param editedName The attribute that was set or removed.
    */

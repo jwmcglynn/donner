@@ -722,8 +722,8 @@ std::optional<ParseDiagnostic> ParseEditedElementContents(const SVGParser::Optio
 }
 
 /**
- * Re-derive a filter element's type-specific state after a mutation set or removed one of its
- * attributes, as a fresh parse of the element would. The parser installs this as
+ * Re-derive the state of a filter element's type-specific attribute after a mutation set or
+ * removed it, as a fresh parse of the element would. The parser installs this as
  * \ref components::SVGDocumentContext::reapplyTypedFilterAttributes.
  *
  * @param options Options of the parse that built the document.
