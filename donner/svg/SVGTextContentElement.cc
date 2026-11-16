@@ -6,6 +6,7 @@
 #include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
@@ -14,6 +15,7 @@ namespace {
 
 TextEngine& getPreparedTextEngine(EntityHandle handle) {
   Registry& registry = *handle.registry();
+  components::ExternalUseStyleRetention::RestoreStandaloneForRead(registry);
   auto* textEngine = registry.ctx().find<TextEngine>();
   if (!textEngine) {
     auto& fontManager = registry.ctx().contains<FontManager>()
