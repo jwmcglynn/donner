@@ -730,15 +730,18 @@ INSTANTIATE_TEST_SUITE_P(
                     {"recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-recursive-on-child.png")
-                         .withReason("Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason(
+                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
                     {"self-recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")
-                         .withReason("Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason(
+                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
                     {"self-recursive.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")
-                         .withReason("Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason(
+                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
                     // The reference resamples a rasterized pattern tile, so only the tile's thin
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
