@@ -375,6 +375,10 @@ private:
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);
   void skipUntil(RenderingInstanceView& view, Entity endEntity);
+  /// Skip a subtree that will not be drawn, together with the mask, marker and pattern content its
+  /// instances draw, which can be instantiated after the subtree's last entity.
+  void skipDrawnContent(RenderingInstanceView& view, Registry& registry,
+                        const components::SubtreeInfo& subtree);
   /// Draw a shape's fill, stroke, and markers honoring the resolved `paint-order`
   /// property. `paint` is the shape's resolved paint state; `drawFillComponent` /
   /// `drawStrokeComponent` are toggled per pass so a single shape draw emits one

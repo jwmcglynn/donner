@@ -3945,6 +3945,26 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
   }
 }
 
+void RendererDriver::skipDrawnContent(RenderingInstanceView& view, Registry& registry,
+                                      const components::SubtreeInfo& subtree) {
+  const auto* lastInstance =
+      registry.try_get<components::RenderingInstanceComponent>(subtree.lastRenderedEntity);
+  if (lastInstance == nullptr) {
+    skipUntil(view, subtree.lastRenderedEntity);
+    return;
+  }
+  int lastDrawOrder = lastInstance->drawOrder;
+  while (!view.done()) {
+    const auto& instance =
+        registry.get<components::RenderingInstanceComponent>(view.currentEntity());
+    if (instance.drawOrder > lastDrawOrder) {
+      break;
+    }
+    lastDrawOrder = std::max(lastDrawOrder, ContentLastDrawOrder(registry, instance));
+    view.advance();
+  }
+}
+
 void RendererDriver::skipUntil(RenderingInstanceView& view, Entity endEntity) {
   while (!view.done()) {
     const bool isEnd = view.currentEntity() == endEntity;
@@ -4087,7 +4107,7 @@ void RendererDriver::renderMaskContents(RenderingInstanceView& view, Registry& r
       }
     }
   } else if (subtreeAhead) {
-    skipUntil(view, mask.subtreeInfo->lastRenderedEntity);
+    skipDrawnContent(view, registry, *mask.subtreeInfo);
   }
 }
 
@@ -4225,7 +4245,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
           .drawOrder > instance.drawOrder;
   const auto skipSubtree = [&]() {
     if (subtreeAhead) {
-      skipUntil(view, ref.subtreeInfo->lastRenderedEntity);
+      skipDrawnContent(view, registry, *ref.subtreeInfo);
     }
   };
 
