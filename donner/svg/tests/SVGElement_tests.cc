@@ -749,9 +749,9 @@ TEST_F(SVGElementTests, NonInheritedPresentationAttributeDoesNotPropagateToDesce
   auto parent = doc.querySelector("#parent");
   auto child = doc.querySelector("#child");
   auto sibling = doc.querySelector("#sibling");
-  ASSERT_TRUE(parent.has_value());
-  ASSERT_TRUE(child.has_value());
-  ASSERT_TRUE(sibling.has_value());
+  ASSERT_THAT(parent, testing::Optional(testing::_));
+  ASSERT_THAT(child, testing::Optional(testing::_));
+  ASSERT_THAT(sibling, testing::Optional(testing::_));
 
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->setAttribute("clip-path", "none");
