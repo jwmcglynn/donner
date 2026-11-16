@@ -105,6 +105,16 @@ bool IsInjectableControl(char32_t codepoint) {
          (codepoint >= bidi_control::kLri && codepoint <= bidi_control::kPdi);
 }
 
+/// Whether \p codepoint starts an override, whose content takes one level whatever its script.
+bool IsOverrideCodepoint(char32_t codepoint) {
+  return codepoint == bidi_control::kLro || codepoint == bidi_control::kRlo;
+}
+
+/// Whether \p control starts an override.
+bool IsOverrideControl(const BidiParagraph::InjectedControl& control) {
+  return IsOverrideCodepoint(control.codepoint);
+}
+
 /// Whether every control is an injectable control within \p scalarCount, in nondecreasing order.
 bool ValidControls(std::span<const BidiParagraph::InjectedControl> controls, size_t scalarCount) {
   return std::all_of(controls.begin(), controls.end(),
@@ -143,9 +153,9 @@ struct BidiParagraph::State {
   /// Analysis position of each scalar when controls were injected, in increasing order; empty
   /// when the analysis buffer is the scalars themselves.
   std::vector<uint32_t> scalarPositions;
-  /// The scalars apart from injected controls, kept to split mixed-script override runs: a
-  /// paragraph override that encloses injected controls resolves through an injected override
-  /// control, whose uniform levels can mix scripts. Empty otherwise.
+  /// The scalars apart from injected controls, kept to split runs at script boundaries when the
+  /// buffer holds an override (the paragraph's own, an inline element's or one in the source),
+  /// whose uniform levels can mix scripts. Empty otherwise.
   std::vector<char32_t> overrideScalars;
   std::vector<uint8_t> levels;
   Algorithm algorithm{nullptr, SBAlgorithmRelease};
@@ -189,6 +199,9 @@ struct BidiParagraph::State {
     codepoints.reserve(scalars.size() + controls.size() + 1);
     if (paragraphOverride) {
       codepoints.push_back(base % 2 != 0 ? bidi_control::kRlo : bidi_control::kLro);
+    }
+    if (paragraphOverride || std::any_of(controls.begin(), controls.end(), IsOverrideControl) ||
+        std::any_of(scalars.begin(), scalars.end(), IsOverrideCodepoint)) {
       overrideScalars = scalars;
     }
     scalarPositions.reserve(scalars.size());
