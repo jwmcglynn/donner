@@ -474,20 +474,12 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   // + FreeType shaping was actually compiled in for this variant, which is
   // exactly what DONNER_TEXT_FULL means, independent of which backend is
   // active.
+  // Both text tiers scale the font's unrounded advances and outlines to the requested size.
   const Box2d inkBounds = textElement.inkBoundingBox();
-#ifdef DONNER_TEXT_FULL
-  // HarfBuzz v14 + FreeType produces slightly wider glyph advances.
-  EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.20), Vector2Near(34.375, 20.125)));
-#else
   EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.204), Vector2Near(34.36, 20.12)));
-#endif
 
   const Box2d objectBounds = textElement.objectBoundingBox();
-#ifdef DONNER_TEXT_FULL
-  EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(35.0, 22.7)));
-#else
   EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(34.984, 22.7)));
-#endif
 }
 
 TEST(SVGTextElementPublicApiTests, AppendTextAndAdvanceTextChunkUpdateTextContent) {

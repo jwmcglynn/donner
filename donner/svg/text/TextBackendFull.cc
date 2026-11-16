@@ -117,19 +117,46 @@ std::optional<FT_F26Dot6> CheckedCharacterSize(float sizePx) {
   return static_cast<FT_F26Dot6>(fixedSize);
 }
 
-/// Sets a scalable face's checked size and refreshes HarfBuzz only after FreeType accepts it.
-bool SetScalableFaceSize(hb_font_t* font, FT_Face face, float sizePx) {
-  const auto characterSize = CheckedCharacterSize(sizePx);
-  if (!face || !characterSize) {
+/**
+ * FreeType and HarfBuzz quantize advances, offsets and outline points to 1/64 pixel of the face
+ * size. A scalable face is sized at this multiple of the text size, so that quantization stays near
+ * 1/1024 pixel of the text size instead of adding up to 1/128 pixel per glyph along a run.
+ */
+constexpr double kScalableFaceOversample = 16.0;
+
+/// The face size multiple for text of \p textSizePx. FreeType stores pixels per em in 16 bits,
+/// so text too large to oversample keeps its own size, where 1/64 pixel is already negligible.
+double ScalableFaceOversample(float textSizePx) {
+  constexpr double kMaximumPixelsPerEm = 65535.0;
+  return static_cast<double>(textSizePx) * kScalableFaceOversample <= kMaximumPixelsPerEm
+             ? kScalableFaceOversample
+             : 1.0;
+}
+
+/**
+ * Sets a scalable face's checked size and refreshes HarfBuzz only after FreeType accepts it.
+ *
+ * @param sizePx Size to shape or outline at.
+ * @param textSizePx Size of the text \p sizePx is derived from, such as the full size of
+ *   synthesized small caps; it selects the oversampling, so both sizes share one pixel scale.
+ */
+bool SetScalableFaceSize(hb_font_t* font, FT_Face face, float sizePx, float textSizePx) {
+  if (!face || !CheckedCharacterSize(sizePx) || !CheckedCharacterSize(textSizePx)) {
     return false;
   }
   if (FT_IS_SCALABLE(face)) {
-    if (FT_Set_Char_Size(face, 0, *characterSize, 72, 72) != 0) {
+    const auto characterSize =
+        CheckedCharacterSize(static_cast<float>(sizePx * ScalableFaceOversample(textSizePx)));
+    if (!characterSize || FT_Set_Char_Size(face, 0, *characterSize, 72, 72) != 0) {
       return false;
     }
     hb_ft_font_changed(font);
   }
   return true;
+}
+
+bool SetScalableFaceSize(hb_font_t* font, FT_Face face, float sizePx) {
+  return SetScalableFaceSize(font, face, sizePx, sizePx);
 }
 
 /// Prepares either a scalable size or the existing bitmap strike for a shaping operation.
@@ -169,9 +196,25 @@ uint32_t decodeCodepointAt(std::string_view str, size_t byteOffset) {
   return static_cast<uint32_t>(cp);
 }
 
-double pixelScaleForPpem(FT_Face ftFace, float fontSizePx, bool useXAxis) {
+/**
+ * Document pixels per HarfBuzz position unit for text of \p fontSizePx at the face's current size.
+ * `hb_ft_font_changed` sets a scalable face's HarfBuzz scale to the em size FreeType applied, in
+ * 1/64 pixel units of the face size; the rounded `x_ppem` is not that size. A bitmap strike uses
+ * its ppem.
+ */
+double pixelScaleForFaceSize(hb_font_t* hbFont, FT_Face ftFace, float fontSizePx, bool useXAxis) {
   if (!ftFace || !ftFace->size) {
     return 1.0 / 64.0;
+  }
+
+  if (FT_IS_SCALABLE(ftFace)) {
+    int scaleX = 0;
+    int scaleY = 0;
+    hb_font_get_scale(hbFont, &scaleX, &scaleY);
+    const int unitsPerEm = std::abs(useXAxis ? scaleX : scaleY);
+    if (unitsPerEm > 0) {
+      return static_cast<double>(fontSizePx) / static_cast<double>(unitsPerEm);
+    }
   }
 
   const unsigned int ppem = useXAxis ? ftFace->size->metrics.x_ppem : ftFace->size->metrics.y_ppem;
@@ -593,20 +636,19 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale,
   if (ftFace->glyph->format != FT_GLYPH_FORMAT_OUTLINE) {
     return {};
   }
+  // FreeType outline coordinates are in 26.6 fixed-point pixels at the face size; these scales
+  // convert them to pixels at the requested size.
+  const double ftScaleX = pixelScaleForFaceSize(hbFont, ftFace, *fontSizePx, true);
+  const double ftScaleY = pixelScaleForFaceSize(hbFont, ftFace, *fontSizePx, false);
   if (const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
       entry && entry->syntheticBold) {
-    const FT_Pos strength =
-        static_cast<FT_Pos>(std::clamp(*fontSizePx * 0.03f * 64.0f, 0.0f, 4096.0f));
-    FT_Outline_Embolden(&ftFace->glyph->outline, strength);
+    // Embolden by 3% of the text size, at most 64 pixels, in face units.
+    const double strengthPx = std::clamp(static_cast<double>(*fontSizePx) * 0.03, 0.0, 64.0);
+    FT_Outline_Embolden(&ftFace->glyph->outline, static_cast<FT_Pos>(strengthPx / ftScaleX));
   }
 
   // Decompose the outline into a Path via PathBuilder.
-  // FreeType outline coordinates are in 26.6 fixed-point pixels at the set size.
-  // Dividing by 64 gives the pixel coordinates, which match the caller's expected scale
-  // because we set FreeType's size to `scale * upem`.
   PathBuilder builder;
-  const double ftScaleX = pixelScaleForPpem(ftFace, *fontSizePx, true);
-  const double ftScaleY = pixelScaleForPpem(ftFace, *fontSizePx, false);
 
   FT_Outline_Funcs funcs{};
   struct FtCtx {
@@ -1245,7 +1287,7 @@ bool ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
 
       if (sc) {
         // Shape small-cap sub-run at reduced font size.
-        if (!SetScalableFaceSize(hbFont, ftFace, fontSizePx * kSmallCapScale)) {
+        if (!SetScalableFaceSize(hbFont, ftFace, fontSizePx * kSmallCapScale, fontSizePx)) {
           return false;
         }
 
@@ -1502,11 +1544,11 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     return {};
   }
 
-  // With FreeType-backed fonts, HarfBuzz returns positions in 26.6 fixed-point pixels
-  // at the face's current size. For scalable fonts that's fontSizePx; for bitmap fonts
-  // it's the strike's ppem. Scale accordingly to get document-pixel coordinates.
-  const double pixelScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
-  const double pixelScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
+  // With FreeType-backed fonts, HarfBuzz returns positions in 26.6 fixed-point pixels at the
+  // face's current size: a multiple of fontSizePx for scalable fonts, the strike's ppem for
+  // bitmap fonts. Scale accordingly to get document-pixel coordinates.
+  const double pixelScaleX = pixelScaleForFaceSize(hbFont, ftFace, fontSizePx, true);
+  const double pixelScaleY = pixelScaleForFaceSize(hbFont, ftFace, fontSizePx, false);
 
   // Detect direction and script from the text chunk.
   const char* chunkData = spanText.data() + byteOffset;
@@ -1621,8 +1663,8 @@ double TextBackendFull::crossSpanKernImpl(FontHandle prevFont, float prevSizePx,
     return 0.0;
   }
 
-  const double pixelScaleX = pixelScaleForPpem(ftFace, prevSizePx, true);
-  const double pixelScaleY = pixelScaleForPpem(ftFace, prevSizePx, false);
+  const double pixelScaleX = pixelScaleForFaceSize(hbFont, ftFace, prevSizePx, true);
+  const double pixelScaleY = pixelScaleForFaceSize(hbFont, ftFace, prevSizePx, false);
 
   TextBackend::ShapingContext::WorkBudget localWork{0, 0};
   auto& metricWork = SelectMetricWork(context, localWork);

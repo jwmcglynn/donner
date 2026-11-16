@@ -1935,10 +1935,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params::Skip("Override order, script runs and Arabic joining match the "
-                                  "reference; Latin glyphs sit up to 1.5 px from the reference "
-                                  "individually (not kerning), leaving 122 px on the full tier")
-                         .onlyTextFull()},
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
