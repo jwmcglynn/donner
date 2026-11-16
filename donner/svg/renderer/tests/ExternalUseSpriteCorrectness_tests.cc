@@ -18,6 +18,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStopElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -1178,6 +1179,37 @@ TEST(ExternalUseWarningReplayTest, DeliveredTruncationIsNotHeldAgain) {
   ParseWarningSink later;
   renderer.draw(host->document, later);
   EXPECT_EQ(restyles.restyles(), 0u);
+  // Every warning it finds again was delivered, and the sheet is still over the limit.
+  EXPECT_THAT(later.warnings(), testing::IsEmpty());
+  EXPECT_TRUE(later.resourceLimitExceeded());
+}
+
+// A sheet that has delivered its warnings and the truncation, then finds a new warning without a
+// sink, marks the next collecting sink truncated: that sink would drop the new warning, and must not
+// look complete.
+TEST(ExternalUseWarningReplayTest, NewWarningPastADeliveredTruncationMarksTheLaterSink) {
+  std::string sheet = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">)svg"
+                      R"svg(<g id="a"><rect id="other" width="4" height="4"/>)svg";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    sheet += "<use href=\"#missing" + std::to_string(i) + "\"/>";
+  }
+  sheet += "</g></svg>";
+  std::optional<ExternalUseDocument> host = MakeExternalUseDocument(kStyleWarningHost, sheet);
+  ASSERT_TRUE(host.has_value());
+  Renderer renderer;
+  ParseWarningSink first;
+  renderer.draw(host->document, first);
+  ASSERT_TRUE(first.resourceLimitExceeded());
+
+  SVGDocument sprites = SpriteSheetOf(*host);
+  SVGUseElement added = SVGUseElement::Create(sprites);
+  added.setHref(RcString("#missing-new"));
+  SVGElement group = *sprites.querySelector("#a");
+  group.insertBefore(added, group.firstChild());
+  renderer.draw(host->document);
+  ParseWarningSink later;
+  renderer.draw(host->document, later);
+  EXPECT_TRUE(later.resourceLimitExceeded());
 }
 
 }  // namespace
