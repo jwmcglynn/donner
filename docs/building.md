@@ -595,7 +595,7 @@ placeholder commit, so the editor's build-information action runs remotely. It n
 `--config=ci`, which on a self-hosted Linux runner carries the Linux lane's executor; it passes the
 parts of `ci` it needs itself. It passes `--remote_print_execution_messages=success`, because
 messages a remote backend attaches to a failed action can name the backend and the job log is
-public; each failure and the action's own output still show. Every command also passes
+public. Every command also passes
 `--incompatible_repo_env_ignores_action_env`: repository rules and module extensions run on the
 Linux runner, and without it Bazel 8 also hands them each `--action_env` value of the config (the
 macOS `PATH` of `ci-macos`, and any variable a runner's rc empties for the executor), so a fetch
@@ -638,6 +638,20 @@ Each run writes a table to the job summary (targets built, tests run, passed, fl
 executed and cached, actions, cache hits, spawns by runner, wall time) and uploads it, with
 `shadow-summary.json` and the Bazel profiles, as the `macos-remote-shadow-<attempt>` artifact. The
 build event and execution logs and any stall note stay on the runner.
+
+**What the job log shows.** The job log is public, and Bazel's own messages can name the remote
+executor's endpoint, for example in a connection error. So the lane never copies Bazel's output to
+the job log: each command's whole console stays in the lane's output directory on the runner, and
+is never uploaded. The job log shows only the lane's own messages and Bazel lines of a few known
+shapes, cut down: progress lines to their counters, the action and its label, and the elapsed
+time; test result lines to label, status and time; an action error to its file, line, label and
+exit code, without its message; and the build's closing summary. Every other line is withheld,
+and the lane says how many. Whatever is shown, and the report, the summary JSON and the step
+summary, also has URLs, host and port pairs, IP addresses and absolute paths outside the workspace
+removed. Compiler and action output is therefore not published by this lane, since it can name
+runner paths and the remote executor: a test's own log and outputs are in the failed-test
+artifact, and a failed build action is named by its label so that it can be reproduced on the
+gating lanes.
 
 When a phase has a test that did not pass, the lane copies the `test.log`, `test.xml` and undeclared
 outputs (`test.outputs/outputs.zip`, such as a pixel comparison's actual, expected and diff images)
