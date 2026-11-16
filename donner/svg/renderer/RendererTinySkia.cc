@@ -233,6 +233,38 @@ void ReserveEstimatedDashWork(const std::optional<tiny_skia::StrokeDash>& dash,
   }
 }
 
+/**
+ * The tiny-skia dash for a stroke's `stroke-dasharray` and `stroke-dashoffset`: an odd-length
+ * array is repeated once, as SVG specifies. Returns no dash when the stroke has none or tiny-skia
+ * rejects the pattern.
+ *
+ * @param stroke Stroke whose dash to convert.
+ * @param onlyZeroLengthGaps Set to whether every gap of the dash has zero length.
+ */
+std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(const StrokeParams& stroke,
+                                                      bool& onlyZeroLengthGaps) {
+  onlyZeroLengthGaps = false;
+  if (stroke.dashArray.empty()) {
+    return std::nullopt;
+  }
+  const int repeats = (stroke.dashArray.size() & 1u) != 0u ? 2 : 1;
+  std::vector<float> dashArray;
+  dashArray.reserve(stroke.dashArray.size() * repeats);
+  for (int i = 0; i < repeats; ++i) {
+    for (double dash : stroke.dashArray) {
+      dashArray.push_back(NarrowToFloat(dash));
+    }
+  }
+  onlyZeroLengthGaps = true;
+  for (std::size_t i = 1; i < dashArray.size(); i += 2) {
+    if (dashArray[i] != 0.0f) {
+      onlyZeroLengthGaps = false;
+      break;
+    }
+  }
+  return tiny_skia::StrokeDash::create(std::move(dashArray), NarrowToFloat(stroke.dashOffset));
+}
+
 bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
                      bool dashHasOnlyZeroLengthGaps) {
   return dash.has_value() && dashHasOnlyZeroLengthGaps;
@@ -269,6 +301,46 @@ std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(
     drawBudget.reject();
   }
   return bitmap;
+}
+
+/**
+ * Strokes a text run's chunk paths after charging their dash work through \p reserve, all chunks
+ * at once, as a dashed path's work is charged before it is stroked. A run whose dash work cannot
+ * be estimated or reserved rejects the draw budget and is not stroked.
+ *
+ * @param pixmap Target to stroke into.
+ * @param paths The run's chunk paths.
+ * @param paint Stroke paint.
+ * @param stroke Stroke, with the run's dash if any.
+ * @param transform Device transform.
+ * @param mask Clip mask, if any.
+ * @param reserve Reserves dash work units; returns false when the budget is exhausted.
+ * @param drawBudget Rejected when the work is not reserved.
+ */
+template <typename Reserve>
+void StrokeTinyRunChunks(tiny_skia::MutablePixmapView& pixmap,
+                         std::span<const tiny_skia::Path> paths, const tiny_skia::Paint& paint,
+                         const tiny_skia::Stroke& stroke, tiny_skia::Transform transform,
+                         const tiny_skia::Mask* mask, Reserve&& reserve,
+                         RendererDrawBudget& drawBudget) {
+  if (stroke.dash.has_value()) {
+    std::size_t total = 0;
+    for (const tiny_skia::Path& path : paths) {
+      const std::optional<std::size_t> work = EstimateDashWorkUnits(path, *stroke.dash);
+      if (!work.has_value() || *work > std::numeric_limits<std::size_t>::max() - total) {
+        drawBudget.reject();
+        return;
+      }
+      total += *work;
+    }
+    if (!reserve(total)) {
+      drawBudget.reject();
+      return;
+    }
+  }
+  for (const tiny_skia::Path& path : paths) {
+    tiny_skia::Painter::strokePath(pixmap, path, paint, stroke, transform, mask);
+  }
 }
 
 /// One path per text chunk, holding every contour of that chunk's glyph paths; chunks without
@@ -2592,27 +2664,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     tinyStroke.lineJoin = toTinyLineJoin(adjustedStroke.lineJoin);
 
     bool dashHasOnlyZeroLengthGaps = false;
-    if (!adjustedStroke.dashArray.empty()) {
-      const int repeats = (adjustedStroke.dashArray.size() & 1u) != 0u ? 2 : 1;
-      std::vector<float> dashArray;
-      dashArray.reserve(adjustedStroke.dashArray.size() * repeats);
-      for (int i = 0; i < repeats; ++i) {
-        for (double dash : adjustedStroke.dashArray) {
-          dashArray.push_back(NarrowToFloat(dash));
-        }
-      }
-
-      dashHasOnlyZeroLengthGaps = true;
-      for (std::size_t i = 1; i < dashArray.size(); i += 2) {
-        if (dashArray[i] != 0.0f) {
-          dashHasOnlyZeroLengthGaps = false;
-          break;
-        }
-      }
-
-      tinyStroke.dash = tiny_skia::StrokeDash::create(std::move(dashArray),
-                                                      NarrowToFloat(adjustedStroke.dashOffset));
-    }
+    tinyStroke.dash = ToTinyStrokeDash(adjustedStroke, dashHasOnlyZeroLengthGaps);
 
     // A zero-length gap still terminates one dash and starts the next. TinySkia otherwise joins
     // those ranges across ClosePath, filling the seam as if the stroke were solid. Replace only
@@ -3066,6 +3118,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     tinyStroke.miterLimit = NarrowToFloat(params.strokeParams.miterLimit);
     tinyStroke.lineCap = toTinyLineCap(params.strokeParams.lineCap);
     tinyStroke.lineJoin = toTinyLineJoin(params.strokeParams.lineJoin);
+    bool dashHasOnlyZeroLengthGaps = false;
+    tinyStroke.dash = ToTinyStrokeDash(params.strokeParams, dashHasOnlyZeroLengthGaps);
   }
 
   // Each draw spends at most the per-draw geometry allowance, and only what the frame has left.
@@ -3376,10 +3430,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // One path for each text chunk of the run, as resvg strokes the part of a span in one
       // chunk: where the strokes of adjacent glyphs overlap, the overlap is covered once instead
       // of composited per glyph. Separate chunks are separate shapes.
-      for (const tiny_skia::Path& chunkPath : JoinTinyPathsByChunk(runGlyphPaths, runChunks)) {
-        tiny_skia::Painter::strokePath(pixmapView, chunkPath, *spanStrokePaint, spanTinyStroke,
-                                       toTinyTransform(deviceFromLocalTransform_), mask);
-      }
+      // A dashed run spends the frame's dash work budget before any of it is stroked, as a dashed
+      // path does, so a run past the budget is rejected whole.
+      StrokeTinyRunChunks(
+          pixmapView, JoinTinyPathsByChunk(runGlyphPaths, runChunks), *spanStrokePaint,
+          spanTinyStroke, toTinyTransform(deviceFromLocalTransform_), mask,
+          [&](std::size_t work) { return dashedPathWorkBudget_->reserve(work); }, *drawBudget_);
     };
 
     bool fillDrawn = false;
