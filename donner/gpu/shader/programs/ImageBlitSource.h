@@ -79,6 +79,10 @@ struct Uniforms {
   // Device pixels per source texel after the complete image transform.
   pixelatedScale: vec2f,
   _samplingPad: vec2u,
+  // Nearest sampling maps target pixel position p to source texel coordinates:
+  // x = p.x * texelFromTargetX.x + (p.y * texelFromTargetX.y + texelFromTargetX.z), likewise y.
+  texelFromTargetX: vec4f,
+  texelFromTargetY: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -138,11 +142,16 @@ fn sample_pixelated(uv: vec2f) -> vec4f {
   return mix(top, bottom, fraction.y);
 }
 
-// The texel containing `uv`, as tiny-skia's gather picks it; a hardware nearest sampler may
-// resolve sample positions on a texel boundary toward either neighbor.
-fn sample_nearest(uv: vec2f) -> vec4f {
+// The texel containing the pixel center under the inverse image transform, evaluated in the
+// order tiny-skia's gather uses. Where a texel boundary passes through a pixel center, an
+// interpolated texture coordinate can land on either side of it.
+fn sample_nearest(pixel_center: vec2f) -> vec4f {
   let texture_size = vec2i(textureDimensions(imageTexture));
-  let texel = clamp(vec2i(floor(uv * vec2f(texture_size))), vec2i(0), texture_size - vec2i(1));
+  let row_x = uniforms.texelFromTargetX;
+  let row_y = uniforms.texelFromTargetY;
+  let coord = vec2f(pixel_center.x * row_x.x + (pixel_center.y * row_x.y + row_x.z),
+                    pixel_center.x * row_y.x + (pixel_center.y * row_y.y + row_y.z));
+  let texel = clamp(vec2i(floor(coord)), vec2i(0), texture_size - vec2i(1));
   return textureLoad(imageTexture, texel, 0);
 }
 
@@ -480,7 +489,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     sampled = sample_pixelated(in.uv);
   }
   if (uniforms.samplingMode == 1u) {
-    sampled = sample_nearest(in.uv);
+    sampled = sample_nearest(in.clip_pos.xy);
   }
   if (uniforms.samplingMode == 3u) {
     // Cubic lobes leave [0, 1]. Like tiny-skia, clamp each channel only, so premultiplied color

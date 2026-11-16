@@ -876,14 +876,7 @@ INSTANTIATE_TEST_SUITE_P(
                          .withReason("Nearest sampling at destination pixel centers")},
                     // The 300x300 resvg v0.49.0 rendering; the superseded reference was flattened
                     // onto white and resolved nearest-neighbor ties toward the lower texel.
-                    {"optimizeSpeed.svg",
-                     ResvgV049Reference().disableBackend(
-                         RendererBackend::Geode,
-                         "Bug: at 3.75 device pixels per texel, every second texel boundary falls "
-                         "on a pixel center; Geode's interpolated texture coordinate lands just "
-                         "below it where tiny-skia's float inverse transform lands on it, so "
-                         "nearest sampling picks the previous texel (564 px against resvg "
-                         "v0.49.0, all inside the image; TinySkia matches)")},
+                    {"optimizeSpeed.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

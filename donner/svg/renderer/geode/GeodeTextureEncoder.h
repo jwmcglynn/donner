@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/Handles.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
@@ -121,6 +122,9 @@ public:
     Box2d destRect;
     /// Source UV rectangle in [0,1] × [0,1]. Default = entire texture.
     Box2d srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+    /// Maps `destRect`'s space to target pixels; the MVP must apply the same mapping. Nearest
+    /// sampling inverts it to find the source texel under each pixel center.
+    Transform2d targetFromLocal;
     /// Overall opacity multiplier in [0, 1]. Combined with the sampled
     /// alpha inside the fragment shader.
     double opacity = 1.0;

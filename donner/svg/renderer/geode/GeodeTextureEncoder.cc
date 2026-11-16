@@ -71,6 +71,36 @@ gpu::Texture GeodeTextureEncoder::uploadRgba8Texture(const GeodeGpuContext& cont
 
 namespace {
 
+/// Fill the nearest-sampling rows that map target pixel positions to source texel coordinates,
+/// the inverse of placing the quad's source texels in the target. They are rounded to float once,
+/// like the inverse transform tiny-skia gathers through, so a texel boundary that passes through a
+/// pixel center selects the same texel.
+///
+/// @param params Quad parameters.
+/// @param textureSize Source texture dimensions in texels.
+/// @param u Uniform block receiving the rows.
+void FillNearestTexelRows(const GeodeTextureEncoder::QuadParams& params,
+                          const gpu::Extent2d& textureSize, Uniforms& u) {
+  const Vector2d sourceSize(textureSize.width, textureSize.height);
+  const Vector2d sourceTexelMin(params.srcRect.topLeft.x * sourceSize.x,
+                                params.srcRect.topLeft.y * sourceSize.y);
+  const Vector2d sourceTexelExtent(params.srcRect.width() * sourceSize.x,
+                                   params.srcRect.height() * sourceSize.y);
+  const Transform2d localFromTexel =
+      Transform2d::Translate(-sourceTexelMin) *
+      Transform2d::Scale(params.destRect.width() / sourceTexelExtent.x,
+                         params.destRect.height() / sourceTexelExtent.y) *
+      Transform2d::Translate(params.destRect.topLeft);
+  const Transform2d texelFromTarget = (localFromTexel * params.targetFromLocal).inverse();
+  // Transform2d stores [a b c d e f] with x' = a*x + c*y + e and y' = b*x + d*y + f.
+  u.texelFromTargetX[0] = static_cast<float>(texelFromTarget.data[0]);
+  u.texelFromTargetX[1] = static_cast<float>(texelFromTarget.data[2]);
+  u.texelFromTargetX[2] = static_cast<float>(texelFromTarget.data[4]);
+  u.texelFromTargetY[0] = static_cast<float>(texelFromTarget.data[1]);
+  u.texelFromTargetY[1] = static_cast<float>(texelFromTarget.data[3]);
+  u.texelFromTargetY[2] = static_cast<float>(texelFromTarget.data[5]);
+}
+
 /// Fill the blit shader's uniform block for one quad.
 ///
 /// @param mvp Column-major clip-from-target matrix.
@@ -212,7 +242,14 @@ void GeodeTextureEncoder::drawTexturedQuad(
 
   gpu::Device& device = *context.gpuDevice;
 
-  const Uniforms u = BuildQuadUniforms(mvp, targetWidth, targetHeight, params);
+  Uniforms u = BuildQuadUniforms(mvp, targetWidth, targetHeight, params);
+  if (params.filter == Filter::Nearest) {
+    const gpu::Result<gpu::TextureDescriptor> descriptor = device.textureDescriptor(texture);
+    if (descriptor.hasError()) {
+      return;
+    }
+    FillNearestTexelRows(params, descriptor.result().size, u);
+  }
   gpu::BufferBinding uniformBinding;
   if (!AllocateQuadUniforms(device, resourceArena, scratch, u, uniformBinding)) {
     return;

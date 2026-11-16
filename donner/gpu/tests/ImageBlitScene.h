@@ -108,6 +108,18 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
     std::copy(dest.begin(), dest.end(), result.destRect);
     std::copy(src.begin(), src.end(), result.srcRect);
   }
+  // Nearest sampling maps pixel centers through the inverse placement of the 2x2 source.
+  constexpr float kSourceTexels = 2.0f;
+  const float texelsPerPixelX = (result.srcRect[2] - result.srcRect[0]) * kSourceTexels /
+                                (result.destRect[2] - result.destRect[0]);
+  const float texelsPerPixelY = (result.srcRect[3] - result.srcRect[1]) * kSourceTexels /
+                                (result.destRect[3] - result.destRect[1]);
+  result.texelFromTargetX[0] = texelsPerPixelX;
+  result.texelFromTargetX[2] =
+      result.srcRect[0] * kSourceTexels - result.destRect[0] * texelsPerPixelX;
+  result.texelFromTargetY[1] = texelsPerPixelY;
+  result.texelFromTargetY[2] =
+      result.srcRect[1] * kSourceTexels - result.destRect[1] * texelsPerPixelY;
   return result;
 }
 

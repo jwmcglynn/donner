@@ -3475,6 +3475,7 @@ GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& im
   GeodeTextureEncoder::QuadParams params;
   params.destRect = destRect;
   params.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  params.targetFromLocal = deviceFromLocalTransform;
   params.opacity = opacity;
   params.sourceIsPremultiplied = true;
 
@@ -3544,6 +3545,7 @@ void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
   GeodeTextureEncoder::QuadParams qp;
   qp.destRect = destRect;
   qp.srcRect = sourceUv;
+  qp.targetFromLocal = impl_->transform;
   qp.opacity = opacity;
   qp.filter =
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
