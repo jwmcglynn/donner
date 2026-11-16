@@ -119,18 +119,24 @@ std::optional<FT_F26Dot6> CheckedCharacterSize(float sizePx) {
 
 /**
  * FreeType and HarfBuzz quantize advances, offsets and outline points to 1/64 pixel of the face
- * size. A scalable face is sized at this multiple of the text size, so that quantization stays near
- * 1/1024 pixel of the text size instead of adding up to 1/128 pixel per glyph along a run.
+ * size. A scalable face is sized at up to this multiple of the text size, so that quantization
+ * stays near 1/1024 pixel of the text size instead of adding up to 1/128 pixel per glyph along a
+ * run.
  */
 constexpr double kScalableFaceOversample = 16.0;
 
-/// The face size multiple for text of \p textSizePx. FreeType stores pixels per em in 16 bits,
-/// so text too large to oversample keeps its own size, where 1/64 pixel is already negligible.
+/**
+ * Largest face size that oversampling produces. HarfBuzz converts each FreeType 16.16 advance
+ * through a 32-bit integer, so an advance must stay under 32768 face pixels; this size keeps
+ * glyphs up to 16 em wide in range.
+ */
+constexpr double kMaximumOversampledFaceSizePx = 2048.0;
+
+/// The face size multiple for text of \p textSizePx: as fine as the face size limit allows, and
+/// never coarser than the text size itself, where 1/64 pixel is negligible for large text.
 double ScalableFaceOversample(float textSizePx) {
-  constexpr double kMaximumPixelsPerEm = 65535.0;
-  return static_cast<double>(textSizePx) * kScalableFaceOversample <= kMaximumPixelsPerEm
-             ? kScalableFaceOversample
-             : 1.0;
+  return std::clamp(kMaximumOversampledFaceSizePx / static_cast<double>(textSizePx), 1.0,
+                    kScalableFaceOversample);
 }
 
 /**
