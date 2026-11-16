@@ -867,35 +867,48 @@ bool SVGDocument::endAnimation(const SVGElement& animation, double offset) {
 namespace {
 
 /**
- * Applies an attribute just set on a filter primitive, or on a light source, transfer function or
- * merge node inside one, to the element's own typed state, and drops the computed filter graphs
- * built from the old value. The generic attribute projection stores these attributes without
- * interpreting them, and a computed filter graph otherwise survives into later frames.
+ * Re-derives a filter element's typed state after one of its attributes was set or removed, and
+ * when the attribute is type-specific, drops the owning filter's computed graph and invalidates
+ * the render tree so the next frame rebuilds it, as the typed setters such as setX do. The generic
+ * attribute projection stores these attributes without interpreting them, and a computed filter
+ * graph otherwise survives into later frames.
  *
  * @param source Current document source.
  * @param element The edited element.
- * @param name Attribute name.
- * @param value New attribute value.
- * @return The attribute's parse error, if any.
+ * @param name The attribute that was set or removed.
+ * @return The attribute's parse error, or a warning when the document was built without the parser
+ *   and so cannot interpret the attribute.
  */
-std::optional<ParseDiagnostic> ApplyFilterPrimitiveAttribute(std::string_view source,
-                                                             const SVGElement& element,
-                                                             const xml::XMLQualifiedNameRef& name,
-                                                             std::string_view value) {
-  const ElementType type = element.type();
-  if (type < ElementType::FeBlend || type > ElementType::FeTurbulence) {
+std::optional<ParseDiagnostic> ReapplyTypedFilterAttributes(std::string_view source,
+                                                            const SVGElement& element,
+                                                            const xml::XMLQualifiedNameRef& name) {
+  if (!IsFilterElementFamily(element.type()) || name == xml::XMLQualifiedNameRef("id") ||
+      name == xml::XMLQualifiedNameRef("class") || name == xml::XMLQualifiedNameRef("style")) {
     return std::nullopt;
   }
   Registry& registry = *element.entityHandle().registry();
-  const auto& parse =
-      registry.ctx().get<components::SVGDocumentContext>().parseEditedElementAttribute;
-  if (!parse) {
+  const auto& reapply =
+      registry.ctx().get<components::SVGDocumentContext>().reapplyTypedFilterAttributes;
+  if (!reapply) {
+    return ParseDiagnostic::Warning(
+        RcString("Attribute '" + name.toString() +
+                 "' was stored but not applied: filter attributes are interpreted only in "
+                 "documents built by the SVG parser"),
+        FileOffset::Offset(0));
+  }
+  components::TypedFilterAttributeEdit edit = reapply(source, element, name);
+  if (!edit.typed) {
     return std::nullopt;
   }
-  std::optional<ParseDiagnostic> diagnostic = parse(source, element, name, value);
-  registry.clear<components::ComputedFilterComponent>();
+  std::optional<SVGElement> owner = element;
+  while (owner.has_value() && owner->type() != ElementType::Filter) {
+    owner = owner->parentElement();
+  }
+  if (owner.has_value()) {
+    owner->entityHandle().remove<components::ComputedFilterComponent>();
+  }
   components::RenderingContext(registry).invalidateRenderTree();
-  return diagnostic;
+  return std::move(edit.diagnostic);
 }
 
 bool IsAttachedAnimation(EntityHandle handle) {
@@ -1499,7 +1512,7 @@ xml::ApplySourceEditResult SVGDocument::setElementAttribute(const SVGElement& el
           name, value, &consumedAsPresentationAttribute)) {
     result.diagnostic = std::move(diagnostic);
   } else if (!consumedAsPresentationAttribute) {
-    result.diagnostic = ApplyFilterPrimitiveAttribute(source(), mutableElement, name, value);
+    result.diagnostic = ReapplyTypedFilterAttributes(source(), mutableElement, name);
   }
   return result;
 }
@@ -1521,7 +1534,9 @@ xml::ApplySourceEditResult SVGDocument::removeElementAttribute(
 
   SVGElement mutableElement(element.handle_);
   mutableElement.removeAttributeFromXMLMutation(name);
-  return xml::ApplySourceEditResult();
+  xml::ApplySourceEditResult result;
+  result.diagnostic = ReapplyTypedFilterAttributes(source(), mutableElement, name);
+  return result;
 }
 
 xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
@@ -1826,8 +1841,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     std::optional<ParseDiagnostic> diagnostic = element.setAttributeFromXMLMutation(
         mutation.attributeName, *mutation.value, &consumedAsPresentationAttribute);
     if (!diagnostic.has_value() && !consumedAsPresentationAttribute) {
-      diagnostic =
-          ApplyFilterPrimitiveAttribute(source(), element, mutation.attributeName, *mutation.value);
+      diagnostic = ReapplyTypedFilterAttributes(source(), element, mutation.attributeName);
     }
     if (diagnostic.has_value()) {
       diagnostic->range = MutationRange(source(), mutation);
@@ -1841,7 +1855,12 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     return diagnostic;
   }
   element.removeAttributeFromXMLMutation(mutation.attributeName);
-  return std::nullopt;
+  std::optional<ParseDiagnostic> diagnostic =
+      ReapplyTypedFilterAttributes(source(), element, mutation.attributeName);
+  if (diagnostic.has_value()) {
+    diagnostic->range = MutationRange(source(), mutation);
+  }
+  return diagnostic;
 }
 
 std::optional<ParseDiagnostic> SVGDocument::projectXMLAttributes(const xml::XMLNode& node,

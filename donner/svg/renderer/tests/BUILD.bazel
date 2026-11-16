@@ -660,6 +660,24 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "filter_attribute_edit_tests",
+    srcs = ["FilterAttributeEdit_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "geode",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_animation_presentation_tests",
     srcs = [
         "RendererAnimationCoordinateContext_tests.cc",

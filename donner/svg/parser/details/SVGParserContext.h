@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -89,6 +90,27 @@ public:
 
   /// Whether the document parser collects diagnostics.
   bool warningsEnabled() const { return warningSink_.isEnabled(); }
+
+  /**
+   * Restrict attribute parsing to type-specific attributes: an attribute that falls through to
+   * the common attribute path (presentation, conditional-processing and generic attributes) is
+   * left alone and only recorded, see \ref fellThroughToCommonAttributes.
+   *
+   * @param typedOnly Whether to skip common attributes.
+   */
+  void setTypedAttributesOnly(bool typedOnly) { typedAttributesOnly_ = typedOnly; }
+
+  /// Whether attribute parsing skips common attributes, see \ref setTypedAttributesOnly.
+  bool typedAttributesOnly() const { return typedAttributesOnly_; }
+
+  /// Records that an attribute fell through to the common attribute path.
+  void noteCommonAttributeFallThrough() { fellThroughToCommonAttributes_ = true; }
+
+  /// Returns whether an attribute fell through to the common attribute path since the last call,
+  /// and clears the record.
+  bool takeCommonAttributeFallThrough() {
+    return std::exchange(fellThroughToCommonAttributes_, false);
+  }
 
   /**
    * Forward recovered parser diagnostics directly, preserving bounded sink refusal flags.
@@ -237,6 +259,11 @@ private:
 
   /// The XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
   RcString namespacePrefix_;
+
+  /// Whether attribute parsing skips common attributes.
+  bool typedAttributesOnly_ = false;
+  /// Whether an attribute fell through to the common attribute path since the last query.
+  bool fellThroughToCommonAttributes_ = false;
 };
 
 }  // namespace donner::svg::parser

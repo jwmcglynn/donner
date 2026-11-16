@@ -2,6 +2,7 @@
 /// @file
 
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
 
 namespace donner::svg::parser {
@@ -45,6 +46,20 @@ public:
    * @param name The name of the attribute, as specified in the document's XML.
    */
   static void RemoveParsedAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& name);
+
+  /**
+   * After \p editedName was set on or removed from a filter element (see
+   * \ref IsFilterElementFamily), reset the element's typed filter state to its defaults and parse
+   * its stored type-specific attributes again, as a fresh parse of the element would. Presentation
+   * and generic attributes are not touched, and nothing happens when \p editedName is not one of
+   * the element's type-specific attributes.
+   *
+   * @param context Parser context; its warning sink receives the reparsed attributes' warnings.
+   * @param element The edited element.
+   * @param editedName The attribute that was set or removed.
+   */
+  static components::TypedFilterAttributeEdit ReapplyTypedFilterAttributes(
+      SVGParserContext& context, SVGElement& element, const xml::XMLQualifiedNameRef& editedName);
 };
 
 }  // namespace donner::svg::parser

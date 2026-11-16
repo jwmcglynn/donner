@@ -722,26 +722,24 @@ std::optional<ParseDiagnostic> ParseEditedElementContents(const SVGParser::Optio
 }
 
 /**
- * Parse one attribute that a mutation has just set on an existing element into its type-specific
- * state, as a full parse would. The parser installs this as
- * \ref components::SVGDocumentContext::parseEditedElementAttribute.
+ * Re-derive a filter element's type-specific state after a mutation set or removed one of its
+ * attributes, as a fresh parse of the element would. The parser installs this as
+ * \ref components::SVGDocumentContext::reapplyTypedFilterAttributes.
  *
  * @param options Options of the parse that built the document.
  * @param source Current document source.
  * @param element The edited element.
- * @param name Attribute name.
- * @param value New attribute value.
- * @return The attribute's parse error, if any.
+ * @param name The attribute that was set or removed.
+ * @return Whether the attribute is type-specific, and its parse error, if any.
  */
-std::optional<ParseDiagnostic> ParseEditedElementAttribute(const SVGParser::Options& options,
-                                                           std::string_view source,
-                                                           const SVGElement& element,
-                                                           const XMLQualifiedNameRef& name,
-                                                           std::string_view value) {
+components::TypedFilterAttributeEdit ReapplyTypedFilterAttributes(const SVGParser::Options& options,
+                                                                  std::string_view source,
+                                                                  const SVGElement& element,
+                                                                  const XMLQualifiedNameRef& name) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   SVGParserContext context(source, warnings, options);
   SVGElement mutableElement = element;
-  return AttributeParser::ParseAndSetAttribute(context, mutableElement, name, value);
+  return AttributeParser::ReapplyTypedFilterAttributes(context, mutableElement, name);
 }
 
 }  // namespace
@@ -966,11 +964,10 @@ public:
                                              const XMLNode& node) {
                 return ParseEditedElementContents(options, source, element, node);
               };
-          documentContext.parseEditedElementAttribute =
+          documentContext.reapplyTypedFilterAttributes =
               [options = context_.options()](std::string_view source, const SVGElement& element,
-                                             const XMLQualifiedNameRef& name,
-                                             std::string_view value) {
-                return ParseEditedElementAttribute(options, source, element, name, value);
+                                             const XMLQualifiedNameRef& name) {
+                return ReapplyTypedFilterAttributes(options, source, element, name);
               };
 
           auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), child.value());

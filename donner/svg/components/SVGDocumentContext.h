@@ -52,6 +52,14 @@ namespace donner::svg::components {
 
 class TreeMutation;
 
+/// Result of \ref SVGDocumentContext::reapplyTypedFilterAttributes.
+struct TypedFilterAttributeEdit {
+  /// Whether the edited attribute is one of the element's type-specific attributes.
+  bool typed = false;
+  /// The edited attribute's parse error, if its value did not parse.
+  std::optional<ParseDiagnostic> diagnostic;
+};
+
 /**
  * Holds global state of an SVG document, such as the root element, id-to-element mapping, and the
  * document size.
@@ -138,18 +146,21 @@ public:
       parseEditedElementContents;
 
   /**
-   * Parses one attribute that a mutation has just set on an existing element into the element's
-   * type-specific state, the way the parser that built this document does for that element type.
-   * The generic attribute projection only stores attributes it does not recognize as presentation
-   * attributes, so this is what makes a filter primitive's own attributes, such as `in` or
-   * `stdDeviation`, take effect. Unset for documents the parser did not build.
+   * Re-derives the type-specific state of a filter element (`filter`, a filter primitive, or a
+   * light source, transfer function or merge node inside one) after a mutation set or removed one
+   * of its attributes, the way the parser that built this document does. The element's typed
+   * filter state is reset to its defaults and its stored type-specific attributes are parsed
+   * again, so a removed or invalid attribute takes its default exactly as a fresh parse gives.
+   * Only the one element is reparsed; its subtree and presentation attributes are untouched.
+   * Unset for documents the parser did not build.
    *
-   * Takes the current document source, the element, the attribute name and its new value, and
-   * returns the first error.
+   * Takes the current document source, the element and the edited attribute's name, and returns
+   * whether that attribute is one of the element's type-specific attributes and, if its new value
+   * did not parse, the error.
    */
-  std::function<std::optional<ParseDiagnostic>(std::string_view, const SVGElement&,
-                                               const xml::XMLQualifiedNameRef&, std::string_view)>
-      parseEditedElementAttribute;
+  std::function<TypedFilterAttributeEdit(std::string_view, const SVGElement&,
+                                         const xml::XMLQualifiedNameRef&)>
+      reapplyTypedFilterAttributes;
 
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.

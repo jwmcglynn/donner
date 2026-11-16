@@ -404,6 +404,10 @@ template <typename T>
 std::optional<ParseDiagnostic> ParseCommonAttribute(SVGParserContext& context, T& element,
                                                     const XMLQualifiedNameRef& name,
                                                     std::string_view value) {
+  if (context.typedAttributesOnly()) {
+    context.noteCommonAttributeFallThrough();
+    return std::nullopt;
+  }
   if constexpr (HasPathLength<T>) {
     if (name == XMLQualifiedNameRef("pathLength")) {
       // Parse the attribute as a number, and if it resolves set the length.
@@ -2352,6 +2356,119 @@ std::optional<ParseDiagnostic> AttributeParser::ApplyParsedAttribute(
 
 void AttributeParser::RemoveParsedAttribute(SVGElement& element, const XMLQualifiedNameRef& name) {
   element.removeAttributeFromXMLMutation(name);
+}
+
+namespace {
+
+/// Replaces component \p T on \p handle, if present, with \p fresh.
+template <typename T>
+void ResetIfPresent(EntityHandle handle, T fresh) {
+  if (T* component = handle.try_get<T>()) {
+    *component = std::move(fresh);
+  }
+}
+
+/// Replaces a component on \p handle with its default, keeping the `flood-color` and
+/// `flood-opacity` properties, which the style cascade owns.
+template <typename T>
+void ResetKeepingFlood(EntityHandle handle) {
+  if (T* component = handle.try_get<T>()) {
+    T fresh;
+    fresh.floodColor = component->floodColor;
+    fresh.floodOpacity = component->floodOpacity;
+    *component = std::move(fresh);
+  }
+}
+
+/// Replaces a lighting component on \p handle with its default, keeping the `lighting-color`
+/// property, which the style cascade owns.
+template <typename T>
+void ResetKeepingLightingColor(EntityHandle handle) {
+  if (T* component = handle.try_get<T>()) {
+    T fresh;
+    fresh.lightingColor = component->lightingColor;
+    *component = std::move(fresh);
+  }
+}
+
+/// Restores the attribute-derived filter state of \p handle to the defaults its element type
+/// starts with. Components the element does not carry are left absent.
+void ResetTypedFilterState(EntityHandle handle) {
+  using namespace components;
+  ResetIfPresent(handle, FilterComponent{});
+  ResetIfPresent(handle, FilterPrimitiveComponent{});
+  ResetIfPresent(handle, FEGaussianBlurComponent{});
+  ResetIfPresent(handle, FEOffsetComponent{});
+  ResetIfPresent(handle, FECompositeComponent{});
+  ResetIfPresent(handle, FEColorMatrixComponent{});
+  ResetIfPresent(handle, FEBlendComponent{});
+  ResetIfPresent(handle, FEConvolveMatrixComponent{});
+  ResetIfPresent(handle, FEMorphologyComponent{});
+  ResetIfPresent(handle, FEDisplacementMapComponent{});
+  ResetIfPresent(handle, FETurbulenceComponent{});
+  ResetIfPresent(handle, FEMergeNodeComponent{});
+  ResetIfPresent(handle, FEImageComponent{});
+  ResetKeepingFlood<FEFloodComponent>(handle);
+  ResetKeepingFlood<FEDropShadowComponent>(handle);
+  ResetKeepingLightingColor<FEDiffuseLightingComponent>(handle);
+  ResetKeepingLightingColor<FESpecularLightingComponent>(handle);
+  if (auto* function = handle.try_get<FEFuncComponent>()) {
+    *function = FEFuncComponent(function->channel);
+  }
+  if (auto* light = handle.try_get<LightSourceComponent>()) {
+    *light = LightSourceComponent(light->type);
+  }
+}
+
+}  // namespace
+
+components::TypedFilterAttributeEdit AttributeParser::ReapplyTypedFilterAttributes(
+    SVGParserContext& context, SVGElement& element, const XMLQualifiedNameRef& editedName) {
+  if (!IsFilterElementFamily(element.type())) {
+    return {};
+  }
+  const EntityHandle handle = element.entityHandle();
+  const bool wasTypedOnly = context.typedAttributesOnly();
+  context.setTypedAttributesOnly(true);
+  (void)context.takeCommonAttributeFallThrough();
+
+  // The probe below already writes the edited value, so remember which image was loaded first.
+  const auto* image = handle.try_get<components::ImageComponent>();
+  const RcString previousImageHref = image ? image->href : RcString();
+
+  // A name the type-specific parser does not recognize reaches the common attribute path, which
+  // the typed-only mode records instead of applying; such an edit leaves the typed state alone.
+  const std::optional<RcString> editedValue = element.getAttribute(editedName);
+  (void)ParseAndSetAttribute(context, element, editedName,
+                             editedValue ? std::string_view(*editedValue) : std::string_view());
+  if (context.takeCommonAttributeFallThrough()) {
+    context.setTypedAttributesOnly(wasTypedOnly);
+    return {};
+  }
+
+  ResetTypedFilterState(handle);
+  ResetIfPresent(handle, components::ImageComponent{});
+
+  components::TypedFilterAttributeEdit result{.typed = true};
+  for (const XMLQualifiedNameRef& name : element.attributes()) {
+    const std::optional<RcString> value = element.getAttribute(name);
+    if (!value.has_value()) {
+      continue;
+    }
+    std::optional<ParseDiagnostic> diagnostic =
+        ParseAndSetAttribute(context, element, name, *value);
+    (void)context.takeCommonAttributeFallThrough();
+    if (name == editedName && diagnostic.has_value()) {
+      result.diagnostic = std::move(diagnostic);
+    }
+  }
+
+  if (const auto* reparsed = handle.try_get<components::ImageComponent>();
+      reparsed && reparsed->href != previousImageHref) {
+    handle.remove<components::LoadedImageComponent, components::LoadedSVGImageComponent>();
+  }
+  context.setTypedAttributesOnly(wasTypedOnly);
+  return result;
 }
 
 }  // namespace donner::svg::parser

@@ -89,6 +89,45 @@ inline constexpr size_t kElementTypeCount = static_cast<size_t>(ElementType::Use
 std::ostream& operator<<(std::ostream& os, ElementType type);
 
 /**
+ * Whether \p type is a filter element family member whose own attributes live in typed filter
+ * state: \ref xml_filter, each filter primitive, and the light source, transfer function and merge
+ * node elements inside them.
+ *
+ * @param type Element type.
+ */
+constexpr bool IsFilterElementFamily(ElementType type) {
+  switch (type) {
+    case ElementType::Filter:
+    case ElementType::FeBlend:
+    case ElementType::FeColorMatrix:
+    case ElementType::FeComponentTransfer:
+    case ElementType::FeComposite:
+    case ElementType::FeConvolveMatrix:
+    case ElementType::FeDiffuseLighting:
+    case ElementType::FeDisplacementMap:
+    case ElementType::FeDistantLight:
+    case ElementType::FeDropShadow:
+    case ElementType::FeFlood:
+    case ElementType::FeFuncA:
+    case ElementType::FeFuncB:
+    case ElementType::FeFuncG:
+    case ElementType::FeFuncR:
+    case ElementType::FeGaussianBlur:
+    case ElementType::FeImage:
+    case ElementType::FeMerge:
+    case ElementType::FeMergeNode:
+    case ElementType::FeMorphology:
+    case ElementType::FeOffset:
+    case ElementType::FePointLight:
+    case ElementType::FeSpecularLighting:
+    case ElementType::FeSpotLight:
+    case ElementType::FeTile:
+    case ElementType::FeTurbulence: return true;
+    default: return false;
+  }
+}
+
+/**
  * Converts a \ref ElementType runtime value to a compile-time value, allowing conditional behavior
  * for different element types with `constexpr`. Takes the runtime value and invokes a function with
  * \c std::integral_constant<ElementType> as a parameter.
