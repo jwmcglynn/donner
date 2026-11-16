@@ -463,9 +463,10 @@ protected:
 TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsAConsumerWaitAlive) {
   constexpr std::chrono::milliseconds kStallBound{700};
   // Each producer submission completes less than a stall bound after the last, and the consumer
-  // completes nothing until the producer's eleventh, many stall bounds in all.
+  // completes nothing until the producer's fourth, more than two stall bounds in all. Few steps,
+  // so the consumer's work is held only briefly in real time.
   constexpr std::chrono::milliseconds kBetweenReleases{400};
-  constexpr uint64_t kEarlier = 10;
+  constexpr uint64_t kEarlier = 3;
   device_->setSubmissionStallTimeoutForTest(kStallBound);
   const Texture target = pausedProducerTexture(kEarlier);
   const Texture source =
@@ -513,8 +514,10 @@ uint64_t SubmitReadOf(MetalDevice& device, const Texture& source) {
 TEST_F(MetalSubmissionBackstopProducerTest,
        ASerialWaitBehindAProducerThatKeepsCompletingOutlastsItsStallBound) {
   constexpr std::chrono::milliseconds kStallBound{700};
+  // The consumer's work completes after the producer's fourth submission, more than two stall
+  // bounds in all.
   constexpr std::chrono::milliseconds kBetweenReleases{400};
-  constexpr uint64_t kEarlier = 10;
+  constexpr uint64_t kEarlier = 3;
   const Texture target = pausedProducerTexture(kEarlier);
   const Texture source =
       GetResultOrFail(device_->registerTexture(GetResultOrFail(producer_->exportTexture(target))));

@@ -308,7 +308,8 @@ struct CompletionState final : DeviceLossRelease {
   /// Clock a test installed in place of the steady clock; see
   /// \ref MetalDevice::setProgressClockForTest. Set once, under \ref watermarkMutex, before the
   /// device's first submission, and never changed afterwards. Completion handlers read it under
-  /// that lock; the device's own thread, which set it, also reads it without the lock.
+  /// that lock. Threads that submit or wait read it without the lock; the install happens before
+  /// any of them, since it must precede the first submission.
   std::shared_ptr<TestProgressClock> testClock;
   /// When a wait last found its work pending, as ticks of \ref now, or the lowest value when none
   /// has; see \ref MetalDevice::lastPendingWaitLookForTest.
@@ -513,8 +514,9 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
     if (state.buffersOutstanding > 0) {
       --state.buffersOutstanding;
     }
-    state.commandBuffersCompleted.fetch_add(1, std::memory_order_release);
     state.noteProgressLocked();
+    // After the progress stamp, so a case that sees the count also sees the progress it made.
+    state.commandBuffersCompleted.fetch_add(1, std::memory_order_release);
     state.completionAdvanced.notify_all();
   }
   if (bufferError != nil) {
