@@ -71,7 +71,17 @@ clips half of its stroke and two neighboring tiles draw the two halves. A recurs
 reference is an error, so the rect's fill is not painted. At 2.5 device pixels per unit, the
 vertical seam at x = 40 units covers device x 98.75 to 101.25. The exact coverage of columns
 98 to 101 is therefore 0.25, 1, 1 and 0.25, which is alpha 64, 255, 255 and 64. Donner draws
-exactly that. The vendored PNGs read 89, 242, 242 and 90, the profile of a rasterized tile
+exactly that.
+
+Donner does not draw pattern tiles analytically. Both backends rasterize the tile at twice its
+device scale (`ComputePatternTileRasterMetrics`) and sample it bilinearly with repeat wrapping.
+These rows come out exact because of their alignment. At 2.5 device pixels per unit, the
+40 x 25 unit tile is exactly 200 x 125 raster pixels, and every stroke edge sits on a multiple of
+half a raster pixel (98.75 device = 197.5 raster). Each device pixel center then falls on a
+raster pixel boundary, so bilinear sampling averages exactly two raster pixels per axis. That
+2x box filter reproduces the exact coverage of edges at those positions. Content whose edges fall
+elsewhere in the tile is not reproduced exactly; `paint-servers/pattern/text-child` is reported
+to read 57 on a glyph edge whose exact coverage is 64. The vendored PNGs read 89, 242, 242 and 90, the profile of a rasterized tile
 resampled with a filter. At the default threshold the rows differ from those PNGs by 4,053
 (recursive-on-child) and 5,503 pixels, and by 0 pixels under a 0.2 color threshold.
 
@@ -92,11 +102,12 @@ pixel, 0-255):
 | Chromium 147, recursive-on-child | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
 | Firefox 153, recursive-on-child | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
 
-Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it
-falls mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG
-does everywhere. On `recursive-on-child` they also paint the mutually recursive fill one level
-deep before treating it as an error: a second copy of the stroke raises the partial columns to
-about 1 - (1 - 0.25)^2 = 0.44 (alpha 112). Neither Donner nor the vendored PNG draws that layer.
+Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it falls
+mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG does
+everywhere. Keeping the exact seams is a maintainer decision. On `recursive-on-child` they also
+paint the mutually recursive fill one level deep before treating it as an error: a second copy of
+the stroke raises the partial columns to about 1 - (1 - 0.25)^2 = 0.44 (alpha 112). Neither Donner
+nor the vendored PNG draws that layer.
 
 resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
 per unit, the horizontal seam at y = 50 units (device y 75) covers device y 74.25 to 75.75, which

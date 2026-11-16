@@ -100,10 +100,10 @@ fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 ### Exact pattern-tile seams (reference rasterization, not a spec violation)
 
 The specification does not say how a pattern tile is rasterized, so these are not "wrong per
-spec". Donner draws the exact coverage of each tile's stroke; the vendored PNGs resample a
-rasterized tile. `testdata/golden/README.md` has the measurements, including what current
-Chromium and Firefox draw (exact coverage on pixel-aligned seams, a resampled tile on fractional
-ones), and the golden is pending a maintainer decision on that evidence.
+spec". On these rows Donner draws the exact coverage of each tile's stroke at the seams; the
+vendored PNGs resample a rasterized tile. Keeping the exact seams is a maintainer decision.
+`testdata/golden/README.md` has the measurements, including what current Chromium and Firefox
+draw: exact coverage on pixel-aligned seams and a resampled tile on fractional ones.
 
 | Category | Test | Reason |
 | --- | --- | --- |
