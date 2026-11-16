@@ -15,6 +15,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/ReflectedComputePipeline.h"
 #include "tiny_skia/filter/GaussianBlur.h"
@@ -95,12 +96,18 @@ void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView
     auto uniform = device.createBuffer(
         BufferDescriptor{"shadow parameters", 32, BufferUsage::Uniform | BufferUsage::CopyDst});
     ASSERT_THAT(uniform, HasResult());
-    const std::array<float, 8> params{0, 0, 1, 0.5f, 0.5f, -0.5f, 0, 0};
-    ASSERT_THAT(
-        device.writeBuffer(uniform.result(), 0,
-                           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),
-                                                    sizeof(params))),
-        IsOk());
+    shader::programs::DropShadowParams params{};
+    params.color[2] = 1;
+    params.color[3] = 0.5f;
+    const shader::programs::OffsetParams shift = shader::programs::MakeOffsetParams(0.5, -0.5);
+    params.shiftX = shift.shiftX;
+    params.shiftY = shift.shiftY;
+    params.weightX = shift.weightX;
+    params.weightY = shift.weightY;
+    ASSERT_THAT(device.writeBuffer(uniform.result(), 0,
+                                   std::span<const uint8_t>(
+                                       reinterpret_cast<const uint8_t*>(&params), sizeof(params))),
+                IsOk());
     auto group = device.createBindGroup(BindGroupDescriptor{
         "drop shadow",
         compute.layout,

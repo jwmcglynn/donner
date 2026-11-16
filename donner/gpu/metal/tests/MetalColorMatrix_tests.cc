@@ -1028,9 +1028,11 @@ TEST_F(MetalColorMatrixTest, FilterResolveUsesReflectedTableBindingAndWorkgroups
 
 TEST_F(MetalColorMatrixTest, OffsetResamplesFractionalShiftsAndTransparentEdges) {
   const auto& shader = shader::programs::OffsetNativeShader();
-  const std::array<std::array<float, 2>, 10> shifts{
+  const std::array<std::array<double, 2>, 12> shifts{
       {{0, 0},
        {2, -3},
+       {0.6, -2.3},
+       {-1.7, 0.35},
        {0.5f, -0.5f},
        {-0.5f, 0.5f},
        {2.5f, -2.5f},

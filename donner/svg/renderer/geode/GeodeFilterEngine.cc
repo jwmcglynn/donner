@@ -2512,11 +2512,7 @@ FilterTexture GeodeFilterEngine::applyOffset(
     return {};
   }
 
-  OffsetParams params{};
-  params.dx = static_cast<float>(primitive.dx);
-  params.dy = static_cast<float>(primitive.dy);
-  params.pad0 = 0;
-  params.pad1 = 0;
+  const OffsetParams params = gpu::shader::programs::MakeOffsetParams(primitive.dx, primitive.dy);
 
   if (!dispatchRuntimeInputOutputParameters(arena, offsetProgram_, input, output,
                                             UniformBytes(params), "FilterOffsetPass")) {
@@ -3287,10 +3283,12 @@ FilterTexture GeodeFilterEngine::applyDropShadow(
     params.color[channel] = arena.isLinearRgb(input) ? srgbToLinearChannel(straight) : straight;
   }
   params.color[3] = flood[3];
-  params.dx = static_cast<float>(pixelDx);
-  params.dy = static_cast<float>(pixelDy);
-  params.pad0 = 0;
-  params.pad1 = 0;
+  const gpu::shader::programs::OffsetParams shift =
+      gpu::shader::programs::MakeOffsetParams(pixelDx, pixelDy);
+  params.shiftX = shift.shiftX;
+  params.shiftY = shift.shiftY;
+  params.weightX = shift.weightX;
+  params.weightY = shift.weightY;
 
   if (!dispatchRuntimeTwoInput(arena, dropShadowProgram_, input, blurred, output, {width, height},
                                UniformBytes(params), "FilterDropShadowPass")) {

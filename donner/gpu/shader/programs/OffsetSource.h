@@ -7,10 +7,10 @@
 namespace donner::gpu::shader::programs {
 /// Authoritative WGSL for SVG offset filtering; fractional offsets resample bilinearly.
 inline constexpr wgsl::SourceText kOffsetSource{R"wgsl(struct OffsetParams {
-  dx: f32,
-  dy: f32,
-  pad0: u32,
-  pad1: u32,
+  shiftX: i32,
+  shiftY: i32,
+  weightX: f32,
+  weightY: f32,
 }
 
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
@@ -32,20 +32,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let coords = vec2<i32>(gid.xy);
   let size = vec2<i32>(textureDimensions(inputTexture));
-  let position = (vec2<f32>(coords) - vec2<f32>(params.dx, params.dy));
-  let base = vec2<i32>(floor(position));
-  let fraction = (position - floor(position));
+  let base = (coords - vec2<i32>(params.shiftX, params.shiftY));
+  let weight = vec2<f32>(params.weightX, params.weightY);
   let topLeft = sampleInput(base, size);
-  if (((fraction.x == 0f) && (fraction.y == 0f))) {
+  if (((weight.x == 0f) && (weight.y == 0f))) {
     textureStore(outputTexture, coords, topLeft);
     return;
   }
   let topRight = sampleInput((base + vec2<i32>(1i, 0i)), size);
   let bottomLeft = sampleInput((base + vec2<i32>(0i, 1i)), size);
   let bottomRight = sampleInput((base + vec2<i32>(1i, 1i)), size);
-  let top = (topLeft + (fraction.x * (topRight - topLeft)));
-  let bottom = (bottomLeft + (fraction.x * (bottomRight - bottomLeft)));
-  textureStore(outputTexture, coords, (top + (fraction.y * (bottom - top))));
+  let top = (topLeft + (weight.x * (topRight - topLeft)));
+  let bottom = (bottomLeft + (weight.x * (bottomRight - bottomLeft)));
+  textureStore(outputTexture, coords, (top + (weight.y * (bottom - top))));
 }
 )wgsl"};
 }  // namespace donner::gpu::shader::programs

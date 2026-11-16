@@ -6,10 +6,10 @@ namespace donner::gpu::shader::programs {
 /// Authoritative WGSL for the feDropShadow composition pass.
 inline constexpr wgsl::SourceText kDropShadowSource{R"wgsl(struct DropShadowParams {
   color: vec4<f32>,
-  dx: f32,
-  dy: f32,
-  pad0: u32,
-  pad1: u32,
+  shiftX: i32,
+  shiftY: i32,
+  weightX: f32,
+  weightY: f32,
 }
 
 @group(0) @binding(0) var sourceTexture: texture_2d<f32>;
@@ -32,16 +32,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
   let coord = vec2<i32>(gid.xy);
   let blurredSize = vec2<i32>(textureDimensions(blurredTexture));
-  let position = (vec2<f32>(coord) - vec2<f32>(params.dx, params.dy));
-  let base = vec2<i32>(floor(position));
-  let fraction = (position - floor(position));
+  let base = (coord - vec2<i32>(params.shiftX, params.shiftY));
+  let weight = vec2<f32>(params.weightX, params.weightY);
   let topLeft = blurredAlphaAt(base, blurredSize);
   let topRight = blurredAlphaAt((base + vec2<i32>(1i, 0i)), blurredSize);
   let bottomLeft = blurredAlphaAt((base + vec2<i32>(0i, 1i)), blurredSize);
   let bottomRight = blurredAlphaAt((base + vec2<i32>(1i, 1i)), blurredSize);
-  let upperAlpha = (topLeft + (fraction.x * (topRight - topLeft)));
-  let lowerAlpha = (bottomLeft + (fraction.x * (bottomRight - bottomLeft)));
-  let blurredAlpha = (upperAlpha + (fraction.y * (lowerAlpha - upperAlpha)));
+  let upperAlpha = (topLeft + (weight.x * (topRight - topLeft)));
+  let lowerAlpha = (bottomLeft + (weight.x * (bottomRight - bottomLeft)));
+  let blurredAlpha = (upperAlpha + (weight.y * (lowerAlpha - upperAlpha)));
   let shadow = vec4<f32>(((params.color.xyz * params.color.w) * blurredAlpha), (params.color.w * blurredAlpha));
   let top = textureLoad(sourceTexture, coord, 0i);
   let result = (top + (shadow * (1f - top.w)));

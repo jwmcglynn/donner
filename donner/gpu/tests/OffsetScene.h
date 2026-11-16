@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Native offset acceptance using an independent bilinear-translation reference.
+/// Native offset acceptance using an independent area-weighted translation reference.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -43,29 +43,27 @@ inline std::array<float, 4> TexelOrClear(const std::array<float, kWidth * kHeigh
   std::copy_n(input.begin() + (y * kWidth + x) * 4, 4, result.begin());
   return result;
 }
-/// Bilinear translation by the uniform's shift: output texel (x, y) samples the input at
-/// (x - dx, y - dy), blending the four texels around that position, with whole shifts an exact
-/// copy.
+/// Exact translation by (\p dx, \p dy), computed independently of the shader's arithmetic: output
+/// texel (x, y) is the area-weighted sum of the input texels that its square, moved back by the
+/// shift, overlaps, evaluated in double precision.
 inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 4>& input,
-                                     shader::programs::OffsetParams params, int32_t x, int32_t y) {
-  const float positionX = float(x) - params.dx;
-  const float positionY = float(y) - params.dy;
-  const int32_t baseX = static_cast<int32_t>(std::floor(positionX));
-  const int32_t baseY = static_cast<int32_t>(std::floor(positionY));
-  const float fractionX = positionX - std::floor(positionX);
-  const float fractionY = positionY - std::floor(positionY);
-  const auto topLeft = TexelOrClear(input, baseX, baseY);
-  const auto topRight = TexelOrClear(input, baseX + 1, baseY);
-  const auto bottomLeft = TexelOrClear(input, baseX, baseY + 1);
-  const auto bottomRight = TexelOrClear(input, baseX + 1, baseY + 1);
-  std::array<float, 4> result{};
-  for (size_t channel = 0; channel < 4; ++channel) {
-    const float top = topLeft[channel] + fractionX * (topRight[channel] - topLeft[channel]);
-    const float bottom =
-        bottomLeft[channel] + fractionX * (bottomRight[channel] - bottomLeft[channel]);
-    result[channel] = top + fractionY * (bottom - top);
+                                     double dx, double dy, int32_t x, int32_t y) {
+  const auto overlap = [](double low, int32_t texel) {
+    return std::max(0.0, std::min(texel + 1.0, low + 1.0) - std::max(double(texel), low));
+  };
+  const double left = x - dx;
+  const double top = y - dy;
+  std::array<double, 4> sum{};
+  for (int32_t sy = int32_t(std::floor(top)); sy <= int32_t(std::floor(top)) + 1; ++sy) {
+    for (int32_t sx = int32_t(std::floor(left)); sx <= int32_t(std::floor(left)) + 1; ++sx) {
+      const double weight = overlap(left, sx) * overlap(top, sy);
+      const auto texel = TexelOrClear(input, sx, sy);
+      for (size_t channel = 0; channel < 4; ++channel) {
+        sum[channel] += weight * texel[channel];
+      }
+    }
   }
-  return result;
+  return {float(sum[0]), float(sum[1]), float(sum[2]), float(sum[3])};
 }
 }  // namespace offset_scene
 /// Runs authored offset semantics with reflected bindings and workgroups on a native device.
@@ -73,7 +71,7 @@ inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 
 /// @param readbackBuffer Bounded native readback. @param dx X shift. @param dy Y shift.
 template <typename DeviceType, typename Readback>
 void CheckOffsetStorage(DeviceType& device, const shader::CompiledShaderView& shader,
-                        Readback readbackBuffer, float dx, float dy) {
+                        Readback readbackBuffer, double dx, double dy) {
   using namespace offset_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
   ASSERT_EQ(shader.entryPoints.front().stage, ShaderStage::Compute);
@@ -89,7 +87,7 @@ void CheckOffsetStorage(DeviceType& device, const shader::CompiledShaderView& sh
   const WorkgroupSize workgroupSize{shape[0], shape[1], shape[2]};
   const auto shaderDescriptor =
       shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "offset");
-  const shader::programs::OffsetParams params{dx, dy, 0, 0};
+  const shader::programs::OffsetParams params = shader::programs::MakeOffsetParams(dx, dy);
   Result<ShaderModule> shaderModule = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shaderModule, HasResult());
   Result<BindGroupLayout> layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
@@ -187,7 +185,7 @@ void CheckOffsetStorage(DeviceType& device, const shader::CompiledShaderView& sh
     std::memcpy(actual->data().data() + y * kWidth * 4, bytes.result().data() + y * kBytesPerRow,
                 kWidth * 4 * sizeof(float));
     for (uint32_t x = 0; x < kWidth; ++x) {
-      const auto pixel = Expected(inputTexels, params, x, y);
+      const auto pixel = Expected(inputTexels, dx, dy, x, y);
       std::copy(pixel.begin(), pixel.end(), expected->data().begin() + (y * kWidth + x) * 4);
     }
   }
