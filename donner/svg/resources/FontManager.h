@@ -715,10 +715,23 @@ private:
   /// The face declaration of a \ref FaceMatch.
   const css::FontFace& matchedFace(const FaceMatch& match) const;
 
-  /// Load @p face's `data` sources into @p entity. When this document's own face is refused by
-  /// its budget and lent sets other than the current one are retained, release them and try once
-  /// more; any other failure releases nothing.
+  /// Load @p face's `data` sources into @p entity. A face of this document is admitted through
+  /// \ref admitReleasingIdleLentSets; a lent face never displaces another lent face.
   bool loadFaceData(Entity entity, const css::FontFace& face, bool lent);
+
+  /**
+   * Run @p admit, and when the retained budget alone refused it, release the lent sets no overlay
+   * lends now and run it once more. Faces retained for a host that stopped lending them then never
+   * keep this document's own, provider or fallback faces out of its budget. A lent set in use is
+   * never released, and nothing is released unless admission would otherwise fail.
+   *
+   * @param admit Callable `bool(bool* retainedBudgetExceeded)` that attempts the admission and
+   *   sets its argument when the retained budget refused it.
+   * @param retainedBudgetExceeded Receives the last attempt's refusal, if non-null.
+   * @return Whether the last attempt succeeded.
+   */
+  template <typename Admit>
+  bool admitReleasingIdleLentSets(Admit&& admit, bool* retainedBudgetExceeded = nullptr);
 
   struct LentSet;
 

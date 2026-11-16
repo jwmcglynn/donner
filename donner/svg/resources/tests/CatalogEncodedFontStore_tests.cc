@@ -262,6 +262,31 @@ TEST(CatalogEncodedFontStoreTest, ConsumerBudgetPressureDefersWithoutPoisoningTh
   EXPECT_EQ(manager.isValidatedFont(manager.findFont("Inter")), true);
 }
 
+// A face retained only for a host that no longer lends it does not hold a catalog face back.
+TEST(CatalogEncodedFontStoreTest, IdleLentFacesYieldTheBudgetToACatalogFace) {
+  EmbeddedFontProvider provider;
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes, 1);
+  manager.setFontProvider(&provider);
+  css::FontFace lent;
+  lent.familyName = RcString("Lent");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(InterBytes());
+  source.trusted = true;
+  lent.sources.push_back(std::move(source));
+  const css::FontFace faces[] = {lent};
+  manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+  ASSERT_EQ(manager.isValidatedFont(manager.findFont("Lent")), true);
+  manager.setHostFontOverlay(nullptr);
+
+  const FontHandle inter = manager.findFont("Inter");
+  EXPECT_EQ(manager.isValidatedFont(inter), true);
+  EXPECT_THAT(manager.faceDependencies(),
+              ElementsAre(Field(&FontFaceDependency::state, FontFaceLoadState::Loaded)));
+  EXPECT_EQ(manager.hostFontOverlayStats().evictions, 1u);
+}
+
 TEST(CatalogEncodedFontStoreTest, FamilyMetadataPressureDefersAndRecoversAfterRelease) {
   Registry measurementRegistry;
   FontManager measurement(measurementRegistry);

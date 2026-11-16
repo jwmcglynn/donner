@@ -781,9 +781,23 @@ FontManager::ResolutionCache& FontManager::resolutionCache() {
   return set ? set->cache : cache_;
 }
 
+template <typename Admit>
+bool FontManager::admitReleasingIdleLentSets(Admit&& admit, bool* retainedBudgetExceeded) {
+  bool refused = false;
+  bool admitted = admit(&refused);
+  // Only a retained-budget refusal can be cured by releasing lent bytes.
+  if (!admitted && refused && releaseLentSets(0) != 0) {
+    refused = false;
+    admitted = admit(&refused);
+  }
+  if (retainedBudgetExceeded) {
+    *retainedBudgetExceeded = refused;
+  }
+  return admitted;
+}
+
 bool FontManager::loadFaceData(Entity entity, const css::FontFace& face, bool lent) {
-  for (int attempt = 0; attempt < 2; ++attempt) {
-    bool budgetRefused = false;
+  const auto loadSources = [&](bool* budgetRefused) {
     for (const auto& source : face.sources) {
       if (source.kind != css::FontFaceSource::Kind::Data) {
         continue;
@@ -791,17 +805,17 @@ bool FontManager::loadFaceData(Entity entity, const css::FontFace& face, bool le
       const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
       if (loadFontDataSharedIntoEntity(
               entity, dataPtr, source.trusted ? FontDataTrust::Trusted : FontDataTrust::Untrusted,
-              &budgetRefused)) {
+              budgetRefused)) {
         return true;
       }
     }
-    // Only a budget refusal can be cured by releasing lent bytes, and lent bytes never outrank
-    // this document's own faces for its budget.
-    if (lent || !budgetRefused || releaseLentSets(0) == 0) {
-      return false;
-    }
+    return false;
+  };
+  if (lent) {
+    bool budgetRefused = false;
+    return loadSources(&budgetRefused);
   }
-  return false;
+  return admitReleasingIdleLentSets(loadSources);
 }
 
 std::string_view FontManager::resolveGenericFamily(std::string_view family) const {
@@ -1042,8 +1056,14 @@ bool FontManager::catalogFaceFitsConsumer(const ProviderLookup& lookup) {
                                FontFaceWaitReason::RetainedBudget);
     return false;
   }
-  if (lookup.availability.decodedBytes > budget->maximumBytes - budget->usedBytes ||
-      budget->usedFonts >= budget->maximumFonts) {
+  const auto fits = [&](bool* retainedBudgetExceeded) {
+    const auto current = budgetStateForRead();
+    *retainedBudgetExceeded =
+        lookup.availability.decodedBytes > current->maximumBytes - current->usedBytes ||
+        current->usedFonts >= current->maximumFonts;
+    return !*retainedBudgetExceeded;
+  };
+  if (!admitReleasingIdleLentSets(fits)) {
     rememberProviderDependency(lookup, FontFaceLoadState::WaitingForAdmission,
                                FontFaceWaitReason::RetainedBudget);
     return false;
@@ -1079,9 +1099,13 @@ FontHandle FontManager::loadProviderFont(const ProviderLookup& lookup,
   bool retainedBudgetExceeded = false;
   const Entity entity = registry_.create();
   if (providerBytesMatch(lookup, data) &&
-      loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted,
-                             lookup.isCatalog() ? &lookup.availability : nullptr,
-                             &retainedBudgetExceeded)) {
+      admitReleasingIdleLentSets(
+          [&](bool* refused) {
+            return loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted,
+                                          lookup.isCatalog() ? &lookup.availability : nullptr,
+                                          refused);
+          },
+          &retainedBudgetExceeded)) {
     registry_.get<LoadedFontComponent>(entity).providerRequest = lookup.request;
     registry_.get<LoadedFontComponent>(entity).genericSans =
         lookup.dependencyKey.family == "sans-serif";
@@ -1173,7 +1197,9 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrus
 FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust,
                                      const FontDataRenderingOptions& rendering) {
   const Entity entity = registry_.create();
-  if (!loadFontDataIntoEntity(entity, data, trust)) {
+  if (!admitReleasingIdleLentSets([&](bool* retainedBudgetExceeded) {
+        return loadFontDataIntoEntity(entity, data, trust, nullptr, retainedBudgetExceeded);
+      })) {
     registry_.destroy(entity);
     return FontHandle();
   }
@@ -1398,8 +1424,11 @@ FontHandle FontManager::fallbackFont() {
   }
 
   const Entity entity = registry_.create();
-  std::vector<uint8_t> data(fallback.bytes().begin(), fallback.bytes().end());
-  if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
+  if (!admitReleasingIdleLentSets([&](bool* retainedBudgetExceeded) {
+        return setRawFontData(
+            entity, std::vector<uint8_t>(fallback.bytes().begin(), fallback.bytes().end()),
+            FontDataTrust::Trusted, nullptr, retainedBudgetExceeded);
+      })) {
     registry_.destroy(entity);
     return FontHandle();
   }
@@ -1582,7 +1611,6 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
                                          FontDataTrust trust, const FontFaceAvailability* catalog,
                                          bool* retainedBudgetExceeded) {
   (void)catalog;
-  (void)retainedBudgetExceeded;
   if (data.size() < 4) {
     return false;
   }
@@ -1599,7 +1627,7 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   }
 
   if (magic == kWoffMagic) {
-    return loadWoff1(entity, data, trust);
+    return loadWoff1(entity, data, trust, nullptr, retainedBudgetExceeded);
   }
 
   if (magic == kWoff2Magic) {
@@ -1613,18 +1641,20 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   }
 
   // Validate and budget the retained index before copying the untrusted byte stream.
-  auto sfnt = validateSfntForLoad(entity, data, trust, budgetState);
+  auto sfnt =
+      validateSfntForLoad(entity, data, trust, budgetState, nullptr, retainedBudgetExceeded);
   if (!sfnt) {
     return false;
   }
-  if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState)) {
+  if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState,
+                          retainedBudgetExceeded)) {
     return false;
   }
   LoadedFontComponent font;
   font.ownedData.assign(data.begin(), data.end());
   font.sfnt = std::move(*sfnt);
   font.trust = trust;
-  return storeLoadedFont(entity, std::move(font));
+  return storeLoadedFont(entity, std::move(font), retainedBudgetExceeded);
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED

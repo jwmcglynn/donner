@@ -2015,6 +2015,90 @@ TEST(FontManagerTest, BrokenOwnFaceDoesNotReleaseLentFaces) {
   EXPECT_EQ(manager.hostFontOverlayStats().evictions, 0u);
 }
 
+/// The budget a test fills with @p fonts loaded fonts: either a font-count limit with ample bytes,
+/// or a byte limit with an ample font count. Every font the tests load is a Public Sans copy.
+struct FilledBudget {
+  const char* name;  //!< Which limit is the binding one.
+  bool byteLimited;  //!< True to bind on bytes, false to bind on the font count.
+
+  /// Builds a manager whose budget holds exactly @p fonts Public Sans faces.
+  std::unique_ptr<FontManager> makeManager(Registry& registry, size_t fonts) const {
+    const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                    embedded::kPublicSansMediumOtf.end());
+    return byteLimited ? std::make_unique<FontManager>(registry, RetainedCharge(data) * fonts)
+                       : std::make_unique<FontManager>(
+                             registry, FontManager::kDefaultMaximumLoadedFontBytes, fonts);
+  }
+};
+
+constexpr FilledBudget kFilledBudgets[] = {{"font count", false}, {"bytes", true}};
+
+/// Lends one face to @p manager, loads it, and stops lending, leaving it retained but idle.
+void LoadAndIdleALentFace(FontManager& manager) {
+  const css::FontFace faces[] = {MakeEmbeddedFace("Lent")};
+  manager.setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+  ASSERT_THAT(manager.fontData(manager.findFont("Lent")), testing::Not(testing::IsEmpty()));
+  manager.setHostFontOverlay(nullptr);
+}
+
+/// An earlier external use occurrence must not change standalone rendering: a face that is
+/// retained only for a host that no longer lends it gives way to a provider face.
+TEST(FontManagerTest, IdleLentFacesYieldTheBudgetToAProviderFace) {
+  for (const FilledBudget& budget : kFilledBudgets) {
+    SCOPED_TRACE(budget.name);
+    Registry registry;
+    const auto manager = budget.makeManager(registry, 2);
+    FakeFontProvider provider({"ProviderFamily"});
+    manager->setFontProvider(&provider);
+    const FontHandle fallback = manager->fallbackFont();
+    ASSERT_TRUE(static_cast<bool>(fallback));
+    LoadAndIdleALentFace(*manager);
+    ASSERT_THAT(manager->numLoadedFonts(), Eq(2u));
+
+    const FontHandle provided = manager->findFont("ProviderFamily");
+    EXPECT_THAT(provided, testing::Ne(fallback));
+    EXPECT_THAT(manager->fontData(provided), testing::Not(testing::IsEmpty()));
+    EXPECT_THAT(manager->hostFontOverlayStats().evictions, Eq(1u));
+  }
+}
+
+/// The packaged fallback face is admitted the same way when idle lent faces fill the budget.
+TEST(FontManagerTest, IdleLentFacesYieldTheBudgetToTheFallbackFace) {
+  for (const FilledBudget& budget : kFilledBudgets) {
+    SCOPED_TRACE(budget.name);
+    Registry registry;
+    const auto manager = budget.makeManager(registry, 1);
+    LoadAndIdleALentFace(*manager);
+    ASSERT_THAT(manager->numLoadedFonts(), Eq(1u));
+
+    const FontHandle fallback = manager->fallbackFont();
+    EXPECT_THAT(manager->fontData(fallback), testing::Not(testing::IsEmpty()));
+    EXPECT_THAT(manager->hostFontOverlayStats().evictions, Eq(1u));
+  }
+}
+
+/// Faces a host is lending now are never released to make room, whatever is refused instead.
+TEST(FontManagerTest, LentFacesInUseKeepTheirBudget) {
+  for (const FilledBudget& budget : kFilledBudgets) {
+    SCOPED_TRACE(budget.name);
+    Registry registry;
+    const auto manager = budget.makeManager(registry, 1);
+    FakeFontProvider provider({"ProviderFamily"});
+    manager->setFontProvider(&provider);
+    const css::FontFace faces[] = {MakeEmbeddedFace("Lent")};
+    manager->setHostFontOverlay(FontManager::HostFontOverlay::Make(faces, nullptr));
+    const FontHandle lent = manager->findFont("Lent");
+    ASSERT_THAT(manager->fontData(lent), testing::Not(testing::IsEmpty()));
+
+    EXPECT_THAT(static_cast<bool>(manager->fallbackFont()), testing::IsFalse());
+    EXPECT_THAT(manager->findFont("ProviderFamily"), testing::Ne(lent));
+    manager->addFontFace(MakeEmbeddedFace("Own"));
+    EXPECT_THAT(manager->findFont("Own"), testing::Ne(lent));
+    EXPECT_THAT(manager->findFont("Lent"), Eq(lent));
+    EXPECT_THAT(manager->hostFontOverlayStats().evictions, Eq(0u));
+  }
+}
+
 TEST(FontManagerTest, DefaultFontIsTheEmbeddedFallbackWithoutADefaultFamily) {
   Registry registry;
   FontManager manager(registry);
