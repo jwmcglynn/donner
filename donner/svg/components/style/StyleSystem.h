@@ -91,6 +91,7 @@ public:
         externalInstanceWork_(other.externalInstanceWork_),
         externalMeasureWork_(other.externalMeasureWork_),
         externalMeasureGeometryBytes_(other.externalMeasureGeometryBytes_),
+        externalMeasureGeometryComparisons_(other.externalMeasureGeometryComparisons_),
         externalResourceWarning_(other.externalResourceWarning_),
         aggregateWork_(other.aggregateWork_),
         limits_(other.limits_),
@@ -108,6 +109,7 @@ public:
     other.externalInstanceWork_ = 0;
     other.externalMeasureWork_ = 0;
     other.externalMeasureGeometryBytes_ = 0;
+    other.externalMeasureGeometryComparisons_ = 0;
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
 
@@ -216,6 +218,14 @@ public:
     return externalMeasureGeometryBytes_;
   }
 
+  /// Count one full comparison of a measured path against a retained path copy.
+  void noteExternalMeasureGeometryComparison() { ++externalMeasureGeometryComparisons_; }
+
+  /// Full path comparisons external-use measurement made in the current frame.
+  [[nodiscard]] std::size_t externalMeasureGeometryComparisons() const {
+    return externalMeasureGeometryComparisons_;
+  }
+
   /// Return true once per frame when an unsupported inherited resource needs a diagnostic.
   bool reportExternalResourceWarning() { return !std::exchange(externalResourceWarning_, true); }
 
@@ -233,6 +243,7 @@ public:
     externalInstanceWork_ = 0;
     externalMeasureWork_ = 0;
     externalMeasureGeometryBytes_ = 0;
+    externalMeasureGeometryComparisons_ = 0;
     externalResourceWarning_ = false;
   }
 
@@ -372,6 +383,7 @@ private:
   std::size_t externalInstanceWork_ = 0;
   std::size_t externalMeasureWork_ = 0;
   std::size_t externalMeasureGeometryBytes_ = 0;
+  std::size_t externalMeasureGeometryComparisons_ = 0;
   bool externalResourceWarning_ = false;
   StyleResourceBudget* aggregateWork_ = nullptr;
   Limits limits_;

@@ -50,6 +50,7 @@ std::shared_ptr<const Path> BoundsGeometryPaths::share(const Registry& registry,
                                                        StyleResourceBudget& budget) {
   std::vector<std::shared_ptr<const Path>>& copies = paths_[{&registry, source}];
   for (const std::shared_ptr<const Path>& copy : copies) {
+    budget.noteExternalMeasureGeometryComparison();
     if (HasIdenticalPathData(*copy, path)) {
       return copy;
     }

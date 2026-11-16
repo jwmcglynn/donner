@@ -812,5 +812,47 @@ TEST(SubDocumentFiltersTest, GeometryAllowanceFallsBackToThePathBox) {
   }
 }
 
+/// A host drawing @p uses occurrences of a symbol whose rect is sized in em, inside an effect
+/// bounded by its content. With @p distinct every occurrence sets its own font size, so each one
+/// measures different geometry for the same source element; otherwise all share one font size.
+std::string SizedUsesHost(int uses, bool distinct) {
+  std::string host =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+      "<filter id='f'><feOffset/></filter></defs><g filter='url(#f)'>";
+  for (int i = 1; i <= uses; ++i) {
+    host += "<use href='sheet.svg#s' font-size='" + std::to_string(distinct ? i : 8) + "'/>";
+  }
+  return host + "</g></svg>";
+}
+
+/// Occurrences that measure different geometry for one source element cost no full path
+/// comparisons with each other's copies, so comparisons grow linearly with the occurrences rather
+/// than quadratically. Occurrences of the same geometry each compare with the one retained copy.
+TEST(SubDocumentFiltersTest, PathComparisonsStayLinearInTheOccurrences) {
+  const Documents documents = {
+      {"sheet.svg",
+       "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs><symbol id='s'>"
+       "<rect width='1em' height='1em' fill='#2050d0'/></symbol></defs></svg>"}};
+  struct Work {
+    std::size_t copyBytes = 0;
+    std::size_t comparisons = 0;
+  };
+  const auto measure = [&](int uses, bool distinct) {
+    SVGDocument document = Parse(SizedUsesHost(uses, distinct), documents);
+    RendererBitmap bitmap;
+    const auto work =
+        DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap);
+    return Work{.copyBytes = work->externalMeasureGeometryBytes(),
+                .comparisons = work->externalMeasureGeometryComparisons()};
+  };
+  constexpr std::size_t kUses = 256;
+  const Work same = measure(kUses, false);
+  EXPECT_THAT(same.comparisons, testing::Eq(kUses - 1));
+  const Work distinct = measure(kUses, true);
+  // Every occurrence retained its own copy, so the geometry did differ.
+  EXPECT_THAT(distinct.copyBytes, testing::Eq(kUses * same.copyBytes));
+  EXPECT_THAT(distinct.comparisons, testing::Le(kUses));
+}
+
 }  // namespace
 }  // namespace donner::svg
