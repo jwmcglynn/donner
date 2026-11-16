@@ -5031,8 +5031,7 @@ TEST_F(RendererGeodeTest, FilterOffsetTranslatesByAHalfPixel) {
   // and texel 51 is outside. Snapping the shift to either neighboring whole pixel would leave
   // texel 50 wholly inside or wholly outside.
   EXPECT_THAT(PixelAt(snap, 49, 32), RgbaEq(255, 0, 0, 255));
-  EXPECT_THAT(PixelAt(snap, 50, 32),
-              Rgba(255, 0, 0, testing::AllOf(testing::Ge(127), testing::Le(128))));
+  EXPECT_THAT(PixelAt(snap, 50, 32), RgbaEq(255, 0, 0, 128));
   EXPECT_THAT(PixelAt(snap, 51, 32), IsTransparent());
 }
 

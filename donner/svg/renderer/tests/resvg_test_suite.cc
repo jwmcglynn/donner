@@ -616,13 +616,6 @@ INSTANTIATE_TEST_SUITE_P(
                               "sits at (27, 37), which needs the user lengths truncated to 11 "
                               "15 and the scaled offset truncated (4269 px, Geode 4311) "
                               "(CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
-                {"drop-shadow-function-no-color.svg",
-                 Params::Skip("Reference disagreement: the device offset is (10, 12.5); the "
-                              "reference truncates it to (10, 12) as resvg does (dx as i32), "
-                              "while Filter Effects asks for interpolation of a fractional "
-                              "offset and the fractional-offset reference shows it; Donner "
-                              "translates by 12.5 (438 px, Geode 472) "
-                              "(CssFilterContractShadowFractionalOffsetsTranslateBySubpixels)")},
                 {"drop-shadow-function.svg",
                  Params::Skip("Reference disagreement: the device offset is (10, 12.5); the "
                               "reference truncates it to (10, 12) as resvg does (dx as i32), "

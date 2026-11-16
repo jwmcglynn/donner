@@ -35,13 +35,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let position = (vec2<f32>(coord) - vec2<f32>(params.dx, params.dy));
   let base = vec2<i32>(floor(position));
   let fraction = (position - floor(position));
-  let topLeft = blurredAlphaAt(base, blurredSize);
-  let topRight = blurredAlphaAt((base + vec2<i32>(1i, 0i)), blurredSize);
-  let bottomLeft = blurredAlphaAt((base + vec2<i32>(0i, 1i)), blurredSize);
-  let bottomRight = blurredAlphaAt((base + vec2<i32>(1i, 1i)), blurredSize);
-  let upperAlpha = (topLeft + (fraction.x * (topRight - topLeft)));
-  let lowerAlpha = (bottomLeft + (fraction.x * (bottomRight - bottomLeft)));
-  let blurredAlpha = (upperAlpha + (fraction.y * (lowerAlpha - upperAlpha)));
+  var blurredAlpha: f32 = blurredAlphaAt(base, blurredSize);
+  if (any((fraction != vec2<f32>(0f)))) {
+    let topLeft = blurredAlpha;
+    let topRight = blurredAlphaAt((base + vec2<i32>(1i, 0i)), blurredSize);
+    let bottomLeft = blurredAlphaAt((base + vec2<i32>(0i, 1i)), blurredSize);
+    let bottomRight = blurredAlphaAt((base + vec2<i32>(1i, 1i)), blurredSize);
+    let upperAlpha = (topLeft + (fraction.x * (topRight - topLeft)));
+    let lowerAlpha = (bottomLeft + (fraction.x * (bottomRight - bottomLeft)));
+    blurredAlpha = (upperAlpha + (fraction.y * (lowerAlpha - upperAlpha)));
+  }
   let shadow = vec4<f32>(((params.color.xyz * params.color.w) * blurredAlpha), (params.color.w * blurredAlpha));
   let top = textureLoad(sourceTexture, coord, 0i);
   let result = (top + (shadow * (1f - top.w)));

@@ -112,12 +112,12 @@ struct FilterInputMargin {
 };
 
 /// Accumulates each primitive's input reach in device pixels, converting lengths with the same
-/// helpers and bounds the filter executors use. The executors round each primitive to whole
-/// pixels (offsets and morphology radii to the nearest pixel, blur kernels up), so each
-/// primitive's reach rounds up to whole pixels before the chain adds them.
+/// helpers and bounds the filter executors use. Each primitive's reach rounds up to whole pixels
+/// before the chain adds them: morphology radii round to the nearest pixel, blur kernels round up,
+/// and a fractional offset reads the whole pixels on both sides of its shift.
 ///
 /// Blur-family graphs under rotation or skew may instead run on the transformed path's local
-/// raster, scaled by each filter axis's length, where blurs and offsets round in local pixels
+/// raster, scaled by each filter axis's length, where blurs and offsets read whole local pixels
 /// before the result maps back to the device. Their reach is the larger of the two.
 struct FilterInputMarginBuilder {
   Transform2d deviceFromFilter;  ///< Filter user space to raster pixels.

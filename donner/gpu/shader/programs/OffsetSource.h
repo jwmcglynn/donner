@@ -36,6 +36,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let base = vec2<i32>(floor(position));
   let fraction = (position - floor(position));
   let topLeft = sampleInput(base, size);
+  if (((fraction.x == 0f) && (fraction.y == 0f))) {
+    textureStore(outputTexture, coords, topLeft);
+    return;
+  }
   let topRight = sampleInput((base + vec2<i32>(1i, 0i)), size);
   let bottomLeft = sampleInput((base + vec2<i32>(0i, 1i)), size);
   let bottomRight = sampleInput((base + vec2<i32>(1i, 1i)), size);

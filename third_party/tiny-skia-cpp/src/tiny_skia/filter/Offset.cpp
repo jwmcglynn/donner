@@ -67,19 +67,19 @@ void offsetWholePixels(const FloatPixmap& src, FloatPixmap& dst, int dx, int dy)
   }
 }
 
-/// Adds \p weight times the pixel of \p src at (\p x, \p y) to \p sum. Pixels outside \p src
-/// are transparent black.
-void accumulatePixel(const FloatPixmap& src, int x, int y, float weight,
-                     std::array<float, 4>& sum) {
+/// The pixel of \p src at (\p x, \p y), or transparent black outside it.
+std::array<float, 4> pixelOrClear(const FloatPixmap& src, int x, int y) {
   const int width = static_cast<int>(src.width());
-  if (weight == 0.0f || x < 0 || y < 0 || x >= width || y >= static_cast<int>(src.height())) {
-    return;
+  if (x < 0 || y < 0 || x >= width || y >= static_cast<int>(src.height())) {
+    return {0.0f, 0.0f, 0.0f, 0.0f};
   }
   const auto srcData = src.data();
   const std::size_t index = (static_cast<std::size_t>(y) * width + x) * 4;
-  for (int channel = 0; channel < 4; ++channel) {
-    sum[channel] += weight * srcData[index + channel];
-  }
+  return {srcData[index], srcData[index + 1], srcData[index + 2], srcData[index + 3]};
+}
+
+float lerp(float from, float to, float t) {
+  return from + t * (to - from);
 }
 
 }  // namespace
@@ -95,33 +95,42 @@ void offset(const FloatPixmap& src, FloatPixmap& dst, double dx, double dy) {
     return;  // No overlap.
   }
 
-  // dx = wholeX + fractionX with fractionX in [0, 1): destination pixel x reads source pixels
-  // x - wholeX (weight 1 - fractionX) and x - wholeX - 1 (weight fractionX).
-  const double floorX = std::floor(dx);
-  const double floorY = std::floor(dy);
-  const int wholeX = static_cast<int>(floorX);
-  const int wholeY = static_cast<int>(floorY);
-  const float fractionX = static_cast<float>(dx - floorX);
-  const float fractionY = static_cast<float>(dy - floorY);
-  if (fractionX == 0.0f && fractionY == 0.0f) {
-    offsetWholePixels(src, dst, wholeX, wholeY);
+  if (dx == std::floor(dx) && dy == std::floor(dy)) {
+    offsetWholePixels(src, dst, static_cast<int>(dx), static_cast<int>(dy));
     return;
   }
 
-  const std::array<float, 2> weightX = {1.0f - fractionX, fractionX};
-  const std::array<float, 2> weightY = {1.0f - fractionY, fractionY};
+  // Destination pixel (x, y) samples the source at (x - dx, y - dy) and blends the four pixels
+  // around that position. The arithmetic is single precision in the same order as the GPU offset
+  // shaders, so both backends agree and uniform regions copy exactly. Only destination pixels
+  // whose taps can reach the source are visited; the rest stay transparent.
+  const float shiftX = static_cast<float>(dx);
+  const float shiftY = static_cast<float>(dy);
+  const int wholeX = static_cast<int>(std::floor(dx));
+  const int wholeY = static_cast<int>(std::floor(dy));
+  const int startX = std::max(0, wholeX);
+  const int endX = std::min(width, width + wholeX + 1);
+  const int startY = std::max(0, wholeY);
+  const int endY = std::min(height, height + wholeY + 1);
   auto dstData = dst.data();
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      std::array<float, 4> sum = {0.0f, 0.0f, 0.0f, 0.0f};
-      for (int tapY = 0; tapY < 2; ++tapY) {
-        for (int tapX = 0; tapX < 2; ++tapX) {
-          accumulatePixel(src, x - wholeX - tapX, y - wholeY - tapY,
-                          weightX[tapX] * weightY[tapY], sum);
-        }
+  for (int y = startY; y < endY; ++y) {
+    const float positionY = static_cast<float>(y) - shiftY;
+    const int baseY = static_cast<int>(std::floor(positionY));
+    const float fractionY = positionY - std::floor(positionY);
+    for (int x = startX; x < endX; ++x) {
+      const float positionX = static_cast<float>(x) - shiftX;
+      const int baseX = static_cast<int>(std::floor(positionX));
+      const float fractionX = positionX - std::floor(positionX);
+      const std::array<float, 4> topLeft = pixelOrClear(src, baseX, baseY);
+      const std::array<float, 4> topRight = pixelOrClear(src, baseX + 1, baseY);
+      const std::array<float, 4> bottomLeft = pixelOrClear(src, baseX, baseY + 1);
+      const std::array<float, 4> bottomRight = pixelOrClear(src, baseX + 1, baseY + 1);
+      const std::size_t index = (static_cast<std::size_t>(y) * width + x) * 4;
+      for (int channel = 0; channel < 4; ++channel) {
+        const float top = lerp(topLeft[channel], topRight[channel], fractionX);
+        const float bottom = lerp(bottomLeft[channel], bottomRight[channel], fractionX);
+        dstData[index + channel] = lerp(top, bottom, fractionY);
       }
-      std::copy(sum.begin(), sum.end(),
-                dstData.begin() + static_cast<std::ptrdiff_t>((y * width + x) * 4));
     }
   }
 }
