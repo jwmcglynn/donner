@@ -917,7 +917,7 @@ covered by layout-level tests.
 | `text/direction/rtl`                                      | Skip            | pass, pass, pass | fail    | Order and anchor edge match; reference face not vendored   |
 | `text/unicode-bidi/bidi-override`                         | Compare, full   | pass, pass, pass | fail    | Compare, full text (Milestone 3)                           |
 | `text/tspan/bidi-reordering`                              | Skip            | pass, fail, fail | pass    | Compare, full text (Milestone 3)                           |
-| `text/writing-mode/mixed-languages-with-tb`               | 120 px, full    | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172) |
+| `text/writing-mode/mixed-languages-with-tb`               | Golden, full    | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172) |
 | `text/writing-mode/mixed-languages-with-tb-and-underline` | Skip, full text | pass, pass, fail | pass    | Remaining difference is the vertical underline (#1172)     |
 | `text/direction/rtl-with-vertical-writing-mode`           | Skip            | unknown          | unknown | `UndefinedBehavior` (SVG WG issue 618)                     |
 

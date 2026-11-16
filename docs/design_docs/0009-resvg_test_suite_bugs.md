@@ -63,7 +63,7 @@ Gaussian of the clipped input. The row is a reference-disagreement skip; a raise
 would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (37)
+## Active overrides (38)
 
 ### resvg golden is wrong per spec
 
@@ -103,6 +103,18 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 `with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
+
+### Vertical text: resvg's own model
+
+| Category          | Test                    | Reason                                                      |
+| ----------------- | ----------------------- | ----------------------------------------------------------- |
+| text/writing-mode | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees |
+
+This reference encodes resvg's vertical model, and browser renders measurably side with Donner.
+resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`.
+CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
+upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
+in the golden README.
 
 ### Allowed nearest-neighbor reference differences
 
@@ -205,7 +217,7 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds 39 `resvg-*.png`: 37 active, counted by distinct file
+`golden/` dir holds 40 `resvg-*.png`: 38 active, counted by distinct file
 (`resvg-simple-case.png` serves two textPath rows), and the 2 parked drop-shadow goldens above.
 
 ## Maintenance

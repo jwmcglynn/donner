@@ -1938,12 +1938,12 @@ INSTANTIATE_TEST_SUITE_P(
                               "underline is not drawn (3180 px)")
                      .onlyTextFull()},
                 {"mixed-languages-with-tb.svg",
-                 Params::WithThreshold(kDefaultThreshold, 120,
-                                       "Larger threshold due to reference disagreement: vmtx "
-                                       "upright origin vs hhea-centered cell; 108 px measured, "
-                                       "at the two upright glyphs' edges")
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
                      .setCanvasSize(300, 300)
-                     .onlyTextFull()},
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
+                                 "origin, where Firefox places them (golden README)")},
                 {"tb-and-punctuation.svg",
                  Params::Skip("Accepted difference (2026-11-13): punctuation forms and spacing "
                               "match; upright glyphs sit 0.026em lower (vhea ascender origin vs "
