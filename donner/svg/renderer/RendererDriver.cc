@@ -4187,10 +4187,10 @@ void RendererDriver::renderPatternTileContents(RenderingInstanceView& view, Regi
                                                const components::SubtreeInfo& subtree,
                                                bool subtreeAhead) {
   struct ActivePatternScope {
-    std::vector<Entity>& tiles;
+    std::vector<ActivePatternTile>& tiles;
     ~ActivePatternScope() { tiles.pop_back(); }
   };
-  activePatternTiles_.push_back(pattern);
+  activePatternTiles_.push_back(ActivePatternTile{&registry, pattern});
   const ActivePatternScope activePattern{activePatternTiles_};
   RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_, registry);
   if (subtreeAhead) {
@@ -4205,9 +4205,11 @@ void RendererDriver::renderPatternTileContents(RenderingInstanceView& view, Regi
   }
 }
 
-bool RendererDriver::isActivePatternTile(Entity pattern) const {
-  return std::find(activePatternTiles_.begin(), activePatternTiles_.end(), pattern) !=
-         activePatternTiles_.end();
+bool RendererDriver::isActivePatternTile(const Registry& registry, Entity pattern) const {
+  return std::any_of(activePatternTiles_.begin(), activePatternTiles_.end(),
+                     [&](const ActivePatternTile& tile) {
+                       return tile.registry == &registry && tile.pattern == pattern;
+                     });
 }
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
@@ -4262,7 +4264,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   }
 
   // A pattern already being rendered further up closes a cycle: this layer paints nothing.
-  if (isActivePatternTile(target.entity())) {
+  if (isActivePatternTile(registry, target.entity())) {
     skipSubtree();
     return;
   }

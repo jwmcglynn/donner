@@ -562,9 +562,11 @@ TEST(SVGPatternElementTests, PatternMutualRecursionThroughHrefTemplate) {
 }
 
 /**
- * Rendering the same document again gives the same result: no cycle state survives a frame.
+ * Drawing the same document again gives the same result. Each draw builds a new driver, so this
+ * covers retained document state; PatternMutualRecursionChainResetsBetweenElements covers the
+ * driver's own chain within one draw.
  */
-TEST(SVGPatternElementTests, PatternMutualRecursionRendersTheSameTwice) {
+TEST(SVGPatternElementTests, PatternMutualRecursionDocumentRendersTheSameForEachDraw) {
   SVGDocument document = instantiateSubtree(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
           <rect width="8" height="8" fill="url(#b)" />
@@ -595,6 +597,228 @@ TEST(SVGPatternElementTests, PatternMutualRecursionRendersTheSameTwice) {
         )";
   EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kRing));
   EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kRing));
+}
+/**
+ * Two elements painted with the same cyclic pattern in one draw: the active chain is empty again
+ * after the first, so the second paints the same tile instead of nothing.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionChainResetsBetweenElements) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect id="inner" x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black"
+                stroke-width="2" />
+        </pattern>
+        <rect width="8" height="16" fill="url(#a)" />
+        <rect x="8" width="8" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        )"));
+}
+
+/**
+ * The cycle-closing reference has a fallback color, which an invalid paint server reference
+ * paints instead (SVG 2 Painting, "Specifying paint").
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionPaintsTheFallbackColor) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect x="2" y="2" width="4" height="4" fill="url(#a) black" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        ................
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ................
+        ................
+        ................
+        ................
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ..@@@@....@@@@..
+        ................
+        ................
+        )"));
+}
+
+/**
+ * The cycle closes through a `<use>` inside the pattern content: the used rect's fill reference to
+ * `a` revisits the active pattern, so only that layer is dropped.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionThroughUse) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <defs>
+          <rect id="ring" x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black"
+                stroke-width="2" />
+        </defs>
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <use href="#ring" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        ................
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        .@@..@@..@@..@@.
+        .@@..@@..@@..@@.
+        .@@@@@@..@@@@@@.
+        .@@@@@@..@@@@@@.
+        ................
+        )"));
+}
+
+/**
+ * A `<use>` of an element inside a cyclic pattern draws the same picture as that element written
+ * out directly: the shared offscreen subtree is not cut short while it is still being built.
+ */
+TEST(SVGPatternElementTests, PatternMutualRecursionUseOfPatternContentMatchesDirectElement) {
+  const AsciiImage viaUse = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect id="inner" x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black"
+                stroke-width="2" />
+        </pattern>
+        <use href="#inner" />
+        <use href="#inner" x="8" y="8" />
+        )-");
+  const AsciiImage direct = RendererTestUtils::renderToAsciiImage(R"-(
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="url(#b)" />
+        </pattern>
+        <pattern id="b" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect id="inner" x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black"
+                stroke-width="2" />
+        </pattern>
+        <rect x="2" y="2" width="4" height="4" fill="url(#a)" stroke="black" stroke-width="2" />
+        <rect x="10" y="10" width="4" height="4" fill="url(#a)" stroke="black" stroke-width="2" />
+        )-");
+  EXPECT_EQ(viaUse.generated, direct.generated);
+}
+
+/**
+ * The cycle runs through an `feImage` fragment. The fragment renders in its own driver, which
+ * starts with an empty pattern chain, so the feImage fragment guard (a fragment already being
+ * rendered is skipped) and its 32-level depth cap bound it instead. Drawing must finish.
+ */
+TEST(SVGPatternElementTests, PatternRecursionThroughFeImageTerminates) {
+  SVGDocument document = instantiateSubtree(R"-(
+        <defs>
+          <filter id="f" x="0" y="0" width="1" height="1">
+            <feImage href="#r" />
+          </filter>
+          <rect id="r" width="8" height="8" fill="url(#a)" stroke="black" stroke-width="2" />
+        </defs>
+        <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="8" height="8" fill="black" filter="url(#f)" />
+        </pattern>
+        <rect width="16" height="16" fill="url(#a)" />
+        )-");
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(document);
+  EXPECT_FALSE(generatedAscii.generated.empty());
+}
+
+/**
+ * The chain is keyed by document as well as entity: a sub-document drawn inside a pattern tile has
+ * its own entity ids, which can equal the host's active pattern. The sub-document's own patterns
+ * must still paint. Its chain of patterns covers a run of entity ids, and the host's pattern `a`
+ * sits inside that run, so one of them shares its id; the leading `<g>` shifts the run by one id
+ * so both parities are covered. Each level is scaled by half so every tile has the same raster size.
+ */
+TEST(SVGPatternElementTests, PatternChainIsPerDocument) {
+  for (const bool shift : {false, true}) {
+    std::string sub = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>";
+    if (shift) {
+      sub += "<g/>";
+    }
+    constexpr int kChainLength = 24;
+    for (int i = 0; i < kChainLength; ++i) {
+      // Halving each level keeps every tile's raster the same size, so the chain is not cut off by
+      // the tile raster limit.
+      sub += "<pattern id='p" + std::to_string(i) +
+             "' patternUnits='userSpaceOnUse' width='16' height='16'" +
+             (i == 0 ? std::string() : std::string(" patternTransform='scale(0.5)'")) +
+             "><rect width='16' height='16'";
+      sub += i + 1 < kChainLength ? " fill='url(%23p" + std::to_string(i + 1) + ")'" : "";
+      sub += "/></pattern>";
+    }
+    sub += "<rect width='16' height='16' fill='url(%23p0)'/></svg>";
+    std::string uri = "data:image/svg+xml,";
+    for (const char c : sub) {
+      uri += c == ' ' ? std::string("%20") : c == '<' ? std::string("%3C") : c == '>' ? std::string("%3E") : std::string(1, c);
+    }
+    // Twenty empty groups first give the host pattern an id inside the sub-document's run.
+    std::string svg;
+    for (int i = 0; i < 20; ++i) {
+      svg += "<g />";
+    }
+    svg +=
+        "<pattern id=\"a\" patternUnits=\"userSpaceOnUse\" width=\"16\" height=\"16\">"
+        "<image width=\"16\" height=\"16\" href=\"" +
+        uri +
+        "\" /></pattern>"
+        "<rect width=\"16\" height=\"16\" fill=\"url(#a)\" />";
+    const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(svg);
+
+    EXPECT_TRUE(generatedAscii.matches(R"(
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
+        )")) << "shift=" << shift;
+  }
 }
 
 /**
