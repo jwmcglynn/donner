@@ -271,16 +271,6 @@ std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(
   return bitmap;
 }
 
-#endif
-
-tiny_skia::Color toTinyColor(const css::RGBA& rgba) {
-  return tiny_skia::Color::fromRgba8(rgba.r, rgba.g, rgba.b, rgba.a);
-}
-
-tiny_skia::Point toTinyPoint(const Vector2d& value) {
-  return tiny_skia::Point::fromXY(NarrowToFloat(value.x), NarrowToFloat(value.y));
-}
-
 /// One path per text chunk, holding every contour of that chunk's glyph paths; chunks without
 /// contours are left out.
 /// @param paths A run's glyph paths, in order.
@@ -298,6 +288,16 @@ std::vector<tiny_skia::Path> JoinTinyPathsByChunk(std::span<const tiny_skia::Pat
     }
   }
   return joined;
+}
+
+#endif
+
+tiny_skia::Color toTinyColor(const css::RGBA& rgba) {
+  return tiny_skia::Color::fromRgba8(rgba.r, rgba.g, rgba.b, rgba.a);
+}
+
+tiny_skia::Point toTinyPoint(const Vector2d& value) {
+  return tiny_skia::Point::fromXY(NarrowToFloat(value.x), NarrowToFloat(value.y));
 }
 
 tiny_skia::Transform toTinyTransform(const Transform2d& transform) {
