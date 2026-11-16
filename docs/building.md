@@ -563,7 +563,8 @@ While the shadow lane runs, the pull request's checks stay pending.
    with "this runner is not configured for the remote macOS lane" when the runner's rc files set no
    remote executor for the config, or the same executor as for a build without it (an executor
    bound unconditionally would send macOS actions to the wrong backend). It compares the values
-   without printing them and deletes both build event files. It then runs
+   without printing them and deletes both build event files. A failed probe stops the preflight at
+   once, and a repository rule that could not run on the runner is reported as such. It then runs
    `//tools/ci:remote_macos_probe`, a manual, never-cached test that passes only on macOS arm64,
    under the config, and stops the lane unless that test passed and ran remotely, uncached, in this
    invocation; this also catches an executor bound under a config the remote macOS config expands,
@@ -589,7 +590,11 @@ placeholder commit, so the editor's build-information action runs remotely. It n
 `--config=ci`, which on a self-hosted Linux runner carries the Linux lane's executor; it passes the
 parts of `ci` it needs itself. It passes `--remote_print_execution_messages=success`, because
 messages a remote backend attaches to a failed action can name the backend and the job log is
-public; each failure and the action's own output still show.
+public; each failure and the action's own output still show. Every command also passes
+`--incompatible_repo_env_ignores_action_env`: repository rules and module extensions run on the
+Linux runner, and without it Bazel 8 also hands them each `--action_env` value of the config (the
+macOS `PATH` of `ci-macos`, and any variable a runner's rc empties for the executor), so a fetch
+on the runner could lose what its own tools need. No other lane passes it.
 
 **A starved executor.** Bazel rewrites its progress line with a growing elapsed time, so a stall
 watchdog that compares lines sees progress while nothing completes. The lane therefore stops a phase
@@ -651,7 +656,9 @@ A runner must provide, in its own rc files under `build:remote-macos-base`:
 Do not bind an executor, cache or credentials under `build:re`, `build:macos` or `build:ci-macos`
 in a runner's system rc: the config expands those after the system rc's `remote-macos-base` lines,
 so they would win. Do not enable `--enable_platform_specific_config` in a runner rc line that
-applies after the config. Bazel can print the executor address in a connection error, so bind it
+applies after the config. Emptying a variable for the executor with `--action_env=NAME=` is fine;
+do not take a variable the runner's own tools need away from repository rules with `--repo_env`.
+Bazel can print the executor address in a connection error, so bind it
 under a name that reveals nothing about the network behind it, and keep any build event service
 out of the config.
 

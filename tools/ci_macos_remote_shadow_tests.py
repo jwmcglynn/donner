@@ -66,6 +66,25 @@ CI_OMISSIONS = {
 }
 
 
+# What the lane script, its Bazel wrappers, the test-artifact collector and the stand-in Bazel
+# read from their environment: the planner's FALLBACK and AFFECTED, DONNER_CI_XCODE_IDENTITY and
+# the other DONNER_CI_* values, GITHUB_STEP_SUMMARY and the other GITHUB_* values, RUNNER_TEMP,
+# the watchdog's BAZEL_STALL_LIMIT_SECONDS and BAZEL_HEARTBEAT_INTERVAL_SECONDS, the collector's
+# TESTLOGS and every FAKE_* switch. Every child environment of these tests starts from a copy of
+# the test's own environment without them, so a CI lane's values (the macOS lanes export
+# DONNER_CI_XCODE_IDENTITY) cannot change what a test sees.
+_SCRUBBED_PREFIXES = ("DONNER_", "GITHUB_", "RUNNER_", "BAZEL_", "FAKE_")
+_SCRUBBED_NAMES = ("FALLBACK", "AFFECTED", "TESTLOGS", "USE_BAZEL_VERSION")
+
+
+def _environ(**values):
+    """A child environment: this test's environment without the lane's inputs, plus `values`."""
+    environ = {name: value for name, value in os.environ.items()
+               if not name.startswith(_SCRUBBED_PREFIXES) and name not in _SCRUBBED_NAMES}
+    environ.update(values)
+    return environ
+
+
 def _read(path):
     return Path(runfiles.Create().Rlocation("donner/%s" % path)).read_text(encoding="utf-8")
 
@@ -514,6 +533,27 @@ class LaneCommandTest(unittest.TestCase):
         self.assertNotRegex(_read("tools/ci/macos_remote_shadow.py"),
                             r"[\"'](?:query|coverage|info)[\"']")
 
+    def test_repository_rules_keep_the_client_environment_on_every_command(self):
+        rc_options = ["--jobs=64"]
+        lane_probe, plain_probe = (command for command, _ in lane.preflight_commands(
+            "bazelisk", [], rc_options, self.OUT).values())
+        commands = {"preflight": lane_probe, "plain preflight": plain_probe,
+                    "routing probe": _bazel_part(lane.routing_command(
+                        "bazelisk", [], rc_options, self.OUT)[0])}
+        commands.update((phase, _bazel_part(lane.phase_command(
+            phase, "bazelisk", [], rc_options, self.OUT, self.TARGETS))) for phase in lane.PHASES)
+        self.assertEqual("--incompatible_repo_env_ignores_action_env", lane.CLIENT_REPO_ENV)
+        for name, command in commands.items():
+            with self.subTest(command=name):
+                self.assertEqual(1, command.count(lane.CLIENT_REPO_ENV))
+                position = command.index(lane.CLIENT_REPO_ENV)
+                # After the remote macOS config and the rc options, so neither can turn it off.
+                before = [word for word in command[position:]
+                          if word.startswith("--config=remote-macos") or word in rc_options]
+                self.assertEqual([], before)
+        # No other lane passes it: it is not in the repository's rc.
+        self.assertNotIn("repo_env_ignores_action_env", _read(".bazelrc"))
+
     def test_remote_execution_messages_are_printed_only_for_successes(self):
         # Messages a backend attaches to failed remote actions can name it; the log is public.
         commands = dict((phase, self.commands[phase]) for phase in lane.PHASES)
@@ -615,7 +655,7 @@ class LaneCommandTest(unittest.TestCase):
                 [sys.executable, str(_root() / "tools/ci/macos_remote_shadow.py"), "--dry-run",
                  "--out", directory, "--fallback", "false", "--affected", " ".join(self.TARGETS)],
                 capture_output=True, text=True, check=False,
-                env=dict(os.environ, DONNER_CI_XCODE_IDENTITY=""))
+                env=_environ(DONNER_CI_XCODE_IDENTITY=""))
         self.assertNotEqual(0, result.returncode, "an empty identity contradicts the config")
         environ = {"FALLBACK": "false", "AFFECTED": " ".join(self.TARGETS)}
         lines = _capture_main(["--dry-run", "--out", self.OUT], environ)
@@ -658,6 +698,16 @@ with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(" ".join(args) + "\n")
 if "shutdown" in args:
     sys.exit(0)
+if any(a.startswith("--config=remote-macos") for a in args) and (
+        os.environ.get("FAKE_REPOSITORY_FAILURE") or (
+            os.environ.get("FAKE_RC_EMPTIES_ACTION_ENV") and
+            "--incompatible_repo_env_ignores_action_env" not in args)):
+    # A runner rc that empties a library path with --action_env under the remote macOS config:
+    # without the flag Bazel 8 hands that to repository rules, which run on this client.
+    print("process-wrapper: error while loading shared libraries: libstdc++.so.6: cannot open "
+          "shared object file: No such file or directory")
+    print("ERROR: Error computing the main repository mapping: error running 'git init'")
+    sys.exit(37)
 events = next(a.split("=", 1)[1] for a in args if a.startswith("--build_event_json_file="))
 os.makedirs(os.path.dirname(events), exist_ok=True)
 lines = []
@@ -726,7 +776,7 @@ def _collect(case, testlogs, cwd=None):
     directory = tempfile.TemporaryDirectory()
     case.addCleanup(directory.cleanup)
     result = subprocess.run(["bash", "-c", textwrap.dedent(body)], cwd=cwd or directory.name,
-                            env=dict(os.environ, RUNNER_TEMP=directory.name, TESTLOGS=testlogs),
+                            env=_environ(RUNNER_TEMP=directory.name, TESTLOGS=testlogs),
                             capture_output=True, text=True, check=False)
     case.assertEqual(0, result.returncode, result.stdout + result.stderr)
     artifacts = Path(directory.name) / "bazel-test-artifacts"
@@ -750,11 +800,10 @@ class LaneRunTest(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         out = Path(directory.name) / "out"
         summary_file = Path(directory.name) / "step-summary.md"
-        environ = dict(os.environ, FALLBACK="false", AFFECTED="//fake:all",
-                       FAKE_LOG=str(Path(directory.name) / "calls"),
-                       GITHUB_STEP_SUMMARY=str(summary_file), BAZEL_HEARTBEAT_INTERVAL_SECONDS="1",
-                       **environment)
-        environ.pop(lane.IDENTITY, None)
+        environ = _environ(FALLBACK="false", AFFECTED="//fake:all",
+                           FAKE_LOG=str(Path(directory.name) / "calls"),
+                           GITHUB_STEP_SUMMARY=str(summary_file),
+                           BAZEL_HEARTBEAT_INTERVAL_SECONDS="1", **environment)
         # The fake Bazel's output tree stands for the lane's own output root.
         root = ["--output-user-root", environ["FAKE_TESTLOGS"]] if "FAKE_TESTLOGS" in environ \
             else []
@@ -791,6 +840,25 @@ class LaneRunTest(unittest.TestCase):
         result, out, _, calls = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
                                           FAKE_PREFLIGHT_STATUS="37")
         self._assert_stopped(result, out, calls, 37, "preflight Bazel command failed (exit 37)")
+        # The probe without the config, a build of no targets, does not run after a failure.
+        self.assertEqual(1, len(calls) - 1, calls)
+        self.assertIn("--config=remote-macos", calls[0])
+
+    def test_a_repository_rule_failure_on_the_client_is_named(self):
+        result, out, _, calls = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
+                                          FAKE_REPOSITORY_FAILURE="1")
+        self._assert_stopped(result, out, calls, 37, "a repository rule failed on this runner "
+                             "before anything ran remotely (exit 37)")
+        self.assertEqual(1, len(calls) - 1, calls)
+
+    def test_a_runner_rc_that_empties_a_client_variable_does_not_break_repositories(self):
+        result, out, _, calls = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
+                                          FAKE_RC_EMPTIES_ACTION_ENV="1")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(6, len(calls))
+        for call in calls[:-1]:
+            with self.subTest(call=call[:60]):
+                self.assertIn(lane.CLIENT_REPO_ENV, call.split())
 
     def test_executor_that_is_not_macos_stops_the_lane(self):
         result, out, _, calls = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
@@ -911,7 +979,7 @@ class LaneRunTest(unittest.TestCase):
             [sys.executable, str(_root() / "tools/ci/macos_remote_shadow.py"), "--out",
              directory.name, "--bazel", self.bazel, "--affected", "  "],
             cwd=_root(), capture_output=True, text=True, check=False,
-            env=dict(os.environ, FALLBACK="false", FAKE_LOG=str(Path(directory.name) / "calls")))
+            env=_environ(FALLBACK="false", FAKE_LOG=str(Path(directory.name) / "calls")))
         self.assertEqual(2, result.returncode)
         self.assertIn("Empty target selection", result.stdout)
         self.assertFalse((Path(directory.name) / "calls").exists())
@@ -970,7 +1038,7 @@ class StarvationGuardTest(unittest.TestCase):
         command = [sys.executable, str(self.script), mode, str(self.console), str(step), *extra]
         started = time.monotonic()
         with contextlib.redirect_stdout(io.StringIO()) as printed:
-            status, starved = lane.run_phase(command, dict(os.environ), self.console,
+            status, starved = lane.run_phase(command, _environ(), self.console,
                                              limit=self.LIMIT, poll=0.05, grace=(2, 2, 2))
         return status, starved, time.monotonic() - started, printed.getvalue()
 

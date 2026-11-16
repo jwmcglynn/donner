@@ -117,6 +117,15 @@ CI_FLAGS = (
     "--nobuild_event_text_file_path_conversion",
 )
 
+# Repository rules and module extensions run on this Linux client, never on the macOS executor.
+# Bazel 8 otherwise also gives them every --action_env the remote macOS config sets: the macOS PATH
+# of ci-macos, and any variable a runner's rc empties for the executor, such as a library path, so
+# a local repository fetch can lose what the client's own tools need. With this flag they see the
+# client's environment plus --repo_env. Every Bazel command of the lane passes it, after the
+# config and the rc options, so the lane's output root never mixes two repository environments;
+# no other lane passes it.
+CLIENT_REPO_ENV = "--incompatible_repo_env_ignores_action_env"
+
 # The editor's build identity action reads the checkout's commit and must then run on the client,
 # which this config cannot do. An explicit commit makes it an ordinary remote action. This lane
 # ships nothing, so it takes the fixed placeholder commit from the narrow test-lane config that
@@ -125,7 +134,7 @@ TEST_LANE_CONFIG = "--config=ci-test-lane"
 
 # Remote timeouts, fallback and every other remote setting come from the config and the runner's
 # rc; a command-line value here would override the runner's.
-LANE_FLAGS = CI_FLAGS + (
+LANE_FLAGS = (CLIENT_REPO_ENV,) + CI_FLAGS + (
     # Tests run remotely; only their logs come back.
     "--remote_download_outputs=minimal",
     r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$",
@@ -201,8 +210,9 @@ def preflight_commands(bazel, startup, rc_options, out):
     for probe in PROBES:
         events = Path(out) / "preflight" / ("%s.json" % probe)
         config = ["--config=" + CONFIG, *rc_options] if probe == "lane" else []
-        commands[probe] = ([bazel, *startup, "build", *config, *CI_FLAGS, QUIET_REMOTE_MESSAGES,
-                            "--nobuild", "--build_event_json_file=%s" % events], events)
+        commands[probe] = ([bazel, *startup, "build", *config, CLIENT_REPO_ENV, *CI_FLAGS,
+                            QUIET_REMOTE_MESSAGES, "--nobuild",
+                            "--build_event_json_file=%s" % events], events)
     return commands
 
 
@@ -228,8 +238,9 @@ def routing_command(bazel, startup, rc_options, out):
     directory = Path(out) / "preflight"
     events, console = directory / "routing.json", directory / "routing.log"
     return ([WATCHDOG, str(console), bazel, *startup, "test", "--config=" + CONFIG, *rc_options,
-             *CI_FLAGS, QUIET_REMOTE_MESSAGES, "--nocache_test_results", "--test_tag_filters=",
-             "--test_output=errors", "--build_event_json_file=%s" % events, ROUTING_PROBE],
+             CLIENT_REPO_ENV, *CI_FLAGS, QUIET_REMOTE_MESSAGES, "--nocache_test_results",
+             "--test_tag_filters=", "--test_output=errors", "--build_event_json_file=%s" % events,
+             ROUTING_PROBE],
             events, console)
 
 
@@ -345,25 +356,51 @@ def preflight_problem(statuses, executors):
     return None
 
 
+# What Bazel prints when a repository rule could not run on the client. The lane then stops before
+# anything reached the executor.
+_REPOSITORY_FAILURES = ("Error computing the main repository mapping",
+                        "error while loading shared libraries")
+_REPOSITORY_PROBLEM = (
+    "a repository rule failed on this runner before anything ran remotely (exit %d). Repository "
+    "rules run on the Linux client with the client's environment (the lane passes " +
+    CLIENT_REPO_ENV + "); check that the runner's rc does not take an environment variable the "
+    "client's own tools need, such as the library path, away from them, for example with "
+    "--repo_env.")
+
+
 def _preflight(args, environment):
-    """Runs both probes and returns (problem or None, exit status for a problem)."""
+    """Runs the probes in order, stopping at the first that fails, and returns (problem or None,
+    exit status for a problem)."""
     statuses, executors = {}, {}
     for probe, (command, events) in preflight_commands(
             args.bazel, args.startup_option, args.rc_option, args.out).items():
-        events.parent.mkdir(parents=True, exist_ok=True)
-        statuses[probe] = _run(command, environment)
-        lines = _read_lines(events)
-        try:
-            executors[probe] = None if lines is None else effective_executor(lines)
-        except Exception:  # Any unreadable event file is reported as unreadable.
-            executors[probe] = None
-        # The event file records the runner's effective options; drop it at once.
-        events.unlink(missing_ok=True)
+        statuses[probe], executors[probe], repository = _probe(command, events, environment)
+        if repository:
+            return _REPOSITORY_PROBLEM % statuses[probe], statuses[probe]
+        if statuses[probe] != 0:
+            # A later probe would only repeat the failure, or run a no-target build for nothing.
+            break
     problem = preflight_problem(statuses, executors)
     failed = [status for status in statuses.values() if status != 0]
     if problem:
         return problem, (failed[0] if failed else 2)
     return _routing_problem(args, environment), 2
+
+
+def _probe(command, events, environment):
+    """Runs one preflight probe: (exit status, executor or None when unreadable, whether a
+    repository rule failed on the client). Its build event file is deleted at once, since it
+    records the runner's effective options."""
+    events.parent.mkdir(parents=True, exist_ok=True)
+    status, output = _run_captured(command, environment)
+    repository = status != 0 and any(marker in output for marker in _REPOSITORY_FAILURES)
+    lines = _read_lines(events)
+    events.unlink(missing_ok=True)
+    try:
+        executor = None if lines is None else effective_executor(lines)
+    except Exception:  # Any unreadable event file is reported as unreadable.
+        executor = None
+    return status, executor, repository
 
 
 def _int(value):
@@ -501,19 +538,30 @@ def failed_test_outputs(lines):
     Fields of an unexpected type are skipped."""
     outputs, seen = [], set()
     for event in _decoded(lines):
-        identity = _dict(_dict(event.get("id")).get("testResult"))
-        result = event.get("testResult")
-        if not identity or not isinstance(result, dict) or result.get("status") == "PASSED":
-            continue
-        label = identity.get("label") if isinstance(identity.get("label"), str) else "a test"
-        listed = result.get("testActionOutput")
-        for output in listed if isinstance(listed, list) else []:
-            path = _output_path(_dict(output).get("uri"))
-            key = _staged_key(path) if path else None
-            if key is not None and key not in seen:
+        label, listed = _failed_result(event)
+        for key, path in filter(None, map(_collected_output, listed)):
+            if key not in seen:
                 seen.add(key)
                 outputs.append((key, path, label))
     return outputs
+
+
+def _failed_result(event):
+    """(label, listed outputs) of a test result event that did not pass, or (None, [])."""
+    identity = _dict(_dict(event.get("id")).get("testResult"))
+    result = event.get("testResult")
+    if not identity or not isinstance(result, dict) or result.get("status") == "PASSED":
+        return None, []
+    label = identity.get("label") if isinstance(identity.get("label"), str) else "a test"
+    listed = result.get("testActionOutput")
+    return label, listed if isinstance(listed, list) else []
+
+
+def _collected_output(output):
+    """(staged key, local path) of one listed output the collector keeps, or None."""
+    path = _output_path(_dict(output).get("uri"))
+    key = _staged_key(path) if path else None
+    return None if key is None else (key, path)
 
 
 def _contained_source(path, output_root):
@@ -610,42 +658,56 @@ def stage_failed_test_outputs(lines, out, phase, output_root, budget, staged=Non
     also keeps current in `staged` as it goes, so a caller knows them even if it raises."""
     staged = {"files": 0, "bytes": 0} if staged is None else staged
     stage_root = Path(out) / ARTIFACTS / phase
+    if not _cleared_stage_root(stage_root, phase):
+        return 0, 0
+    files = used = 0
+    for key, path, label in failed_test_outputs(lines):
+        copied = _stage_output(stage_root, key, path, label, output_root, budget - used)
+        if copied is not None:
+            files, used = files + 1, used + copied
+            staged.update(files=files, bytes=used)
+    return files, used
+
+
+def _cleared_stage_root(stage_root, phase):
+    """Removes an earlier stage; False, with a warning, when the stage root or its parent is a
+    symbolic link. A stage root that cannot be removed raises."""
     if any(path.is_symlink() for path in (stage_root.parent, stage_root)):
         print("::warning::macOS remote shadow lane: %s is a symbolic link; nothing of the %s "
               "phase is staged." % (ARTIFACTS, phase))
-        return 0, 0
+        return False
     if os.path.lexists(stage_root):
         shutil.rmtree(stage_root)
-    files = used = 0
-    for key, path, label in failed_test_outputs(lines):
-        # Residual window: a directory below the output root could be swapped for a link after
-        # this check and before the open below. Only a concurrent process on the runner can do
-        # that, and the lane's trust gate already lets such a pull request run code there.
-        source = _contained_source(path, output_root)
-        opened = _open_regular(source) if source else None
-        if opened is None:
-            continue
-        descriptor, size = opened
+    return True
+
+
+def _stage_output(stage_root, key, path, label, output_root, remaining):
+    """Stages one output within the caps, `remaining` bytes being what the run has left; returns
+    the bytes copied, or None when nothing was staged."""
+    # Residual window: a directory below the output root could be swapped for a link after this
+    # check and before the open below. Only a concurrent process on the runner can do that, and
+    # the lane's trust gate already lets such a pull request run code there.
+    source = _contained_source(path, output_root)
+    opened = _open_regular(source) if source else None
+    if opened is None:
+        return None
+    descriptor, size = opened
+    try:
+        cap, which = min((MAX_ARTIFACT_FILE_BYTES, "per-file"), (remaining, "per-run"))
+        if size > cap:
+            _skip(label, key, size, cap, which)
+            return None
         try:
-            cap, which = min((MAX_ARTIFACT_FILE_BYTES, "per-file"),
-                             (budget - used, "per-run"))
-            if size > cap:
-                _skip(label, key, size, cap, which)
-                continue
-            try:
-                copied = _stage_one(stage_root, key, descriptor, cap)
-            except (OSError, ValueError) as error:
-                print("::warning::macOS remote shadow lane: %s of %s is not staged (%s)."
-                      % (_printable(key), _printable(label), type(error).__name__))
-                continue
-            if copied is None:
-                _skip(label, key, size, cap, which + " (it grew while it was copied)")
-                continue
-            files, used = files + 1, used + copied
-            staged.update(files=files, bytes=used)
-        finally:
-            os.close(descriptor)
-    return files, used
+            copied = _stage_one(stage_root, key, descriptor, cap)
+        except (OSError, ValueError) as error:
+            print("::warning::macOS remote shadow lane: %s of %s is not staged (%s)."
+                  % (_printable(key), _printable(label), type(error).__name__))
+            return None
+        if copied is None:
+            _skip(label, key, size, cap, which + " (it grew while it was copied)")
+        return copied
+    finally:
+        os.close(descriptor)
 
 
 _HEADER = ("| Phase | Exit status | Bazel result | Wall time (s) | Targets built | "
@@ -785,9 +847,13 @@ def run_phase(command, environment, console, limit=STARVED_SECONDS, poll=POLL_SE
             return STARVED_STATUS, True
 
 
-def _run(command, environment):
+def _run_captured(command, environment):
+    """(exit status, console output) of a command; the output is also printed, as it would be."""
     print("+ " + shlex.join(command), flush=True)
-    return subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+    result = subprocess.run(command, cwd=ROOT, env=environment, check=False, text=True,
+                            errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(result.stdout, end="", flush=True)
+    return result.returncode, result.stdout
 
 
 def _read_lines(path):
@@ -797,14 +863,14 @@ def _read_lines(path):
         return None
 
 
-def _finish(out, summary):
+def _finish(out, summary, environment):
     Path(out).mkdir(parents=True, exist_ok=True)
     (Path(out) / "shadow-summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     text = report(summary)
     (Path(out) / "report.md").write_text(text, encoding="utf-8")
     print(text)
-    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    step_summary = environment.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         with open(step_summary, "a", encoding="utf-8") as handle:
             handle.write(text)
@@ -840,7 +906,7 @@ def _run_lane(args, environment, targets, summary):
     if problem:
         summary["problem"] = problem
         print("::error::macOS remote shadow lane: %s" % problem)
-        _finish(args.out, summary)
+        _finish(args.out, summary, environment)
         return status
     first_failure = 0
     budget = MAX_ARTIFACT_TOTAL_BYTES
@@ -875,7 +941,7 @@ def _run_lane(args, environment, targets, summary):
             print("::warning::macOS remote shadow lane: the %s phase exited %d (advisory; the "
                   "pull request is not failed by it)." % (phase, status))
             first_failure = first_failure or status
-    _finish(args.out, summary)
+    _finish(args.out, summary, environment)
     return first_failure
 
 
