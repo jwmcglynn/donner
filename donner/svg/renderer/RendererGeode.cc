@@ -8162,7 +8162,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (span.strokeWidth > 0.0) {
           runStrokeParams.strokeWidth = span.strokeWidth;
         }
-        runStrokeParams.dashArray = span.strokeDashArray;
+        const std::span<const double> spanDash = span.strokeDashLengths();
+        runStrokeParams.dashArray.assign(spanDash.begin(), spanDash.end());
         runStrokeParams.dashOffset = span.strokeDashOffset;
         if (!std::holds_alternative<PaintServer::None>(span.resolvedStroke)) {
           spanOverridesStroke = true;

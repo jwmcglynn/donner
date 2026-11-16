@@ -3461,7 +3461,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       spanTinyStroke.lineCap = toTinyLineCap(span.strokeLinecap);
       spanTinyStroke.lineJoin = toTinyLineJoin(span.strokeLinejoin);
       bool spanDashHasOnlyZeroLengthGaps = false;
-      spanTinyStroke.dash = ToTinyStrokeDash(span.strokeDashArray, span.strokeDashOffset,
+      spanTinyStroke.dash = ToTinyStrokeDash(span.strokeDashLengths(), span.strokeDashOffset,
                                              spanDashHasOnlyZeroLengthGaps);
       runGlyphPaths.setOpenDashSeam(
           HasOpenDashSeam(spanTinyStroke.dash, spanDashHasOnlyZeroLengthGaps));

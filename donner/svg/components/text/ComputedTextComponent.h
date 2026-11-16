@@ -210,15 +210,19 @@ struct ComputedTextComponent {
     /// Stroke miter limit used for text outlines in this span.
     double strokeMiterLimit = 4.0;
 
-    /// Stroke dash lengths in user units for this span (`stroke-dasharray`); empty for a solid
+    /// Stroke dash lengths in user units for this span (`stroke-dasharray`), shared by every span
+    /// styled by the same element so a text of many chunks holds one copy; null for a solid
     /// stroke.
-    std::vector<double> strokeDashArray;
+    std::shared_ptr<const std::vector<double>> strokeDashArray;
 
     /// Stroke dash offset in user units for this span (`stroke-dashoffset`).
     double strokeDashOffset = 0.0;
 
     /// The span's stroke dash lengths in user units; empty for a solid stroke.
-    [[nodiscard]] std::span<const double> strokeDashLengths() const { return strokeDashArray; }
+    [[nodiscard]] std::span<const double> strokeDashLengths() const {
+      return strokeDashArray ? std::span<const double>(*strokeDashArray)
+                             : std::span<const double>();
+    }
 
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
