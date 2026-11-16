@@ -1159,12 +1159,12 @@ INSTANTIATE_TEST_SUITE_P(
                     {"no-width-and-height-on-svg.svg",
                      Params::UndefinedBehavior("No width and height")},
                     {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
+                    // Donner rendering: the references omit the text or quantize the frame lines'
+                    // coverage to quarters; see testdata/golden/README.md.
                     {"embedded-svg-with-text.svg",
-                     Params::Skip(
-                         "Reference disagreement: the vendored reference omits the embedded SVG's "
-                         "text. Donner renders it with the document font catalog; the authored "
-                         "embedded-versus-direct identity test EmbeddedSvgUsesDocumentFontContext "
-                         "pins that policy")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-embedded-svg-with-text.png")
+                         .withReason("Donner rendering; reference coverage quantized to quarters")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
