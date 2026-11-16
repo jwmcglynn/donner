@@ -723,8 +723,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"out-of-order-referencing.svg",
                      Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
-                    {"patternContentUnits-with-viewBox.svg",
-                     Params::WithThreshold(kDefaultThreshold, 150, "Pattern AA drift")},
                     {"recursive-on-child.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
@@ -739,14 +737,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150,
                                            "Reference resamples a rasterized pattern tile")},
-                    {"transform-and-patternTransform.svg",
-                     Params{}.withGeodeGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/geode/"
-                         "paint-servers_pattern_transform-and-patternTransform.png",
-                         "Geode analytic dual-ray Slug coverage (0041 §6) on the rotated rounded "
-                         "rect edge diverges from the resvg finite-sample reference by a ~1px edge "
-                         "band, interacting with the pattern tile seams; the exact backend golden "
-                         "keeps the case gated without a threshold exception")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -896,9 +886,6 @@ INSTANTIATE_TEST_SUITE_P(
             "painting/marker",
             {
                 {"default-clip.svg", WithMaxPixels(300, "Marker clip edge AA")},
-                {"marker-on-circle.svg", WithMaxPixels(160,
-                                                       "Circle stroke edge: cross-GPU coverage "
-                                                       "fringe, 122px on Mesa lavapipe vs golden")},
                 {"orient=auto-on-M-C-C-4.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
@@ -950,14 +937,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-paint-order-on-tspan.png")
                      .withReason("Preserve cross-span kerning across a paint-only tspan boundary")},
-                {"on-text.svg",
-                 Params{}.withGeodeGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/geode/"
-                     "painting_paint-order_on-text.png",
-                     "Geode's whole-run stroke-then-fill order is covered independently; its "
-                     "analytic glyph edge coverage differs from resvg's finite-sample text "
-                     "rasterization, so this exact backend golden preserves a zero-tolerance "
-                     "oracle without masking paint-order behavior.")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -972,11 +951,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke",
                 {
-                    // Geode's analytic stroke coverage for this near-degenerate cubic is visibly
-                    // close, but differs by 410 pixels on Linux aarch64.
-                    {"control-points-clamping-1.svg",
-                     WithMaxPixels(150, "Stroke control-point clamping edge coverage")
-                         .withGeodeMaxPixelsDifferent(500)},
                     // Both vendored references map a stroke paint server's objectBoundingBox units
                     // through the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..
                     // 110.40 user units at font-size 60) instead of its glyph cells: advance width
