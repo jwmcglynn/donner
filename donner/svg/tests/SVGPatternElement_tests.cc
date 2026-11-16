@@ -755,7 +755,7 @@ TEST(SVGPatternElementTests, PatternRecursionThroughFeImageTerminates) {
         <rect width="16" height="16" fill="url(#a)" />
         )-");
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(document);
-  EXPECT_FALSE(generatedAscii.generated.empty());
+  EXPECT_THAT(generatedAscii.generated, testing::Not(testing::IsEmpty()));
 }
 
 /**

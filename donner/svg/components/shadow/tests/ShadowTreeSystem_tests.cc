@@ -21,6 +21,8 @@
 
 using testing::Eq;
 using testing::IsEmpty;
+using testing::Ne;
+using testing::Optional;
 using testing::SizeIs;
 
 namespace donner::svg::components {
@@ -606,10 +608,9 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenPaintTargetParentKeepsElem
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenFill,
                                         lightEntity.entity(), RcString("#light"), warnings);
 
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result.value(), 0u);
+  EXPECT_THAT(result, Optional(0u));
   EXPECT_EQ(shadow.offscreenShadowCount(), 1u);
-  EXPECT_TRUE(shadow.offscreenShadowRoot(0) != entt::null);
+  EXPECT_THAT(shadow.offscreenShadowRoot(0), Ne(Entity(entt::null)));
   EXPECT_THAT(warnings.warnings(), SizeIs(0));
 }
 
@@ -638,10 +639,9 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenMaskTargetParentRecursionW
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenMask,
                                         lightEntity.entity(), RcString("#light"), warnings);
 
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result.value(), 0u);
+  EXPECT_THAT(result, Optional(0u));
   EXPECT_EQ(shadow.offscreenShadowCount(), 1u);
-  EXPECT_TRUE(shadow.offscreenShadowRoot(0) == entt::null);
+  EXPECT_THAT(shadow.offscreenShadowRoot(0), Eq(Entity(entt::null)));
   EXPECT_THAT(warnings.warnings(), SizeIs(1));
 }
 
