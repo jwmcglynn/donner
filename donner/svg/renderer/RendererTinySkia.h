@@ -16,6 +16,8 @@
 #include "tiny_skia/Mask.h"
 #include "tiny_skia/Paint.h"
 #include "tiny_skia/Pixmap.h"
+#include "tiny_skia/SpanCapture.h"
+#include "tiny_skia/Stroke.h"
 
 namespace donner::svg {
 
@@ -280,6 +282,9 @@ public:
   void setStrokeOutputPointLimitForTesting(std::size_t maximumPoints);
   /// Tightens the stroke outline points one frame may emit, for a test; this never raises it.
   void setFrameStrokeOutputPointLimitForTesting(std::size_t maximumPoints);
+  /// Tightens the curve-measurement steps the dashes of one frame may take, for a test; this never
+  /// raises it.
+  void setFrameDashMeasureStepLimitForTesting(std::size_t maximumSteps);
   /// Reduce materialized gradient stops for a boundary test.
   void setGradientStopBudgetForTesting(std::size_t maximumStops);
   /// Reduce decoded-outline and path-copy ceilings for a boundary test.
@@ -459,17 +464,32 @@ private:
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
-  /// Strokes \p path into the current surface and, when given, \p strokePaintPixmap, with each
-  /// expansion bounded by \ref strokeOutputPointLimit_ (see \ref strokeIntoWithinOutputLimit).
-  void strokeWithinOutputLimit(const tiny_skia::Path& path, const tiny_skia::Paint& paint,
-                               const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask,
-                               tiny_skia::Pixmap* strokePaintPixmap);
-  /// Strokes \p path into \p target with the expansion bounded by \ref strokeOutputPointLimit_
-  /// and the frame's remaining stroke output, charging what it emits; a stroke past either bound
-  /// draws nothing and rejects the draw budget, and nothing is stroked once the budget is rejected.
-  void strokeIntoWithinOutputLimit(tiny_skia::MutablePixmapView& target,
-                                   const tiny_skia::Path& path, const tiny_skia::Paint& paint,
-                                   const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask);
+  /// Strokes \p path into the current surface and, when given, \p strokePaintPixmap, each pass
+  /// within \ref frameStrokeLimits (see \ref strokeIntoWithinLimits).
+  void strokeWithinLimits(const tiny_skia::Path& path, const tiny_skia::Paint& paint,
+                          const tiny_skia::Stroke& stroke, const tiny_skia::Mask* mask,
+                          tiny_skia::Pixmap* strokePaintPixmap);
+  /// Strokes \p path into \p target within \ref frameStrokeLimits and charges what it took
+  /// (\ref chargeStroke); a stroke past a limit draws nothing and rejects the draw budget, and
+  /// nothing is stroked once the budget is rejected.
+  void strokeIntoWithinLimits(tiny_skia::MutablePixmapView& target, const tiny_skia::Path& path,
+                              const tiny_skia::Paint& paint, const tiny_skia::Stroke& stroke,
+                              const tiny_skia::Mask* mask);
+  /// \ref strokeIntoWithinLimits through \p capture, recording the runs it draws.
+  /// @return Whether the stroke was captured.
+  [[nodiscard]] bool captureStrokeWithinLimits(tiny_skia::SpanCapture& capture,
+                                               tiny_skia::MutablePixmapView& target,
+                                               const tiny_skia::Path& path,
+                                               const tiny_skia::Paint& paint,
+                                               const tiny_skia::Stroke& stroke,
+                                               const tiny_skia::Mask* mask);
+  /// The bounds of the next stroke: its dash measurement by what the frame's dash measurement
+  /// budget has left, and its outline by \ref strokeOutputPointLimit_ and what the frame's stroke
+  /// output has left.
+  [[nodiscard]] tiny_skia::StrokeLimits frameStrokeLimits() const;
+  /// Charges the measurement steps and outline points a stroke took under \p limits to the frame,
+  /// or rejects the draw budget when it passed a limit or the frame has no room for it.
+  bool chargeStroke(const tiny_skia::StrokeLimits& limits);
   void resetOwnedFrameBudgets();
   void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
   [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);

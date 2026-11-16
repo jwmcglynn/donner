@@ -233,32 +233,6 @@ void ReserveEstimatedDashWork(const std::optional<tiny_skia::StrokeDash>& dash,
   }
 }
 
-/**
- * Captures a stroke with its expansion bounded by \p maxPoints and by what \p drawBudget's frame
- * stroke output allows, charging what it emits. A stroke past either bound draws and records
- * nothing and rejects \p drawBudget; nothing is stroked once the budget is rejected.
- *
- * @return Whether the stroke was captured.
- */
-bool CaptureTinyStrokeWithinOutputLimit(tiny_skia::SpanCapture& capture,
-                                        tiny_skia::MutablePixmapView& target,
-                                        const tiny_skia::Path& path, const tiny_skia::Paint& paint,
-                                        const tiny_skia::Stroke& stroke,
-                                        tiny_skia::Transform transform, const tiny_skia::Mask* mask,
-                                        std::size_t maxPoints, RendererDrawBudget& drawBudget) {
-  if (drawBudget.rejected()) {
-    return false;
-  }
-  tiny_skia::StrokeOutputLimit limit{
-      .maxPoints = std::min(maxPoints, drawBudget.remainingStrokeOutputPoints())};
-  const bool captured = capture.strokePath(target, path, paint, stroke, transform, mask, &limit);
-  if (limit.exceeded || !drawBudget.reserveStrokeOutputPoints(limit.emittedPoints)) {
-    drawBudget.reject();
-    return false;
-  }
-  return captured;
-}
-
 bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
                      bool dashHasOnlyZeroLengthGaps) {
   return dash.has_value() && dashHasOnlyZeroLengthGaps;
@@ -1419,7 +1393,23 @@ double computeBlurPadding(const components::FilterGraph& filterGraph) {
 struct RendererTinySkia::DashedPathWorkBudget {
   void reset() {
     workUnits = 0;
+    measureSteps = 0;
     rejected = false;
+  }
+
+  /// Curve-measurement steps dashes may still take in this frame; zero once rejected.
+  [[nodiscard]] std::size_t remainingMeasureSteps() const {
+    return rejected || measureSteps >= maximumMeasureSteps ? 0 : maximumMeasureSteps - measureSteps;
+  }
+
+  /// Charges the curve-measurement steps a dash took, or latches rejection past the frame cap.
+  [[nodiscard]] bool reserveMeasureSteps(std::size_t count) {
+    if (count > remainingMeasureSteps()) {
+      rejected = true;
+      return false;
+    }
+    measureSteps += count;
+    return true;
   }
 
   [[nodiscard]] bool reserve(std::size_t count) {
@@ -1433,6 +1423,10 @@ struct RendererTinySkia::DashedPathWorkBudget {
 
   std::size_t maximumWorkUnits = kMaximumTinySkiaDashWorkUnits;
   std::size_t workUnits = 0;
+  /// The curve measurement dashes need is counted apart from the dash count above: the units
+  /// differ, and sharing one counter would let measurement crowd out the dashes it serves.
+  std::size_t maximumMeasureSteps = kMaximumTinySkiaDashWorkUnits;
+  std::size_t measureSteps = 0;
   bool rejected = false;
 };
 
@@ -2662,19 +2656,15 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
         (retained && !paintBorrowsPattern(*strokePaint)) ? &retained.entry->stroke : nullptr;
     drawRetainablePass(
         slot, key, pixmapView, mask, retainedSpanStats_,
-        [&] {
-          strokeIntoWithinOutputLimit(pixmapView, strokePath(), *strokePaint, tinyStroke, mask);
-        },
+        [&] { strokeIntoWithinLimits(pixmapView, strokePath(), *strokePaint, tinyStroke, mask); },
         [&](tiny_skia::SpanCapture& capture) {
-          return CaptureTinyStrokeWithinOutputLimit(capture, pixmapView, strokePath(), *strokePaint,
-                                                    tinyStroke,
-                                                    toTinyTransform(deviceFromLocalTransform_),
-                                                    mask, strokeOutputPointLimit_, *drawBudget_);
+          return captureStrokeWithinLimits(capture, pixmapView, strokePath(), *strokePaint,
+                                           tinyStroke, mask);
         });
 
     if (strokePaintPixmap != nullptr) {
       auto strokePaintView = strokePaintPixmap->mutableView();
-      strokeIntoWithinOutputLimit(strokePaintView, strokePath(), *strokePaint, tinyStroke, mask);
+      strokeIntoWithinLimits(strokePaintView, strokePath(), *strokePaint, tinyStroke, mask);
     }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
@@ -2749,7 +2739,7 @@ void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
     tinyStroke.lineCap = toTinyLineCap(stroke.lineCap);
     tinyStroke.lineJoin = toTinyLineJoin(stroke.lineJoin);
 
-    strokeWithinOutputLimit(path, *strokePaint, tinyStroke, mask, strokePaintPixmap);
+    strokeWithinLimits(path, *strokePaint, tinyStroke, mask, strokePaintPixmap);
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -2807,7 +2797,7 @@ void RendererTinySkia::drawEllipse(const Box2d& bounds, const StrokeParams& stro
     tinyStroke.lineCap = toTinyLineCap(stroke.lineCap);
     tinyStroke.lineJoin = toTinyLineJoin(stroke.lineJoin);
 
-    strokeWithinOutputLimit(path, *strokePaint, tinyStroke, mask, strokePaintPixmap);
+    strokeWithinLimits(path, *strokePaint, tinyStroke, mask, strokePaintPixmap);
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
@@ -3260,7 +3250,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                 if (decoStrokePaint && decoration.strokeWidth > 0.0) {
                   tiny_skia::Stroke stroke;
                   stroke.width = NarrowToFloat(decoration.strokeWidth);
-                  strokeIntoWithinOutputLimit(pixmapView, tinyPath, *decoStrokePaint, stroke, mask);
+                  strokeIntoWithinLimits(pixmapView, tinyPath, *decoStrokePaint, stroke, mask);
                 }
               };
               // The decoration's own fill/stroke order is the declaring element's `paint-order`.
@@ -3366,7 +3356,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         return;
       }
       for (const auto& tinyPath : runGlyphPaths) {
-        strokeIntoWithinOutputLimit(pixmapView, tinyPath, *spanStrokePaint, spanTinyStroke, mask);
+        strokeIntoWithinLimits(pixmapView, tinyPath, *spanStrokePaint, spanTinyStroke, mask);
       }
     };
 
@@ -3461,35 +3451,64 @@ RendererFilterPreparationBudget* RendererTinySkia::filterPreparationBudget() {
   return filterPreparationBudget_.get();
 }
 
-void RendererTinySkia::strokeWithinOutputLimit(const tiny_skia::Path& path,
-                                               const tiny_skia::Paint& paint,
-                                               const tiny_skia::Stroke& stroke,
-                                               const tiny_skia::Mask* mask,
-                                               tiny_skia::Pixmap* strokePaintPixmap) {
+void RendererTinySkia::strokeWithinLimits(const tiny_skia::Path& path,
+                                          const tiny_skia::Paint& paint,
+                                          const tiny_skia::Stroke& stroke,
+                                          const tiny_skia::Mask* mask,
+                                          tiny_skia::Pixmap* strokePaintPixmap) {
   auto pixmapView = currentPixmapView();
-  strokeIntoWithinOutputLimit(pixmapView, path, paint, stroke, mask);
+  strokeIntoWithinLimits(pixmapView, path, paint, stroke, mask);
   if (strokePaintPixmap != nullptr) {
     auto strokePaintView = strokePaintPixmap->mutableView();
-    strokeIntoWithinOutputLimit(strokePaintView, path, paint, stroke, mask);
+    strokeIntoWithinLimits(strokePaintView, path, paint, stroke, mask);
   }
 }
 
-void RendererTinySkia::strokeIntoWithinOutputLimit(tiny_skia::MutablePixmapView& target,
-                                                   const tiny_skia::Path& path,
-                                                   const tiny_skia::Paint& paint,
-                                                   const tiny_skia::Stroke& stroke,
-                                                   const tiny_skia::Mask* mask) {
+void RendererTinySkia::strokeIntoWithinLimits(tiny_skia::MutablePixmapView& target,
+                                              const tiny_skia::Path& path,
+                                              const tiny_skia::Paint& paint,
+                                              const tiny_skia::Stroke& stroke,
+                                              const tiny_skia::Mask* mask) {
   if (drawBudget_->rejected()) {
     return;
   }
   ++frameCounters_.limitedStrokes;
-  tiny_skia::StrokeOutputLimit limit{
-      .maxPoints = std::min(strokeOutputPointLimit_, drawBudget_->remainingStrokeOutputPoints())};
+  tiny_skia::StrokeLimits limits = frameStrokeLimits();
   tiny_skia::Painter::strokePath(target, path, paint, stroke,
-                                 toTinyTransform(deviceFromLocalTransform_), mask, nullptr, &limit);
-  if (limit.exceeded || !drawBudget_->reserveStrokeOutputPoints(limit.emittedPoints)) {
-    drawBudget_->reject();
+                                 toTinyTransform(deviceFromLocalTransform_), mask, nullptr,
+                                 &limits);
+  (void)chargeStroke(limits);
+}
+
+bool RendererTinySkia::captureStrokeWithinLimits(tiny_skia::SpanCapture& capture,
+                                                 tiny_skia::MutablePixmapView& target,
+                                                 const tiny_skia::Path& path,
+                                                 const tiny_skia::Paint& paint,
+                                                 const tiny_skia::Stroke& stroke,
+                                                 const tiny_skia::Mask* mask) {
+  if (drawBudget_->rejected()) {
+    return false;
   }
+  tiny_skia::StrokeLimits limits = frameStrokeLimits();
+  const bool captured = capture.strokePath(
+      target, path, paint, stroke, toTinyTransform(deviceFromLocalTransform_), mask, &limits);
+  return chargeStroke(limits) && captured;
+}
+
+tiny_skia::StrokeLimits RendererTinySkia::frameStrokeLimits() const {
+  return tiny_skia::StrokeLimits{
+      .maxMeasureSteps = dashedPathWorkBudget_->remainingMeasureSteps(),
+      .maxOutlinePoints =
+          std::min(strokeOutputPointLimit_, drawBudget_->remainingStrokeOutputPoints())};
+}
+
+bool RendererTinySkia::chargeStroke(const tiny_skia::StrokeLimits& limits) {
+  if (limits.exceeded || !dashedPathWorkBudget_->reserveMeasureSteps(limits.measureSteps) ||
+      !drawBudget_->reserveStrokeOutputPoints(limits.outlinePoints)) {
+    drawBudget_->reject();
+    return false;
+  }
+  return true;
 }
 
 void RendererTinySkia::setStrokeOutputPointLimitForTesting(std::size_t maximumPoints) {
@@ -3498,6 +3517,11 @@ void RendererTinySkia::setStrokeOutputPointLimitForTesting(std::size_t maximumPo
 
 void RendererTinySkia::setFrameStrokeOutputPointLimitForTesting(std::size_t maximumPoints) {
   drawBudget_->setStrokeOutputPointLimitForTesting(maximumPoints);
+}
+
+void RendererTinySkia::setFrameDashMeasureStepLimitForTesting(std::size_t maximumSteps) {
+  dashedPathWorkBudget_->maximumMeasureSteps =
+      std::min(dashedPathWorkBudget_->maximumMeasureSteps, maximumSteps);
 }
 
 void RendererTinySkia::setDashWorkBudgetForTesting(std::size_t maximumWorkUnits) {
@@ -3546,6 +3570,7 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .imageDraws = drawBudget_->imageDraws(),
       .imageBytes = drawBudget_->imageBytes(),
       .strokeOutputPoints = drawBudget_->strokeOutputPoints(),
+      .dashMeasureSteps = dashedPathWorkBudget_->measureSteps,
       .drawBudgetRejected = drawBudget_->rejected(),
       .textMaterializationBudgetSupported = true,
       .textUniqueOutlines = textMaterializationBudget_->uniqueOutlines(),
