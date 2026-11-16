@@ -14,16 +14,21 @@ that no longer matches a difference also fails, so the lists shrink as gaps clos
 import copy
 import functools
 import hashlib
+import itertools
 import json
 from pathlib import Path
 import re
 import shlex
+import sys
 import unittest
 from unittest import mock
 
 from python.runfiles import runfiles
 from tools import bazelrc_configs
 from tools import ci_coverage_contract as coverage_contract
+from tools.ci import lane as lane_entry
+from tools.ci import lane_view
+from tools.ci import lanes
 
 
 _CONFIGS = []
@@ -46,8 +51,9 @@ def _config_flags(name, command="test"):
 
 
 # The shared target selection: `//...` on a fallback, otherwise the affected labels. Steps that use
-# it are compared by this symbol, since the labels are only known when the workflow runs.
-SELECTED_TARGETS = "@selected_targets"
+# it are compared by this symbol, since the labels are only known when the workflow runs; a lane
+# phase's dry run prints it for a selection it is not given.
+SELECTED_TARGETS = lane_entry.SELECTION_SYMBOL
 
 # Workflows that run on a push to main without running on pull requests at all, or with a
 # narrower pull request trigger. Keyed by (workflow, difference).
@@ -195,7 +201,7 @@ INVOCATION_ALLOWLIST = {
     # hooks from job env or earlier steps are rejected by //tools:macos_cache_key_parity_tests.
     # The refresh passes the self-hosted lane's rc-skipping startup flags.
     ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
-     "step-changed", "c3adecb0303d2d56"):
+     "step-changed", "de78e4645a7c25f7"):
         "Same repositories refreshed; only the runner-specific startup flags differ.",
     # Setup the hosted runner needs and the self-hosted runner has already: the host provides
     # Bazelisk, Homebrew LLVM and the Xcode tools ("Prepare self-hosted macOS toolchain"),
@@ -245,9 +251,9 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "1f030eca32a64fd1"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "fd5d740341fdc576"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "5530b757d19fd050"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "4c74c44b7a2797b2"),
 }
 
 SHARED_STEP_ALLOWLIST = {
@@ -311,8 +317,7 @@ COUNTERPART_ALLOWLIST = {
         ("*", "flag-pr-only", "--incompatible_remote_local_fallback_for_remote_cache=false"),
         ("*", "flag-pr-only", "--remote_timeout=60s"),
         ("*", "flag-pr-only", "--remote_download_outputs=minimal"),
-        ("Test", "flag-pr-only",
-         r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$"),
+        ("Test", "flag-pr-only", lanes.DIAG_TEST[-1]),
     ], "Runner-specific remote execution settings; they choose where actions run and which "
        "outputs come back, not what is built or tested."),
     **_counterpart_entries("linux", "linux-self-hosted", [
@@ -349,7 +354,7 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
       for flag, filename in (("build_event_json_file", "bep.json"),
                              ("execution_log_compact_file", "exec.log.zst"),
                              ("profile", "profile.gz"))],
-    ("Test", "flag-pr-only", r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$"),
+    ("Test", "flag-pr-only", lanes.DIAG_TEST[-1]),
     ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
     ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
     ("Test", "target-main-only", SELECTED_TARGETS),
@@ -795,10 +800,6 @@ def _split_words(text):
         return text.split()
 
 
-_SELECTION = re.compile(
-    r'(?P<name>[A-Za-z_]\w*)=\$\(if \[\[ "\$\{\{ needs\.determine-targets\.outputs\.fallback '
-    r'\}\}" == "true" \]\]; then\s+echo "//\.\.\."\s+else\s+echo "\$\{\{ '
-    r'needs\.determine-targets\.outputs\.affected \}\}"\s+fi\)')
 # A shell assignment, quoted or bare, not part of a longer word or an option.
 _ASSIGNMENT = re.compile(r'(?<![\w=-])([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|\S+)')
 _WHOLE_VARIABLE = re.compile(r"^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$")
@@ -876,11 +877,10 @@ def render(text, scenario):
 def bazel_invocations(script, environment, scenario=None):
     """Every `bazelisk build` or `bazelisk test` command in a step script, as option sets.
 
-    Script variables assigned before a command (such as the target selection) are resolved, so
-    two steps that select targets differently compare as different. With a scenario, the
-    script's other `${{ }}` expressions are evaluated for it.
+    Script variables assigned before a command are resolved, so two steps that select targets
+    differently compare as different. With a scenario, the script's `${{ }}` expressions are
+    evaluated for it.
     """
-    script = _SELECTION.sub(lambda match: match.group("name") + "=" + SELECTED_TARGETS, script)
     if scenario is not None:
         script = render(script, scenario)
     script = _join_continuations(script)
@@ -896,6 +896,99 @@ def bazel_invocations(script, environment, scenario=None):
         for name, value in _ASSIGNMENT.findall(line):
             variables[name] = _resolve(value, environment, variables)
     return invocations
+
+
+# A step that runs one phase of the lane table (tools/ci/lanes.py).
+_LANE_CALL = re.compile(r"^python3 tools/ci/lane\.py phase ([\w-]+) ([\w-]+)$")
+# The job environment that carries the planner's selection to a lane phase. A phase is compared
+# with the selection left out, so its dry run prints SELECTED_TARGETS in its place;
+# test_lane_steps_pass_the_planner_selection pins what the jobs pass.
+SELECTION_ENVIRONMENT = ("TARGETS_FALLBACK", "TARGETS_AFFECTED")
+
+
+def lane_phase(step):
+    """(lane, phase) of a step that runs a lane phase, else None."""
+    match = _LANE_CALL.match(str(step.get("run") or "").strip())
+    return match.groups() if match else None
+
+
+def lane_description(step, environment=None):
+    """A lane step's dry run: its actions with the step's environment and the selection symbol."""
+    environment = {key: value for key, value in (environment or {}).items()
+                   if key not in SELECTION_ENVIRONMENT}
+    return lane_entry.dry_run(*lane_phase(step), environment)
+
+
+def lane_commands(step, environment=None):
+    """The argv of each Bazel command (and query) a lane step runs, in order."""
+    return [action["argv"] for action in lane_description(step, environment)["actions"]
+            if action["action"] in ("bazel", "query")]
+
+
+def step_invocations(step, environment, scenario=None):
+    """Every Bazel build or test a step runs, as option sets.
+
+    A lane step's commands come from its phase's dry run with the step's environment; any other
+    step's from its script.
+    """
+    if lane_phase(step):
+        return [invocation for argv in lane_commands(step, environment)
+                for invocation in [_invocation(shlex.join(argv), {}, {})] if invocation]
+    return bazel_invocations(str(step.get("run") or ""), environment, scenario)
+
+
+# Every lane step's dry run in every scenario, reviewed: a change to the lane table, or to what a
+# job passes a phase, changes it. Each command is also recorded with the repository's configs
+# expanded, which a change that only moves flags into a config leaves as it is. Regenerate with
+# `python3 tools/ci_lane_parity_tests.py --update-lane-golden` and review the diff.
+LANE_GOLDEN = "tools/ci/lane_commands.golden.json"
+
+
+def _expanded(argv):
+    """A Bazel command line with each repository config replaced by its flags, so a change that
+    moves flags into a .bazelrc config shows as no change here."""
+    words = argv[argv.index("bazelisk") + 1:]
+    startup = [word for word in itertools.takewhile(lambda word: word.startswith("--"), words)]
+    command, options = words[len(startup)], words[len(startup) + 1:]
+    return shlex.join(argv[:argv.index("bazelisk") + 1] + startup + [command] + (
+        options if command == "query" else
+        bazelrc_configs.expand(command, options, _repository_configs())))
+
+
+def _golden_action(action):
+    action = dict(action)
+    if action["action"] in ("bazel", "query"):
+        action["expanded"] = _expanded(action["argv"])
+    if "argv" in action:
+        action["argv"] = shlex.join(action["argv"])
+    return action
+
+
+def lane_steps(workflow):
+    """(job name, job, step) for every step that runs a lane phase."""
+    return [(job_name, job, step) for job_name, job in _jobs(workflow).items()
+            for step in job.get("steps") or [] if lane_phase(step)]
+
+
+def _golden_entry(workflow, job_name, job, step):
+    groups = {}
+    for scenario in SCENARIOS:
+        actions = [_golden_action(action) for action in lane_description(
+            step, _step_environment(workflow, job, step, scenario))["actions"]]
+        groups.setdefault(json.dumps(actions, sort_keys=True), []).append(scenario)
+    return {"step": _step_name(step),
+            "runs_in": [scenario for scenario in SCENARIOS
+                        if job_runs(workflow, job_name, scenario)
+                        and runs(step.get("if"), scenario)],
+            "actions": [{"scenarios": scenarios, "actions": json.loads(actions)}
+                        for actions, scenarios in groups.items()]}
+
+
+def lane_golden(workflow):
+    """Each lane step's actions per scenario, grouped by the scenarios that agree, and the
+    scenarios in which the step runs."""
+    return {"%s %s" % lane_phase(step): _golden_entry(workflow, job_name, job, step)
+            for job_name, job, step in lane_steps(workflow)}
 
 
 def _tag_filters(options):
@@ -1019,10 +1112,9 @@ def _bazel_profile(workflow, job, scenario):
     for step in _gating_steps(job, scenario):
         if not runs(step.get("if"), scenario):
             continue
-        script = str(step.get("run") or "")
-        writes |= runtime_flag_writes(script)
-        invocations = bazel_invocations(script, _step_environment(workflow, job, step, scenario),
-                                        scenario)
+        writes |= runtime_flag_writes(str(step.get("run") or ""))
+        invocations = step_invocations(step, _step_environment(workflow, job, step, scenario),
+                                       scenario)
         if invocations:
             steps[_step_name(step)] = invocations
     return steps, writes
@@ -1051,6 +1143,10 @@ def _step_script(run):
     still renders per scenario.
     """
     script = run
+    # A lane step is compared with what its phase runs.
+    if lane_phase({"run": run}):
+        script += "\n# %s\n%s" % (run.strip(), json.dumps(lane_description({"run": run}),
+                                                          sort_keys=True))
     for path in sorted(set(re.findall(r"(?<![\w/.-])tools/ci/[\w.-]+\.sh\b", run))
                        & _workflow_logic_scripts()):
         body = _read(path)
@@ -1089,8 +1185,8 @@ def _other_steps(workflow, job, scenario):
     """Gating steps that run in this scenario and run no Bazel build or test, by name."""
     other = {}
     for step in _gating_steps(job, scenario):
-        if runs(step.get("if"), scenario) and not bazel_invocations(
-                str(step.get("run") or ""), _step_environment(workflow, job, step)):
+        if runs(step.get("if"), scenario) and not step_invocations(
+                step, _step_environment(workflow, job, step)):
             other[_step_name(step)] = _other_step_view(workflow, job, step, scenario)
     return other
 
@@ -1165,8 +1261,8 @@ def _coverage_phases(workflow, lane):
     """The gating checks main's hosted lane runs on a push: its Bazel steps and listed others."""
     job = _jobs(workflow)[lane]
     phases = {_step_name(step) for step in _gating_steps(job, "main-push")
-              if runs(step.get("if"), "main-push") and bazel_invocations(
-                  str(step.get("run") or ""), _step_environment(workflow, job, step))}
+              if runs(step.get("if"), "main-push") and step_invocations(
+                  step, _step_environment(workflow, job, step))}
     return phases | set(COVERAGE_NON_BAZEL_PHASES.get(lane, ()))
 
 
@@ -1204,7 +1300,7 @@ def subset_setup_differences(workflow, main_job_name, subset_name, covered):
         name = _step_name(step)
         if name in covered:
             break
-        if bazel_invocations(str(step.get("run") or ""), environment):
+        if step_invocations(step, environment):
             continue
         if name not in subset_steps:
             problems.append((name, "missing"))
@@ -1609,9 +1705,8 @@ def _bazel_running_steps(workflow, job):
     seen = {}
     for scenario in ("main-push",) + PULL_REQUEST_SCENARIOS:
         for step in _gating_steps(job, scenario):
-            script = str(step.get("run") or "")
-            if runs(step.get("if"), scenario) and bazel_invocations(
-                    script, _step_environment(workflow, job, step)):
+            if runs(step.get("if"), scenario) and step_invocations(
+                    step, _step_environment(workflow, job, step)):
                 seen[id(step)] = step
     return list(seen.values())
 
@@ -1644,9 +1739,7 @@ def _bazel_commands(workflows):
     for name, workflow in workflows.items():
         for job_name, job in _jobs(workflow).items():
             for step in job.get("steps") or []:
-                script = str(step.get("run") or "")
-                for invocation in bazel_invocations(script,
-                                                    _step_environment(workflow, job, step)):
+                for invocation in step_invocations(step, _step_environment(workflow, job, step)):
                     yield name, job_name, _step_name(step), invocation
 
 
@@ -1707,8 +1800,10 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertIn("Test", steps)
         self.assertIn("Test (browser targets)", steps)
         test = next(step for step in jobs["macos"]["steps"] if _step_name(step) == "Test")
-        self.assertIn("bazelisk test", test["run"])
-        self.assertIn("--config=hosted-macos-quarantine", test["run"])
+        self.assertEqual(lane_phase(test), ("macos", "test"))
+        [command] = lane_commands(test)
+        self.assertEqual(command[:3], ["tools/ci_bazel_test.sh", "bazelisk", "test"])
+        self.assertIn("--config=hosted-macos-quarantine", command)
         self.assertIn("main.yml", self.main_push_workflows)
 
     def test_expressions_follow_the_routing_gate(self):
@@ -1797,26 +1892,94 @@ class CiLaneParityTest(unittest.TestCase):
             "the pull request runs a skipped main step differently in its counterpart job")
 
     def test_target_selection_differences_are_reported(self):
-        selection = ('TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == '
-                     '"true" ]]; then\n            echo "//..."\n          else\n'
-                     '            echo "${{ needs.determine-targets.outputs.affected }}"\n'
-                     '          fi)\n          ')
-        main = textwrap_job('X_TARGETS: "//tools/ci:a"',
-                            selection + "bazelisk test --config=ci $TARGETS $X_TARGETS")
+        # A lane phase that narrows the planner's selection differs from main's phase.
+        workflow = self.workflows["main.yml"]
+        self.assertFalse({difference for difference in
+                          invocation_differences(workflow, "macos", "macos-self-hosted")
+                          if difference[1].startswith("target-")})
+        narrowed = _replacing(lanes.SELECTED, "//donner/base/...")
+        with _with_phase_args("macos-self-hosted", "test", narrowed):
+            differences = invocation_differences(workflow, "macos", "macos-self-hosted")
+        self.assertLessEqual({("Test", "target-main-only", SELECTED_TARGETS),
+                              ("Test", "target-pr-only", "//donner/base/...")}, differences)
+        # A step script's targets, through its environment, compare the same way.
+        main = textwrap_job('X_TARGETS: "//tools/ci:a"', "bazelisk test --config=ci $X_TARGETS")
         narrowed = textwrap_job('X_TARGETS: "//tools/ci:b"',
-                                selection + "bazelisk test --config=ci //donner/base/... "
-                                "$X_TARGETS")
+                                "bazelisk test --config=ci //donner/base/... $X_TARGETS")
         workflow = parse_workflow("jobs:\n  main:\n" + main + "  pr:\n" + narrowed)
         self.assertEqual(invocation_differences(workflow, "main", "pr"), {
-            ("Test", "target-main-only", SELECTED_TARGETS),
             ("Test", "target-pr-only", "//donner/base/..."),
             ("Test", "target-main-only", "//tools/ci:a"),
             ("Test", "target-pr-only", "//tools/ci:b"),
         })
-        same = textwrap_job('X_TARGETS: "//tools/ci:a"',
-                            selection + "bazelisk test --config=ci $TARGETS $X_TARGETS")
-        workflow = parse_workflow("jobs:\n  main:\n" + main + "  pr:\n" + same)
+        workflow = parse_workflow("jobs:\n  main:\n" + main + "  pr:\n" + main)
         self.assertEqual(invocation_differences(workflow, "main", "pr"), set())
+
+    def test_lane_steps_match_the_reviewed_golden(self):
+        observed = lane_golden(self.workflows["main.yml"])
+        golden = json.loads(_read(LANE_GOLDEN))
+        self.assertEqual(sorted(golden), sorted(observed))
+        for key in observed:
+            with self.subTest(phase=key):
+                self.assertEqual(golden[key], observed[key],
+                                 "regenerate %s with --update-lane-golden" % LANE_GOLDEN)
+
+    def test_every_lane_phase_runs_in_one_step_of_its_job(self):
+        # A phase runs in the job of its lane's name, in the step its table entry names; a step
+        # with an id runs the phase of that id.
+        jobs = _jobs(self.workflows["main.yml"])
+        called = {}
+        for job_name, job in jobs.items():
+            for step in job.get("steps") or []:
+                phase = lane_phase(step)
+                if not phase:
+                    self.assertNotIn("tools/ci/lane.py", str(step.get("run") or ""))
+                    continue
+                with self.subTest(job=job_name, step=_step_name(step)):
+                    self.assertEqual(phase[0], job_name)
+                    self.assertNotIn(phase, called)
+                    called[phase] = step
+                    self.assertEqual(lanes.LANES[phase[0]].phases[phase[1]].step,
+                                     _step_name(step))
+                    if step.get("id"):
+                        self.assertEqual(step["id"], phase[1])
+        self.assertEqual(sorted(called), sorted(
+            (name, phase) for name, lane in lanes.LANES.items() for phase in lane.phases))
+
+    def test_lane_steps_pass_the_planner_selection(self):
+        # A phase reads the selection only from its job's environment, set from the planner's
+        # outputs, so the dry run's symbol stands for exactly the planner's selection.
+        expected = {"TARGETS_FALLBACK": "${{ needs.determine-targets.outputs.fallback }}",
+                    "TARGETS_AFFECTED": "${{ needs.determine-targets.outputs.affected }}"}
+        workflow = self.workflows["main.yml"]
+        reading = {job_name for job_name, _, step in lane_steps(workflow)
+                   if SELECTED_TARGETS in json.dumps(lane_description(step))}
+        for job_name, job in _jobs(workflow).items():
+            uses = job_name in reading
+            with self.subTest(job=job_name):
+                passed = {key: value for key, value in (job.get("env") or {}).items()
+                          if key in SELECTION_ENVIRONMENT}
+                self.assertEqual(passed, expected if uses else {})
+                self.assertTrue(not uses or "determine-targets" in _needs(job))
+                self.assertEqual([], [step for step in job.get("steps") or []
+                                      if set(step.get("env") or {}) & set(SELECTION_ENVIRONMENT)])
+        for scenario, values in SCENARIOS.items():
+            for name, key in (("TARGETS_FALLBACK", "fallback"), ("TARGETS_AFFECTED", "affected")):
+                self.assertEqual(render(expected[name], scenario), values[key])
+
+    def test_deferred_lane_failures_are_advisory(self):
+        # A phase that runs past a failed command (a diagnostic comparison) still exits with that
+        # failure; only a step that cannot fail its job may run one.
+        jobs = _jobs(self.workflows["main.yml"])
+        deferring = set()
+        for job_name, job in jobs.items():
+            for step in job.get("steps") or []:
+                if lane_phase(step) and any(action.get("defer") for action in
+                                            lane_description(step)["actions"]):
+                    deferring.add((job_name, _step_name(step)))
+                    self.assertEqual(str(step.get("continue-on-error")), "true", step)
+        self.assertEqual(deferring, {("macos", "Compare browser GPU tests (serial)"),
+                                     ("macos", "Compare browser GPU tests (parallel)")})
 
     def test_reader_rejects_what_it_cannot_parse(self):
         with self.assertRaisesRegex(ValueError, "unsupported YAML"):
@@ -1865,16 +2028,12 @@ class CiLaneParityTest(unittest.TestCase):
         ])
         self.assertEqual([line for line in rc if _RELEASE_COMMIT_FLAG in line],
                          ["common:ci-test-lane " + TEST_LANE_EDITOR_COMMIT])
-        # A lane that leaves `ci` out, or overrides the commit, is found.
-        main = next(path for path in _workflow_paths() if path.name == "main.yml")
-        text = main.read_text(encoding="utf-8")
-        command = "bazelisk test --config=ci --config=geode"
-        self.assertIn(command, text)
-        for replacement in ("bazelisk test --config=geode",
-                            command + " " + _RELEASE_COMMIT_FLAG + "1" * 40):
-            workflows = dict(self.workflows)
-            workflows["main.yml"] = parse_workflow(text.replace(command, replacement))
-            self.assertTrue(editor_identity_problems(workflows), replacement)
+        # A lane phase that leaves `ci` out, or overrides the commit, is found.
+        for edit in (_replacing("--config=ci"),
+                     _replacing("--config=geode", "--config=geode",
+                                _RELEASE_COMMIT_FLAG + "1" * 40)):
+            with _with_phase_args("macos", "geode_test", edit):
+                self.assertTrue(editor_identity_problems(self.workflows))
 
     def test_release_builds_keep_their_real_editor_identity(self):
         for path in RELEASE_IDENTITY_SOURCES:
@@ -1893,20 +2052,18 @@ class CiLaneParityTest(unittest.TestCase):
 
     def test_build_event_file_problems_are_found(self):
         geode = "Test (Geode editor lane)"
-        main = next(path for path in _workflow_paths() if path.name == "main.yml")
-        text = main.read_text(encoding="utf-8")
-        command = "bazelisk test --config=ci --config=geode"
-        self.assertIn(command, text)
-        for replacement, problem in (
-                ("bazelisk test --config=geode", "json build event file with path conversion on"),
-                (command + " --build_event_json_file_path_conversion",
+        for edit, problem in (
+                (_replacing("--config=ci"), "json build event file with path conversion on"),
+                (_replacing("--config=ci", "--config=ci",
+                            "--build_event_json_file_path_conversion"),
                  "--build_event_json_file_path_conversion"),
-                (command + " --experimental_build_event_json_file_path_conversion=True",
+                (_replacing("--config=ci", "--config=ci",
+                            "--experimental_build_event_json_file_path_conversion=True"),
                  "--experimental_build_event_json_file_path_conversion=True")):
-            workflow = parse_workflow(text.replace(command, replacement))
-            problems = build_event_file_problems({"main.yml": workflow})
+            with _with_phase_args("macos", "geode_test", edit):
+                problems = build_event_file_problems({"main.yml": self.workflows["main.yml"]})
             self.assertTrue(any(geode in entry and problem in entry for entry in problems),
-                            (replacement, problems))
+                            (problem, problems))
 
     def test_failure_swallowing_lines_are_found(self):
         workflow = parse_workflow(
@@ -2443,8 +2600,9 @@ class CiLaneParityTest(unittest.TestCase):
                 self.assertEqual({"STEPS_JSON": "${{ toJSON(steps) }}"}, receipt["env"])
                 # A minimum test count is read from the step's own build event file.
                 if counterpart.get("min_tests"):
-                    self.assertIn('--build_event_json_file="$RUNNER_TEMP/coverage-%s.bep.json"'
-                                  % step_id, steps[step_id]["run"])
+                    self.assertTrue(any(
+                        lanes.bep(step_id) in command for command in lane_commands(
+                            steps[step_id])), step_id)
 
     def test_coverage_contract_job_needs_every_receipt_and_selection_source(self):
         # The contract job waits for every job whose receipt it reads.
@@ -2528,6 +2686,13 @@ class CiLaneParityTest(unittest.TestCase):
         })
 
 
+_replacing = lane_view.replacing
+
+
+def _with_phase_args(lane, phase, edit):
+    return lane_view.edited_lane(lane, edit, phases=(phase,))
+
+
 def textwrap_job(environment, command):
     return ("    env:\n"
             "      %s\n"
@@ -2537,5 +2702,16 @@ def textwrap_job(environment, command):
             "          %s\n") % (environment, command)
 
 
+def _update_lane_golden():
+    """Writes LANE_GOLDEN for the checkout's main.yml and lane table."""
+    root = Path(__file__).resolve().parent.parent
+    workflow = parse_workflow((root / ".github/workflows/main.yml").read_text(encoding="utf-8"))
+    (root / LANE_GOLDEN).write_text(json.dumps(lane_golden(workflow), indent=1, sort_keys=True)
+                                    + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if sys.argv[1:] == ["--update-lane-golden"]:
+        _update_lane_golden()
+    else:
+        unittest.main()

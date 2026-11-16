@@ -17,6 +17,9 @@ from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 from tools import bazelrc_configs
 from tools import test_timing
+from tools.ci import lane as lane_entry
+from tools.ci import lane_view
+from tools.ci import lanes
 
 
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
@@ -43,7 +46,7 @@ SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
 # Scripts that hold step bodies moved out of a workflow. The target selection treats a change to
 # one exactly as a change to the CI workflow.
 WORKFLOW_LOGIC_SCRIPTS = ("tools/ci/bazel_watchdog.sh", "tools/ci/determine_targets.sh",
-                          "tools/ci/fetch_bazel_diff.sh")
+                          "tools/ci/fetch_bazel_diff.sh", "tools/ci/lane.py", "tools/ci/lanes.py")
 # The start of the target selection's list of those scripts.
 WORKFLOW_LOGIC_MARKER = "          # Workflow logic kept in scripts"
 # Other repository scripts the CI workflow and its composite actions run, each with the test
@@ -69,8 +72,6 @@ UNTRACKED_CI_SCRIPTS = {
 }
 _RUN = re.compile(r"^(?P<indent> *)(?P<item>- )?run: *(?P<value>.*)$")
 _SCRIPT_PATH = re.compile(r"(?<![\w/.-])((?:tools|build_defs)/[\w./-]+\.(?:sh|py))\b")
-# How a step rejects a target list that is empty or only whitespace, applied to a variable name.
-EMPTY_SELECTION_GUARD = 'if [[ "$%s" =~ ^[[:space:]]*$ ]]; then'
 # Each Editor WASM build step that runs Bazel or stages an artifact, in workflow order, with the one
 # command it runs. The commands themselves are pinned by //tools/ci:editor_wasm_lane_tests and
 # //tools/ci:editor_wasm_stage_tests.
@@ -153,6 +154,25 @@ def _run_bodies(text):
     return bodies
 
 
+def _phases_testing_the_selection():
+    """(lane, phase, actions, test actions) of each lane phase that tests the planner's selection
+    or a subset of it."""
+    found = []
+    for lane, entry in lanes.LANES.items():
+        for phase, definition in entry.phases.items():
+            tests = [action for action in definition.actions
+                     if isinstance(action, lanes.Bazel) and action.args[0] == "test"]
+            if tests and _reads_selection(definition.actions):
+                found.append((lane, phase, definition.actions, tests))
+    return found
+
+
+def _reads_selection(actions):
+    """Whether a phase's commands or queries read the planner's selection."""
+    return any(isinstance(action, lanes.QueryTag) or (isinstance(action, lanes.Bazel) and any(
+        isinstance(item, lanes.Selected) for item in action.args)) for action in actions)
+
+
 class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_executable_stubs_are_shared_for_the_test_class(self):
         stub = self.fixture_bin / "python3"
@@ -173,7 +193,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
         cls.bazelrc = _repository_text(".bazelrc")
         cls.configs = bazelrc_configs.parse(cls.bazelrc)
-        cls.main = _repository_text(".github/workflows/main.yml")
+        # main.yml with each lane step's commands (tools/ci/lanes.py) under its `run:` line.
+        cls.main_text = _repository_text(".github/workflows/main.yml")
+        cls.main = lane_view.with_dry_runs(cls.main_text)
         cls.cmake = _repository_text(".github/workflows/cmake.yml")
         cls.coverage = _repository_text(".github/workflows/coverage.yml")
         cls.editor_wasm = _repository_text(".github/workflows/editor_wasm.yml")
@@ -216,6 +238,19 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         rest = job.split(marker, 1)[1]
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
+
+    @staticmethod
+    def _phase_commands(lane, phase):
+        """The argv of each command a lane phase runs, from its dry run."""
+        return [action["argv"] for action in lane_entry.dry_run(lane, phase, {})["actions"]
+                if "argv" in action]
+
+    @staticmethod
+    def _phases_with(word):
+        """(lane, phase) of every lane table phase with a command that passes `word`."""
+        return {(lane, phase) for lane, entry in lanes.LANES.items() for phase in entry.phases
+                if any(word in argv for argv in
+                       CiRuntimeWorkflowTest._phase_commands(lane, phase))}
 
     def test_self_hosted_lint_isolates_both_nested_bazel_commands(self):
         job = self._job_body("lint-self-hosted", self.lint)
@@ -375,26 +410,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("continue-on-error: true", body)
             self.assertIn("--nocache_test_results", body)
             self.assertIn("--local_test_jobs=%d" % jobs, body)
-            self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS", body)
-            self.assertIn("//tools/ci:browser_gpu_comparison", body)
+            [command, summary] = self._phase_commands("macos", "browser_gpu_" + mode)
+            for flag in lanes.MACOS_BUILD[:2] + lanes.MACOS_TEST["macos"]:
+                self.assertIn(flag, command)
+            self.assertEqual("//tools/ci:browser_gpu_comparison", command[-1])
+            self.assertEqual(["python3", "tools/browser_gpu_test_summary.py"], summary[:2])
             artifact = self._step_body(hosted, "Upload browser GPU comparison (%s)" % mode)
             self.assertIn("./.github/actions/upload-bazel-test-artifacts", artifact)
             self.assertIn("browser-gpu-%s-" % mode, artifact)
-
-    def test_hosted_browser_comparisons_keep_failure_reports_with_errexit(self):
-        hosted = self._job_body("macos")
-        environment = os.environ.copy()
-        environment.update(RUNNER_TEMP=".", BAZEL_MACOS_BUILD_FLAGS="",
-                           BAZEL_MACOS_TEST_FLAGS="", BROWSER_STALL_TEST_FLAGS="",
-                           HOSTED_MACOS_QUARANTINE_TEST_FLAGS="")
-        prefix = "bazelisk() { return 3; }; python3() { echo summary-ran; return 0; };\n"
-        for mode in ("serial", "parallel"):
-            body = self._step_body(hosted, "Compare browser GPU tests (%s)" % mode)
-            script = textwrap.dedent(body.split("run: |\n", 1)[1])
-            result = subprocess.run(["/bin/bash", "-e", "-c", prefix + script],
-                                    env=environment, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 3, result.stderr)
-            self.assertIn("summary-ran", result.stdout)
 
     def test_browser_stall_system_log_is_hosted_only_and_follows_the_failure_archive(self):
         hosted = self._job_body("macos")
@@ -451,7 +474,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak",
             self._tag_filters(browser, hosted),
         )
-        self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS", browser)
+        [command] = self._phase_commands("macos", "browser_test")
+        self.assertEqual(command[-2:], [lanes.BROWSER_STALL[0], "@selected_targets"])
         # Every step that reacts to a failed test step also reacts to the browser phase.
         for step in ("Upload Bazel test failure artifacts", "Collect browser stall system log",
                      "Upload browser stall system log", "Detect browser GPU acquisition failure"):
@@ -483,8 +507,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak",
             self._tag_filters(browser, job))
         self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
-        for phase in (main_test, browser):
-            self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
+        for phase in ("test", "browser_test"):
+            [command] = self._phase_commands("macos-self-hosted", phase)
+            self.assertEqual(command[-6:], list(lanes.MACOS_BUILD[:2]
+                                                + lanes.MACOS_TEST["macos-self-hosted"])
+                             + ["@selected_targets"])
         archive = self._step_body(job, "Upload Bazel test failure artifacts")
         self.assertIn("steps.browser_test.outcome == 'failure'", archive)
 
@@ -499,7 +526,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertNotIn("steps.browser_test.outcome", geode)
                 self.assertLess(job.index("      - name: Test (browser targets)\n"),
                                 job.index("      - name: Test (Geode editor lane)\n"))
-                self.assertIn("$GEODE_EDITOR_TARGETS", geode)
+                self.assertIn(" " + lanes.GEODE_EDITOR + "\n", geode)
 
     def test_every_test_that_launches_a_browser_is_tagged(self):
         # The hosted browser phase selects by tag, so an untagged browser test would
@@ -607,17 +634,19 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # hosted job may enable it; every other lane and local runs leave it inert.
         switch = '--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1'
         hosted = self._job_body("macos")
-        self.assertIn('      BROWSER_STALL_TEST_FLAGS: "%s"\n' % switch, hosted)
+        self.assertEqual(lanes.BROWSER_STALL, (switch,))
         steps = ("Test", "Test (browser targets)", "Compare browser GPU tests (serial)",
                  "Compare browser GPU tests (parallel)")
         for step in steps:
-            self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",
-                          self._step_body(hosted, step), step)
+            self.assertIn(switch, self._step_body(hosted, step), step)
+        # Only those phases of the hosted lane pass it.
+        self.assertEqual(self._phases_with(switch), {
+            ("macos", "test"), ("macos", "browser_test"), ("macos", "browser_gpu_serial"),
+            ("macos", "browser_gpu_parallel")})
         recorder = _repository_text("donner/editor/wasm/tests/browser-stall-diagnostics.mjs")
         self.assertIn('kEnableVariable = "DONNER_BROWSER_STALL_DIAGNOSTICS"', recorder)
-        self.assertEqual(self.main.count("DONNER_BROWSER_STALL_DIAGNOSTICS"), 1)
-        self.assertEqual(self.main.count("BROWSER_STALL_TEST_FLAGS"),
-                         1 + len(steps))
+        self.assertEqual(_repository_text("tools/ci/lanes.py").count(switch), 1)
+        self.assertNotIn("BROWSER_STALL", self.main_text)
         for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
             self.assertNotIn("BROWSER_STALL", self._job_body(job), job)
         resolver = runfiles.Create()
@@ -650,7 +679,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertNotIn("DONNER_HOSTED_MACOS_QUARANTINE", self.main)
         hosted = self._job_body("macos")
         for step in ("Test", "Test (browser targets)"):
-            self.assertIn("$BROWSER_STALL_TEST_FLAGS", self._step_body(hosted, step), step)
+            self.assertIn(lanes.BROWSER_STALL[0], self._step_body(hosted, step), step)
         # The advisory comparisons never set the job's outcome and exist to diagnose exactly
         # these failures, so they keep running the quarantined cases.
         for mode in ("serial", "parallel"):
@@ -672,6 +701,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", text, path.name)
             self.assertNotIn("hosted-macos-quarantine", text, path.name)
+        # The lane table passes the config in those two phases alone.
+        self.assertEqual(self._phases_with("--config=hosted-macos-quarantine"),
+                         {("macos", "test"), ("macos", "browser_test")})
         # In the repository bazelrc it is one named config, which no other config or default
         # names.
         self.assertEqual(
@@ -810,11 +842,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         listed = [path for arm in re.findall(r"^\s+([\w./|-]+)\)$", function, re.MULTILINE)
                   for path in arm.split("|")]
         self.assertEqual(sorted(listed), sorted(WORKFLOW_LOGIC_SCRIPTS))
+        lane_table = _repository_text("tools/ci/lanes.py")
         for path in WORKFLOW_LOGIC_SCRIPTS:
-            # Each is a step body some workflow step runs, kept executable.
-            self.assertIn(path, self.main, path)
-            mode = Path(runfiles.Create().Rlocation("donner/" + path)).stat().st_mode
-            self.assertTrue(mode & 0o111, path)
+            with self.subTest(path=path):
+                if path == "tools/ci/lanes.py":
+                    # The lane table, which the entry point imports.
+                    self.assertIn("from tools.ci import lanes",
+                                  _repository_text("tools/ci/lane.py"))
+                elif path.endswith(".py"):
+                    # Run by its steps as `python3 <path>`.
+                    self.assertIn("run: python3 %s " % path, self.main_text)
+                else:
+                    # A step body that a step or a lane phase runs, kept executable.
+                    self.assertIn(path, self.main_text + lane_table)
+                    mode = Path(runfiles.Create().Rlocation("donner/" + path)).stat().st_mode
+                    self.assertTrue(mode & 0o111, path)
 
     def test_workflows_do_not_write_scripts_from_heredocs(self):
         """Step logic lives in tested scripts, not in files a step writes from a heredoc."""
@@ -846,6 +888,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                   for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
         invoked = {path for text in texts for body in _run_bodies(text)
                    for path in _SCRIPT_PATH.findall(body)}
+        # And every script a lane phase runs, which the entry point and its table name.
+        invoked |= {path for source in ("tools/ci/lane.py", "tools/ci/lanes.py")
+                    for path in _SCRIPT_PATH.findall(_repository_text(source))}
         self.assertEqual(sorted(invoked), sorted(set(WORKFLOW_LOGIC_SCRIPTS)
                                                  | set(TRACKED_CI_SCRIPTS)
                                                  | set(UNTRACKED_CI_SCRIPTS)))
@@ -1045,48 +1090,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("--test_env=PATH", step)
         self.assertIn("for tool in xvfb-run Xvfb xauth cmake ninja",
                       self._step_body(local, "Check native consumer tools"))
-        script_template = textwrap.dedent(step.split("run: |\n", 1)[1])
-        native_target = "//donner/editor/tests:editor_window_vulkan_surface_tests"
-        for fallback, affected, expected_target, no_tests in (
-            ("false", native_target, native_target, False),
-            ("false", "//donner/base:base_tests", "//donner/base:base_tests", True),
-            ("true", "", "//...", False),
-        ):
-            with self.subTest(fallback=fallback, affected=affected):
-                script = script_template.replace(
-                    "${{ needs.determine-targets.outputs.fallback }}", fallback
-                ).replace(
-                    "${{ needs.determine-targets.outputs.affected }}", affected
-                )
-                with tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory)
-                    (root / "tools").mkdir()
-                    wrapper = root / "tools/ci_bazel_test.sh"
-                    wrapper.write_text(self.ci_bazel_test)
-                    wrapper.chmod(0o755)
-                    fake_bazel = root / "bazelisk"
-                    fake_bazel.write_text(
-                        '#!/bin/bash\nprintf "%s\\n" "$*" > "$BAZEL_ARGS"\n'
-                        'case " $* " in\n'
-                        '  *" //... "*|*" //donner/editor/tests:editor_window_vulkan_surface_tests "*) exit 0 ;;\n'
-                        '  *) exit 4 ;;\n'
-                        'esac\n'
-                    )
-                    fake_bazel.chmod(0o755)
-                    ambient_bash = root / "bash"
-                    ambient_bash.write_text("#!/bin/sh\necho ambient-bash-was-used >&2\nexit 97\n")
-                    ambient_bash.chmod(0o755)
-                    args_file = root / "args.txt"
-                    env = {**os.environ, "BAZEL_ARGS": str(args_file),
-                           "BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS":
-                               self._variables(local)["BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS"],
-                           "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
-                    result = self._run_script(script, [], cwd=root, env=env)
-                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                    args = args_file.read_text()
-                    self.assertIn("--test_tag_filters=requires_xvfb", args)
-                    self.assertIn(expected_target, args)
-                    self.assertEqual(no_tests, "No test targets" in result.stdout)
+        # //tools/ci:lane_tests runs the phase with a native target, a selection without one
+        # and a fallback.
+        self.assertEqual("--strategy=TestRunner=local",
+                         self._phase_commands("linux-self-hosted", "local_xvfb")[0][-2])
 
     def test_shell_fixture_timeout_reports_only_known_progress_markers(self):
         for stderr, entered, exited in (
@@ -1184,9 +1191,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         needles = ("hosted-macos-unvalidated", "metal_shader_validation")
         self.assertIn("--config=hosted-macos-unvalidated",
                       self._step_body(self._job_body("macos"), "Test"))
-        # The hosted config and two explicit VM job environments own API-only validation.
-        workflow = _repository_text(".github/workflows/main.yml")
-        self.assertEqual(1, workflow.count(needles[0]))
+        # The hosted config and two explicit VM lane test environments own API-only validation.
+        self.assertEqual(self._phases_with("--config=hosted-macos-unvalidated"),
+                         {("macos", "test")})
         vm_flags = {
             "macos-self-hosted": "--//build_defs:metal_shader_validation=off "
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
@@ -1195,13 +1202,19 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 "--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
                 "--test_env=DONNER_CI_MACOS_LANE=vm-qualification",
         }
-        expected_lines = []
         for job_name, flags in vm_flags.items():
-            line = 'BAZEL_MACOS_TEST_FLAGS: "%s"' % flags
-            self.assertIn("      " + line + "\n", self._job_body(job_name))
-            expected_lines.append(line)
-        self.assertEqual(sorted(expected_lines), sorted(
-            line.strip() for line in workflow.splitlines() if needles[1] in line))
+            self.assertEqual(" ".join(lanes.MACOS_TEST[job_name]), flags)
+        self.assertEqual(sorted(vm_flags), sorted(
+            lane for lane, flags in lanes.MACOS_TEST.items()
+            if any(needles[1] in flag for flag in flags)))
+        off = "--//build_defs:metal_shader_validation=off"
+        self.assertEqual({lane for lane, _ in self._phases_with(off)}, set(vm_flags))
+        lane_table = _repository_text("tools/ci/lanes.py")
+        self.assertEqual(1, lane_table.count(needles[0]))
+        self.assertEqual(2, lane_table.count(off))
+        workflow = _repository_text(".github/workflows/main.yml")
+        self.assertNotIn(needles[0], workflow)
+        self.assertNotIn(needles[1], workflow)
         workflows = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
         others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]
         actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
@@ -1688,33 +1701,28 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         while an empty pattern list (a derivation defect, not an empty test set)
         still fails hard.
 
-        The lanes are DISCOVERED, not listed: any step that tests the derived
-        target set is covered by this, including one added after this was
-        written.
+        The phases are DISCOVERED from the lane table, not listed: any phase that
+        tests the derived target set is covered by this, including one added
+        after this was written.
         """
         covered = []
-        for name, body in self._steps(self.main):
-            if "outputs.affected" not in body:
-                continue
-            if not re.search(r"bazelisk(?:\s+--\S+)*\s+test\b", body):
-                continue
-            covered.append(name)
-            self.assertIn(
-                "tools/ci_bazel_test.sh",
-                body,
-                "step %r tests the derived target set without tolerating an "
-                "empty test selection" % name,
-            )
-            self.assertIn(
-                EMPTY_SELECTION_GUARD % "TARGETS",
-                body,
-                "step %r tests the derived target set without rejecting an "
-                "empty target list" % name,
-            )
+        for lane, phase, actions, tests in _phases_testing_the_selection():
+            covered.append((lane, phase))
+            with self.subTest(lane=lane, phase=phase):
+                for action in tests:
+                    self.assertEqual(lanes.TEST_WRAPPER, action.wrappers[:1],
+                                     "tests the derived target set without tolerating an "
+                                     "empty test selection")
+                self.assertIsInstance(actions[0], lanes.RequireSelection,
+                                      "tests the derived target set without rejecting an "
+                                      "empty target list")
+                # Each run of the phase's step sees the selection.
+                self.assertIn("TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}",
+                              self._job_body(lane))
         self.assertGreaterEqual(
             len(covered),
-            4,
-            "step discovery matched %r, which is fewer lanes than exist; the "
+            11,
+            "phase discovery matched %r, which is fewer phases than exist; the "
             "match is stale and this test is no longer checking anything"
             % (covered,),
         )
@@ -1736,20 +1744,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 with self.subTest(file=path.name, line=number):
                     self.assertNotRegex(line, r"\$\{\w*(?:TARGETS|targets)\w*//",
                                         "pattern substitution on a target list")
-
-    def test_empty_selection_guard_rejects_only_whitespace(self):
-        script = "TARGETS=$1\n%s echo empty; else echo nonempty; fi" % (
-            EMPTY_SELECTION_GUARD % "TARGETS")
-        cases = {"": "empty", "   ": "empty", " \t ": "empty", "\n\n": "empty",
-                 " \n ": "empty", "//...": "nonempty", "  //a:b  //c:d  ": "nonempty",
-                 "//a:b\n//c:d": "nonempty", "\n//a:b\n": "nonempty"}
-        for value, expected in cases.items():
-            with self.subTest(value=value):
-                result = subprocess.run(
-                    ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", script,
-                     "guard", value],
-                    capture_output=True, text=True, check=True)
-                self.assertEqual(result.stdout.strip(), expected)
 
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.

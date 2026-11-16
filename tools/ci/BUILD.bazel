@@ -17,6 +17,9 @@ exports_files([
     "editor_wasm_stage.py",
     "fetch_bazel_diff.sh",
     "github_rate_limit.py",
+    "lane.py",
+    "lane_commands.golden.json",
+    "lanes.py",
     "remote_macos_xcode.bzl",
     "test_with_exclusions.py",
 ])
@@ -400,6 +403,48 @@ filegroup(
 sh_binary(
     name = "plan",
     srcs = ["determine_targets.sh"],
+)
+
+# The CI lane table and its entry point: each main.yml Bazel step runs
+# `python3 tools/ci/lane.py phase <lane> <phase>`, and
+# `bazel run //tools/ci:lane -- phase <lane> <phase> --dry-run` prints what it runs.
+py_library(
+    name = "lanes",
+    srcs = [
+        "lane.py",
+        "lanes.py",
+    ],
+)
+
+py_binary(
+    name = "lane",
+    srcs = ["lane.py"],
+    deps = [":lanes"],
+)
+
+# Workflow text with each lane step's commands, and lane table edits, for the workflow policy tests.
+py_library(
+    name = "lane_view",
+    testonly = True,
+    srcs = ["lane_view.py"],
+    deps = [":lanes"],
+)
+
+# Runs lane phases against recording stand-ins for bazelisk and the helper scripts.
+py_test(
+    name = "lane_tests",
+    size = "small",
+    srcs = ["lane_tests.py"],
+    data = [
+        "lane.py",
+        "lanes.py",
+        "//tools:ci_bazel_test.sh",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # The CI workflow's target selection and its bazel-diff download.
