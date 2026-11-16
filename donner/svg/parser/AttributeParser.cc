@@ -2455,11 +2455,20 @@ components::TypedFilterAttributeEdit AttributeParser::ReapplyTypedFilterAttribut
     if (!value.has_value()) {
       continue;
     }
+    const std::size_t warningsBefore = context.warnings().size();
     std::optional<ParseDiagnostic> diagnostic =
         ParseAndSetAttribute(context, element, name, *value);
     (void)context.takeCommonAttributeFallThrough();
-    if (name == editedName && diagnostic.has_value()) {
+    if (name != editedName) {
+      continue;
+    }
+    // A value the parser rejects with a warning, such as an unparsable length, keeps the default
+    // like a fresh parse does; the edit still applies, so report that warning as a warning.
+    if (diagnostic.has_value()) {
       result.diagnostic = std::move(diagnostic);
+    } else if (context.warnings().size() > warningsBefore) {
+      result.diagnostic = context.warnings()[warningsBefore];
+      result.diagnostic->severity = DiagnosticSeverity::Warning;
     }
   }
 

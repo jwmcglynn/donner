@@ -730,13 +730,14 @@ std::optional<ParseDiagnostic> ParseEditedElementContents(const SVGParser::Optio
  * @param source Current document source.
  * @param element The edited element.
  * @param name The attribute that was set or removed.
- * @return Whether the attribute is type-specific, and its parse error, if any.
+ * @return Whether the attribute is type-specific, and its parse error or warning, if any.
  */
 components::TypedFilterAttributeEdit ReapplyTypedFilterAttributes(const SVGParser::Options& options,
                                                                   std::string_view source,
                                                                   const SVGElement& element,
                                                                   const XMLQualifiedNameRef& name) {
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  // Collect warnings so a rejected value of the edited attribute reaches the edit's diagnostic.
+  ParseWarningSink warnings;
   SVGParserContext context(source, warnings, options);
   SVGElement mutableElement = element;
   return AttributeParser::ReapplyTypedFilterAttributes(context, mutableElement, name);

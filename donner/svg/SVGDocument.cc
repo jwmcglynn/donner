@@ -876,8 +876,8 @@ namespace {
  * @param source Current document source.
  * @param element The edited element.
  * @param name The attribute that was set or removed.
- * @return The attribute's parse error, or a warning when the document was built without the parser
- *   and so cannot interpret the attribute.
+ * @return The attribute's parse error or warning, or a warning when the document was built
+ *   without the parser and so cannot interpret the attribute.
  */
 std::optional<ParseDiagnostic> ReapplyTypedFilterAttributes(std::string_view source,
                                                             const SVGElement& element,

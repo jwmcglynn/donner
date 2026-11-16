@@ -145,6 +145,8 @@ std::vector<EditCase> EditCases() {
        filter("<feOffset in='SourceGraphic'/>")},
       {"invalid-offset", filter("<feOffset id='p' in='SourceGraphic' dx='3'/>"), "dx", "wide",
        filter("<feOffset in='SourceGraphic'/>")},
+      {"invalid-subregion", filter("<feFlood id='p' flood-color='blue' x='8'/>"), "x", "wide",
+       filter("<feFlood flood-color='blue'/>")},
       {"point-light",
        filter("<feDiffuseLighting in='SourceGraphic'><fePointLight id='p' x='8' y='8' "
               "z='2'/></feDiffuseLighting>"),
@@ -192,6 +194,23 @@ TEST(FilterAttributeEditInvalidation, GenericAttributeKeepsTheRenderTree) {
 
   offset->setAttribute("dx", "4");
   EXPECT_THAT(renderState.needsFullRebuild, testing::IsTrue());
+}
+
+// A value the parser rejects with a warning keeps the attribute's default, as a fresh parse does,
+// and the edit reports that warning.
+TEST(FilterAttributeEditInvalidation, RejectedTypedValueReportsAWarning) {
+  SVGDocument document = FilteredDocument(FilterOf("<feFlood id='p' flood-color='blue' x='8'/>"));
+  std::optional<SVGElement> flood = document.querySelector("#p");
+  ASSERT_THAT(flood, testing::Optional(testing::_));
+  const xml::ApplySourceEditResult result =
+      document.setElementAttribute(*flood, xml::XMLQualifiedNameRef("x"), "wide");
+  EXPECT_THAT(
+      result.diagnostic,
+      testing::Optional(testing::AllOf(
+          testing::Field(&ParseDiagnostic::severity, DiagnosticSeverity::Warning),
+          testing::Field(
+              &ParseDiagnostic::reason,
+              testing::Property(&RcString::str, testing::HasSubstr("Failed to parse number"))))));
 }
 
 // A document assembled without the SVG parser has no way to interpret a filter element's own

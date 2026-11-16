@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -90,6 +91,9 @@ public:
 
   /// Whether the document parser collects diagnostics.
   bool warningsEnabled() const { return warningSink_.isEnabled(); }
+
+  /// Warnings collected so far, in the order they were added.
+  const std::vector<ParseDiagnostic>& warnings() const { return warningSink_.warnings(); }
 
   /**
    * Restrict attribute parsing to type-specific attributes: an attribute that falls through to

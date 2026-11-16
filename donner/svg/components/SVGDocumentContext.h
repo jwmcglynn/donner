@@ -56,7 +56,7 @@ class TreeMutation;
 struct TypedFilterAttributeEdit {
   /// Whether the edited attribute is one of the element's type-specific attributes.
   bool typed = false;
-  /// The edited attribute's parse error, if its value did not parse.
+  /// The edited attribute's parse error or warning, if its value did not parse.
   std::optional<ParseDiagnostic> diagnostic;
 };
 
