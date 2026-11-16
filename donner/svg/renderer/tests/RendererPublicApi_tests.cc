@@ -4087,14 +4087,14 @@ TEST(RendererTinySkiaSecurityTest, GlyphStrokesStopAfterTheFirstPassesTheOutputL
 }
 
 TEST(RendererTinySkiaSecurityTest, DottedDecorationStrokeStopsAtTheOutputLimit) {
-  // A dotted underline is a row of circles of cubics. Under no-break spaces, which have no
+  // A dotted underline is a row of circles of cubics. Under preserved spaces, which have no
   // outlines of their own, and magnified 100,000 times about the canvas center, its stroke needs
   // more outline points than the lowered limit and rejects the draw.
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
            <text transform="translate(50 50) scale(100000)" x="-40" y="-8" font-size="80"
                  fill="none" stroke="black" stroke-width="20"
-                 style="text-decoration: underline dotted">&#160;&#160;&#160;&#160;&#160;</text>
+                 xml:space="preserve" style="text-decoration: underline dotted">     </text>
          </svg>)svg");
   RendererTinySkia renderer;
   renderer.setStrokeOutputPointLimitForTesting(4096);
