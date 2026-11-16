@@ -1175,11 +1175,11 @@ TEST(ExternalUseWarningReplayTest, MovedSheetWithAHeldWarningKeepsRetainedUpdate
     renderer.draw(host->document);
   }
   using Counters = components::RenderTreeState::Counters;
-  EXPECT_THAT(counters(),
-              testing::AllOf(testing::Field("fullRebuilds", &Counters::fullRebuilds,
-                                            before.fullRebuilds),
-                             testing::Field("retainedUpdates", &Counters::retainedUpdates,
-                                            before.retainedUpdates + kFrames)));
+  EXPECT_THAT(
+      counters(),
+      testing::AllOf(testing::Field("fullRebuilds", &Counters::fullRebuilds, before.fullRebuilds),
+                     testing::Field("retainedUpdates", &Counters::retainedUpdates,
+                                    before.retainedUpdates + kFrames)));
 }
 
 // Once a sheet over the sink limit has delivered its warnings and the truncation, finding them
