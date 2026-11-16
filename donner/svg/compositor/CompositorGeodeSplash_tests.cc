@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -1940,7 +1941,7 @@ TEST(CompositorGeodeSplashTest, MaskedChildHeldDragStaysIncrementalUnderFraction
                             surface.surfaceFromCanvas);
       ASSERT_FALSE(held.ownerTexture.empty());
       ASSERT_FALSE(reference.empty());
-      EXPECT_EQ(held.ownerCanvasOffset, referenceOffset);
+      EXPECT_THAT(held.ownerCanvasOffset, Vector2Eq(referenceOffset.x, referenceOffset.y));
       editor::tests::CompareBitmapToBitmap(
           held.ownerTexture, reference, std::string(surface.label) + "_damage_patch_vs_full_owner",
           editor::tests::PixelmatchIdentityParams());
@@ -1963,7 +1964,7 @@ TEST(CompositorGeodeSplashTest, MaskedChildHeldDragStaysIncrementalUnderFraction
                             surface.surfaceFromCanvas);
       ASSERT_FALSE(held.ownerTexture.empty());
       ASSERT_FALSE(reference.empty());
-      EXPECT_EQ(held.ownerCanvasOffset, referenceOffset);
+      EXPECT_THAT(held.ownerCanvasOffset, Vector2Eq(referenceOffset.x, referenceOffset.y));
       editor::tests::CompareBitmapToBitmap(held.ownerTexture, reference,
                                            std::string(surface.label) + "_pieces_vs_full_owner",
                                            kRecomposedOwnerParams);
