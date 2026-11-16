@@ -379,6 +379,16 @@ TEST(PropertyRegistry, UnsupportedProperty) {
               Optional(ParseErrorIs("Unknown property 'not-supported'")));
 }
 
+TEST(PropertyRegistry, EmptyPropertyNameIsUnknown) {
+  css::Declaration declaration("", {ComponentValue(Token(Token::Ident("test"), 0))});
+
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+              Optional(ParseErrorIs("Unknown property ''")));
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeName(""));
+  EXPECT_THAT(registry.parsePresentationAttribute("", "test"), ParseResultIs(false));
+}
+
 TEST(PropertyRegistry, ParseErrorsAreIgnored) {
   {
     PropertyRegistry registry;
