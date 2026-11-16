@@ -659,6 +659,23 @@ void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
   RetainSpanDecorations(registry, span, origins, count);
 }
 
+/// Resolves a text span's `stroke-dasharray` and `stroke-dashoffset` into user units, as the span's
+/// stroke width is resolved.
+void ResolveSpanStrokeDash(const PropertyRegistry& properties, const Box2d& viewBox,
+                           const FontMetrics& fontMetrics,
+                           components::ComputedTextComponent::TextSpan& span) {
+  span.strokeDashArray.clear();
+  span.strokeDashOffset = properties.strokeDashoffset.get().value().toPixels(
+      viewBox, fontMetrics, Lengthd::Extent::Mixed);
+  if (const std::optional<StrokeDasharray> dashArray = properties.strokeDasharray.get()) {
+    span.strokeDashArray.reserve(dashArray->size());
+    for (const Lengthd& dashLength : *dashArray) {
+      span.strokeDashArray.push_back(
+          dashLength.toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
+    }
+  }
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 ///
@@ -744,6 +761,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       span.strokeLinecap = style->properties->strokeLinecap.get().value();
       span.strokeLinejoin = style->properties->strokeLinejoin.get().value();
       span.strokeMiterLimit = style->properties->strokeMiterlimit.get().value();
+      ResolveSpanStrokeDash(*style->properties, viewBox, baseFm, span);
       span.paintOrder = style->properties->paintOrder.get().value();
     }
 

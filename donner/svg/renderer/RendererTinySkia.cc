@@ -264,24 +264,25 @@ bool CaptureTinyStrokeWithinOutputLimit(tiny_skia::SpanCapture& capture,
 }
 
 /**
- * The tiny-skia dash for a stroke's `stroke-dasharray` and `stroke-dashoffset`: an odd-length
- * array is repeated once, as SVG specifies. Returns no dash when the stroke has none or tiny-skia
+ * The tiny-skia dash for `stroke-dasharray` lengths and a `stroke-dashoffset`: an odd-length
+ * array is repeated once, as SVG specifies. Returns no dash when there are no lengths or tiny-skia
  * rejects the pattern.
  *
- * @param stroke Stroke whose dash to convert.
+ * @param lengths Dash lengths in user units.
+ * @param offset Dash offset in user units.
  * @param onlyZeroLengthGaps Set to whether every gap of the dash has zero length.
  */
-std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(const StrokeParams& stroke,
-                                                      bool& onlyZeroLengthGaps) {
+std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(std::span<const double> lengths,
+                                                      double offset, bool& onlyZeroLengthGaps) {
   onlyZeroLengthGaps = false;
-  if (stroke.dashArray.empty()) {
+  if (lengths.empty()) {
     return std::nullopt;
   }
-  const int repeats = (stroke.dashArray.size() & 1u) != 0u ? 2 : 1;
+  const int repeats = (lengths.size() & 1u) != 0u ? 2 : 1;
   std::vector<float> dashArray;
-  dashArray.reserve(stroke.dashArray.size() * repeats);
+  dashArray.reserve(lengths.size() * repeats);
   for (int i = 0; i < repeats; ++i) {
-    for (double dash : stroke.dashArray) {
+    for (double dash : lengths) {
       dashArray.push_back(NarrowToFloat(dash));
     }
   }
@@ -292,7 +293,13 @@ std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(const StrokeParams& stroke
       break;
     }
   }
-  return tiny_skia::StrokeDash::create(std::move(dashArray), NarrowToFloat(stroke.dashOffset));
+  return tiny_skia::StrokeDash::create(std::move(dashArray), NarrowToFloat(offset));
+}
+
+/// \ref ToTinyStrokeDash for a stroke's dash array and offset.
+std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(const StrokeParams& stroke,
+                                                      bool& onlyZeroLengthGaps) {
+  return ToTinyStrokeDash(stroke.dashArray, stroke.dashOffset, onlyZeroLengthGaps);
 }
 
 bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
@@ -887,6 +894,9 @@ class TinyRunGlyphPaths {
 public:
   /// @param openDashSeam Whether the run's stroke dash has only zero-length gaps.
   explicit TinyRunGlyphPaths(bool openDashSeam) : openDashSeam_(openDashSeam) {}
+
+  /// Sets whether the run's stroke dash has only zero-length gaps; call before \ref add.
+  void setOpenDashSeam(bool openDashSeam) { openDashSeam_ = openDashSeam; }
 
   /// Adds a placed glyph outline.
   void add(const Path& glyph) {
@@ -3450,6 +3460,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       spanTinyStroke.miterLimit = NarrowToFloat(span.strokeMiterLimit);
       spanTinyStroke.lineCap = toTinyLineCap(span.strokeLinecap);
       spanTinyStroke.lineJoin = toTinyLineJoin(span.strokeLinejoin);
+      bool spanDashHasOnlyZeroLengthGaps = false;
+      spanTinyStroke.dash = ToTinyStrokeDash(span.strokeDashArray, span.strokeDashOffset,
+                                             spanDashHasOnlyZeroLengthGaps);
+      runGlyphPaths.setOpenDashSeam(
+          HasOpenDashSeam(spanTinyStroke.dash, spanDashHasOnlyZeroLengthGaps));
 
       if (span.strokeWidth > 0.0) {
         if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedStroke)) {

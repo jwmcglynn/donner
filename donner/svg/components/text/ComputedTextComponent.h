@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/Length.h"
 #include "donner/base/Path.h"
@@ -208,6 +209,13 @@ struct ComputedTextComponent {
 
     /// Stroke miter limit used for text outlines in this span.
     double strokeMiterLimit = 4.0;
+
+    /// Stroke dash lengths in user units for this span (`stroke-dasharray`); empty for a solid
+    /// stroke.
+    std::vector<double> strokeDashArray;
+
+    /// Stroke dash offset in user units for this span (`stroke-dashoffset`).
+    double strokeDashOffset = 0.0;
 
     /// CSS font-weight for this span (100-900, 400=normal, 700=bold).
     /// Populated by RendererDriver from sourceEntity.
