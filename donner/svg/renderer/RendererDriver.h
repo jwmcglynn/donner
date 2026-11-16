@@ -15,7 +15,7 @@
 #include "donner/svg/components/FontResourceGraph.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
-#include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/components/shape/BoundsGeometry.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/core/MarkerOrient.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
@@ -526,6 +526,9 @@ private:
    */
   const std::vector<components::BoundsGeometryPiece>& externalUseGeometry(Registry& hostRegistry,
                                                                           Entity hostEntity);
+  /// A collector of external `<use>` geometry into @p pieces, sharing this frame's path copies.
+  components::BoundsGeometryCollector geometryCollector(
+      std::vector<components::BoundsGeometryPiece>& pieces);
   /// Measure \ref externalUseGeometry without the frame cache.
   std::vector<components::BoundsGeometryPiece> measureExternalUseGeometry(Registry& hostRegistry,
                                                                           Entity hostEntity);
@@ -665,6 +668,8 @@ private:
   std::unordered_map<const Registry*,
                      std::unordered_map<Entity, std::vector<components::BoundsGeometryPiece>>>
       externalUseGeometryCache_;
+  /// Path copies the measured external `<use>` geometry shares this frame.
+  components::BoundsGeometryPaths externalUseGeometryPaths_;
   /// Per-registry external `<use>` instances in draw order; see \ref externalUseInstances.
   std::unordered_map<const Registry*, std::vector<std::pair<int, Entity>>> externalUseInstances_;
 };

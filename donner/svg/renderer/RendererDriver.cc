@@ -395,14 +395,14 @@ std::optional<Box2d> RenderingObjectBoundingBox(Registry& registry, EntityHandle
   return components::ShapeSystem().getShapeBounds(handle);
 }
 
-/// Collect the geometry \ref RenderingObjectBoundingBox bounds into @p pieces, placed in a
+/// Collect the geometry \ref RenderingObjectBoundingBox bounds into @p collector, placed in a
 /// measurement space by @p spaceFromEntity. A text box is collected as a box.
 void CollectRenderingObjectGeometry(Registry& registry, EntityHandle handle,
                                     const Transform2d& spaceFromEntity,
-                                    std::vector<components::BoundsGeometryPiece>& pieces) {
+                                    const components::BoundsGeometryCollector& collector) {
 #ifdef DONNER_TEXT_ENABLED
   if (const TextEngine* textEngine = ObjectBoxTextEngine(registry, handle)) {
-    pieces.push_back(
+    collector.pieces.push_back(
         components::BoundsGeometryPiece{.spaceFromPiece = spaceFromEntity,
                                         .geometry = textEngine->computedObjectBoundingBox(handle)});
     return;
@@ -411,7 +411,8 @@ void CollectRenderingObjectGeometry(Registry& registry, EntityHandle handle,
   (void)registry;
 #endif
 
-  (void)components::ShapeSystem().collectShapeGeometry(handle, spaceFromEntity, pieces);
+  // Geometry that cannot be bounded contributes nothing, as its object bounding box would be empty.
+  (void)components::ShapeSystem().collectShapeGeometry(handle, spaceFromEntity, collector);
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -5142,7 +5143,8 @@ void RendererDriver::collectObjectGeometry(Registry& registry, Entity entity,
                                            const Transform2d& spaceFromEntity,
                                            std::vector<components::BoundsGeometryPiece>& pieces) {
   const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-  CollectRenderingObjectGeometry(registry, instance.styleHandle(registry), spaceFromEntity, pieces);
+  CollectRenderingObjectGeometry(registry, instance.styleHandle(registry), spaceFromEntity,
+                                 geometryCollector(pieces));
   const Transform2d entityFromWorld = instance.worldFromEntityTransform.inverse();
   for (const auto& [drawOrder, use] : externalUsesInSubtree(registry, instance)) {
     const auto& useInstance = registry.get<components::RenderingInstanceComponent>(use);
@@ -5215,6 +5217,7 @@ void RendererDriver::forgetEffectBounds(const Registry& registry) {
 void RendererDriver::forgetAllEffectBounds() {
   objectBoundsCache_.clear();
   externalUseGeometryCache_.clear();
+  externalUseGeometryPaths_.clear();
   externalUseInstances_.clear();
 }
 
@@ -5236,6 +5239,12 @@ void RendererDriver::applyExternalUseClipBounds(
     clip.clipPathUnitsTransform =
         Transform2d::Scale(bounds->size()) * Transform2d::Translate(bounds->topLeft);
   }
+}
+
+components::BoundsGeometryCollector RendererDriver::geometryCollector(
+    std::vector<components::BoundsGeometryPiece>& pieces) {
+  return components::BoundsGeometryCollector{
+      .pieces = pieces, .paths = externalUseGeometryPaths_, .budget = *externalUseStyleWork_};
 }
 
 const std::vector<components::BoundsGeometryPiece>& RendererDriver::externalUseGeometry(
@@ -5295,7 +5304,8 @@ std::vector<components::BoundsGeometryPiece> RendererDriver::measureExternalUseG
   if (child.all_of<components::RenderingInstanceComponent>(root)) {
     collectObjectGeometry(child, root, useFromRoot, geometry);
   } else {
-    (void)components::ShapeSystem().collectShapeGeometry(target, useFromRoot, geometry);
+    (void)components::ShapeSystem().collectShapeGeometry(target, useFromRoot,
+                                                         geometryCollector(geometry));
   }
   forgetEffectBounds(child);
   return geometry;

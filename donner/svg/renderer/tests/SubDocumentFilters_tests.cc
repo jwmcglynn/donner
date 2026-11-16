@@ -718,5 +718,99 @@ TEST(SubDocumentFiltersTest, NestedBoxEffectOwnersMeasureEachExternalUseOnce) {
   }
 }
 
+/// A frame of @p document drawn through a driver whose external-use work is charged to a budget
+/// with @p limits, which is returned. @p bitmap receives the frame.
+std::shared_ptr<components::StyleResourceBudget> DrawWithBudget(
+    SVGDocument& document, const components::StyleResourceBudget::Limits& limits,
+    RendererBitmap* bitmap) {
+  const auto work = std::make_shared<components::StyleResourceBudget>(limits);
+  Renderer renderer;
+  RendererDriver driver(renderer, false, nullptr, work);
+  driver.draw(document);
+  *bitmap = TightSnapshot(renderer);
+  return work;
+}
+
+/// A host drawing @p uses occurrences of a path of thousands of segments inside a box filter that
+/// keeps the left half of their box, with `{ref}` naming the path's document.
+std::string LargePathHost(int uses) {
+  std::string host =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>"
+      "<filter id='half' x='0' y='0' width='0.5' height='1'><feOffset/></filter></defs>"
+      "<rect width='32' height='32' fill='#ffffff'/><g filter='url(#half)'>";
+  for (int i = 0; i < uses; ++i) {
+    host += "<use href='{ref}p' transform='translate(" + std::to_string(i % 4) + " " +
+            std::to_string(i / 4) + ")'/>";
+  }
+  return host + "</g></svg>";
+}
+
+/// A document holding the path @ref LargePathHost draws, zigzagging across x = 2..22.
+std::string LargePathDefs() {
+  std::string d = "M2 2";
+  constexpr int kSegments = 4000;
+  for (int i = 1; i <= kSegments; ++i) {
+    d += " L" + std::to_string(i % 2 == 0 ? 2 : 22) + " " + std::to_string(2 + 20 * i / kSegments);
+  }
+  return "<path id='p' fill='#2050d0' d='" + d + "'/>";
+}
+
+/// @p host with every `{ref}` replaced by @p prefix.
+std::string WithReference(std::string host, std::string_view prefix) {
+  for (size_t at = host.find("{ref}"); at != std::string::npos; at = host.find("{ref}")) {
+    host.replace(at, 5, prefix);
+  }
+  return host;
+}
+
+/// Measuring many occurrences of one large external path for a host effect retains one copy of
+/// it for the frame, which every occurrence's geometry shares.
+TEST(SubDocumentFiltersTest, ManyUsesOfOnePathRetainOneCopy) {
+  const Documents documents = {
+      {"sheet.svg", "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><defs>" +
+                        LargePathDefs() + "</defs></svg>"}};
+  const auto retainedBytes = [&](int uses) {
+    SVGDocument document = Parse(WithReference(LargePathHost(uses), "sheet.svg#"), documents);
+    RendererBitmap bitmap;
+    return DrawWithBudget(document, components::StyleResourceBudget::Limits(), &bitmap)
+        ->externalMeasureGeometryBytes();
+  };
+  const std::size_t oneCopy = retainedBytes(1);
+  ASSERT_THAT(oneCopy, Gt(4000u * sizeof(Vector2d)));
+  EXPECT_THAT(retainedBytes(32), testing::Eq(oneCopy));
+}
+
+/// At a geometry allowance that admits one copy of the path the copy is retained, and below it the
+/// path's box stands in for it: either way the effect still bounds every occurrence, as in-document.
+TEST(SubDocumentFiltersTest, GeometryAllowanceFallsBackToThePathBox) {
+  const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
+  const Documents documents = {
+      {"sheet.svg", head + "<defs>" + LargePathDefs() + "</defs></svg>"}};
+  const std::string host = LargePathHost(4);
+  SVGDocument sized = Parse(WithReference(host, "sheet.svg#"), documents);
+  RendererBitmap unused;
+  const std::size_t oneCopy =
+      DrawWithBudget(sized, components::StyleResourceBudget::Limits(), &unused)
+          ->externalMeasureGeometryBytes();
+  ASSERT_THAT(oneCopy, Gt(0u));
+
+  SVGDocument local = Parse(head + "<defs>" + LargePathDefs() + "</defs>" +
+                            WithReference(host, "#").substr(head.size()));
+  Renderer localRenderer;
+  const RendererBitmap expected = Draw(localRenderer, local);
+  for (const std::size_t allowance : {oneCopy, oneCopy - 1}) {
+    SCOPED_TRACE(testing::Message() << "allowance " << allowance);
+    components::StyleResourceBudget::Limits limits;
+    limits.externalMeasureGeometryBytes = allowance;
+    SVGDocument external = Parse(WithReference(host, "sheet.svg#"), documents);
+    RendererBitmap actual;
+    EXPECT_THAT(DrawWithBudget(external, limits, &actual)->externalMeasureGeometryBytes(),
+                testing::Eq(allowance == oneCopy ? oneCopy : 0u));
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, "sub-document-geometry-allowance-" + std::to_string(allowance),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
