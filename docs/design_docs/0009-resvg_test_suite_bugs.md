@@ -52,18 +52,16 @@ remain transparent.
 
 `filters/filter/complex-order-and-xlink-href.svg` filters a rect through a filter that inherits
 its blur and height through `xlink:href` and sets its own `x`, so the filter region cuts the
-blur's input at its left and bottom edges. The vendored reference now is resvg v0.49.0's
-300x300 rendering; the snapshot's reference had been flattened onto white (see
-`third_party/resvg-test-suite/BUILD.bazel`). Against it, Donner's region geometry and its free
-blur edges match. The remaining pixels (1,275 on TinySkia; Geode adds 3 frame-corner pixels)
-lie within 5 px of the two clipped edges: resvg approximates the blur with five box passes over a
+blur's input at its left and bottom edges. resvg approximates the blur with five box passes over a
 region-sized buffer, and each pass drops what spreads past the buffer, so the first row and column
-inside read alpha 84. Donner keeps that spill and reads 143, close to the 144 of a single
-Gaussian of the clipped input. The row is a reference-disagreement skip; a raised pixel budget
-would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
-the clipped render to equal the visible part of the rect blurred with room around it.
+inside read alpha 84. Donner keeps that spill and reads 143, close to the 144.4 of the exact
+Gaussian of the clipped input; resvg v0.49.0 renders like the vendored reference. The row compares
+at default settings against `donner-complex-order-and-xlink-href.png`, a Donner rendering whose
+evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
+`RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
+requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (37)
+## Active overrides (38)
 
 ### resvg golden is wrong per spec
 
@@ -71,6 +69,7 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
 | filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
 | filters/feImage            | svg                                   | We render higher quality                                       |
+| filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
