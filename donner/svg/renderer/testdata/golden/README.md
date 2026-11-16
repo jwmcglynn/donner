@@ -63,10 +63,8 @@ cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 `paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.
 `self-recursive` and `self-recursive-on-child` render identically and share
 `donner-pattern-self-recursive.png`. All three are 500x500 renderings by the software renderer
-at default settings: the shared self-recursive golden at commit `21c59c75`, and the
-recursive-on-child golden with the active-chain recursion fix on this branch. Full text and Geode
-on Linux lavapipe (aarch64) render all three identically (0 pixels counted); Geode on Metal
-renders the self-recursive rows identically.
+with simple text at default settings. Full text and Geode on Linux lavapipe (aarch64) render all
+three identically (0 pixels counted).
 
 Each tile is a 40 x 25 unit rect whose 1-unit stroke straddles the tile edge, so each tile
 clips half of its stroke and two neighboring tiles draw the two halves. In the self-recursive rows
@@ -78,11 +76,20 @@ In `recursive-on-child` the two patterns fill their rects with each other. Only 
 revisits a pattern already being rendered is circular, so `patt1`'s rect is filled with `patt2`'s
 tile, whose rect keeps its stroke and drops only its fill. The tile therefore holds two layers of
 the stroke, which is what Chromium 147 and Firefox 153 draw (see the table below). Donner's seam
-columns read 96, 255, 255 and 96 there, where the first-layer-only rendering read 64, 255, 255
-and 64. Two layers of 0.25 coverage composite to 1 - (1 - 0.25)^2 = 0.44 (alpha 112), and the
-browsers read 102 to 114. Donner's inner layer contributes about 0.17 instead of 0.25 on those
-columns; the nested tile passes through a second raster resampling, which has not yet been
-confirmed as the cause.
+columns read 96, 255, 255 and 96, and the browsers read 102 to 114. Both layers contribute fully;
+the difference is where the two coincident half-strokes are composited:
+
+- Tiles rasterize at twice the device scale of their parent surface: the outer tile at 5 raster
+  pixels per unit, the nested tile at 10. Each layer's half stroke (39.5 to 40 units) covers half
+  of outer texel 197 (39.4 to 39.6 units).
+- Source-over treats the two half-covers as independent: 0.5 + 0.5 x 0.5 = 0.75 for texel 197.
+  Device column 98 averages texels 196 (0) and 197 (0.75), giving 0.375, alpha 96. The
+  horizontal seam gives 0.875 the same way, alpha 224.
+- Measured: either layer alone reads 64 on column 98 (and 192 on the horizontal seam), on the
+  software renderer and on Geode.
+- Browsers composite the layers at device resolution instead: 1 - (1 - 0.25)^2 = 0.44, alpha 112.
+  The true coverage of two coincident strokes is 0.25, so neither is exact; each counts the
+  overlap at a different resolution.
 
 The seam numbers below are for the self-recursive tiles, the single-layer case. At 2.5 device pixels
 per unit, the vertical seam at x = 40 units covers device x 98.75 to 101.25. The exact coverage of
