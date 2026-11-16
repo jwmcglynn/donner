@@ -388,6 +388,24 @@ class ShadowUpstreamTests(unittest.TestCase):
         self.assertEqual(admission.ACTIVE, self._state(admission.current_attempt(missing, 2),
                                                        "2026-11-16T03:00:00Z"))
 
+    def test_a_partial_rerun_whose_pool_job_completed_does_not_hold_the_slot(self):
+        # A partial rerun lists the jobs it kept from the first attempt beside the ones it ran
+        # again; this attempt's pool job has completed. Every job is listed, so the listing is
+        # complete, and the run must not read as active in either pool.
+        payload = {"total_count": 4, "jobs": [
+            dict(_job("gatekeeper", "completed", "success", None, "2026-11-16T01:00:00Z"),
+                 run_attempt=1),
+            dict(_job(_LINUX_LANE, "completed", "success", None, "2026-11-16T01:30:00Z"),
+                 run_attempt=1),
+            dict(_job(_SHADOW_LANE + "-turnstile", "completed", "success", None,
+                      "2026-11-16T02:00:00Z"), run_attempt=2),
+            dict(_job(_SHADOW_LANE, "completed", "success", None, "2026-11-16T02:40:00Z"),
+                 run_attempt=2)]}
+        current = admission.current_attempt(payload, 2)
+        self.assertEqual(admission.CLEAR, self._state(current, "2026-11-16T02:41:00Z"))
+        self.assertEqual(admission.CLEAR, admission.pool_state(current, _SHADOW_POOL))
+        self.assertEqual(admission.ABSENT, admission.pool_state(current, [_LINUX_LANE]))
+
     def test_a_jobs_listing_missing_a_page_holds_the_slot(self):
         payload = dict(_MAIN_PUSH, total_count=150)
         self.assertEqual(admission.ACTIVE, self._state(payload, "2026-11-16T01:12:10Z"))
