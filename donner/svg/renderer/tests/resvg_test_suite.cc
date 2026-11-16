@@ -1649,8 +1649,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"coordinates-list.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/donner-coordinates-list.png")
-                         .withReason("Donner reference: y-only chunks anchor at their unanchored "
-                                     "start; the vendored PNG is opaque (#1185)")},
+                         .withReason("Harness mismatch: opaque reference background; under 4x4 "
+                                     "supersampled coverage the glyphs match it (#1185)")},
                     {"on-tspan-with-arabic.svg",
                      Params().requireFeature(RendererBackendFeature::TextFull)},
                 })),
@@ -1736,13 +1736,13 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-path-and-xlink-href.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-path.png")
-                     .withReason("Donner reference: SVG 2 textPath path attribute; the vendored "
-                                 "PNG is opaque (#1175)")},
+                     .withReason("Reference disagreement: SVG 2 textPath path attribute, which "
+                                 "resvg v0.49.0 ignores; the vendored PNG is opaque (#1175)")},
                 {"with-path.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-path.png")
-                     .withReason("Donner reference: SVG 2 textPath path attribute; the vendored "
-                                 "PNG is opaque (#1175)")},
+                     .withReason("Reference disagreement: SVG 2 textPath path attribute, which "
+                                 "resvg v0.49.0 ignores; the vendored PNG is opaque (#1175)")},
                 {"closed-path.svg", Params::WithThreshold(0.1f, 400, "Minor AA diffs")},
                 {"complex.svg",
                  Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "

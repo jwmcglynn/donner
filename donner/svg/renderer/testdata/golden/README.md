@@ -65,8 +65,8 @@ and Donner's canvas are transparent. Under the comparator's checkerboard blendin
 background alone counts about 235,000 pixels. No resvg v0.49.0 reference fixes them: the
 upstream renderings at that release draw something different (see each row). The goldens are
 Donner renderings at commit `21c59c75`, made with the software renderer and simple text at
-default settings. Full text renders both within 1 pixel of them. These rows are text, so the
-Geode lane does not run them. A self-rendered golden cannot prove itself correct, so each row
+default settings. Full text matches them within 1 pixel (0 on `coordinates-list`, 1 on each
+`with-path` row). Geode skips these rows ("Geode backend does not support text rendering"). A self-rendered golden cannot prove itself correct, so each row
 records the independent evidence.
 
 ### `text/text-anchor/coordinates-list`
@@ -80,9 +80,11 @@ the end of the unshifted `T`. Two pieces of evidence agree with Donner:
 - Glyph placement. Flattened onto white, Donner's rendering matches the vendored PNG's glyph
   placement: the `T` ink centroid is identical, and the `ext` centroid is 0.36 px to the right.
   results.csv records Chrome and Safari passing that reference.
-- Glyph edges. Flattened, 406 pixels (simple text) and 408 (full text) still differ. They lie on
-  the glyph edges of `T` and `ext`, where the red text shows through the anti-aliased edges of
-  the black text in both images (257 red-tinted pixels in Donner's, 230 in the PNG).
+- Glyph edges. Flattened, Donner's analytic rendering still differs by 406 pixels (simple text)
+  and 408 (full text), all on the glyph edges of `T` and `ext`, where the red text shows through
+  the anti-aliased edges of the black text. That is edge coverage only: Donner rendered at 4x
+  size, box-filtered 4x4 down to 500x500 and flattened onto white differs from the vendored PNG
+  by 16 pixels (simple text) and 15 (full text), inside the default allowance.
 
 resvg v0.49.0 centers `ext` on the end of the already anchored `T`, about 6 user units further
 left, and Donner differs from it by 245 pixels at 300x300.
@@ -95,7 +97,8 @@ Both rows compare against `donner-textPath-with-path.png` (500x500). Their text 
 SVG 2 `path` attribute of `textPath`, which takes precedence over `href` (SVG 2, Text,
 "The 'path' attribute"), so the two files draw the same picture. Flattened onto white, Donner's
 rendering differs from each vendored PNG by 38 pixels (simple text) and 33 (full text), inside
-the default allowance. results.csv records Firefox passing the vendored PNGs. resvg v0.49.0
+the default allowance. results.csv records Firefox passing the vendored PNGs, and Chrome and
+Safari failing them: they do not implement the `path` attribute. resvg v0.49.0
 does not implement the attribute: its references draw only the guide path and frame, and
 results.csv records resvg failing both rows.
 

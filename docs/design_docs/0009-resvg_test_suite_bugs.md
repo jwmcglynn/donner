@@ -78,9 +78,6 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
-| text/text-anchor           | coordinates-list                      | y-only chunks anchor at their unanchored start; opaque PNG     |
-| text/textPath              | with-path                             | SVG 2 textPath path attribute; opaque PNG                      |
-| text/textPath              | with-path-and-xlink-href              | SVG 2 textPath path attribute; opaque PNG                      |
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
@@ -99,6 +96,18 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 `with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
+
+### Opaque vendored references
+
+These vendored PNGs are opaque white, while Donner's canvas and the other references are
+transparent, and resvg v0.49.0 has no usable replacement. They are not wrong per spec: the
+glyphs agree with Donner. `testdata/golden/README.md` has the evidence.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| text/text-anchor | coordinates-list | Harness mismatch: opaque background; glyphs match under 4x4 coverage |
+| text/textPath | with-path | Reference disagreement: v0.49.0 ignores `path`; opaque PNG |
+| text/textPath | with-path-and-xlink-href | Reference disagreement: v0.49.0 ignores `path`; opaque PNG |
 
 ### Allowed nearest-neighbor reference differences
 
