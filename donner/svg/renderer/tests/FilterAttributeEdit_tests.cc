@@ -40,6 +40,17 @@ std::string FilterOf(std::string_view primitives) {
          std::string(primitives) + "</filter>";
 }
 
+/// Filter `f`, which takes its region and primitives from \p href: `b` holds \p primitives and
+/// `c` floods blue.
+std::string HrefChainOf(std::string_view primitives, std::string_view href) {
+  constexpr std::string_view kRegion =
+      "filterUnits='userSpaceOnUse' x='0' y='0' width='16' height='16' "
+      "color-interpolation-filters='sRGB'";
+  return "<filter id='b' " + std::string(kRegion) + ">" + std::string(primitives) +
+         "</filter><filter id='c' " + std::string(kRegion) +
+         "><feFlood flood-color='blue'/></filter><filter id='f' href='" + std::string(href) + "'/>";
+}
+
 /// One edit: render \c base, apply the edit to \c selector, and expect the next render to match a
 /// document authored as \c expected.
 struct EditCase {
@@ -134,6 +145,25 @@ std::vector<EditCase> EditCases() {
        filter("<feOffset in='SourceGraphic'/>")},
       {"invalid-offset", filter("<feOffset id='p' in='SourceGraphic' dx='3'/>"), "dx", "wide",
        filter("<feOffset in='SourceGraphic'/>")},
+      {"point-light",
+       filter("<feDiffuseLighting in='SourceGraphic'><fePointLight id='p' x='8' y='8' "
+              "z='2'/></feDiffuseLighting>"),
+       "z", "40",
+       filter("<feDiffuseLighting in='SourceGraphic'><fePointLight x='8' y='8' "
+              "z='40'/></feDiffuseLighting>")},
+      {"spot-light",
+       filter("<feSpecularLighting in='SourceGraphic' specularExponent='2'><feSpotLight id='p' "
+              "x='8' y='8' z='12' pointsAtX='8' pointsAtY='8'/></feSpecularLighting>"),
+       "limitingConeAngle", "5",
+       filter("<feSpecularLighting in='SourceGraphic' specularExponent='2'><feSpotLight x='8' "
+              "y='8' z='12' pointsAtX='8' pointsAtY='8' "
+              "limitingConeAngle='5'/></feSpecularLighting>")},
+      // An edit inside a filter that another filter references through href reaches the
+      // referencing filter, and so does an edit of that href.
+      {"href-chain-primitive", HrefChainOf("<feOffset id='p' in='SourceGraphic'/>", "#b"), "dx",
+       "3", HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#b")},
+      {"href-chain-link", HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#b"), "href", "#c",
+       HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#c"), "#f"},
   };
 }
 
