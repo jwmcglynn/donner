@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Native offset acceptance using an independent rounded-coordinate reference.
+/// Native offset acceptance using an independent bilinear-translation reference.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -33,15 +33,38 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
   }
   return result;
 }
-inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 4>& input,
-                                     shader::programs::OffsetParams params, int32_t x, int32_t y) {
-  const int32_t sx = x - static_cast<int32_t>(std::round(params.dx));
-  const int32_t sy = y - static_cast<int32_t>(std::round(params.dy));
-  if (sx < 0 || sy < 0 || sx >= int32_t(kWidth) || sy >= int32_t(kHeight)) {
+/// Texel (\p x, \p y) of \p input, or transparent black outside it.
+inline std::array<float, 4> TexelOrClear(const std::array<float, kWidth * kHeight * 4>& input,
+                                         int32_t x, int32_t y) {
+  if (x < 0 || y < 0 || x >= int32_t(kWidth) || y >= int32_t(kHeight)) {
     return {};
   }
   std::array<float, 4> result{};
-  std::copy_n(input.begin() + (sy * kWidth + sx) * 4, 4, result.begin());
+  std::copy_n(input.begin() + (y * kWidth + x) * 4, 4, result.begin());
+  return result;
+}
+/// Bilinear translation by the uniform's shift: output texel (x, y) samples the input at
+/// (x - dx, y - dy), blending the four texels around that position, with whole shifts an exact
+/// copy.
+inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 4>& input,
+                                     shader::programs::OffsetParams params, int32_t x, int32_t y) {
+  const float positionX = float(x) - params.dx;
+  const float positionY = float(y) - params.dy;
+  const int32_t baseX = static_cast<int32_t>(std::floor(positionX));
+  const int32_t baseY = static_cast<int32_t>(std::floor(positionY));
+  const float fractionX = positionX - std::floor(positionX);
+  const float fractionY = positionY - std::floor(positionY);
+  const auto topLeft = TexelOrClear(input, baseX, baseY);
+  const auto topRight = TexelOrClear(input, baseX + 1, baseY);
+  const auto bottomLeft = TexelOrClear(input, baseX, baseY + 1);
+  const auto bottomRight = TexelOrClear(input, baseX + 1, baseY + 1);
+  std::array<float, 4> result{};
+  for (size_t channel = 0; channel < 4; ++channel) {
+    const float top = topLeft[channel] + fractionX * (topRight[channel] - topLeft[channel]);
+    const float bottom =
+        bottomLeft[channel] + fractionX * (bottomRight[channel] - bottomLeft[channel]);
+    result[channel] = top + fractionY * (bottom - top);
+  }
   return result;
 }
 }  // namespace offset_scene

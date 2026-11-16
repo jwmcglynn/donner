@@ -250,7 +250,7 @@ TEST_F(VulkanColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
-TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
+TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndResamplesHalfOffsets) {
   gpu::tests::CheckDropShadowStorage(
       *device_, shader::programs::DropShadowNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
@@ -881,7 +881,7 @@ TEST_F(VulkanColorMatrixTest, FilterResolveUsesReflectedTableBindingAndWorkgroup
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
-TEST_F(VulkanColorMatrixTest, OffsetPreservesRoundingAndTransparentEdges) {
+TEST_F(VulkanColorMatrixTest, OffsetResamplesFractionalShiftsAndTransparentEdges) {
   const auto& shader = shader::programs::OffsetNativeShader();
   const std::array<std::array<float, 2>, 10> shifts{
       {{0, 0},

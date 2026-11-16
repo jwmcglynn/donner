@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Native shadow composition, shared input bindings, and offset rounding acceptance.
+/// Native shadow composition, shared input bindings, and fractional offset acceptance.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -21,7 +21,8 @@
 
 namespace donner::gpu::tests {
 
-/// Composes a translucent blue shadow beneath a translucent red source at half-pixel offsets.
+/// Composes a translucent blue shadow beneath a translucent red source at half-pixel offsets,
+/// which blend the four blurred texels around each shifted position.
 /// @param device Native device with bounded wait/readback support.
 /// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
@@ -143,13 +144,18 @@ void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView
       for (int32_t x = 0; x < 4; ++x) {
         const size_t offset = (y * 4 + x) * 4;
         std::copy_n(sourceValues.begin() + offset, 4, expected->data().begin() + offset);
-        const int32_t sampleX = x - 1;
-        const int32_t sampleY = y + 1;
-        if (sampleX < 0 || sampleY >= 4) {
-          continue;
-        }
+        // The offset (0.5, -0.5) samples the blurred alpha at (x - 0.5, y + 0.5), halfway between
+        // texels x - 1 and x and between rows y and y + 1.
         const auto& alphaValues = aliasedInputs ? sourceValues : blurredValues;
-        const float shadowAlpha = 0.5f * alphaValues[(sampleY * 4 + sampleX) * 4 + 3];
+        const auto alphaAt = [&](int32_t sampleX, int32_t sampleY) {
+          return sampleX < 0 || sampleY < 0 || sampleX >= 4 || sampleY >= 4
+                     ? 0.0f
+                     : alphaValues[(sampleY * 4 + sampleX) * 4 + 3];
+        };
+        const float upper = alphaAt(x - 1, y) + 0.5f * (alphaAt(x, y) - alphaAt(x - 1, y));
+        const float lower =
+            alphaAt(x - 1, y + 1) + 0.5f * (alphaAt(x, y + 1) - alphaAt(x - 1, y + 1));
+        const float shadowAlpha = 0.5f * (upper + 0.5f * (lower - upper));
         const float remaining = 1 - sourceValues[offset + 3];
         expected->data()[offset + 2] += shadowAlpha * remaining;
         expected->data()[offset + 3] += shadowAlpha * remaining;
