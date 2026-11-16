@@ -8,6 +8,8 @@
 #include <memory>
 #include <tuple>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -758,14 +760,17 @@ Path BuildClosedPathClip(const Path& path, const Vector2d& origin) {
 
 class ReferenceBoundsAccumulator {
 public:
+  /// With @p pieces, the accumulator collects geometry there instead of bounding it.
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
                              const Transform2d& targetFromWorld, bool includeStroke,
-                             CircleClipGeometryBudget* budget)
+                             CircleClipGeometryBudget* budget,
+                             std::vector<BoundsGeometryPiece>* pieces = nullptr)
       : shapes_(shapes),
         root_(root),
         targetFromWorld_(targetFromWorld),
         includeStroke_(includeStroke),
-        budget_(budget) {}
+        budget_(budget),
+        pieces_(pieces) {}
 
   bool visit(EntityHandle child) {
     if (failed_ || (budget_ && !budget_->reserve(1))) {
@@ -787,8 +792,39 @@ public:
 
   std::optional<Box2d> result() const { return failed_ ? std::nullopt : bounds_; }
 
+  bool failed() const { return failed_; }
+
 private:
+  /// Add a box already in the target space.
   void add(const Box2d& bounds) {
+    if (pieces_) {
+      addBox(bounds, Transform2d());
+    } else {
+      accumulate(bounds);
+    }
+  }
+
+  void addBox(const Box2d& box, const Transform2d& targetFromBox) {
+    if (pieces_) {
+      if (!IsFiniteBox(box)) {
+        RejectGeometry(budget_, failed_);
+        return;
+      }
+      pieces_->push_back(BoundsGeometryPiece{.spaceFromPiece = targetFromBox, .geometry = box});
+      return;
+    }
+    accumulate(targetFromBox.transformBox(box));
+  }
+
+  void addPath(const Path& path, const Transform2d& targetFromPath) {
+    if (pieces_) {
+      pieces_->push_back(BoundsGeometryPiece{.spaceFromPiece = targetFromPath, .geometry = path});
+      return;
+    }
+    accumulate(path.transformedBounds(targetFromPath));
+  }
+
+  void accumulate(const Box2d& bounds) {
     if (!IsFiniteBox(bounds)) {
       RejectGeometry(budget_, failed_);
       return;
@@ -817,7 +853,7 @@ private:
       RejectGeometry(budget_, failed_);
       return;
     }
-    add(path->transformedBounds(worldFromChild * targetFromWorld_));
+    addPath(path->spline, worldFromChild * targetFromWorld_);
     if (!includeStroke_) {
       return;
     }
@@ -839,11 +875,11 @@ private:
     // Structural type and fallback dimensions live on the light element. Any instance sizing
     // wins, while the caller always supplies the occurrence's transform.
     if (const auto* sized = child.try_get<ComputedShadowSizedElementComponent>()) {
-      add(targetFromChild.transformBox(sized->bounds));
+      addBox(sized->bounds, targetFromChild);
     } else if (const auto* sized = child.try_get<ComputedSizedElementComponent>()) {
-      add(targetFromChild.transformBox(sized->bounds));
+      addBox(sized->bounds, targetFromChild);
     } else if (const auto* sized = light.try_get<ComputedSizedElementComponent>()) {
-      add(targetFromChild.transformBox(sized->bounds));
+      addBox(sized->bounds, targetFromChild);
     }
   }
 
@@ -902,7 +938,7 @@ private:
       // a budget and must not enter this painted-cache construction path.
       const Box2d bounds = textEngine.computedObjectBoundingBox(geometryEntity);
       if (!bounds.isEmpty()) {
-        add((worldFromText * targetFromWorld_).transformBox(bounds));
+        addBox(bounds, worldFromText * targetFromWorld_);
       }
       return;
     }
@@ -913,7 +949,7 @@ private:
       return;
     }
     if (geometry->objectBounds) {
-      add((worldFromText * targetFromWorld_).transformBox(*geometry->objectBounds));
+      addBox(*geometry->objectBounds, worldFromText * targetFromWorld_);
     }
     for (const auto& glyph : geometry->outlines) {
       const EntityHandle source(*geometryEntity.registry(), glyph.sourceEntity);
@@ -934,12 +970,29 @@ private:
   const Transform2d& targetFromWorld_;
   bool includeStroke_;
   CircleClipGeometryBudget* budget_;
+  std::vector<BoundsGeometryPiece>* pieces_;
   ParseWarningSink warningSink_ = ParseWarningSink::Disabled();
   std::optional<Box2d> bounds_;
   bool failed_ = false;
 };
 
 }  // namespace
+
+std::optional<Box2d> BoundGeometryPieces(std::span<const BoundsGeometryPiece> pieces,
+                                         const Transform2d& targetFromSpace) {
+  std::optional<Box2d> bounds;
+  for (const BoundsGeometryPiece& piece : pieces) {
+    const Transform2d targetFromPiece = piece.spaceFromPiece * targetFromSpace;
+    const Box2d box = std::holds_alternative<Path>(piece.geometry)
+                          ? std::get<Path>(piece.geometry).transformedBounds(targetFromPiece)
+                          : targetFromPiece.transformBox(std::get<Box2d>(piece.geometry));
+    if (!IsFiniteBox(box)) {
+      return std::nullopt;
+    }
+    bounds = bounds ? Box2d::Union(*bounds, box) : box;
+  }
+  return bounds;
+}
 
 EntityHandle ShapeSystem::geometryHandle(EntityHandle instance) {
   const auto* shadow = instance.try_get<ShadowEntityComponent>();
@@ -1051,15 +1104,30 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
 }
 
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
-  return getShapeBoundsIn(handle, Transform2d());
-}
-
-std::optional<Box2d> ShapeSystem::getShapeBoundsIn(EntityHandle handle,
-                                                   const Transform2d& targetFromEntity) {
   const Transform2d outerEntityFromWorld =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
 
-  return getTransformedShapeBounds(handle, outerEntityFromWorld * targetFromEntity);
+  return getTransformedShapeBounds(handle, outerEntityFromWorld);
+}
+
+bool ShapeSystem::collectShapeGeometry(EntityHandle handle, const Transform2d& spaceFromEntity,
+                                       std::vector<BoundsGeometryPiece>& pieces) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  if (IsDisplayNone(handle, disabledSink)) {
+    return true;
+  }
+  const Transform2d spaceFromWorld =
+      LayoutSystem().getEntityFromWorldTransform(handle).inverse() * spaceFromEntity;
+  const ScopedTextPathBoundsWorkEpoch textPathWorkEpoch(*handle.registry());
+  const std::size_t firstPiece = pieces.size();
+  ReferenceBoundsAccumulator accumulator(*this, handle, spaceFromWorld, false, nullptr, &pieces);
+  donner::components::ForAllChildrenRecursivePruned(
+      handle, [&accumulator](EntityHandle child) { return accumulator.visit(child); });
+  if (accumulator.failed()) {
+    pieces.erase(pieces.begin() + static_cast<std::ptrdiff_t>(firstPiece), pieces.end());
+    return false;
+  }
+  return true;
 }
 
 std::optional<Box2d> ShapeSystem::getStrokeBounds(EntityHandle handle) {
