@@ -781,11 +781,11 @@ TEST(SubDocumentFiltersTest, ManyUsesOfOnePathRetainOneCopy) {
 }
 
 /// At a geometry allowance that admits one copy of the path the copy is retained, and below it the
-/// path's box stands in for it: either way the effect still bounds every occurrence, as in-document.
+/// path's box stands in for it: either way the effect still bounds every occurrence, as
+/// in-document.
 TEST(SubDocumentFiltersTest, GeometryAllowanceFallsBackToThePathBox) {
   const std::string head = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>";
-  const Documents documents = {
-      {"sheet.svg", head + "<defs>" + LargePathDefs() + "</defs></svg>"}};
+  const Documents documents = {{"sheet.svg", head + "<defs>" + LargePathDefs() + "</defs></svg>"}};
   const std::string host = LargePathHost(4);
   SVGDocument sized = Parse(WithReference(host, "sheet.svg#"), documents);
   RendererBitmap unused;
