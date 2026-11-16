@@ -101,6 +101,18 @@ def _environ(**values):
     return environ
 
 
+def _signallable(pid):
+    """Whether a process is still there for this test to signal, by the lane's own rule for a
+    process group (_signal_group): EPERM, for a process this test started as its own user, means
+    one that has exited and waits to be reaped, or one out of its reach, which a signal could not
+    end either."""
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 class _GatedClock:
     """Stands still until `ready()` holds, then jumps far past any deadline set from it: a test's
     deadline is reached only once the state it observes exists, however slowly the host starts
@@ -1100,9 +1112,7 @@ class LaneRunTest(unittest.TestCase):
             self.assertIn("/ 24130 actions", text)
             self.assertIn("actions per minute", text)
             self.assertIn("| gpu | - | not run |", text)
-        pid = int(pid_file.read_text())
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        self.assertFalse(_signallable(int(pid_file.read_text())))
 
     def test_a_preflight_or_routing_probe_out_of_time_is_labelled_and_exits_124(self):
         import contextlib
@@ -1427,13 +1437,6 @@ class StarvationGuardTest(unittest.TestCase):
         self.assertEqual((7, 9), lane.progress("(12:34:56.789) [7 / 9] Testing //a:b\n"))
         self.assertIsNone(lane.progress("Loading: 3 packages loaded\n"))
 
-    def _alive(self, pid):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        return True
-
     def test_the_budget_stops_a_progressing_phase_and_leaves_no_process(self):
         import contextlib
         import io
@@ -1451,8 +1454,8 @@ class StarvationGuardTest(unittest.TestCase):
         self.assertEqual((lane.OUT_OF_TIME_STATUS, lane.OUT_OF_TIME), (status, stop))
         self.assertIn("the lane's budget ran out", printed.getvalue())
         own, child = (int(value) for value in pids.read_text().split())
-        self.assertFalse(self._alive(own))
-        self.assertFalse(self._alive(child), "the stopped command left a process behind")
+        self.assertFalse(_signallable(own))
+        self.assertFalse(_signallable(child), "the stopped command left a process behind")
 
     def test_starvation_still_stops_first_when_nothing_completes(self):
         # The budget runs out on the very poll that the counter has been frozen for the bound.
@@ -1496,7 +1499,7 @@ class StarvationGuardTest(unittest.TestCase):
         background = int(pid_file.read_text())
         lane._stop(process, grace=(30, 30, 30))
         self.assertIsNotNone(process.returncode)
-        self.assertFalse(self._alive(background), "the interrupt-immune job was left running")
+        self.assertFalse(_signallable(background), "the interrupt-immune job was left running")
 
     def test_a_group_already_gone_is_reaped_without_a_kill(self):
         from unittest import mock
@@ -1511,6 +1514,49 @@ class StarvationGuardTest(unittest.TestCase):
             lane._stop(process)
         self.assertEqual([signal.SIGINT], sent)
         self.assertIsNotNone(process.returncode)
+
+    def test_a_group_with_nothing_the_lane_may_signal_is_not_waited_for(self):
+        # EPERM: the group still has processes, none the lane may signal (exited ones waiting to
+        # be reaped, as macOS reports them, or ones out of its reach). Nothing is left to stop, so
+        # the lane neither waits out its bounds nor escalates, and says so once.
+        import contextlib
+        import io
+        from unittest import mock
+        sent = []
+
+        def killpg(group, sig):
+            sent.append(sig)
+            raise PermissionError(1, "Operation not permitted")
+
+        with mock.patch.object(lane.os, "killpg", side_effect=killpg), \
+                mock.patch.object(lane.time, "sleep", side_effect=AssertionError("waited")), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertTrue(lane._group_gone(12345, 3600))
+            lane._end_group(12345)
+        self.assertEqual([0, 0], sent)
+        self.assertEqual(2, printed.getvalue().count("has no process the lane may signal"))
+        # The command itself is still waited for, so its exit status is known.
+        process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        sent.clear()
+        with mock.patch.object(lane.os, "killpg", side_effect=killpg), \
+                contextlib.redirect_stdout(io.StringIO()):
+            lane._stop(process)
+        self.assertEqual([signal.SIGINT], sent)
+        self.assertEqual(0, process.returncode)
+
+    def test_a_command_no_signal_reaches_does_not_hang_the_lane(self):
+        import contextlib
+        import io
+        from unittest import mock
+        process = mock.Mock(pid=12345)
+        process.wait.side_effect = subprocess.TimeoutExpired("command", 1)
+        with mock.patch.object(lane.os, "killpg",
+                               side_effect=PermissionError(1, "Operation not permitted")), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            lane._stop(process)
+        process.wait.assert_called_once_with(timeout=lane.STOP_KILL_SECONDS)
+        self.assertIn("the stopped command did not exit within %d seconds and is left running"
+                      % lane.STOP_KILL_SECONDS, printed.getvalue())
 
     def test_bound_exceeds_the_longest_test_timeout(self):
         # `long` (900 s) is the longest effective test timeout in the tree; see STARVED_SECONDS.

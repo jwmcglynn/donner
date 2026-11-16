@@ -922,10 +922,8 @@ def _stop(process, grace=STOP_GRACE):
     command and writing the build event file on its own, so callers shut it down before they
     read that file."""
     for seconds in grace:
-        try:
-            os.killpg(process.pid, signal.SIGINT)
-        except ProcessLookupError:
-            process.wait()
+        if not _signal_group(process.pid, signal.SIGINT):
+            _reap(process)
             return
         try:
             process.wait(timeout=seconds)
@@ -933,12 +931,49 @@ def _stop(process, grace=STOP_GRACE):
             continue
         _end_group(process.pid)
         return
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _signal_group(process.pid, signal.SIGKILL)
     _group_gone(process.pid, STOP_KILL_SECONDS)
-    process.wait()
+    _reap(process)
+
+
+def _signal_group(group, sig):
+    """Sends `sig` (0 only probes) to a process group. True when the group has a process this
+    process may signal; False when it has none left to stop.
+
+    The two refusals mean different things, and neither leaves the lane anything to stop:
+
+      * ESRCH (ProcessLookupError): the group has no process at all.
+      * EPERM (PermissionError): the group still has processes, but none this process may signal.
+        Every process the lane starts runs as the lane's own user, so a process that is still
+        running a command the lane started is not refused by the kernel's ownership rule. What
+        is refused is a process that has exited and waits to be reaped (macOS has been seen to
+        refuse a group whose remaining members are such processes, where Linux delivers the
+        signal to them and reports ESRCH only once they are reaped), or a process that a sandbox
+        or another user keeps out of reach. A further signal could not end either.
+
+    So for the lane's question, whether anything of the command is still running that a signal
+    can end, both mean no, on Linux and on macOS. EPERM is reported in the log, since on a runner
+    it can also mean that something the lane started is out of its control."""
+    try:
+        os.killpg(group, sig)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        print("macOS remote shadow lane: the stopped command's process group has no process the "
+              "lane may signal (only exited processes waiting to be reaped, or processes outside "
+              "the lane's permissions); nothing of it is left to stop.", flush=True)
+        return False
+    return True
+
+
+def _reap(process):
+    """Waits for the command itself, at most STOP_KILL_SECONDS: a command no signal could reach
+    must not hang the lane, which then reports and leaves it."""
+    try:
+        process.wait(timeout=STOP_KILL_SECONDS)
+    except subprocess.TimeoutExpired:
+        print("::warning::macOS remote shadow lane: the stopped command did not exit within %d "
+              "seconds and is left running." % STOP_KILL_SECONDS, flush=True)
 
 
 def _end_group(group):
@@ -947,22 +982,17 @@ def _end_group(group):
     if _group_gone(group, _LEFTOVER_SECONDS):
         return
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(group, sig)
-        except ProcessLookupError:
-            return
-        if _group_gone(group, _LEFTOVER_SECONDS):
+        if not _signal_group(group, sig) or _group_gone(group, _LEFTOVER_SECONDS):
             return
 
 
 def _group_gone(group, seconds):
-    """Waits up to `seconds` for every process of a process group to exit; returns whether it
-    has. The group leader must already be reaped or exiting."""
+    """Waits up to `seconds` until no process of a process group is left that a signal can end
+    (see _signal_group); returns whether that happened. The group leader must already be reaped
+    or exiting."""
     bound = time.monotonic() + seconds
     while True:
-        try:
-            os.killpg(group, 0)
-        except ProcessLookupError:
+        if not _signal_group(group, 0):
             return True
         if time.monotonic() >= bound:
             return False
