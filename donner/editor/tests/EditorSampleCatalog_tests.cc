@@ -1,8 +1,8 @@
 #include "donner/editor/EditorSampleCatalog.h"
 
 #include <array>
-#include <cctype>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -12,10 +12,13 @@
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
+
+using ::testing::MatchesRegex;
 
 TEST(EditorSampleCatalog, HasStableUniqueAsciiIdsInDisplayOrder) {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
@@ -27,11 +30,8 @@ TEST(EditorSampleCatalog, HasStableUniqueAsciiIdsInDisplayOrder) {
   for (std::size_t i = 0; i < samples.size(); ++i) {
     EXPECT_EQ(samples[i].id, kExpectedIds[i]);
     EXPECT_TRUE(ids.insert(samples[i].id).second);
-    for (const unsigned char character : samples[i].id) {
-      EXPECT_LT(character, 0x80u);
-      EXPECT_TRUE(std::isalnum(character) || character == '-')
-          << "non-stable ID character in " << samples[i].id;
-    }
+    // Stable IDs are ASCII letters, digits and '-' only.
+    EXPECT_THAT(std::string(samples[i].id), MatchesRegex("[A-Za-z0-9-]+"));
   }
 }
 

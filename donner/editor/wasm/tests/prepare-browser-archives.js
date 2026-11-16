@@ -60,10 +60,12 @@ function prepareBrowserArchives(environment, browsers = Object.keys(kArchiveVari
   }
 }
 
-// As a Playwright global setup, extracts the browsers the config lists in
-// `metadata.pinnedBrowsers`, or every pinned browser when it lists none.
-module.exports = function setup(config) {
+// As a Playwright global setup: extract the browsers the config lists in `metadata.pinnedBrowsers`
+// (every pinned browser when it lists none), then launch each project's browser once so a
+// browser that cannot start fails the lane before its first case.
+module.exports = async function setup(config) {
   prepareBrowserArchives(process.env, config?.metadata?.pinnedBrowsers);
+  await require("./browser-launch-probe.js").probeBrowserLaunch(config);
 };
 module.exports.browserExecutablePaths = browserExecutablePaths;
 module.exports.prepareBrowserArchives = prepareBrowserArchives;

@@ -358,6 +358,22 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
     }
   }
 
+  // The filter region clips the backdrop the same way it clips the source graphic. A backdrop with
+  // other dimensions cannot be placed in this raster and is ignored.
+  std::optional<FloatPixmap> backgroundFloatPixels;
+  if (graph.backgroundInput.has_value() && static_cast<int>(graph.backgroundInput->width()) == w &&
+      static_cast<int>(graph.backgroundInput->height()) == h) {
+    backgroundFloatPixels = FloatPixmap::fromPixmap(*graph.backgroundInput);
+    if (graph.clipSourceToFilterRegion && graph.filterRegion.has_value()) {
+      if (graph.filterFromDevice.has_value() && graph.userSpaceFilterRegion.has_value()) {
+        applySubregionClipping(*backgroundFloatPixels, *graph.filterRegion, w, h,
+                               &*graph.filterFromDevice, &*graph.userSpaceFilterRegion);
+      } else {
+        applySubregionClipping(*backgroundFloatPixels, *graph.filterRegion, w, h);
+      }
+    }
+  }
+
   // The source graphic and the paint inputs arrive as uint8 sRGB.
   SpacedPixmap sourceFloat(std::move(sourceFloatPixels), /*linear=*/false);
   std::optional<SpacedPixmap> fillPaintStorage =
@@ -377,6 +393,11 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   SpacedPixmap* strokePaint = strokePaintStorage.has_value() ? &*strokePaintStorage : nullptr;
   std::optional<SpacedPixmap> transparentPaintInput;
   std::optional<SpacedPixmap> sourceAlpha;
+  std::optional<SpacedPixmap> background =
+      backgroundFloatPixels.has_value()
+          ? std::make_optional(SpacedPixmap(std::move(*backgroundFloatPixels), /*linear=*/false))
+          : std::nullopt;
+  std::optional<SpacedPixmap> backgroundAlpha;
   // A node's result is one buffer even when it is reachable under two names, as `result="x"` is
   // also the implicit input of the next primitive. Sharing the object rather than copying it
   // keeps a converted twin shared too, so a result consumed in both spaces converts once no
@@ -421,6 +442,23 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
     return &sourceAlpha.value();
   };
 
+  auto getBackgroundAlpha = [&]() -> SpacedPixmap* {
+    if (!background.has_value()) {
+      return getTransparentPaintInput();
+    }
+    if (!backgroundAlpha.has_value()) {
+      FloatPixmap alphaOnly(background->spaceAgnostic());
+      auto data = alphaOnly.data();
+      for (int i = 0; i < w * h; ++i) {
+        data[i * 4 + 0] = 0.0f;
+        data[i * 4 + 1] = 0.0f;
+        data[i * 4 + 2] = 0.0f;
+      }
+      backgroundAlpha = SpacedPixmap::alphaOnly(std::move(alphaOnly));
+    }
+    return &backgroundAlpha.value();
+  };
+
   auto resolveInput = [&](const NodeInput& input) -> SpacedPixmap* {
     return std::visit(
         [&](const auto& v) -> SpacedPixmap* {
@@ -439,6 +477,12 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             }
             if (v == StandardInput::StrokePaint) {
               return strokePaint != nullptr ? strokePaint : getTransparentPaintInput();
+            }
+            if (v == StandardInput::BackgroundImage) {
+              return background.has_value() ? &*background : getTransparentPaintInput();
+            }
+            if (v == StandardInput::BackgroundAlpha) {
+              return getBackgroundAlpha();
             }
             return source;
           } else if constexpr (std::is_same_v<V, NodeInput::Named>) {

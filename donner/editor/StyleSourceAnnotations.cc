@@ -1,7 +1,6 @@
 #include "donner/editor/StyleSourceAnnotations.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <iterator>
 #include <optional>
@@ -15,6 +14,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/css/CSS.h"
@@ -90,10 +90,6 @@ struct FragmentReference {
   return SourceByteRange{start, std::min(end, sourceSize)};
 }
 
-[[nodiscard]] bool IsAsciiSpace(char ch) {
-  return std::isspace(static_cast<unsigned char>(ch)) != 0;
-}
-
 [[nodiscard]] std::string TagNameForElement(const svg::SVGElement& element) {
   if (std::optional<xml::XMLQualifiedName> tagName = element.tryTagName()) {
     return std::string(tagName->name);
@@ -162,7 +158,7 @@ void AppendUrlFragmentReferences(std::string_view value,
     }
 
     std::size_t index = urlPos + 4;
-    while (index < value.size() && IsAsciiSpace(value[index])) {
+    while (index < value.size() && StringUtils::IsAsciiWhitespace(value[index])) {
       ++index;
     }
 
@@ -170,7 +166,7 @@ void AppendUrlFragmentReferences(std::string_view value,
     if (index < value.size() && (value[index] == '\'' || value[index] == '"')) {
       quote = value[index];
       ++index;
-      while (index < value.size() && IsAsciiSpace(value[index])) {
+      while (index < value.size() && StringUtils::IsAsciiWhitespace(value[index])) {
         ++index;
       }
     }
@@ -184,7 +180,8 @@ void AppendUrlFragmentReferences(std::string_view value,
     std::size_t fragmentEnd = fragmentStart;
     while (fragmentEnd < value.size()) {
       const char ch = value[fragmentEnd];
-      if ((quote != '\0' && ch == quote) || (quote == '\0' && (ch == ')' || IsAsciiSpace(ch)))) {
+      if ((quote != '\0' && ch == quote) ||
+          (quote == '\0' && (ch == ')' || StringUtils::IsAsciiWhitespace(ch)))) {
         break;
       }
       ++fragmentEnd;
@@ -200,7 +197,7 @@ void AppendHrefFragmentReference(std::string_view value,
                                  std::optional<svg::SVGElement> referencingElement,
                                  std::vector<FragmentReference>* references) {
   std::size_t start = 0;
-  while (start < value.size() && IsAsciiSpace(value[start])) {
+  while (start < value.size() && StringUtils::IsAsciiWhitespace(value[start])) {
     ++start;
   }
 
@@ -209,7 +206,7 @@ void AppendHrefFragmentReference(std::string_view value,
   }
 
   std::size_t end = value.size();
-  while (end > start + 1 && IsAsciiSpace(value[end - 1])) {
+  while (end > start + 1 && StringUtils::IsAsciiWhitespace(value[end - 1])) {
     --end;
   }
 
@@ -232,8 +229,7 @@ void AppendHrefFragmentReference(std::string_view value,
   }
 
   range.end = end;
-  while (range.end > range.start &&
-         std::isspace(static_cast<unsigned char>(source[range.end - 1])) != 0) {
+  while (range.end > range.start && StringUtils::IsAsciiWhitespace(source[range.end - 1])) {
     --range.end;
   }
   return range;

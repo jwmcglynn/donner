@@ -128,6 +128,10 @@ enum class FilterStandardInput : std::uint8_t {
   SourceAlpha,    ///< Alpha channel of SourceGraphic (RGB = 0).
   FillPaint,      ///< The element's fill paint, conceptually infinite.
   StrokePaint,    ///< The element's stroke paint, conceptually infinite.
+  /// The backdrop beneath the filtered element: what its nearest isolation group painted before
+  /// it, clipped by the filter region.
+  BackgroundImage,
+  BackgroundAlpha,  ///< Alpha channel of BackgroundImage (RGB = 0).
 };
 
 /**
@@ -180,6 +184,12 @@ struct FilterInput {
     }
     if (value == "StrokePaint") {
       return FilterInput(FilterStandardInput::StrokePaint);
+    }
+    if (value == "BackgroundImage") {
+      return FilterInput(FilterStandardInput::BackgroundImage);
+    }
+    if (value == "BackgroundAlpha") {
+      return FilterInput(FilterStandardInput::BackgroundAlpha);
     }
     return FilterInput(Named{RcString(value)});
   }
@@ -724,6 +734,13 @@ struct FilterGraph {
   /// origin. Set by the renderer driver.
   bool keepsViewportAlignedCapture = false;
 
+  /// Number of layers the filtered element itself pushed between its backdrop and this filter
+  /// stage: its own isolated (opacity, blend or isolation) layer, its masks, and the filter stages
+  /// that wrap this one. BackgroundImage and BackgroundAlpha read the target beneath those layers,
+  /// since none of them changes what lies behind the element. Set by the renderer driver; zero
+  /// reads the target the filter layer is pushed onto.
+  std::uint32_t backdropLayerSkip = 0;
+
   /// Returns true if the graph has no nodes.
   [[nodiscard]] bool empty() const { return nodes.empty(); }
 };
@@ -763,6 +780,21 @@ inline std::uint64_t GpuFilterParameterAllocationBound(std::uint64_t requested) 
   return requested * 2 + kGpuFilterParameterBlockBytes;
 }
 
+/// Float textures the backdrop inputs of \p graph may hold: BackgroundImage and the
+/// BackgroundAlpha derived from it, each possibly in both color representations.
+inline std::uint64_t GpuBackdropFloatTextures(const FilterGraph& graph) {
+  bool image = false;
+  bool alpha = false;
+  for (const FilterNode& node : graph.nodes) {
+    for (const FilterInput& input : node.inputs) {
+      const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+      image |= standard && *standard == FilterStandardInput::BackgroundImage;
+      alpha |= standard && *standard == FilterStandardInput::BackgroundAlpha;
+    }
+  }
+  return 2 * static_cast<std::uint64_t>(image || alpha) + 2 * static_cast<std::uint64_t>(alpha);
+}
+
 /// Derives a byte-format-aware bound without allocating or changing the CPU filter model.
 /// @param graph Ordered filter graph. @param result Receives the resource layout on success.
 inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkingSet& result) {
@@ -774,6 +806,7 @@ inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkin
   std::array<std::size_t, kMaximumFilterGraphNodes> nextDefinition{};
   nextDefinition.fill(graph.nodes.size());
   bool sourceAlpha = false;
+  const std::uint64_t backdropTextures = GpuBackdropFloatTextures(graph);
   for (std::size_t producer = 0; producer < graph.nodes.size(); ++producer) {
     const auto& name = graph.nodes[producer].result;
     for (const FilterInput& input : graph.nodes[producer].inputs) {
@@ -817,11 +850,12 @@ inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkin
       }
       scratch = std::max<std::uint64_t>(2, node.inputs.size());
     }
-    // SourceGraphic may need one float representation; SourceAlpha and retained logical values
-    // may need both color representations. The previous output can also be unnamed.
+    // SourceGraphic may need one float representation; SourceAlpha, the backdrop, its alpha and
+    // retained logical values may need both color representations. The previous output can also
+    // be unnamed.
     result.floatTextures =
-        std::max(result.floatTextures,
-                 1 + (sourceAlpha ? 2u : 0u) + namedValues * 2 + (index ? 2u : 0u) + scratch);
+        std::max(result.floatTextures, 1 + (sourceAlpha ? 2u : 0u) + backdropTextures +
+                                           namedValues * 2 + (index ? 2u : 0u) + scratch);
     result.runtimeUniformBytes += 8192;
     const bool rawUniform = std::holds_alternative<fp::GaussianBlur>(node.primitive) ||
                             std::holds_alternative<fp::Blend>(node.primitive) ||
@@ -1003,9 +1037,14 @@ inline bool InitializeFilterWork(const FilterGraph& graph, std::uint64_t pixelCo
 
 /// Standard filter inputs that a graph reads, other than SourceGraphic.
 struct FilterStandardInputUsage {
-  bool sourceAlpha = false;  //!< Some node reads SourceAlpha.
-  bool fillPaint = false;    //!< Some node reads FillPaint.
-  bool strokePaint = false;  //!< Some node reads StrokePaint.
+  bool sourceAlpha = false;      //!< Some node reads SourceAlpha.
+  bool fillPaint = false;        //!< Some node reads FillPaint.
+  bool strokePaint = false;      //!< Some node reads StrokePaint.
+  bool backgroundImage = false;  //!< Some node reads BackgroundImage.
+  bool backgroundAlpha = false;  //!< Some node reads BackgroundAlpha.
+
+  /// Whether the graph reads the backdrop in either form, which needs a backdrop capture.
+  [[nodiscard]] bool readsBackdrop() const { return backgroundImage || backgroundAlpha; }
 };
 
 /// Collects the standard inputs retained by a CPU filter execution.
@@ -1017,6 +1056,8 @@ inline FilterStandardInputUsage StandardInputUsage(const FilterGraph& graph) {
         result.sourceAlpha |= *standard == FilterStandardInput::SourceAlpha;
         result.fillPaint |= *standard == FilterStandardInput::FillPaint;
         result.strokePaint |= *standard == FilterStandardInput::StrokePaint;
+        result.backgroundImage |= *standard == FilterStandardInput::BackgroundImage;
+        result.backgroundAlpha |= *standard == FilterStandardInput::BackgroundAlpha;
       }
     }
   }
@@ -1083,9 +1124,12 @@ struct CpuTransientBufferCount {
 /// Computes the maximum live CPU float-buffer count across the graph.
 inline std::uint64_t CpuRetainedBuffers(const FilterGraph& graph) {
   const FilterStandardInputUsage usage = StandardInputUsage(graph);
+  // The backdrop is one float buffer, and BackgroundAlpha derives a second from it.
   const std::uint64_t fixedBuffers = 1 + static_cast<std::uint64_t>(usage.sourceAlpha) +
                                      static_cast<std::uint64_t>(usage.fillPaint) +
-                                     static_cast<std::uint64_t>(usage.strokePaint);
+                                     static_cast<std::uint64_t>(usage.strokePaint) +
+                                     static_cast<std::uint64_t>(usage.readsBackdrop()) +
+                                     static_cast<std::uint64_t>(usage.backgroundAlpha);
   std::uint64_t retainedBuffers = 0;
   std::uint64_t priorNamedResults = 0;
   for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
