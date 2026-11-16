@@ -19,9 +19,11 @@
 #
 # An empty selection produced by FAILING selection tooling cannot reach this
 # wrapper: the job that derives the target set aborts on any tooling error, so
-# its lanes never run at all, and a selection that legitimately comes back
-# empty is widened to the full target set first. Callers reject an empty
-# pattern list themselves before invoking this script.
+# its lanes never run at all. A selection that is provably empty is the
+# placeholder //tools/ci:no_affected_targets, which builds and tests nothing and
+# reaches this wrapper as exit 4; any other empty result is widened to the full
+# target set. Callers reject an empty pattern list themselves before invoking
+# this script.
 #
 # What this wrapper cannot see is selection tooling that SUCCEEDS while being
 # wrong: an under-inclusive set that omits tests the change should have run
