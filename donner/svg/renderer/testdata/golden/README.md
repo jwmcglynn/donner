@@ -58,7 +58,7 @@ bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 
-## Embedded SVG with text
+## structure/image: embedded SVG with text
 
 `resvg-embedded-svg-with-text.png` is a Donner CPU rendering of the unchanged corpus file
 `tests/structure/image/embedded-svg-with-text.svg`, at the 500x500 size of its vendored reference,

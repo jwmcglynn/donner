@@ -505,12 +505,16 @@ re-enabled `filters/feImage/with-subregion-5` and refreshed the Donner-generated
 references were replaced by their v0.49.0 renderings, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
-The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
-the embedded SVG's text, while Donner uses the document font catalog. An authored
-`EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
-ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
-`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
-a reference-disagreement skip rather than a missing feature.
+The `embedded-svg-with-text` row compares against a Donner rendering
+(`testdata/golden/resvg-embedded-svg-with-text.png`) at the default settings on every backend. The
+vendored reference omits the embedded SVG's text, which browsers and resvg draw; the resvg v0.49.0
+rendering draws it but quantizes the embedded frame lines' coverage to quarters. The golden
+encodes a harness-only configuration: the suite gives SVG image documents its test fonts, as a
+stand-in for the system fonts an image document sees in a browser or in resvg's process-wide font
+database. The product renders an image document's text with only the built-in font catalog. An
+authored `EmbeddedSvgUsesDocumentFontContext` case checks that product behavior (embedded-versus-direct
+identity plus visible text ink) in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
