@@ -1923,6 +1923,75 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
   }
 }
 
+TEST_F(RendererRegressionTests, TextStrokeMatchesItsOutlinesWhereGlyphsMeetTheTargetEdge) {
+  // The CPU backend does not expand the stroke of a glyph that cannot reach the drawing target.
+  // These runs place glyphs across and just beyond the target's edge, under rotation and skew, with
+  // miter joins and square caps that reach farther than the stroke's half width, and inside a
+  // pattern tile, a filter and a mask, whose targets are their own surfaces, and as a hairline.
+  // Each must match a `<path>` of the same glyph outlines, which is never culled.
+  struct Case {
+    std::string_view label;
+    std::string_view defs;
+    std::string_view open;
+    std::string_view close;
+    std::string_view text;
+  };
+  constexpr std::array<Case, 6> kCases = {{
+      {"rotated_miter", "", R"svg(<g transform="rotate(25 100 100) skewX(15)">)svg", "</g>",
+       R"svg(x="150" y="60" font-size="60" stroke-width="8" stroke-linejoin="miter"
+             stroke-miterlimit="10">WWWW)svg"},
+      {"skewed_square_cap", "", R"svg(<g transform="skewY(-20)">)svg", "</g>",
+       R"svg(x="-30" y="215" font-size="60" stroke-width="10" stroke-linecap="square">x-x)svg"},
+      {"pattern",
+       R"svg(<pattern id="tile" width="40" height="40" patternUnits="userSpaceOnUse">CONTENT</pattern>)svg",
+       R"svg(<rect width="200" height="200" fill="url(#tile)"/>)svg", "",
+       R"svg(x="20" y="30" font-size="40" stroke-width="3">WW)svg"},
+      {"filter", R"svg(<filter id="soft"><feGaussianBlur stdDeviation="1"/></filter>)svg",
+       R"svg(<g filter="url(#soft)">)svg", "</g>",
+       R"svg(x="120" y="120" font-size="80" stroke-width="4">WW)svg"},
+      {"mask", R"svg(<mask id="clipper"><rect width="150" height="150" fill="white"/></mask>)svg",
+       R"svg(<g mask="url(#clipper)">)svg", "</g>",
+       R"svg(x="100" y="160" font-size="80" stroke-width="4">WW)svg"},
+      {"hairline", "", "", "", R"svg(x="10" y="120" font-size="40" stroke-width="0.4">Text)svg"},
+  }};
+  for (const Case& testCase : kCases) {
+    SCOPED_TRACE(testCase.label);
+    const auto document = [&](const std::string& content) {
+      std::string defs(testCase.defs);
+      std::string body = "<defs>";
+      const std::size_t marker = defs.find("CONTENT");
+      if (marker != std::string::npos) {
+        defs.replace(marker, std::string("CONTENT").size(), content);
+        body += defs + "</defs>" + std::string(testCase.open) + std::string(testCase.close);
+      } else {
+        body +=
+            defs + "</defs>" + std::string(testCase.open) + content + std::string(testCase.close);
+      }
+      return body;
+    };
+    SVGDocument textDocument = instantiateSubtree(
+        document(R"svg(<text id="text" font-family="Noto Sans" fill="none" stroke="black" )svg" +
+                 std::string(testCase.text) + "</text>"),
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    const std::string text(testCase.text);
+    const std::string strokeAttributes =
+        text.substr(text.find("stroke-width"), text.find('>') - text.find("stroke-width"));
+    SVGDocument pathDocument =
+        instantiateSubtree(document("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") +
+                                    "\" fill=\"none\" stroke=\"black\" " + strokeAttributes + "/>"),
+                           parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_target_edge_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_target_edge_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, TextStrokeCoversOverlapsOfNonAdjacentGlyphsOnce) {
   // Glyphs whose strokes overlap without being neighbours in the run: `dx`/`dy` move "x" back
   // onto "T" while "e" touches neither, and in a mixed-direction run the right-to-left glyphs are

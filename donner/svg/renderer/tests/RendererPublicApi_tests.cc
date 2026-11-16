@@ -3752,6 +3752,51 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionIsChargedBeforeTheChunkIsK
   EXPECT_THAT(stats.textMaterializationPoints, testing::Le(limit));
 }
 
+TEST(RendererTinySkiaSecurityTest, TextStrokeChunkStopsAtTheStrokeOutputCap) {
+  // One chunk of 10,000 stroked "O"s, all drawn at one place (letter-spacing cancels the 0.741 em
+  // advance of the bundled font's "O"), expands into more than Path::kMaximumStrokeOutputPoints
+  // outline points; its stroke is rejected at that cap, well below the text budget's own limits.
+  const std::string glyphs(10000, 'O');
+  SVGDocument document = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <text x="10" y="60" font-size="40" letter-spacing="-29.64" fill="none" stroke="black"
+                 stroke-width="2">)" +
+      glyphs + "</text></svg>");
+  RendererTinySkia renderer;
+  renderer.draw(document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_TRUE(stats.drawBudgetRejected);
+  EXPECT_FALSE(stats.textMaterializationBudgetRejected);
+}
+
+TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionsOfSeparateTextsShareTheBudget) {
+  // Each stroked text alone fits the lowered text budget; the second one's expansion does not fit
+  // beside the first's, so the frame is rejected.
+  constexpr std::string_view kText =
+      R"(<text x="2" y="44" font-size="40" fill="none" stroke="black" stroke-width="2">OO</text>)";
+  const auto draw = [](std::string_view body, std::size_t points) {
+    SVGDocument document = ParseDocument(
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">)") +
+        std::string(body) + "</svg>");
+    RendererTinySkia renderer;
+    renderer.setTextMaterializationBudgetForTesting(
+        {.uniqueOutlines = RendererTextMaterializationBudget::kDefaultMaximumGlyphs,
+         .commands = RendererTextMaterializationBudget::kMaximumCommands,
+         .points = points,
+         .bytes = RendererTextMaterializationBudget::kMaximumBytes,
+         .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork});
+    renderer.draw(document);
+    return renderer.resourceStats();
+  };
+  const std::size_t onePoints =
+      draw(kText, RendererTextMaterializationBudget::kMaximumPoints).textMaterializationPoints;
+  const std::size_t limit = onePoints * 3 / 2;
+  EXPECT_FALSE(draw(kText, limit).textMaterializationBudgetRejected);
+  const RendererResourceStats both = draw(std::string(kText) + std::string(kText), limit);
+  EXPECT_TRUE(both.textMaterializationBudgetRejected);
+  EXPECT_TRUE(both.drawBudgetRejected);
+}
+
 TEST(RendererTinySkiaSecurityTest, TextStrokeIsNotExpandedForGlyphsOutsideTheCanvas) {
   // A glyph whose stroke cannot reach the canvas is not expanded: moving the second "O" of the
   // chunk far off the canvas charges only the visible glyph's expansion.
