@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
@@ -52,15 +54,24 @@ enum class Case {
   AlphaMask,
   MaskBounds,
   PathClip,
-  Blend
+  Blend,
+  AnchoredTranslate,
+  AnchoredRotate,
+  AnchoredScale
 };
+
+/// Whether \p kind samples through the anchored bilinear mapping.
+inline bool SamplesAnchored(Case kind) {
+  return kind == Case::AnchoredTranslate || kind == Case::AnchoredRotate ||
+         kind == Case::AnchoredScale;
+}
 
 struct Scenario {
   Case kind;
   uint32_t blendMode = 0;
   uint32_t width() const { return kind == Case::Pixelated ? 7 : 8; }
-  uint32_t height() const { return kind == Case::Pixelated ? 5 : 4; }
-  bool textured() const { return kind <= Case::Cropped; }
+  uint32_t height() const { return kind == Case::Pixelated ? 5 : SamplesAnchored(kind) ? 8 : 4; }
+  bool textured() const { return kind <= Case::Cropped || SamplesAnchored(kind); }
 };
 
 /// Whether \p kind samples the nearest texel.
@@ -77,6 +88,22 @@ inline bool UsesCroppedRects(Case kind) {
 inline FilterMode SamplerFilter(Case kind) {
   return SamplesNearest(kind) ? FilterMode::Nearest : FilterMode::Linear;
 }
+
+/// Placement of the 2x2 source's texels in the target for an anchored scenario: a sub-pixel
+/// translation, a rotation and a non-uniform scale, none aligned to the pixel grid.
+inline Transform2d TargetFromTexel(Case kind) {
+  switch (kind) {
+    case Case::AnchoredTranslate:
+      return Transform2d::Scale(2.5, 2.5) * Transform2d::Translate(1.3, 0.7);
+    case Case::AnchoredRotate:
+      return Transform2d::Scale(2.4, 2.4) * Transform2d::Rotate(0.5) *
+             Transform2d::Translate(3.0, 0.5);
+    default: return Transform2d::Scale(3.3, 1.7) * Transform2d::Translate(0.6, 2.2);
+  }
+}
+
+/// The anchor pixel of the anchored scenarios, away from the origin so the offset arithmetic runs.
+inline constexpr std::array<int32_t, 2> kAnchor{3, 2};
 
 inline Pixel SourcePixel(const Scenario& scenario, uint32_t x, uint32_t y) {
   return scenario.kind == Case::CubicTranslucent ? kTranslucentCorners[y * 2 + x]
@@ -103,6 +130,7 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.opacity = scenario.textured() ? 1.0f : 0.75f;
   result.sourceIsPremult = scenario.kind != Case::Straight;
   result.samplingMode = SamplesNearest(scenario.kind)      ? 1u
+                        : SamplesAnchored(scenario.kind)   ? 4u
                         : scenario.kind == Case::Pixelated ? 2u
                         : scenario.kind == Case::Cubic || scenario.kind == Case::CubicTranslucent
                             ? 3u
@@ -136,6 +164,37 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.texelFromTargetY[1] = texelsPerPixelY;
   result.texelFromTargetY[2] =
       result.srcRect[1] * kSourceTexels - result.destRect[1] * texelsPerPixelY;
+  if (SamplesAnchored(scenario.kind)) {
+    // The quad is the source's texel rectangle placed by TargetFromTexel; the mapping back is
+    // split at the anchor in double precision into a float linear part, the anchor's fractional
+    // texel coordinate and its whole texel coordinate.
+    const Transform2d placement = TargetFromTexel(scenario.kind);
+    const float w = float(scenario.width()), h = float(scenario.height());
+    std::fill(std::begin(result.mvp), std::end(result.mvp), 0.0f);
+    result.mvp[0] = float(2.0 * placement.data[0] / w);
+    result.mvp[1] = float(-2.0 * placement.data[1] / h);
+    result.mvp[4] = float(2.0 * placement.data[2] / w);
+    result.mvp[5] = float(-2.0 * placement.data[3] / h);
+    result.mvp[10] = result.mvp[15] = 1.0f;
+    result.mvp[12] = float(2.0 * placement.data[4] / w - 1.0);
+    result.mvp[13] = float(-2.0 * placement.data[5] / h + 1.0);
+    result.destRect[0] = result.destRect[1] = 0.0f;
+    result.destRect[2] = result.destRect[3] = kSourceTexels;
+    const Transform2d texelFromTarget = placement.inverse();
+    const Vector2d anchorTexel =
+        texelFromTarget.transformPosition(Vector2d(kAnchor[0], kAnchor[1]));
+    const Vector2d whole(std::floor(anchorTexel.x), std::floor(anchorTexel.y));
+    result.texelFromTargetX[0] = float(texelFromTarget.data[0]);
+    result.texelFromTargetX[1] = float(texelFromTarget.data[2]);
+    result.texelFromTargetX[2] = float(anchorTexel.x - whole.x);
+    result.texelFromTargetY[0] = float(texelFromTarget.data[1]);
+    result.texelFromTargetY[1] = float(texelFromTarget.data[3]);
+    result.texelFromTargetY[2] = float(anchorTexel.y - whole.y);
+    result.texelWholeX = int32_t(whole.x);
+    result.texelWholeY = int32_t(whole.y);
+    result.anchorX = kAnchor[0];
+    result.anchorY = kAnchor[1];
+  }
   return result;
 }
 
@@ -265,9 +324,24 @@ inline float CoverageScale(const shader::programs::ImageBlitParams& params, uint
   return scale;
 }
 
+/// Bilinear reference for an anchored scenario: the pixel center mapped through the exact inverse
+/// placement, sampled half a texel from texel centers with clamp-to-edge, and only where the center
+/// lies inside the placed source.
+inline FloatPixel AnchoredForegroundPixel(const Scenario& scenario, uint32_t x, uint32_t y) {
+  const Vector2d texel =
+      TargetFromTexel(scenario.kind).inverse().transformPosition(Vector2d(x + 0.5, y + 0.5));
+  if (texel.x < 0.0 || texel.x >= 2.0 || texel.y < 0.0 || texel.y >= 2.0) {
+    return {};
+  }
+  return SampleLinear(ExpandSource(scenario), float(texel.x - 0.5), float(texel.y - 0.5));
+}
+
 inline FloatPixel ForegroundPixel(const Scenario& scenario,
                                   const shader::programs::ImageBlitParams& params, uint32_t x,
                                   uint32_t y) {
+  if (SamplesAnchored(scenario.kind)) {
+    return AnchoredForegroundPixel(scenario, x, y);
+  }
   const float px = x + 0.5f, py = y + 0.5f;
   if (OutsideRectangle(
           px, py,
@@ -331,10 +405,12 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
 /// Pixelmatch policy for a scenario's readback.
 inline editor::tests::BitmapGoldenCompareParams ComparisonParams(
     const shader::programs::ImageBlitParams& params) {
-  if (params.samplingMode == 3u) {
+  if (params.samplingMode == 3u || params.samplingMode == 4u) {
     // Sixteen float taps can land one 8-bit step from the CPU reference on some GPUs (measured:
     // one channel of one pixel on a Vulkan device); the same two-pixel, one-step allowance as the
-    // native blur cascade check keeps every other pixel exact.
+    // native blur cascade check keeps every other pixel exact. Anchored bilinear evaluates its
+    // texel coordinate in single precision where the reference uses double, so it shares the
+    // allowance; a half-texel or sub-pixel error moves far more than two pixels.
     return editor::tests::ApprovedPixelToleranceParams(0.0f, 2, /*includeAntiAliasing=*/true);
   }
   return editor::tests::PixelmatchIdentityParams();
