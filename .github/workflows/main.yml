@@ -606,6 +606,8 @@ jobs:
           lane: macos-remote-shadow
           pool: macos-remote-shadow
           pool-workflows: main.yml pr_base_change.yml
+          pool-upstream: linux-self-hosted macos-remote-shadow-turnstile
+          upstream-grace-minutes: "5"
           capacity: "1"
           token: ${{ github.token }}
           timeout-minutes: "30"

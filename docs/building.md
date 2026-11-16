@@ -553,7 +553,11 @@ duration: at most its 90-minute budget, and a starved executor stops a phase aft
 turnstile with a pool of one runs a single shadow at a time against the macOS executor. It fails
 closed: after 30 minutes without admission the shadow lane is skipped. An older run still in its
 Linux lane counts against that pool until its own shadow job is created or skipped, so under load a
-shadow run can wait and then be skipped this way. That cost is why the lane is opt-in per pull
+shadow run can wait and then be skipped this way. A run that can no longer create a shadow job
+does not count: one whose Linux lane was skipped or cancelled, such as a push to `main`, and one
+with no shadow job 5 minutes after its Linux lane and shadow turnstile ended, such as a pull request
+from a branch without this lane (the turnstile's `pool-upstream` and `upstream-grace-minutes`
+inputs). An unreadable run still counts. That cost is why the lane is opt-in per pull
 request, and turning it on for every trusted pull request should wait for dedicated runner capacity.
 While the shadow lane runs, the pull request's checks stay pending.
 

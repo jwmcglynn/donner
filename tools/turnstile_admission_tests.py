@@ -7,6 +7,7 @@ queue. So the rules live in a pure unit that these tests drive with fabricated
 Actions API payloads, and the workflow wiring that feeds it is pinned here too.
 """
 
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 import re
@@ -282,6 +283,119 @@ class ShadowPoolTests(unittest.TestCase):
         self.assertEqual(admission.CLEAR, admission.pool_state(payload, [_LINUX_LANE]))
 
 
+# The jobs the shadow job needs, first the Linux lane that every run of the pool workflows lists.
+_SHADOW_UPSTREAM = [_LINUX_LANE, _SHADOW_LANE + "-turnstile"]
+_GRACE = 300.0
+
+
+def _epoch(stamp):
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+
+
+def _job(name, status, conclusion=None, started_at=None, completed_at=None):
+    """One job as /actions/runs/{id}/jobs lists it (the fields admission reads)."""
+    return {"name": name, "status": status, "conclusion": conclusion,
+            "started_at": started_at, "completed_at": completed_at}
+
+
+# Sanitized shapes of real runs of this repository (2026-11-16).
+# A push to main: the Linux lane is skipped, so neither shadow job is ever listed.
+_MAIN_PUSH = {"jobs": [
+    _job("gatekeeper", "completed", "success", "2026-11-16T01:10:40Z", "2026-11-16T01:12:04Z"),
+    _job("linux-self-hosted-turnstile", "completed", "skipped", "2026-11-16T01:12:06Z",
+         "2026-11-16T01:12:06Z"),
+    _job(_LINUX_LANE, "completed", "skipped", "2026-11-16T01:12:06Z", "2026-11-16T01:12:06Z"),
+    _job("macos", "in_progress", None, "2026-11-16T01:12:10Z", None)]}
+# A pull request whose workflow revision has no shadow jobs, after its Linux lane passed.
+_OTHER_PULL_REQUEST = {"jobs": [
+    _job("linux-self-hosted-turnstile", "completed", "success", "2026-11-16T01:54:26Z",
+         "2026-11-16T01:55:48Z"),
+    _job(_LINUX_LANE, "completed", "success", "2026-11-16T01:55:50Z", "2026-11-16T02:01:56Z"),
+    _job("macos-browser", "in_progress", None, "2026-11-16T01:56:02Z", None)]}
+# A pull request with the shadow jobs that did not opt in: both are listed as skipped at once.
+_OPTED_OUT = {"jobs": [
+    _job(_LINUX_LANE, "completed", "success", "2026-11-15T23:32:43Z", "2026-11-15T23:38:14Z"),
+    _job(_SHADOW_LANE + "-turnstile", "completed", "skipped", "2026-11-15T23:38:14Z",
+         "2026-11-15T23:38:14Z"),
+    _job(_SHADOW_LANE, "completed", "skipped", "2026-11-15T23:38:14Z", "2026-11-15T23:38:14Z")]}
+# A pull request still in its Linux lane.
+_IN_LINUX_LANE = {"jobs": [
+    _job("linux-self-hosted-turnstile", "completed", "success", "2026-11-16T01:58:24Z",
+         "2026-11-16T01:59:44Z"),
+    _job(_LINUX_LANE, "in_progress", None, "2026-11-16T02:03:05Z", None)]}
+# An opted-in pull request waiting at its own shadow turnstile: the shadow job is not listed yet.
+_AT_SHADOW_TURNSTILE = {"jobs": [
+    _job(_LINUX_LANE, "completed", "success", "2026-11-16T01:22:46Z", "2026-11-16T01:51:02Z"),
+    _job(_SHADOW_LANE + "-turnstile", "in_progress", None, "2026-11-16T01:51:04Z", None)]}
+
+
+class ShadowUpstreamTests(unittest.TestCase):
+    """A run whose shadow job is absent holds the shadow slot only while it may still create it."""
+
+    def _state(self, payload, now):
+        return admission.pool_state(payload, _SHADOW_POOL, _SHADOW_UPSTREAM, _epoch(now), _GRACE)
+
+    def test_a_main_push_with_a_skipped_linux_lane_never_holds_the_slot(self):
+        # At once, inside the grace: a skipped Linux lane can never create the shadow job.
+        self.assertEqual(admission.CLEAR, self._state(_MAIN_PUSH, "2026-11-16T01:12:10Z"))
+
+    def test_a_run_without_shadow_jobs_releases_the_slot_after_the_grace(self):
+        self.assertEqual(admission.ABSENT, self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:02:56Z"))
+        self.assertEqual(admission.CLEAR, self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:07:00Z"))
+
+    def test_an_opted_out_run_lists_skipped_shadow_jobs(self):
+        self.assertEqual(admission.CLEAR, self._state(_OPTED_OUT, "2026-11-15T23:38:15Z"))
+
+    def test_a_run_still_in_its_linux_lane_holds_the_slot(self):
+        self.assertEqual(admission.ABSENT, self._state(_IN_LINUX_LANE, "2026-11-16T05:00:00Z"))
+
+    def test_an_opted_in_run_waiting_at_its_turnstile_holds_the_slot(self):
+        self.assertEqual(admission.ABSENT,
+                         self._state(_AT_SHADOW_TURNSTILE, "2026-11-16T03:00:00Z"))
+
+    def test_an_unfinished_upstream_job_holds_even_with_a_completion_time(self):
+        # The status decides, not a timestamp: a queued rerun of a job can carry an old one.
+        payload = {"jobs": [_job(_LINUX_LANE, "queued", None, None, "2026-11-16T01:00:00Z")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T03:00:00Z"))
+
+    def test_a_run_not_yet_listing_its_linux_lane_holds_the_slot(self):
+        payload = {"jobs": [_job("gatekeeper", "in_progress")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T03:00:00Z"))
+
+    def test_an_unreadable_completion_time_or_clock_holds_the_slot(self):
+        payload = {"jobs": [_job(_LINUX_LANE, "completed", "success", None, "yesterday")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T03:00:00Z"))
+        self.assertEqual(admission.ABSENT, admission.pool_state(
+            _OTHER_PULL_REQUEST, _SHADOW_POOL, _SHADOW_UPSTREAM, None, _GRACE))
+
+    def test_a_listed_shadow_job_or_an_api_failure_still_decides_first(self):
+        for status, expected in (("queued", admission.PENDING),
+                                 ("in_progress", admission.ACTIVE)):
+            with self.subTest(status=status):
+                payload = {"jobs": _MAIN_PUSH["jobs"] + [_job(_SHADOW_LANE, status)]}
+                self.assertEqual(expected, self._state(payload, "2026-11-16T03:00:00Z"))
+        self.assertEqual(admission.ACTIVE, self._state(None, "2026-11-16T03:00:00Z"))
+
+    def test_without_upstream_every_run_without_a_pool_job_holds(self):
+        # The Linux pool, and any pool that names no upstream, keeps the original rule.
+        self.assertEqual(admission.ABSENT, admission.pool_state(_OTHER_PULL_REQUEST, _SHADOW_POOL))
+        self.assertEqual(admission.ABSENT, admission.pool_state(
+            {"jobs": [_job("gatekeeper", "completed", "success")]}, [_LINUX_LANE]))
+
+    def test_the_queue_admits_past_runs_that_can_no_longer_take_the_slot(self):
+        runs = [_run(10, _MAIN_PUSH), _run(11, _OTHER_PULL_REQUEST), _run(12, _OPTED_OUT)]
+        request = {"capacity": 1, "me": 20, "pool": _SHADOW_POOL, "runs": runs,
+                   "upstream": _SHADOW_UPSTREAM, "grace_seconds": _GRACE,
+                   "now": _epoch("2026-11-16T02:30:00Z")}
+        self.assertEqual({"occupancy": 0, "admit": True, "blockers": []},
+                         admission.decide(request))
+        request["runs"] = runs + [_run(13, _IN_LINUX_LANE)]
+        self.assertEqual(["13 (absent)"], admission.decide(request)["blockers"])
+        # Without the upstream data, the old rule counts the runs that never create the job.
+        self.assertEqual(["10 (absent)", "11 (absent)"], admission.decide(
+            dict(request, upstream=[], runs=runs))["blockers"])
+
+
 class TurnstileWiringTests(unittest.TestCase):
     """The rules only help if the self-hosted lane is actually gated by them."""
 
@@ -306,8 +420,10 @@ class TurnstileWiringTests(unittest.TestCase):
         self.assertRegex(usage, r"(?m)^\s+pool: " + _LINUX_LANE + r"$")
         self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
         self.assertRegex(usage, r"capacity:\s*\"?" + _EXPECTED_CAPACITY)
-        # The gating lane keeps the default fail-open timeout.
+        # The gating lane keeps the default fail-open timeout and the original absence rule.
         self.assertNotIn("timeout-result", usage)
+        self.assertNotIn("pool-upstream", usage)
+        self.assertNotIn("upstream-grace", usage)
 
     def test_the_shadow_lane_has_a_fail_closed_pool_of_one(self):
         usage = self._turnstile_usages(self.workflows["main.yml"])[_SHADOW_LANE]
@@ -319,6 +435,17 @@ class TurnstileWiringTests(unittest.TestCase):
         self.assertLessEqual(minutes, 30)
         shadow = self._job_body(self.workflows["main.yml"], _SHADOW_LANE)
         self.assertIn("needs.macos-remote-shadow-turnstile.outputs.admitted == 'true'", shadow)
+        # The upstream it supplies is what the shadow jobs need, the Linux lane first, and the
+        # grace is short: the turnstile job is listed seconds after the Linux lane ends.
+        self.assertRegex(usage, r"(?m)^\s+pool-upstream: %s$" % " ".join(_SHADOW_UPSTREAM))
+        grace = int(re.search(r'(?m)^\s+upstream-grace-minutes: "(\d+)"$', usage).group(1))
+        self.assertLessEqual(grace, 10)
+        for job in (_SHADOW_LANE, _SHADOW_LANE + "-turnstile"):
+            self.assertIn("(needs.linux-self-hosted.result == 'success' || "
+                          "needs.linux-self-hosted.result == 'failure')",
+                          self._job_body(self.workflows["main.yml"], job))
+        self.assertIn("TURNSTILE_POOL_UPSTREAM: ${{ inputs.pool-upstream }}", self.action)
+        self.assertRegex(self.action, r'pool-upstream:\n(?:.*\n)*?\s+default: ""')
 
     def test_action_fails_closed_only_when_asked(self):
         self.assertRegex(self.action, r'timeout-result:\n(?:.*\n)*?\s+default: "proceed"')

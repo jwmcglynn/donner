@@ -89,6 +89,10 @@ class Turnstile:
         names = (environ.get("TURNSTILE_POOL") or "").split() or [self.lane]
         self.pool = names
         self.pool_workflows = (environ.get("TURNSTILE_POOL_WORKFLOWS") or "").split()
+        # Jobs a pool job needs, for a pool whose runs may never create their pool job (see
+        # admission.upstream_state). Empty keeps every run without a pool job holding a slot.
+        self.upstream = (environ.get("TURNSTILE_POOL_UPSTREAM") or "").split()
+        self.grace = float(environ.get("TURNSTILE_UPSTREAM_GRACE_MINUTES") or "5") * 60
         self.capacity = int(environ.get("TURNSTILE_CAPACITY") or "1")
         self.base = float(environ.get("TURNSTILE_POLL_SECONDS") or "60")
         self.maximum = max(self.base, float(environ.get("TURNSTILE_MAX_POLL_SECONDS") or "300"))
@@ -181,11 +185,13 @@ class Turnstile:
                 jobs = None
             if not isinstance(jobs, dict):
                 jobs = None
-            if jobs is not None and admission.pool_state(jobs, self.pool) == admission.CLEAR:
+            if jobs is not None and admission.pool_state(
+                    jobs, self.pool, self.upstream, self.clock(), self.grace) == admission.CLEAR:
                 self.finished[run_id] = attempt
                 continue
             entries.append({"id": run_id, "jobs": jobs})
-        return {"capacity": self.capacity, "me": self.me, "pool": self.pool, "runs": entries}
+        return {"capacity": self.capacity, "me": self.me, "pool": self.pool, "runs": entries,
+                "upstream": self.upstream, "grace_seconds": self.grace, "now": self.clock()}
 
     def run(self) -> int:
         workflow_ids = self._resolve()

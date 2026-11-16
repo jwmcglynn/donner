@@ -56,6 +56,20 @@ inputs:
       pool run that is still initializing. Defaults to this run's own workflow.
     required: false
     default: ""
+  pool-upstream:
+    description: >-
+      Whitespace-separated names of the jobs a pool job needs, first the one every run
+      creates. Given, an older run with no pool job stops holding a slot once one of them
+      concluded skipped or cancelled, or upstream-grace-minutes after all of them completed;
+      it still holds one while any is unfinished. Empty keeps every such run holding a slot.
+    required: false
+    default: ""
+  upstream-grace-minutes:
+    description: >-
+      With pool-upstream, how long after its upstream jobs completed a run may still
+      create its pool job.
+    required: false
+    default: "5"
   capacity:
     description: >-
       How many pool jobs may be admitted at once. Default 1 preserves the
@@ -111,6 +125,8 @@ runs:
         TURNSTILE_LANE: ${{ inputs.lane }}
         TURNSTILE_POOL: ${{ inputs.pool }}
         TURNSTILE_POOL_WORKFLOWS: ${{ inputs.pool-workflows }}
+        TURNSTILE_POOL_UPSTREAM: ${{ inputs.pool-upstream }}
+        TURNSTILE_UPSTREAM_GRACE_MINUTES: ${{ inputs.upstream-grace-minutes }}
         TURNSTILE_CAPACITY: ${{ inputs.capacity }}
         TURNSTILE_TOKEN: ${{ inputs.token }}
         TURNSTILE_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}

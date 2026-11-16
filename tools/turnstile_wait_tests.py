@@ -9,6 +9,7 @@ requests per poll and the spacing between polls are part of its contract.
 import importlib.util
 import re
 import tempfile
+import time
 import unittest
 
 from python.runfiles import runfiles
@@ -313,6 +314,73 @@ class FailClosedTests(unittest.TestCase):
                                                 TURNSTILE_TIMEOUT_MINUTES="5")
         self.assertEqual((0, None), (status, written))
         self.assertIn("proceeding (fail-open)", self.logged[-2])
+
+
+def _stamp(seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+
+
+class ShadowUpstreamWaitTests(unittest.TestCase):
+    """The shadow pool supplies its upstream jobs, so runs that never create one stop holding."""
+
+    _SHADOW = "macos-remote-shadow"
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.logged = []
+
+    def _api(self, ago=600):
+        api = FakeActions(self.clock, {100: (1, None), 200: (1, None), _ME: (1, None)})
+        finished = _stamp(self.clock.now - ago)
+        payloads = {
+            # A push to main: its Linux lane is skipped.
+            100: [{"name": _LANE, "status": "completed", "conclusion": "skipped",
+                   "completed_at": finished}],
+            # A pull request whose workflow has no shadow job, its Linux lane passed.
+            200: [{"name": _LANE, "status": "completed", "conclusion": "success",
+                   "completed_at": finished}],
+            _ME: [{"name": self._SHADOW + "-turnstile", "status": "in_progress"}]}
+        original = api.get_json
+
+        def get_json(url):
+            jobs = re.search(r"actions/runs/(\d+)/jobs\?per_page=100$", url)
+            if jobs:
+                original(url)
+                return {"jobs": payloads[int(jobs.group(1))]}
+            return original(url)
+        api.get_json = get_json
+        return api
+
+    def _run(self, ago=600, **environ):
+        with tempfile.TemporaryDirectory() as directory:
+            output = directory + "/output"
+            values = dict(TURNSTILE_LANE=self._SHADOW, TURNSTILE_POOL=self._SHADOW,
+                          TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="30",
+                          TURNSTILE_TIMEOUT_RESULT="skip", GITHUB_OUTPUT=output)
+            values.update(environ)
+            status = turnstile.Turnstile(_environ(**values), self._api(ago), sleep=self.clock.sleep,
+                                         clock=self.clock, jitter=lambda: 0,
+                                         log=self.logged.append).run()
+            return status, open(output, encoding="utf-8").read()
+
+    def test_runs_that_never_create_the_shadow_job_do_not_hold_its_slot(self):
+        status, written = self._run(
+            TURNSTILE_POOL_UPSTREAM=_LANE + " " + self._SHADOW + "-turnstile",
+            TURNSTILE_UPSTREAM_GRACE_MINUTES="5")
+        self.assertEqual((0, "admitted=true\n"), (status, written))
+        self.assertLess(sum(self.clock.slept), 5 * 60)
+
+    def test_a_run_whose_linux_lane_just_ended_holds_it_for_the_grace(self):
+        status, written = self._run(
+            ago=60, TURNSTILE_POOL_UPSTREAM=_LANE + " " + self._SHADOW + "-turnstile",
+            TURNSTILE_UPSTREAM_GRACE_MINUTES="5")
+        self.assertEqual((0, "admitted=true\n"), (status, written))
+        self.assertGreaterEqual(sum(self.clock.slept), 4 * 60)
+        self.assertIn("200 (absent)", "".join(self.logged))
+
+    def test_without_upstream_they_hold_it_until_the_safety_timeout(self):
+        self.assertEqual((0, "admitted=false\n"), self._run())
+        self.assertIn("100 (absent), 200 (absent)", "".join(self.logged))
 
 
 class WiringTests(unittest.TestCase):
