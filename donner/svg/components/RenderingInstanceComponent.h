@@ -162,6 +162,22 @@ inline bool HasPaint(const ResolvedPaintServer& paint) {
 }
 
 /**
+ * Returns true only when both paints are provably identical: both none, or the same solid color.
+ * A resolved reference is never reported equal, because it carries per-resolution state such as
+ * its paint subtree and context remapping.
+ *
+ * @param lhs First paint.
+ * @param rhs Second paint.
+ */
+inline bool IsProvablySamePaint(const ResolvedPaintServer& lhs, const ResolvedPaintServer& rhs) {
+  if (std::holds_alternative<PaintResolvedReference>(lhs) || lhs.index() != rhs.index()) {
+    return false;
+  }
+  const auto* lhsSolid = std::get_if<PaintServer::Solid>(&lhs);
+  return lhsSolid == nullptr || *lhsSolid == std::get<PaintServer::Solid>(rhs);
+}
+
+/**
  * An instance of the entity in the rendering tree. Each renderered entity has an instance with a
  * unique \c drawOrder, which enables this list to be sorted and traversed to render the tree.
  */

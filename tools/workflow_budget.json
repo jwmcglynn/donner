@@ -1,10 +1,10 @@
 {
   "tree": {
-    "lines": 6152,
-    "comment_lines": 688,
-    "multiline_runs": 110,
+    "lines": 5677,
+    "comment_lines": 634,
+    "multiline_runs": 72,
     "longest_run": 194,
-    "run_expressions": 44,
+    "run_expressions": 12,
     "longest_if": 402
   },
   "files": {
@@ -97,11 +97,11 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1767,
-      "comment_lines": 248,
-      "multiline_runs": 48,
-      "longest_run": 38,
-      "run_expressions": 38,
+      "lines": 1292,
+      "comment_lines": 194,
+      "multiline_runs": 10,
+      "longest_run": 31,
+      "run_expressions": 6,
       "longest_if": 402
     },
     ".github/workflows/perf.yml": {

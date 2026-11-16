@@ -34,6 +34,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/SubDocumentWarnings.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "donner/svg/text/TextEngine.h"
@@ -1994,6 +1995,29 @@ TEST_F(RendererDriverTest, ResolvesSpanFallbackPaintFromAncestorStyle) {
       });
 
   driver.draw(document);
+}
+
+/// A sink holding one warning at a location with @p line.
+ParseWarningSink WarningOnLine(std::size_t line) {
+  ParseWarningSink sink;
+  sink.add(ParseDiagnostic::Warning(
+      "Repeated warning",
+      FileOffset::OffsetWithLineInfo(4, FileOffset::LineInfo{.line = line, .offsetOnLine = 4})));
+  return sink;
+}
+
+// Two preparations whose warnings differ only in line information found different warnings, so a
+// later collecting sink receives both.
+TEST(SubDocumentWarningsTest, BatchesDifferingOnlyInLineInfoAreBothHeld) {
+  SVGDocument subDocument;
+  const ParseWarningSink first = WarningOnLine(1);
+  const ParseWarningSink second = WarningOnLine(2);
+  details::HoldSubDocumentWarnings(subDocument.registry(), first);
+  details::HoldSubDocumentWarnings(subDocument.registry(), second);
+  ParseWarningSink host;
+  details::DeliverHeldSubDocumentWarnings(subDocument.registry(), host);
+  EXPECT_THAT(host.warnings(),
+              testing::ElementsAre(first.warnings().front(), second.warnings().front()));
 }
 
 }  // namespace
