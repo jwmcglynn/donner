@@ -24,6 +24,7 @@ TextLayoutParams ToTextLayoutParams(const TextParams& params) {
   layoutParams.textAnchor = params.textAnchor;
   layoutParams.direction = params.direction;
   layoutParams.bidiOverride = params.bidiOverride;
+  layoutParams.bidiPlaintext = params.bidiPlaintext;
   layoutParams.writingMode = params.writingMode;
   layoutParams.letterSpacingPx = params.letterSpacingPx;
   layoutParams.wordSpacingPx = params.wordSpacingPx;
