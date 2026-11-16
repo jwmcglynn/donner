@@ -73,14 +73,21 @@ struct Uniforms {
   // should gate the SOURCE content before mask/blend compositing.
   hasClipMask: u32,
   // 0 = linear, 1 = nearest texel, 2 = CSS pixelated two-stage sampling,
-  // 3 = Mitchell-Netravali cubic (B = C = 1/3) over the source rectangle.
+  // 3 = Mitchell-Netravali cubic (B = C = 1/3) over the source rectangle,
+  // 4 = bilinear through the anchored texel mapping below.
   samplingMode: u32,
   _blendPad1: u32,
   // Device pixels per source texel after the complete image transform.
   pixelatedScale: vec2f,
-  _samplingPad: vec2u,
+  // Anchored bilinear sampling: whole texel coordinate of the anchor pixel.
+  texelWholeX: i32,
+  texelWholeY: i32,
   // Nearest sampling maps target pixel position p to source texel coordinates:
   // x = p.x * texelFromTargetX.x + (p.y * texelFromTargetX.y + texelFromTargetX.z), likewise y.
+  // Anchored bilinear sampling maps it relative to the anchor pixel a = (texelFromTargetX.w,
+  // texelFromTargetY.w), with q = p - a:
+  // x = q.x * texelFromTargetX.x + (q.y * texelFromTargetX.y + texelFromTargetX.z) + texelWholeX,
+  // where the z terms are the anchor's fractional texel coordinate.
   texelFromTargetX: vec4f,
   texelFromTargetY: vec4f,
 };
@@ -162,6 +169,38 @@ fn sample_nearest(pixel_center: vec2f) -> vec4f {
 }
 
 // Mitchell weights in tiny-skia's form, for texels 0.5 and 1.5 texels from the sample.
+fn anchored_texel(coord: vec2i, source_min: vec2i, source_max: vec2i) -> vec4f {
+  return textureLoad(imageTexture, clamp(coord, source_min, source_max), 0);
+}
+
+// Bilinear sampling whose weights depend only on the pixel's position relative to the anchor and
+// on the anchor's fractional texel coordinate, both exact in single precision. Two draws that
+// differ by a whole-pixel move of the target or the source then blend corresponding pixels with
+// the same weights; an interpolated texture coordinate, or hardware filtering with its limited
+// subtexel precision, does not guarantee that. Edges clamp to the source rectangle.
+fn sample_anchored(pixel_center: vec2f) -> vec4f {
+  let texture_size = vec2i(textureDimensions(imageTexture));
+  let source_min = uniforms.srcRect.xy * vec2f(texture_size);
+  let source_max = uniforms.srcRect.zw * vec2f(texture_size);
+  let source_origin = clamp(vec2i(floor(source_min + vec2f(0.5))), vec2i(0),
+                            texture_size - vec2i(1));
+  let source_size = max(vec2i(floor(source_max - source_min + vec2f(0.5))), vec2i(1));
+  let last = min(source_origin + source_size, texture_size) - vec2i(1);
+  let row_x = uniforms.texelFromTargetX;
+  let row_y = uniforms.texelFromTargetY;
+  let q = pixel_center - vec2f(row_x.w, row_y.w);
+  let coord = vec2f(q.x * row_x.x + (q.y * row_x.y + row_x.z),
+                    q.x * row_y.x + (q.y * row_y.y + row_y.z)) - vec2f(0.5);
+  let cell = floor(coord);
+  let fraction = coord - cell;
+  let base = vec2i(cell) + vec2i(uniforms.texelWholeX, uniforms.texelWholeY);
+  let top = mix(anchored_texel(base, source_origin, last),
+                anchored_texel(base + vec2i(1, 0), source_origin, last), fraction.x);
+  let bottom = mix(anchored_texel(base + vec2i(0, 1), source_origin, last),
+                   anchored_texel(base + vec2i(1, 1), source_origin, last), fraction.x);
+  return mix(top, bottom, fraction.y);
+}
+
 fn cubic_near(t: f32) -> f32 {
   return ((-21.0 / 18.0 * t + 27.0 / 18.0) * t + 9.0 / 18.0) * t + 1.0 / 18.0;
 }
@@ -496,6 +535,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   }
   if (uniforms.samplingMode == 1u) {
     sampled = sample_nearest(in.clip_pos.xy);
+  }
+  if (uniforms.samplingMode == 4u) {
+    sampled = sample_anchored(in.clip_pos.xy);
   }
   if (uniforms.samplingMode == 3u) {
     // Cubic lobes leave [0, 1]. Like tiny-skia, clamp each channel only, so premultiplied color

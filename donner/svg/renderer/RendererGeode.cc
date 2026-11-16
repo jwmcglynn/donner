@@ -44,6 +44,7 @@
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
+#include "donner/svg/renderer/geode/GeodeAnchoredSampling.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
@@ -3217,14 +3218,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.y)) - regionY0);
     resampleEncoder->setTransform(localFromDevice);
     // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
-    // past the viewport's top-left corner.
-    resampleEncoder->drawTexture(frame.layerTexture,
-                                 Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
-                                                 -static_cast<double>(frame.filterBufferOffsetY),
-                                                 static_cast<double>(frame.layerDesc.size.width),
-                                                 static_cast<double>(frame.layerDesc.size.height)),
-                                 kWholeTextureUv, 1.0, /*pixelated=*/false,
-                                 /*sourceIsPremultiplied=*/true);
+    // past the viewport's top-left corner. The local raster follows the filter region while the
+    // capture follows the device grid, so a whole-pixel device move shifts the capture under the
+    // raster; anchoring the mapping at the raster origin keeps every bilinear weight unchanged.
+    resampleEncoder->drawTextureAnchored(
+        frame.layerTexture,
+        Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
+                        -static_cast<double>(frame.filterBufferOffsetY),
+                        static_cast<double>(frame.layerDesc.size.width),
+                        static_cast<double>(frame.layerDesc.size.height)),
+        kWholeTextureUv, 1.0, /*sourceIsPremultiplied=*/true, Vector2i::Zero());
     resampleEncoder->finish();
     retireFinishedEncoder(std::move(resampleEncoder));
 
@@ -3267,11 +3270,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     updateEncoderScissor();
     if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
       encoder->setTransform(deviceFromLocal);
-      encoder->drawTexture(*composited,
-                           Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
-                                           static_cast<double>(geometry->height)),
-                           kWholeTextureUv, 1.0, /*pixelated=*/false,
-                           /*sourceIsPremultiplied=*/true);
+      // The raster moves with the content, so anchor at the device pixel holding its origin: a
+      // whole-pixel device move moves the anchor with it and leaves every weight unchanged.
+      encoder->drawTextureAnchored(
+          *composited,
+          Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
+                          static_cast<double>(geometry->height)),
+          kWholeTextureUv, 1.0, /*sourceIsPremultiplied=*/true,
+          geode::AnchorPixelFor(deviceFromLocal.transformPosition(Vector2d::Zero())));
       encoder->setTransform(Transform2d());
     }
     releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);

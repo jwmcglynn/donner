@@ -71,8 +71,11 @@ consteval bool ValidateImageBlitArtifact() {
       "uniforms", "pixelatedScale", offsetof(ImageBlitParams, pixelatedScale),
       sizeof(ImageBlitParams::pixelatedScale), ShaderScalarType::F32, 2, 0, 0, 0, 0));
   static_assert(shader.matchesMember(
-      "uniforms", "_samplingPad", offsetof(ImageBlitParams, samplingPadding),
-      sizeof(ImageBlitParams::samplingPadding), ShaderScalarType::U32, 2, 0, 0, 0, 0));
+      "uniforms", "texelWholeX", offsetof(ImageBlitParams, texelWholeX),
+      sizeof(ImageBlitParams::texelWholeX), ShaderScalarType::I32, 1, 0, 0, 0, 0));
+  static_assert(shader.matchesMember(
+      "uniforms", "texelWholeY", offsetof(ImageBlitParams, texelWholeY),
+      sizeof(ImageBlitParams::texelWholeY), ShaderScalarType::I32, 1, 0, 0, 0, 0));
   static_assert(shader.matchesMember(
       "uniforms", "texelFromTargetX", offsetof(ImageBlitParams, texelFromTargetX),
       sizeof(ImageBlitParams::texelFromTargetX), ShaderScalarType::F32, 4, 0, 0, 0, 0));
