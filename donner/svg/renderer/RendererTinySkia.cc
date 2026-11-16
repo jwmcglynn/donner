@@ -281,14 +281,23 @@ tiny_skia::Point toTinyPoint(const Vector2d& value) {
   return tiny_skia::Point::fromXY(NarrowToFloat(value.x), NarrowToFloat(value.y));
 }
 
-/// One path holding every contour of \p paths, or `std::nullopt` when they hold none.
-/// @param paths Paths to join, in order.
-std::optional<tiny_skia::Path> JoinTinyPaths(std::span<const tiny_skia::Path> paths) {
-  tiny_skia::PathBuilder joined;
-  for (const tiny_skia::Path& path : paths) {
-    joined.pushPath(path);
+/// One path per text chunk, holding every contour of that chunk's glyph paths; chunks without
+/// contours are left out.
+/// @param paths A run's glyph paths, in order.
+/// @param chunks The run's text chunks over \p paths.
+std::vector<tiny_skia::Path> JoinTinyPathsByChunk(std::span<const tiny_skia::Path> paths,
+                                                  const TextChunkRanges& chunks) {
+  std::vector<tiny_skia::Path> joined;
+  for (const auto& [begin, end] : chunks.ranges(paths.size())) {
+    tiny_skia::PathBuilder builder;
+    for (const tiny_skia::Path& path : paths.subspan(begin, end - begin)) {
+      builder.pushPath(path);
+    }
+    if (std::optional<tiny_skia::Path> chunk = builder.finish()) {
+      joined.push_back(std::move(*chunk));
+    }
   }
-  return joined.finish();
+  return joined;
 }
 
 tiny_skia::Transform toTinyTransform(const Transform2d& transform) {
@@ -3367,13 +3376,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // One path for each text chunk of the run, as resvg strokes the part of a span in one
       // chunk: where the strokes of adjacent glyphs overlap, the overlap is covered once instead
       // of composited per glyph. Separate chunks are separate shapes.
-      const std::span<const tiny_skia::Path> paths(runGlyphPaths);
-      for (const auto& [begin, end] : runChunks.ranges(paths.size())) {
-        if (const std::optional<tiny_skia::Path> chunkPath =
-                JoinTinyPaths(paths.subspan(begin, end - begin))) {
-          tiny_skia::Painter::strokePath(pixmapView, *chunkPath, *spanStrokePaint, spanTinyStroke,
-                                         toTinyTransform(deviceFromLocalTransform_), mask);
-        }
+      for (const tiny_skia::Path& chunkPath : JoinTinyPathsByChunk(runGlyphPaths, runChunks)) {
+        tiny_skia::Painter::strokePath(pixmapView, chunkPath, *spanStrokePaint, spanTinyStroke,
+                                       toTinyTransform(deviceFromLocalTransform_), mask);
       }
     };
 
