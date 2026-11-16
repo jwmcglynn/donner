@@ -96,6 +96,22 @@ class CoverageContractTest(unittest.TestCase):
             self.assertTrue(any(line.startswith("macos / %s: " % exception)
                                 for line in excepted), exception)
 
+    def test_an_intentionally_empty_selection_is_not_a_gap(self):
+        # When bazel-diff proves that no target is affected, the selection builds and tests
+        # nothing: the change-based steps run and find no tests, and the browser and native
+        # Metal lanes it gates skip. The fixed-suite steps still run their tests.
+        receipts = copy.deepcopy(_COMPLETE)
+        for job, steps in (("linux-self-hosted", ("build", "test", "local_xvfb")),
+                           ("macos-self-hosted", ("build", "test", "browser_preflight",
+                                                  "browser_test"))):
+            for step in steps:
+                receipts[job]["steps"][step] = _ran(0)
+        del receipts["macos-browser"], receipts["macos-metal"]
+        nothing = {"always": True, "fallback": False, "browser_affected": False,
+                   "metal_affected": False, "self_hosted_macos": True}
+        problems, _ = self._check(receipts, nothing)
+        self.assertEqual([], problems)
+
     def test_skipped_self_hosted_shader_validation_fails(self):
         # Main runs no shader validation, so the self-hosted real-GPU steps are the only gate.
         for step, entry in (("metal_profile", "shader-validation"),

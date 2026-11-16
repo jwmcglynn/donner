@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/StringUtils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/svg/SVGDefsElement.h"
@@ -49,7 +50,7 @@ bool IsGeneratedPrefabId(std::string_view id, std::string_view key) {
   }
   const std::string_view suffix = id.substr(prefix.size());
   return !suffix.empty() && suffix.front() >= '1' && suffix.front() <= '9' &&
-         std::all_of(suffix.begin(), suffix.end(), [](char c) { return c >= '0' && c <= '9'; });
+         std::all_of(suffix.begin(), suffix.end(), StringUtils::IsAsciiDigit);
 }
 
 bool AttributeIs(const svg::SVGElement& element, const char* name, std::string_view expected) {

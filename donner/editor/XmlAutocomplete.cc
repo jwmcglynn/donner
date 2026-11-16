@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <string>
 #include <vector>
 
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/svg/SVGElementNames.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -21,7 +21,9 @@ bool IsCssPropertyNameChar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
 }
 
-bool IsAsciiWhitespace(char c) {
+/// XML whitespace (the `S` production): space, tab, line feed and carriage return. Unlike
+/// StringUtils::IsAsciiWhitespace, vertical tab and form feed are not whitespace.
+bool IsXmlWhitespace(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -43,8 +45,7 @@ bool StartsWithInsensitive(std::string_view value, std::string_view prefix) {
   }
 
   return std::equal(prefix.begin(), prefix.end(), value.begin(), [](char a, char b) {
-    return std::tolower(static_cast<unsigned char>(a)) ==
-           std::tolower(static_cast<unsigned char>(b));
+    return StringUtils::ToLowerAscii(a) == StringUtils::ToLowerAscii(b);
   });
 }
 
@@ -174,7 +175,7 @@ XmlAutocompleteContext MakeStylePropertyContext(std::string_view source, std::si
     }
   }
 
-  while (segmentStart < cursorOffset && IsAsciiWhitespace(source[segmentStart])) {
+  while (segmentStart < cursorOffset && IsXmlWhitespace(source[segmentStart])) {
     ++segmentStart;
   }
 

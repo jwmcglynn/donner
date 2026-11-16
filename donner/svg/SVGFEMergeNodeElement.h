@@ -83,11 +83,11 @@ namespace donner::svg {
  * | --------: | :-----------: | :---------- |
  * | `in`      | *previous*    | Filter result name or implemented standard source keyword. |
  *
- * Implemented standard source keywords are `SourceGraphic`, `SourceAlpha`, `FillPaint`, and
- * `StrokePaint`.
+ * Implemented standard source keywords are `SourceGraphic`, `SourceAlpha`, `FillPaint`,
+ * `StrokePaint`, `BackgroundImage` and `BackgroundAlpha`.
  *
- * \note SVG 1.1 `BackgroundImage` and `BackgroundAlpha` filter inputs are not implemented; see
- *       \ref UnsupportedSvg1Features.
+ * \note `BackgroundImage` and `BackgroundAlpha` read the isolation-group backdrop, not an SVG 1.1
+ *       `enable-background` snapshot; see \ref UnsupportedSvg1Features.
  *
  * \note Unlike most filter primitives, `<feMergeNode>` **does not** inherit the standard
  *       filter primitive attributes. It has no `x`, `y`, `width`, `height`, or `result`

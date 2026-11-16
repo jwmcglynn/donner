@@ -160,7 +160,7 @@ namespace donner::svg {
  *
  * | Attribute | Default    | Description |
  * | --------: | :--------: | :---------- |
- * | `in`      | *previous* | First (top) input, named filter result or one of `SourceGraphic`, `SourceAlpha`, `FillPaint`, `StrokePaint`. |
+ * | `in`      | *previous* | First (top) input, named filter result or one of `SourceGraphic`, `SourceAlpha`, `FillPaint`, `StrokePaint`, `BackgroundImage`, `BackgroundAlpha`. |
  * | `in2`     | *previous* | Second (bottom) input; defaults to the previous primitive result. |
  * | `mode`    | `normal`   | One of `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`. |
  *

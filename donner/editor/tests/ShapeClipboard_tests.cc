@@ -21,8 +21,11 @@ namespace donner::editor {
 
 namespace {
 
+using ::testing::AllOf;
 using ::testing::ElementsAre;
+using ::testing::Field;
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::Not;
 
 /// Parse \p svg into a source-backed SVGDocument, asserting success.
@@ -45,6 +48,14 @@ std::vector<svg::SVGElement> Select(svg::SVGDocument& document,
     }
   }
   return selection;
+}
+
+/// Matches a paste that succeeded, with no error, and whose merged source matches \p sourceMatcher.
+template <typename SourceMatcher>
+auto PasteSucceededWithSource(SourceMatcher sourceMatcher) {
+  return AllOf(Field("error", &PreparePasteResult::error, IsEmpty()),
+               Field("ok", &PreparePasteResult::ok, true),
+               Field("mergedSource", &PreparePasteResult::mergedSource, sourceMatcher));
 }
 
 constexpr std::string_view kTwoRects =
@@ -411,6 +422,24 @@ TEST(ShapeClipboardCommands, PasteRepairsReferencesWithIdTokenCharacters) {
   EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#a:b.c_d-1_pasted)\""));
   EXPECT_THAT(result.mergedSource, HasSubstr("fill: url(#a:b.c_d-1_pasted)"));
   EXPECT_THAT(result.mergedSource, HasSubstr("href=\"#shape_pasted\""));
+}
+
+TEST(ShapeClipboardCommands, PasteRepairsReferencesToNonAsciiIds) {
+  // "caf\303\251" is "cafe" with an acute accent: the reference scan must carry the whole id.
+  const std::string id = "caf\303\251";
+  const std::string destination =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id=")" +
+      id + R"("/></defs><rect id="shape" x="0" y="0" width="10" height="10"/></svg>)";
+  svg::SVGDocument document = Parse(destination);
+  ShapeClipboardPayload payload;
+  payload.svgFragment = R"svg(<defs><linearGradient id=")svg" + id + R"svg("/></defs>)svg" +
+                        R"svg(<rect id="shape" width="10" height="10" fill="url(#)svg" + id +
+                        R"svg()"/>)svg";
+  payload.sourceElementIds = {"shape"};
+
+  EXPECT_THAT(preparePaste(document, payload, PastePlacement::EndOfRootOffset),
+              PasteSucceededWithSource(AllOf(HasSubstr("id=\"" + id + "_pasted\""),
+                                             HasSubstr("fill=\"url(#" + id + "_pasted)\""))));
 }
 
 TEST(ShapeClipboardCommands, PasteIdRepairSkipsAlreadyTakenGeneratedIds) {

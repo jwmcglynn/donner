@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string_view>
 
+#include "donner/base/ClassicNumberStream.h"
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor::repro {
@@ -36,7 +37,8 @@ std::string ContentHash(std::string_view source) {
     hash *= 1099511628211ull;
   }
 
-  std::ostringstream out;
+  // A grouping global locale would otherwise put separators between the hex digits.
+  std::ostringstream out = MakeClassicNumberStream();
   out << "fnv1a64:" << std::hex << std::setfill('0') << std::setw(16) << hash;
   return out.str();
 }
