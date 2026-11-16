@@ -18,6 +18,32 @@
 
 namespace donner::svg::components {
 
+class ShadowTreeComponent;
+
+/// Registry context marker: the document's missing packaged fallback font was already reported.
+struct MissingFallbackFontReported {};
+
+/**
+ * Let the next render-tree preparation of the document report a missing packaged fallback font
+ * again, by removing its \ref MissingFallbackFontReported marker, for a caller that discarded the
+ * earlier report. The report is otherwise made once per document.
+ *
+ * @param registry Document registry.
+ */
+void ForgetMissingFallbackFontReport(Registry& registry);
+
+/**
+ * Whether \p entity is a same-document `<use>` left unexpanded because it sits in a `<defs>`
+ * reached only through `<g>` ancestors. Inside an external use's instance, the walk stops at the
+ * installed instance root, so a definition use is expanded while that instance presents it.
+ *
+ * @param registry Document registry.
+ * @param entity Element to test.
+ * @param shadowTree The element's shadow tree component.
+ */
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree);
+
 /**
  * Rendering controller, which instantiates and and manages the rendering tree.
  *
@@ -142,7 +168,8 @@ public:
   /**
    * Set initial context-fill and context-stroke values for sub-document rendering.
    * When a `<use>` element references an external SVG, the `<use>` element's resolved fill
-   * and stroke become the initial context-fill/context-stroke in the sub-document.
+   * and stroke become the initial context-fill/context-stroke in the sub-document. Rebuilds the
+   * rendering instances on the next instantiation unless both paints are provably unchanged.
    *
    * @param fill Initial context-fill value.
    * @param stroke Initial context-stroke value.
@@ -150,21 +177,10 @@ public:
   void setInitialContextPaint(const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke);
 
   /**
-   * Clear previously set context-fill and context-stroke values.
-   * Call after rendering a sub-document to prevent stale context paint from leaking to subsequent
-   * renders of the same cached sub-document handle.
+   * Clear previously set context-fill and context-stroke values, so a sub-document drawn without
+   * an external `<use>` does not inherit stale context paint.
    */
   void clearInitialContextPaint();
-
-  /// Owned paint state saved and restored under a sub-document's write guard.
-  using InitialPaintState =
-      std::pair<std::optional<ResolvedPaintServer>, std::optional<ResolvedPaintServer>>;
-  /// Return the owned context paints for restoration after a scoped external-use render.
-  InitialPaintState initialPaintState() const {
-    return {initialContextFill_, initialContextStroke_};
-  }
-  /// Restore the state that preceded a scoped external-use occurrence.
-  void restoreInitialPaintState(InitialPaintState state);
 
 private:
   /**
@@ -179,6 +195,16 @@ private:
   /// Prepare metadata and a path borrowed only until the next document mutation.
   bool prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path,
                           HitTestMode mode = HitTestMode::SvgPointerEvents);
+
+  /**
+   * Bring the computed components up to date without the full rebuild when the frame's dirty set
+   * only moves content, changes its compositing, or retargets external `<use>` elements; see
+   * \ref RetainedUpdatePlan.
+   *
+   * @param warningSink Sink to collect warnings.
+   * @return True if the update was applied, false if the frame needs the full rebuild.
+   */
+  bool tryRetainedUpdate(ParseWarningSink& warningSink);
 
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
