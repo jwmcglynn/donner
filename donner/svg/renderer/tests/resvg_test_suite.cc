@@ -1232,13 +1232,12 @@ INSTANTIATE_TEST_SUITE_P(StructureTransform, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform-origin",
-                {
-                    {"on-image.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                    {"on-text-path.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                    {"on-text.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("structure/transform-origin",
+                                        {
+                                            // The 300x300 resvg v0.49.0 renderings.
+                                            {"on-text-path.svg", ResvgV049Reference()},
+                                            {"on-text.svg", ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
