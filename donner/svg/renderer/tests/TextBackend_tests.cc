@@ -1260,6 +1260,36 @@ TEST(TextBackendFullCapabilities, AdvancesKeepFontUnitPrecision) {
   }
 }
 
+// A small units-per-em makes the existing Noto Sans advances wide in em units. At text size
+// 96 the advances fit in signed 16.16, but at a 16x face size they would overflow it.
+TEST(TextBackendFullCapabilities, WideAdvancesKeepTheirFontUnitWidth) {
+  std::vector<uint8_t> bytes = ReadResvgFontBytes("NotoSans-Regular.ttf");
+  ASSERT_GE(bytes.size(), 12u);
+  for (size_t i = 0; i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    ASSERT_LE(entry + 16, bytes.size());
+    if (ReadBe32(bytes, entry) == 0x68656164) {  // head
+      const size_t offset = ReadBe32(bytes, entry + 8);
+      ASSERT_LE(offset + 20, bytes.size());
+      WriteBe16(&bytes, offset + 18, 32);  // unitsPerEm
+      break;
+    }
+  }
+
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = manager.loadFontData(bytes, FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  constexpr float kSize = 96.0f;
+  const auto run = backend.shapeRunNoKerning(font, kSize, "WW", 0, 2, false, FontVariant::Normal,
+                                             false);
+  ASSERT_THAT(run.glyphs, SizeIs(2));
+  const auto expected = HmtxAdvances(manager, font, run.glyphs, kSize);
+  ASSERT_THAT(expected, Each(Gt(2048.0)));
+  EXPECT_THAT(run.glyphs, Pointwise(XAdvanceNear(1.0 / 64.0), expected));
+}
+
 // Synthesized small caps shape at 0.8 of the text size on the same face scale as the full-size
 // glyphs, so their advances stay the scaled `hmtx` widths, including where the text size is
 // oversampled less than the reduced size could be.
