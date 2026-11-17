@@ -372,14 +372,11 @@ generation:`, only when all of the following hold:
 
 | Case | Before | Residual (px) | 4x4 (px) | Budget | 1 px text shift |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `text/font/font-shorthand` | skip | 386 | 0 | 400 | 422 |
-| `text/text/real-text-height` | skip | 397 | 0 | 410 | 441 |
 | `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
 | `text/text/ligatures-handling-in-mixed-fonts-1` (full text) | skip | 399 | 0 | 415 | 507 |
 | `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | skip | 343 | 0 | 355 | 435 |
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
-| `text/tspan/nested-whitespaces` | 400 | 387 | 0 | 400 | 416 |
 | `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
 The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping

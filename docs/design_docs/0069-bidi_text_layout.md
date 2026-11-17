@@ -948,9 +948,9 @@ in that order. The extent still includes the space's advance, so the middle anch
 The prediction is therefore no change; Milestone 2 reruns the row against its reference, and if it
 moves, the row leaves this list and the change is examined against the reference before acceptance.
 
-Three skips are labeled "BiDi-adjacent" but contain no right-to-left text:
-`text/text/ligatures-handling-in-mixed-fonts-1`, `-2`, and `real-text-height`. Bidi does not unlock
-them; their reasons belong to [#1176](https://github.com/jwmcglynn/donner/issues/1176).
+Two rows are labeled "BiDi-adjacent" but contain no right-to-left text:
+`text/text/ligatures-handling-in-mixed-fonts-1` and `-2`. Bidi does not unlock them; their reasons
+belong to [#1176](https://github.com/jwmcglynn/donner/issues/1176).
 
 Geode does not compare `text/*` rows, so renderer parity is covered by the regressions below.
 
