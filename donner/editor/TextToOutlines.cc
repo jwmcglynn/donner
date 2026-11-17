@@ -135,12 +135,12 @@ std::string formatOpacity(double opacity) {
   return detail::FormatNumberForSVG(std::round(opacity * 1e6) / 1e6);
 }
 
-/// Serializes a stroke length (`stroke-width`, a dash length or `stroke-dashoffset`) of an element
-/// whose font size is \p fontSizePx. A font-relative
-/// length (`em`, `ex`, `ch`, `rem`) is written in user units, resolved against that font size as
-/// the renderer resolves a text span's stroke lengths, because a converted path inherits its font
-/// size from the outline group instead. Every other unit resolves the same on the path and is
-/// written as authored.
+/// Serializes a stroke length (`stroke-width`, a dash length or `stroke-dashoffset`) of the run
+/// painted by an element whose font size is \p fontSizePx. A font-relative length (`em`, `ex`,
+/// `ch`, `rem`) is written in user units, resolved against that font size as the renderer resolves
+/// a text span's stroke lengths (`rem` included), because a converted path inherits its font size
+/// from the outline group instead. Every other unit resolves the same on the path and is written as
+/// authored.
 std::string serializeStrokeLength(const Lengthd& length, double fontSizePx) {
   using Unit = Lengthd::Unit;
   if (length.unit != Unit::Em && length.unit != Unit::Ex && length.unit != Unit::Ch &&
