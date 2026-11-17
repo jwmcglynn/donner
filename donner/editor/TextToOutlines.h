@@ -34,8 +34,10 @@
 ///   ancestors; per-`<tspan>` paint that differs from the group is applied on
 ///   the individual `<path>`s so multi-color runs are not collapsed. A
 ///   fill-only `<path>` carries only fill overrides and a stroke-only `<path>`
-///   only stroke overrides. Font-relative dash lengths are written in user
-///   units, resolved against the font size of the element that set them.
+///   only stroke overrides. Font-relative stroke widths and dash lengths are
+///   written in user units, resolved against the font size of the element that
+///   set them. The text's `vector-effect: non-scaling-stroke`, which is not
+///   inherited, is written on each stroke-only `<path>`.
 /// - The group carries the `<text>` element's own `opacity`, which composites
 ///   the outlines as one layer, as it did the text. The `opacity` of the spans
 ///   between a run and the `<text>` is not written as `opacity`: it is folded into

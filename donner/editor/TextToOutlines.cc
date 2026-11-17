@@ -25,6 +25,7 @@
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
@@ -134,7 +135,8 @@ std::string formatOpacity(double opacity) {
   return detail::FormatNumberForSVG(std::round(opacity * 1e6) / 1e6);
 }
 
-/// Serializes a stroke length of an element whose font size is \p fontSizePx. A font-relative
+/// Serializes a stroke length (`stroke-width`, a dash length or `stroke-dashoffset`) of an element
+/// whose font size is \p fontSizePx. A font-relative
 /// length (`em`, `ex`, `ch`, `rem`) is written in user units, resolved against that font size as
 /// the renderer resolves a text span's stroke lengths, because a converted path inherits its font
 /// size from the outline group instead. Every other unit resolves the same on the path and is
@@ -193,12 +195,12 @@ ResolvedPaint resolvePaint(const svg::SVGElement& element, double runOpacity) {
   paint.fillOpacity = formatOpacity(style.fillOpacity.getOr(1.0) * runOpacity);
   paint.stroke =
       serializePaint(style.stroke.getOr(svg::PaintServer(svg::PaintServer::None())), currentColor);
-  const Lengthd strokeWidth = style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None));
-  paint.strokeWidth = std::string(std::string_view(strokeWidth.toRcString()));
-  paint.strokeHasWidth = strokeWidth.value > 0.0;
-  paint.strokeOpacity = formatOpacity(style.strokeOpacity.getOr(1.0) * runOpacity);
   const double fontSizePx = style.fontSize.getOr(Lengthd(16, Lengthd::Unit::Px))
                                 .toPixels(Box2d(), FontMetrics::DefaultsWithFontSize(12.0));
+  const Lengthd strokeWidth = style.strokeWidth.getOr(Lengthd(1, Lengthd::Unit::None));
+  paint.strokeWidth = serializeStrokeLength(strokeWidth, fontSizePx);
+  paint.strokeHasWidth = strokeWidth.value > 0.0;
+  paint.strokeOpacity = formatOpacity(style.strokeOpacity.getOr(1.0) * runOpacity);
   paint.strokeDasharray = serializeDasharray(style.strokeDasharray.get(), fontSizePx);
   paint.strokeDashoffset = serializeStrokeLength(
       style.strokeDashoffset.getOr(Lengthd(0, Lengthd::Unit::None)), fontSizePx);
@@ -359,7 +361,9 @@ public:
         textElement_(textElement),
         groupId_(std::move(groupId)),
         groupPaint_(groupPaint),
-        out_(out) {}
+        out_(out),
+        nonScalingStroke_(textElement.getComputedStyle().vectorEffect.getOr(
+                              svg::VectorEffect::None) == svg::VectorEffect::NonScalingStroke) {}
 
   /// Adds the paths of one text run, whose glyphs share one source element.
   void addRun(std::span<const svg::TextGlyphOutline> run) {
@@ -430,6 +434,11 @@ private:
     } else if (paints == PathPaints::Stroke && groupPaint_.fill != "none") {
       pathElement.setAttribute("fill", "none");
     }
+    // The text's `vector-effect` applies to every run's stroke, and it is not inherited, so each
+    // stroke path carries it.
+    if (paints == PathPaints::Stroke && nonScalingStroke_) {
+      pathElement.setAttribute("vector-effect", "non-scaling-stroke");
+    }
     out_.push_back(pathElement);
   }
 
@@ -439,6 +448,8 @@ private:
   const ResolvedPaint& groupPaint_;
   std::vector<svg::SVGElement>& out_;
   int nextIndex_ = 0;
+  /// Whether the converted `<text>` has `vector-effect: non-scaling-stroke`.
+  bool nonScalingStroke_ = false;
 };
 
 ConvertTextToOutlinesResult buildDetachedTextOutlines(svg::SVGDocument& document,
