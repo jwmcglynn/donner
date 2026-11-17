@@ -807,3 +807,29 @@ copy with `--sign`; production signing retains its existing separate process. Sy
 controlled evidence, excluded from release archives and attachments. Release adoption remains
 pending an explicitly configured retention destination and native crash/symbolication proof;
 these helpers do not change ordinary release producer behavior.
+
+### Unified self-hosted CI
+
+A trusted pull request can run its Linux and Darwin target configurations from one Linux
+Actions job named `self-hosted`. Both Bazel clients must select the same RE executor.
+The execution platform identifies which worker may compile, link or run a test. The clients
+keep separate output bases and run concurrently so their Bazel server locks do not serialize
+the two configurations.
+
+Set the repository variable `UNIFIED_RE_CANARY_PR` to one trusted PR number to qualify a
+runner. Set `UNIFIED_RE_CI=true` to select this route for eligible trusted PRs. The hosted
+macOS and VM qualification labels retain their existing routes. Hosted main and untrusted PRs
+keep their independent execution. Clear the variables to restore the previous routing.
+
+Runner configuration must define `build:unified-re-endpoint` with the same remote executor
+and cache as the Linux CI configuration. Darwin workers must support the pinned Xcode, a
+physical GPU, full Metal validation, the offline compiler and the desktop browser tests.
+Workers serving CMake consumers advertise `cmake-consumer=v1`, provide CMake, Ninja, a
+native C++20 compiler and Python, and have enough capacity for four compiler processes.
+
+The Linux coordinator runs the existing CMake generator check, exports the checked-out commit
+and stages its pinned dependency sources. The native worker configures a fresh CMake consumer
+with network fetching disabled, builds the executable and runs both CTest cases including
+resource delivery. The coordinator verifies an uncached remote TestRunner result. Linux runs
+the consumer in the ordinary build lane. Darwin runs it on changes to the CMake inputs or to
+the unified workflow.

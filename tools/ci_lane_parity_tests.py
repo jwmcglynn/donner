@@ -1991,8 +1991,9 @@ class CiLaneParityTest(unittest.TestCase):
         workflow = self.workflows["main.yml"]
         reading = {job_name for job_name, _, step in lane_steps(workflow)
                    if SELECTED_TARGETS in json.dumps(lane_description(step))}
+        reading.add("self-hosted")  # unified_ci.py drives both platform phases
         for job_name, job in _jobs(workflow).items():
-            uses = job_name in reading or job_name == "self-hosted"
+            uses = job_name in reading
             with self.subTest(job=job_name):
                 passed = {key: value for key, value in (job.get("env") or {}).items()
                           if key in SELECTION_ENVIRONMENT}

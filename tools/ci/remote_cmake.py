@@ -15,30 +15,38 @@ def run(args, cwd):
     subprocess.run(args, cwd=cwd, check=True)
 
 
-def archive_tree(bundle, directory, prefix):
-    """Store stable inputs only, without Git metadata or workspace output links."""
+def source_entries(directory):
     for parent, dirs, files in os.walk(directory):
         dirs[:] = sorted(d for d in dirs if d != ".git")
         for name in sorted(dirs + files):
             path = Path(parent) / name
-            relative = path.relative_to(directory)
-            if name == ".git" or path.is_dir() and not path.is_symlink():
-                continue
-            if path.is_symlink():
-                if relative == Path("external") and os.readlink(path) == "bazel-out/../../../external":
-                    continue
-                if path.readlink().is_absolute() or directory not in path.resolve().parents:
-                    raise ValueError(f"Source link leaves its input tree: {relative}")
-            info = bundle.gettarinfo(str(path), str(Path(prefix) / relative))
-            info.uid = info.gid = info.mtime = 0
-            info.uname = info.gname = ""
-            if info.isfile():
-                with path.open("rb") as contents:
-                    bundle.addfile(info, contents)
-            elif info.issym():
-                bundle.addfile(info)
-            else:
-                raise ValueError(f"Unsupported input: {relative}")
+            if name != ".git" and (path.is_symlink() or path.is_file()):
+                yield path
+
+
+def add_entry(bundle, directory, prefix, path):
+    relative = path.relative_to(directory)
+    if path.is_symlink():
+        if relative == Path("external") and os.readlink(path) == "bazel-out/../../../external":
+            return
+        if path.readlink().is_absolute() or directory not in path.resolve().parents:
+            raise ValueError(f"Source link leaves its input tree: {relative}")
+    info = bundle.gettarinfo(str(path), str(Path(prefix) / relative))
+    info.uid = info.gid = info.mtime = 0
+    info.uname = info.gname = ""
+    if info.issym():
+        bundle.addfile(info)
+    elif info.isfile():
+        with path.open("rb") as contents:
+            bundle.addfile(info, contents)
+    else:
+        raise ValueError(f"Unsupported input: {relative}")
+
+
+def archive_tree(bundle, directory, prefix):
+    """Store reproducible source inputs, excluding Git metadata."""
+    for path in source_entries(directory):
+        add_entry(bundle, directory, prefix, path)
 
 
 def prepare(repo, destination):
