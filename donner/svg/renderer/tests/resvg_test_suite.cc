@@ -96,6 +96,12 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
   return testPlan;
 }
 
+/// Params for a drop-shadow() row compared against the Donner golden at \p path for \p reason
+/// (see testdata/golden/README.md). The params keep views of both, so they must be string literals.
+ImageComparisonParams DropShadowFunctionGolden(std::string_view path, std::string_view reason) {
+  return Params::WithGoldenOverride(path, kDefaultThreshold, reason);
+}
+
 /// Params for the feColorMatrix identity rows, whose references posterize through 8-bit linearRGB;
 /// they share one Donner golden (see testdata/golden/README.md).
 ImageComparisonParams ColorMatrixIdentityGolden() {
@@ -597,35 +603,25 @@ INSTANTIATE_TEST_SUITE_P(
                                "residual confined to the three label bands; analytic residual "
                                "375 px, supersampled 302 px; filtered squares compare exactly "
                                "(#1167, #1169)")},
+                // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
-                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
-                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
-                              "at (10, 12) matches the reference within the default allowance")},
+                 DropShadowFunctionGolden(
+                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                     "Reference disagreement: resvg truncates the fractional shadow offset")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip("Reference disagreement: 0.2em 0.3em at font-size 64 is 12.8 19.2 "
-                              "user units, device (32, 48); the reference shadow sits at (30, 47), "
-                              "which needs the user lengths truncated to 12 19 (a hypothesis the "
-                              "usvg source does not show) and the scaled offset truncated as "
-                              "resvg's apply_drop_shadow does (dx as i32) "
-                              "(CssFilterContractEmShadowUsesComputedNondefaultFontSize)")},
+                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-drop-shadow-function-em-values.png",
+                                          "Reference disagreement: the reference places the "
+                                          "shadow at truncated lengths")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip("Reference disagreement: 3mm 4mm is 11.34 15.12 user units, device "
-                              "(28.35, 37.80), which Donner rounds to (28, 38); the reference "
-                              "shadow sits at (27, 37), which needs the user lengths truncated to "
-                              "11 15 (a hypothesis the usvg source does not show) and the scaled "
-                              "offset truncated as resvg's apply_drop_shadow does (dx as i32) "
-                              "(CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
-                {"drop-shadow-function-no-color.svg",
-                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
-                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
-                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
-                              "at (10, 12) matches the reference within the default allowance")},
+                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-drop-shadow-function-mm-values.png",
+                                          "Reference disagreement: the reference places the "
+                                          "shadow at truncated lengths")},
                 {"drop-shadow-function.svg",
-                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
-                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
-                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
-                              "at (10, 12) matches the reference within the default allowance")},
+                 DropShadowFunctionGolden(
+                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                     "Reference disagreement: resvg truncates the fractional shadow offset")},
                 {"two-exact-urls.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; the valid "
