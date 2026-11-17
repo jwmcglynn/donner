@@ -732,7 +732,8 @@ INSTANTIATE_TEST_SUITE_P(
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150,
-                                           "Reference resamples a rasterized pattern tile")},
+                                           "Larger threshold due to pattern tile resampling at "
+                                           "fractional tile edges")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
