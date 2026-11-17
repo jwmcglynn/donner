@@ -911,6 +911,14 @@ else:
         result = {"status": "FAILED" if status else "PASSED", "testActionOutput": [
             {"name": name.replace("/", "__"), "uri": "file://" + os.path.join(directory, name)}
             for name in [*files, "test.outputs_manifest/MANIFEST"]]}
+    if os.environ.get("FAKE_SKIPPED"):
+        # A test incompatible with the platform, as Bazel skips it.
+        lines += [{"id": {"targetConfigured": {"label": "//fake:linux_only_test"}},
+                   "configured": {"targetKind": "cc_test rule", "testSize": "SMALL"}},
+                  {"id": {"targetCompleted": {"label": "//fake:linux_only_test",
+                                              "configuration": {"id": "c"}}},
+                   "aborted": {"reason": "SKIPPED",
+                               "description": "Target //fake:linux_only_test build was skipped."}}]
     if os.environ.get("FAKE_REMOTE_ERROR_" + phase.upper()):
         # An action the executor failed, as Bazel reports it: its exit code is REMOTE_ERROR.
         status = 34
@@ -1073,7 +1081,7 @@ class LaneRunTest(unittest.TestCase):
             entry = summary["phases"][phase]
             self.assertEqual(0, entry["status"])
             self.assertEqual({"total": 1, "passed": 1, "flaky": 0, "failed": 0, "not_run": 0,
-                              "executed": 1, "cached": 0}, entry["tests"])
+                              "skipped": 0, "executed": 1, "cached": 0}, entry["tests"])
             self.assertEqual({"remote": 0, "own": 0}, entry["failed_actions"])
             self.assertEqual({"remote": 7}, entry["runners"])
             self.assertEqual(1.5, entry["wall_time_seconds"])
@@ -1170,6 +1178,21 @@ class LaneRunTest(unittest.TestCase):
             self.assertNotIn("outcome", summary["phases"][phase])
             self.assertEqual(0, summary["phases"][phase]["status"])
         self.assertNotIn("out of time", result.stdout)
+
+    def test_a_successful_run_with_skipped_targets_prints_no_warning(self):
+        result, out, summary_file, _ = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
+                                                 FAKE_SKIPPED="1")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("::warning::", result.stdout + result.stderr)
+        summary = json.loads((out / "shadow-summary.json").read_text(encoding="utf-8"))
+        for phase in lane.PHASES:
+            entry = summary["phases"][phase]
+            self.assertEqual({"succeeded": 1, "failed": 0, "skipped": 1, "aborted": 0},
+                             entry["targets"])
+            self.assertEqual((2, 1, 1), (entry["tests"]["total"], entry["tests"]["passed"],
+                                         entry["tests"]["skipped"]))
+        self.assertIn("| native | 0 | X (0) | 1.5 | 1 | 0 | 1 | 2 | 1 |",
+                      summary_file.read_text(encoding="utf-8"))
 
     def test_a_remote_execution_error_is_told_apart_from_a_build_break(self):
         result, out, summary_file, _ = self._run(FAKE_EXECUTOR="grpcs://executor.invalid",
@@ -1670,7 +1693,7 @@ class BuildEventTest(unittest.TestCase):
         summary = lane.summarize(events)
         self.assertEqual({"remote": 4, "own": 1}, summary["failed_actions"])
         self.assertEqual({"total": 4, "passed": 1, "flaky": 0, "failed": 1, "not_run": 2,
-                          "executed": 0, "cached": 4}, summary["tests"])
+                          "skipped": 0, "executed": 0, "cached": 4}, summary["tests"])
         self.assertEqual(["//a:t2"], summary["failed_tests"])
         summary.update(status=1, wall_time_seconds=1.0)
         report = lane.report({"phases": {"native": summary}})
@@ -1679,10 +1702,97 @@ class BuildEventTest(unittest.TestCase):
         self.assertIn("| Failed | Not run |", report)
         self.assertIn("| 1 | 2 |", report)
 
+    # Build events in the shapes Bazel 8.8.2 wrote for `bazel test --keep_going
+    # --skip_incompatible_explicit_targets` of a passing test, a test and a genrule incompatible
+    # with the platform, a genrule that fails and a test that depends on it. Bazel's own line:
+    # "Executed 1 out of 3 tests: 1 test passes, 1 fails to build, and 1 was skipped."
+    _CFG, _EXEC = {"id": "8fa4c4ac"}, {"id": "54191d9e"}
+    _PROBE_EVENTS = (
+        {"id": {"targetConfigured": {"label": "//:incompatible_test"}},
+         "configured": {"targetKind": "sh_test rule", "testSize": "MEDIUM"}},
+        {"id": {"targetConfigured": {"label": "//:incompatible_lib"}},
+         "configured": {"targetKind": "genrule rule"}},
+        {"id": {"targetConfigured": {"label": "//:broken"}},
+         "configured": {"targetKind": "genrule rule"}},
+        {"id": {"actionCompleted": {"configuration": _EXEC, "label": "//:broken",
+                                    "primaryOutput": "bazel-out/aarch64-fastbuild/bin/b.txt"}},
+         "action": {"exitCode": 1, "label": "//:broken", "type": "Genrule", "failureDetail": {
+             "message": "bash failed", "spawn": {"code": "NON_ZERO_EXIT", "spawnExitCode": 1}}}},
+        {"id": {"targetCompleted": {"configuration": _EXEC, "label": "//:broken"}},
+         "completed": {"failureDetail": {"message": "bash failed",
+                                         "spawn": {"code": "NON_ZERO_EXIT", "spawnExitCode": 1}}}},
+        {"id": {"targetConfigured": {"label": "//:passes"}},
+         "configured": {"targetKind": "sh_test rule", "testSize": "MEDIUM"}},
+        {"id": {"targetConfigured": {"label": "//:needs_broken"}},
+         "configured": {"targetKind": "sh_test rule", "testSize": "MEDIUM"}},
+        {"id": {"targetCompleted": {"configuration": _CFG, "label": "//:passes"}},
+         "completed": {"success": True, "tag": ["medium"], "testTimeout": "300s"}},
+        {"id": {"targetCompleted": {"configuration": _CFG, "label": "//:needs_broken"}},
+         "completed": {"failureDetail": {"message": "bash failed",
+                                         "spawn": {"code": "NON_ZERO_EXIT", "spawnExitCode": 1}},
+                       "tag": ["medium"]}},
+        {"id": {"testResult": {"attempt": 1, "configuration": _CFG, "label": "//:passes",
+                               "run": 1, "shard": 1}},
+         "testResult": {"executionInfo": {"strategy": "linux-sandbox"}, "status": "PASSED"}},
+        {"id": {"testSummary": {"configuration": _CFG, "label": "//:passes"}},
+         "testSummary": {"overallStatus": "PASSED", "runCount": 1, "totalRunCount": 1}},
+        {"id": {"targetCompleted": {"configuration": _CFG, "label": "//:incompatible_test"}},
+         "aborted": {"description": "Target //:incompatible_test build was skipped.",
+                     "reason": "SKIPPED"}},
+        {"id": {"targetCompleted": {"configuration": _EXEC, "label": "//:incompatible_lib"}},
+         "aborted": {"description": "Target //:incompatible_lib build was skipped.",
+                     "reason": "SKIPPED"}},
+        {"id": {"buildFinished": {}},
+         "finished": {"exitCode": {"code": 1, "name": "BUILD_FAILURE"}}})
+
+    def test_skipped_targets_are_not_build_failures(self):
+        summary = lane.summarize(_events(*self._PROBE_EVENTS))
+        self.assertEqual({"succeeded": 1, "failed": 2, "skipped": 2, "aborted": 0},
+                         summary["targets"])
+        # Bazel: 3 tests, 1 passes, 1 fails to build, 1 was skipped; 1 executed.
+        self.assertEqual({"total": 3, "passed": 1, "flaky": 0, "failed": 0, "not_run": 1,
+                          "skipped": 1, "executed": 1, "cached": 0}, summary["tests"])
+        self.assertEqual({"remote": 0, "own": 1}, summary["failed_actions"])
+        # A stopped build's targets are not built, not failed; analysis failures are failures.
+        stopped = lane.summarize(_events(
+            {"id": {"targetCompleted": {"label": "//a:b"}}, "aborted": {"reason": "INCOMPLETE"}},
+            {"id": {"targetCompleted": {"label": "//a:c"}},
+             "aborted": {"reason": "ANALYSIS_FAILURE"}}))
+        self.assertEqual({"succeeded": 0, "failed": 1, "skipped": 0, "aborted": 1},
+                         stopped["targets"])
+        self.assertIn("- native: 1 targets were not built because the build stopped",
+                      lane.report({"phases": {"native": dict(stopped, status=1)}}))
+
+    def test_an_event_holding_a_line_separator_character_stays_whole(self):
+        # JSON may carry U+0085, U+2028 and U+2029 unescaped inside a string; str.splitlines
+        # would cut such an event in two and lose it.
+        events = [{"id": {"testSummary": {"label": "//a:t\u2028\u0085"}},
+                   "testSummary": {"overallStatus": "PASSED"}},
+                  {"id": {"buildFinished": {}}, "finished": {"exitCode": {"code": 0}}}]
+        path = Path(tempfile.mkdtemp()) / "bep.json"
+        self.addCleanup(shutil.rmtree, path.parent)
+        path.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+                        encoding="utf-8")
+        self.assertEqual(1, lane.summarize(lane._read_lines(path))["tests"]["total"])
+
+    def test_a_phase_that_only_skipped_targets_prints_no_warning(self):
+        events = [event for event in self._PROBE_EVENTS
+                  if event["id"].get("targetCompleted", {}).get("label") not in (
+                      "//:broken", "//:needs_broken") and "actionCompleted" not in event["id"]]
+        summary = lane.summarize(_events(*events))
+        self.assertEqual(0, summary["targets"]["failed"])
+        args = lane.parse_args(["--out", tempfile.mkdtemp()], {})
+        self.addCleanup(shutil.rmtree, args.out)
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            lane._stage_phase(args, _events(*events), "native", lane.MAX_ARTIFACT_TOTAL_BYTES, 0,
+                              summary["targets"]["failed"])
+        self.assertNotIn("::warning::", printed.getvalue())
+
     def test_summary_counts_targets_tests_cache_and_runners(self):
         events = _events(
             {"id": {"targetCompleted": {"label": "//a:lib"}}, "completed": {"success": True}},
-            {"id": {"targetCompleted": {"label": "//a:bad"}}, "aborted": {}},
+            {"id": {"targetCompleted": {"label": "//a:bad"}},
+             "completed": {"failureDetail": {"message": "x", "spawn": {"code": "NON_ZERO_EXIT"}}}},
             {"id": {"testResult": {"label": "//a:t1"}}, "testResult": {}},
             {"id": {"testResult": {"label": "//a:t2"}},
              "testResult": {"executionInfo": {"cachedRemotely": True}}},
@@ -1701,9 +1811,10 @@ class BuildEventTest(unittest.TestCase):
                         {"name": "remote cache hit", "count": "8"}]},
                 "timingMetrics": {"wallTimeInMs": "65432"}}})
         summary = lane.summarize(events)
-        self.assertEqual({"succeeded": 1, "failed": 1}, summary["targets"])
+        self.assertEqual({"succeeded": 1, "failed": 1, "skipped": 0, "aborted": 0},
+                         summary["targets"])
         self.assertEqual({"total": 3, "passed": 1, "flaky": 1, "failed": 1, "not_run": 0,
-                          "executed": 1, "cached": 2}, summary["tests"])
+                          "skipped": 0, "executed": 1, "cached": 2}, summary["tests"])
         self.assertEqual(["//a:t3"], summary["failed_tests"])
         self.assertEqual("TESTS_FAILED (3)", summary["exit"])
         self.assertEqual((12, 30, 4), (summary["actions_executed"], summary["action_cache_hits"],

@@ -492,14 +492,45 @@ def _on_action(event, state):
     state["failed_actions"]["remote" if remote else "own"] += 1
 
 
+def _configuration(identity):
+    """The configuration id of a build event id, or "" when it has none."""
+    return _dict(identity.get("configuration")).get("id") or ""
+
+
+def _on_configured(event, state):
+    # A test target is configured with a test size; Bazel reports no other kind with one.
+    if "testSize" in _dict(event.get("configured")):
+        state["test_labels"].add(_dict(_dict(event.get("id")).get("targetConfigured")).get("label"))
+
+
+# Reasons Bazel aborts a target with that are failures of the target itself. SKIPPED is a target
+# incompatible with the target platform; any other reason, such as INCOMPLETE or USER_INTERRUPTED,
+# is a build that stopped before reaching the target.
+_FAILED_ABORT_REASONS = ("ANALYSIS_FAILURE", "LOADING_FAILURE")
+
+
 def _on_target(event, state):
-    succeeded = (event.get("completed") or {}).get("success")
-    state["targets"]["succeeded" if succeeded else "failed"] += 1
+    """A target is built (completed with success), failed (completed without it, or aborted as an
+    analysis or loading failure), skipped (aborted as SKIPPED: incompatible with the target
+    platform, which --skip_incompatible_explicit_targets skips without failing) or aborted for
+    another reason, such as a stopped build."""
+    identity = _dict(_dict(event.get("id")).get("targetCompleted"))
+    key = (identity.get("label"), _configuration(identity))
+    if "aborted" in event:
+        reason = _dict(event.get("aborted")).get("reason")
+        outcome = "skipped" if reason == "SKIPPED" else \
+            "failed" if reason in _FAILED_ABORT_REASONS else "aborted"
+    else:
+        outcome = "succeeded" if _dict(event.get("completed")).get("success") is True \
+            else "failed"
+    state["targets"][outcome] += 1
+    state["target_outcomes"][key] = outcome
 
 
 def _on_test_summary(event, state):
-    state["tests"][event["id"]["testSummary"]["label"]] = event.get("testSummary", {}).get(
-        "overallStatus", "NO_STATUS")
+    identity = _dict(_dict(event.get("id")).get("testSummary"))
+    state["tests"][(identity.get("label"), _configuration(identity))] = _dict(
+        event.get("testSummary")).get("overallStatus", "NO_STATUS")
 
 
 def _on_test_result(event, state):
@@ -507,7 +538,8 @@ def _on_test_result(event, state):
     cached = result is None or result.get("cachedLocally") or result.get(
         "executionInfo", {}).get("cachedRemotely")
     if not cached:
-        state["executed"].add(event["id"]["testResult"]["label"])
+        identity = _dict(_dict(event.get("id")).get("testResult"))
+        state["executed"].add((identity.get("label"), _configuration(identity)))
 
 
 def _on_finished(event, state):
@@ -520,34 +552,43 @@ def _on_metrics(event, state):
     state["result"].update(_metrics(event.get("buildMetrics", {})))
 
 
-_HANDLERS = {"actionCompleted": _on_action, "targetCompleted": _on_target,
-             "testSummary": _on_test_summary,
+_HANDLERS = {"actionCompleted": _on_action, "targetConfigured": _on_configured,
+             "targetCompleted": _on_target, "testSummary": _on_test_summary,
              "testResult": _on_test_result, "buildFinished": _on_finished,
              "buildMetrics": _on_metrics}
 
 
 def summarize(lines):
-    """Counts of one phase's build event file. Option values are never read into it."""
-    state = {"targets": {"succeeded": 0, "failed": 0}, "tests": {}, "executed": set(),
+    """Counts of one phase's build event file. Option values are never read into it.
+
+    Bazel reports a test that ran in a testSummary event. A test target that was skipped or failed
+    to build has no testSummary, only its targetCompleted event: those are counted from the
+    targets, as skipped and as not run, so the totals match Bazel's own test line."""
+    state = {"targets": {"succeeded": 0, "failed": 0, "skipped": 0, "aborted": 0}, "tests": {},
+             "executed": set(), "test_labels": set(), "target_outcomes": {},
              "failed_actions": {"remote": 0, "own": 0}, "result": dict(_metrics({}), exit=None)}
     for event in _decoded(lines):
-        handler = _HANDLERS.get(next(iter(event.get("id", {})), None))
+        handler = _HANDLERS.get(next(iter(_dict(event.get("id"))), None))
         if handler:
             handler(event, state)
     tests, result = state["tests"], state["result"]
     statuses = list(tests.values())
+    unsummarized = [outcome for (label, configuration), outcome in state["target_outcomes"].items()
+                    if label in state["test_labels"] and (label, configuration) not in tests]
     executed = len(state["executed"] & set(tests))
     result["targets"] = state["targets"]
     result["tests"] = {
-        "total": len(statuses),
+        "total": len(statuses) + len(unsummarized),
         "passed": sum(status in _PASSED for status in statuses),
         "flaky": sum(status in _FLAKY for status in statuses),
         "failed": sum(status not in _PASSED + _FLAKY + _NOT_RUN for status in statuses),
-        "not_run": sum(status in _NOT_RUN for status in statuses),
+        "not_run": sum(status in _NOT_RUN for status in statuses) +
+        sum(outcome in ("failed", "aborted") for outcome in unsummarized),
+        "skipped": sum(outcome == "skipped" for outcome in unsummarized),
         "executed": executed,
         "cached": len(statuses) - executed,
     }
-    result["failed_tests"] = sorted(label for label, status in tests.items()
+    result["failed_tests"] = sorted(label for (label, _), status in tests.items()
                                     if status not in _PASSED + _FLAKY + _NOT_RUN)
     result["failed_actions"] = state["failed_actions"]
     return result
@@ -781,20 +822,21 @@ def _stage_output(stage_root, key, path, label, output_root, remaining):
 
 
 _HEADER = ("| Phase | Exit status | Bazel result | Wall time (s) | Targets built | "
-           "Targets failed | Tests | Passed | Flaky | Failed | Not run | Executed | Cached | "
-           "Actions run | Action cache hits |")
+           "Targets failed | Targets skipped | Tests | Passed | Flaky | Failed | Not run | "
+           "Skipped | Executed | Cached | Actions run | Action cache hits |")
 
 
 def _row(phase, entry):
     if not entry:
-        return "| %s | - | not run |%s" % (phase, " |" * 12)
+        return "| %s | - | not run |%s" % (phase, " |" * 14)
     tests, targets = entry["tests"], entry["targets"]
     wall = entry["wall_time_seconds"]
     return "| %s | %s | %s | %s | %s |" % (
         phase, entry["status"], entry["exit"] or "-", "-" if wall is None else wall,
         " | ".join(str(value) for value in (
-            targets["succeeded"], targets["failed"], tests["total"], tests["passed"],
-            tests["flaky"], tests["failed"], tests["not_run"], tests["executed"], tests["cached"],
+            targets["succeeded"], targets["failed"], targets["skipped"], tests["total"],
+            tests["passed"], tests["flaky"], tests["failed"], tests["not_run"], tests["skipped"],
+            tests["executed"], tests["cached"],
             entry["actions_executed"], entry["action_cache_hits"])))
 
 
@@ -816,6 +858,9 @@ def _stopped_details(phase, entry):
 
 def _details(phase, entry):
     lines = _stopped_details(phase, entry) if entry.get("outcome") else []
+    if (entry.get("targets") or {}).get("aborted"):
+        lines.append("- %s: %d targets were not built because the build stopped before them" % (
+            phase, entry["targets"]["aborted"]))
     if entry.get("runners"):
         lines.append("- %s spawns by runner: %s" % (phase, ", ".join(
             "%s %d" % (name, count) for name, count in sorted(entry["runners"].items()))))
@@ -840,7 +885,7 @@ def report(summary):
              ""]
     if summary.get("problem"):
         lines += ["**Stopped:** %s" % summary["problem"], ""]
-    lines += [_HEADER, "|" + "---|" * 15]
+    lines += [_HEADER, "|" + "---|" * 17]
     lines += [_row(phase, summary["phases"].get(phase)) for phase in PHASES]
     lines.append("")
     for phase in PHASES:
@@ -1097,7 +1142,10 @@ def _run_captured(command, environment, console, deadline=None, grace=STOP_GRACE
 
 def _read_lines(path):
     try:
-        return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+        # Lines end at a newline only: str.splitlines also splits at characters such as U+0085 and
+        # U+2028, which a build event can carry unescaped inside a string, and would cut that
+        # event in two.
+        return Path(path).read_text(encoding="utf-8", errors="replace").split("\n")
     except OSError:
         return None
 

@@ -638,9 +638,11 @@ not read it:
   job: that check entry is red or cancelled, and the workflow run still succeeds, because both
   jobs continue on error.
 
-Each run writes a table to the job summary (targets built and failed, tests run, passed, flaky,
-failed, not run, executed and cached, actions, cache hits, spawns by runner, wall time). Tests that
-were not built or never started count as not run, apart from tests that ran and failed. Failed
+Each run writes a table to the job summary (targets built, failed and skipped, tests, passed,
+flaky, failed, not run and skipped, executed and cached, actions, cache hits, spawns by runner,
+wall time). A target incompatible with the target platform is skipped, not failed, and so is its
+test. Tests that were not built or never started count as not run, apart from tests that ran and
+failed, and only targets that failed to build raise the build-failure warning. Failed
 actions are split by their build events into remote execution errors (Bazel's remote exit codes or
 a remote execution failure detail: an executor-side fault, not a macOS build break) and actions
 that failed with their own exit status; a phase with either says so in a warning and in the job
