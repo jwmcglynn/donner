@@ -124,8 +124,8 @@ sampling grid does not establish that the upstream reference violates the specif
 
 The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage)
 records the construction and checksums for `on-feImage`. The separate `optimizeSpeed` fixture
-compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode began sampling at
-destination pixel centers through the inverse transform in [#2331](https://github.com/jwmcglynn/donner/pull/2331).
+compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
+pixel centers through the inverse transform to select the nearest source texel.
 
 ### Backend-difference goldens (text)
 
