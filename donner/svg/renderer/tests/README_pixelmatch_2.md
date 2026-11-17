@@ -1,7 +1,9 @@
 # Pixelmatch 2.0 migration {#Pixelmatch2Migration}
 
 This note records the pixelmatch-cpp17 1.0.3 to 2.0.0 migration, landed through
-PR #1285 (a Renovate major bump plus the recalibration below). The dependency
+PR #1285 (a Renovate major bump plus the recalibration below). The tables are the migration's record: a
+row whose reference or registration changed since then carries its current parameters in
+`resvg_test_suite.cc`. The dependency
 resolves to 2.0.0 from the Bazel Central Registry; the CMake FetchContent pin
 tracks tag `v2.0.0` (commit `25b82299cbedc24b61af3f440c83f9b64cf18ce9`).
 
