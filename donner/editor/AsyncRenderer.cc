@@ -10,6 +10,8 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <emscripten/threading.h>
+
+#include "donner/gpu/browser/BrowserGpuOwner.h"
 #endif
 
 #include "donner/base/MemoryAttribution.h"
@@ -455,7 +457,70 @@ bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
   return !hasCompositor || overviewInfillOnly || geometryDebugOverlay;
 }
 
+/// The controller's lifetime fast-path counters, or zeros when composited rendering is Off.
+svg::compositor::CompositorController::FastPathCounters FastPathCountersOf(
+    const std::unique_ptr<svg::compositor::CompositorController>& compositor) {
+  return compositor != nullptr ? compositor->fastPathCountersForTesting()
+                               : svg::compositor::CompositorController::FastPathCounters{};
+}
+
+/// Field-wise increase of one controller's lifetime fast-path counters between two snapshots.
+svg::compositor::CompositorController::FastPathCounters FastPathCountersDelta(
+    const svg::compositor::CompositorController::FastPathCounters& before,
+    const svg::compositor::CompositorController::FastPathCounters& after) {
+  return svg::compositor::CompositorController::FastPathCounters{
+      .fastPathFrames = after.fastPathFrames - before.fastPathFrames,
+      .slowPathFramesWithDirty = after.slowPathFramesWithDirty - before.slowPathFramesWithDirty,
+      .noDirtyFrames = after.noDirtyFrames - before.noDirtyFrames,
+      .segmentResyncRebuilds = after.segmentResyncRebuilds - before.segmentResyncRebuilds,
+      .paintOrderSnapshots = after.paintOrderSnapshots - before.paintOrderSnapshots,
+  };
+}
+
+#ifdef __EMSCRIPTEN__
+/// Record the browser GPU owner dispatch activity between two totals snapshots. The request and
+/// wait-slice counts are unsigned 32-bit counters that wrap, so modular subtraction stays correct
+/// across one wrap. The blocked time saturates instead of wrapping, so once saturated its
+/// difference reads zero.
+void ApplyGpuOwnerDispatchDelta(RenderResult::WorkerTimingBreakdown& timing,
+                                const gpu::browser::BrowserGpuOwnerDispatchTotals& before,
+                                const gpu::browser::BrowserGpuOwnerDispatchTotals& after) {
+  timing.gpuOwnerDispatchCount = static_cast<int>(after.requested - before.requested);
+  timing.gpuOwnerWaitSliceTimeouts =
+      static_cast<int>(after.waitSliceTimeouts - before.waitSliceTimeouts);
+  timing.gpuOwnerDispatchWaitMs =
+      static_cast<double>(after.dispatchWaitUs - before.dispatchWaitUs) / 1000.0;
+}
+#endif
+
 }  // namespace
+
+svg::compositor::CompositorController::RenderFrameStats CombineIterationRenderFrameStats(
+    const std::optional<svg::compositor::CompositorController::RenderFrameStats>& earlierRender,
+    const svg::compositor::CompositorController::RenderFrameStats& lastRender) {
+  svg::compositor::CompositorController::RenderFrameStats combined = lastRender;
+  if (!earlierRender.has_value()) {
+    return combined;
+  }
+  const auto& earlier = *earlierRender;
+  combined.firstFrameDrawMs += earlier.firstFrameDrawMs;
+  combined.firstFramePlanningMs += earlier.firstFramePlanningMs;
+  combined.firstFrameWarmupMs += earlier.firstFrameWarmupMs;
+  combined.immediateRasterizeMs += earlier.immediateRasterizeMs;
+  combined.cachedRasterizeMs += earlier.cachedRasterizeMs;
+  combined.mainComposeMs += earlier.mainComposeMs;
+  combined.mainComposeCount += earlier.mainComposeCount;
+  combined.immediateTileCount += earlier.immediateTileCount;
+  combined.cachedTileCount += earlier.cachedTileCount;
+  combined.damagePatchTileCount += earlier.damagePatchTileCount;
+  combined.damagePatchGeometryDraws += earlier.damagePatchGeometryDraws;
+  combined.maskedChildComposeTileCount += earlier.maskedChildComposeTileCount;
+  combined.offscreenCreateCount += earlier.offscreenCreateCount;
+  combined.offscreenRecycleCount += earlier.offscreenRecycleCount;
+  combined.textureAllocationFailureCount += earlier.textureAllocationFailureCount;
+  combined.composePayloadRefusalCount += earlier.composePayloadRefusalCount;
+  return combined;
+}
 
 bool CanPresentTilePayload(bool requiresTexturePresentation, const svg::RendererBitmap& bitmap,
                            const std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
@@ -1477,6 +1542,10 @@ void AsyncRenderer::workerLoop() {
     // when the numbers are read, so a stage that retains is named exactly.
     const ScopedHeapDelta workerIterationHeapDelta(MemoryStage::WorkerOther);
     const auto workerStart = std::chrono::steady_clock::now();
+#ifdef __EMSCRIPTEN__
+    const gpu::browser::BrowserGpuOwnerDispatchTotals gpuOwnerDispatchesAtStart =
+        gpu::browser::ReadBrowserGpuOwnerDispatchTotals();
+#endif
     const auto elapsedSince = [](std::chrono::steady_clock::time_point start) {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
           .count();
@@ -1976,6 +2045,10 @@ void AsyncRenderer::workerLoop() {
       };
     };
 
+    const svg::compositor::CompositorController::FastPathCounters fastPathCountersBeforeRender =
+        FastPathCountersOf(compositor_);
+    int compositorRenderCount = 0;
+    std::optional<svg::compositor::CompositorController::RenderFrameStats> earlierRenderStats;
     bool renderCompleted = runReplayRenderDelay();
     if (renderCompleted) {
       ZoneScopedN("Compositor::renderFrame");
@@ -1997,6 +2070,7 @@ void AsyncRenderer::workerLoop() {
             }
           };
           renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+          ++compositorRenderCount;
           if (renderCompleted) {
             syncWorkerPromotions();
             bool promotionAddedAfterPrepare = false;
@@ -2014,6 +2088,8 @@ void AsyncRenderer::workerLoop() {
             if (promotionAddedAfterPrepare) {
               compositorEntity_ = compositorEntities_.front();
               compositorInteractionKind_ = desiredKind;
+              earlierRenderStats = compositor_->lastRenderFrameStats();
+              ++compositorRenderCount;
               renderCompleted =
                   compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
               if (renderCompleted) {
@@ -2235,12 +2311,15 @@ void AsyncRenderer::workerLoop() {
           done.result.fontResourceRevision = request.fontResourceRevision;
           done.result.fontDependencies = std::move(fontDependencies);
           done.presentationHoldPollsRemaining = replayResultHoldFramesForTesting_;
-          lastFastPathCounters_ = compositor_ != nullptr
-                                      ? compositor_->fastPathCountersForTesting()
-                                      : svg::compositor::CompositorController::FastPathCounters{};
+          lastFastPathCounters_ = FastPathCountersOf(compositor_);
+          done.result.compositorFastPathDelta =
+              FastPathCountersDelta(fastPathCountersBeforeRender, lastFastPathCounters_);
           lastCompositorRenderFrameStats_ =
               compositor_ != nullptr ? compositor_->lastRenderFrameStats()
                                      : svg::compositor::CompositorController::RenderFrameStats{};
+          done.result.compositorRenderCount = compositorRenderCount;
+          done.result.compositorFrameStats =
+              CombineIterationRenderFrameStats(earlierRenderStats, lastCompositorRenderFrameStats_);
           if (compositorDiagnosticsEnabled_.load(std::memory_order_acquire)) {
             const auto diagnosticsStart = std::chrono::steady_clock::now();
             if (compositor_ != nullptr) {
@@ -2268,6 +2347,10 @@ void AsyncRenderer::workerLoop() {
           const double workerMs =
               std::chrono::duration<double, std::milli>(workerEnd - workerStart).count();
           done.result.workerMs = workerMs;
+#ifdef __EMSCRIPTEN__
+          ApplyGpuOwnerDispatchDelta(workerTiming, gpuOwnerDispatchesAtStart,
+                                     gpu::browser::ReadBrowserGpuOwnerDispatchTotals());
+#endif
           done.result.workerTiming = workerTiming;
           done.result.workerCompletedAt = workerEnd;
           workerState_ = std::move(done);

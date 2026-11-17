@@ -178,6 +178,14 @@ the default. Their SVG inputs are byte-identical at both revisions.
   SHA256: ff7c4cf87937e4d8ae4f1fde51f155fcb83246abf405a6aa88fe8b410703e24b
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references differed from Donner only along rotated glyph edges; Donner matches the
+v0.49.0 renderings within the default allowance on both CPU text tiers and on Geode with Metal
+(the Vulkan lanes were not measured). Their SVG inputs are byte-identical at both revisions.
+
+  tests/structure/transform-origin/on-text-path.png
+  tests/structure/transform-origin/on-text.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
 snapshot's references were flattened onto white: where the filter output is semi-transparent or
 empty they store opaque colors (for example opaque white for an eroded or empty region, and
 (0, 0, 210) at alpha 120 where the filter gives (103, 103, 229) at alpha 199), which match the

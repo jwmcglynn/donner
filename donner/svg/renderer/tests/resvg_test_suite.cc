@@ -96,6 +96,14 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
   return testPlan;
 }
 
+/// Params for the feColorMatrix identity rows, whose references posterize through 8-bit linearRGB;
+/// they share one Donner golden (see testdata/golden/README.md).
+ImageComparisonParams ColorMatrixIdentityGolden() {
+  return Params::WithGoldenOverride(
+      "donner/svg/renderer/testdata/golden/donner-feColorMatrix-identity.png", kDefaultThreshold,
+      "Reference disagreement: identity output; the reference stores linearRGB in 8 bits");
+}
+
 /// Params for a reference replaced by its 300x300 rendering from resvg release v0.49.0; the
 /// provenance is recorded in third_party/resvg-test-suite/BUILD.bazel.
 ImageComparisonParams ResvgV049Reference() {
@@ -148,28 +156,25 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/feColorMatrix",
             {
-                {"type=hueRotate-without-an-angle.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "hueRotate(0) identity")},
-                {"type=matrix-with-empty-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
+                // Identity forms compare against a Donner golden: the references posterize dark
+                // tones through 8-bit linearRGB.
+                {"type=hueRotate-without-an-angle.svg", ColorMatrixIdentityGolden()},
+                {"type=matrix-with-empty-values.svg", ColorMatrixIdentityGolden()},
                 {"type=matrix-with-non-normalized-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")},
-                {"type=matrix-with-not-enough-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
-                {"type=matrix-with-too-many-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
-                {"type=matrix-without-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
+                {"type=matrix-with-not-enough-values.svg", ColorMatrixIdentityGolden()},
+                {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
+                {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
                 {"type=saturate-with-a-large-coefficient.svg",
                  Params::UndefinedBehavior("saturate 99999")},
                 {"type=saturate-with-negative-coefficient.svg",
                  Params::UndefinedBehavior("saturate -0.5")},
-                {"type=saturate-without-a-coefficient.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity saturate")},
+                {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
                 {"type=saturate.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "saturate")},
-                {"without-attributes.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "no attrs identity")},
+                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
+                                       "Larger threshold due to the reference's 8-bit linearRGB "
+                                       "steps, which one-level gradient rounding crosses")},
+                {"without-attributes.svg", ColorMatrixIdentityGolden()},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -421,18 +426,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                // Reference refreshed to resvg v0.49.0; see
-                // third_party/resvg-test-suite/BUILD.bazel.
+                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"complex-order-and-xlink-href.svg",
-                 Params::Skip("Reference disagreement: the region's x and height cut the blur's "
-                              "input at its left and bottom edges. The reference blurs with five "
-                              "box passes that each drop what spreads past the region, so the "
-                              "first row and column inside read alpha 84 where Donner, which "
-                              "keeps that spill, reads 143, close to a single Gaussian of the "
-                              "clipped input (1,275 px, all within 5 px of those "
-                              "edges; Geode adds 3 frame-corner pixels); "
-                              "FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom pins the "
-                              "region clip")
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-complex-order-and-xlink-href.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: resvg drops blur spill at the region edge; see "
+                     "golden/README.md")
                      .setCanvasSize(300, 300)},
                 {"in=BackgroundAlpha-with-enable-background.svg",
                  Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
@@ -680,7 +680,8 @@ INSTANTIATE_TEST_SUITE_P(
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150,
-                                           "Reference resamples a rasterized pattern tile")},
+                                           "Larger threshold due to pattern tile resampling at "
+                                           "fractional tile edges")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1174,13 +1175,12 @@ INSTANTIATE_TEST_SUITE_P(StructureTransform, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform-origin",
-                {
-                    {"on-image.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                    {"on-text-path.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                    {"on-text.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("structure/transform-origin",
+                                        {
+                                            // The 300x300 resvg v0.49.0 renderings.
+                                            {"on-text-path.svg", ResvgV049Reference()},
+                                            {"on-text.svg", ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
