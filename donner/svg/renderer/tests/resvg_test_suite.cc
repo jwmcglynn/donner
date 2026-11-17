@@ -115,8 +115,8 @@ ImageComparisonParams ColorMatrixIdentityGolden() {
 ImageComparisonParams ColorAdjustReference(std::string_view cpuPath, std::string_view geodePath) {
   return Params::WithGoldenOverride(cpuPath, kDefaultThreshold,
                                     "Reference disagreement: font smoothing on labels; original "
-                                    "filter pixels, usvg label outlines")
-      .withGeodeGoldenOverride(geodePath, "Geode coverage of the same usvg label outlines");
+                                    "filter pixels and per-backend coverage of usvg label outlines")
+      .withGeodeGoldenOverride(geodePath);
 }
 
 /// Params for a reference replaced by its 300x300 rendering from resvg release v0.49.0; the
