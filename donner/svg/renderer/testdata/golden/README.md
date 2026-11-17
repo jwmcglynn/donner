@@ -58,6 +58,79 @@ bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 
+## Donner-rendered font-size-adjust reference
+
+`resvg-font-size-adjust-simple-case.png` is Donner's own rendering of the unchanged
+corpus `text/font-size-adjust/simple-case.svg`. It is used because no valid
+upstream rendering exists: the vendored PNG kerns `Text` but centers it on the
+unkerned advance, and resvg v0.49.0 does not implement `font-size-adjust` (it draws
+the text at 64px).
+
+Evidence, measured as ink centroids of the two vertical stems in a band below the
+T crossbar, in device px at the 500x500 (2.5x) canvas:
+
+| Stem | Vendored PNG | This reference | Offset |
+| ---- | ------------ | -------------- | ------ |
+| T    | 184.89       | 188.92         | 4.03   |
+| t    | 311.83       | 315.86         | 4.03   |
+
+The stem-to-stem distance is equal within 0.01 px, so both images draw the same
+adjusted size (64 * 0.3 / 0.536 = 35.82, from Noto Sans's OS/2 x-height of 536
+units) and the same kerned advances. Noto Sans shapes `Text` to 2010 units unkerned
+and 1920 kerned (T-e -70, e-x -20). Half of the 90 units of kerning is
+45 * 35.82 / 1000 = 1.61 user units = 4.03 device px, the whole offset.
+[SVG 2 text-anchor](https://www.w3.org/TR/SVG2/text.html#TextAnchoringProperties)
+centers the chunk on its shaped advance. `text/text-anchor/middle-on-text`, the
+same kerned string centered without `font-size-adjust`, matches its upstream
+reference at default settings, and
+`RendererRegressionTests.FontSizeAdjustMatchesExplicitUsedSize` requires the
+adjusted rendering to equal the text drawn at the explicit used size.
+
+The image was created from the simple text tier on TinySkia with the suite's
+golden-creation path, with the renderer sources of main at
+`21c59c7588b1f64ecd4df30496e975544d194c61`. The suite compares it at default settings on both CPU text
+tiers; the Geode resvg lane skips `text/*` rows through its backend feature gate.
+
+Corpus SVG SHA-256: `db28cd3a01650a98afe5d8f7a718434c1e71802b68b8b7a3d8d2feb8f97f11ea`.
+
+Reference PNG SHA-256: `7493132a5ca79910e11d3ece3c025cab71a14360162feb6e1e550df1c2762abb`.
+
+To regenerate after an intended rendering change, delete the image, run the
+command below from the repository root, and review the new image before
+committing it:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=*TextFontSizeAdjust*'
+```
+
+## structure/image: embedded SVG with text
+
+Disposition: harness mismatch. `resvg-embedded-svg-with-text.png` is a Donner CPU rendering of the
+unchanged corpus file `tests/structure/image/embedded-svg-with-text.svg`, at the 500x500 size of its
+vendored reference, rendered by the resvg suite harness (which gives SVG image documents the corpus
+fonts as a system font set) at the commit that adds it. Both CPU text tiers match it exactly; Geode
+differs by 2 pixels, within the default settings.
+
+The upstream references are not used. The vendored reference omits the embedded document's text,
+which browsers and resvg draw. The resvg v0.49.0 rendering (300x300) draws it, but differs from
+Donner by 469 pixels on the CPU backend and 941 on Geode. At that size the embedded document's
+frame lines are 1.2 px wide, with an exact coverage of 0.8 and 0.4. Geode produces that on all
+four sides and the CPU backend on the vertical sides; the reference has 0.75 and 0.5, the quarter
+steps of 4x4 supersampled coverage. Its glyph edges differ only below the pixelmatch
+anti-aliasing filter.
+
+Corpus SVG SHA-256: `f469e4ae7b284f434486f6781db4a81f2ee4c86e8f3948969b53769fd26b8aee`.
+
+PNG SHA-256: `0f0c328a6c2c99e3ff09b3e4e0c8173d0720737fcafee7c4dbfb8f316cff0bf8`.
+
+To regenerate, delete the PNG and run the row with `UPDATE_GOLDEN_IMAGES_DIR` set; the harness
+writes a missing golden from the current rendering:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text -- --gtest_filter='*embedded_svg_with_text*'
+```
+
 ## Donner renderings of filter references that resvg gets wrong
 
 The goldens below are Donner renderings for rows where the vendored resvg reference does not follow
@@ -117,10 +190,11 @@ steps: green falls from 13 to 0 where the source runs 12, 10, 9, 8, 7, 6, 5 and 
 uses the same tables.
 
 results.csv records Chrome, Firefox and resvg passing all seven vendored references, and Safari
-passing four of them (it fails type=matrix with empty, short and long value lists). A visual grade
-checks that the gradient is drawn unchanged; steps of a few levels in its darkest band, the
-largest from 0 to 13, are not what such a grade can see, so the browsers passing the reference
-does not show that they reproduce its 8-bit steps.
+passing four of them (it fails type=matrix with empty, short and long value lists). Rendered
+headless at 500x500, each browser draws all seven rows identically, and the two browsers split.
+Chromium 151 matches this golden (0 pixels at the suite's default settings). Firefox 153
+reproduces the references' 8-bit linearRGB steps, with the same dark-band green levels, and
+differs from this golden by 796 pixels in two single columns.
 
 PNG SHA-256: `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916`.
 

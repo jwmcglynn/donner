@@ -126,7 +126,7 @@ bottom for completeness.
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
 | F10 | Remaining `textPath` vertical and kerning cases                         |                              2 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
+| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -197,11 +197,13 @@ perform no live network requests. Applications independently provide resource by
 `ResourceLoaderInterface`; deterministic image-loader tests cover accepted PNG/SVG bytes, denied
 requests and resource-size limits.
 
-The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text.
-Its upstream reference is entirely opaque, whereas the SVG canvas is transparent outside painted
-content. The comparison remains gated pending background and typography reference qualification.
-An independently authored inline-versus-external text-fragment comparison covers host style
-inheritance, fragment selection, the callback identifier and transparent canvas behavior.
+The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text
+in the `Noto Sans` it inherits from the `use`, with glyphs within 0.4 device px of the reference.
+That reference is entirely opaque, whereas the SVG canvas is transparent outside painted content,
+and its glyph stems are 0.6 device px wider; resvg and the browsers fail this row in the corpus
+results, so it stays a harness-mismatch skip. An independently authored inline-versus-external
+text-fragment comparison covers host style inheritance, fragment selection, the callback
+identifier and transparent canvas behavior.
 
 ## CSS radial clipping
 
@@ -303,7 +305,7 @@ now removed). The remaining structural cluster is below.
 ### B7: text reference qualification
 
 **Status:** the font-family allowances are gone. Every `text/font-family/` case
-except `fallback-1` compares at default settings in both CPU text tiers, as do
+compares at default settings in both CPU text tiers, as do
 `text/text/xml-lang=ja`, `text/letter-spacing/non-ASCII-character` and
 `structure/defs/style-inheritance-on-text`. Face
 selection for these cases is asserted directly in `FontSelection_tests.cc`.
@@ -335,9 +337,12 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   and 52. They compare with a 390-pixel label glyph budget (see
   [Reference label glyph budgets](#reference-label-glyph-budgets)).
 - **Remaining:** `text/font/simple-case` disagrees on the unitless
-  `font` shorthand (see the reference qualification table). `fallback-1` is a
-  harness mismatch: resvg's harness falls back to Noto Serif for an unknown
-  family and Donner to its embedded Public Sans (445 simple, 444 full pixels).
+  `font` shorthand (see the reference qualification table).
+- **Default family:** CSS leaves the face for a family list that matches nothing
+  to the user agent. resvg appends its default family, serif, to every list, so
+  the comparison harness sets serif as `FontManager`'s default family and
+  `fallback-1` draws Noto Serif like the reference; the product default remains
+  the embedded Public Sans.
 
 > The remaining sub-1000-px CPU thresholds (feColorMatrix saturate and non-normalized values,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
@@ -368,14 +373,11 @@ generation:`, only when all of the following hold:
 
 | Case | Before | Residual (px) | 4x4 (px) | Budget | 1 px text shift |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `text/font/font-shorthand` | skip | 386 | 0 | 400 | 422 |
-| `text/text/real-text-height` | skip | 397 | 0 | 410 | 441 |
 | `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
 | `text/text/ligatures-handling-in-mixed-fonts-1` (full text) | skip | 399 | 0 | 415 | 507 |
 | `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | skip | 343 | 0 | 355 | 435 |
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
-| `text/tspan/nested-whitespaces` | 400 | 387 | 0 | 400 | 416 |
 | `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
 The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
@@ -505,12 +507,16 @@ re-enabled `filters/feImage/with-subregion-5` and refreshed the Donner-generated
 references were replaced by their v0.49.0 renderings, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
-The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
-the embedded SVG's text, while Donner uses the document font catalog. An authored
-`EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
-ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
-`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
-a reference-disagreement skip rather than a missing feature.
+The `embedded-svg-with-text` row is a harness mismatch and compares against a Donner rendering
+(`testdata/golden/resvg-embedded-svg-with-text.png`) at the default settings on every backend. The
+vendored reference omits the embedded SVG's text, which browsers and resvg draw; the resvg v0.49.0
+rendering draws it but quantizes the embedded frame lines' coverage to quarters. The golden encodes
+a harness-only configuration: the suite gives SVG image documents its test fonts, as a stand-in for
+the system fonts an image document sees in a browser or in resvg's process-wide font database. The
+product renders an image document's text with only the built-in font catalog. An authored
+`EmbeddedSvgUsesDocumentFontContext` case checks that product behavior (embedded-versus-direct
+identity plus visible text ink) in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
@@ -822,8 +828,10 @@ goldens, all now fixed/closed:
 **Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
 problem — inspect whether a coverage change actually moves it before attributing it.
 No active resvg case is backend-disabled. Verified analytic-vs-finite-sample edge
-residuals, including `feGaussianBlur/complex-transform`, paint-order text, and the
-rotated pattern case, use exact Geode goldens so the backend remains fully gated.
+residuals, including `feGaussianBlur/complex-transform`, use exact Geode goldens so the
+backend remains fully gated. paint-order `on-text` and the rotated pattern case
+(`transform-and-patternTransform`) compare on Geode against their vendored references at default
+settings (42 and 55 pixels on Metal and on Linux lavapipe).
 
 ---
 

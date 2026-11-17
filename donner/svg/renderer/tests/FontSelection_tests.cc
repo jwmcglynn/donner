@@ -21,14 +21,18 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
@@ -167,7 +171,11 @@ private:
 
 /// Resolves the face the text pipeline actually uses for the first `<text>` element in @p svg,
 /// exercising the same family-list cascade as rendering.
-SelectedFace ResolveDocumentFace(std::string_view svg) {
+///
+/// @param svg Document under test.
+/// @param defaultFamily Replaces the suite's default family when set; empty clears it.
+SelectedFace ResolveDocumentFace(std::string_view svg,
+                                 std::optional<std::string_view> defaultFamily = std::nullopt) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   parser::SVGParser::Options options;
   auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
@@ -178,6 +186,9 @@ SelectedFace ResolveDocumentFace(std::string_view svg) {
 
   SVGDocument document = std::move(result.result());
   RegisterFontsFromDirectoryForTesting(document, TestFontsDir());
+  if (defaultFamily) {
+    document.registry().ctx().get<FontManager>().setDefaultFamily(*defaultFamily);
+  }
 
   std::optional<SVGElement> textElement = document.querySelector("text");
   EXPECT_TRUE(textElement.has_value()) << "SVG under test has no <text> element";
@@ -294,6 +305,153 @@ TEST(FontSelection, DocumentBoldGenericFamilyResolvesToTheBoldFace) {
               FaceFrom("NotoSans-Bold.ttf"));
 }
 
+// The suite sets serif as the user agent's default family, as resvg's harness does, so a family
+// list that matches nothing renders in the serif face rather than the product's embedded face.
+TEST(FontSelection, UnmatchedFamilyListUsesTheSuiteDefaultFamily) {
+  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid")), FaceFrom("NotoSerif-Regular.ttf"));
+}
+
+TEST(FontSelection, FullyUnknownFamilyListFallsBackToTheEmbeddedFace) {
+  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid"), ""), FaceFrom(kEmbeddedFallback));
+}
+
+TEST(FontSelection, UnmatchedFamilyListUsesTheDefaultFamilyFaceForTheRequest) {
+  EXPECT_THAT(
+      ResolveDocumentFace(TextSvgWithFamily("Invalid", R"(font-weight="bold")"), "Noto Sans"),
+      FaceFrom("NotoSans-Bold.ttf"));
+  EXPECT_THAT(
+      ResolveDocumentFace(TextSvgWithFamily("Invalid", R"(font-style="italic")"), "Noto Sans"),
+      FaceFrom("NotoSans-Italic.ttf"));
+  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid"), "Noto Sans"),
+              FaceFrom("NotoSans-Regular.ttf"));
+}
+
+TEST(FontSelection, ChUnitOfAnUnmatchedFamilyListUsesTheDefaultFamily) {
+  HermeticFontSet fonts;
+  FontManager& fontManager = fonts.fontManager();
+  TextEngine engine(fontManager, fonts.registry());
+  const std::vector<RcString> unmatched = {RcString("Invalid")};
+  const std::vector<RcString> mono = {RcString("Noto Mono")};
+
+  fontManager.setDefaultFamily("monospace");
+  const std::optional<double> defaultCh = engine.measureChUnitInEm(unmatched);
+  const std::optional<double> monoCh = engine.measureChUnitInEm(mono);
+  ASSERT_THAT(defaultCh, testing::Optional(testing::Gt(0.0)));
+  EXPECT_THAT(defaultCh, testing::Eq(monoCh));
+
+  fontManager.setDefaultFamily("");
+  EXPECT_THAT(engine.measureChUnitInEm(unmatched), testing::Ne(monoCh));
+}
+
+/// Parses @p svg with the hermetic fonts and @p defaultFamily as the default family.
+SVGDocument ParseWithHermeticFonts(std::string_view svg, std::string_view defaultFamily) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  parser::SVGParser::Options options;
+  auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
+  EXPECT_FALSE(result.hasError()) << "Parse error: " << result.error();
+  SVGDocument document = std::move(result.result());
+  RegisterFontsFromDirectoryForTesting(document, TestFontsDir());
+  document.registry().ctx().get<FontManager>().setDefaultFamily(defaultFamily);
+  return document;
+}
+
+/// The computed text length of the first `<text>` element, which lays it out when needed.
+double FirstTextLength(SVGDocument& document) {
+  std::optional<SVGElement> text = document.querySelector("text");
+  EXPECT_TRUE(text.has_value()) << "SVG under test has no <text> element";
+  return text ? text->cast<SVGTextElement>().getComputedTextLength() : 0.0;
+}
+
+std::string RectSvgWithFamily(std::string_view family) {
+  return std::string(R"(<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">)"
+                     R"(<rect width="4ch" height="10" font-size="20" font-family=")")
+      .append(family)
+      .append("\"/></svg>");
+}
+
+/// The width of the first `<rect>` element's bounds after rendering @p document, which computes
+/// its path with the measured `ch`.
+double FirstRectWidth(SVGDocument& document) {
+  Renderer renderer;
+  renderer.draw(document);
+  std::optional<SVGElement> rect = document.querySelector("rect");
+  EXPECT_TRUE(rect.has_value()) << "SVG under test has no <rect> element";
+  const std::optional<Box2d> bounds =
+      rect ? rect->cast<SVGGeometryElement>().worldBounds() : std::nullopt;
+  EXPECT_TRUE(bounds.has_value()) << "<rect> has no bounds";
+  return bounds ? bounds->width() : 0.0;
+}
+
+TEST(FontSelection, DefaultFamilyChangeLaysOutPreparedTextAgain) {
+  SVGDocument document = ParseWithHermeticFonts(TextSvgWithFamily("Invalid"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(TextSvgWithFamily("Noto Mono"), "");
+  const double fallbackLength = FirstTextLength(document);
+  const double monoLength = FirstTextLength(monoDocument);
+  ASSERT_THAT(fallbackLength, testing::Ne(monoLength));
+
+  document.registry().ctx().get<FontManager>().setDefaultFamily("monospace");
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstTextLength(document), testing::DoubleEq(monoLength));
+}
+
+TEST(FontSelection, GenericFamilyMappingChangeLaysOutPreparedTextAgain) {
+  SVGDocument document = ParseWithHermeticFonts(TextSvgWithFamily("serif"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(TextSvgWithFamily("Noto Mono"), "");
+  const double serifLength = FirstTextLength(document);
+  const double monoLength = FirstTextLength(monoDocument);
+  ASSERT_THAT(serifLength, testing::Ne(monoLength));
+
+  document.registry().ctx().get<FontManager>().setGenericFamilyMapping("serif", "Noto Mono");
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstTextLength(document), testing::DoubleEq(monoLength));
+}
+
+TEST(FontSelection, DefaultFamilyChangeRecomputesChUnitShapes) {
+  SVGDocument document = ParseWithHermeticFonts(RectSvgWithFamily("Invalid"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(RectSvgWithFamily("Noto Mono"), "");
+  const double fallbackWidth = FirstRectWidth(document);
+  const double monoWidth = FirstRectWidth(monoDocument);
+  ASSERT_THAT(fallbackWidth, testing::Ne(monoWidth));
+
+  document.registry().ctx().get<FontManager>().setDefaultFamily("monospace");
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstRectWidth(document), testing::DoubleEq(monoWidth));
+}
+
+/// Supplies one family from the hermetic Noto Mono bytes.
+class SingleFamilyProvider final : public FontFamilyProvider {
+public:
+  explicit SingleFamilyProvider(std::string family) : family_(std::move(family)) {}
+
+  std::vector<FontFamilyInfo> families() const override { return {{family_}}; }
+
+  bool hasFamily(std::string_view family) const override {
+    return StringUtils::Equals<StringComparison::IgnoreCase>(family, family_);
+  }
+
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest&) const override {
+    return hasFamily(family) ? bytes_ : std::vector<uint8_t>();
+  }
+
+private:
+  std::string family_;
+  std::vector<uint8_t> bytes_ = ReadFile(TestFontsDir() / "NotoMono-Regular.ttf");
+};
+
+TEST(FontSelection, FontProviderChangeLaysOutPreparedTextAgain) {
+  const SingleFamilyProvider provider("Provided Mono");
+  SVGDocument document = ParseWithHermeticFonts(TextSvgWithFamily("Provided Mono"), "");
+  SVGDocument monoDocument = ParseWithHermeticFonts(TextSvgWithFamily("Noto Mono"), "");
+  const double fallbackLength = FirstTextLength(document);
+  const double monoLength = FirstTextLength(monoDocument);
+  ASSERT_THAT(fallbackLength, testing::Ne(monoLength));
+
+  document.registry().ctx().get<FontManager>().setFontProvider(&provider);
+  EXPECT_TRUE(document.refreshFontResources());
+  EXPECT_THAT(FirstTextLength(document), testing::DoubleEq(monoLength));
+}
+
 TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {
   EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid, Noto Sans")),
               FaceFrom("NotoSans-Regular.ttf"));
@@ -302,10 +460,6 @@ TEST(FontSelection, FamilyListSkipsAnUnknownFamily) {
 TEST(FontSelection, FamilyListPrefersTheFirstAvailableFamily) {
   EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("'Source Sans Pro', Noto Sans, serif")),
               FaceFrom("SourceSansPro-Regular.ttf"));
-}
-
-TEST(FontSelection, FullyUnknownFamilyListFallsBackToTheEmbeddedFace) {
-  EXPECT_THAT(ResolveDocumentFace(TextSvgWithFamily("Invalid")), FaceFrom(kEmbeddedFallback));
 }
 
 TEST(FontSelection, QuotedFamilyNameContainingADigitResolves) {

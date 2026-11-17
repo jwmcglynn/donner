@@ -75,7 +75,10 @@ public:
   void prepareForElement(EntityHandle handle, ParseWarningSink& warningSink);
 
   /// Adopt pending face resolutions under serialized document access and invalidate only the
-  /// text roots whose cached runs used a changed face. Call before the renderer's dirty snapshot.
+  /// text roots whose cached runs used a changed face. A family selection change (default family,
+  /// generic mapping or font provider) invalidates every result prepared before it, including
+  /// computed shapes, whose `ch` lengths may have measured the replaced face. Call before the
+  /// renderer's dirty snapshot.
   std::vector<Entity> refreshFontResources();
   /// Whether changed or pending font resources require another text preparation pass.
   bool needsFontResourceRefresh() const;
@@ -256,6 +259,7 @@ private:
   std::unique_ptr<TextBackend> backend_;
   size_t registeredFontFaceCount_ = 0;
   uint64_t observedFontResourceRevision_ = 0;
+  uint64_t observedHostFontKey_ = 0;
   std::size_t layoutCallCount_ = 0;
   std::size_t fallbackCoverageEntries_ = 0;
   std::size_t bidiRunCandidates_ = 0;

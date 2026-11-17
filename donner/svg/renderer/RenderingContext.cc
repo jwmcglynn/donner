@@ -58,6 +58,7 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -66,6 +67,8 @@
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/parser/TransformParser.h"
+#include "donner/svg/renderer/ExternalUseStyleRetention.h"
+#include "donner/svg/renderer/RetainedRenderTreeUpdate.h"
 
 namespace donner::svg::components {
 
@@ -1260,6 +1263,7 @@ public:
 #ifdef DONNER_TEXT_ENABLED
     if (fontManager) {
       paths.fontResourceRevision = fontManager->fontResourceRevision();
+      paths.hostFontKey = fontManager->hostFontKey();
     }
 #endif
   }
@@ -1559,20 +1563,9 @@ bool IsUnpresentedDefinition(const Registry& registry, Entity entity) {
   return false;
 }
 
-bool IsDormantDefinitionUse(Registry& registry, Entity entity,
-                            const ShadowTreeComponent& shadowTree) {
-  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
-  if (hostType == nullptr || hostType->type() != ElementType::Use) {
-    return false;
-  }
-  const std::optional<RcString> href = shadowTree.mainHref();
-  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
-    return false;
-  }
-  return IsUnpresentedDefinition(registry, entity);
-}
-
 void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  // Admit each external document once for this rebuild, however many uses reference it.
+  registry.ctx().get<ResourceManagerContext>().beginExternalSVGAdmissionPass();
   for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
     auto [shadowTreeComponent] = view.get(entity);
     // A referencing host expands these local uses from their light tree when it is presented.
@@ -1596,16 +1589,9 @@ void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSin
       }
     } else if (shadowTreeComponent.mainHref()) {
       // Same-document resolution failed. Check if this is an external reference.
-      const Reference ref(shadowTreeComponent.mainHref().value());
-      if (ref.isExternal()) {
-        // Load the external SVG document via ResourceManagerContext.
-        auto& resourceManager = registry.ctx().get<ResourceManagerContext>();
-        const RcString docUrl(ref.documentUrl());
-        auto subDoc = resourceManager.loadExternalSVG(docUrl, warningSink);
-        if (subDoc) {
-          registry.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
-                                                            RcString(ref.fragment()));
-        }
+      const RcString href = shadowTreeComponent.mainHref().value();
+      if (Reference(href).isExternal()) {
+        AttachExternalUse(registry, entity, href, warningSink);
       } else {
         ParseDiagnostic err;
         err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
@@ -1618,35 +1604,64 @@ void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSin
 
 }  // namespace
 
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree) {
+  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
+  if (hostType == nullptr || hostType->type() != ElementType::Use) {
+    return false;
+  }
+  const std::optional<RcString> href = shadowTree.mainHref();
+  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
+    return false;
+  }
+  return IsUnpresentedDefinition(registry, entity);
+}
+
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
+
+namespace {
+
+bool IsProvablySameContextPaint(const std::optional<ResolvedPaintServer>& lhs,
+                                const std::optional<ResolvedPaintServer>& rhs) {
+  return lhs.has_value() == rhs.has_value() && (!lhs || IsProvablySamePaint(*lhs, *rhs));
+}
+
+}  // namespace
 
 void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
                                               const ResolvedPaintServer& stroke) {
-  initialContextFill_ = fill;
-  initialContextStroke_ = stroke;
-  getRenderTreeState(registry_).needsFullRebuild = true;
-}
-
-void RenderingContext::restoreInitialPaintState(InitialPaintState state) {
-  initialContextFill_ = std::move(state.first);
-  initialContextStroke_ = std::move(state.second);
-  getRenderTreeState(registry_).needsFullRebuild = true;
+  const std::optional<ResolvedPaintServer> newFill = fill;
+  const std::optional<ResolvedPaintServer> newStroke = stroke;
+  if (IsProvablySameContextPaint(initialContextFill_, newFill) &&
+      IsProvablySameContextPaint(initialContextStroke_, newStroke)) {
+    return;
+  }
+  initialContextFill_ = newFill;
+  initialContextStroke_ = newStroke;
+  getRenderTreeState(registry_).needsInstanceRebuild = true;
 }
 
 void RenderingContext::clearInitialContextPaint() {
+  if (!initialContextFill_ && !initialContextStroke_) {
+    return;
+  }
   initialContextFill_.reset();
   initialContextStroke_.reset();
-  getRenderTreeState(registry_).needsFullRebuild = true;
+  getRenderTreeState(registry_).needsInstanceRebuild = true;
 }
 
 void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& warningSink) {
+  if (!registry_.ctx().contains<ExternalUseStyleContext>()) {
+    ExternalUseStyleRetention::RestoreStandalone(registry_);
+  }
+
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 
-  // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
-  // is required, skip all recomputation.
+  // Fast path: if the render tree has been built, nothing is dirty, and no rebuild is required,
+  // skip all recomputation.
   if (renderState.hasBeenBuilt && !renderState.needsFullStyleRecompute &&
-      !renderState.needsFullRebuild && !hasDirtyEntities) {
+      !renderState.needsFullRebuild && !renderState.needsInstanceRebuild && !hasDirtyEntities) {
     return;
   }
 
@@ -1655,6 +1670,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& war
 
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
+  renderState.needsInstanceRebuild = false;
   renderState.hasBeenBuilt = true;
 }
 
@@ -1666,9 +1682,12 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
     return;
   }
 
+  if (tryRetainedUpdate(warningSink)) {
+    return;
+  }
+
   // Full rebuild path: tear down shadow trees and recompute everything.
-  // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
-  // instead of the full tree.
+  ++renderState.counters.fullRebuilds;
   ShadowTreeSystem::beginRebuild(registry_);
   std::vector<Entity> shadowHosts;
   auto shadowView = registry_.view<ComputedShadowTreeComponent>();
@@ -1682,6 +1701,7 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
     }
     if (auto* shadow = registry_.try_get<ComputedShadowTreeComponent>(entity)) {
       createShadowTreeSystem().teardown(registry_, *shadow);
+      ++renderState.counters.shadowTreeTeardowns;
     }
   }
   registry_.clear<ComputedShadowTreeComponent>();
@@ -1706,6 +1726,26 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
+}
+
+bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink) {
+  auto& renderState = getRenderTreeState(registry_);
+  if (!renderState.retainedUpdatesEnabled || !renderState.hasBeenBuilt ||
+      renderState.needsFullRebuild || renderState.needsFullStyleRecompute) {
+    return false;
+  }
+  const std::optional<RetainedUpdatePlan> plan = PlanRetainedUpdate(registry_);
+  if (!plan) {
+    return false;
+  }
+
+  ++renderState.counters.retainedUpdates;
+  renderState.counters.retargetedUses += plan->retargetedUses.size();
+  ApplyRetainedUpdate(registry_, *plan, warningSink);
+  registry_.clear<DirtyFlagsComponent>();
+  // The instances still describe the previous frame; the next instantiation rebuilds them.
+  renderState.needsInstanceRebuild = true;
+  return true;
 }
 
 bool RenderingContext::HitGeometry::contains(const Vector2d& point, const Path* path) const {
@@ -2057,9 +2097,6 @@ void InstantiateNestedMarkerTrees(Registry& registry, ParseWarningSink& warningS
 }
 
 #ifdef DONNER_TEXT_ENABLED
-/// Registry context marker: the document's missing packaged fallback font was already reported.
-struct MissingFallbackFontReported {};
-
 /**
  * Warn once per document when it contains text and the packaged fallback font is unavailable,
  * since text that matches no other font then has no face to draw with.
@@ -2084,6 +2121,10 @@ void ReportMissingFallbackFontOnce(Registry& registry, FontManager& fontManager,
 #endif
 
 }  // namespace
+
+void ForgetMissingFallbackFontReport(Registry& registry) {
+  registry.ctx().erase<MissingFallbackFontReported>();
+}
 
 void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   RestoreAnimationPresentation(registry_);

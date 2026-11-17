@@ -54,7 +54,10 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (49)
+## Active overrides (50)
+
+The count is of overridden suite rows; the shared feColorMatrix table row covers seven of them
+and the drop-shadow-function row four.
 
 ### resvg golden is wrong per spec
 
@@ -68,10 +71,16 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
-| painting/marker            | with-an-image-child                   | We (correctly) render the image child                          |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
+| text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+
+`structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
+rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
+fonts by the harness; see [0021](0021-resvg_feature_gaps.md) and
+[`testdata/golden/README.md`](../../donner/svg/renderer/testdata/golden/README.md).
 
 The seven feColorMatrix identity forms (without-attributes, type=matrix without values or with
 empty, short or long value lists, and type=saturate and type=hueRotate without a value) share
@@ -80,6 +89,13 @@ is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`font-size-adjust/simple-case` runs against a committed Donner render
+(`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
+it on the unkerned advance, 4.03 device px left of the kerned center, while SVG 2
+anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
+`font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
+command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
 (`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
