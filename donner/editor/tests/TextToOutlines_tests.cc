@@ -1272,4 +1272,37 @@ TEST(TextToOutlinesPaint, DefaultFillRuleAndOpacityUnderAnAncestor) {
   EXPECT_EQ(group->getComputedStyle().fillRule.getOr(FillRule::EvenOdd), FillRule::NonZero);
 }
 
+// A dashed text stroke converts to dashed stroke-only paths. The text dashes each text chunk as one
+// shape, the contours in glyph order, and so does the chunk's path. The tspan overrides the dash
+// array with font-relative lengths, which resolve against its own font size, not the outline
+// group's (inherited from an ancestor at another size); the text sets a nonzero dash offset and
+// its own line join, cap and miter limit.
+TEST(TextToOutlinesPaint, DashedStrokeWithSpanOverride) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g font-size="16"><text x="10" y="120" font-size="64" fill="none" stroke="#0033aa" stroke-width="3" stroke-dasharray="6 4" stroke-dashoffset="3" stroke-linejoin="round" stroke-linecap="square" stroke-miterlimit="2">Te<tspan stroke-dasharray="0.25em 0.1em">xt</tspan></text></g>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "dashed_stroke_with_span_override",
+                               tests::PixelmatchIdentityParams());
+}
+
+// Stroke geometry the text resets to its defaults under an ancestor that sets it: the outlines
+// draw a solid stroke with miter joins and butt caps, as the text does.
+TEST(TextToOutlinesPaint, DefaultStrokeGeometryUnderAnAncestor) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g stroke-dasharray="2 2" stroke-dashoffset="1" stroke-linejoin="bevel" stroke-linecap="round" stroke-miterlimit="1"><text x="10" y="120" font-size="64" fill="none" stroke="#0033aa" stroke-width="4" stroke-dasharray="none" stroke-dashoffset="0" stroke-linejoin="miter" stroke-linecap="butt" stroke-miterlimit="4">SVG</text></g>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "default_stroke_geometry_under_ancestor",
+                               tests::PixelmatchIdentityParams());
+}
+
 }  // namespace donner::editor
