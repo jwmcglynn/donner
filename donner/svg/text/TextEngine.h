@@ -259,6 +259,7 @@ private:
   std::unique_ptr<TextBackend> backend_;
   size_t registeredFontFaceCount_ = 0;
   uint64_t observedFontResourceRevision_ = 0;
+  uint64_t observedHostFontKey_ = 0;
   std::size_t layoutCallCount_ = 0;
   std::size_t fallbackCoverageEntries_ = 0;
   std::size_t bidiRunCandidates_ = 0;

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -22,6 +23,7 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -187,6 +189,46 @@ void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::pa
   fontManager.setGenericFamilyMapping("fantasy", "Sedgwick Ave Display");
   // resvg's harness resolves a family list that matches nothing to its default serif family.
   fontManager.setDefaultFamily("serif");
+}
+
+/**
+ * Returns the parse callback for SVG image sub-documents: it parses them as the parser does by
+ * default, then registers the test fonts in \p fontsDir on each one. resvg renders every document
+ * of a test, images included, with one process-wide font database holding the suite's fonts, much
+ * as a browser renders an SVG image with the fonts installed on the system. The test fonts stand in
+ * for those system fonts; nothing of the host document, such as its own `@font-face` rules, is
+ * shared with the image.
+ *
+ * @param options Parser options of the host document.
+ * @param resourceFamily Resource budget the host document shares with its sub-documents.
+ * @param fontsDir Directory of the test fonts.
+ */
+SVGDocument::SvgParseCallback SvgParseCallbackWithTestFonts(
+    const parser::SVGParser::Options& options,
+    const std::shared_ptr<components::DocumentResourceFamilyBudget>& resourceFamily,
+    const std::filesystem::path& fontsDir) {
+  parser::SVGParser::Options subOptions = options;
+  // Image resources are independent documents, even when the parent was parsed inline.
+  subOptions.parseAsInlineSVG = false;
+  return [subOptions, resourceFamily, fontsDir](
+             const std::vector<uint8_t>& svgContent,
+             ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings subSettings;
+    subSettings.processingMode = ProcessingMode::SecureStatic;
+    subSettings.resourceFamilyBudget = resourceFamily;
+    subSettings.svgParseCallback =
+        SvgParseCallbackWithTestFonts(subOptions, resourceFamily, fontsDir);
+    const std::string_view source(reinterpret_cast<const char*>(svgContent.data()),
+                                  svgContent.size());
+    auto result = parser::SVGParser::ParseSVG(source, warnings, subOptions, std::move(subSettings));
+    if (result.hasError()) {
+      warnings.add(ParseDiagnostic(result.error()));
+      return std::nullopt;
+    }
+    SVGDocument document = std::move(result.result());
+    registerFontsFromDirectory(document, fontsDir);
+    return document.handle();
+  };
 }
 
 bool isEnabledFromEnv(const char* name, bool defaultValue) {
@@ -842,6 +884,17 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
         ResolveRunfilesResourceRootForTesting(*resourceDir, filename),
         std::filesystem::path(filename));
   }
+  // SVG images see the test fonts too, as they would see the fonts installed on a system.
+  std::optional<std::filesystem::path> fontsDir;
+  if (resourceDir && std::filesystem::is_directory(*resourceDir / "fonts")) {
+    fontsDir = *resourceDir / "fonts";
+    settings.resourceFamilyBudget = std::make_shared<components::DocumentResourceFamilyBudget>(
+        components::DocumentResourceFamilyBudget::Limits{
+            .parsedPayloadBytes = options.maximumParsedPayloadSize,
+        });
+    settings.svgParseCallback =
+        SvgParseCallbackWithTestFonts(options, settings.resourceFamilyBudget, *fontsDir);
+  }
 
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   auto maybeResult = parser::SVGParser::ParseSVG(fileData, disabled, options, std::move(settings));
@@ -854,11 +907,8 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   TrustDocumentFontFacesForTesting(document);
 
   // If a resource directory is provided, load any fonts from its fonts/ subdirectory.
-  if (resourceDir) {
-    const std::filesystem::path fontsDir = *resourceDir / "fonts";
-    if (std::filesystem::is_directory(fontsDir)) {
-      registerFontsFromDirectory(document, fontsDir);
-    }
+  if (fontsDir) {
+    registerFontsFromDirectory(document, *fontsDir);
   }
 
   return document;

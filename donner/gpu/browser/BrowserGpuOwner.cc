@@ -450,4 +450,16 @@ bool UsesBrowserGpuOwner() {
 #endif
 }
 
+BrowserGpuOwnerDispatchTotals ReadBrowserGpuOwnerDispatchTotals() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  return BrowserGpuOwnerDispatchTotals{
+      .requested = gOwnerWaitStats[kRequested].load(std::memory_order_relaxed),
+      .waitSliceTimeouts = gOwnerWaitStats[kFutexTimeouts].load(std::memory_order_relaxed),
+      .dispatchWaitUs = gOwnerWaitStats[kTotalDispatchWaitUs].load(std::memory_order_relaxed),
+  };
+#else
+  return {};
+#endif
+}
+
 }  // namespace donner::gpu::browser

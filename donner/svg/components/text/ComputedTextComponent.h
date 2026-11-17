@@ -13,6 +13,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -243,8 +244,21 @@ struct ComputedTextComponent {
     /// programmatic spans keep their root-size fallback when fontSize has the default zero value.
     bool hasResolvedFontSize = false;
 
-    /// CSS font-family list for this span.
-    SmallVector<RcString, 1> fontFamilies;
+    /// CSS font-family list for this span, shared by every span styled by the same element, so a
+    /// text of many spans holds one copy; null until resolved.
+    std::shared_ptr<const SmallVector<RcString, 1>> fontFamilies;
+
+    /// The span's font-family list; empty until resolved. The view borrows the list this span
+    /// holds, so it is valid only while this span, or another span sharing the list, keeps it.
+    [[nodiscard]] std::span<const RcString> fontFamilyList() const UTILS_LIFETIME_BOUND {
+      return fontFamilies ? std::span<const RcString>(fontFamilies->data(), fontFamilies->size())
+                          : std::span<const RcString>();
+    }
+
+    /// Sets the span's font-family list to its own copy of \p families.
+    void setFontFamilies(SmallVector<RcString, 1> families) {
+      fontFamilies = std::make_shared<const SmallVector<RcString, 1>>(std::move(families));
+    }
 
     /// Indicates whether baseline-shift was set via the `sub` or `super` keywords,
     /// which should be resolved from font OS/2 metrics at layout time.

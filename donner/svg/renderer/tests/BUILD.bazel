@@ -437,6 +437,7 @@ donner_cc_test(
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
+        "//donner/svg/renderer:rendering_context",
     ],
 )
 
@@ -567,6 +568,7 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
         "//third_party/public-sans:public-sans_resource_files",
+        "//third_party/resvg-test-suite:fonts",
     ],
     defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
@@ -584,6 +586,8 @@ donner_cc_test(
     deps = [
         ":mock_renderer_interface",
         ":renderer_test_backend",
+        "//donner/base:runfiles",
+        "//donner/base/encoding:base64",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer",
         "//donner/svg/renderer/tests:rgba_test_matchers",
