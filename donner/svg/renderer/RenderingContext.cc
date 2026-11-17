@@ -1263,6 +1263,7 @@ public:
 #ifdef DONNER_TEXT_ENABLED
     if (fontManager) {
       paths.fontResourceRevision = fontManager->fontResourceRevision();
+      paths.hostFontKey = fontManager->hostFontKey();
     }
 #endif
   }

@@ -44,6 +44,8 @@ struct ComputedClipPathsComponent {
   /// Faces whose accepted glyph/shape paths formed this consumer's clip, including nested clips.
   std::vector<FontFaceDependency> fontDependencies;
   uint64_t fontResourceRevision = 0;
+  /// \ref FontManager::hostFontKey when this was prepared; a different key makes it stale.
+  uint64_t hostFontKey = 0;
 };
 
 }  // namespace donner::svg::components

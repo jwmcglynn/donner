@@ -104,6 +104,72 @@ rm donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=*TextFontSizeAdjust*'
 ```
 
+## structure/image: embedded SVG with text
+
+Disposition: harness mismatch. `resvg-embedded-svg-with-text.png` is a Donner CPU rendering of the
+unchanged corpus file `tests/structure/image/embedded-svg-with-text.svg`, at the 500x500 size of its
+vendored reference, rendered by the resvg suite harness (which gives SVG image documents the corpus
+fonts as a system font set) at the commit that adds it. Both CPU text tiers match it exactly; Geode
+differs by 2 pixels, within the default settings.
+
+The upstream references are not used. The vendored reference omits the embedded document's text,
+which browsers and resvg draw. The resvg v0.49.0 rendering (300x300) draws it, but differs from
+Donner by 469 pixels on the CPU backend and 941 on Geode. At that size the embedded document's
+frame lines are 1.2 px wide, with an exact coverage of 0.8 and 0.4. Geode produces that on all
+four sides and the CPU backend on the vertical sides; the reference has 0.75 and 0.5, the quarter
+steps of 4x4 supersampled coverage. Its glyph edges differ only below the pixelmatch
+anti-aliasing filter.
+
+Corpus SVG SHA-256: `f469e4ae7b284f434486f6781db4a81f2ee4c86e8f3948969b53769fd26b8aee`.
+
+PNG SHA-256: `0f0c328a6c2c99e3ff09b3e4e0c8173d0720737fcafee7c4dbfb8f316cff0bf8`.
+
+To regenerate, delete the PNG and run the row with `UPDATE_GOLDEN_IMAGES_DIR` set; the harness
+writes a missing golden from the current rendering:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text -- --gtest_filter='*embedded_svg_with_text*'
+```
+
+## Donner renderings of filter references that resvg gets wrong
+
+The goldens below are Donner renderings for rows where the vendored resvg reference does not follow
+the specification. A self-rendered golden cannot prove itself correct, so each row's section gives
+independent evidence, how resvg v0.49.0 renders the row, and what the suite's results.csv records:
+those are manual visual grades of the vendored reference by browser and renderer, which show
+whether an engine draws the case's intended picture but cannot resolve differences of a level or
+a pixel along an edge.
+
+### `filters/filter/complex-order-and-xlink-href`
+
+Disposition: reference disagreement. `donner-complex-order-and-xlink-href.png` is a Donner CPU
+rendering of the unchanged corpus file, at the 300x300 size of the resvg v0.49.0 reference,
+rendered by the resvg suite harness at the commit that adds it. The software backend compares with
+it at default settings; Geode differs by 3 pixels.
+
+The filter region's x and height cut the blur's input. Filter Effects 1 makes the filter region a
+hard clip on a primitive's input and result, and allows three successive box blurs only as an
+approximation of the Gaussian convolution of that input. resvg blurs with five 8-bit box passes
+inside a buffer the size of the region, so each pass drops what the previous one spread past the
+region. Modeling those five passes on the clipped step gives 84 for the first row inside the edge,
+which is the reference's value; the same passes keeping their spill give 143, Donner's value, and
+the exact Gaussian of the clipped input gives 144.4 (standard deviation 3 device pixels). resvg
+v0.49.0 renders the row like the vendored reference.
+
+results.csv records Firefox passing the vendored reference and Chrome and Safari failing it (resvg
+passes its own). The failing browsers draw the case differently enough for a visual grade to see;
+a grade cannot see the one-pixel band along the clipped edges where Donner and the reference
+differ.
+
+PNG SHA-256: `9962099aac41e77fd1d9044fd05d2c939dad0ecfdc941f98dc1b36dae9ab3750`.
+
+To regenerate, delete the file and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*complex_order_and_xlink_href*'
+```
+
 ## Donner renderings of recursive pattern references
 
 `paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.

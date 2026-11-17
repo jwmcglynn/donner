@@ -253,7 +253,7 @@ other compilers retain their own evaluator defaults.
 
 ## Image sampling and local control flow
 
-Image blit uses a shared 176-byte `ImageBlitParams` block. Each retained artifact verifies every
+Image blit uses a shared 224-byte `ImageBlitParams` block. Each retained artifact verifies every
 authored member against the host layout. Its live caller derives all six bindings and both entry
 names from reflection. Filtered textures are distinct from textures used only for texel reads; the
 unused clip sampler is removed from the shader and host layout.
