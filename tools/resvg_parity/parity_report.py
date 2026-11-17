@@ -257,7 +257,85 @@ def _get_tests_call(macro_text: str) -> list[str]:
     return calls[0][2]
 
 
-def _parse_overrides(expression: str, category: str) -> dict[str, str]:
+# A helper in the registration source that returns one params expression, such as
+# `ImageComparisonParams Name(std::string_view path) { return Params::...; }`.
+_PARAMS_HELPER_RE = re.compile(
+    r"\bImageComparisonParams\s+([A-Za-z_]\w*)\s*\(([^()]*)\)\s*\{\s*return\s+(.*?);\s*\}",
+    re.DOTALL,
+)
+
+ParamsHelpers = dict[str, tuple[list[str], str]]
+
+
+def parse_params_helpers(source: str) -> ParamsHelpers:
+    """Return the params helpers defined in the source: parameter names and returned expression.
+
+    Helpers listed in PARAMS_FREE_HELPERS keep their own handling and are not expanded. Two helpers
+    with one name, such as overloads, are rejected: a call could not tell which one it expands.
+    """
+
+    helpers: ParamsHelpers = {}
+    masked = _mask_comments(source)
+    for match in _PARAMS_HELPER_RE.finditer(masked):
+        name, parameters, _ = match.groups()
+        if name in PARAMS_FREE_HELPERS:
+            continue
+        names = [
+            parameter.split()[-1].lstrip("&*")
+            for parameter in _split_top_level(parameters)
+            if parameter.strip()
+        ]
+        if name in helpers:
+            raise ParityReportError(f"params helper {name} is defined more than once")
+        body = source[match.start(3) : match.end(3)]
+        helpers[name] = (names, _normalize_cpp_expression(body))
+    return helpers
+
+
+def _expand_params_helpers(expression: str, helpers: ParamsHelpers) -> str:
+    """Replace a leading call to a params helper with the expression it returns.
+
+    The report classifies a case by the factories and builder calls in its params expression, so a
+    helper that hides them is substituted with its arguments before any check reads the expression.
+    """
+
+    match = re.match(r"([A-Za-z_]\w*)\s*\(", expression)
+    if match is None or match.group(1) not in helpers:
+        return expression
+    open_index = expression.find("(", match.start(), match.end())
+    close_index = _find_matching(expression, open_index)
+    arguments = [
+        argument
+        for argument in _split_top_level(expression[open_index + 1 : close_index])
+        if argument.strip()
+    ]
+    names, body = helpers[match.group(1)]
+    if len(arguments) != len(names):
+        raise ParityReportError(
+            f"params helper {match.group(1)} takes {len(names)} arguments: {expression[:60]!r}"
+        )
+    nested = _iter_named_calls(body, helpers)
+    if nested:
+        raise ParityReportError(
+            f"params helper {match.group(1)} calls params helper {nested[0][1]}; "
+            "a helper must return factories and builder calls only"
+        )
+    substitutions = dict(zip(names, arguments))
+    masked = _mask_string_literals(body)
+    pieces: list[str] = []
+    last = 0
+    for token in re.finditer(r"\b[A-Za-z_]\w*\b", masked):
+        if token.group(0) in substitutions:
+            pieces.append(body[last : token.start()])
+            pieces.append(substitutions[token.group(0)])
+            last = token.end()
+    pieces.append(body[last:])
+    return _normalize_cpp_expression("".join(pieces) + expression[close_index + 1 :])
+
+
+def _parse_overrides(
+    expression: str, category: str, helpers: ParamsHelpers | None = None
+) -> dict[str, str]:
     if expression.strip() == "{}":
         return {}
 
@@ -276,7 +354,7 @@ def _parse_overrides(expression: str, category: str) -> dict[str, str]:
             raise ParityReportError(f"invalid override filename {filename!r} in {category!r}")
         if filename in overrides:
             raise ParityReportError(f"duplicate override {category}/{filename}")
-        params = _normalize_cpp_expression(fields[1])
+        params = _expand_params_helpers(_normalize_cpp_expression(fields[1]), helpers or {})
         _check_params_expression(params, f"params expression for {category}/{filename}")
         overrides[filename] = params
     return overrides
@@ -347,7 +425,9 @@ def _check_params_expression(expression: str, where: str) -> None:
         )
 
 
-def _parse_registration(macro_text: str, macro_args: list[str], state: str) -> Registration | None:
+def _parse_registration(
+    macro_text: str, macro_args: list[str], state: str, helpers: ParamsHelpers
+) -> Registration | None:
     if len(macro_args) < 2 or "ImageComparisonTestFixture" not in macro_args[1]:
         return None
     if len(macro_args) != 4:
@@ -359,8 +439,12 @@ def _parse_registration(macro_text: str, macro_args: list[str], state: str) -> R
     if not 1 <= len(call_args) <= 3:
         raise ParityReportError("getTestsInCategory must contain one to three arguments")
     category = _parse_cpp_string_expression(call_args[0])
-    overrides = _parse_overrides(call_args[1], category) if len(call_args) >= 2 else {}
-    default_params = _normalize_cpp_expression(call_args[2]) if len(call_args) == 3 else "{}"
+    overrides = _parse_overrides(call_args[1], category, helpers) if len(call_args) >= 2 else {}
+    default_params = (
+        _expand_params_helpers(_normalize_cpp_expression(call_args[2]), helpers)
+        if len(call_args) == 3
+        else "{}"
+    )
     _check_params_expression(default_params, f"default params expression for {category!r}")
     return Registration(
         category=category,
@@ -375,8 +459,9 @@ def parse_registrations(source: str) -> list[Registration]:
     """Parse active and intentionally commented-out category registrations."""
 
     registrations: list[Registration] = []
+    helpers = parse_params_helpers(source)
     for macro_text, macro_args in _find_macro_calls(source):
-        registration = _parse_registration(macro_text, macro_args, "active")
+        registration = _parse_registration(macro_text, macro_args, "active", helpers)
         if registration is not None:
             registrations.append(registration)
 
@@ -388,7 +473,7 @@ def parse_registrations(source: str) -> list[Registration]:
         # unmatched quotes. Start at the macro, whose body must still parse as
         # a complete balanced C++ invocation.
         for macro_text, macro_args in _find_macro_calls(comment_block[macro_start:]):
-            registration = _parse_registration(macro_text, macro_args, "disabled")
+            registration = _parse_registration(macro_text, macro_args, "disabled", helpers)
             if registration is not None:
                 registrations.append(registration)
 
