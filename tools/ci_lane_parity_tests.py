@@ -768,6 +768,8 @@ def _context(scenario):
             return "--config=buildbuddy-re" if scenario == "main-push" or values["trusted_pr"] == "true" else ""
         if name in ("github.event_name", "github.ref"):
             return values[name]
+        if name == "needs.gatekeeper.outputs.use_unified_re":
+            return values.get("unified_re", "false")
         if name.startswith("needs.gatekeeper.outputs.use_self_hosted_"):
             return values["use_self_hosted"]
         if name in ("needs.gatekeeper.outputs.is_duplicate_push",
@@ -1990,7 +1992,7 @@ class CiLaneParityTest(unittest.TestCase):
         reading = {job_name for job_name, _, step in lane_steps(workflow)
                    if SELECTED_TARGETS in json.dumps(lane_description(step))}
         for job_name, job in _jobs(workflow).items():
-            uses = job_name in reading
+            uses = job_name in reading or job_name == "self-hosted"
             with self.subTest(job=job_name):
                 passed = {key: value for key, value in (job.get("env") or {}).items()
                           if key in SELECTION_ENVIRONMENT}

@@ -106,6 +106,7 @@ jobs:
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
           UNIFIED_RE_CI: ${{ vars.UNIFIED_RE_CI }}
+          VM_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -136,7 +137,7 @@ jobs:
           fi
 
           use_unified=false
-          if [[ "$use_linux" == true && "$UNIFIED_RE_CI" == true && "$hosted_macos_label" != true ]]; then
+          if [[ "$use_linux" == true && "${UNIFIED_RE_CI:-false}" == true && "$hosted_macos_label" != true && "${VM_QUALIFICATION:-false}" != true ]]; then
             use_unified=true
             use_macos=true
           fi
@@ -247,7 +248,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     steps:
       - uses: actions/checkout@v7
         with:

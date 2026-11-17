@@ -46,7 +46,8 @@ SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
 # Scripts that hold step bodies moved out of a workflow. The target selection treats a change to
 # one exactly as a change to the CI workflow.
 WORKFLOW_LOGIC_SCRIPTS = ("tools/ci/bazel_watchdog.sh", "tools/ci/determine_targets.sh",
-                          "tools/ci/fetch_bazel_diff.sh", "tools/ci/lane.py", "tools/ci/lanes.py")
+                          "tools/ci/fetch_bazel_diff.sh", "tools/ci/lane.py", "tools/ci/lanes.py",
+                          "tools/ci/unified_ci.py", "tools/ci/select_remote_cmake.py")
 # The start of the target selection's list of those scripts.
 WORKFLOW_LOGIC_MARKER = "          # Workflow logic kept in scripts"
 # Other repository scripts the CI workflow and its composite actions run, each with the test

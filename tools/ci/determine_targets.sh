@@ -160,7 +160,7 @@ determine() {
       tools/ci/bazel_watchdog.sh|tools/ci/determine_targets.sh|tools/ci/fetch_bazel_diff.sh)
         return 0
         ;;
-      tools/ci/lane.py|tools/ci/lanes.py)
+      tools/ci/lane.py|tools/ci/lanes.py|tools/ci/unified_ci.py|tools/ci/select_remote_cmake.py)
         return 0
         ;;
     esac

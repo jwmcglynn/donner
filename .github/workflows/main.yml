@@ -109,6 +109,7 @@ jobs:
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
           UNIFIED_RE_CI: ${{ vars.UNIFIED_RE_CI }}
+          VM_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -139,7 +140,7 @@ jobs:
           fi
 
           use_unified=false
-          if [[ "$use_linux" == true && "$UNIFIED_RE_CI" == true && "$hosted_macos_label" != true ]]; then
+          if [[ "$use_linux" == true && "${UNIFIED_RE_CI:-false}" == true && "$hosted_macos_label" != true && "${VM_QUALIFICATION:-false}" != true ]]; then
             use_unified=true
             use_macos=true
           fi
@@ -408,7 +409,7 @@ jobs:
   self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re == 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_unified_re == 'true' }}
     timeout-minutes: 210
     env:
       TARGETS_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
@@ -422,8 +423,67 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Check native consumer tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for tool in xvfb-run Xvfb xauth cmake ninja; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Sync Bazel toolchain
+        # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
+        # not track in cc_configure's cache key; a stale @local_config_cc then
+        # omits them and the hermetic include scanner rejects /nix/store
+        # headers. Surgically reset ONLY @local_config_cc so it regenerates
+        # against the current env. This replaces `bazelisk clean --expunge`,
+        # which also wiped the persistent /var/cache/bazel LLVM toolchain and
+        # forced a ~5-minute re-download+re-extract of it on every run.
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_base=$(bazelisk info output_base)
+          bazelisk shutdown
+          # Match the repo dir + marker under any Bzlmod canonical name
+          # (local_config_cc, ...+local_config_cc, @local_config_cc.marker).
+          find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
+            -print -exec rm -rf {} + 2>/dev/null || true
+
       - name: Build and test Linux and macOS
         run: python3 tools/ci/unified_ci.py "$RUNNER_TEMP/unified"
+      - name: Summarize diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          diag_dir="${DIAG_DIR:-$RUNNER_TEMP/unified/linux-diagnostics}"
+          if [[ -f tools/ci_diagnostics_report.py && -f "$diag_dir/build/profile.gz" ]]; then
+            python3 tools/ci_diagnostics_report.py "$diag_dir" | tee "$diag_dir/report.md" || true
+            if [[ -s "$diag_dir/report.md" ]]; then
+              cat "$diag_dir/report.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
+          # Derived files only; see the job environment comment above.
+          path: |
+            ${{ runner.temp }}/unified/linux-diagnostics/manifest.txt
+            ${{ runner.temp }}/unified/linux-diagnostics/target-list.txt
+            ${{ runner.temp }}/unified/linux-diagnostics/report.md
+            ${{ runner.temp }}/unified/linux-diagnostics/*/profile.gz
+            ${{ runner.temp }}/unified/linux-diagnostics/*/stall.txt
+          retention-days: 3
+          if-no-files-found: ignore
+
       - name: Upload coverage receipts
         if: always()
         uses: actions/upload-artifact@v7
@@ -447,7 +507,7 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     # RE-availability SLA lane. A healthy affected-target run is ~21 min. This
     # budget applies only after the hosted turnstile admits this job. It retains
     # ample room for an unusually slow build without making the admission wait
@@ -629,7 +689,7 @@ jobs:
   macos-remote-shadow-turnstile:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets, linux-self-hosted]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') }}
+    if: ${{ !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     # Advisory like the lane: a crash or timeout here never fails the run.
     continue-on-error: true
     timeout-minutes: 40
@@ -658,7 +718,7 @@ jobs:
   macos-remote-shadow:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted, macos-remote-shadow-turnstile]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') && needs.macos-remote-shadow-turnstile.outputs.admitted == 'true' }}
+    if: ${{ !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') && needs.macos-remote-shadow-turnstile.outputs.admitted == 'true' && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     # Never fails the run, even when the runner or the job itself fails.
     continue-on-error: true
     # The lane's --budget-minutes in tools/ci/lanes.py stays below this with room to report.
@@ -969,7 +1029,7 @@ jobs:
   macos-browser:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     timeout-minutes: 60
     environment:
       name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
@@ -1059,7 +1119,7 @@ jobs:
   macos-self-hosted:
     runs-on: [self-hosted, macOS-vm, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     # Bound at 60 min so healthy affected-target runs have buffer while a stuck
     # run still fails instead of tailing for hours.
     timeout-minutes: 60
@@ -1199,7 +1259,7 @@ jobs:
   macos-vm-qualification:
     runs-on: [self-hosted, macOS-vm-qualification, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1259,7 +1319,7 @@ jobs:
   macos-metal:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.metal_affected == 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.metal_affected == 'true') && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     # Bound at 60 min so healthy affected-target runs have buffer while a stuck
     # run still fails instead of tailing for hours.
     timeout-minutes: 60
@@ -1403,7 +1463,7 @@ jobs:
     # reporting across the different execution venues.
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-metal, macos-browser]
-    if: ${{ needs.gatekeeper.outputs.use_unified_re != 'true' && !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
+    if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.gatekeeper.outputs.use_unified_re != 'true' }}
     timeout-minutes: 10
     steps:
       - name: Checkout

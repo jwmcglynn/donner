@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import contextlib
 import time
 
 import lane
@@ -55,7 +56,7 @@ class RemoteMac(lane._Context):
         return [*self.argv(action.wrappers), *bazel("macos"), command, *mac_flags(command, serial), *options]
 
     def query(self, tag):
-        return [*bazel("macos"), "query", super().query(tag)[-1], "--symlink_prefix=/"]
+        return [*bazel("macos"), "query", super().query(tag)[-1]]
 
 
 def routing(os_name, directory):
@@ -144,16 +145,28 @@ def run_os(os_name, directory):
 
 
 def stop_children(children):
-    for child in children:
-        if child.poll() is None:
-            os.killpg(child.pid, signal.SIGTERM)
+    # A phase can leave a descendant after its leader exits. Account for the
+    # group itself until the deadline, reaping leaders while we wait.
+    groups = {child.pid for child in children}
+    for group in groups:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(group, signal.SIGTERM)
     deadline = time.monotonic() + 10
+    while groups and time.monotonic() < deadline:
+        for child in children:
+            child.poll()
+        for group in groups.copy():
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                groups.remove(group)
+        if groups:
+            time.sleep(0.1)
+    for group in groups:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(group, signal.SIGKILL)
     for child in children:
-        try:
-            child.wait(timeout=max(0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
-            child.wait()
+        child.wait(timeout=10)
 
 
 def interrupted(signum, frame):
@@ -161,11 +174,19 @@ def interrupted(signum, frame):
 
 
 def combined(directory):
+    signal.signal(signal.SIGTERM, interrupted)
     directory.mkdir()
+    if not os.environ.get("TARGETS_AFFECTED") and os.environ["TARGETS_FALLBACK"] != "true":
+        raise ValueError("empty target selection")
     diagnostics = directory / "linux-diagnostics"
     for name in ("fetch", "build", "test", "test-wgpu"):
         (diagnostics / name).mkdir(parents=True)
     os.environ["DIAG_DIR"] = str(diagnostics)
+    targets = ["//..."] if os.environ["TARGETS_FALLBACK"] == "true" else os.environ["TARGETS_AFFECTED"].split()
+    (diagnostics / "target-list.txt").write_text("\n".join(targets) + "\n")
+    (diagnostics / "manifest.txt").write_text(
+        f"run_id={os.environ.get('GITHUB_RUN_ID')} attempt={os.environ.get('GITHUB_RUN_ATTEMPT')} "
+        f"sha={os.environ.get('GITHUB_SHA')}\ntarget_count={len(targets)}\n")
     os.environ["DONNER_CI_XCODE_IDENTITY"] = shadow.xcode_identity()
     os.environ["BAZEL_MACOS_BUILD_FLAGS"] = ""
     os.environ["MAC_BAZEL_BASE"] = str(Path(os.environ["RUNNER_TOOL_CACHE"]) / "donner-unified-macos")
@@ -174,7 +195,6 @@ def combined(directory):
         raise RuntimeError("Linux and macOS require the same configured remote executor")
     prepare(ROOT, directory / "cmake-inputs")
     children = []
-    signal.signal(signal.SIGTERM, interrupted)
     try:
         for os_name in ("linux", "macos"):
             children.append(subprocess.Popen([sys.executable, __file__, str(directory), "--os", os_name],

@@ -33,6 +33,7 @@ jobs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
       use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
+      use_unified_re: ${{ steps.runner_gate.outputs.use_unified_re }}
       use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
       # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
@@ -86,6 +87,8 @@ jobs:
           TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
+          UNIFIED_RE_CI: ${{ vars.UNIFIED_RE_CI }}
+          VM_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -115,6 +118,12 @@ jobs:
             use_macos=true
           fi
 
+          use_unified=false
+          if [[ "$use_linux" == true && "${UNIFIED_RE_CI:-false}" == true && "$hosted_macos_label" != true && "${VM_QUALIFICATION:-false}" != true ]]; then
+            use_unified=true
+            use_macos=true
+          fi
+          echo "use_unified_re=$use_unified" >> "$GITHUB_OUTPUT"
           echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
           echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
           echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"

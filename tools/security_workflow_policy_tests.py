@@ -103,6 +103,7 @@ REVIEWED_WORKFLOW_CALLS = {
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
+    (".github/workflows/main.yml", "self-hosted"): "use_unified_re",
     (".github/workflows/cmake.yml", "cmake-cache-producer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "macos-self-hosted"): "use_self_hosted_macos",
@@ -148,6 +149,17 @@ SELF_HOSTED_NARROWING = {
         " && (needs.determine-targets.outputs.fallback == 'true' || "
         "needs.determine-targets.outputs.metal_affected == 'true')",
 }
+
+# A unified run covers these legacy jobs on its single admitted Linux allocation.
+for _workflow, _job in (
+    ("cmake.yml", "macos-self-hosted"),
+    *(("main.yml", job) for job in ("linux-self-hosted", "macos-self-hosted", "macos-browser",
+                                    "macos-metal", "macos-vm-qualification", "macos-remote-shadow",
+                                    "coverage-contract")),
+):
+    _key = (".github/workflows/" + _workflow, _job)
+    SELF_HOSTED_NARROWING[_key] = (SELF_HOSTED_NARROWING.get(_key, "")
+                                   + " && needs.gatekeeper.outputs.use_unified_re != 'true'")
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
 # label, label list or runner group can route a job to a self-hosted runner.
