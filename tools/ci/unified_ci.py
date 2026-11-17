@@ -149,7 +149,7 @@ def run_os(os_name, directory):
         raise RuntimeError("Failed macOS lanes: " + ", ".join(failed))
 
 
-def stop_children(children, grace=10):
+def stop_children(children, grace=1):
     # A phase can leave a descendant after its leader exits. Account for the
     # group itself until the deadline, reaping leaders while we wait.
     groups = {child.pid for child in children}
@@ -185,7 +185,14 @@ def supervise(commands):
             children.append(subprocess.Popen(command, start_new_session=True))
         return [child.wait() for child in children]
     finally:
-        stop_children(children)
+        # Actions follows SIGINT with SIGTERM. Neither should interrupt the
+        # bounded TERM/KILL cleanup of children in independent sessions.
+        saved = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+        try:
+            stop_children(children)
+        finally:
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
 
 
 def prepare_job(directory):

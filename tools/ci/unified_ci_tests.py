@@ -2,6 +2,7 @@
 
 import fcntl
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -80,6 +81,39 @@ class UnifiedTest(unittest.TestCase):
                             time.sleep(0.01)
             finally:
                 unified_ci.stop_children([process], grace=0.1)
+
+    def test_actions_second_signal_cannot_interrupt_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "process"
+            child = ("import fcntl, os, signal, sys, time; "
+                     "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                     "f=open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); "
+                     "print(os.getpid(), file=f, flush=True); time.sleep(20)")
+            driver = ("import signal, sys; from tools.ci import unified_ci as ci; "
+                      "signal.signal(signal.SIGTERM, ci.interrupted); "
+                      "ci.supervise([[sys.executable, '-c', sys.argv[1], sys.argv[2]]])")
+            runner = subprocess.Popen([sys.executable, "-c", driver, child, str(path)],
+                                      cwd=unified_ci.ROOT, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic() + 4
+                while not (path.exists() and path.stat().st_size):
+                    if time.monotonic() > deadline:
+                        self.fail("child failed to start")
+                    time.sleep(0.02)
+                runner.send_signal(signal.SIGINT)
+                time.sleep(0.2)
+                runner.send_signal(signal.SIGTERM)
+                runner.wait(timeout=4)
+                with path.open() as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                runner.kill()
+                runner.wait()
+                if path.exists() and path.stat().st_size:
+                    try:
+                        os.kill(int(path.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_missing_selection_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp, mock.patch.dict(os.environ, {"TARGETS_FALLBACK": "false",
