@@ -496,6 +496,7 @@ py_test(
         "//tools/ci:BUILD.bazel",
         "//tools/ci:bazel_watchdog.sh",
         "//tools/ci:coverage_contract.json",
+        "testdata/macos_remote_shadow_build_events.json",
     ],
     deps = [
         ":bazelrc_configs",

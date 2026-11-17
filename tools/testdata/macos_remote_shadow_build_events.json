@@ -1,0 +1,25 @@
+{"configured": {"tag": ["launches-browser"], "targetKind": "js_test rule", "testSize": "MEDIUM"}, "id": {"targetConfigured": {"label": "//donner/editor/wasm/tests:linux_browser_archive_tests"}}}
+{"configured": {"targetKind": "cc_test rule", "testSize": "SMALL"}, "id": {"targetConfigured": {"label": "//donner/base/fonts:woff2_parser_tests"}}}
+{"configured": {"tag": ["fuzz_target", "fuzz_text_full", "fuzz_ubsan", "fuzz_ubsan_text_full"], "targetKind": "cc_test rule", "testSize": "SMALL"}, "id": {"targetConfigured": {"label": "//donner/base/fonts:woff2_parser_fuzzer"}}}
+{"configured": {"tag": ["fuzz_soak", "fuzz_target"], "targetKind": "_fuzzer_soak_test rule", "testSize": "SMALL"}, "id": {"targetConfigured": {"label": "//donner/base:path_ops_fuzzer_soak"}}}
+{"configured": {"tag": ["fuzz_soak", "fuzz_target"], "targetKind": "_fuzzer_soak_test rule", "testSize": "SMALL"}, "id": {"targetConfigured": {"label": "//build_defs:soak_probe_fuzzer_soak"}}}
+{"configured": {"targetKind": "cc_test rule", "testSize": "SMALL"}, "id": {"targetConfigured": {"label": "//donner/base/parser:parser_tests"}}}
+{"configured": {"targetKind": "cc_test rule", "testSize": "MEDIUM"}, "id": {"targetConfigured": {"label": "//tools/svg_suite:donner_extension_tests"}}}
+{"configured": {"targetKind": "alias rule"}, "id": {"targetConfigured": {"label": "//donner/svg/renderer/tests:donner_svg2_suite"}}}
+{"completed": {"success": true}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//build_defs:soak_probe_fuzzer_soak"}}}
+{"completed": {"success": true}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//donner/base:path_ops_fuzzer_soak"}}}
+{"children": [{"testSummary": {"configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests"}}], "completed": {"success": true, "testTimeout": "60s"}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests"}}}
+{"id": {"testResult": {"attempt": 1, "configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests", "run": 1, "shard": 2}}, "testResult": {"cachedLocally": true, "executionInfo": {}, "status": "PASSED"}}
+{"id": {"testResult": {"attempt": 1, "configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests", "run": 1, "shard": 1}}, "testResult": {"cachedLocally": true, "executionInfo": {}, "status": "PASSED"}}
+{"id": {"testResult": {"attempt": 1, "configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests", "run": 1, "shard": 5}}, "testResult": {"cachedLocally": true, "executionInfo": {}, "status": "PASSED"}}
+{"id": {"testResult": {"attempt": 1, "configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests", "run": 1, "shard": 4}}, "testResult": {"cachedLocally": true, "executionInfo": {}, "status": "PASSED"}}
+{"id": {"testResult": {"attempt": 1, "configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests", "run": 1, "shard": 3}}, "testResult": {"cachedLocally": true, "executionInfo": {}, "status": "PASSED"}}
+{"id": {"testSummary": {"configuration": {"id": "cfg1"}, "label": "//donner/base/parser:parser_tests"}}, "testSummary": {"overallStatus": "PASSED", "runCount": 1, "shardCount": 5, "totalRunCount": 5}}
+{"children": [{"testSummary": {"configuration": {"id": "cfg1"}, "label": "//tools/svg_suite:donner_extension_tests"}}], "completed": {"success": true, "testTimeout": "300s"}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//tools/svg_suite:donner_extension_tests"}}}
+{"children": [{"testSummary": {"configuration": {"id": "cfg1"}, "label": "//tools/svg_suite:donner_extension_tests"}}], "completed": {"success": true, "testTimeout": "300s"}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//donner/svg/renderer/tests:donner_svg2_suite"}}}
+{"id": {"testResult": {"attempt": 1, "configuration": {"id": "cfg1"}, "label": "//tools/svg_suite:donner_extension_tests", "run": 1, "shard": 1}}, "testResult": {"cachedLocally": true, "executionInfo": {}, "status": "PASSED"}}
+{"id": {"testSummary": {"configuration": {"id": "cfg1"}, "label": "//tools/svg_suite:donner_extension_tests"}}, "testSummary": {"overallStatus": "PASSED", "runCount": 1, "totalRunCount": 1}}
+{"aborted": {"reason": "SKIPPED"}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//donner/base/fonts:woff2_parser_tests"}}}
+{"aborted": {"reason": "SKIPPED"}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//donner/base/fonts:woff2_parser_fuzzer"}}}
+{"aborted": {"reason": "SKIPPED"}, "id": {"targetCompleted": {"configuration": {"id": "cfg1"}, "label": "//donner/editor/wasm/tests:linux_browser_archive_tests"}}}
+{"finished": {"exitCode": {"name": "SUCCESS"}}, "id": {"buildFinished": {}}}

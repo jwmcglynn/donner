@@ -498,9 +498,13 @@ def _configuration(identity):
 
 
 def _on_configured(event, state):
-    # A test target is configured with a test size; Bazel reports no other kind with one.
-    if "testSize" in _dict(event.get("configured")):
-        state["test_labels"].add(_dict(_dict(event.get("id")).get("targetConfigured")).get("label"))
+    # A test target is configured with a test size; Bazel reports no other kind with one. Its
+    # tags are the rule's own, which --test_tag_filters matches.
+    configured = _dict(event.get("configured"))
+    if "testSize" in configured:
+        tags = configured.get("tag")
+        state["test_tags"][_dict(_dict(event.get("id")).get("targetConfigured")).get("label")] = \
+            tags if isinstance(tags, list) else []
 
 
 # Reasons Bazel aborts a target with that are failures of the target itself. SKIPPED is a target
@@ -509,27 +513,37 @@ def _on_configured(event, state):
 _FAILED_ABORT_REASONS = ("ANALYSIS_FAILURE", "LOADING_FAILURE")
 
 
+def _summary_key(identity):
+    return (identity.get("label"), _configuration(identity))
+
+
 def _on_target(event, state):
     """A target is built (completed with success), failed (completed without it, or aborted as an
     analysis or loading failure), skipped (aborted as SKIPPED: incompatible with the target
     platform, which --skip_incompatible_explicit_targets skips without failing) or aborted for
-    another reason, such as a stopped build."""
+    another reason, such as a stopped build. A target Bazel tests completes with a test timeout,
+    and names the testSummary of the test it runs among its children: its own, or for an alias,
+    the actual test's."""
     identity = _dict(_dict(event.get("id")).get("targetCompleted"))
-    key = (identity.get("label"), _configuration(identity))
+    completed = _dict(event.get("completed"))
     if "aborted" in event:
         reason = _dict(event.get("aborted")).get("reason")
         outcome = "skipped" if reason == "SKIPPED" else \
             "failed" if reason in _FAILED_ABORT_REASONS else "aborted"
     else:
-        outcome = "succeeded" if _dict(event.get("completed")).get("success") is True \
-            else "failed"
+        outcome = "succeeded" if completed.get("success") is True else "failed"
     state["targets"][outcome] += 1
-    state["target_outcomes"][key] = outcome
+    summaries = [_summary_key(_dict(child.get("testSummary")))
+                 for child in event.get("children") or [] if isinstance(child, dict) and
+                 isinstance(child.get("testSummary"), dict)]
+    state["completions"].append({
+        "label": identity.get("label"), "outcome": outcome, "tested": "testTimeout" in completed,
+        "summary": summaries[0] if summaries else _summary_key(identity)})
 
 
 def _on_test_summary(event, state):
     identity = _dict(_dict(event.get("id")).get("testSummary"))
-    state["tests"][(identity.get("label"), _configuration(identity))] = _dict(
+    state["tests"][_summary_key(identity)] = _dict(
         event.get("testSummary")).get("overallStatus", "NO_STATUS")
 
 
@@ -539,7 +553,7 @@ def _on_test_result(event, state):
         "executionInfo", {}).get("cachedRemotely")
     if not cached:
         identity = _dict(_dict(event.get("id")).get("testResult"))
-        state["executed"].add((identity.get("label"), _configuration(identity)))
+        state["executed"].add(_summary_key(identity))
 
 
 def _on_finished(event, state):
@@ -558,35 +572,71 @@ _HANDLERS = {"actionCompleted": _on_action, "targetConfigured": _on_configured,
              "buildMetrics": _on_metrics}
 
 
-def summarize(lines):
+def selected_by_tags(tags, tag_filter):
+    """Whether --test_tag_filters=`tag_filter` selects a test with `tags`: none of its excluded
+    (`-`) tags, and one of its required tags when it names any."""
+    filters = [tag for tag in (tag_filter or "").split(",") if tag]
+    excluded = {tag[1:] for tag in filters if tag.startswith("-")}
+    required = {tag for tag in filters if not tag.startswith("-")}
+    tags = set(tags)
+    return not tags & excluded and (not required or bool(tags & required))
+
+
+def _counted_tests(state, tag_filter):
+    """(statuses of the tests that ran, outcomes of the selected tests that did not, the test
+    summaries counted) by the rules in summarize."""
+    tests, statuses, not_built, ran = state["tests"], [], [], set()
+    for completion in state["completions"]:
+        if completion["tested"]:
+            statuses.append(tests.get(completion["summary"], "NO_STATUS"))
+            ran.add(completion["summary"])
+        elif completion["outcome"] != "succeeded" and _selected_test(state, completion["label"],
+                                                                     tag_filter):
+            not_built.append(completion["outcome"])
+    unnamed = [key for key in tests if key not in ran]
+    statuses += [tests[key] for key in unnamed]
+    return statuses, not_built, (ran & set(tests)) | set(unnamed)
+
+
+def _selected_test(state, label, tag_filter):
+    return label in state["test_tags"] and selected_by_tags(state["test_tags"][label], tag_filter)
+
+
+def summarize(lines, tag_filter=""):
     """Counts of one phase's build event file. Option values are never read into it.
 
-    Bazel reports a test that ran in a testSummary event. A test target that was skipped or failed
-    to build has no testSummary, only its targetCompleted event: those are counted from the
-    targets, as skipped and as not run, so the totals match Bazel's own test line."""
+    The tests are the ones Bazel counts in its own "Executed N out of M tests" line:
+
+      * every target Bazel tested, which completes with a test timeout, with the status of the
+        testSummary its event names (an alias counts as a test of its own, with the status of
+        the test it names, as Bazel prints it);
+      * every test target, configured with a test size, that --test_tag_filters (`tag_filter`)
+        selects but that was skipped as incompatible (skipped) or failed to build or was never
+        reached (not run); such a target has no testSummary;
+      * any testSummary no completed target names.
+
+    Test targets the tag filters leave out are built but not tested, and are not counted."""
     state = {"targets": {"succeeded": 0, "failed": 0, "skipped": 0, "aborted": 0}, "tests": {},
-             "executed": set(), "test_labels": set(), "target_outcomes": {},
+             "executed": set(), "test_tags": {}, "completions": [],
              "failed_actions": {"remote": 0, "own": 0}, "result": dict(_metrics({}), exit=None)}
     for event in _decoded(lines):
         handler = _HANDLERS.get(next(iter(_dict(event.get("id"))), None))
         if handler:
             handler(event, state)
     tests, result = state["tests"], state["result"]
-    statuses = list(tests.values())
-    unsummarized = [outcome for (label, configuration), outcome in state["target_outcomes"].items()
-                    if label in state["test_labels"] and (label, configuration) not in tests]
-    executed = len(state["executed"] & set(tests))
+    statuses, not_built, summaries = _counted_tests(state, tag_filter)
+    executed = len(state["executed"] & summaries)
     result["targets"] = state["targets"]
     result["tests"] = {
-        "total": len(statuses) + len(unsummarized),
+        "total": len(statuses) + len(not_built),
         "passed": sum(status in _PASSED for status in statuses),
         "flaky": sum(status in _FLAKY for status in statuses),
         "failed": sum(status not in _PASSED + _FLAKY + _NOT_RUN for status in statuses),
         "not_run": sum(status in _NOT_RUN for status in statuses) +
-        sum(outcome in ("failed", "aborted") for outcome in unsummarized),
-        "skipped": sum(outcome == "skipped" for outcome in unsummarized),
+        sum(outcome != "skipped" for outcome in not_built),
+        "skipped": sum(outcome == "skipped" for outcome in not_built),
         "executed": executed,
-        "cached": len(statuses) - executed,
+        "cached": len(summaries) - executed,
     }
     result["failed_tests"] = sorted(label for (label, _), status in tests.items()
                                     if status not in _PASSED + _FLAKY + _NOT_RUN)
@@ -1241,7 +1291,7 @@ def _run_one_phase(args, environment, targets, phase, budget):
         _shutdown(args, environment)
     lines = _read_lines(files["bep"]) or []
     try:
-        entry = summarize(lines)
+        entry = summarize(lines, tag_filters(phase))
     except Exception as error:  # A malformed event file must not cost the summary.
         print("::warning::macOS remote shadow lane: the %s phase's build event file could "
               "not be summarized (%s)." % (phase, type(error).__name__))

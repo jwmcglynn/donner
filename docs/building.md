@@ -641,8 +641,11 @@ not read it:
 Each run writes a table to the job summary (targets built, failed and skipped, tests, passed,
 flaky, failed, not run and skipped, executed and cached, actions, cache hits, spawns by runner,
 wall time). A target incompatible with the target platform is skipped, not failed, and so is its
-test. Tests that were not built or never started count as not run, apart from tests that ran and
-failed, and only targets that failed to build raise the build-failure warning. Failed
+test. The tests counted are the ones Bazel counts in its own "Executed N out of M tests" line: the
+targets it tested, an alias of a test included, and the tests the phase's tag filters select that
+were skipped or not built. Tests that were not built or never started count as not run, apart
+from tests that ran and failed, and only targets that failed to build raise the build-failure
+warning. Failed
 actions are split by their build events into remote execution errors (Bazel's remote exit codes or
 a remote execution failure detail: an executor-side fault, not a macOS build break) and actions
 that failed with their own exit status; a phase with either says so in a warning and in the job

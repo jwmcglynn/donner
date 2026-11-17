@@ -913,12 +913,22 @@ else:
             for name in [*files, "test.outputs_manifest/MANIFEST"]]}
     if os.environ.get("FAKE_SKIPPED"):
         # A test incompatible with the platform, as Bazel skips it.
+        # The phase's tag filters select it: the GPU phase requires the GPU resource tag.
+        tags = ["resources:local_gpu:1"] if phase == "gpu" else []
         lines += [{"id": {"targetConfigured": {"label": "//fake:linux_only_test"}},
-                   "configured": {"targetKind": "cc_test rule", "testSize": "SMALL"}},
+                   "configured": {"targetKind": "cc_test rule", "testSize": "SMALL",
+                                  "tag": tags}},
                   {"id": {"targetCompleted": {"label": "//fake:linux_only_test",
                                               "configuration": {"id": "c"}}},
                    "aborted": {"reason": "SKIPPED",
-                               "description": "Target //fake:linux_only_test build was skipped."}}]
+                               "description": "Target //fake:linux_only_test build was skipped."}},
+                  # One the phase's tag filters leave out, which Bazel does not count.
+                  {"id": {"targetConfigured": {"label": "//fake:browser_test"}},
+                   "configured": {"targetKind": "js_test rule", "testSize": "MEDIUM",
+                                  "tag": ["launches-browser"] + tags}},
+                  {"id": {"targetCompleted": {"label": "//fake:browser_test",
+                                              "configuration": {"id": "c"}}},
+                   "aborted": {"reason": "SKIPPED"}}]
     if os.environ.get("FAKE_REMOTE_ERROR_" + phase.upper()):
         # An action the executor failed, as Bazel reports it: its exit code is REMOTE_ERROR.
         status = 34
@@ -1187,11 +1197,11 @@ class LaneRunTest(unittest.TestCase):
         summary = json.loads((out / "shadow-summary.json").read_text(encoding="utf-8"))
         for phase in lane.PHASES:
             entry = summary["phases"][phase]
-            self.assertEqual({"succeeded": 1, "failed": 0, "skipped": 1, "aborted": 0},
+            self.assertEqual({"succeeded": 1, "failed": 0, "skipped": 2, "aborted": 0},
                              entry["targets"])
             self.assertEqual((2, 1, 1), (entry["tests"]["total"], entry["tests"]["passed"],
                                          entry["tests"]["skipped"]))
-        self.assertIn("| native | 0 | X (0) | 1.5 | 1 | 0 | 1 | 2 | 1 |",
+        self.assertIn("| native | 0 | X (0) | 1.5 | 1 | 0 | 2 | 2 | 1 |",
                       summary_file.read_text(encoding="utf-8"))
 
     def test_a_remote_execution_error_is_told_apart_from_a_build_break(self):
@@ -1744,6 +1754,31 @@ class BuildEventTest(unittest.TestCase):
                      "reason": "SKIPPED"}},
         {"id": {"buildFinished": {}},
          "finished": {"exitCode": {"code": 1, "name": "BUILD_FAILURE"}}})
+
+    def test_counts_equal_bazels_own_line_for_a_recorded_run(self):
+        # The build events of a real Bazel 8.8.2 run on this repository (Linux execution, the
+        # native phase's tag filters, --keep_going --skip_incompatible_explicit_targets), kept to
+        # the fields the summary reads, configuration ids renamed. The run tested an alias of a
+        # test and that test, a sharded test, two tests skipped as incompatible, a third one the
+        # tag filters leave out, a test the tag filters leave out and a test_suite of one. Bazel
+        # printed: "Executed 0 out of 5 tests: 3 tests pass and 2 were skipped."
+        lines = _read("tools/testdata/macos_remote_shadow_build_events.json").splitlines()
+        summary = lane.summarize(lines, lane.tag_filters("native"))
+        self.assertEqual({"total": 5, "passed": 3, "flaky": 0, "failed": 0, "not_run": 0,
+                          "skipped": 2, "executed": 0, "cached": 2}, summary["tests"])
+        # Without the tag filters, every incompatible test would count as skipped.
+        self.assertEqual(3, lane.summarize(lines)["tests"]["skipped"])
+
+    def test_tag_filters_select_tests_as_bazel_does(self):
+        native, gpu = lane.tag_filters("native"), lane.tag_filters("gpu")
+        self.assertTrue(lane.selected_by_tags([], native))
+        self.assertTrue(lane.selected_by_tags(["fuzz_target"], native))
+        self.assertFalse(lane.selected_by_tags(["launches-browser"], native))
+        self.assertFalse(lane.selected_by_tags(["resources:local_gpu:1"], native))
+        self.assertFalse(lane.selected_by_tags([], gpu))
+        self.assertTrue(lane.selected_by_tags(["resources:local_gpu:1", "variant"], gpu))
+        self.assertFalse(lane.selected_by_tags(["resources:local_gpu:1", "perf"], gpu))
+        self.assertTrue(lane.selected_by_tags(["anything"], ""))
 
     def test_skipped_targets_are_not_build_failures(self):
         summary = lane.summarize(_events(*self._PROBE_EVENTS))
