@@ -32,8 +32,8 @@ export const kCompletionChecksEnv = "DONNER_BROWSER_COMPLETION_CHECKS";
 
 /**
  * Hard checks of this lane that the hosted macOS Perf job only reports, each in the one browser
- * whose misses its issue tracks and, when `phases` is set, only in those phases; every other
- * browser and phase keeps enforcing the check. The fix restores enforcement: remove the entry once
+ * whose misses its issue tracks and, when `phases` or `projects` is set, only in those phases and
+ * Playwright projects; every other browser, project and phase keeps enforcing the check. The fix restores enforcement: remove the entry once
  * its issue is fixed.
  */
 export const kCompletionChecks = {
@@ -42,18 +42,30 @@ export const kCompletionChecks = {
   // Masked-child drags render too slowly on the hosted runner to complete a second held position
   // (#2106). Re-enforce once #2106 is fixed.
   heldDragPositions: { browser: "chromium", phases: ["geode-crown"], issue: "#2106" },
+  // At device pixel ratio 1, which only the firefox-dpr1 project runs for this phase, each held
+  // masked-child move rasterizes the whole owning tile instead of patching its damage (#2106).
+  // Re-enforce once #2106 is fixed.
+  heldMaskedDragDamagePatch: {
+    browser: "firefox",
+    projects: ["firefox-dpr1"],
+    phases: ["geode-crown"],
+    issue: "#2106",
+  },
 };
 
 /**
- * Whether a completion check miss in this browser and phase is tracked by the check's issue.
+ * Whether a completion check miss in this browser, phase and project is tracked by the check's
+ * issue.
  * @param {keyof typeof kCompletionChecks} check Check that missed.
  * @param {string} browserName Playwright browser name, such as "chromium".
  * @param {string} phase Measured phase of the miss.
+ * @param {string} [project] Playwright project name, such as "firefox-dpr1".
  * @returns {boolean}
  */
-export function completionCheckTracks(check, browserName, phase) {
-  const { browser, phases } = kCompletionChecks[check];
-  return browserName === browser && (phases === undefined || phases.includes(phase));
+export function completionCheckTracks(check, browserName, phase, project) {
+  const { browser, phases, projects } = kCompletionChecks[check];
+  return browserName === browser && (phases === undefined || phases.includes(phase))
+    && (projects === undefined || projects.includes(project));
 }
 
 /** Line prefix of a recorded completion check result in the test log. */
@@ -124,7 +136,7 @@ export async function runCompletionCheck(check, assertion, options) {
     detail: options.detail,
     met: failure === undefined,
     mode: options.mode === "report"
-        && completionCheckTracks(check, options.browserName, options.phase)
+        && completionCheckTracks(check, options.browserName, options.phase, options.project)
       ? "report"
       : "enforce",
   };

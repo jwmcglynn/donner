@@ -2081,6 +2081,42 @@ void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
   window.endFrame();
 }
 
+/// Polls outstanding UI submissions until the window can admit another frame, or the hang guard
+/// expires. Returns `Pending` only on expiry.
+gui::EditorWindow::PresentationProgress WaitForPresentationSlot(gui::EditorWindow& window) {
+  auto progress = window.pollDeferredPresentation();
+  for (const tests::HangGuard guard;
+       progress == gui::EditorWindow::PresentationProgress::Pending && guard.active();) {
+    window.waitEventsTimeout(0.001);
+    progress = window.pollDeferredPresentation();
+  }
+  return progress;
+}
+
+/// Waits until the next frame will be admitted. The window refuses a frame, and a readback of it
+/// returns no pixels, while three earlier UI submissions are still running on the GPU; frames
+/// without a readback do not wait for their own submission.
+void ExpectPresentationSlot(gui::EditorWindow& window) {
+  EXPECT_THAT(WaitForPresentationSlot(window),
+              testing::AnyOf(testing::Eq(gui::EditorWindow::PresentationProgress::Idle),
+                             testing::Eq(gui::EditorWindow::PresentationProgress::Ready)))
+      << "Earlier UI submissions did not complete within the hang guard";
+}
+
+/// Runs one shell frame and reads back its framebuffer once the window can admit the frame.
+/// @param contentOnly Whether the frame omits editor chrome, see
+///   EditorShell::setContentOnlyCaptureForNextFrameForReplay.
+svg::RendererBitmap CaptureShellFrame(gui::EditorWindow& window, EditorShell& shell,
+                                      bool contentOnly = false) {
+  ExpectPresentationSlot(window);
+  if (contentOnly) {
+    shell.setContentOnlyCaptureForNextFrameForReplay(true);
+  }
+  window.beginFrame();
+  shell.runFrame();
+  return window.endFrameAndReadPixels();
+}
+
 /**
  * Runs idle frames (no input, no document edit). After each one it waits until the render worker
  * has nothing in flight, so the next frame consumes whatever the previous one posted. A final frame
@@ -5359,12 +5395,7 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   ASSERT_TRUE(originalWorldBounds.has_value());
 
   const auto captureFrame = [&](bool contentOnly = false) {
-    if (contentOnly) {
-      shell.setContentOnlyCaptureForNextFrameForReplay(true);
-    }
-    window.beginFrame();
-    shell.runFrame();
-    return window.endFrameAndReadPixels();
+    return CaptureShellFrame(window, shell, contentOnly);
   };
   const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion,
                                bool requireSelectedCache = false,
@@ -5587,10 +5618,7 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
   ASSERT_TRUE(shine.has_value());
   const Entity shineEntity = shine->unsafeEntityHandle().entity();
   const auto captureContent = [&] {
-    shell.setContentOnlyCaptureForNextFrameForReplay(true);
-    window.beginFrame();
-    shell.runFrame();
-    return window.endFrameAndReadPixels();
+    return CaptureShellFrame(window, shell, /*contentOnly=*/true);
   };
   const auto waitForCurrentFrame = [&](bool requireRequestedDensity = false) {
     const tests::HangGuard guard;
@@ -5721,10 +5749,7 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
   ASSERT_TRUE(shell.valid());
   EditorApp& app = EditorShellTestAccess::App(shell);
   const auto captureContent = [&] {
-    shell.setContentOnlyCaptureForNextFrameForReplay(true);
-    window.beginFrame();
-    shell.runFrame();
-    return window.endFrameAndReadPixels();
+    return CaptureShellFrame(window, shell, /*contentOnly=*/true);
   };
   const auto awaitPresentation = [&] {
     for (const tests::HangGuard guard; guard.active();) {
@@ -5848,24 +5873,13 @@ svg::RendererBitmap DrawRetinaDragFrame(gui::EditorWindow& window, EditorShell& 
   return svg::RendererBitmap{};
 }
 
-gui::EditorWindow::PresentationProgress WaitForDeferredRetinaPresentation(
-    gui::EditorWindow& window) {
-  auto progress = window.pollDeferredPresentation();
-  for (const tests::HangGuard guard;
-       progress == gui::EditorWindow::PresentationProgress::Pending && guard.active();) {
-    window.waitEventsTimeout(0.001);
-    progress = window.pollDeferredPresentation();
-  }
-  return progress;
-}
-
 svg::RendererBitmap RunRetinaDragFrame(gui::EditorWindow& window, EditorShell& shell,
                                        const Vector2d& documentPoint, bool mouseDown,
                                        bool capture) {
   svg::RendererBitmap bitmap =
       DrawRetinaDragFrame(window, shell, documentPoint, mouseDown, capture);
   if (capture && bitmap.empty() &&
-      WaitForDeferredRetinaPresentation(window) == gui::EditorWindow::PresentationProgress::Ready) {
+      WaitForPresentationSlot(window) == gui::EditorWindow::PresentationProgress::Ready) {
     // A deferred submission ended its UI frame without capturing; readiness requires a new frame.
     return DrawRetinaDragFrame(window, shell, documentPoint, mouseDown, true);
   }
@@ -6653,9 +6667,7 @@ TEST(EditorShellTest, PenPreviewTracksLatestPointerBeforeBusyRendererPublishes) 
   EXPECT_THAT(frame->replacementPaint()->livePathPreview->pathDoc, testing::Eq(latest));
   EXPECT_THAT(frame->replacementPaint()->livePathPreview->pathDoc,
               testing::Ne(oldFrame->replacementPaint()->livePathPreview->pathDoc));
-  window.beginFrame();
-  shell.runFrame();
-  const auto screenshot = window.endFrameAndReadPixels();
+  const auto screenshot = CaptureShellFrame(window, shell);
   ASSERT_FALSE(screenshot.empty());
   if (const char* output = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const auto file = std::filesystem::path(output) / "pen_latest_pointer_while_busy.png";
@@ -8199,9 +8211,7 @@ TEST(EditorShellTest, TextMovePositionChipTracksPresentedBoundsWhileWorkerIsHeld
   const auto capture = [&](const Vector2d& point, bool pressed, std::string_view name) {
     shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
         .documentPoint = point, .leftMouseDown = true, .leftMousePressed = pressed});
-    window.beginFrame();
-    shell.runFrame();
-    const svg::RendererBitmap bitmap = window.endFrameAndReadPixels();
+    const svg::RendererBitmap bitmap = CaptureShellFrame(window, shell);
     const char* directory = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
     if (directory != nullptr && !name.empty()) {
       const auto path = std::filesystem::path(directory) / name;
@@ -9955,6 +9965,8 @@ const DocumentPixelCapture* WaitForDocumentPixelCapture(gui::EditorWindow& windo
 
 svg::RendererBitmap CaptureFrameWithMouse(gui::EditorWindow& window, EditorShell& shell,
                                           const ImVec2& mouse) {
+  // Wait before queueing input, so window events polled by the wait cannot interleave with it.
+  ExpectPresentationSlot(window);
   ImGuiIO& io = ImGui::GetIO();
   io.AddMousePosEvent(mouse.x, mouse.y);
   io.AddMouseButtonEvent(0, false);
@@ -9975,6 +9987,7 @@ void WriteEyedropperScreenshot(const svg::RendererBitmap& bitmap, std::string_vi
 
 svg::RendererBitmap CapturePaintWidgetFrame(gui::EditorWindow& window, EditorShell& shell,
                                             const ImVec2& cursor) {
+  ExpectPresentationSlot(window);
   ImGuiIO& io = ImGui::GetIO();
   io.AddMousePosEvent(-1.0f, -1.0f);
   io.AddMouseButtonEvent(0, false);
