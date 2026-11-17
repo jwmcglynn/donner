@@ -142,8 +142,9 @@ divergence with, in order of preference:
 2. `.disableBackend(RendererBackend::Geode, "reason")` — for features one backend doesn't
    implement yet; the other backend still gates.
 3. `.withGeodeMaxPixelsDifferent(px)` — a Geode-mode-only mismatch budget; `TinyGolden` keeps the
-   strict budget, so the healthy backend is not blinded (e.g. `control-points-clamping-1.svg` in
-   the `painting/stroke` block: 150 px shared, 500 px on Geode).
+   strict budget, so the healthy backend is not blinded (e.g. `with-an-image-child.svg` in the
+   `painting/marker` block: default shared budget, 500 px on Geode, with the measured counts per
+   Geode lane in its comment).
 4. `.withGeodeGoldenOverride("donner/svg/renderer/testdata/golden/geode/<name>.png", "reason")` —
    ONLY for a verified-correct Geode output that differs from the shared golden by a genuine
    sub-pixel analytic difference (e.g. 8-bit filter-intermediate precision). TinyGolden still uses

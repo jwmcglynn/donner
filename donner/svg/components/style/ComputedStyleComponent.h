@@ -13,6 +13,9 @@ struct ComputedResourceOpacities {
   double floodOpacity = 1;            ///< Final filter flood opacity.
   css::Specificity stopSpecificity;   ///< Winning stop-opacity cascade priority.
   css::Specificity floodSpecificity;  ///< Winning flood-opacity cascade priority.
+
+  /// Equality operator.
+  bool operator==(const ComputedResourceOpacities&) const = default;
 };
 
 /**
