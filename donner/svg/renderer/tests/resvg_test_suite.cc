@@ -478,18 +478,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                // Reference refreshed to resvg v0.49.0; see
-                // third_party/resvg-test-suite/BUILD.bazel.
+                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"complex-order-and-xlink-href.svg",
-                 Params::Skip("Reference disagreement: the region's x and height cut the blur's "
-                              "input at its left and bottom edges. The reference blurs with five "
-                              "box passes that each drop what spreads past the region, so the "
-                              "first row and column inside read alpha 84 where Donner, which "
-                              "keeps that spill, reads 143, close to a single Gaussian of the "
-                              "clipped input (1,275 px, all within 5 px of those "
-                              "edges; Geode adds 3 frame-corner pixels); "
-                              "FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom pins the "
-                              "region clip")
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-complex-order-and-xlink-href.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: resvg drops blur spill at the region edge; see "
+                     "golden/README.md")
                      .setCanvasSize(300, 300)},
                 {"in=BackgroundAlpha-with-enable-background.svg",
                  Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
