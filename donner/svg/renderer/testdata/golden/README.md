@@ -255,8 +255,10 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 The seven `filters/filter-functions/color-adjust-functions-*` inputs keep their live text and
 filters. Their references preserve every original pixel outside the three text bands, including
 all seven filtered squares and the frame. The historical PNGs draw heavier labels: switching
-only font smoothing reproduces them within 7 pixels in Chromium and 12 in Firefox over white.
-The original PNG producer is unknown.
+Chromium on macOS from `-webkit-font-smoothing: antialiased` to `auto` reduces mismatches
+from 461 to 7 against the transparent reference. Firefox’s `-moz-osx-font-smoothing: antialiased`
+to `auto` gives 450 to 12 with both images composited on white. Font bytes, layout, filters
+and device scale remain fixed within each pair. The original PNG producer is unknown.
 
 usvg 0.49.0 shapes the seven strings with the vendored Noto Sans Regular font
 (SHA-256 `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9`).
@@ -305,9 +307,10 @@ bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_a
   //donner/svg/renderer/tests:resvg_test_suite_geode
 ```
 
-With the original fixtures in place, compose the decoded masks with their upstream PNGs. Supply
-the TinySkia mask first and the Geode mask second. The command writes five PNGs for each
-backend and checks that the two shared pairs agree byte-for-byte in RGBA.
+Copy the two actual PNGs to `/tmp/tinyskia-labels.png` and `/tmp/geode-labels.png`, respectively.
+Return to the checkout containing the reproduction script and the unchanged corpus SVGs. The
+command writes five PNGs for each backend and checks that the two shared pairs agree byte-for-byte
+in RGBA.
 
 ```sh
 python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
