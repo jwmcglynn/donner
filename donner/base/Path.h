@@ -144,6 +144,10 @@ public:
   /// Maximum command visits and recursive subdivisions in one geometric query.
   static constexpr std::size_t kMaximumGeometryQueryWork = 1024 * 1024;
 
+  /// Maximum points in one stroke's expanded outline. A stroke that would need more is refused,
+  /// on every backend.
+  static constexpr std::size_t kMaximumStrokeOutputPoints = 1024 * 1024;
+
   /// Maximum zero-based recursion depth used by adaptive arc-length subdivision.
   static constexpr int kMaximumArcLengthSubdivisionDepth = 19;
 

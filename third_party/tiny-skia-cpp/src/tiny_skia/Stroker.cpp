@@ -608,12 +608,28 @@ float PathStroker::computeResolutionScale(const Transform& ts) {
 }
 
 std::optional<Path> PathStroker::stroke(const Path& path, const Stroke& stroke,
-                                        float resolutionScale) {
+                                        float resolutionScale, StrokeOutputLimit* limit) {
   if (stroke.width <= 0.0f || !std::isfinite(stroke.width)) {
     return std::nullopt;
   }
-  return strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap, stroke.lineJoin,
-                     resolutionScale);
+  outputLimit_ = limit;
+  std::optional<Path> outline = strokeInner(path, stroke.width, stroke.miterLimit, stroke.lineCap,
+                                            stroke.lineJoin, resolutionScale);
+  if (limit != nullptr) {
+    limit->emittedPoints = outline.has_value() ? outline->points().size()
+                                               : outer_.points().size() + inner_.points().size() +
+                                                     cusper_.points().size();
+    // Finishing the last contour adds its caps or closing join and appends its inner side after
+    // the last check above, so the finished outline is checked exactly before it is returned.
+    if (outline.has_value() && outline->points().size() > limit->maxPoints) {
+      limit->exceeded = true;
+    }
+    if (limit->exceeded) {
+      outline.reset();
+    }
+  }
+  outputLimit_ = nullptr;
+  return outline;
 }
 
 std::optional<Path> PathStroker::strokeInner(const Path& path, float width, float miterLimit,
@@ -691,6 +707,9 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
   PathSegmentsIter iter(path);
   iter.setAutoClose(true);
   while (auto segment = iter.next()) {
+    if (exceedsOutputLimit()) {
+      return std::nullopt;
+    }
     switch (segment->kind) {
       case PathSegment::Kind::MoveTo:
         moveTo(segment->pts[0]);
@@ -724,7 +743,23 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
     }
   }
 
+  if (exceedsOutputLimit()) {
+    return std::nullopt;
+  }
   return finish(lastSegmentIsLine);
+}
+
+// Donner addition: true once the outline emitted so far passes the caller's limit.
+bool PathStroker::exceedsOutputLimit() {
+  if (outputLimit_ == nullptr) {
+    return false;
+  }
+  if (!outputLimit_->exceeded &&
+      outer_.points().size() + inner_.points().size() + cusper_.points().size() >
+          outputLimit_->maxPoints) {
+    outputLimit_->exceeded = true;
+  }
+  return outputLimit_->exceeded;
 }
 
 SwappableBuilders PathStroker::builders() { return SwappableBuilders{&inner_, &outer_}; }
@@ -885,6 +920,9 @@ void PathStroker::cubicTo(Point pt1, Point pt2, Point pt3) {
 }
 
 bool PathStroker::cubicStroke(const Point cubic[4], QuadConstruct& quadPoints) {
+  if (exceedsOutputLimit()) {
+    return false;  // Donner addition: stop subdividing once the output limit is passed.
+  }
   if (!foundTangents_) {
     ResultType resultType = tangentsMeet(cubic, quadPoints);
     if (resultType != ResultType::Quad) {
@@ -1153,6 +1191,9 @@ void PathStroker::initQuad(StrokeType strokeType, NormalizedF32 start, Normalize
 }
 
 bool PathStroker::quadStroke(const Point quad[3], QuadConstruct& quadPoints) {
+  if (exceedsOutputLimit()) {
+    return false;  // Donner addition: stop subdividing once the output limit is passed.
+  }
   ResultType resultType = compareQuadQuad(quad, quadPoints);
   if (resultType == ResultType::Quad) {
     PathBuilder* path;
@@ -1367,9 +1408,10 @@ bool PathStroker::isCurrentContourEmpty() const {
 // Path::stroke
 // ---------------------------------------------------------------------------
 
-std::optional<Path> Path::stroke(const Stroke& stroke, float resScale) const {
+std::optional<Path> Path::stroke(const Stroke& stroke, float resScale,
+                                 StrokeOutputLimit* limit) const {
   PathStroker stroker;
-  return stroker.stroke(*this, stroke, resScale);
+  return stroker.stroke(*this, stroke, resScale, limit);
 }
 
 }  // namespace tiny_skia

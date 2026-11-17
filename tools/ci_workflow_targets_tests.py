@@ -6,6 +6,9 @@ import re
 import unittest
 
 from python.runfiles import runfiles
+from tools import bazelrc_configs
+from tools.ci import lane_view
+from tools.ci import lanes
 
 
 LABEL = re.compile(r"(?<![\w:/])(?P<option>--)?(?P<label>//[\w./:+*=-]+)")
@@ -27,6 +30,22 @@ def individual_targets(source):
     return findings
 
 
+def lane_commands(lane, *commands, expand=True):
+    """Every Bazel command a lane's phases run, from their dry runs, without wrappers and, unless
+    `expand` is false, with the repository's .bazelrc configs expanded; with `commands`, only
+    those Bazel commands (build, test)."""
+    configs = expand and bazelrc_configs.parse(
+        Path(runfiles.Create().Rlocation("donner/.bazelrc")).read_text(encoding="utf-8")) or None
+    found = [argv[argv.index("bazelisk"):] for phase in lanes.LANES[lane].phases
+             for argv in lane_view.phase_commands(lane, phase, configs) if "bazelisk" in argv]
+    return [argv for argv in found if _command(argv) != "query"
+            and (not commands or _command(argv) in commands)]
+
+
+def _command(argv):
+    return next(word for word in argv[1:] if not word.startswith("--"))
+
+
 class WorkflowTargetsTest(unittest.TestCase):
     maxDiff = None
 
@@ -35,6 +54,8 @@ class WorkflowTargetsTest(unittest.TestCase):
         directory = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
         paths = sorted(directory.glob("*.yml")) + sorted(directory.glob("*.yaml"))
         self.assertGreater(len(paths), 0, "workflow runfiles are missing")
+        # The lane table holds the commands the workflow's Bazel steps run.
+        paths.append(Path(resolver.Rlocation("donner/tools/ci/lanes.py")))
         findings = [
             f"{path.name}:{line}: {label}"
             for path in paths
@@ -78,7 +99,8 @@ class WorkflowTargetsTest(unittest.TestCase):
         for name in ("macos-self-hosted",):
             with self.subTest(job=name):
                 self.assertIn("runs-on: [self-hosted, macOS-vm, ARM64]", jobs[name])
-                self.assertIn("--//build_defs:metal_shader_validation=off", jobs[name])
+                for command in lane_commands(name, "test"):
+                    self.assertIn("--//build_defs:metal_shader_validation=off", command)
                 self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", jobs[name])
         native = jobs["macos-metal"]
         self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
@@ -86,19 +108,20 @@ class WorkflowTargetsTest(unittest.TestCase):
         # Only pull requests that reach the Metal suites, or fall back to //..., run it.
         self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "
                       "needs.determine-targets.outputs.metal_affected == 'true')", native)
-        for target in ("metal_full_validation", "metal_preflight", "metal_native",
-                       "metal_offline_compiler"):
-            self.assertIn("//tools/ci:" + target, native)
-        self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", native)
-        self.assertNotIn("metal_shader_validation=off", native)
+        native_commands = lane_commands("macos-metal", "test")
+        self.assertEqual([command[-1] for command in native_commands], [
+            "//tools/ci:" + target for target in ("metal_full_validation", "metal_preflight",
+                                                  "metal_offline_compiler", "metal_native")])
+        for command in native_commands:
+            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
+            self.assertNotIn("--//build_defs:metal_shader_validation=off", command)
         self.assertNotIn("continue-on-error:", native)
         self.assertIn("macos-metal", jobs["coverage-contract"].split("steps:", 1)[0])
-        fast = jobs["macos-self-hosted"]
-        commands = re.findall(r"(?m)^.*bazelisk .* (?:test|build) .*", fast)
+        commands = lane_commands("macos-self-hosted", "test", "build", expand=False)
         self.assertGreaterEqual(len(commands), 6)
         for command in commands:
             self.assertIn("--config=macos-vm", command)
-            self.assertNotRegex(command, r"--jobs|--local_resources")
+            self.assertNotRegex(" ".join(command), r"--jobs|--local_resources")
         # Local execution stays bounded by the VM's CPU and memory budget. --jobs sits above the
         # CPU budget so cache lookups and downloads are not throttled to local concurrency.
         bazelrc = Path(resolver.Rlocation("donner/.bazelrc")).read_text()
@@ -123,12 +146,19 @@ class WorkflowTargetsTest(unittest.TestCase):
                       qualification)
         self.assertIn("instance: [1, 2, 3, 4]", qualification)
         self.assertIn("fail-fast: false", qualification)
-        self.assertIn("--nocache_test_results", qualification)
-        self.assertIn("--noskip_incompatible_explicit_targets", qualification)
-        self.assertIn("//tools/ci:macos_vm_qualification", qualification)
-        self.assertIn('--build_event_json_file="$RUNNER_TEMP/coverage-qualification.bep.json"', qualification)
+        [command] = lane_commands("macos-vm-qualification", "test")
+        self.assertIn("--nocache_test_results", command)
+        self.assertIn("--noskip_incompatible_explicit_targets", command)
+        self.assertEqual("//tools/ci:macos_vm_qualification", command[-1])
+        self.assertIn("--build_event_json_file=$RUNNER_TEMP/coverage-qualification.bep.json",
+                      command)
         self.assertIn("vm-qualification-evidence-", qualification)
-        self.assertIn('step.get("executed", 0) != 4', qualification)
+        self.assertIn("run: python3 tools/ci/lane.py phase macos-vm-qualification "
+                      "require_executed", qualification)
+        self.assertEqual(
+            lanes.LANES["macos-vm-qualification"].phases["require_executed"].actions,
+            (lanes.RequireExecuted("qualification", 4,
+                                   "Expected four executed qualification tests"),))
 
     def test_native_suite_keeps_every_shader_validated_device_test(self):
         resolver = runfiles.Create()

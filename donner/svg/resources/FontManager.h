@@ -7,11 +7,13 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/Utils.h"
 #include "donner/base/fonts/SfntUtils.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
@@ -185,8 +187,15 @@ public:
   bool needsResourceRefresh() const;
   /// Whether current face dependencies still have unresolved states.
   bool hasUnresolvedDependencies() const;
-  /// Revision advanced when a resolved font change invalidates prepared text geometry.
+  /// Revision advanced when a resolved font change invalidates prepared text geometry. It does
+  /// not change while a \ref HostFontOverlay is lent or cleared: text prepared under an overlay is
+  /// keyed by \ref hostFontKey instead, which the external-use style retention compares.
   uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+  /// The \ref fontResourceRevision at which \ref setDefaultFamily, \ref setGenericFamilyMapping or
+  /// \ref setFontProvider last changed family selection, or 0 if none has. Such a change can move
+  /// any family lookup to another face without leaving a provider dependency behind, so a result
+  /// prepared at an earlier revision is stale.
+  uint64_t familySelectionRevision() const { return familySelectionRevision_; }
   /// Whether bounded dependency collection exceeded its resource limit.
   bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
 
@@ -215,12 +224,141 @@ public:
    * Register a mapping from a CSS generic family name (serif, sans-serif, monospace, cursive,
    * fantasy) to a real font family name registered via `addFontFace()`.
    *
-   * This allows `findFont("sans-serif")` to resolve to the specified family.
+   * This allows `findFont("sans-serif")` to resolve to the specified family. Changing a mapping
+   * advances \ref familySelectionRevision so prepared text is laid out again.
    *
    * @param genericName The CSS generic family name (case-insensitive).
    * @param realFamily The real family name to resolve to.
    */
   void setGenericFamilyMapping(std::string_view genericName, std::string_view realFamily);
+
+  /// The CSS generic family mappings registered with \ref setGenericFamilyMapping, keyed by the
+  /// lowercased generic name.
+  const std::unordered_map<std::string, std::string>& genericFamilyMappings() const {
+    return genericFamilyMap_;
+  }
+
+  /**
+   * Fonts a document lends to a document it references with an external `<use>`, for one
+   * occurrence of that `<use>`.
+   *
+   * The referenced element renders as an instance of the `<use>`, so its text resolves families the
+   * host declares, as it would if the element were in the host. The overlay holds only `data`
+   * sources: sources the host already turned into bytes. Lending fonts therefore fetches nothing
+   * on the referenced document's behalf, and a face whose bytes the host has not loaded is not
+   * lent. An overlay is immutable once built, so one overlay can be lent to many occurrences.
+   */
+  struct HostFontOverlay {
+    /// The host's `@font-face` rules, each reduced to its `data` sources, in declaration order,
+    /// after any faces the host was itself lent. At most \ref kMaximumLentFaces.
+    std::vector<css::FontFace> faces;
+    /// \ref css::FontFaceIdentityKey of each of \ref faces, in the same order.
+    std::vector<std::string> faceKeys;
+    /// The host's CSS generic family mappings, as (lowercased generic name, family) pairs sorted
+    /// by generic name.
+    std::vector<std::pair<std::string, std::string>> genericFamilies;
+    /// Digest of \ref faces and \ref genericFamilies; never zero. Overlays with equal content have
+    /// equal digests, since face identity follows \ref css::FontFaceIdentityKey.
+    uint64_t digest = 0;
+
+    /**
+     * Build the overlay a host lends. Its cost is linear in the host's faces and mappings, so
+     * callers build it once per host and frame rather than once per occurrence.
+     *
+     * @param faces The host's `@font-face` rules.
+     * @param hostFonts The host's font manager, for its generic family mappings and any overlay
+     *   the host is itself lent. May be nullptr.
+     * @return The overlay, or nullptr when the host has nothing to lend.
+     */
+    static std::shared_ptr<const HostFontOverlay> Make(std::span<const css::FontFace> faces,
+                                                       const FontManager* hostFonts);
+  };
+
+  /// Most faces one overlay lends; a host's faces beyond this are not lent, and their text falls
+  /// back as it would without the host.
+  static constexpr size_t kMaximumLentFaces = 256;
+
+  /// Most lent faces a manager keeps across the lent sets it retains. Twice one overlay's limit, so
+  /// two full overlays alternating over one document keep both sets. The least recently lent sets
+  /// beyond this are released, except the one lent now.
+  static constexpr size_t kMaximumRetainedLentFaces = 2 * kMaximumLentFaces;
+
+  /// Most lent sets a manager retains, whatever their size.
+  static constexpr size_t kMaximumLentSets = 8;
+
+  /// Lending work a manager has done, for regression tests.
+  struct HostFontOverlayStats {
+    /// Overlays installed with content no retained lent set holds, which builds a lent set.
+    /// Lending content a retained set holds is constant time and is not counted.
+    size_t rebuilds = 0;
+    /// Lent faces released, by the retention bounds or to make room for this document's own faces.
+    size_t evictions = 0;
+  };
+
+  /**
+   * Lend @p overlay's fonts to lookups until it is replaced, or cleared with nullptr.
+   *
+   * While lent, \ref findFont and \ref hasFamily resolve a family in this order: this manager's own
+   * `@font-face` rules, the overlay's faces, the attached provider, then the packaged fallback. A
+   * CSS generic name this manager does not map uses the overlay's mapping. Answers given under an
+   * overlay are cached with its lent set, apart from this manager's own answers, so clearing the
+   * overlay restores the document's own resolution without reloading anything.
+   *
+   * Lent bytes are loaded into this manager's registry and charged to its budget, like its own
+   * faces; the entity shares the host's immutable payload rather than copying it. Each distinct
+   * overlay gets a lent set, retained after it is cleared or replaced so lending the same content
+   * again is constant time, up to \ref kMaximumRetainedLentFaces and \ref kMaximumLentSets. A face
+   * is released with the last retained set holding it, and every retained set except the one lent
+   * now is released when this document's own face is refused by its budget. A released face is
+   * minted afresh, with a new serial, if lent again, which changes that overlay's
+   * \ref hostFontKey, so nothing prepared with the released face is drawn again.
+   *
+   * @param overlay Fonts to lend, or nullptr to stop lending.
+   */
+  void setHostFontOverlay(std::shared_ptr<const HostFontOverlay> overlay);
+
+  /// The overlay currently lent, or nullptr.
+  std::shared_ptr<const HostFontOverlay> hostFontOverlay() const;
+
+  /// Identity of the fonts lent now: zero when none are. It differs between overlays with
+  /// different content, and for one overlay whose faces were released and minted again; it is an
+  /// identity, not a monotonic counter. Text, clip and paint preparations record it, and one
+  /// recorded under another key is stale.
+  uint64_t hostFontKey() const;
+
+  /// Lending work done so far.
+  const HostFontOverlayStats& hostFontOverlayStats() const { return hostOverlayStats_; }
+
+  /**
+   * Set the user agent's default family, used when no family in a `font-family` list is
+   * available. CSS leaves this face to the user agent. Without a default family, or while the
+   * named family is unavailable, \ref defaultFont answers with \ref fallbackFont. Changing it
+   * advances \ref familySelectionRevision so prepared text is laid out again.
+   *
+   * @param family A family name or CSS generic family name; empty clears the default.
+   */
+  void setDefaultFamily(std::string_view family);
+
+  /**
+   * Returns the best face of the default family set by \ref setDefaultFamily for the requested
+   * attributes, or \ref fallbackFont when no default family is set or it is unavailable.
+   *
+   * @param weight The requested CSS font weight.
+   * @param style The requested font style, as passed to \ref findFont.
+   * @param stretch The requested font stretch, as passed to \ref findFont.
+   */
+  FontHandle defaultFont(int weight = 400, int style = 0, int stretch = 5);
+
+  /// Whether a default family is set by \ref setDefaultFamily and currently available.
+  bool hasDefaultFamily() const;
+
+  /**
+   * The default family set by \ref setDefaultFamily, or empty.
+   *
+   * The reference aliases this manager's storage: it is valid until the next
+   * \ref setDefaultFamily call or until the manager is destroyed. Copy it to keep the name longer.
+   */
+  const std::string& defaultFamily() const UTILS_LIFETIME_BOUND { return defaultFamily_; }
 
   /**
    * Returns whether any registered `@font-face` rule or the attached provider claims @p family,
@@ -444,8 +582,10 @@ public:
       providerDependencies_.clear();
       providerResolvedFamiliesLower_.clear();
       fontDependenciesOverflowed_ = false;
-      ++fontResourceRevision_;
+      // A family the previous provider lacked was resolved without recording a dependency.
+      familySelectionRevision_ = ++fontResourceRevision_;
       cache_.clear();
+      clearLentSetCaches();
     }
   }
 
@@ -464,6 +604,7 @@ public:
 
 private:
   struct FontFaceComponent;
+  struct HostFontFaceComponent;
   struct LoadedFontComponent;
   struct FontBudgetContext;
   struct FontBudgetState;
@@ -481,7 +622,8 @@ private:
                       bool* validationWorkLimitExceeded = nullptr,
                       bool* retainedBudgetExceeded = nullptr);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData,
-                      FontDataTrust trust, bool* validationWorkLimitExceeded = nullptr);
+                      FontDataTrust trust, bool* validationWorkLimitExceeded = nullptr,
+                      bool* retainedBudgetExceeded = nullptr);
 
   /** Return the registry budget when installed, otherwise this manager's private candidate. */
   std::shared_ptr<const FontBudgetState> budgetStateForRead() const;
@@ -501,7 +643,7 @@ private:
                        bool* retainedBudgetExceeded = nullptr);
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data,
-                                    FontDataTrust trust);
+                                    FontDataTrust trust, bool* retainedBudgetExceeded = nullptr);
   bool isValidationRejectedSource(const std::shared_ptr<const std::vector<uint8_t>>& data,
                                   const std::shared_ptr<FontBudgetState>& budgetState) const;
   bool exhaustedValidationBudgetRejects(std::span<const uint8_t> data, FontDataTrust trust,
@@ -512,7 +654,7 @@ private:
   std::optional<fonts::SfntFont> validateSfntForLoad(
       Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
       const std::shared_ptr<FontBudgetState>& budgetState,
-      bool* validationWorkLimitExceeded = nullptr);
+      bool* validationWorkLimitExceeded = nullptr, bool* retainedBudgetExceeded = nullptr);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
@@ -522,7 +664,8 @@ private:
    * @return True on success.
    */
   bool loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
-                 bool* validationWorkLimitExceeded = nullptr);
+                 bool* validationWorkLimitExceeded = nullptr,
+                 bool* retainedBudgetExceeded = nullptr);
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
@@ -556,6 +699,72 @@ private:
 
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;
+
+  /// The family a CSS generic name maps to, by this manager's mapping or else the lent overlay's;
+  /// any other name is returned unchanged.
+  std::string_view resolveGenericFamily(std::string_view family) const;
+
+  /// The best `@font-face` match for a query: this manager's own rules first, then, only when none
+  /// of them declares the family, the faces the current overlay lends.
+  struct FaceMatch {
+    Entity entity = entt::null;  ///< Matched face entity, or null.
+    bool lent = false;           ///< Whether the face is a lent host face.
+  };
+  FaceMatch bestFace(std::string_view family, int weight, int style, int stretch) const;
+
+  /// The face declaration of a \ref FaceMatch.
+  const css::FontFace& matchedFace(const FaceMatch& match) const;
+
+  /// Load @p face's `data` sources into @p entity. A face of this document is admitted through
+  /// \ref admitReleasingIdleLentSets; a lent face never displaces another lent face.
+  bool loadFaceData(Entity entity, const css::FontFace& face, bool lent);
+
+  /**
+   * Run @p admit, and when the retained budget alone refused it, release the lent sets no overlay
+   * lends now and run it once more. Faces retained for a host that stopped lending them then never
+   * keep this document's own, provider or fallback faces out of its budget. A lent set in use is
+   * never released, and nothing is released unless admission would otherwise fail.
+   *
+   * @param admit Callable `bool(bool* retainedBudgetExceeded)` that attempts the admission and
+   *   sets its argument when the retained budget refused it.
+   * @param retainedBudgetExceeded Receives the last attempt's refusal, if non-null.
+   * @return Whether the last attempt succeeded.
+   */
+  template <typename Admit>
+  bool admitReleasingIdleLentSets(Admit&& admit, bool* retainedBudgetExceeded = nullptr);
+
+  struct LentSet;
+
+  /// The lent set of the overlay lent now, or nullptr.
+  const LentSet* activeLentSet() const;
+  LentSet* activeLentSet();
+
+  /// Release the least recently lent sets other than the current one while more than
+  /// @p maximumFaces faces, or more than \ref kMaximumLentSets sets, are retained. Returns the
+  /// number of faces released.
+  size_t releaseLentSets(size_t maximumFaces);
+
+  /// Drop every lent set's cached answers.
+  void clearLentSetCaches();
+
+  /**
+   * One cached resolution. A catalog provider's answer also records the content it was resolved
+   * from, so each cache judges its own answer against the provider's current content: a change one
+   * cache notices first cannot leave another cache serving the old content.
+   */
+  struct CachedAnswer {
+    FontHandle font;
+    /// Provider content identity the answer was resolved from; empty when no catalog answered.
+    std::string providerContentId;
+    /// Provider content generation the answer was resolved from.
+    uint64_t providerGeneration = 0;
+  };
+
+  /// Resolution answers by query key.
+  using ResolutionCache = std::unordered_map<std::string, CachedAnswer>;
+
+  /// Resolution answers for the current overlay, or for this document when none is lent.
+  ResolutionCache& resolutionCache();
 
   /**
    * Identity of one provider lookup: the family the provider was asked for, folded the way family
@@ -600,8 +809,9 @@ private:
                                       const FontFaceDependency& dependency) const;
   bool admissionCanProgress(const FontFaceDependency& dependency,
                             const FontFaceAvailability& current) const;
-  void invalidateChangedProviderAnswer(std::string_view family, const ProviderFontKey& key,
-                                       const std::string& cacheKey);
+  /// Whether @p answer still reflects the provider's content for @p family and @p key.
+  bool providerAnswerIsCurrent(std::string_view family, const ProviderFontKey& key,
+                               const CachedAnswer& answer) const;
   void rememberProviderDependency(const ProviderLookup& lookup, FontFaceLoadState state,
                                   FontFaceWaitReason waitReason = FontFaceWaitReason::None);
   FontHandle cachedProviderFont(const ProviderLookup& lookup);
@@ -612,7 +822,7 @@ private:
   bool providerBytesMatch(const ProviderLookup& lookup, std::span<const uint8_t> data) const;
   FontHandle loadProviderFont(const ProviderLookup& lookup, std::span<const uint8_t> data);
   FontHandle cacheProviderFont(const std::string& cacheKey, FontHandle font,
-                               bool documentSourceFailed);
+                               bool documentSourceFailed, const FontFaceAvailability& availability);
   FontHandle findProviderFont(std::string_view family, const ProviderFontKey& dependencyKey,
                               const std::string& cacheKey, bool documentSourceFailed);
 
@@ -624,8 +834,8 @@ private:
   /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 
-  /// Cache: family/style query key → resolved font handle.
-  std::unordered_map<std::string, FontHandle> cache_;
+  /// Cache: family/style query key → resolved font, for this document's own resolution.
+  ResolutionCache cache_;
 
   /// Identity key of every registered `@font-face` rule to the entity holding it. Keeps
   /// re-registration of an unchanged rule from minting a second entity for the same declaration.
@@ -659,11 +869,17 @@ private:
       providerDependencies_;
   std::vector<FontFaceDependency>* dependencyCapture_ = nullptr;
   uint64_t fontResourceRevision_ = 0;
+  /// See \ref familySelectionRevision.
+  uint64_t familySelectionRevision_ = 0;
   bool fontDependenciesOverflowed_ = false;
   bool refreshingFonts_ = false;
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;
+
+  /// Family used when no family in a `font-family` list is available; empty selects the embedded
+  /// fallback face.
+  std::string defaultFamily_;
 
   /// Lowercased family names claimed by the `@font-face` rules this instance knows about, so
   /// \ref hasFamily answers without rescanning them. Seeded from the registry at construction and
@@ -679,6 +895,53 @@ private:
 
   /// Handle for the embedded Public Sans fallback, lazily loaded.
   FontHandle fallbackHandle_;
+
+  /// Whether an overlay is lent now; its set is `lentSets_[activeDigest_]`.
+  bool hostOverlayActive_ = false;
+  uint64_t activeDigest_ = 0;
+
+  /// A host face loaded or lendable here, held by every retained lent set that lends it.
+  struct LentFace {
+    Entity entity = entt::null;
+    /// Minted with the entity; part of the key of every overlay lending it.
+    uint64_t serial = 0;
+    /// Retained lent sets holding this face.
+    size_t sets = 0;
+  };
+
+  /// Identity key of each host face to its entity.
+  std::unordered_map<std::string, LentFace> lentFaces_;
+
+  /// The faces one distinct overlay lends, retained so lending it again is constant time.
+  struct LentSet {
+    std::shared_ptr<const HostFontOverlay> overlay;
+    /// Each lent face's entity and position in the overlay, which breaks ties between equally
+    /// good faces in favour of the one the host declared last.
+    std::vector<std::pair<Entity, uint64_t>> faces;
+    /// Lowercased family names the faces claim, for \ref hasFamily.
+    std::unordered_set<std::string> familiesLower;
+    /// The overlay's \ref hostFontKey: its digest mixed with the serials of its faces.
+    uint64_t key = 0;
+    uint64_t lastLent = 0;
+    /// Resolution answers under this overlay.
+    ResolutionCache cache;
+  };
+
+  /// Retained lent sets by overlay digest; see \ref setHostFontOverlay.
+  std::unordered_map<uint64_t, LentSet> lentSets_;
+
+  /// The least recently lent retained set other than the one lent now, or end.
+  std::unordered_map<uint64_t, LentSet>::iterator leastRecentlyLentSet();
+
+  /// Release one lent set and every face no other retained set holds; returns how many faces.
+  size_t releaseLentSet(std::unordered_map<uint64_t, LentSet>::iterator set);
+
+  /// Faces summed over \ref lentSets_.
+  size_t lentSetFaces_ = 0;
+  uint64_t lentClock_ = 0;
+  uint64_t lentSerial_ = 0;
+
+  HostFontOverlayStats hostOverlayStats_;
 
   /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
   const FontFamilyProvider* provider_ = nullptr;

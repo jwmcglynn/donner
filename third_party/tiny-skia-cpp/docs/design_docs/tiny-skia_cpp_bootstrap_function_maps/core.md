@@ -286,7 +286,7 @@ Legend: `☐` Not started, `🧩` Stub only, `🟡` Implemented/tested (Rust com
 | Rust function/item | C++ function/item | Status | Evidence / Notes |
 | --- | --- | --- | --- |
 | `PathStroker::new` | `PathStroker::PathStroker` | 🟢 | Line-by-line audited: Constructor initializes stroke parameters, cap/join procs matches Rust. Validated in audit 2026-03-02. |
-| `PathStroker::stroke` | `PathStroker::stroke` | 🟢 | Line-by-line audited: Main entry iterates path segments, dispatches to line/quad/cubic/close matches Rust. Validated in audit 2026-03-02. |
+| `PathStroker::stroke` | `PathStroker::stroke` | 🟢 | Line-by-line audited: Main entry iterates path segments, dispatches to line/quad/cubic/close matches Rust. Validated in audit 2026-03-02. Donner addition: an optional `StrokeOutputLimit` stops the segment loop and the quad/cubic subdivision once the emitted outline passes it, returns no outline, and reports the points emitted; without a limit the function matches Rust. |
 | `PathStroker::stroke_line` | `PathStroker::strokeLine` | 🟢 | Line-by-line audited: Degenerate + normal line handling matches Rust. Validated in audit 2026-03-02. |
 | `PathStroker::stroke_quad` | `PathStroker::strokeQuad` | 🟢 | Line-by-line audited: Recursive quad subdivision with linearity check matches Rust. Validated in audit 2026-03-02. |
 | `PathStroker::stroke_cubic` | `PathStroker::strokeCubic` | 🟢 | Line-by-line audited: Recursive cubic subdivision, cusp/inflection handling matches Rust. Validated in audit 2026-03-02. |

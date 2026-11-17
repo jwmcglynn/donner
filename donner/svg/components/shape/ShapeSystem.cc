@@ -8,6 +8,8 @@
 #include <memory>
 #include <tuple>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -515,19 +517,6 @@ constexpr bool ForEachShape(const F& f) {
   return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
 }
 
-bool HasIdenticalPathData(const Path& first, const Path& second) {
-  const auto sameCommand = [](const Path::Command& a, const Path::Command& b) {
-    return a.verb == b.verb && a.pointIndex == b.pointIndex && a.isInternal == b.isInternal;
-  };
-  const auto samePoint = [](const Vector2d& a, const Vector2d& b) {
-    return a.x == b.x && a.y == b.y;
-  };
-  return std::equal(first.commands().begin(), first.commands().end(), second.commands().begin(),
-                    second.commands().end(), sameCommand) &&
-         std::equal(first.points().begin(), first.points().end(), second.points().begin(),
-                    second.points().end(), samePoint);
-}
-
 bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
   return style.properties && style.properties->display.get().value() == Display::None;
@@ -758,14 +747,17 @@ Path BuildClosedPathClip(const Path& path, const Vector2d& origin) {
 
 class ReferenceBoundsAccumulator {
 public:
+  /// With @p collector, the accumulator collects geometry there instead of bounding it.
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
                              const Transform2d& targetFromWorld, bool includeStroke,
-                             CircleClipGeometryBudget* budget)
+                             CircleClipGeometryBudget* budget,
+                             const BoundsGeometryCollector* collector = nullptr)
       : shapes_(shapes),
         root_(root),
         targetFromWorld_(targetFromWorld),
         includeStroke_(includeStroke),
-        budget_(budget) {}
+        budget_(budget),
+        collector_(collector) {}
 
   bool visit(EntityHandle child) {
     if (failed_ || (budget_ && !budget_->reserve(1))) {
@@ -787,8 +779,51 @@ public:
 
   std::optional<Box2d> result() const { return failed_ ? std::nullopt : bounds_; }
 
+  bool failed() const { return failed_; }
+
 private:
+  /// Add a box already in the target space.
   void add(const Box2d& bounds) {
+    if (collector_) {
+      addBox(bounds, Transform2d());
+    } else {
+      accumulate(bounds);
+    }
+  }
+
+  void addBox(const Box2d& box, const Transform2d& targetFromBox) {
+    if (collector_) {
+      if (!IsFiniteBox(box)) {
+        RejectGeometry(budget_, failed_);
+        return;
+      }
+      collector_->pieces.push_back(
+          BoundsGeometryPiece{.spaceFromPiece = targetFromBox, .geometry = box});
+      return;
+    }
+    accumulate(targetFromBox.transformBox(box));
+  }
+
+  void addPath(EntityHandle source, const Path& path, const Transform2d& targetFromPath) {
+    if (collector_) {
+      std::shared_ptr<const Path> shared =
+          collector_->paths.share(*source.registry(), source.entity(), path, collector_->budget);
+      if (!shared) {
+        // Past the allowance, or on a rare hash collision, the path's own box stands in for it.
+        // Under a rotation or skew that box bounds the path more loosely, so objectBoundingBox
+        // effects scale against a larger box than in-document: an intended degradation, and the
+        // bound still contains the path.
+        addBox(path.bounds(), targetFromPath);
+        return;
+      }
+      collector_->pieces.push_back(
+          BoundsGeometryPiece{.spaceFromPiece = targetFromPath, .geometry = std::move(shared)});
+      return;
+    }
+    accumulate(path.transformedBounds(targetFromPath));
+  }
+
+  void accumulate(const Box2d& bounds) {
     if (!IsFiniteBox(bounds)) {
       RejectGeometry(budget_, failed_);
       return;
@@ -817,7 +852,7 @@ private:
       RejectGeometry(budget_, failed_);
       return;
     }
-    add(path->transformedBounds(worldFromChild * targetFromWorld_));
+    addPath(child, path->spline, worldFromChild * targetFromWorld_);
     if (!includeStroke_) {
       return;
     }
@@ -839,11 +874,11 @@ private:
     // Structural type and fallback dimensions live on the light element. Any instance sizing
     // wins, while the caller always supplies the occurrence's transform.
     if (const auto* sized = child.try_get<ComputedShadowSizedElementComponent>()) {
-      add(targetFromChild.transformBox(sized->bounds));
+      addBox(sized->bounds, targetFromChild);
     } else if (const auto* sized = child.try_get<ComputedSizedElementComponent>()) {
-      add(targetFromChild.transformBox(sized->bounds));
+      addBox(sized->bounds, targetFromChild);
     } else if (const auto* sized = light.try_get<ComputedSizedElementComponent>()) {
-      add(targetFromChild.transformBox(sized->bounds));
+      addBox(sized->bounds, targetFromChild);
     }
   }
 
@@ -902,7 +937,7 @@ private:
       // a budget and must not enter this painted-cache construction path.
       const Box2d bounds = textEngine.computedObjectBoundingBox(geometryEntity);
       if (!bounds.isEmpty()) {
-        add((worldFromText * targetFromWorld_).transformBox(bounds));
+        addBox(bounds, worldFromText * targetFromWorld_);
       }
       return;
     }
@@ -913,7 +948,7 @@ private:
       return;
     }
     if (geometry->objectBounds) {
-      add((worldFromText * targetFromWorld_).transformBox(*geometry->objectBounds));
+      addBox(*geometry->objectBounds, worldFromText * targetFromWorld_);
     }
     for (const auto& glyph : geometry->outlines) {
       const EntityHandle source(*geometryEntity.registry(), glyph.sourceEntity);
@@ -934,6 +969,7 @@ private:
   const Transform2d& targetFromWorld_;
   bool includeStroke_;
   CircleClipGeometryBudget* budget_;
+  const BoundsGeometryCollector* collector_;
   ParseWarningSink warningSink_ = ParseWarningSink::Disabled();
   std::optional<Box2d> bounds_;
   bool failed_ = false;
@@ -1055,6 +1091,27 @@ std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
 
   return getTransformedShapeBounds(handle, outerEntityFromWorld);
+}
+
+bool ShapeSystem::collectShapeGeometry(EntityHandle handle, const Transform2d& spaceFromEntity,
+                                       const BoundsGeometryCollector& collector) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  if (IsDisplayNone(handle, disabledSink)) {
+    return true;
+  }
+  const Transform2d spaceFromWorld =
+      LayoutSystem().getEntityFromWorldTransform(handle).inverse() * spaceFromEntity;
+  const ScopedTextPathBoundsWorkEpoch textPathWorkEpoch(*handle.registry());
+  std::vector<BoundsGeometryPiece>& pieces = collector.pieces;
+  const std::size_t firstPiece = pieces.size();
+  ReferenceBoundsAccumulator accumulator(*this, handle, spaceFromWorld, false, nullptr, &collector);
+  donner::components::ForAllChildrenRecursivePruned(
+      handle, [&accumulator](EntityHandle child) { return accumulator.visit(child); });
+  if (accumulator.failed()) {
+    pieces.erase(pieces.begin() + static_cast<std::ptrdiff_t>(firstPiece), pieces.end());
+    return false;
+  }
+  return true;
 }
 
 std::optional<Box2d> ShapeSystem::getStrokeBounds(EntityHandle handle) {
