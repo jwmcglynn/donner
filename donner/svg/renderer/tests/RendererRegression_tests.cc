@@ -2553,6 +2553,75 @@ TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport)
   renderAndCompare(document, svg, golden, GoldenParams());
 }
 
+/// Renders a stroked, unfilled underlined text with \p attributes, holding \p content, in a
+/// 200 x 200 document. The default content is preserved spaces, which have no outlines, so only
+/// the underline is drawn.
+RendererBitmap RenderStrokedUnderline(std::string_view attributes,
+                                      std::string_view content = "        ") {
+  SVGDocument document = instantiateSubtree(
+      R"svg(<text font-family="Noto Sans" font-size="40" xml:space="preserve" fill="none" stroke="black" style="text-decoration: underline" )svg" +
+          std::string(attributes) + ">" + std::string(content) + "</text>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, TextDecorationStrokeWidthResolvesAgainstItsFontSize) {
+  // A font-relative stroke-width on a decoration resolves against the font size of the element
+  // that provides the decoration's paint, here the text: 0.1em and 0.2ex at font size 40 stroke
+  // the underline 4 wide, also over a tspan of font size 10, whose own 0.1em would be 1.
+  const RendererBitmap expected =
+      RenderStrokedUnderline(R"svg(x="20" y="100" stroke-width="4")svg");
+  AssertVisibleFixture(expected, "decoration_stroke_width_visible");
+  constexpr std::string_view kSmallSpan = R"svg(<tspan font-size="10">        </tspan>)svg";
+  const RendererBitmap expectedOverSpan =
+      RenderStrokedUnderline(R"svg(x="20" y="100" stroke-width="4")svg", kSmallSpan);
+  AssertVisibleFixture(expectedOverSpan, "decoration_stroke_width_over_span_visible");
+  struct Case {
+    std::string_view label;
+    std::string_view width;
+    std::string_view content;
+  };
+  for (const Case& testCase : {Case{"em", "0.1em", "        "}, Case{"ex", "0.2ex", "        "},
+                               Case{"em_over_span", "0.1em", kSmallSpan}}) {
+    SCOPED_TRACE(testCase.label);
+    const RendererBitmap actual = RenderStrokedUnderline(
+        R"svg(x="20" y="100" stroke-width=")svg" + std::string(testCase.width) + "\"",
+        testCase.content);
+    editor::tests::CompareBitmapToBitmap(
+        actual, testCase.content == kSmallSpan ? expectedOverSpan : expected,
+        "decoration_stroke_width_" + std::string(testCase.label),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, NonScalingTextDecorationStrokeKeepsItsAuthoredWidth) {
+  // Under `vector-effect: non-scaling-stroke` the underline's stroke takes the text stroke's
+  // adjustment: its local width is the authored width divided by the square root of the
+  // transform's determinant, as a stroke of that local width without the vector effect is.
+  struct Case {
+    std::string_view label;
+    std::string_view transform;
+    double determinant;
+  };
+  for (const Case& testCase :
+       {Case{"uniform", "scale(2)", 4.0}, Case{"non_uniform", "scale(2 1)", 2.0}}) {
+    SCOPED_TRACE(testCase.label);
+    const std::string placed =
+        R"svg(x="10" y="50" transform=")svg" + std::string(testCase.transform) + "\" ";
+    std::ostringstream localWidth;
+    localWidth << std::setprecision(17) << 4.0 / std::sqrt(testCase.determinant);
+    const RendererBitmap actual = RenderStrokedUnderline(
+        placed + R"svg(vector-effect="non-scaling-stroke" stroke-width="4")svg");
+    const RendererBitmap expected =
+        RenderStrokedUnderline(placed + "stroke-width=\"" + localWidth.str() + "\"");
+    AssertVisibleFixture(expected, "non_scaling_decoration_visible_" + std::string(testCase.label));
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "non_scaling_decoration_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, TextDecorationUnderlineRenders) {
   const char* svg = "donner/svg/renderer/testdata/geode_text_decoration_underline.svg";
   const char* golden = "donner/svg/renderer/testdata/golden/geode_text_decoration_underline.png";
