@@ -10,9 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-import lanes
-import select_remote_cmake
-import unified_ci
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.ci import lanes, select_remote_cmake, unified_ci
 
 
 class UnifiedTest(unittest.TestCase):

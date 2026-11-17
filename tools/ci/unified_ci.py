@@ -10,14 +10,12 @@ import subprocess
 import sys
 import time
 
-import lane
-import lanes
-import macos_remote_shadow as shadow
-from remote_cmake import prepare
-
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tools"))
-import ci_coverage_contract as coverage
+sys.path.insert(0, str(ROOT))
+from tools import ci_coverage_contract as coverage
+from tools.ci import lane, lanes
+from tools.ci import macos_remote_shadow as shadow
+from tools.ci.remote_cmake import prepare
 
 MAC = ["--config=remote-macos", "--config=unified-re-endpoint", "--config=ci-test-lane",
        "--incompatible_repo_env_ignores_action_env"]
