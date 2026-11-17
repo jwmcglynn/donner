@@ -693,6 +693,18 @@ TEST_F(MetalColorMatrixTest, ImageBlitNearest) {
                              {gpu::tests::image_blit_scene::Case::Nearest});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
+// The anchored bilinear mapping samples the same pixels as a bilinear reference under a sub-pixel
+// translation, a rotation and a non-uniform scale.
+TEST_F(MetalColorMatrixTest, ImageBlitAnchoredMatchesBilinearReference) {
+  using gpu::tests::image_blit_scene::Case;
+  for (const Case kind : {Case::AnchoredTranslate, Case::AnchoredRotate, Case::AnchoredScale}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {kind});
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
 TEST_F(MetalColorMatrixTest, ImageBlitLinear) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
