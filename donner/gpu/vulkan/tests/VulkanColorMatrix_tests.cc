@@ -584,6 +584,17 @@ TEST_F(VulkanColorMatrixTest, ImageBlitNearest) {
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
                              {gpu::tests::image_blit_scene::Case::Nearest});
 }
+// The anchored bilinear mapping samples the same pixels as a bilinear reference under a sub-pixel
+// translation, a rotation and a non-uniform scale.
+TEST_F(VulkanColorMatrixTest, ImageBlitAnchoredMatchesBilinearReference) {
+  using gpu::tests::image_blit_scene::Case;
+  for (const Case kind : {Case::AnchoredTranslate, Case::AnchoredRotate, Case::AnchoredScale}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {kind});
+  }
+}
 TEST_F(VulkanColorMatrixTest, ImageBlitLinear) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },

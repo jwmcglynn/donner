@@ -525,6 +525,7 @@ donner_cc_library(
         ":blend_reference",
         ":gpu",
         ":gpu_test_utils",
+        "//donner/base",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:image_blit_api",
         "@com_google_gtest//:gtest",

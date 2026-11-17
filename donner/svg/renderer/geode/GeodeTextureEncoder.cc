@@ -10,6 +10,7 @@
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
+#include "donner/svg/renderer/geode/GeodeAnchoredSampling.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodeNearestSampling.h"
 
@@ -74,16 +75,10 @@ gpu::Texture GeodeTextureEncoder::uploadRgba8Texture(const GeodeGpuContext& cont
 
 namespace {
 
-/// Fill the nearest-sampling rows that map target pixel positions to source texel coordinates:
-/// the inverse of placing the quad's source texels in the target, narrowed and inverted in single
-/// precision as the software renderer's image sampler does (see \ref NearestTexelRowsFor).
-///
-/// @param params Quad parameters.
-/// @param textureSize Source texture dimensions in texels.
-/// @param u Uniform block receiving the rows.
-/// @return False when the placement is not invertible, so no pixel samples it.
-bool FillNearestTexelRows(const GeodeTextureEncoder::QuadParams& params,
-                          const gpu::Extent2d& textureSize, Uniforms& u) {
+/// The transform from source texel coordinates to target pixels for \p params, whose source has
+/// \p textureSize texels.
+Transform2d TargetFromTexel(const GeodeTextureEncoder::QuadParams& params,
+                            const gpu::Extent2d& textureSize) {
   const Vector2d sourceSize(textureSize.width, textureSize.height);
   const Vector2d sourceTexelMin(params.srcRect.topLeft.x * sourceSize.x,
                                 params.srcRect.topLeft.y * sourceSize.y);
@@ -94,13 +89,53 @@ bool FillNearestTexelRows(const GeodeTextureEncoder::QuadParams& params,
       Transform2d::Scale(params.destRect.width() / sourceTexelExtent.x,
                          params.destRect.height() / sourceTexelExtent.y) *
       Transform2d::Translate(params.destRect.topLeft);
+  return localFromTexel * params.targetFromLocal;
+}
+
+/// Fill the nearest-sampling rows that map target pixel positions to source texel coordinates:
+/// the inverse of placing the quad's source texels in the target, narrowed and inverted in single
+/// precision as the software renderer's image sampler does (see \ref NearestTexelRowsFor).
+///
+/// @param params Quad parameters.
+/// @param textureSize Source texture dimensions in texels.
+/// @param u Uniform block receiving the rows.
+/// @return False when the placement is not invertible, so no pixel samples it.
+bool FillNearestTexelRows(const GeodeTextureEncoder::QuadParams& params,
+                          const gpu::Extent2d& textureSize, Uniforms& u) {
   const std::optional<NearestTexelRows> rows =
-      NearestTexelRowsFor(localFromTexel * params.targetFromLocal);
+      NearestTexelRowsFor(TargetFromTexel(params, textureSize));
   if (!rows.has_value()) {
     return false;
   }
   std::copy(rows->texelX.begin(), rows->texelX.end(), u.texelFromTargetX);
   std::copy(rows->texelY.begin(), rows->texelY.end(), u.texelFromTargetY);
+  return true;
+}
+
+/// Fill the anchored-sampling mapping split at \p params.anchor (see \ref AnchoredTexelRowsFor).
+///
+/// @param params Quad parameters.
+/// @param textureSize Source texture dimensions in texels.
+/// @param u Uniform block receiving the mapping.
+/// @return False when the placement is not invertible or the split does not fit, so no pixel
+///   samples it.
+bool FillAnchoredTexelRows(const GeodeTextureEncoder::QuadParams& params,
+                           const gpu::Extent2d& textureSize, Uniforms& u) {
+  const std::optional<AnchoredTexelRows> rows =
+      AnchoredTexelRowsFor(TargetFromTexel(params, textureSize), params.anchor);
+  if (!rows.has_value()) {
+    return false;
+  }
+  u.texelFromTargetX[0] = rows->linear[0];
+  u.texelFromTargetX[1] = rows->linear[1];
+  u.texelFromTargetX[2] = rows->fraction[0];
+  u.texelFromTargetY[0] = rows->linear[2];
+  u.texelFromTargetY[1] = rows->linear[3];
+  u.texelFromTargetY[2] = rows->fraction[1];
+  u.texelWholeX = rows->whole.x;
+  u.texelWholeY = rows->whole.y;
+  u.anchorX = rows->anchor.x;
+  u.anchorY = rows->anchor.y;
   return true;
 }
 
@@ -137,7 +172,8 @@ Uniforms BuildQuadUniforms(const float mvp[16], uint32_t targetWidth, uint32_t t
   static_assert(static_cast<uint32_t>(GeodeTextureEncoder::Filter::Linear) == 0u &&
                     static_cast<uint32_t>(GeodeTextureEncoder::Filter::Nearest) == 1u &&
                     static_cast<uint32_t>(GeodeTextureEncoder::Filter::Pixelated) == 2u &&
-                    static_cast<uint32_t>(GeodeTextureEncoder::Filter::Cubic) == 3u,
+                    static_cast<uint32_t>(GeodeTextureEncoder::Filter::Cubic) == 3u &&
+                    static_cast<uint32_t>(GeodeTextureEncoder::Filter::Anchored) == 4u,
                 "Filter values are the image-blit shader's samplingMode values");
   u.samplingMode = static_cast<uint32_t>(params.filter);
   u.pixelatedScale[0] = static_cast<float>(params.pixelatedScaleX);
@@ -285,6 +321,43 @@ void GeodeTextureEncoder::BuildClipFromLocal(const Transform2d& targetFromLocal,
   out16[15] = 1.0f;
 }
 
+namespace {
+
+/// Fills the texel mapping that nearest and anchored sampling read from the uniforms. Returns
+/// false when the mapping cannot be built, and true without changes for the other filters.
+bool FillTexelMapping(gpu::Device& device, const gpu::Texture& texture, const float mvp[16],
+                      uint32_t targetWidth, uint32_t targetHeight,
+                      const GeodeTextureEncoder::QuadParams& params, Uniforms& u) {
+  using Filter = GeodeTextureEncoder::Filter;
+  if (params.filter != Filter::Nearest && params.filter != Filter::Anchored) {
+    return true;
+  }
+#ifndef NDEBUG
+  // Nearest and anchored sampling map pixels back through targetFromLocal, which must be the
+  // mapping the MVP rasterizes the quad with.
+  float expectedMvp[16];
+  GeodeTextureEncoder::BuildClipFromLocal(params.targetFromLocal, targetWidth, targetHeight,
+                                          expectedMvp);
+  assert(std::equal(expectedMvp, expectedMvp + 16, mvp) &&
+         "QuadParams::targetFromLocal must match the MVP");
+#else
+  (void)mvp;
+  (void)targetWidth;
+  (void)targetHeight;
+#endif
+  // A texture this device can draw always has a descriptor.
+  const gpu::Result<gpu::TextureDescriptor> descriptor = device.textureDescriptor(texture);
+  assert(descriptor.hasResult() && "texel mapping needs the source texture's dimensions");
+  if (descriptor.hasError()) {
+    return false;
+  }
+  return params.filter == Filter::Nearest
+             ? FillNearestTexelRows(params, descriptor.result().size, u)
+             : FillAnchoredTexelRows(params, descriptor.result().size, u);
+}
+
+}  // namespace
+
 void GeodeTextureEncoder::drawTexturedQuad(
     const GeodeGpuContext& context, const GeodeImagePipeline& pipeline,
     gpu::RenderPassEncoder& pass, const gpu::Texture& texture, const float mvp[16],
@@ -297,21 +370,8 @@ void GeodeTextureEncoder::drawTexturedQuad(
   gpu::Device& device = *context.gpuDevice;
 
   Uniforms u = BuildQuadUniforms(mvp, targetWidth, targetHeight, params);
-  if (params.filter == Filter::Nearest) {
-#ifndef NDEBUG
-    // Nearest sampling maps pixels back through targetFromLocal, which must be the mapping the
-    // MVP rasterizes the quad with.
-    float expectedMvp[16];
-    BuildClipFromLocal(params.targetFromLocal, targetWidth, targetHeight, expectedMvp);
-    assert(std::equal(expectedMvp, expectedMvp + 16, mvp) &&
-           "QuadParams::targetFromLocal must match the MVP");
-#endif
-    // A texture this device can draw always has a descriptor.
-    const gpu::Result<gpu::TextureDescriptor> descriptor = device.textureDescriptor(texture);
-    assert(descriptor.hasResult() && "nearest sampling needs the source texture's dimensions");
-    if (descriptor.hasError() || !FillNearestTexelRows(params, descriptor.result().size, u)) {
-      return;
-    }
+  if (!FillTexelMapping(device, texture, mvp, targetWidth, targetHeight, params, u)) {
+    return;
   }
   gpu::BufferBinding uniformBinding;
   if (!AllocateQuadUniforms(device, resourceArena, scratch, u, uniformBinding)) {
