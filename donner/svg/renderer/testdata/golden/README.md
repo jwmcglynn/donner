@@ -169,3 +169,38 @@ To regenerate, delete the file and run from the repository root:
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*complex_order_and_xlink_href*'
 ```
+
+### `filters/feColorMatrix` identity rows
+
+Disposition: reference disagreement. `donner-feColorMatrix-identity.png` is a Donner CPU rendering
+of the corpus file `without-attributes.svg`, at the 500x500 size of the vendored references,
+rendered by the resvg suite harness at the commit that adds it. Seven rows share it, because each
+draws the same gradient through an identity color matrix: without-attributes, type=matrix without
+values or with empty, short or long value lists, and type=saturate and type=hueRotate without a
+value. Every backend compares with it at default settings.
+
+An identity color matrix returns its input. Filter Effects 1 gives the conversion between sRGB and
+linearRGB as a formula and sets no precision for it, and Donner passes an identity matrix through
+without converting; RendererRegressionTests.IdentityColorMatrixLeavesLinearRgbInputUnchanged
+checks every identity form against the unfiltered render, independently of this image. resvg
+converts filter inputs between sRGB and linearRGB through 8-bit lookup tables, so every dark
+channel value in these references below 60 is one of the sRGB levels an 8-bit linear value maps to
+(0, 13, 22, 28, 34, 38, 42, 46, 50, 53, 56, 59), verified pixel by pixel, and the smooth gradient
+steps: green falls from 13 to 0 where the source runs 12, 10, 9, 8, 7, 6, 5 and on. resvg v0.49.0
+uses the same tables.
+
+results.csv records Chrome, Firefox and resvg passing all seven vendored references, and Safari
+passing four of them (it fails type=matrix with empty, short and long value lists). Rendered
+headless at 500x500, each browser draws all seven rows identically, and the two browsers split.
+Chromium 151 matches this golden (0 pixels at the suite's default settings). Firefox 153
+reproduces the references' 8-bit linearRGB steps, with the same dark-band green levels, and
+differs from this golden by 796 pixels in two single columns.
+
+PNG SHA-256: `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916`.
+
+To regenerate, delete the file and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=FiltersFeColorMatrix*without_attributes*'
+```

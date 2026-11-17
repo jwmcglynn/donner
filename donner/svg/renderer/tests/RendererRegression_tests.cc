@@ -535,6 +535,39 @@ TEST_F(RendererRegressionTests, CssFilterContractShadowColorAlphaIsAppliedOnce) 
   ExpectBitmapsIdentical(actual, expected, "shadow_color_alpha_once");
 }
 
+// Every identity form of feColorMatrix passes its input through unchanged, so the dark tones that
+// a linearRGB round trip held in eight bits would collapse onto a few levels (sRGB 0, 13, 22,
+// 28...) survive. The gradient spans those tones and a translucent edge, so the comparison sees
+// both.
+TEST_F(RendererRegressionTests, IdentityColorMatrixLeavesLinearRgbInputUnchanged) {
+  constexpr std::string_view kGradient = R"svg(
+    <linearGradient id="g"><stop offset="0" stop-color="#cc00cc"/>
+      <stop offset=".5" stop-color="#400000"/><stop offset=".7" stop-color="black"/>
+      <stop offset="1" stop-color="#0a0a3c" stop-opacity=".5"/></linearGradient>)svg";
+  const auto render = [&](std::string_view primitive) {
+    SVGDocument document = instantiateSubtree(
+        std::string(kGradient) + R"svg(<filter id="f">)svg" + std::string(primitive) +
+            R"svg(</filter><rect x="4" y="4" width="56.5" height="40" fill="url(#g)")svg" +
+            (primitive.empty() ? std::string("/>") : std::string(R"svg( filter="url(#f)"/>)svg")),
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const auto unfiltered = render("");
+  ExpectVisibleBitmap(unfiltered, "identity_color_matrix_source_visible");
+  for (std::string_view primitive :
+       {R"svg(<feColorMatrix/>)svg", R"svg(<feColorMatrix type="matrix" values=""/>)svg",
+        R"svg(<feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0"/>)svg",
+        // A list with other than 20 values is invalid, so the matrix keeps its identity default.
+        R"svg(<feColorMatrix values="2 0 0 0 0 0 2 0 0 0 0 0 2 0 0"/>)svg",
+        R"svg(<feColorMatrix values="2 0 0 0 0 0 2 0 0 0 0 0 2 0 0 0 0 0 2 0 0 0 0 0 0"/>)svg",
+        R"svg(<feColorMatrix type="saturate"/>)svg",
+        R"svg(<feColorMatrix type="hueRotate"/>)svg"}) {
+    SCOPED_TRACE(primitive);
+    editor::tests::CompareBitmapToBitmap(render(primitive), unfiltered, "identity_color_matrix",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractColorAmountsMatchIndependentEndpoints) {
   for (const auto& [function, color] : std::array<std::pair<std::string_view, std::string_view>, 7>{
            {{"brightness", "black"},

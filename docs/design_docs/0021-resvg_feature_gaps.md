@@ -344,7 +344,7 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   `fallback-1` draws Noto Serif like the reference; the product default remains
   the embedded Public Sans.
 
-> The remaining sub-1000-px CPU thresholds (feColorMatrix matrix/saturate variants,
+> The remaining sub-1000-px CPU thresholds (feColorMatrix saturate and non-normalized values,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
 > plausible coverage-geometry differences; audit opportunistically but they are not
 > promoted bugs.
