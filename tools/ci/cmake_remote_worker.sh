@@ -5,6 +5,8 @@ expected="$1"
 [[ "$(uname -s)" == "$expected" ]] || { echo "CMake worker OS mismatch, expected $expected" >&2; exit 1; }
 if [[ "$expected" == Darwin ]]; then
   export PATH="$PATH:/opt/homebrew/bin"
+else
+  export CC=cc CXX=c++
 fi
 cd "$TEST_TMPDIR"
 tar -xf "$TEST_SRCDIR/$2"
@@ -14,3 +16,14 @@ cmake -S src/examples/cmake_consumer -B build -G Ninja \
 cmake --build build --target donner_cmake_consumer --parallel 4
 ctest --test-dir build --output-on-failure --no-tests=error \
   --output-junit "$TEST_UNDECLARED_OUTPUTS_DIR/consumer.xml"
+python3 - "$TEST_UNDECLARED_OUTPUTS_DIR/consumer.xml" <<'REPORT'
+import sys
+import xml.etree.ElementTree as ET
+
+cases = ET.parse(sys.argv[1]).findall(".//testcase")
+expected = ["donner_cmake_consumer", "donner_cmake_consumer_resources"]
+if sorted(case.get("name", "") for case in cases) != expected:
+    sys.exit("The native consumer and its resource delivery test must both run")
+if any(case.find(tag) is not None for case in cases for tag in ("skipped", "error", "failure")):
+    sys.exit("CMake consumer tests failed or skipped")
+REPORT

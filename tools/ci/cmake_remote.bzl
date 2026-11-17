@@ -9,6 +9,11 @@ def cmake_remote_consumers():
             srcs = ["worker.sh"],
             args = [kernel, "$(rlocationpath :inputs.tar)"],
             data = ["inputs.tar"],
+            exec_properties = {
+                "OSFamily": "darwin" if name == "macos" else "linux",
+                "ISA": "aarch64",
+                "cmake-consumer": "v1",
+            },
             timeout = "eternal",
             target_compatible_with = ["@platforms//os:" + name],
         )

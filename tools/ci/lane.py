@@ -282,10 +282,10 @@ def _report(failure):
         print(failure.message, file=stream, flush=True)
 
 
-def run_phase(lane_name, phase_name, environ=None):
+def run_phase(lane_name, phase_name, environ=None, context_type=_Context):
     """Runs a phase and returns its exit status."""
     lane = lanes.LANES[lane_name]
-    context = _Context(lane, os.environ if environ is None else environ, dry_run=False)
+    context = context_type(lane, os.environ if environ is None else environ, dry_run=False)
     deferred = []
     try:
         for action in lane.phases[phase_name].actions:

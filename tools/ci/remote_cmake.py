@@ -42,6 +42,9 @@ def archive_tree(bundle, directory, prefix):
 
 
 def prepare(repo, destination):
+    root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=repo, text=True).strip()
+    if Path(root).resolve() != repo.resolve():
+        raise ValueError("CMake inputs require the Donner checkout root")
     destination = destination.resolve()
     if destination.exists():
         raise FileExistsError(destination)
@@ -62,7 +65,9 @@ def prepare(repo, destination):
         output_base = work / "generator"
         startup = f"--output_base={output_base}"
         try:
-            run([sys.executable, "tools/cmake/gen_cmakelists.py", f"--bazel-startup-arg={startup}"], src)
+            generator = [sys.executable, "tools/cmake/gen_cmakelists.py", f"--bazel-startup-arg={startup}"]
+            run([*generator, "--check"], src)
+            run(generator, src)
         finally:
             run(["bazel", startup, "shutdown"], src)
         for link in src.glob("bazel-*"):
