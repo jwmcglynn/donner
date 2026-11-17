@@ -1244,7 +1244,7 @@ filters_generators_lighting	val:crossorigin/use-credentials	missing	low	S	no
 filters_generators_lighting	val:feImage-subregion/x-y-width-height	conformant	-	-	yes
 filters_generators_lighting	val:dx-dy@feOffset/userSpaceOnUse	conformant	-	-	yes
 filters_generators_lighting	val:dx-dy@feOffset/objectBoundingBox	conformant	-	-	yes
-filters_generators_lighting	val:dx-dy@feOffset/fractional	partial	low	S	yes
+filters_generators_lighting	val:dx-dy@feOffset/fractional	conformant	-	-	yes
 filters_generators_lighting	val:feTile/input-subregion	partial	low	S	yes
 filters_generators_lighting	val:in@feMergeNode/reference	conformant	-	-	yes
 filters_generators_lighting	val:specularExponent@feSpecularLighting/range	legacy	low	S	yes

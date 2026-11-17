@@ -620,7 +620,7 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/resources:font_catalog_types",
     ] + select({
-        "@platforms//os:emscripten": [],
+        "@platforms//os:emscripten": ["//donner/gpu/browser:emscripten_browser_bridge"],
         "//conditions:default": [":text_to_outlines"],
     }),
 )

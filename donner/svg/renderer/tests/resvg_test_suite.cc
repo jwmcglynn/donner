@@ -96,6 +96,20 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
   return testPlan;
 }
 
+/// Params for a drop-shadow() row compared against the Donner golden at \p path for \p reason
+/// (see testdata/golden/README.md). The params keep views of both, so they must be string literals.
+ImageComparisonParams DropShadowFunctionGolden(std::string_view path, std::string_view reason) {
+  return Params::WithGoldenOverride(path, kDefaultThreshold, reason);
+}
+
+/// Params for the feColorMatrix identity rows, whose references posterize through 8-bit linearRGB;
+/// they share one Donner golden (see testdata/golden/README.md).
+ImageComparisonParams ColorMatrixIdentityGolden() {
+  return Params::WithGoldenOverride(
+      "donner/svg/renderer/testdata/golden/donner-feColorMatrix-identity.png", kDefaultThreshold,
+      "Reference disagreement: identity output; the reference stores linearRGB in 8 bits");
+}
+
 /// Params for a reference replaced by its 300x300 rendering from resvg release v0.49.0; the
 /// provenance is recorded in third_party/resvg-test-suite/BUILD.bazel.
 ImageComparisonParams ResvgV049Reference() {
@@ -148,28 +162,25 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/feColorMatrix",
             {
-                {"type=hueRotate-without-an-angle.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "hueRotate(0) identity")},
-                {"type=matrix-with-empty-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
+                // Identity forms compare against a Donner golden: the references posterize dark
+                // tones through 8-bit linearRGB.
+                {"type=hueRotate-without-an-angle.svg", ColorMatrixIdentityGolden()},
+                {"type=matrix-with-empty-values.svg", ColorMatrixIdentityGolden()},
                 {"type=matrix-with-non-normalized-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")},
-                {"type=matrix-with-not-enough-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
-                {"type=matrix-with-too-many-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
-                {"type=matrix-without-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
+                {"type=matrix-with-not-enough-values.svg", ColorMatrixIdentityGolden()},
+                {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
+                {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
                 {"type=saturate-with-a-large-coefficient.svg",
                  Params::UndefinedBehavior("saturate 99999")},
                 {"type=saturate-with-negative-coefficient.svg",
                  Params::UndefinedBehavior("saturate -0.5")},
-                {"type=saturate-without-a-coefficient.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity saturate")},
+                {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
                 {"type=saturate.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "saturate")},
-                {"without-attributes.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "no attrs identity")},
+                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
+                                       "Larger threshold due to the reference's 8-bit linearRGB "
+                                       "steps, which one-level gradient rounding crosses")},
+                {"without-attributes.svg", ColorMatrixIdentityGolden()},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -592,35 +603,25 @@ INSTANTIATE_TEST_SUITE_P(
                                "residual confined to the three label bands; analytic residual "
                                "375 px, supersampled 302 px; filtered squares compare exactly "
                                "(#1167, #1169)")},
+                // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
-                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
-                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
-                              "at (10, 12) matches the reference within the default allowance")},
+                 DropShadowFunctionGolden(
+                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                     "Reference disagreement: resvg truncates the fractional shadow offset")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip("Reference disagreement: 0.2em 0.3em at font-size 64 is 12.8 19.2 "
-                              "user units, device (32, 48); the reference shadow sits at (30, 47), "
-                              "which needs the user lengths truncated to 12 19 (a hypothesis the "
-                              "usvg source does not show) and the scaled offset truncated as "
-                              "resvg's apply_drop_shadow does (dx as i32) "
-                              "(CssFilterContractEmShadowUsesComputedNondefaultFontSize)")},
+                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-drop-shadow-function-em-values.png",
+                                          "Reference disagreement: the reference places the "
+                                          "shadow at truncated lengths")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip("Reference disagreement: 3mm 4mm is 11.34 15.12 user units, device "
-                              "(28.35, 37.80), which Donner rounds to (28, 38); the reference "
-                              "shadow sits at (27, 37), which needs the user lengths truncated to "
-                              "11 15 (a hypothesis the usvg source does not show) and the scaled "
-                              "offset truncated as resvg's apply_drop_shadow does (dx as i32) "
-                              "(CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
-                {"drop-shadow-function-no-color.svg",
-                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
-                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
-                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
-                              "at (10, 12) matches the reference within the default allowance")},
+                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-drop-shadow-function-mm-values.png",
+                                          "Reference disagreement: the reference places the "
+                                          "shadow at truncated lengths")},
                 {"drop-shadow-function.svg",
-                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
-                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
-                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
-                              "at (10, 12) matches the reference within the default allowance")},
+                 DropShadowFunctionGolden(
+                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                     "Reference disagreement: resvg truncates the fractional shadow offset")},
                 {"two-exact-urls.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; the valid "
@@ -732,7 +733,8 @@ INSTANTIATE_TEST_SUITE_P(
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150,
-                                           "Reference resamples a rasterized pattern tile")},
+                                           "Larger threshold due to pattern tile resampling at "
+                                           "fractional tile edges")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1226,13 +1228,12 @@ INSTANTIATE_TEST_SUITE_P(StructureTransform, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform-origin",
-                {
-                    {"on-image.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                    {"on-text-path.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                    {"on-text.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("structure/transform-origin",
+                                        {
+                                            // The 300x300 resvg v0.49.0 renderings.
+                                            {"on-text-path.svg", ResvgV049Reference()},
+                                            {"on-text.svg", ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 

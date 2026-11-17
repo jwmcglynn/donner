@@ -1623,8 +1623,8 @@ struct FilterSamplingHalo {
   bool add(const fp::Offset& value) {
     const Vector2d offset =
         svg::FilterOffsetInPixels({value.dx, value.dy}, bounds, objectBounds, transform);
-    halo += Vector2d(std::ceil(std::abs(svg::BoundedSignedFilterPixels(offset.x))),
-                     std::ceil(std::abs(svg::BoundedSignedFilterPixels(offset.y))));
+    halo += Vector2d(std::ceil(std::abs(svg::BoundedFilterOffsetPixels(offset.x))),
+                     std::ceil(std::abs(svg::BoundedFilterOffsetPixels(offset.y))));
     return true;
   }
 
@@ -2186,10 +2186,16 @@ FilterTexture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
 FilterTexture FilterNodeExecution::apply(const fp::Offset& primitive) {
   const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
   fp::Offset scaled = primitive;
-  scaled.dx = svg::BoundedSignedFilterPixels(offset.x);
-  scaled.dy = svg::BoundedSignedFilterPixels(offset.y);
-  outputLinear = arena.isLinearRgb(input);
-  return engine.applyOffset(arena, input, scaled);
+  scaled.dx = svg::BoundedFilterOffsetPixels(offset.x);
+  scaled.dy = svg::BoundedFilterOffsetPixels(offset.y);
+  // A whole-pixel shift only moves pixels, so it keeps its input's space. A fractional shift
+  // blends neighboring colors, which happens in this primitive's color-interpolation-filters
+  // space.
+  if (scaled.dx == std::floor(scaled.dx) && scaled.dy == std::floor(scaled.dy)) {
+    outputLinear = arena.isLinearRgb(input);
+    return engine.applyOffset(arena, input, scaled);
+  }
+  return engine.applyOffset(arena, toNodeSpace(input), scaled);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::ColorMatrix& primitive) {
@@ -2292,8 +2298,8 @@ FilterTexture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
           : 0.0;
   const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
   return engine.applyDropShadow(arena, toNodeSpace(input), primitive, sx, sy,
-                                svg::BoundedSignedFilterPixels(offset.x),
-                                svg::BoundedSignedFilterPixels(offset.y));
+                                svg::BoundedFilterOffsetPixels(offset.x),
+                                svg::BoundedFilterOffsetPixels(offset.y));
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
@@ -2506,12 +2512,7 @@ FilterTexture GeodeFilterEngine::applyOffset(
     return {};
   }
 
-  OffsetParams params{};
-  // Round before narrowing: doubles on either side of a half can become the same float.
-  params.dx = static_cast<float>(std::round(primitive.dx));
-  params.dy = static_cast<float>(std::round(primitive.dy));
-  params.pad0 = 0;
-  params.pad1 = 0;
+  const OffsetParams params = gpu::shader::programs::MakeOffsetParams(primitive.dx, primitive.dy);
 
   if (!dispatchRuntimeInputOutputParameters(arena, offsetProgram_, input, output,
                                             UniformBytes(params), "FilterOffsetPass")) {
@@ -3282,11 +3283,12 @@ FilterTexture GeodeFilterEngine::applyDropShadow(
     params.color[channel] = arena.isLinearRgb(input) ? srgbToLinearChannel(straight) : straight;
   }
   params.color[3] = flood[3];
-  // Keep the software path's rounding boundary before converting the uniform to float.
-  params.dx = static_cast<float>(std::round(pixelDx));
-  params.dy = static_cast<float>(std::round(pixelDy));
-  params.pad0 = 0;
-  params.pad1 = 0;
+  const gpu::shader::programs::OffsetParams shift =
+      gpu::shader::programs::MakeOffsetParams(pixelDx, pixelDy);
+  params.shiftX = shift.shiftX;
+  params.shiftY = shift.shiftY;
+  params.weightX = shift.weightX;
+  params.weightY = shift.weightY;
 
   if (!dispatchRuntimeTwoInput(arena, dropShadowProgram_, input, blurred, output, {width, height},
                                UniformBytes(params), "FilterDropShadowPass")) {
