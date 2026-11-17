@@ -106,6 +106,9 @@ public:
     /// Mitchell-Netravali cubic (B = C = 1/3) over premultiplied texels, for `<image>` quality
     /// rendering. Uses the linear sampler only for mask and backdrop reads.
     Cubic,
+    /// Bilinear filtering through a texel mapping split at `QuadParams::anchor`, for resamples
+    /// that must not change when the target and the content move together by whole pixels.
+    Anchored,
   };
 
   /**
@@ -130,6 +133,10 @@ public:
     double opacity = 1.0;
     /// Sampling filter mode.
     Filter filter = Filter::Linear;
+    /// Target pixel that the content stays aligned to for `Filter::Anchored`: two draws whose
+    /// source and target differ by whole pixels, with the anchor at the same target pixel, sample
+    /// corresponding pixels with the same bilinear weights.
+    Vector2i anchor = Vector2i::Zero();
     /// Device-pixel scale per source texel for CSS `pixelated` sampling.
     double pixelatedScaleX = 1.0;
     /// @see pixelatedScaleX

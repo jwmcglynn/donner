@@ -1133,12 +1133,15 @@ INSTANTIATE_TEST_SUITE_P(
                     {"no-width-and-height-on-svg.svg",
                      Params::UndefinedBehavior("No width and height")},
                     {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
+                    // Harness mismatch: the harness gives SVG image documents the suite's test
+                    // fonts as a stand-in for system fonts, so the row compares against a Donner
+                    // rendering of that configuration. The vendored reference omits the embedded
+                    // text and the resvg v0.49.0 one quantizes the frame lines' coverage to
+                    // quarters; see testdata/golden/README.md.
                     {"embedded-svg-with-text.svg",
-                     Params::Skip(
-                         "Reference disagreement: the vendored reference omits the embedded SVG's "
-                         "text. Donner renders it with the document font catalog; the authored "
-                         "embedded-versus-direct identity test EmbeddedSvgUsesDocumentFontContext "
-                         "pins that policy")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-embedded-svg-with-text.png")
+                         .withReason("Harness mismatch: SVG images get the suite's test fonts")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1243,9 +1246,10 @@ INSTANTIATE_TEST_SUITE_P(
                 "structure/use",
                 {
                     {"xlink-to-an-external-file.svg",
-                     Params::Skip("Bug #1183: external-use content resolves fonts in the "
-                                  "referenced document's own font catalog, so the inherited "
-                                  "Noto Sans falls back to the embedded face")},
+                     Params::Skip("Harness mismatch: the reference is opaque white where the "
+                                  "SVG canvas is transparent, and its glyph stems are 0.6 device "
+                                  "px wider; the inherited Noto Sans glyphs sit within 0.4 px of "
+                                  "it, and neither resvg nor any browser passes this row")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1343,30 +1347,23 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFont, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/font",
-            {
-                // The vertical crosshair is 1.25 device px wide centered on x=250. Donner's
-                // analytic coverage gives the exact area split, 160/160; this PNG's 4x4
-                // supersampled coverage gives 128/192. With 4x4 coverage the case compares at
-                // 0 pixels, and shifting the text 1 px raises the residual to 422.
-                {"font-shorthand.svg",
-                 Params().withMaxPixelsDifferent(400).withReason(
-                     "Reference rasterizer generation: 4x4 supersampled coverage on the 1.25 px "
-                     "crosshair; the text under the shorthand matches; analytic residual 386 px, "
-                     "supersampled 0 px (#1173)")},
-                // SVG 2 has no `font` presentation attribute, so the case draws the initial
-                // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
-                // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail it
-                // in results.csv.
-                {"simple-case.svg",
-                 Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
-                              "which SVG 2 does not list as a presentation attribute (#1167, "
-                              "#1173, #1186)")
-                     .setCanvasSize(400, 400)},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/font",
+                {
+                    // The 300x300 resvg v0.49.0 rendering; the superseded PNG's 4x4 supersampled
+                    // crosshair coverage differed from Donner's by 386 px.
+                    {"font-shorthand.svg", ResvgV049Reference()},
+                    // SVG 2 has no `font` presentation attribute, so the case draws the initial
+                    // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
+                    // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail
+                    // it in results.csv.
+                    {"simple-case.svg",
+                     Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
+                                  "which SVG 2 does not list as a presentation attribute (#1167, "
+                                  "#1173, #1186)")
+                         .setCanvasSize(400, 400)},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1599,10 +1596,9 @@ INSTANTIATE_TEST_SUITE_P(
                          "Reference rasterizer generation: 4x4 supersampled coverage on the "
                          "crosshair and glyph edges; analytic residual 343 px, supersampled 0 px; "
                          "simple tier: Bug #1176, mixed-font ligature shaping")},
-                    {"real-text-height.svg",
-                     Params().withMaxPixelsDifferent(410).withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                         "crosshair and glyph edges; analytic residual 397 px, supersampled 0 px")},
+                    // The 300x300 resvg v0.49.0 rendering; the superseded PNG's supersampled
+                    // crosshair and glyph edges differed from Donner's by 397 px.
+                    {"real-text-height.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1877,11 +1873,9 @@ INSTANTIATE_TEST_SUITE_P(
             "text/tspan",
             {
                 {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
-                {"nested-whitespaces.svg",
-                 Params().withMaxPixelsDifferent(400).withReason(
-                     "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                     "crosshair; analytic residual 387 px, supersampled 0 px; a 1 px text shift "
-                     "reaches 416")},
+                // The 300x300 resvg v0.49.0 rendering; the superseded PNG's supersampled
+                // crosshair differed from Donner's by 387 px.
+                {"nested-whitespaces.svg", ResvgV049Reference()},
                 {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
                                          "Crosshair thin-line AA + underline uses")},
                 // Same cause as text/textPath/with-filter.svg: the span filter applies, but
