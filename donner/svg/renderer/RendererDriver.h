@@ -92,6 +92,8 @@ public:
     std::size_t fullElementStylePasses = 0;
     /// Span entries visited while resolving renderer-facing paints and decoration.
     std::size_t spanStyleVisits = 0;
+    /// Host font overlays built for external-use occurrences; one per host and frame.
+    std::size_t hostFontOverlayBuilds = 0;
   };
 
   /// Cumulative text preparation work for this driver's lifetime.
@@ -442,6 +444,15 @@ private:
   /// Apply \ref resolvePaintContextRemap to the fill and stroke of @p paint for @p instance.
   void applyDrawTimeContextRemaps(PaintParams& paint,
                                   const components::RenderingInstanceComponent& instance) const;
+  /**
+   * The fonts @p host lends @p child's occurrences this frame, built at most once per host, and
+   * per overlay the host was itself lent, each frame. Nothing is lent to a document without text
+   * or `<use>` elements of its own, since nothing there would read it, nor in builds without
+   * text.
+   */
+  std::shared_ptr<const FontManager::HostFontOverlay> hostFontOverlay(Registry& host,
+                                                                      Registry& child);
+
   void drawExternalUse(SVGDocument& subDocument, std::string_view fragment,
                        const components::RenderingInstanceComponent& instance,
                        const components::ComputedStyleComponent& style, Registry& hostRegistry,

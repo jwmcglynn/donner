@@ -4,9 +4,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -97,6 +99,11 @@ struct RendererDriverTextFrameCache {
   std::unordered_map<Registry*, Roots> roots;
   std::unordered_map<Registry*, std::unordered_map<Entity, std::optional<TextStyleContext>>>
       shadowStyles;
+  /// \ref RendererDriver::hostFontOverlay per host registry and the digest of the overlay the
+  /// host was itself lent (zero for none), for the current frame.
+  std::map<std::pair<const Registry*, std::uint64_t>,
+           std::shared_ptr<const FontManager::HostFontOverlay>>
+      hostFonts;
 
   // A pattern or marker can revisit text in the same registry with a different paint context.
   // Keep its preparations separate without evicting the caller's text between effect runs.
@@ -160,6 +167,13 @@ private:
   std::shared_ptr<components::DocumentResourceFamilyBudget> family_;
 };
 
+/// Record which font state @p paint's dependencies were captured under.
+void StampFontIdentity(const FontManager* manager,
+                       components::FontPaintDependenciesComponent& paint) {
+  paint.fontResourceRevision = manager ? manager->fontResourceRevision() : 0;
+  paint.hostFontKey = manager ? manager->hostFontKey() : 0;
+}
+
 class CapturePaintFontDependencies {
 public:
   CapturePaintFontDependencies(Registry& registry, Entity host, bool preparesReferences)
@@ -180,7 +194,7 @@ public:
     auto& paint = registry_.get_or_emplace<components::FontPaintDependenciesComponent>(host_);
     const bool preparationChanged = preparesReferences_ && !paint.prepared;
     if (preparationChanged || !dependencies_.empty()) {
-      paint.fontResourceRevision = manager_ ? manager_->fontResourceRevision() : 0;
+      StampFontIdentity(manager_, paint);
     }
     const auto before = paint.fontDependencies;
     paint.prepared |= preparesReferences_;
@@ -2180,6 +2194,26 @@ Entity InstanceTextRootEntity(Registry& registry,
 }
 
 #ifdef DONNER_TEXT_ENABLED
+/// The laid-out runs for @p textRootHandle: its cached geometry when that is current for the fonts
+/// lent now, otherwise a fresh layout.
+std::vector<TextRun> TextRootRuns(Registry& registry, TextEngine& textEngine,
+                                  EntityHandle textRootHandle,
+                                  const components::ComputedTextComponent& text,
+                                  const TextParams& params) {
+  const auto* fonts = registry.ctx().find<FontManager>();
+  const uint64_t hostFontKey = fonts ? fonts->hostFontKey() : 0;
+  const auto* cached =
+      registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
+  if (cached == nullptr) {
+    return textEngine.layout(text, ToTextLayoutParams(params));
+  }
+  // Laid out under other lent fonts, its runs may name faces this occurrence does not see.
+  if (cached->hostFontKey != hostFontKey || cached->retryAfterTextPathWorkRejection) {
+    return textEngine.ensureComputedTextGeometryComponent(textRootHandle).runs;
+  }
+  return cached->runs.empty() ? textEngine.layout(text, ToTextLayoutParams(params)) : cached->runs;
+}
+
 void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
                      components::ComputedTextComponent& text, const TextParams& params,
                      RendererDriverTextFrameCache::Root& preparedRoot,
@@ -2187,16 +2221,8 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
   ++stats.fullElementStylePasses;
   TextEngine& textEngine = registry.ctx().get<TextEngine>();
   textEngine.resolvePerSpanLayoutStyles(textRootHandle, text);
-  std::vector<TextRun> runs;
-  if (const auto* cached =
-          registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
-      cached != nullptr && !cached->retryAfterTextPathWorkRejection && !cached->runs.empty()) {
-    runs = cached->runs;
-  } else if (cached != nullptr && cached->retryAfterTextPathWorkRejection) {
-    runs = textEngine.ensureComputedTextGeometryComponent(textRootHandle).runs;
-  } else {
-    runs = textEngine.layout(text, ToTextLayoutParams(params));
-  }
+  const std::vector<TextRun> runs =
+      TextRootRuns(registry, textEngine, textRootHandle, text, params);
   preparedRoot.elementBounds = ComputeTextBounds(textEngine, runs);
 
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
@@ -2577,6 +2603,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
+  textFrameCache_->hostFonts.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
@@ -2625,6 +2652,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
+  textFrameCache_->hostFonts.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
@@ -2652,6 +2680,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
+  textFrameCache_->hostFonts.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
@@ -2701,6 +2730,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
+  textFrameCache_->hostFonts.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -2736,6 +2766,7 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
+  textFrameCache_->hostFonts.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -3258,7 +3289,9 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry
     std::fprintf(stderr, "[bounds] --- computeEntityRangeBounds(first=%u, last=%u) ---\n",
                  static_cast<unsigned>(firstEntity), static_cast<unsigned>(lastEntity));
   }
-  // Bounds measured here describe the document as it is now, not as the last frame drew it.
+  // Bounds measured here describe the document as it is now, not as the last frame drew it, so
+  // the hosts' fonts are gathered again too.
+  textFrameCache_->hostFonts.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
@@ -3273,6 +3306,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry
       FinalizeRangeBounds(ScanRangeBounds(registry, view, lastEntity, surfaceFromCanvas, context),
                           canvasSize, options.clipToCanvas);
   forgetAllEffectBounds();
+  textFrameCache_->hostFonts.clear();
   return bounds;
 }
 
@@ -4798,6 +4832,37 @@ bool ReserveExternalWork(components::StyleResourceBudget& work, ExternalWorkChar
                                             : work.reserveExternalMeasureWork(entities);
 }
 
+/// Lends fonts to the referenced document for one occurrence and restores what it lent before;
+/// see \ref FontManager::HostFontOverlay. Constructed only for an admitted occurrence, so a
+/// document drawn as an image, on its own, or refused by the work budget is lent nothing.
+class ExternalUseHostFontScope {
+public:
+  ExternalUseHostFontScope(Registry& child,
+                           std::shared_ptr<const FontManager::HostFontOverlay> overlay)
+      : manager_(child.ctx().contains<FontManager>() ? child.ctx().get<FontManager>()
+                                                     : child.ctx().emplace<FontManager>(child)),
+        previous_(manager_.hostFontOverlay()) {
+    manager_.setHostFontOverlay(std::move(overlay));
+  }
+
+  // Restoring a non-null previous overlay is unreachable today: a document is never re-entered
+  // while one of its occurrences is drawing. It is restored anyway so nesting stays correct.
+  ~ExternalUseHostFontScope() { manager_.setHostFontOverlay(std::move(previous_)); }
+
+  ExternalUseHostFontScope(const ExternalUseHostFontScope&) = delete;
+  ExternalUseHostFontScope& operator=(const ExternalUseHostFontScope&) = delete;
+
+  /// Identity of the fonts lent while this scope is installed.
+  std::uint64_t key() const { return manager_.hostFontKey(); }
+
+private:
+  FontManager& manager_;
+  std::shared_ptr<const FontManager::HostFontOverlay> previous_;
+};
+
+/// Supplies an occurrence's lent fonts once the occurrence is admitted.
+using HostFontSource = std::function<std::shared_ptr<const FontManager::HostFontOverlay>()>;
+
 class ExternalUseStyleScope {
 public:
   ExternalUseStyleScope(Registry& child, Entity root, Registry& host,
@@ -4806,6 +4871,7 @@ public:
                         const components::ResolvedPaintServer& stroke,
                         std::shared_ptr<components::StyleResourceBudget> work,
                         ParseWarningSink* warningSink, bool verbose,
+                        const HostFontSource& hostFonts,
                         ExternalWorkCharge charge = ExternalWorkCharge::Draw)
       : registry_(child),
         warningSink_(warningSink),
@@ -4826,8 +4892,13 @@ public:
          !family->reserve(components::DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes))) {
       return;
     }
-    child.ctx().emplace<components::ExternalUseStyleContext>(
-        root, properties, style.resourceOpacities, fill, stroke, family, bytes, std::move(work));
+    if (auto overlay = hostFonts()) {
+      hostFonts_.emplace(child, std::move(overlay));
+    }
+    child.ctx()
+        .emplace<components::ExternalUseStyleContext>(root, properties, style.resourceOpacities,
+                                                      fill, stroke, family, bytes, std::move(work))
+        .hostFontKey = hostFonts_ ? hostFonts_->key() : 0;
     retainPaintOwner(fill, resourceLeases_[0]);
     retainPaintOwner(stroke, resourceLeases_[1]);
     components::ExternalUseStyleRetention::PrepareOccurrence(child);
@@ -4869,6 +4940,8 @@ private:
   ParseWarningSink* warningSink_;
   bool verbose_;
   ElementAnchor hostLease_;
+  /// Restores the previously lent fonts when the scope ends, after the context is removed.
+  std::optional<ExternalUseHostFontScope> hostFonts_;
   std::array<ElementAnchor, 2> resourceLeases_;
   bool installed_ = false;
 };
@@ -4911,6 +4984,37 @@ private:
 
 }  // namespace
 
+std::shared_ptr<const FontManager::HostFontOverlay> RendererDriver::hostFontOverlay(
+    Registry& host, Registry& child) {
+#ifdef DONNER_TEXT_ENABLED
+  // Text reads lent fonts, and a `<use>` may pass them on to a document it references; the check
+  // is per document and constant time. Font-relative shape lengths (`ex`, `ch`) also read fonts:
+  // in a document with neither text nor `<use>` they resolve against its own fonts only.
+  if (child.storage<components::TextComponent>().empty() &&
+      child.storage<components::ShadowTreeComponent>().empty()) {
+    return nullptr;
+  }
+  const auto* hostFonts = host.ctx().find<FontManager>();
+  const auto inherited = hostFonts ? hostFonts->hostFontOverlay() : nullptr;
+  const auto key =
+      std::pair<const Registry*, std::uint64_t>(&host, inherited ? inherited->digest : 0);
+  auto [it, inserted] = textFrameCache_->hostFonts.try_emplace(key);
+  if (inserted) {
+    const auto* resources = host.ctx().find<components::ResourceManagerContext>();
+    it->second = FontManager::HostFontOverlay::Make(
+        resources ? std::span<const css::FontFace>(resources->fontFaces())
+                  : std::span<const css::FontFace>(),
+        hostFonts);
+    ++textPreparationStats_.hostFontOverlayBuilds;
+  }
+  return it->second;
+#else
+  (void)host;
+  (void)child;
+  return nullptr;
+#endif
+}
+
 void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view fragment,
                                      const components::RenderingInstanceComponent& instance,
                                      const components::ComputedStyleComponent& style,
@@ -4932,7 +5036,7 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   }
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
                               instance.resolvedStroke, externalUseStyleWork_, warningSink_,
-                              verbose_);
+                              verbose_, [&] { return hostFontOverlay(hostRegistry, child); });
   if (!scope.installed()) {
     return;
   }
@@ -5245,9 +5349,10 @@ std::vector<components::BoundsGeometryPiece> RendererDriver::measureExternalUseG
   // style matching for both still shares the frame's rule budget. Measuring recurses into the
   // occurrence's own external uses and forgets those results afterwards, so the allowance is what
   // bounds a family of documents that each use the next several times.
-  ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
-                              instance.resolvedStroke, externalUseStyleWork_, warningSink_,
-                              verbose_, ExternalWorkCharge::Measure);
+  ExternalUseStyleScope scope(
+      child, root, hostRegistry, style, instance.resolvedFill, instance.resolvedStroke,
+      externalUseStyleWork_, warningSink_, verbose_,
+      [&] { return hostFontOverlay(hostRegistry, child); }, ExternalWorkCharge::Measure);
   if (!scope.installed()) {
     return {};
   }
