@@ -1135,8 +1135,33 @@ TEST(TextToOutlinesPaint, OverlappingStrokesPerChunkAndPaintOrder) {
 <text x="10" y="120" font-size="64" fill="#0033aa" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5" style="paint-order: stroke">SV<tspan x="110">G</tspan></text>
 </svg>)",
       text, outlines));
+  // Draw the two paint operations explicitly. The chunks do not overlap each other, so their
+  // strokes can all be drawn first. Keep the strokes as live text in both reference renders:
+  // the converter must produce the same stroke union and put the fills on top of it.
+  svg::SVGDocument layered = Parse(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g font-size="64">
+  <text x="10" y="120" fill="none" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5">SV<tspan x="110">G</tspan></text>
+  <text id="fill" x="10" y="120" fill="#0033aa">SV<tspan x="110">G</tspan></text>
+</g></svg>)");
+  tests::CompareBitmapToBitmap(text, RenderToBitmap(layered), "stroke_chunks_text_order",
+                               tests::PixelmatchIdentityParams());
+
+  // Geode places resident glyph fills with a float transform. Converted fills use already-placed
+  // path coordinates. Compare the compound conversion with independently converted fill-only
+  // glyphs so both sides rasterize fill edges in the same coordinate space.
+  const auto fill = layered.querySelector("#fill");
+  ASSERT_THAT(fill, Optional(testing::_));
+  auto fillPaths = convertTextToOutlines(layered, *fill);
+  ASSERT_THAT(fillPaths.ok, testing::IsTrue()) << fillPaths.error;
+  svg::SVGDocument layeredPaths = Parse(ApplyConversion(layered, *fill, fillPaths));
+  tests::CompareBitmapToBitmap(outlines, RenderToBitmap(layeredPaths), "stroke_chunks_path_order",
+                               tests::PixelmatchIdentityParams());
+#ifndef DONNER_GEODE_BACKEND_AVAILABLE
   tests::CompareBitmapToBitmap(outlines, text, "stroke_chunks_paint_order",
                                tests::PixelmatchIdentityParams());
+#endif
 }
 
 // One run that `x` splits into two text chunks, "S" and "V", whose translucent strokes overlap.
