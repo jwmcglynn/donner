@@ -1341,4 +1341,35 @@ TEST(TextToOutlinesPaint, DefaultStrokeGeometryUnderAnAncestor) {
                                tests::PixelmatchIdentityParams());
 }
 
+// A font-relative `stroke-width` resolves against the font size of the element that sets it: the
+// text's and a tspan's own, not the outline group's, which it inherits from an ancestor.
+TEST(TextToOutlinesPaint, FontRelativeStrokeWidthUnderAnotherFontSize) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g font-size="12"><text x="10" y="120" font-size="60" fill="none" stroke="#aa0000" stroke-width="0.1em">S<tspan font-size="80" stroke="#0033aa" stroke-width="0.05em">V</tspan>G</text></g>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "font_relative_stroke_width",
+                               tests::PixelmatchIdentityParams());
+}
+
+// A text with `vector-effect="non-scaling-stroke"` under `scale(2)` strokes 2 units wide on the
+// canvas, as its outlines must; `vector-effect` is not inherited, so it has to be on each stroke
+// path rather than on the outline group.
+TEST(TextToOutlinesPaint, NonScalingStrokeUnderAScale) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text transform="scale(2)" x="5" y="60" font-size="32" fill="none" stroke="#aa0000" stroke-width="2" vector-effect="non-scaling-stroke">SVG</text>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "non_scaling_stroke_under_scale",
+                               tests::PixelmatchIdentityParams());
+}
+
 }  // namespace donner::editor
