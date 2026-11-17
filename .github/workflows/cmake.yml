@@ -5,13 +5,8 @@ env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
 
-# The generated CMake build is validated and built on Linux by every CI run of a pull request and
-# of main (main.yml's CMake consumer step). This workflow adds the macOS CMake build, which runs on
-# every push to main, on demand, and on a pull request only when it changes an input that only the
-# CMake build reads: the generator and its dependency map, CMake files, the example consumer, the
-# CMake lane scripts, this workflow, the module versions the generator turns into FetchContent
-# downloads, and the pinned Xcode it compiles with. Branch pushes before a pull request exists still build and validate the Linux
-# consumer here.
+# Main pushes run the macOS consumer on hosted Xcode. The main CI workflow covers the
+# Linux consumer on PRs. The PR trigger here supports opt-in Linux cache qualification.
 on:
   push:
     branches: ["*"]
@@ -166,13 +161,10 @@ jobs:
       - name: Build with CMake (tiny_skia)
         run: tools/ci/cmake_consumer.sh build --check --ccache
 
-  # On every push to main, on demand, and on pull requests that change a CMake input (the
-  # trigger's paths). A branch push does not run it.
   macos:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: xcode-27
     timeout-minutes: 60
-    needs: gatekeeper
-    if: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M
@@ -198,8 +190,6 @@ jobs:
       # because they can change emitted CMake dependency edges.
       # restore-keys is intentionally absent: a partial-match restore would
       # bring in incompatible state.
-      # Every run restores; only main pushes save (below), so pull requests
-      # read main's entries without spending the shared cache budget.
       - name: Restore CMake dependencies
         id: cmake-deps
         uses: actions/cache/restore@v6
@@ -234,43 +224,6 @@ jobs:
         with:
           path: .ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
-
-  macos-self-hosted:
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 60
-    needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Select pinned Xcode
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh
-
-      - name: Check preinstalled build tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v cmake >/dev/null
-          command -v ninja >/dev/null
-
-      - name: Isolate nested Bazel invocations
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazel_binary="$(command -v bazelisk)"
-          wrapper_dir="${RUNNER_TEMP}/cmake-bazel"
-          mkdir -p "$wrapper_dir"
-          printf '#!/usr/bin/env bash\nexec %q --nohome_rc --nosystem_rc "$@"\n' "$bazel_binary" > "$wrapper_dir/bazel"
-          chmod +x "$wrapper_dir/bazel"
-          ln -s bazel "$wrapper_dir/bazelisk"
-          echo "$wrapper_dir" >> "$GITHUB_PATH"
-
-      # Hosted FetchContent trees contain absolute paths; start a fresh native consumer build.
-      - name: Build with CMake (tiny_skia)
-        run: tools/ci/cmake_consumer.sh build --cache --parallel 2
 
   cmake-cache-producer:
     runs-on: [self-hosted, Linux, ARM64, cmake-cache-producer]

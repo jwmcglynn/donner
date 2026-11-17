@@ -1879,19 +1879,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("install-recommends must be true or false", result.stderr)
             self.assertEqual(recorded, [])
 
-    def test_native_cmake_retains_consumer_without_installing_tools(self):
-        native = self._job_body("macos-self-hosted", self.cmake)
-        self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
-        self.assertIn("run: tools/ci_select_macos_xcode.sh", native)
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --cache --parallel 2", native)
-        self.assertIn("command -v cmake", native)
-        self.assertIn("command -v ninja", native)
-        self.assertNotIn("install-tools", native)
-        self.assertNotIn("actions/cache", native)
-        self.assertIn("needs: gatekeeper", native)
-        # The generator check runs in CI's Linux jobs, not in the macOS consumer builds.
-        self.assertIsNone(re.search(r"(?m)^ +run: .*gen_cmakelists\.py", self.cmake))
-
     def test_cmake_cache_qualification_artifacts_are_attempt_scoped(self):
         producer = self._job_body("cmake-cache-producer", self.cmake)
         consumer = self._job_body("cmake-cache-consumer", self.cmake)
@@ -1916,14 +1903,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                             "cmake-cache-consumer-%s" % attempt])
         self.assertNotIn("pattern:", download)
 
-    def test_macos_cmake_runs_on_main_pushes_on_demand_and_for_cmake_inputs(self):
-        """macOS CMake builds left pull requests that cannot change the CMake build.
-
-        The hosted build runs on every push to main, on manual dispatch, and on a pull request
-        only when its paths reach a CMake input; a branch push does not run it. The per-push run
-        on main makes a nightly run redundant. The Linux consumer in main.yml still builds the
-        generated CMake tree on every pull request and main push.
-        """
+    def test_macos_cmake_runs_only_on_hosted_main_pushes(self):
         trigger = self.cmake.split("\non:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn('  push:\n    branches: ["*"]\n', trigger)
         self.assertNotIn("schedule:", trigger)
@@ -1936,16 +1916,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "tools/ci/cmake_cache.py", "tools/ci/cmake_consumer.sh", "MODULE.bazel",
             "third_party/bazel/non_bcr_deps.bzl", "tools/ci_macos_xcode.txt",
             "tools/ci_select_macos_xcode.sh"])
-        for job in ("macos", "macos-self-hosted"):
-            condition = next(line for line in self._job_body(job, self.cmake).splitlines()
-                             if line.startswith("    if:"))
-            if job == "macos":
-                self.assertIn("(github.event_name != 'push' || github.ref == 'refs/heads/main')",
-                              condition)
-            else:
-                # The self-hosted build runs only for trusted pull requests.
-                self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'",
-                              condition)
+        mac = self._job_body("macos", self.cmake)
+        self.assertIn("\n    runs-on: xcode-27\n", mac)
+        self.assertIn("\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n", mac)
+        self.assertNotIn("macos-self-hosted:", self.cmake)
+        self.assertNotRegex(self.cmake, r"(?im)^\s*runs-on:.*self-hosted.*macos")
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache", mac)
         consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
         self.assertIn("run: tools/ci/cmake_consumer.sh build --check --cache "
                       "--release-bazel-server --parallel 4", consumer)
