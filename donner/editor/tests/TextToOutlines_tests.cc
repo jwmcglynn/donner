@@ -1127,12 +1127,13 @@ TEST(TextToOutlinesPaint, StrokeViaCss) {
 // fill, over two runs (the tspan's `x` starts the second, also a new text chunk). The text strokes
 // each chunk as one shape, so an overlap is covered once; the outlines paint the same pixels.
 TEST(TextToOutlinesPaint, OverlappingStrokesPerChunkAndPaintOrder) {
+  // Negative spacing makes the S and V strokes overlap by several pixels even without kerning.
   svg::RendererBitmap text;
   svg::RendererBitmap outlines;
   ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect x="0" y="0" width="200" height="200" fill="white"/>
-<text x="10" y="120" font-size="64" fill="#0033aa" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5" style="paint-order: stroke">SV<tspan x="110">G</tspan></text>
+<text x="10" y="120" font-size="64" letter-spacing="-6" fill="#0033aa" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5" style="paint-order: stroke">SV<tspan x="110">G</tspan></text>
 </svg>)",
       text, outlines));
   // Draw the two paint operations explicitly. The chunks do not overlap each other, so their
@@ -1141,7 +1142,7 @@ TEST(TextToOutlinesPaint, OverlappingStrokesPerChunkAndPaintOrder) {
   svg::SVGDocument layered = Parse(
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect x="0" y="0" width="200" height="200" fill="white"/>
-<g font-size="64">
+<g font-size="64" letter-spacing="-6">
   <text x="10" y="120" fill="none" stroke="#aa0000" stroke-width="8" stroke-opacity="0.5">SV<tspan x="110">G</tspan></text>
   <text id="fill" x="10" y="120" fill="#0033aa">SV<tspan x="110">G</tspan></text>
 </g></svg>)");
