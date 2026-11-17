@@ -38,6 +38,8 @@ struct FontPaintDependenciesComponent {
   std::vector<FontFaceDependency> fontDependencies;
   std::vector<ChildFontPaintDependencies> children;
   uint64_t fontResourceRevision = 0;
+  /// \ref FontManager::hostFontKey when this was prepared; a different key makes it stale.
+  uint64_t hostFontKey = 0;
   bool prepared = false;
   bool resourceLimit = false;
 };

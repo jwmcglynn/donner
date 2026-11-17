@@ -19,6 +19,7 @@
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
+#include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
 
 namespace donner {
 class Path;
@@ -548,6 +549,24 @@ public:
                    double opacity, bool pixelated, bool sourceIsPremultiplied);
 
   /**
+   * Draw a GPU-resident texture like \ref drawTexture with bilinear filtering, mapping each target
+   * pixel to its source texel relative to \p anchor. Two draws whose source and target differ
+   * only by whole pixels, with the anchor at the same target pixel relative to the content,
+   * produce identical pixels; interpolated texture coordinates and hardware filtering do not
+   * guarantee that when the mapping is rotated, skewed or fractionally scaled.
+   *
+   * @param texture GPU-resident RGBA texture.
+   * @param destRect Destination rectangle in local (pre-transform) space.
+   * @param sourceUv Source UV rectangle in [0,1] x [0,1]; samples clamp to it.
+   * @param opacity Overall opacity in [0, 1].
+   * @param sourceIsPremultiplied True when the texels are premultiplied.
+   * @param anchor Target pixel the sampled content is aligned to.
+   */
+  void drawTextureAnchored(const gpu::Texture& texture, const Box2d& destRect,
+                           const Box2d& sourceUv, double opacity, bool sourceIsPremultiplied,
+                           const Vector2i& anchor);
+
+  /**
    * Fill a path with a solid color.
    *
    * The path is encoded into Slug band data on the CPU, uploaded to GPU
@@ -885,6 +904,12 @@ public:
 private:
   struct Impl;
   struct FillDrawArgs;
+
+  /// Shared path for \ref drawTexture and \ref drawTextureAnchored.
+  void drawTextureWithFilter(const gpu::Texture& texture, const Box2d& destRect,
+                             const Box2d& sourceUv, double opacity,
+                             GeodeTextureEncoder::Filter filter, bool sourceIsPremultiplied,
+                             const Vector2i& anchor);
 
   /// Shared path for solid and pattern fills: encode path, upload buffers,
   /// build bind group, record draw call.

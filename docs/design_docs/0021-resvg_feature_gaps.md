@@ -197,12 +197,13 @@ perform no live network requests. Applications independently provide resource by
 `ResourceLoaderInterface`; deterministic image-loader tests cover accepted PNG/SVG bytes, denied
 requests and resource-size limits.
 
-The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text,
-but in the wrong face: external-use content resolves fonts in the referenced document's own font
-catalog, so the `Noto Sans` it inherits from the `use` falls back to the embedded face (#1183).
-Its reference is also entirely opaque, whereas the SVG canvas is transparent outside painted
-content. An independently authored inline-versus-external text-fragment comparison covers host
-style inheritance, fragment selection, the callback identifier and transparent canvas behavior.
+The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text
+in the `Noto Sans` it inherits from the `use`, with glyphs within 0.4 device px of the reference.
+That reference is entirely opaque, whereas the SVG canvas is transparent outside painted content,
+and its glyph stems are 0.6 device px wider; resvg and the browsers fail this row in the corpus
+results, so it stays a harness-mismatch skip. An independently authored inline-versus-external
+text-fragment comparison covers host style inheritance, fragment selection, the callback
+identifier and transparent canvas behavior.
 
 ## CSS radial clipping
 
@@ -372,14 +373,11 @@ generation:`, only when all of the following hold:
 
 | Case | Before | Residual (px) | 4x4 (px) | Budget | 1 px text shift |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `text/font/font-shorthand` | skip | 386 | 0 | 400 | 422 |
-| `text/text/real-text-height` | skip | 397 | 0 | 410 | 441 |
 | `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
 | `text/text/ligatures-handling-in-mixed-fonts-1` (full text) | skip | 399 | 0 | 415 | 507 |
 | `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | skip | 343 | 0 | 355 | 435 |
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
-| `text/tspan/nested-whitespaces` | 400 | 387 | 0 | 400 | 416 |
 | `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
 The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
@@ -508,12 +506,16 @@ re-enabled `filters/feImage/with-subregion-5` and refreshed the Donner-generated
 references were replaced by their v0.49.0 renderings, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
-The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
-the embedded SVG's text, while Donner uses the document font catalog. An authored
-`EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
-ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
-`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
-a reference-disagreement skip rather than a missing feature.
+The `embedded-svg-with-text` row is a harness mismatch and compares against a Donner rendering
+(`testdata/golden/resvg-embedded-svg-with-text.png`) at the default settings on every backend. The
+vendored reference omits the embedded SVG's text, which browsers and resvg draw; the resvg v0.49.0
+rendering draws it but quantizes the embedded frame lines' coverage to quarters. The golden encodes
+a harness-only configuration: the suite gives SVG image documents its test fonts, as a stand-in for
+the system fonts an image document sees in a browser or in resvg's process-wide font database. The
+product renders an image document's text with only the built-in font catalog. An authored
+`EmbeddedSvgUsesDocumentFontContext` case checks that product behavior (embedded-versus-direct
+identity plus visible text ink) in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
