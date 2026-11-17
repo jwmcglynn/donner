@@ -183,7 +183,8 @@ class Turnstile:
             except rate.ApiError:
                 # Unreadable counts as executing: an API hiccup narrows the pool.
                 jobs = None
-            jobs = admission.current_attempt(jobs, attempt) if isinstance(jobs, dict) else None
+            if not isinstance(jobs, dict):
+                jobs = None
             # Only a final clear is remembered: a run released by the upstream grace is read
             # again on every poll, since its pool job may still be listed.
             if jobs is not None and admission.pool_state(

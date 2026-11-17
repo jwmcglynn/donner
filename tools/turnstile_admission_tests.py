@@ -360,52 +360,6 @@ class ShadowUpstreamTests(unittest.TestCase):
                                  "2026-11-16T01:10:00Z")]}
         self.assertEqual(admission.CLEAR, self._state(payload, "2026-11-16T01:10:01Z"))
 
-    def test_jobs_of_an_earlier_attempt_are_ignored(self):
-        # A rerun: the first attempt's shadow jobs were skipped; the second is in its Linux lane.
-        payload = {"jobs": [
-            dict(_job(_LINUX_LANE, "completed", "success", None, "2026-11-16T01:00:00Z"),
-                 run_attempt=1),
-            dict(_job(_SHADOW_LANE, "completed", "skipped", None, "2026-11-16T01:00:00Z"),
-                 run_attempt=1),
-            dict(_job(_LINUX_LANE, "in_progress"), run_attempt=2)]}
-        self.assertEqual(admission.CLEAR, self._state(payload, "2026-11-16T03:00:00Z"))
-        self.assertEqual(admission.ABSENT, self._state(admission.current_attempt(payload, 2),
-                                                       "2026-11-16T03:00:00Z"))
-
-    def test_a_complete_listing_filtered_to_the_current_attempt_stays_complete(self):
-        # As the API lists a rerun: three jobs of three, one of them of the current attempt.
-        payload = {"total_count": 3, "jobs": [
-            dict(_job(_LINUX_LANE, "completed", "success", None, "2026-11-16T01:00:00Z"),
-                 run_attempt=1),
-            dict(_job(_SHADOW_LANE, "completed", "skipped", None, "2026-11-16T01:00:00Z"),
-                 run_attempt=1),
-            dict(_job(_LINUX_LANE, "in_progress"), run_attempt=2)]}
-        current = admission.current_attempt(payload, 2)
-        self.assertEqual(1, len(current["jobs"]))
-        self.assertEqual(admission.ABSENT, self._state(current, "2026-11-16T03:00:00Z"))
-        # A listing missing a page still holds the slot once filtered.
-        missing = dict(payload, total_count=4)
-        self.assertEqual(admission.ACTIVE, self._state(admission.current_attempt(missing, 2),
-                                                       "2026-11-16T03:00:00Z"))
-
-    def test_a_partial_rerun_whose_pool_job_completed_does_not_hold_the_slot(self):
-        # A partial rerun lists the jobs it kept from the first attempt beside the ones it ran
-        # again; this attempt's pool job has completed. Every job is listed, so the listing is
-        # complete, and the run must not read as active in either pool.
-        payload = {"total_count": 4, "jobs": [
-            dict(_job("gatekeeper", "completed", "success", None, "2026-11-16T01:00:00Z"),
-                 run_attempt=1),
-            dict(_job(_LINUX_LANE, "completed", "success", None, "2026-11-16T01:30:00Z"),
-                 run_attempt=1),
-            dict(_job(_SHADOW_LANE + "-turnstile", "completed", "success", None,
-                      "2026-11-16T02:00:00Z"), run_attempt=2),
-            dict(_job(_SHADOW_LANE, "completed", "success", None, "2026-11-16T02:40:00Z"),
-                 run_attempt=2)]}
-        current = admission.current_attempt(payload, 2)
-        self.assertEqual(admission.CLEAR, self._state(current, "2026-11-16T02:41:00Z"))
-        self.assertEqual(admission.CLEAR, admission.pool_state(current, _SHADOW_POOL))
-        self.assertEqual(admission.ABSENT, admission.pool_state(current, [_LINUX_LANE]))
-
     def test_a_jobs_listing_missing_a_page_holds_the_slot(self):
         payload = dict(_MAIN_PUSH, total_count=150)
         self.assertEqual(admission.ACTIVE, self._state(payload, "2026-11-16T01:12:10Z"))
@@ -466,6 +420,80 @@ class ShadowUpstreamTests(unittest.TestCase):
         # Without the upstream data, the old rule counts the runs that never create the job.
         self.assertEqual(["10 (absent)", "11 (absent)"], admission.decide(
             dict(request, upstream=[], runs=runs))["blockers"])
+
+
+def _main_job(name, status, conclusion=None, attempt=None):
+    job = {"name": name, "status": status, "conclusion": conclusion}
+    if attempt is not None:
+        job["run_attempt"] = attempt
+    return job
+
+
+# The Linux pool's jobs listings as the Actions API returns them today, with the state the
+# admission rules on main give each. The expected states and decisions below were produced by
+# running main's admission.py (the revision this branch is based on) on these same fixtures;
+# this branch's rules must give the same, since the gating Linux turnstile passes no upstream.
+_LINUX_FIXTURES = (
+    ("main push, Linux lane skipped", {"jobs": [
+        _main_job("gatekeeper", "completed", "success"),
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "skipped"),
+        _main_job(_LINUX_LANE, "completed", "skipped"), _main_job("macos", "in_progress")]},
+     "clear"),
+    ("pull request after its Linux lane", {"jobs": [
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "success"),
+        _main_job(_LINUX_LANE, "completed", "success"),
+        _main_job("macos-browser", "in_progress")]}, "clear"),
+    ("opted out", {"jobs": [
+        _main_job(_LINUX_LANE, "completed", "success"),
+        _main_job(_SHADOW_LANE + "-turnstile", "completed", "skipped"),
+        _main_job(_SHADOW_LANE, "completed", "skipped")]}, "clear"),
+    ("in its Linux lane", {"jobs": [
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "success"),
+        _main_job(_LINUX_LANE, "in_progress")]}, "active"),
+    ("Linux lane queued", {"jobs": [
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "success"),
+        _main_job(_LINUX_LANE, "queued")]}, "pending"),
+    ("at its shadow turnstile", {"jobs": [
+        _main_job(_LINUX_LANE, "completed", "success"),
+        _main_job(_SHADOW_LANE + "-turnstile", "in_progress")]}, "clear"),
+    ("before its Linux lane is listed", {"jobs": [_main_job("gatekeeper", "in_progress")]},
+     "absent"),
+    ("no jobs yet", {"jobs": []}, "absent"),
+    ("called workflow in its Linux lane", {"jobs": [
+        _main_job("base-change-ci / " + _LINUX_LANE, "in_progress")]}, "active"),
+    # A partial rerun of a failed job other than the pool job keeps the completed Linux lane
+    # job of the first attempt in the listing; it holds nothing.
+    ("partial rerun, retained completed Linux lane", {"total_count": 3, "jobs": [
+        _main_job(_LINUX_LANE, "completed", "success", 1),
+        _main_job("macos", "in_progress", None, 2),
+        _main_job("gatekeeper", "completed", "success", 1)]}, "clear"),
+    ("partial rerun, Linux lane rerun", {"total_count": 3, "jobs": [
+        _main_job(_LINUX_LANE, "queued", None, 2),
+        _main_job("gatekeeper", "completed", "success", 1),
+        _main_job("macos", "completed", "success", 1)]}, "pending"),
+    ("complete listing with its count", {"total_count": 2, "jobs": [
+        _main_job(_LINUX_LANE, "in_progress"), _main_job("macos", "queued")]}, "active"),
+)
+
+
+class LinuxTurnstileUnchangedTests(unittest.TestCase):
+    """The gating Linux turnstile decides exactly as on main for today's listings."""
+
+    def test_each_listing_reads_as_on_main(self):
+        for name, payload, expected in _LINUX_FIXTURES:
+            with self.subTest(listing=name):
+                self.assertEqual(expected, admission.pool_state(payload, [_LINUX_LANE]))
+
+    def test_the_admission_decision_is_main_s(self):
+        runs = [_run(40 + index, payload)
+                for index, (_, payload, _) in enumerate(_LINUX_FIXTURES)] + [_run(60, None)]
+        blockers = ["43 (active)", "44 (pending)", "46 (absent)", "47 (absent)", "48 (active)",
+                    "50 (pending)", "51 (active)", "60 (active)"]
+        for capacity, admit in ((4, False), (8, False), (9, True)):
+            with self.subTest(capacity=capacity):
+                self.assertEqual({"occupancy": 8, "admit": admit, "blockers": blockers},
+                                 admission.decide({"capacity": capacity, "me": 55,
+                                                   "pool": [_LINUX_LANE], "runs": runs}))
 
 
 class TurnstileWiringTests(unittest.TestCase):

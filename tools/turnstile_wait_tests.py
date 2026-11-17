@@ -392,10 +392,9 @@ class ShadowUpstreamWaitTests(unittest.TestCase):
                                          jitter=lambda: 0, log=self.logged.append).run()
             return status, open(output, encoding="utf-8").read()
 
-    def _jobs_api(self, payload_for, attempts=None):
+    def _jobs_api(self, payload_for):
         """A fake API whose jobs payload for a run comes from payload_for(run, poll)."""
-        attempts = attempts or {}
-        api = FakeActions(self.clock, {200: (attempts.get(200, 1), None), _ME: (1, None)})
+        api = FakeActions(self.clock, {200: (1, None), _ME: (1, None)})
         original, polls = api.get_json, {}
 
         def get_json(url):
@@ -424,19 +423,6 @@ class ShadowUpstreamWaitTests(unittest.TestCase):
         self.assertEqual((0, "admitted=false\n"), self._shadow_turnstile(api))
         self.assertGreater(polls[200], 2)
         self.assertIn("200 (active)", "".join(self.logged))
-
-    def test_jobs_of_an_earlier_attempt_do_not_release_the_slot(self):
-        finished = _stamp(self.clock.now - 600)
-
-        def payload(run, poll):
-            return [{"name": _LANE, "status": "completed", "conclusion": "success",
-                     "completed_at": finished, "run_attempt": 1},
-                    {"name": self._SHADOW, "status": "completed", "conclusion": "skipped",
-                     "completed_at": finished, "run_attempt": 1},
-                    {"name": _LANE, "status": "in_progress", "run_attempt": 2}]
-        api, _ = self._jobs_api(payload, attempts={200: 2})
-        self.assertEqual((0, "admitted=false\n"), self._shadow_turnstile(api))
-        self.assertIn("200 (absent)", "".join(self.logged))
 
     def test_the_grace_is_measured_on_githubs_clock(self):
         # The runner's clock is ten minutes fast: by GitHub's clock the Linux lane ended two

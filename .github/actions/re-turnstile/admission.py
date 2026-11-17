@@ -94,24 +94,6 @@ def is_pool_job(name, pool):
     return any(name == job or name.endswith(" / " + job) for job in pool)
 
 
-def current_attempt(jobs_payload, attempt):
-    """The jobs payload without jobs of another run attempt than `attempt`, the run's current
-    one. A job without a run_attempt is kept.
-
-    Completeness is judged on the listing as the API returned it: a listing missing a page is
-    returned unchanged, so it still reads as unreadable, and a complete one keeps a total_count
-    that matches its filtered jobs, so the jobs of other attempts do not make it look
-    incomplete."""
-    if not isinstance(jobs_payload, dict) or _incomplete(jobs_payload):
-        return jobs_payload
-    jobs = [job for job in jobs_payload.get("jobs") or []
-            if job.get("run_attempt") in (None, attempt)]
-    filtered = dict(jobs_payload, jobs=jobs)
-    if "total_count" in jobs_payload:
-        filtered["total_count"] = len(jobs)
-    return filtered
-
-
 def _incomplete(jobs_payload):
     """Whether a jobs payload lists fewer jobs than its total_count, so a page is missing."""
     total = jobs_payload.get("total_count")
