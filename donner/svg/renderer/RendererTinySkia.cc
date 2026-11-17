@@ -604,6 +604,19 @@ void StrokeTinyTextRun(tiny_skia::MutablePixmapView& pixmap,
   }
 }
 
+/// The text's fill re-applied to a span that has no resolved fill of its own, with the span's
+/// \p spanOpacity. A solid text fill is resolved from its color with the product of the text's
+/// `fill-opacity` and \p spanOpacity, quantized once; any other keeps \p resolvedTextFill, the
+/// text's already resolved fill color, and applies \p spanOpacity on top of it.
+css::RGBA ReappliedTextFill(const PaintParams& textPaint, const css::Color& resolvedTextFill,
+                            double spanOpacity) {
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&textPaint.fill)) {
+    return solid->color.resolve(textPaint.currentColor,
+                                NarrowToFloat(textPaint.fillOpacity * spanOpacity));
+  }
+  return resolvedTextFill.resolve(textPaint.currentColor, NarrowToFloat(spanOpacity));
+}
+
 #endif
 
 tiny_skia::Color toTinyColor(const css::RGBA& rgba) {
@@ -3364,14 +3377,17 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // These read from paint_ (set by setPaint()) which the driver already populated.
   std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
   // The text element's own `opacity` belongs to the isolated layer the driver pushes for it, so
-  // glyph alpha carries only the span's own product and never `paint_.opacity`.
-  const auto makeSolidPaint = [&](const css::Color& color, double spanOpacity) {
+  // glyph alpha carries only the span's own product and never `paint_.opacity`. A span's
+  // `opacity` and its `fill-opacity` or `stroke-opacity` reach the alpha as one product, narrowed
+  // and quantized once by `Color::resolve`, as a path's paint opacity is: quantizing each factor
+  // on its own lands on a different alpha than the same paint on a path.
+  const auto makeSolidPaint = [&](const css::RGBA& rgba) {
     tiny_skia::Paint paint = makeBasePaint(antialias_);
-
-    css::RGBA rgba = color.rgba();
-    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) * spanOpacity));
     paint.shader = toTinyColor(rgba);
     return paint;
+  };
+  const auto spanPaintOpacity = [](double paintOpacity, double spanOpacity) {
+    return NarrowToFloat(paintOpacity * spanOpacity);
   };
 
   // Check if we have a stroke.
@@ -3421,20 +3437,18 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       spanPaintOrder = span.paintOrder;
       spanOpacity = span.opacity;
       const css::RGBA spanCurrentColor = paint_.currentColor;
-      const float spanFillOpacity = NarrowToFloat(span.fillOpacity);
-      const float spanStrokeOpacity = NarrowToFloat(span.strokeOpacity);
+      const float spanFillOpacity = spanPaintOpacity(span.fillOpacity, span.opacity);
+      const float spanStrokeOpacity = spanPaintOpacity(span.strokeOpacity, span.opacity);
 
       if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
         // Per-span solid fill color.
-        spanFillPaint = makeSolidPaint(
-            css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+        spanFillPaint = makeSolidPaint(solid->color.resolve(spanCurrentColor, spanFillOpacity));
       } else if (const auto* ref =
                      std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
         // Per-span gradient/pattern fill. Uses the text element's bbox (textBounds)
         // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
-        const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
         if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                                    spanCurrentColor, combinedOpacity)) {
+                                                    spanCurrentColor, spanFillOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader = std::move(*shader);
           spanFillPaint = paint;
@@ -3442,19 +3456,17 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader =
               tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                                 tiny_skia::FilterQuality::Bilinear,
-                                 NarrowToFloat(spanFillOpacity * static_cast<float>(span.opacity)),
+                                 tiny_skia::FilterQuality::Bilinear, spanFillOpacity,
                                  toTinyTransform(patternFillPaint_->targetFromPattern));
           spanFillPaint = paint;
         } else if (ref->fallback.has_value()) {
-          spanFillPaint = makeSolidPaint(
-              css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+          spanFillPaint = makeSolidPaint(ref->fallback->resolve(spanCurrentColor, spanFillOpacity));
         } else {
           // Keep the inherited paint for non-gradient refs such as patterns.
         }
       } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
-        // No explicit fill but has per-span opacity - re-apply with opacity.
-        spanFillPaint = makeSolidPaint(params.fillColor, span.opacity);
+        // No resolved span fill but a per-span opacity: re-apply the text's fill with it.
+        spanFillPaint = makeSolidPaint(ReappliedTextFill(paint_, params.fillColor, span.opacity));
       }
 
       spanTinyStroke.width = NarrowToFloat(span.strokeWidth);
@@ -3469,14 +3481,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       if (span.strokeWidth > 0.0) {
         if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedStroke)) {
-          spanStrokePaint = makeSolidPaint(
-              css::Color(solid->color.resolve(spanCurrentColor, spanStrokeOpacity)), span.opacity);
+          spanStrokePaint =
+              makeSolidPaint(solid->color.resolve(spanCurrentColor, spanStrokeOpacity));
         } else if (const auto* ref =
                        std::get_if<components::PaintResolvedReference>(&span.resolvedStroke)) {
-          const float combinedOpacity = spanStrokeOpacity * static_cast<float>(span.opacity);
           if (auto shader =
                   instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                            spanCurrentColor, combinedOpacity)) {
+                                            spanCurrentColor, spanStrokeOpacity)) {
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = std::move(*shader);
             spanStrokePaint = paint;
@@ -3484,14 +3495,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = tiny_skia::Pattern(
                 patternStrokePaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                tiny_skia::FilterQuality::Bilinear,
-                NarrowToFloat(spanStrokeOpacity * static_cast<float>(span.opacity)),
+                tiny_skia::FilterQuality::Bilinear, spanStrokeOpacity,
                 toTinyTransform(patternStrokePaint_->targetFromPattern));
             spanStrokePaint = paint;
           } else if (ref->fallback.has_value()) {
-            spanStrokePaint = makeSolidPaint(
-                css::Color(ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity)),
-                span.opacity);
+            spanStrokePaint =
+                makeSolidPaint(ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity));
           } else {
             // Keep the inherited paint for non-gradient refs such as patterns.
           }
@@ -3527,14 +3536,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             std::optional<tiny_skia::Paint> decoFillPaint;
             if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.fill)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
-              const float fillOpacity = NarrowToFloat(decoration.fillOpacity);
-              decoFillPaint = makeSolidPaint(
-                  css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
+              decoFillPaint = makeSolidPaint(solid->color.resolve(
+                  spanCurrentColor, spanPaintOpacity(decoration.fillOpacity, span.opacity)));
             } else if (const auto* ref =
                            std::get_if<components::PaintResolvedReference>(&decoration.fill)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
-              const float combinedOpacity =
-                  NarrowToFloat(decoration.fillOpacity) * static_cast<float>(span.opacity);
+              const float combinedOpacity = spanPaintOpacity(decoration.fillOpacity, span.opacity);
               if (auto shader =
                       instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                 spanCurrentColor, combinedOpacity)) {
@@ -3550,9 +3557,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                 decoFillPaint = paint;
               } else if (ref->fallback) {
                 decoFillPaint =
-                    makeSolidPaint(css::Color(ref->fallback->resolve(
-                                       spanCurrentColor, NarrowToFloat(decoration.fillOpacity))),
-                                   span.opacity);
+                    makeSolidPaint(ref->fallback->resolve(spanCurrentColor, combinedOpacity));
               }
             }
             if (!span.decorations) {
@@ -3562,14 +3567,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             std::optional<tiny_skia::Paint> decoStrokePaint;
             if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.stroke)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
-              const float strokeOpacity = NarrowToFloat(decoration.strokeOpacity);
-              decoStrokePaint = makeSolidPaint(
-                  css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
+              decoStrokePaint = makeSolidPaint(solid->color.resolve(
+                  spanCurrentColor, spanPaintOpacity(decoration.strokeOpacity, span.opacity)));
             } else if (const auto* ref =
                            std::get_if<components::PaintResolvedReference>(&decoration.stroke)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
               const float combinedOpacity =
-                  NarrowToFloat(decoration.strokeOpacity) * static_cast<float>(span.opacity);
+                  spanPaintOpacity(decoration.strokeOpacity, span.opacity);
               if (auto shader =
                       instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                 spanCurrentColor, combinedOpacity)) {

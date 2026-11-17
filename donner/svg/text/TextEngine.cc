@@ -4,11 +4,14 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <functional>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -877,10 +880,57 @@ void ResolveBidiEmbeddings(Registry& registry, Entity styleEntity,
   std::reverse(span.bidiEmbeddings.begin(), span.bidiEmbeddings.end());
 }
 
+/**
+ * The font-family lists of the spans of one text element, resolved once per style entity, with
+ * each distinct list kept once.
+ *
+ * Each text node becomes a span styled by its element, and every element inherits its parent's
+ * `font-family`, so a text with many child elements, empty ones included, has many spans whose
+ * lists are equal. Within one text element, its spans then hold one copy of each distinct list
+ * rather than one per span. This bounds the spans only: each element's computed style still holds
+ * its own copy of an inherited list, and the sharing does not reach across text elements.
+ */
+class SpanFontFamilyLists {
+public:
+  /// The font-family list of the spans styled by \p styleEntity, whose style is \p properties.
+  std::shared_ptr<const SmallVector<RcString, 1>> listFor(Entity styleEntity,
+                                                          const PropertyRegistry& properties) {
+    auto [found, inserted] = byStyle_.try_emplace(styleEntity);
+    if (inserted) {
+      found->second = share(properties.fontFamily.get().value());
+    }
+    return found->second;
+  }
+
+private:
+  /// The kept copy of \p families.
+  std::shared_ptr<const SmallVector<RcString, 1>> share(SmallVector<RcString, 1> families) {
+    std::size_t hash = families.size();
+    for (const RcString& family : families) {
+      hash = hash * 31 + std::hash<std::string_view>()(std::string_view(family));
+    }
+    const std::span<const RcString> list(families.data(), families.size());
+    auto [first, last] = distinct_.equal_range(hash);
+    for (; first != last; ++first) {
+      const std::span<const RcString> kept(first->second->data(), first->second->size());
+      if (std::ranges::equal(kept, list)) {
+        return first->second;
+      }
+    }
+    auto shared = std::make_shared<const SmallVector<RcString, 1>>(std::move(families));
+    distinct_.emplace(hash, shared);
+    return shared;
+  }
+
+  std::unordered_map<Entity, std::shared_ptr<const SmallVector<RcString, 1>>> byStyle_;
+  std::unordered_multimap<std::size_t, std::shared_ptr<const SmallVector<RcString, 1>>> distinct_;
+};
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
                                 const Box2d& viewBox, const FontMetrics& fontMetrics,
                                 const TextStyleContext* styleContext = nullptr) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+  SpanFontFamilyLists fontFamilyLists;
 
   for (auto& [owner, fontSize] : text.textLengthOwnerFontSizes) {
     const Entity styleEntity = styleContext ? styleContext->styleEntityFor(owner) : owner;
@@ -961,7 +1011,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
     span.hasResolvedFontSize = true;
-    span.fontFamilies = style->properties->fontFamily.get().value();
+    span.fontFamilies = fontFamilyLists.listFor(styleEntity, *style->properties);
     span.visibility = style->properties->visibility.get().value();
     span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
         viewBox, fontMetrics, Lengthd::Extent::X);
@@ -3706,11 +3756,19 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
 struct FontResolutionState {
   uint64_t revision = 0;                         ///< Current font resource revision.
   uint64_t familySelectionRevision = 0;          ///< Revision of the last family selection change.
+  uint64_t hostFontKey = 0;                      ///< Identity of the lent host fonts, if any.
   std::span<const FontFaceDependency> resolved;  ///< Current provider dependencies.
 };
 
 template <typename Geometry>
 bool FontDependenciesChanged(Geometry& geometry, const FontResolutionState& state) {
+  // Prepared under other lent fonts, or none: whatever it resolved may name faces this document
+  // does not see now.
+  if (geometry.hostFontKey != state.hostFontKey) {
+    geometry.hostFontKey = state.hostFontKey;
+    geometry.fontResourceRevision = state.revision;
+    return true;
+  }
   if (geometry.fontResourceRevision == state.revision) {
     return false;
   }
@@ -3794,7 +3852,7 @@ TextEngine::~TextEngine() = default;
 
 bool TextEngine::needsFontResourceRefresh() const {
   return fontManager_.fontResourceRevision() != observedFontResourceRevision_ ||
-         fontManager_.needsResourceRefresh();
+         fontManager_.hostFontKey() != observedHostFontKey_ || fontManager_.needsResourceRefresh();
 }
 
 std::vector<Entity> TextEngine::refreshFontResources() {
@@ -3802,6 +3860,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   const auto resolved = fontManager_.faceDependencies();
   const FontResolutionState state{.revision = fontManager_.fontResourceRevision(),
                                   .familySelectionRevision = fontManager_.familySelectionRevision(),
+                                  .hostFontKey = fontManager_.hostFontKey(),
                                   .resolved = resolved};
 
   std::vector<Entity> changedRoots;
@@ -3828,6 +3887,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
           components::DirtyFlagsComponent::RenderInstance,
       changedRoots);
   observedFontResourceRevision_ = state.revision;
+  observedHostFontKey_ = state.hostFontKey;
   return changedRoots;
 }
 
@@ -3929,9 +3989,9 @@ bool HasPaintedTextGlyphs(const components::ComputedTextComponent::TextSpan& spa
 /// Resolves a span's inherited font family and face attributes.
 FontHandle ResolveSpanFace(FontManager& fontManager,
                            const components::ComputedTextComponent::TextSpan& span,
-                           const SmallVector<RcString, 1>& families, FontHandle fallback) {
-  const SmallVector<RcString, 1>& spanFamilies =
-      span.fontFamilies.empty() ? families : span.fontFamilies;
+                           std::span<const RcString> families, FontHandle fallback) {
+  const std::span<const RcString> spanFamilies =
+      span.fontFamilyList().empty() ? families : span.fontFamilyList();
   FontHandle spanFont = FindFirstAvailableFont(fontManager, spanFamilies);
   if (!spanFont) {
     // A list that matches nothing resolves to the user agent's default family at the span's own
@@ -6491,12 +6551,11 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
   }
   const auto& properties = *style->properties;
   components::ComputedTextComponent::TextSpan span;
-  span.fontFamilies = properties.fontFamily.get().value();
+  const SmallVector<RcString, 1> families = properties.fontFamily.get().value();
   span.fontWeight = properties.fontWeight.get().value();
   span.fontStyle = properties.fontStyle.get().value();
   span.fontStretch = static_cast<FontStretch>(properties.fontStretch.get().value());
-  FontHandle font =
-      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.fallbackFont());
+  FontHandle font = ResolveSpanFace(fontManager_, span, families, fontManager_.fallbackFont());
   font = selectBackendSafeFont(*backend_, fontManager_, font);
   const float size = CheckedFontSizePx(
       properties.fontSize.get().value().toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
@@ -6972,13 +7031,14 @@ private:
     state.indexMappings = buildByteIndexMappings(state.text);
     const TextSpan& span = *state.span;
     fallbackCoverage_.grant(state.text.size());
-    const ClusterFallback fallback{
-        fontManager_,
-        fallbackCoverage_,
-        span.fontFamilies.empty() ? params_.fontFamilies : span.fontFamilies,
-        span.fontWeight,
-        static_cast<int>(span.fontStyle),
-        static_cast<int>(span.fontStretch)};
+    const ClusterFallback fallback{fontManager_,
+                                   fallbackCoverage_,
+                                   span.fontFamilyList().empty()
+                                       ? std::span<const RcString>(params_.fontFamilies)
+                                       : span.fontFamilyList(),
+                                   span.fontWeight,
+                                   static_cast<int>(span.fontStyle),
+                                   static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
                              fallback, normalBidi_.enabled ? &normalBidi_ : nullptr,
@@ -8215,7 +8275,8 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
       registry_.remove<components::FontMetricDependenciesComponent>(geometryOwner);
     } else {
       registry_.emplace_or_replace<components::FontMetricDependenciesComponent>(
-          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision());
+          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision(),
+          fontManager_.hostFontKey());
     }
   }
   return measured;
@@ -8524,10 +8585,14 @@ bool ReserveTextReferenceSpan(const components::ComputedTextComponent::TextSpan&
   if (span.start > span.end || span.end > span.text.size()) {
     return work.reject();
   }
-  const std::array counts{
-      span.end - span.start, span.fontFamilies.size(), span.ancestorBaselineShifts.size(),
-      span.xList.size(),     span.yList.size(),        span.dxList.size(),
-      span.dyList.size(),    span.rotateList.size()};
+  const std::array counts{span.end - span.start,
+                          span.fontFamilyList().size(),
+                          span.ancestorBaselineShifts.size(),
+                          span.xList.size(),
+                          span.yList.size(),
+                          span.dxList.size(),
+                          span.dyList.size(),
+                          span.rotateList.size()};
   for (const std::size_t count : counts) {
     if (!work.reserve(count)) {
       return false;
@@ -8816,7 +8881,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
     const bool workCanRetry =
         !TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
-    if (!existing->retryAfterTextPathWorkRejection || !workCanRetry) {
+    const bool sameLentFonts = existing->hostFontKey == fontManager_.hostFontKey();
+    if (sameLentFonts && (!existing->retryAfterTextPathWorkRejection || !workCanRetry)) {
       fontManager_.recordDependencies(existing->fontDependencies);
       return *existing;
     }
@@ -8846,6 +8912,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     runs = const_cast<TextEngine*>(this)->layout(styledText, params);
   }
   cache.fontResourceRevision = fontManager_.fontResourceRevision();
+  cache.hostFontKey = fontManager_.hostFontKey();
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
   std::size_t stretchedCacheReservation = 0u;

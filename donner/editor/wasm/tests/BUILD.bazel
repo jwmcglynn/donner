@@ -103,6 +103,7 @@ playwright_bin.playwright_test(
         "gpu-image-transfer-comparison.ts",
         "gpu-session-console.ts",
         "latency-gates.mjs",
+        "masked-drag-counters.mjs",
         "package.json",
         "package-identity.mjs",
         "pipeline-compile-readiness.mjs",

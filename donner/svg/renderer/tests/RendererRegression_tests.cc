@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
@@ -30,10 +31,13 @@
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/geode/GeodeNearestSampling.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -2246,6 +2250,84 @@ TEST_F(RendererRegressionTests, TextStrokeOutlinesEachChunkAsItsOwnShape) {
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "text_stroke_chunk_outlines_" + std::string(paint.label),
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// One text element of the editor's "Text and Style" sample: its attributes and content.
+struct EditorSampleText {
+  std::string_view attributes;  //!< Attributes, without `id`.
+  std::string_view content;     //!< Character data.
+};
+
+/// The editor's "Text and Style" sample (`donner/editor/art/samples/text-style.svg`) at \p width x
+/// \p height device pixels, with \p stroke inherited by every text element. Each text element is
+/// drawn by \p drawText from its index and definition. Its `Inter, sans-serif` family falls back
+/// to the embedded Public Sans, as in the editor.
+std::string EditorTextStyleSample(
+    int width, int height, std::string_view stroke,
+    const std::function<std::string(size_t, const EditorSampleText&)>& drawText) {
+  constexpr std::array<EditorSampleText, 4> kTexts = {{
+      {R"svg(class="heading" x="48" y="110")svg", "Donner editor"},
+      {R"svg(class="body" x="48" y="158")svg", "Text and style inspection"},
+      {R"svg(x="48" y="270" fill="#f8f9fa" font-family="Inter, sans-serif" font-size="24px")svg",
+       "Editable SVG source"},
+      {R"svg(x="48" y="310" fill="#aeb6bf" font-family="Inter, sans-serif" font-size="18px")svg"
+       R"svg( font-style="italic")svg",
+       "Selectors, inheritance, and typography"},
+  }};
+  std::ostringstream svg;
+  svg << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width=")svg" << width
+      << R"svg(" height=")svg" << height << R"svg(" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#17202a"/>
+  <style>
+    .heading { fill: #f8f9fa; font-family: Inter, sans-serif; font-size: 42px; font-weight: bold; }
+    .body { fill: #9fe3c0; font-family: Inter, sans-serif; font-size: 22px; }
+    .rule { stroke: #f0b429; stroke-width: 5; }
+  </style>
+  <g )svg"
+      << stroke << ">";
+  for (size_t i = 0; i < kTexts.size(); ++i) {
+    svg << drawText(i, kTexts[i]);
+  }
+  svg << R"svg(</g>
+  <line class="rule" x1="48" y1="202" x2="592" y2="202"/>
+</svg>)svg";
+  return svg.str();
+}
+
+TEST_F(RendererRegressionTests, EditorTextSampleStrokeMatchesStrokedGlyphOutlines) {
+  // Adding a stroke to this sample was reported to draw the lowercase t crossbar as a rectangle
+  // detached from its stem; no detached crossbar reproduces here. What this checks is that each
+  // text element's stroke, with its fill removed, renders exactly like the stroke of a path made of
+  // its glyph outlines, at the sample's own size and at twice that.
+  const std::array<std::pair<Vector2i, std::string_view>, 4> cases = {{
+      {Vector2i(640, 360), "1"},
+      {Vector2i(640, 360), "2"},
+      {Vector2i(640, 360), "4"},
+      {Vector2i(1280, 720), "2"},
+  }};
+  for (const auto& [size, strokeWidth] : cases) {
+    SCOPED_TRACE(testing::Message() << size << " stroke-width=" << strokeWidth);
+    const std::string stroke =
+        std::string(R"svg(stroke="#e8590c" stroke-width=")svg") + std::string(strokeWidth) + "\"";
+    SVGDocument textDocument = ParseSvg(EditorTextStyleSample(
+        size.x, size.y, stroke, [](size_t index, const EditorSampleText& text) {
+          return "<text id=\"t" + std::to_string(index) + "\" style=\"fill: none\" " +
+                 std::string(text.attributes) + ">" + std::string(text.content) + "</text>";
+        }));
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+    SVGDocument pathDocument = ParseSvg(EditorTextStyleSample(
+        size.x, size.y, stroke, [&textDocument](size_t index, const EditorSampleText& text) {
+          return "<path d=\"" + GlyphOutlinePathData(textDocument, "#t" + std::to_string(index)) +
+                 "\" style=\"fill: none\" " + std::string(text.attributes) + "/>";
+        }));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "editor_text_sample_outlines_visible");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected,
+        "editor_text_sample_stroke_" + std::to_string(size.x) + "_" + std::string(strokeWidth),
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -5014,6 +5096,224 @@ TEST(ClipContourClosure, NormalOpenStrokeKeepsItsEndpoints) {
   const auto expected = RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
   editor::tests::CompareBitmapToBitmap(actual, expected, "clip_closure_preserves_open_stroke",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// An feImage fragment whose content is filled with the pattern that draws the filtered element: the
+// fragment cycle is bounded by the feImage fragment guard. The document must render the same way
+// on every draw through one renderer.
+constexpr std::string_view kFeImagePatternCycle = R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="#r" />
+    </filter>
+    <rect id="r" width="8" height="8" fill="url(#a)" stroke="black" stroke-width="2" />
+  </defs>
+  <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+    <rect width="8" height="8" fill="black" filter="url(#f)" />
+  </pattern>
+  <rect width="16" height="16" fill="url(#a)" />)svg";
+
+TEST_F(RendererRegressionTests, FeImagePatternCycleDrawsTheSameEachTime) {
+  SVGDocument document = instantiateSubtree(kFeImagePatternCycle, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  renderer->draw(document);
+  const RendererBitmap second = renderer->takeSnapshot();
+  renderer->draw(document);
+  const RendererBitmap third = renderer->takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(second, first, "feimage_pattern_cycle_second_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(third, first, "feimage_pattern_cycle_third_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Number of `OffscreenFeImage` shadow branches across all hosts in @p document.
+std::size_t FeImageBranchCount(SVGDocument& document) {
+  std::size_t count = 0;
+  for (auto view = document.registry().view<const components::ComputedShadowTreeComponent>();
+       const Entity host : view) {
+    for (const auto& branch :
+         view.get<const components::ComputedShadowTreeComponent>(host).branches) {
+      count += branch.branchType == components::ShadowBranchType::OffscreenFeImage ? 1 : 0;
+    }
+  }
+  return count;
+}
+
+// Draws @p document three times through one renderer and returns the shadow branch count after
+// each draw.
+std::vector<std::size_t> FeImageBranchCountsOverThreeDraws(SVGDocument& document) {
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  std::vector<std::size_t> counts;
+  for (int draw = 0; draw < 3; ++draw) {
+    renderer->draw(document);
+    counts.push_back(FeImageBranchCount(document));
+  }
+  return counts;
+}
+
+// A plain feImage fragment whose target is not in the render tree (it is in `<defs>`).
+constexpr std::string_view kFeImageFragment = R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="#r" />
+    </filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect width="16" height="16" fill="black" filter="url(#f)" />)svg";
+
+// Drawing an feImage fragment again without a render-tree rebuild reuses the fragment's shadow
+// tree: it must not add another shadow branch and more rendering instances on every frame.
+TEST_F(RendererRegressionTests, FeImageFragmentRedrawKeepsOneShadowTree) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  const auto instanceCount = [&]() {
+    return document.registry().view<components::RenderingInstanceComponent>().size();
+  };
+
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  const std::size_t firstInstances = instanceCount();
+  EXPECT_EQ(FeImageBranchCount(document), 1u);
+  for (int draw = 2; draw <= 3; ++draw) {
+    renderer->draw(document);
+    EXPECT_EQ(FeImageBranchCount(document), 1u) << "draw " << draw;
+    EXPECT_EQ(instanceCount(), firstInstances) << "draw " << draw;
+    editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
+                                         "feimage_fragment_redraw_" + std::to_string(draw),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// A plain feImage fragment drawn repeatedly renders the same way each time through one renderer,
+// and after its target changes it renders the new target: the same image a fresh document with the
+// new target gives, rendered by a separate renderer.
+TEST_F(RendererRegressionTests, FeImageFragmentRedrawFollowsItsTarget) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  EXPECT_THAT(PixelAt(first, 8, 8), test::RgbaEq(255, 0, 0, 255));
+  renderer->draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
+                                       "feimage_fragment_second_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  auto target = document.querySelector("#r");
+  ASSERT_TRUE(target.has_value());
+  target->setAttribute("fill", "blue");
+  renderer->draw(document);
+  const RendererBitmap mutated = renderer->takeSnapshot();
+  EXPECT_THAT(PixelAt(mutated, 8, 8), test::RgbaEq(0, 0, 255, 255));
+  EXPECT_EQ(FeImageBranchCount(document), 1u);
+
+  std::string blueMarkup(kFeImageFragment);
+  blueMarkup.replace(blueMarkup.find("fill=\"red\""), std::string_view("fill=\"red\"").size(),
+                     "fill=\"blue\"");
+  SVGDocument fresh = instantiateSubtree(blueMarkup, {}, Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      mutated, RenderDocumentWithBackend(fresh, ActiveRendererBackend()),
+      "feimage_fragment_target_mutation", editor::tests::PixelmatchIdentityParams());
+}
+
+// A fragment target that renders nothing (display none, or an empty group) keeps one shadow branch:
+// its empty instantiation is remembered instead of repeated every frame.
+TEST_F(RendererRegressionTests, FeImageFragmentWithoutContentKeepsOneShadowTree) {
+  for (const std::string_view target :
+       {std::string_view(R"svg(<rect id="r" width="16" height="16" display="none" />)svg"),
+        std::string_view(R"svg(<g id="r" />)svg")}) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<defs><filter id="f" x="0" y="0" width="1" height="1">
+          <feImage href="#r" /></filter>)svg") +
+            std::string(target) +
+            R"svg(</defs><rect width="16" height="16" fill="black" filter="url(#f)" />)svg",
+        {}, Vector2i(16, 16));
+    EXPECT_THAT(FeImageBranchCountsOverThreeDraws(document), testing::ElementsAre(1u, 1u, 1u))
+        << target;
+  }
+}
+
+// Two hosts sharing one fragment target keep one branch each.
+TEST_F(RendererRegressionTests, FeImageFragmentSharedByTwoHostsKeepsOneBranchEach) {
+  SVGDocument document = instantiateSubtree(R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1"><feImage href="#r" /></filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect width="8" height="16" fill="black" filter="url(#f)" />
+  <rect x="8" width="8" height="16" fill="black" filter="url(#f)" />)svg",
+                                            {}, Vector2i(16, 16));
+  EXPECT_THAT(FeImageBranchCountsOverThreeDraws(document), testing::ElementsAre(2u, 2u, 2u));
+}
+
+// Removing the host rebuilds the render tree, which tears its fragment branch down.
+TEST_F(RendererRegressionTests, FeImageFragmentBranchGoesAwayWithItsHost) {
+  SVGDocument document = instantiateSubtree(R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1"><feImage href="#r" /></filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect id="host" width="16" height="16" fill="black" filter="url(#f)" />)svg",
+                                            {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  renderer->draw(document);
+  EXPECT_EQ(FeImageBranchCount(document), 1u);
+  auto host = document.querySelector("#host");
+  ASSERT_TRUE(host.has_value());
+  host->remove();
+  renderer->draw(document);
+  EXPECT_EQ(FeImageBranchCount(document), 0u);
+}
+
+// When the rendering instances are cleared but the shadow trees survive (as a retained update
+// that rebuilds only instances does), the fragment branch is rebuilt in place, not duplicated.
+TEST_F(RendererRegressionTests, FeImageFragmentBranchIsRebuiltInPlaceAfterInstancesClear) {
+  SVGDocument document = instantiateSubtree(R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1"><feImage href="#r" /></filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect id="host" width="16" height="16" fill="black" filter="url(#f)" />)svg",
+                                            {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  renderer->draw(document);
+  ASSERT_EQ(FeImageBranchCount(document), 1u);
+
+  Registry& registry = document.registry();
+  const Entity host = document.querySelector("#host")->entityHandle().entity();
+  const Entity target = document.querySelector("#r")->entityHandle().entity();
+  auto& renderingContext = registry.ctx().get<components::RenderingContext>();
+  for (int round = 0; round < 3; ++round) {
+    registry.clear<components::RenderingInstanceComponent>();
+    const auto rebuilt = renderingContext.createFeImageShadowTree(host, target, false);
+    EXPECT_TRUE(rebuilt.has_value()) << "round " << round;
+    EXPECT_EQ(FeImageBranchCount(document), 1u) << "round " << round;
+  }
+}
+
+// Fragment instances are drawn only into their fragment; rectangle queries must not return them.
+TEST_F(RendererRegressionTests, FeImageFragmentInstancesAreNotReturnedByRectQueries) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  auto& renderingContext = [&]() -> components::RenderingContext& {
+    Registry& registry = document.registry();
+    if (!registry.ctx().contains<components::RenderingContext>()) {
+      registry.ctx().emplace<components::RenderingContext>(registry);
+    }
+    return registry.ctx().get<components::RenderingContext>();
+  }();
+  const Box2d canvas = Box2d::FromXYWH(0, 0, 16, 16);
+  const std::vector<Entity> beforeDraw = renderingContext.findIntersectingRect(canvas);
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  for (int draw = 0; draw < 3; ++draw) {
+    renderer->draw(document);
+  }
+  EXPECT_THAT(renderingContext.findIntersectingRect(canvas), testing::ElementsAreArray(beforeDraw));
 }
 
 }  // namespace

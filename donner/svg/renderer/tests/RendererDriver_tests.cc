@@ -1812,6 +1812,53 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 26u);
 }
 
+TEST_F(RendererDriverTest, TextSpansShareOneFontFamilyListPerStyle) {
+  // Each text node, and each empty child element, becomes a span, and every one of them takes the
+  // text's font-family list, by inheritance for the children. The spans of the text element hold
+  // one copy of that list between them, however many spans the text has. A tspan that sets its
+  // own font-family keeps its own list.
+  constexpr int kTextNodeCount = 200;
+  constexpr std::size_t kFamilyCount = 1000;
+  std::string content;
+  for (int node = 0; node < kTextNodeCount; ++node) {
+    content += "l<tspan/>";
+  }
+  content += R"svg(<tspan font-family="b">l</tspan>)svg";
+  std::string families;
+  for (std::size_t family = 0; family < kFamilyCount; ++family) {
+    families += family == 0 ? "a" : ", a";
+  }
+  SVGDocument document = makeDocument(R"svg(<text x="10" y="60" font-size="12" font-family=")svg" +
+                                          families + R"svg(">)svg" + content + "</text>",
+                                      Vector2i(200, 200));
+
+  std::size_t spanCount = 0;
+  std::size_t retainedFamilyBytes = 0;
+  std::vector<std::vector<RcString>> singleFamilyLists;
+  ON_CALL(renderer, drawText(_, _, _))
+      .WillByDefault([&](Registry&, const components::ComputedTextComponent& text,
+                         const TextParams&) {
+        std::vector<const RcString*> lists;
+        for (const auto& span : text.spans) {
+          ++spanCount;
+          const std::span<const RcString> list = span.fontFamilyList();
+          if (list.size() == 1) {
+            singleFamilyLists.emplace_back(list.begin(), list.end());
+          }
+          if (!list.empty() && std::find(lists.begin(), lists.end(), list.data()) == lists.end()) {
+            lists.push_back(list.data());
+            retainedFamilyBytes += list.size_bytes();
+          }
+        }
+      });
+
+  driver.draw(document);
+
+  ASSERT_GE(spanCount, static_cast<std::size_t>(kTextNodeCount));
+  EXPECT_THAT(singleFamilyLists, testing::ElementsAre(testing::ElementsAre(RcString("b"))));
+  EXPECT_EQ(retainedFamilyBytes, (kFamilyCount + 1) * sizeof(RcString));
+}
+
 TEST_F(RendererDriverTest, TextSpansShareOneResolvedDashListPerStyle) {
   // Each text node, and each empty child element, becomes a span, and every one of them takes the
   // text's dash list, by inheritance for the children. The spans hold one resolved copy of that

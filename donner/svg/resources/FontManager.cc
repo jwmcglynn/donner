@@ -7,12 +7,15 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/fonts/SfntUtils.h"
@@ -216,6 +219,12 @@ struct FontManager::FontFaceComponent {
   /// Registration order. CSS resolves a tie between equally good faces in favour of the one
   /// declared last, and storage order is not a contract, so the winner is chosen on this instead.
   uint64_t sequence = 0;
+};
+
+/// A face lent by a host document's \ref FontManager::HostFontOverlay. A distinct component, so
+/// the manager's own rules, counts and family index never include it.
+struct FontManager::HostFontFaceComponent : FontManager::FontFaceComponent {
+  using FontFaceComponent::FontFaceComponent;
 };
 
 struct FontManager::FontBudgetState {
@@ -533,6 +542,7 @@ void FontManager::addFontFace(const css::FontFace& face) {
   // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
   // have to be recomputed.
   cache_.clear();
+  clearLentSetCaches();
 }
 
 size_t FontManager::numFaces() const {
@@ -586,15 +596,294 @@ FontHandle FontManager::defaultFont(int weight, int style, int stretch) {
   return fallbackFont();
 }
 
-bool FontManager::hasFamily(std::string_view family) const {
+namespace {
+
+/// Mix @p value into @p hash.
+uint64_t MixHash(uint64_t hash, uint64_t value) {
+  return hash ^ (value + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2));
+}
+
+/// @p face reduced to the sources a host can lend, or nullopt when none of them is already data.
+/// A face with nothing to lend is not copied; a lent copy shares the payloads by reference.
+std::optional<css::FontFace> LendableFace(const css::FontFace& face) {
+  const auto isData = [](const css::FontFaceSource& source) {
+    return source.kind == css::FontFaceSource::Kind::Data;
+  };
+  if (std::none_of(face.sources.begin(), face.sources.end(), isData)) {
+    return std::nullopt;
+  }
+  css::FontFace lent = face;
+  std::erase_if(lent.sources, [&](const css::FontFaceSource& source) { return !isData(source); });
+  return lent;
+}
+
+/// The generic mappings a host lends: its own, then those it was lent for names it does not map,
+/// sorted by generic name.
+std::vector<std::pair<std::string, std::string>> LentGenericFamilies(
+    const std::unordered_map<std::string, std::string>& own,
+    const FontManager::HostFontOverlay* inherited) {
+  std::vector<std::pair<std::string, std::string>> result(own.begin(), own.end());
+  if (inherited) {
+    std::copy_if(inherited->genericFamilies.begin(), inherited->genericFamilies.end(),
+                 std::back_inserter(result),
+                 [&](const auto& mapping) { return !own.contains(mapping.first); });
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+}  // namespace
+
+std::shared_ptr<const FontManager::HostFontOverlay> FontManager::HostFontOverlay::Make(
+    std::span<const css::FontFace> faces, const FontManager* hostFonts) {
+  auto overlay = std::make_shared<HostFontOverlay>();
+  uint64_t digest = 0;
+  // A host that is itself referenced passes on what its own host lent it. Those faces come first,
+  // so on a tie the nearer host's face, declared later, wins.
+  const auto inherited = hostFonts ? hostFonts->hostFontOverlay() : nullptr;
+  if (inherited) {
+    overlay->faces = inherited->faces;
+    overlay->faceKeys = inherited->faceKeys;
+    digest = inherited->digest;
+  }
+  for (const css::FontFace& face : faces) {
+    if (overlay->faces.size() >= kMaximumLentFaces) {
+      break;
+    }
+    if (auto lent = LendableFace(face)) {
+      std::string key = css::FontFaceIdentityKey(*lent);
+      digest = MixHash(digest, std::hash<std::string>{}(key));
+      overlay->faceKeys.push_back(std::move(key));
+      overlay->faces.push_back(std::move(*lent));
+    }
+  }
+  if (hostFonts) {
+    // The nearer host's mapping for a generic name wins over the one it was lent.
+    overlay->genericFamilies =
+        LentGenericFamilies(hostFonts->genericFamilyMappings(), inherited.get());
+  }
+  for (const auto& [generic, realFamily] : overlay->genericFamilies) {
+    digest = MixHash(digest, std::hash<std::string>{}(generic));
+    digest = MixHash(digest, std::hash<std::string>{}(realFamily));
+  }
+  if (overlay->faces.empty() && overlay->genericFamilies.empty()) {
+    return nullptr;
+  }
+  // Zero means "nothing lent" to \ref hostFontKey.
+  overlay->digest = digest == 0 ? 1 : digest;
+  return overlay;
+}
+
+const FontManager::LentSet* FontManager::activeLentSet() const {
+  if (!hostOverlayActive_) {
+    return nullptr;
+  }
+  const auto it = lentSets_.find(activeDigest_);
+  return it == lentSets_.end() ? nullptr : &it->second;
+}
+
+FontManager::LentSet* FontManager::activeLentSet() {
+  return const_cast<LentSet*>(std::as_const(*this).activeLentSet());
+}
+
+std::shared_ptr<const FontManager::HostFontOverlay> FontManager::hostFontOverlay() const {
+  const LentSet* set = activeLentSet();
+  return set ? set->overlay : nullptr;
+}
+
+uint64_t FontManager::hostFontKey() const {
+  const LentSet* set = activeLentSet();
+  return set ? set->key : 0;
+}
+
+void FontManager::setHostFontOverlay(std::shared_ptr<const HostFontOverlay> overlay) {
+  if (!overlay) {
+    hostOverlayActive_ = false;
+    return;
+  }
+  hostOverlayActive_ = true;
+  activeDigest_ = overlay->digest;
+  if (const auto existing = lentSets_.find(activeDigest_); existing != lentSets_.end()) {
+    existing->second.lastLent = ++lentClock_;
+    return;
+  }
+  LentSet& set = lentSets_[activeDigest_];
+  set.overlay = std::move(overlay);
+  set.lastLent = ++lentClock_;
+  uint64_t serials = 0;
+  for (size_t i = 0; i < set.overlay->faces.size(); ++i) {
+    const css::FontFace& face = set.overlay->faces[i];
+    auto [it, inserted] = lentFaces_.try_emplace(set.overlay->faceKeys[i]);
+    if (inserted) {
+      it->second.entity = registry_.create();
+      registry_.emplace<HostFontFaceComponent>(it->second.entity, face, 0);
+      it->second.serial = ++lentSerial_;
+    }
+    ++it->second.sets;
+    serials = MixHash(serials, it->second.serial);
+    set.faces.emplace_back(it->second.entity, i);
+    set.familiesLower.insert(StringUtils::ToLowerAscii(face.familyName));
+  }
+  lentSetFaces_ += set.faces.size();
+  set.key = MixHash(activeDigest_, serials) | 1;
+  ++hostOverlayStats_.rebuilds;
+  (void)releaseLentSets(kMaximumRetainedLentFaces);
+}
+
+std::unordered_map<uint64_t, FontManager::LentSet>::iterator FontManager::leastRecentlyLentSet() {
+  auto victim = lentSets_.end();
+  for (auto it = lentSets_.begin(); it != lentSets_.end(); ++it) {
+    const bool lentNow = hostOverlayActive_ && it->first == activeDigest_;
+    if (!lentNow && (victim == lentSets_.end() || it->second.lastLent < victim->second.lastLent)) {
+      victim = it;
+    }
+  }
+  return victim;
+}
+
+size_t FontManager::releaseLentSet(std::unordered_map<uint64_t, LentSet>::iterator set) {
+  size_t released = 0;
+  for (const auto& [entity, position] : set->second.faces) {
+    const auto face = lentFaces_.find(set->second.overlay->faceKeys[position]);
+    if (face != lentFaces_.end() && --face->second.sets == 0) {
+      // Destroying the entity releases its loaded bytes and their budget reservation.
+      registry_.destroy(face->second.entity);
+      lentFaces_.erase(face);
+      ++released;
+    }
+  }
+  lentSetFaces_ -= set->second.faces.size();
+  lentSets_.erase(set);
+  return released;
+}
+
+size_t FontManager::releaseLentSets(size_t maximumFaces) {
+  size_t released = 0;
+  while (lentSetFaces_ > maximumFaces || lentSets_.size() > kMaximumLentSets) {
+    const auto victim = leastRecentlyLentSet();
+    if (victim == lentSets_.end()) {
+      break;
+    }
+    released += releaseLentSet(victim);
+  }
+  hostOverlayStats_.evictions += released;
+  return released;
+}
+
+void FontManager::clearLentSetCaches() {
+  for (auto& [digest, set] : lentSets_) {
+    set.cache.clear();
+  }
+}
+
+FontManager::ResolutionCache& FontManager::resolutionCache() {
+  LentSet* set = activeLentSet();
+  return set ? set->cache : cache_;
+}
+
+template <typename Admit>
+bool FontManager::admitReleasingIdleLentSets(Admit&& admit, bool* retainedBudgetExceeded) {
+  bool refused = false;
+  bool admitted = admit(&refused);
+  // Only a retained-budget refusal can be cured by releasing lent bytes.
+  if (!admitted && refused && releaseLentSets(0) != 0) {
+    refused = false;
+    admitted = admit(&refused);
+  }
+  if (retainedBudgetExceeded) {
+    *retainedBudgetExceeded = refused;
+  }
+  return admitted;
+}
+
+bool FontManager::loadFaceData(Entity entity, const css::FontFace& face, bool lent) {
+  const auto loadSources = [&](bool* budgetRefused) {
+    for (const auto& source : face.sources) {
+      if (source.kind != css::FontFaceSource::Kind::Data) {
+        continue;
+      }
+      const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+      if (loadFontDataSharedIntoEntity(
+              entity, dataPtr, source.trusted ? FontDataTrust::Trusted : FontDataTrust::Untrusted,
+              budgetRefused)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (lent) {
+    bool budgetRefused = false;
+    return loadSources(&budgetRefused);
+  }
+  return admitReleasingIdleLentSets(loadSources);
+}
+
+std::string_view FontManager::resolveGenericFamily(std::string_view family) const {
   const std::string familyLower = StringUtils::ToLowerAscii(family);
-  const auto generic = genericFamilyMap_.find(familyLower);
-  const bool isGeneric = generic != genericFamilyMap_.end();
-  const std::string_view resolved = isGeneric ? std::string_view(generic->second) : family;
-  const std::string resolvedLower = isGeneric ? StringUtils::ToLowerAscii(resolved) : familyLower;
+  if (const auto generic = genericFamilyMap_.find(familyLower);
+      generic != genericFamilyMap_.end()) {
+    return generic->second;
+  }
+  if (const LentSet* set = activeLentSet()) {
+    for (const auto& [generic, realFamily] : set->overlay->genericFamilies) {
+      if (generic == familyLower) {
+        return realFamily;
+      }
+    }
+  }
+  return family;
+}
+
+FontManager::FaceMatch FontManager::bestFace(std::string_view family, int weight, int style,
+                                             int stretch) const {
+  // CSS font matching: width first, then style, then weight.
+  FaceMatch best;
+  std::optional<FontMatchScore> bestScore;
+  uint64_t bestSequence = 0;
+  const auto consider = [&](Entity entity, const css::FontFace& face, uint64_t sequence,
+                            bool lent) {
+    if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
+      return;
+    }
+    const FontMatchScore score = RankFontFace(face, weight, style, stretch);
+
+    // Equally good faces resolve to the one declared last, per CSS. The scan runs to completion
+    // rather than stopping at the first exact match, because a later declaration can tie it and
+    // then has to win.
+    if (!bestScore || score < *bestScore || (score == *bestScore && sequence > bestSequence)) {
+      bestScore = score;
+      bestSequence = sequence;
+      best = FaceMatch{entity, lent};
+    }
+  };
+
+  auto view = registry_.view<FontFaceComponent>();
+  for (const Entity entity : view) {
+    const FontFaceComponent& component = view.get<FontFaceComponent>(entity);
+    consider(entity, component.face, component.sequence, false);
+  }
+  // The document's own rules win; a lent host face only answers a family they do not declare.
+  const LentSet* set = best.entity == entt::null ? activeLentSet() : nullptr;
+  if (set != nullptr) {
+    for (const auto& [entity, position] : set->faces) {
+      consider(entity, registry_.get<HostFontFaceComponent>(entity).face, position, true);
+    }
+  }
+  return best;
+}
+
+const css::FontFace& FontManager::matchedFace(const FaceMatch& match) const {
+  return match.lent ? registry_.get<HostFontFaceComponent>(match.entity).face
+                    : registry_.get<FontFaceComponent>(match.entity).face;
+}
+
+bool FontManager::hasFamily(std::string_view family) const {
+  const std::string_view resolved = resolveGenericFamily(family);
+  const std::string resolvedLower = StringUtils::ToLowerAscii(resolved);
 
   if (registeredFamiliesLower_.count(resolvedLower) != 0 ||
-      providerResolvedFamiliesLower_.count(resolvedLower) != 0) {
+      providerResolvedFamiliesLower_.count(resolvedLower) != 0 ||
+      (activeLentSet() != nullptr && activeLentSet()->familiesLower.count(resolvedLower) != 0)) {
     return true;
   }
 
@@ -613,52 +902,30 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   weight = std::clamp(weight, 1, 1000);
   stretch = std::clamp(stretch, 1, 9);
   // Resolve CSS generic family names to real family names.
-  const std::string familyLower = StringUtils::ToLowerAscii(family);
-  if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
-    family = it->second;
-  }
+  family = resolveGenericFamily(family);
 
   const ProviderFontKey dependencyKey{StringUtils::ToLowerAscii(family), weight, style, stretch};
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
-  invalidateChangedProviderAnswer(family, dependencyKey, cacheKey);
-  if (auto it = cache_.find(cacheKey); it != cache_.end()) {
+  // Answers under an overlay can differ from the document's own, so they are cached apart.
+  auto& cache = resolutionCache();
+  if (auto it = cache.find(cacheKey); it != cache.end()) {
     // A cached answer outlives many lookups, so confirm the entity behind it is still a live,
-    // loaded font rather than handing back a handle to a destroyed or emptied one. Every answer
-    // this function caches has loaded bytes, so anything else means the entity changed underneath
-    // the cache and the query has to be resolved again.
-    if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
+    // loaded font rather than handing back a handle to a destroyed or emptied one, and that a
+    // catalog's content has not changed since. Every answer this function caches has loaded
+    // bytes, so anything else means the answer is stale and the query has to be resolved again.
+    const FontHandle font = it->second.font;
+    if (isValidHandle(font) && registry_.all_of<LoadedFontComponent>(font.entity()) &&
+        providerAnswerIsCurrent(family, dependencyKey, it->second)) {
       recordDependency(dependencyKey);
-      return it->second;
+      return font;
     }
-    cache_.erase(it);
+    cache.erase(it);
   }
 
   // Walk @font-face rules looking for the best match.
-  // CSS font matching: width first, then style, then weight.
-  Entity bestEntity = entt::null;
-  std::optional<FontMatchScore> bestScore;
-  uint64_t bestSequence = 0;
-
-  auto view = registry_.view<FontFaceComponent>();
-  for (const Entity entity : view) {
-    const FontFaceComponent& component = view.get<FontFaceComponent>(entity);
-    const css::FontFace& face = component.face;
-    if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
-      continue;
-    }
-    const FontMatchScore score = RankFontFace(face, weight, style, stretch);
-
-    // Equally good faces resolve to the one declared last, per CSS. The scan runs to completion
-    // rather than stopping at the first exact match, because a later declaration can tie it and
-    // then has to win.
-    if (!bestScore || score < *bestScore ||
-        (score == *bestScore && component.sequence > bestSequence)) {
-      bestScore = score;
-      bestSequence = component.sequence;
-      bestEntity = entity;
-    }
-  }
+  const FaceMatch match = bestFace(family, weight, style, stretch);
+  const Entity bestEntity = match.entity;
 
   // Set when something claimed this family but could not be turned into loaded bytes this time,
   // whether that was an `@font-face` rule or the external provider. The failure can be transient
@@ -667,33 +934,31 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   bool matchedSourceFailedToLoad = false;
 
   if (bestEntity != entt::null) {
+    // A provider answer recorded for the document itself still stands when a lent face answers.
+    const auto resolvedByRule = [&] {
+      if (!match.lent) {
+        providerDependencies_.erase(dependencyKey);
+      }
+    };
     if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
-      providerDependencies_.erase(dependencyKey);
+      resolvedByRule();
       FontHandle handle(bestEntity);
-      cache_[cacheKey] = handle;
+      cache[cacheKey] = CachedAnswer{.font = handle};
       return handle;
     }
 
-    const auto& face = registry_.get<FontFaceComponent>(bestEntity).face;
-    for (const auto& source : face.sources) {
-      if (source.kind == css::FontFaceSource::Kind::Data) {
-        const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
-        const FontDataTrust trust =
-            source.trusted ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
-        if (loadFontDataSharedIntoEntity(bestEntity, dataPtr, trust)) {
-          providerDependencies_.erase(dependencyKey);
-          FontHandle handle(bestEntity);
-          cache_[cacheKey] = handle;
-          return handle;
-        }
-      }
+    if (loadFaceData(bestEntity, matchedFace(match), match.lent)) {
+      resolvedByRule();
+      FontHandle handle(bestEntity);
+      cache[cacheKey] = CachedAnswer{.font = handle};
+      return handle;
     }
     matchedSourceFailedToLoad = true;
   }
 
   const auto cacheUnlessRetryable = [&](FontHandle handle) {
     if (!matchedSourceFailedToLoad) {
-      cache_[cacheKey] = handle;
+      cache[cacheKey] = CachedAnswer{.font = handle};
     }
     return handle;
   };
@@ -708,21 +973,19 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   return cacheUnlessRetryable(fallbackFont());
 }
 
-void FontManager::invalidateChangedProviderAnswer(std::string_view family,
-                                                  const ProviderFontKey& key,
-                                                  const std::string& cacheKey) {
-  if (!provider_) {
-    return;
+bool FontManager::providerAnswerIsCurrent(std::string_view family, const ProviderFontKey& key,
+                                          const CachedAnswer& answer) const {
+  // Only a catalog identifies its content; other answers stay valid until the provider changes,
+  // which drops every cache.
+  if (provider_ == nullptr || answer.providerContentId.empty()) {
+    return true;
   }
-  const auto dependency = providerDependencies_.find(key);
-  if (dependency == providerDependencies_.end()) {
-    return;
-  }
-  const auto current = provider_->availability(family, dependency->second.request);
-  if (current.contentId != dependency->second.availability.contentId ||
-      current.contentGeneration != dependency->second.availability.contentGeneration) {
-    cache_.erase(cacheKey);
-  }
+  const FontFaceRequest request{.weight = key.weight,
+                                .style = static_cast<FontStyle>(key.style),
+                                .stretch = static_cast<FontStretch>(key.stretch)};
+  const auto current = provider_->availability(family, request);
+  return current.contentId == answer.providerContentId &&
+         current.contentGeneration == answer.providerGeneration;
 }
 
 void FontManager::rememberProviderDependency(const ProviderLookup& lookup, FontFaceLoadState state,
@@ -793,8 +1056,14 @@ bool FontManager::catalogFaceFitsConsumer(const ProviderLookup& lookup) {
                                FontFaceWaitReason::RetainedBudget);
     return false;
   }
-  if (lookup.availability.decodedBytes > budget->maximumBytes - budget->usedBytes ||
-      budget->usedFonts >= budget->maximumFonts) {
+  const auto fits = [&](bool* retainedBudgetExceeded) {
+    const auto current = budgetStateForRead();
+    *retainedBudgetExceeded =
+        lookup.availability.decodedBytes > current->maximumBytes - current->usedBytes ||
+        current->usedFonts >= current->maximumFonts;
+    return !*retainedBudgetExceeded;
+  };
+  if (!admitReleasingIdleLentSets(fits)) {
     rememberProviderDependency(lookup, FontFaceLoadState::WaitingForAdmission,
                                FontFaceWaitReason::RetainedBudget);
     return false;
@@ -830,9 +1099,13 @@ FontHandle FontManager::loadProviderFont(const ProviderLookup& lookup,
   bool retainedBudgetExceeded = false;
   const Entity entity = registry_.create();
   if (providerBytesMatch(lookup, data) &&
-      loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted,
-                             lookup.isCatalog() ? &lookup.availability : nullptr,
-                             &retainedBudgetExceeded)) {
+      admitReleasingIdleLentSets(
+          [&](bool* refused) {
+            return loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted,
+                                          lookup.isCatalog() ? &lookup.availability : nullptr,
+                                          refused);
+          },
+          &retainedBudgetExceeded)) {
     registry_.get<LoadedFontComponent>(entity).providerRequest = lookup.request;
     registry_.get<LoadedFontComponent>(entity).genericSans =
         lookup.dependencyKey.family == "sans-serif";
@@ -859,9 +1132,13 @@ FontHandle FontManager::loadProviderFont(const ProviderLookup& lookup,
 }
 
 FontHandle FontManager::cacheProviderFont(const std::string& cacheKey, FontHandle font,
-                                          bool documentSourceFailed) {
+                                          bool documentSourceFailed,
+                                          const FontFaceAvailability& availability) {
   if (!documentSourceFailed) {
-    cache_[cacheKey] = font;
+    resolutionCache()[cacheKey] =
+        CachedAnswer{.font = font,
+                     .providerContentId = availability.contentId,
+                     .providerGeneration = availability.contentGeneration};
   }
   return font;
 }
@@ -882,7 +1159,7 @@ FontHandle FontManager::findProviderFont(std::string_view family,
       .availability = std::move(availability),
   };
   if (const auto font = cachedProviderFont(lookup)) {
-    return cacheProviderFont(cacheKey, font, documentSourceFailed);
+    return cacheProviderFont(cacheKey, font, documentSourceFailed, lookup.availability);
   }
   if (shouldDeferCatalogLookup(lookup) || !catalogFaceFitsConsumer(lookup)) {
     return fallbackFont();
@@ -907,7 +1184,7 @@ FontHandle FontManager::findProviderFont(std::string_view family,
       return fallbackFont();
     }
     if (const auto font = loadProviderFont(lookup, data)) {
-      return cacheProviderFont(cacheKey, font, documentSourceFailed);
+      return cacheProviderFont(cacheKey, font, documentSourceFailed, lookup.availability);
     }
   }
   return fallbackFont();
@@ -920,7 +1197,9 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrus
 FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust,
                                      const FontDataRenderingOptions& rendering) {
   const Entity entity = registry_.create();
-  if (!loadFontDataIntoEntity(entity, data, trust)) {
+  if (!admitReleasingIdleLentSets([&](bool* retainedBudgetExceeded) {
+        return loadFontDataIntoEntity(entity, data, trust, nullptr, retainedBudgetExceeded);
+      })) {
     registry_.destroy(entity);
     return FontHandle();
   }
@@ -941,7 +1220,8 @@ FontLoadingDomainIdentity FontManager::fontDomainIdentity() const {
 }
 
 bool FontManager::loadFontDataSharedIntoEntity(
-    Entity entity, const std::shared_ptr<const std::vector<uint8_t>>& data, FontDataTrust trust) {
+    Entity entity, const std::shared_ptr<const std::vector<uint8_t>>& data, FontDataTrust trust,
+    bool* retainedBudgetExceeded) {
   if (!data) {
     return false;
   }
@@ -968,12 +1248,13 @@ bool FontManager::loadFontDataSharedIntoEntity(
 
   // WOFF fonts need decompression/reconstruction, so they create new owned buffers.
   if (magic == kWoffMagic) {
-    return finishLoad(loadWoff1(entity, *data, trust, &workLimitExceeded));
+    return finishLoad(loadWoff1(entity, *data, trust, &workLimitExceeded, retainedBudgetExceeded));
   }
 
   if (magic == kWoff2Magic) {
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-    return finishLoad(loadWoff2(entity, *data, trust, &workLimitExceeded));
+    return finishLoad(
+        loadWoff2(entity, *data, trust, &workLimitExceeded, nullptr, retainedBudgetExceeded));
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
                  "Build with --config=text-full to enable.\n";
@@ -982,7 +1263,8 @@ bool FontManager::loadFontDataSharedIntoEntity(
   }
 
   // Raw TTF/OTF: share the data via shared_ptr (no copy).
-  return finishLoad(setRawFontData(entity, data, trust, &workLimitExceeded));
+  return finishLoad(
+      setRawFontData(entity, data, trust, &workLimitExceeded, retainedBudgetExceeded));
 }
 
 bool FontManager::isValidationRejectedSource(
@@ -1142,8 +1424,11 @@ FontHandle FontManager::fallbackFont() {
   }
 
   const Entity entity = registry_.create();
-  std::vector<uint8_t> data(fallback.bytes().begin(), fallback.bytes().end());
-  if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
+  if (!admitReleasingIdleLentSets([&](bool* retainedBudgetExceeded) {
+        return setRawFontData(
+            entity, std::vector<uint8_t>(fallback.bytes().begin(), fallback.bytes().end()),
+            FontDataTrust::Trusted, nullptr, retainedBudgetExceeded);
+      })) {
     registry_.destroy(entity);
     return FontHandle();
   }
@@ -1154,11 +1439,12 @@ FontHandle FontManager::fallbackFont() {
 
 std::optional<fonts::SfntFont> FontManager::validateSfntForLoad(
     Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
-    const std::shared_ptr<FontBudgetState>& budgetState, bool* validationWorkLimitExceeded) {
+    const std::shared_ptr<FontBudgetState>& budgetState, bool* validationWorkLimitExceeded,
+    bool* retainedBudgetExceeded) {
   if (validationWorkLimitExceeded) {
     *validationWorkLimitExceeded = false;
   }
-  if (!canStoreLoadedFont(entity, data.size(), 0, budgetState)) {
+  if (!canStoreLoadedFont(entity, data.size(), 0, budgetState, retainedBudgetExceeded)) {
     return std::nullopt;
   }
   if (exhaustedValidationBudgetRejects(data, trust, budgetState)) {
@@ -1194,7 +1480,8 @@ std::optional<fonts::SfntFont> FontManager::validateSfntForLoad(
 bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust,
                                  bool* validationWorkLimitExceeded, bool* retainedBudgetExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
-  auto sfnt = validateSfntForLoad(entity, data, trust, budgetState, validationWorkLimitExceeded);
+  auto sfnt = validateSfntForLoad(entity, data, trust, budgetState, validationWorkLimitExceeded,
+                                  retainedBudgetExceeded);
   if (!sfnt) {
     return false;
   }
@@ -1208,13 +1495,14 @@ bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontD
 
 bool FontManager::setRawFontData(Entity entity,
                                  std::shared_ptr<const std::vector<uint8_t>> sharedData,
-                                 FontDataTrust trust, bool* validationWorkLimitExceeded) {
+                                 FontDataTrust trust, bool* validationWorkLimitExceeded,
+                                 bool* retainedBudgetExceeded) {
   if (!sharedData) {
     return false;
   }
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
-  auto sfnt =
-      validateSfntForLoad(entity, *sharedData, trust, budgetState, validationWorkLimitExceeded);
+  auto sfnt = validateSfntForLoad(entity, *sharedData, trust, budgetState,
+                                  validationWorkLimitExceeded, retainedBudgetExceeded);
   if (!sfnt) {
     return false;
   }
@@ -1223,7 +1511,7 @@ bool FontManager::setRawFontData(Entity entity,
   font.sharedData = std::move(sharedData);
   font.sfnt = std::move(*sfnt);
   font.trust = trust;
-  return storeLoadedFont(entity, std::move(font));
+  return storeLoadedFont(entity, std::move(font), retainedBudgetExceeded);
 }
 
 std::shared_ptr<const FontManager::FontBudgetState> FontManager::budgetStateForRead() const {
@@ -1302,7 +1590,7 @@ bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t inde
 }
 
 bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
-                            bool* validationWorkLimitExceeded) {
+                            bool* validationWorkLimitExceeded, bool* retainedBudgetExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   ++budgetState->compressedFontDecompressionAttempts;
   fonts::WoffParser::Options options;
@@ -1315,14 +1603,14 @@ bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDa
 
   // Reconstruct sfnt byte stream from decompressed WOFF tables.
   std::vector<uint8_t> sfntData = reconstructSfnt(maybeFont.result());
-  return setRawFontData(entity, std::move(sfntData), trust, validationWorkLimitExceeded);
+  return setRawFontData(entity, std::move(sfntData), trust, validationWorkLimitExceeded,
+                        retainedBudgetExceeded);
 }
 
 bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data,
                                          FontDataTrust trust, const FontFaceAvailability* catalog,
                                          bool* retainedBudgetExceeded) {
   (void)catalog;
-  (void)retainedBudgetExceeded;
   if (data.size() < 4) {
     return false;
   }
@@ -1339,7 +1627,7 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   }
 
   if (magic == kWoffMagic) {
-    return loadWoff1(entity, data, trust);
+    return loadWoff1(entity, data, trust, nullptr, retainedBudgetExceeded);
   }
 
   if (magic == kWoff2Magic) {
@@ -1353,18 +1641,20 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   }
 
   // Validate and budget the retained index before copying the untrusted byte stream.
-  auto sfnt = validateSfntForLoad(entity, data, trust, budgetState);
+  auto sfnt =
+      validateSfntForLoad(entity, data, trust, budgetState, nullptr, retainedBudgetExceeded);
   if (!sfnt) {
     return false;
   }
-  if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState)) {
+  if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState,
+                          retainedBudgetExceeded)) {
     return false;
   }
   LoadedFontComponent font;
   font.ownedData.assign(data.begin(), data.end());
   font.sfnt = std::move(*sfnt);
   font.trust = trust;
-  return storeLoadedFont(entity, std::move(font));
+  return storeLoadedFont(entity, std::move(font), retainedBudgetExceeded);
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED

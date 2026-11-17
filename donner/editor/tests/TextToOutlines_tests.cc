@@ -1177,23 +1177,59 @@ TEST(TextToOutlinesPaint, ChunkInsideOneRunIsStrokedAsItsOwnShape) {
 
 // A translucent stroked span whose glyphs overlap. The renderer folds the span's opacity into each
 // glyph's fill alpha and each chunk's stroke alpha, so where "A" and "V" overlap the fills
-// composite twice (0.84 coverage for `opacity="0.6"`, not 0.6); the outlines fold it into each
+// composite twice (0.75 coverage for `opacity="0.5"`, not 0.5); the outlines fold it into each
 // path's `fill-opacity` and `stroke-opacity` and paint the same pixels. A per-run `<g opacity>`
-// (0.6 in the overlap) or an `opacity` on each path (a layer, which rounds differently) does not.
-//
-// The opacity is 0.6 because 255 * 0.6 is a whole alpha. The CPU renderer rounds a span's
-// `opacity` to 8-bit alpha but truncates `fill-opacity` and `stroke-opacity`, so at 0.5 the text
-// paints alpha 128 and its outlines alpha 127, one step apart everywhere they paint.
+// (0.5 in the overlap) or an `opacity` on each path (a layer, which rounds differently) does not.
 TEST(TextToOutlinesPaint, TranslucentStrokedSpanOfOverlappingGlyphs) {
   svg::RendererBitmap text;
   svg::RendererBitmap outlines;
   ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect x="0" y="0" width="200" height="200" fill="white"/>
-<text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.6" stroke="#aa0000" stroke-width="3" letter-spacing="-20">AV</tspan></text>
+<text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.5" stroke="#aa0000" stroke-width="3" letter-spacing="-20">AV</tspan></text>
 </svg>)",
       text, outlines));
   tests::CompareBitmapToBitmap(outlines, text, "translucent_stroked_overlapping_span",
+                               tests::PixelmatchIdentityParams());
+}
+
+// A span whose `stroke-opacity` and `opacity` are both 0.948, stroked with no fill. The renderer
+// applies the product to the stroke alpha once, as the outlines' folded `stroke-opacity` of
+// 0.898704 does (alpha 229). Quantizing each factor on its own gave alpha 228.
+TEST(TextToOutlinesPaint, SpanOpacityAndStrokeOpacityApplyOnce) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="none" stroke="#0033aa" stroke-width="4"><tspan opacity="0.948" stroke-opacity="0.948">SVG</tspan></text>
+</svg>)",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "span_opacity_and_stroke_opacity_apply_once",
+                               tests::PixelmatchIdentityParams());
+}
+
+// The same for the fill: a span whose `fill-opacity` and `opacity` are both 0.948 fills at alpha
+// 229, as the outlines' folded `fill-opacity` does.
+//
+// CPU only. On Geode a glyph fill, drawn from the glyph's outline in glyph space and placed by a
+// float transform, and the same outline drawn as a path in place differ by one step in a few
+// anti-aliased edge pixels on some devices (1 pixel here under Linux software Vulkan), which this
+// case cannot avoid: a fill edge covered by a stroke would show through the span's translucent
+// stroke. Geode never quantized the opacity twice; its alpha is covered by the stroke case above.
+TEST(TextToOutlinesPaint, SpanOpacityAndFillOpacityApplyOnce) {
+#ifdef DONNER_GEODE_BACKEND_AVAILABLE
+  GTEST_SKIP() << "Geode glyph fills and placed paths differ at anti-aliased edges";
+#endif
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text x="10" y="120" font-size="64" fill="#0033aa"><tspan opacity="0.948" fill-opacity="0.948">SVG</tspan></text>
+</svg>)",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "span_opacity_and_fill_opacity_apply_once",
                                tests::PixelmatchIdentityParams());
 }
 
@@ -1270,6 +1306,75 @@ TEST(TextToOutlinesPaint, DefaultFillRuleAndOpacityUnderAnAncestor) {
   const std::optional<svg::SVGElement> group = reparsed.querySelector("#t_outlines");
   ASSERT_TRUE(group.has_value());
   EXPECT_EQ(group->getComputedStyle().fillRule.getOr(FillRule::EvenOdd), FillRule::NonZero);
+}
+
+// A dashed text stroke converts to dashed stroke-only paths. The text dashes each text chunk as one
+// shape, the contours in glyph order, and so does the chunk's path. The tspan overrides the dash
+// array with font-relative lengths, which resolve against its own font size, not the outline
+// group's (inherited from an ancestor at another size); the text sets a nonzero dash offset and
+// its own line join, cap and miter limit.
+TEST(TextToOutlinesPaint, DashedStrokeWithSpanOverride) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g font-size="16"><text x="10" y="120" font-size="64" fill="none" stroke="#0033aa" stroke-width="3" stroke-dasharray="6 4" stroke-dashoffset="3" stroke-linejoin="round" stroke-linecap="square" stroke-miterlimit="2">Te<tspan stroke-dasharray="0.25em 0.1em">xt</tspan></text></g>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "dashed_stroke_with_span_override",
+                               tests::PixelmatchIdentityParams());
+}
+
+// Stroke geometry the text resets to its defaults under an ancestor that sets it: the outlines
+// draw a solid stroke with miter joins and butt caps, as the text does.
+TEST(TextToOutlinesPaint, DefaultStrokeGeometryUnderAnAncestor) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g stroke-dasharray="2 2" stroke-dashoffset="1" stroke-linejoin="bevel" stroke-linecap="round" stroke-miterlimit="1"><text x="10" y="120" font-size="64" fill="none" stroke="#0033aa" stroke-width="4" stroke-dasharray="none" stroke-dashoffset="0" stroke-linejoin="miter" stroke-linecap="butt" stroke-miterlimit="4">SVG</text></g>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "default_stroke_geometry_under_ancestor",
+                               tests::PixelmatchIdentityParams());
+}
+
+// A font-relative stroke width resolves against the font size of the element whose run it
+// paints, not the outline group's, which the group inherits from an ancestor. The tspan with its
+// own `em` width, the tspan that inherits the text's `em` width at another font size (8 wide, not
+// 6), and the `rem` width all resolve against their own run's font size, as the renderer
+// resolves them.
+TEST(TextToOutlinesPaint, FontRelativeStrokeWidthUnderAnotherFontSize) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<g font-size="12"><text x="10" y="80" font-size="60" fill="none" stroke="#aa0000" stroke-width="0.1em">S<tspan font-size="80" stroke="#0033aa" stroke-width="0.05em">V</tspan><tspan font-size="80">G</tspan></text>
+<text x="10" y="170" font-size="40" fill="none" stroke="#006600" stroke-width="0.1rem">S<tspan font-size="70">V</tspan></text></g>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "font_relative_stroke_width",
+                               tests::PixelmatchIdentityParams());
+}
+
+// A text with `vector-effect="non-scaling-stroke"` under `scale(2)` strokes 2 units wide on the
+// canvas, as its outlines must; `vector-effect` is not inherited, so it has to be on each stroke
+// path rather than on the outline group. A tspan with its own stroke and dash array takes the
+// text's non-scaling effect on its stroke path too.
+TEST(TextToOutlinesPaint, NonScalingStrokeUnderAScale) {
+  svg::RendererBitmap text;
+  svg::RendererBitmap outlines;
+  ASSERT_NO_FATAL_FAILURE(RenderTextAndOutlines(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect x="0" y="0" width="200" height="200" fill="white"/>
+<text transform="scale(2)" x="5" y="60" font-size="32" fill="none" stroke="#aa0000" stroke-width="2" vector-effect="non-scaling-stroke">S<tspan stroke="#0033aa" stroke-width="3" stroke-dasharray="4 2">VG</tspan></text>
+</svg>)svg",
+      text, outlines));
+  tests::CompareBitmapToBitmap(outlines, text, "non_scaling_stroke_under_scale",
+                               tests::PixelmatchIdentityParams());
 }
 
 }  // namespace donner::editor
