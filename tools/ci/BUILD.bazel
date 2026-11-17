@@ -807,3 +807,22 @@ py_test(
     data = ["cmake_cache.py"],
     deps = ["@rules_python//python/runfiles"],
 )
+
+platform(
+    name = "linux_ci",
+    parents = ["//:linux_aarch64"],
+    exec_properties = {"OSFamily": "linux", "ISA": "aarch64", "container-image": "none"},
+    visibility = ["//visibility:public"],
+)
+
+platform(
+    name = "macos_ci",
+    parents = [":remote_macos_aarch64"],
+    flags = [
+        "--host_platform=//tools/ci:remote_macos_aarch64",
+        "--xcode_version_config=//tools/ci:remote_macos_xcodes",
+        "--xcode_version=27.2",
+        "--macos_minimum_os=13.3",
+    ],
+    visibility = ["//visibility:public"],
+)

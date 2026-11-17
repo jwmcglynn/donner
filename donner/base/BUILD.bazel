@@ -1,3 +1,4 @@
+load("@bazel_lib//lib:transitions.bzl", "platform_transition_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -393,3 +394,12 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+
+[platform_transition_test(
+    name = "ci_" + os + "_ndebug_test",
+    binary = ":base_tests_ndebug",
+    target_platform = "//tools/ci:" + os + "_ci",
+    tags = ["manual"],
+    exec_compatible_with = ["@platforms//os:" + os],
+) for os in ["linux", "macos"]]
