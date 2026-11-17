@@ -1918,7 +1918,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "tools/ci_select_macos_xcode.sh"])
         mac = self._job_body("macos", self.cmake)
         self.assertIn("\n    runs-on: xcode-27\n", mac)
-        self.assertIn("\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n", mac)
+        self.assertIn("    if: github.event_name == 'push' && github.ref == 'refs/heads/main'", mac.splitlines())
         self.assertNotIn("macos-self-hosted:", self.cmake)
         self.assertNotRegex(self.cmake, r"(?im)^\s*runs-on:.*self-hosted.*macos")
         self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache", mac)
