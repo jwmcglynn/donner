@@ -125,19 +125,28 @@ std::optional<FT_F26Dot6> CheckedCharacterSize(float sizePx) {
  */
 constexpr double kScalableFaceOversample = 16.0;
 
-/**
- * Largest face size that oversampling produces. HarfBuzz converts each FreeType 16.16 advance
- * through a 32-bit integer, so an advance must stay under 32768 face pixels; this size keeps
- * glyphs up to 16 em wide in range.
- */
 constexpr double kMaximumOversampledFaceSizePx = 2048.0;
 
-/// The face size multiple for text of \p textSizePx: the largest whole multiple the face size
-/// limit allows, and never coarser than the text size itself, where 1/64 pixel is negligible for
-/// large text. A whole multiple keeps every coordinate exact that is exact at the text size.
-double ScalableFaceOversample(float textSizePx) {
-  return std::clamp(std::floor(kMaximumOversampledFaceSizePx / static_cast<double>(textSizePx)),
-                    1.0, kScalableFaceOversample);
+/// Use a whole multiple so positions exact at the requested size remain exact. FreeType returns
+/// advances to HarfBuzz in signed 16.16 pixels. A wide glyph can reach that limit even below
+/// the normal face-size cap. Round the cap down to whole ppem for faces that grid-fit the size.
+double ScalableFaceOversample(FT_Face face, float textSizePx) {
+  // FT_Face exposes a signed short for max_advance_width. Read the unsigned OpenType metric
+  // directly so that widths above 32767 font units still constrain the scale.
+  const auto* hhea = static_cast<const TT_HoriHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_HHEA));
+  const auto* vhea = static_cast<const TT_VertHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_VHEA));
+  unsigned int maxAdvance = hhea ? hhea->advance_Width_Max : 0;
+  if (vhea) {
+    maxAdvance = std::max<unsigned int>(maxAdvance, vhea->advance_Height_Max);
+  }
+  if (!hhea || !maxAdvance || FT_HAS_MULTIPLE_MASTERS(face)) {
+    // Static header metrics need not describe a variation instance.
+    maxAdvance = std::numeric_limits<uint16_t>::max();
+  }
+  constexpr double kMaxAdvancePx = 32767.0;
+  const double maxFacePx = std::min(kMaximumOversampledFaceSizePx,
+                                    std::floor(kMaxAdvancePx * face->units_per_EM / maxAdvance));
+  return std::clamp(std::floor(maxFacePx / textSizePx), 1.0, kScalableFaceOversample);
 }
 
 /**
@@ -153,7 +162,7 @@ bool SetScalableFaceSize(hb_font_t* font, FT_Face face, float sizePx, float text
   }
   if (FT_IS_SCALABLE(face)) {
     const auto characterSize =
-        CheckedCharacterSize(static_cast<float>(sizePx * ScalableFaceOversample(textSizePx)));
+        CheckedCharacterSize(static_cast<float>(sizePx * ScalableFaceOversample(face, textSizePx)));
     if (!characterSize || FT_Set_Char_Size(face, 0, *characterSize, 72, 72) != 0) {
       return false;
     }
