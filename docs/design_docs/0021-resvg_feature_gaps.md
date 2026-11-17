@@ -126,7 +126,7 @@ bottom for completeness.
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
 | F10 | Remaining `textPath` vertical and kerning cases                         |                              2 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
+| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -145,7 +145,7 @@ reference qualifications and independent rendering assertions. Most use `CssFilt
 
 | Assigned cases | Disposition |
 | --- | --- |
-| Seven `color-adjust-functions-*` cases | Compare with a 390-pixel reference label glyph budget. Every mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular (see [B7](#b7-text-reference-qualification)). |
+| Seven `color-adjust-functions-*` cases | Compare at the default threshold and 100-pixel limit on both backends. The references retain the upstream filter squares and frame. The labels use independently shaped Noto Sans outlines (see [B7](#b7-text-reference-qualification)). |
 | Four `drop-shadow-function*` cases | Compare against Donner goldens (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)). Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For `drop-shadow-function` and `color-last` the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner translates the shadow by the exact offset and resamples the half pixel. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80), consistent with the resolved user lengths truncated to whole units before scaling and the scaled offset truncated toward zero. Color order, currentColor, em/mm resolution and alpha compare independently. |
 | `two-exact-urls`                             | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `two-urls`                                   | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -327,15 +327,10 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
   differing pixels. resvg v0.49.0 draws 900 with Noto Sans Black, so registering
   the other weights belongs with a refresh of those references.
-- **Color-adjust labels:** the seven `color-adjust-functions-*` labels are 8-unit
-  Noto Sans Regular, and their pixels are identical across all seven references in
-  each reference set. Against the vendored 500x500 PNGs they differ by 354 simple,
-  370 full and 375 Geode pixels, all inside the three label bands; those PNGs carry
-  about 14% more label ink than Donner's Noto Sans Regular. Against resvg v0.49.0's
-  300x300 rendering label ink agrees within 2%, and a 4x4 supersampled prototype of
-  Donner's rasterizer brings the residual from 364 simple and 377 full pixels to 5
-  and 52. They compare with a 390-pixel label glyph budget (see
-  [Reference label glyph budgets](#reference-label-glyph-budgets)).
+- **Color-adjust labels:** the 8-unit Noto Sans Regular labels have identical geometry across
+  the seven cases. The vendored PNGs reproduce macOS font smoothing and draw more ink at the
+  glyph edges. The [qualified references](#color-adjust-label-references) keep the upstream
+  filter pixels and compare all seven live-text inputs at default settings.
 - **Remaining:** `text/font/simple-case` disagrees on the unitless
   `font` shorthand (see the reference qualification table).
 - **Default family:** CSS leaves the face for a family list that matches nothing
@@ -403,7 +398,7 @@ justified by what each setting detects:
   px shift. Counting anti-aliased pixels would catch it (940 against 1235), but makes the budget a
   measure of glyph-edge coverage rather than of the crosshair, so it is not used.
 
-`//tools/resvg_parity:parity_report_tests` checks the form of this class and the next. Such a
+`//tools/resvg_parity:parity_report_tests` checks the form of these reference-generation budgets. Such a
 compared case:
 
 - comes from a per-case override, not a category default;
@@ -412,31 +407,19 @@ compared case:
 - has a budget at most its stated analytic residual plus 3%, rounded up to 5 pixels;
 - states its supersampled residual, which for this class must be within the default allowance.
 
-The parity report counts them as `reference_generation_budget_cases` and
-`reference_label_glyph_budget_cases`.
+The parity report counts these cases as `reference_generation_budget_cases`.
 
-### Reference label glyph budgets
+### Color-adjust label references
 
-The seven `filters/filter-functions/color-adjust-functions-*` cases fail the first condition. They
-differ from their vendored 500x500 PNGs by 354 simple, 370 full and 375 Geode pixels, all inside
-the three label bands; the filtered squares compare exactly. Under 4x4 coverage the difference is
-still 302 and 297 pixels, because those PNGs draw the 8-unit Noto Sans labels about 14% heavier.
-Against resvg v0.49.0's rendering, 4x4 coverage brings the labels to 5 and 52 pixels.
+Switching only font smoothing in Chromium reduces the difference against each original 500 × 500
+reference from 461 pixels to 7. Firefox reproduces the effect over white (450 to 12). The
+filtered squares agree independently. An upstream resvg 0.48.1 render at the same size still
+differs by more than 100 pixels on the 0% case. Even identical glyph paths differ at their
+edges when rasterized by different backends.
 
-They compare with a 390-pixel budget whose reason starts `Reference label glyphs:` and states the
-analytic and supersampled residuals. Detection was measured on the residual-bearing PNGs:
-
-| Regression | Pixels (simple / full) | Budget |
-| --- | ---: | ---: |
-| none | 354 / 370 | 390 |
-| 1 px label shift | 1508 / 1524 | fails |
-| brightness 50% to 45% on one square | 10354 / 10370 | fails |
-| opacity 50% to 45% on one square | 5358 / 5374 | fails |
-| sepia 2 to 0.9 on one square | 10354 / 10370 | fails |
-| grayscale 2 to 0.9 on one square | 354 / 370 | passes: no pixel moves past the 0.02 threshold |
-
-The grayscale change is invisible to any comparison at the default color threshold, budgeted or
-not.
+The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the independent outline construction, the per-backend rasterization and the comparison
+controls. Only the label bands are replaced. All seven rows use the ordinary comparison settings.
 
 ### Removed budgets
 

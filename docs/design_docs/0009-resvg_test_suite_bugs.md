@@ -54,10 +54,10 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (50)
+## Active overrides (57)
 
 The count is of overridden suite rows; the shared feColorMatrix table row covers seven of them
-and the drop-shadow-function row four.
+and the drop-shadow-function row four. The color-adjust entry covers seven rows.
 
 ### resvg golden is wrong per spec
 
@@ -135,6 +135,13 @@ Geode's interpolated texture coordinate lands just below it where tiny-skia's
 float inverse transform lands on it, so Geode picks the previous texel. All 564
 differing pixels are inside the image; this is a sampling-position rounding
 difference, not missing SVG support.
+
+### Color-adjust filter labels
+
+The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
+outside the label bands. Both backends compare the live filtered squares against the original
+pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the reference construction and qualification.
 
 ### Backend-difference goldens (text)
 

@@ -249,3 +249,67 @@ To regenerate, delete the files and run from the repository root:
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*drop_shadow_function*'
 ```
+
+## Color-adjust filter references
+
+The seven `filters/filter-functions/color-adjust-functions-*` inputs keep their live text and
+filters. Their references preserve every original pixel outside the three text bands, including
+all seven filtered squares and the frame. The historical PNGs draw heavier labels: switching
+only font smoothing reproduces them within 7 pixels in Chromium and 12 in Firefox over white.
+The original PNG producer is unknown.
+
+usvg 0.49.0 shapes the seven strings with the vendored Noto Sans Regular font
+(SHA-256 `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9`).
+The resulting scene contains only vector outlines. TinySkia and Geode each rasterize those
+paths at 500 × 500. The labels therefore test Donner’s face selection, shaping and placement
+against independent geometry while accounting for each renderer’s glyph-edge coverage.
+The filter expectations come entirely from the vendored PNGs.
+
+At 500 × 500, each of the seven fixtures gives the same whole-image mismatch count on macOS
+and Linux. The threshold is 0.02 and the ordinary limit is 100 pixels.
+
+| Comparison | CPU simple | CPU full | Geode (Metal and software Vulkan) |
+| --- | ---: | ---: | ---: |
+| Vendored PNG | 354 | 370 | 375 |
+| Outlined-label reference | 25 | 47 | 0 |
+
+Changing one square from 50% to 45% brightness fails by at least 10,000 pixels. Moving the
+labels right by one device pixel fails by at least 1,412 pixels across the two CPU tiers and
+native Metal. These comparisons cover the whole image.
+
+The 100% and omitted-value cases share
+one PNG per backend, as do 200% and 2. Each pair has identical decoded reference pixels.
+
+### Reproduction
+
+From the repository root, with Python, Pillow, defusedxml and usvg 0.49.0 installed, extract
+the common label scene and convert it to paths:
+
+```sh
+python3 tools/resvg_test_suite_upgrade/color_adjust_references.py labels /tmp/color-adjust-labels.svg
+usvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf \
+  /tmp/color-adjust-labels.svg /tmp/color-adjust-paths.svg
+```
+
+To reproduce the masks, use a disposable checkout of Donner at `4a5e9abb2bd2433ba9566375d7d8ee34ff7cd104`.
+In that checkout, replace only `third_party/resvg-test-suite/tests/filters/filter-functions/color-adjust-functions-0percent.svg`
+with `color-adjust-paths.svg`. Run the two renderer targets below. The diagnostic comparison to
+the full upstream scene fails because the path input contains only the labels. Retain the
+`actual_*.png` from the selected test in each target’s `test.outputs` directory. Check for
+`[TinySkia]` in the first test log and `[Geode]` in the second.
+
+```sh
+bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_adjust_functions_0percent' \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text
+bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_adjust_functions_0percent_GeodeGolden' \
+  //donner/svg/renderer/tests:resvg_test_suite_geode
+```
+
+With the original fixtures in place, compose the decoded masks with their upstream PNGs. Supply
+the TinySkia mask first and the Geode mask second. The command writes five PNGs for each
+backend and checks that the two shared pairs agree byte-for-byte in RGBA.
+
+```sh
+python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
+  /tmp/tinyskia-labels.png /tmp/geode-labels.png /tmp/color-adjust-references
+```
