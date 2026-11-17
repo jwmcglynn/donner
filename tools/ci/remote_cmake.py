@@ -25,6 +25,8 @@ def archive_tree(bundle, directory, prefix):
             if name == ".git" or path.is_dir() and not path.is_symlink():
                 continue
             if path.is_symlink():
+                if relative == Path("external") and os.readlink(path) == "bazel-out/../../../external":
+                    continue
                 if path.readlink().is_absolute() or directory not in path.resolve().parents:
                     raise ValueError(f"Source link leaves its input tree: {relative}")
             info = bundle.gettarinfo(str(path), str(Path(prefix) / relative))
