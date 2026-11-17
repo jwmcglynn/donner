@@ -10,6 +10,7 @@ exports_files(
 )
 
 exports_files([
+    "ci_bazel_test.sh",
     "lint.sh",
     "run-browser-ci.sh",
 ])
@@ -347,11 +348,14 @@ py_test(
         "//tools/ci:determine_targets.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:fetch_bazel_diff.sh",
+        "//tools/ci:lane.py",
+        "//tools/ci:lanes.py",
     ],
     imports = ["."],
     deps = [
         ":bazelrc_configs",
         ":test_timing",
+        "//tools/ci:lane_view",
         "@rules_python//python/runfiles",
     ],
 )
@@ -411,6 +415,7 @@ py_test(
         ":release_candidate",
         ":release_macos_editor",
         ":test_timing",
+        "//tools/ci:lane_view",
         "@rules_python//python/runfiles",
     ],
 )
@@ -434,6 +439,7 @@ py_test(
     deps = [
         ":bazelrc_configs",
         ":test_timing",
+        "//tools/ci:lane_view",
         "@rules_python//python/runfiles",
     ],
 )
@@ -453,6 +459,7 @@ py_test(
         "//:github_action_definitions",
         "//build_defs:rules.bzl",
         "//tools/ci:BUILD.bazel",
+        "//tools/ci:lanes.py",
         "//tools/ci:remote_macos_xcode.bzl",
     ],
     deps = [
@@ -478,6 +485,7 @@ py_library(
     name = "bazelrc_configs",
     testonly = 1,
     srcs = ["bazelrc_configs.py"],
+    visibility = ["//tools/ci:__pkg__"],
 )
 
 py_test(
@@ -1023,16 +1031,18 @@ py_test(
         "run-browser-ci.sh",
         "//:.bazelrc",
         "//:github_action_definitions",
-        "//tools/ci:bazel_watchdog.sh",
         "//tools/ci:coverage_contract.json",
         "//tools/ci:determine_targets.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:editor_wasm_stage.py",
         "//tools/ci:fetch_bazel_diff.sh",
+        "//tools/ci:lane_commands.golden.json",
     ],
     main = "ci_lane_parity_tests.py",
     deps = [
         ":bazelrc_configs",
+        "//tools/ci:lane_view",
+        "//tools/ci:lanes",
         "@rules_python//python/runfiles",
     ],
 )
@@ -1185,8 +1195,13 @@ py_test(
         "//donner/gpu/metal/tests:BUILD.bazel",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:coverage_contract.json",
+        "//tools/ci:lanes.py",
     ],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":bazelrc_configs",
+        "//tools/ci:lane_view",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(

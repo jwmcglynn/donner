@@ -20,6 +20,8 @@ from tools import bcr_preflight
 from tools import release_candidate
 from tools import release_macos_editor
 from tools import test_timing
+from tools.ci import lane_view
+from tools.ci import lanes
 
 
 BAZEL_DIFF_TAG = "v18.1.0"
@@ -859,8 +861,10 @@ def _read_supply_chain_files():
     github = main.parent.parent
     paths = sorted((github / "workflows").glob("*.y*ml"))
     paths.extend(sorted((github / "actions").glob("*/action.y*ml")))
+    # Each lane step's commands, from the lane table, under its `run:` line.
     return {
-        str(path.relative_to(github.parent)): path.read_text(encoding="utf-8")
+        str(path.relative_to(github.parent)): lane_view.with_dry_runs(
+            path.read_text(encoding="utf-8"))
         for path in paths
     }
 
@@ -3355,15 +3359,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual("bash", _step_key(step, "shell", 8))
         scripts = _run_bodies(step)
         self.assertEqual(1, len(scripts), step)
+        # The step runs one lane phase; its command, from the dry run, follows the call.
         self.assertEqual([
-            "set", "-euo", "pipefail", "bazelisk", "test", "--config=ci",
-            "--config=latest_llvm", "--test_output=all",
-            "$BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS",
-            "--test_tag_filters=", "--nocache_test_results",
-            "--noskip_incompatible_explicit_targets",
-            "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
-            "//tools/ci:deterministic_fuzzer_soak",
-        ], shlex.split(scripts[0].replace("\\\n", " ")))
+            "python3 tools/ci/lane.py phase linux-self-hosted deterministic_soak_probe",
+            " ".join([
+                "bazelisk", "test", "--config=ci", "--config=latest_llvm", "--test_output=all",
+                *lanes.SELF_HOSTED_REMOTE, "--test_tag_filters=", "--nocache_test_results",
+                "--noskip_incompatible_explicit_targets",
+                "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
+                "//tools/ci:deterministic_fuzzer_soak"]),
+        ], [line.strip().lstrip("# ") for line in scripts[0].splitlines()])
         metadata = _read("tools/ci/BUILD.bazel")
         self.assertIn('test_suite(\n    name = "deterministic_fuzzer_soak",\n'
                       '    tags = ["manual"],\n'
@@ -3374,18 +3379,25 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         workflow = self.supply_chain_files[path]
         step = _named_step(_jobs(workflow)["linux-self-hosted"],
                            "Test deterministic fuzzer soak wrapper")
-        for old, new in [("--test_tag_filters= ", "--test_tag_filters=-fuzz_soak "),
+        skipped = workflow.replace(step, step.replace(
+            "        shell: bash", "        if: false\n        shell: bash", 1), 1)
+        self.assertNotEqual(workflow, skipped)
+        cases = {"if: false": (None, skipped)}
+        for old, new in [("--test_tag_filters=", "--test_tag_filters=-fuzz_soak"),
                          ("--nocache_test_results", "--cache_test_results"),
                          ("--noskip_incompatible_explicit_targets",
-                          "--skip_incompatible_explicit_targets"),
-                         ("        shell: bash", "        if: false\n        shell: bash")]:
-            with self.subTest(change=new):
-                changed = step.replace(old, new, 1)
-                self.assertNotEqual(step, changed)
+                          "--skip_incompatible_explicit_targets")]:
+            cases[new] = (lane_view.edited_lane("linux-self-hosted", lane_view.replacing(
+                old, new), ("deterministic_soak_probe",)), None)
+        for change, (edit, text) in cases.items():
+            with self.subTest(change=change):
                 case = type(self)("test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate")
-                case.supply_chain_files = {**self.supply_chain_files,
-                                          path: workflow.replace(step, changed, 1)}
-                with self.assertRaises(AssertionError, msg=new):
+                if edit:
+                    with edit:
+                        text = _read_supply_chain_files()[path]
+                self.assertNotEqual(workflow, text)
+                case.supply_chain_files = {**self.supply_chain_files, path: text}
+                with self.assertRaises(AssertionError, msg=change):
                     case.test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate()
 
     def test_fuzz_soaks_are_tagged_for_pr_exclusion_with_a_hang_guard_timeout(self):
@@ -3552,6 +3564,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual([], _buildbuddy_violations({**files, docs: cased}))
 
     def test_buildbuddy_policy_rejects_widened_key_access(self):
+        # A hosted macOS phase that turns the local fallback off, read back through the workflow.
+        with lane_view.edited_lane("macos", lane_view.replacing(
+                "--config=ci", "--config=ci", "--remote_local_fallback=false"), ("build",)):
+            fallback_off = _read_supply_chain_files()[".github/workflows/main.yml"]
         files = self.supply_chain_files
         main = ".github/workflows/main.yml"
         wasm = ".github/workflows/editor_wasm.yml"
@@ -3609,10 +3625,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "lane dropped": (wasm, files[wasm].replace(
                 "uses: ./.github/actions/buildbuddy-cache", "uses: ./.github/actions/apt-install"),
                 "BuildBuddy lanes changed"),
-            "fallback turned off for one step": (main, files[main].replace(
-                "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
-                "bazelisk build --config=ci --remote_local_fallback=false "
-                "$BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),
+            "fallback turned off for one step": (main, fallback_off,
                 "overrides the BuildBuddy local fallback"),
             "fallback turned off for the job": (nightly, files[nightly].replace(
                 "        linker: [default, gold]\n    steps:\n",
@@ -3864,7 +3877,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("--remote_accept_cached=false --disk_cache=", probe)
         self.assertIn("--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}", probe)
         self.assertIn('.runner == "remote" and .cacheHit != true', probe)
-        self.assertIn("bazelisk build --config=ci --config=latest_llvm ${BUILDBUDDY_FLAGS} //...",
+        self.assertIn("bazelisk build --config=ci --config=latest_llvm $BUILDBUDDY_FLAGS //...",
                       probe)
         # Every hosted Linux Bazel step selects the declared LLVM toolchain itself, so a run
         # without the cloud credential builds what main builds. Only the linker canary keeps the
