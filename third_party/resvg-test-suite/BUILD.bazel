@@ -155,6 +155,15 @@ matched only when composited over white. Its SVG input is byte-identical at both
   tests/text/textPath/link-to-rect.png
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references covered the crosshair and glyph edges with 4x4 supersampling, which
+differed from Donner's coverage by about 390 pixels per case; Donner matches the v0.49.0
+renderings within 2 pixels. Their SVG inputs are byte-identical at both revisions.
+
+  tests/text/font/font-shorthand.png
+  tests/text/text/real-text-height.png
+  tests/text/tspan/nested-whitespaces.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
 snapshot's references drew the filtered circle's anti-aliased edge 0.1 to 0.26 coverage lighter
 than its geometry gives wherever the semi-transparent shadow lies beneath it; the v0.49.0
 renderings and Donner both match the geometry there. The v0.49.0 with-percent-offset.png is

@@ -3485,6 +3485,23 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
 void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
                              const Box2d& sourceUv, double opacity, bool pixelated,
                              bool sourceIsPremultiplied) {
+  drawTextureWithFilter(
+      texture, destRect, sourceUv, opacity,
+      pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear,
+      sourceIsPremultiplied, Vector2i::Zero());
+}
+
+void GeoEncoder::drawTextureAnchored(const gpu::Texture& texture, const Box2d& destRect,
+                                     const Box2d& sourceUv, double opacity,
+                                     bool sourceIsPremultiplied, const Vector2i& anchor) {
+  drawTextureWithFilter(texture, destRect, sourceUv, opacity, GeodeTextureEncoder::Filter::Anchored,
+                        sourceIsPremultiplied, anchor);
+}
+
+void GeoEncoder::drawTextureWithFilter(const gpu::Texture& texture, const Box2d& destRect,
+                                       const Box2d& sourceUv, double opacity,
+                                       GeodeTextureEncoder::Filter filter,
+                                       bool sourceIsPremultiplied, const Vector2i& anchor) {
   if (!texture.isValid() || destRect.isEmpty() || sourceUv.isEmpty() || opacity <= 0.0) {
     return;
   }
@@ -3502,8 +3519,8 @@ void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
   qp.srcRect = sourceUv;
   qp.targetFromLocal = impl_->transform;
   qp.opacity = opacity;
-  qp.filter =
-      pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  qp.filter = filter;
+  qp.anchor = anchor;
   // Texture snapshots produced by Geode render targets store premultiplied RGBA; sampling
   // those as straight-alpha would multiply RGB by alpha a second time and visibly darken
   // translucent cached layers. Snapshots wrapping a host-uploaded CPU bitmap are
