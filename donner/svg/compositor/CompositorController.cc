@@ -256,6 +256,23 @@ bool OwnerSupportsDamagePatching(Registry& registry, const CompositorLayer& owne
   return false;
 }
 
+/// Compose translations at or below this many device pixels are rounding in the stamp product, not
+/// motion.
+constexpr double kComposeTranslationResiduePx = 1e-6;
+
+/// Returns \p canvasFromBitmap, a translation-only compose transform, with a translation within
+/// \ref kComposeTranslationResiduePx replaced by exact identity. The inverse stamp times the
+/// current transform is exact only at some surface scales, and tile patching requires an identity
+/// compose transform.
+Transform2d WithoutComposeTranslationResidue(const Transform2d& canvasFromBitmap) {
+  const Vector2d translation = canvasFromBitmap.translation();
+  if (std::abs(translation.x) <= kComposeTranslationResiduePx &&
+      std::abs(translation.y) <= kComposeTranslationResiduePx) {
+    return Transform2d();
+  }
+  return canvasFromBitmap;
+}
+
 bool CanReuseImmediateDragLayer(const CompositorLayer& layer, bool rootDirty) {
   return !rootDirty && layer.isImmediate() && !layer.isDirty() && layer.hasRenderablePayload() &&
          layer.bitmapEntityFromWorldTransform().has_value();
@@ -2293,7 +2310,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     const Transform2d canvasFromBitmap =
         bitmapStamp.inverse() * (instance.worldFromEntityTransform * surfaceFromCanvas);
     if (canvasFromBitmap.isTranslation()) {
-      layer.setCanvasFromBitmap(canvasFromBitmap);
+      layer.setCanvasFromBitmap(WithoutComposeTranslationResidue(canvasFromBitmap));
     }
     // Non-translation deltas (scale / rotate of an ancestor) require a
     // re-rasterize; `consumeDirtyFlags` / the rasterize loop handle

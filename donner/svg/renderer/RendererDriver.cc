@@ -1258,9 +1258,17 @@ double lengthToPixels(const Lengthd& length, const Box2d& viewBox, const FontMet
 /// re-draw they linger in the `RenderingInstanceComponent` storage. Unlike
 /// mask/marker/paint offscreen subtrees, no main-pool host instance owns them via
 /// `subtreeInfo`, so the main traversal would otherwise pick them up as top-level
-/// content. We filter them out of the main-entity snapshot by entity identity.
+/// content. We filter them out of the main-entity snapshot by entity identity. The same holds
+/// for the paint, mask and marker content instantiated while building a fragment, which
+/// `RenderingInstanceComponent::feImageFragment` marks.
 std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& registry) {
   std::unordered_set<Entity> result;
+  for (auto view = registry.view<const components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    if (view.get<const components::RenderingInstanceComponent>(entity).feImageFragment) {
+      result.insert(entity);
+    }
+  }
   for (auto view = registry.view<const components::ComputedShadowTreeComponent>();
        auto hostEntity : view) {
     const auto& shadow = view.get<const components::ComputedShadowTreeComponent>(hostEntity);
