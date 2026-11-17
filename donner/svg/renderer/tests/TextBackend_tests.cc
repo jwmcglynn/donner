@@ -1282,8 +1282,8 @@ TEST(TextBackendFullCapabilities, WideAdvancesKeepTheirFontUnitWidth) {
   const FontHandle font = manager.loadFontData(bytes, FontDataTrust::Trusted);
   ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
   constexpr float kSize = 96.0f;
-  const auto run = backend.shapeRunNoKerning(font, kSize, "WW", 0, 2, false, FontVariant::Normal,
-                                             false);
+  const auto run =
+      backend.shapeRunNoKerning(font, kSize, "WW", 0, 2, false, FontVariant::Normal, false);
   ASSERT_THAT(run.glyphs, SizeIs(2));
   const auto expected = HmtxAdvances(manager, font, run.glyphs, kSize);
   ASSERT_THAT(expected, Each(Gt(2048.0)));

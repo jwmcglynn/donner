@@ -134,14 +134,21 @@ double ScalableFaceOversample(FT_Face face, float textSizePx) {
   // FT_Face exposes a signed short for max_advance_width. Read the unsigned OpenType metric
   // directly so that widths above 32767 font units still constrain the scale.
   const auto* hhea = static_cast<const TT_HoriHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_HHEA));
-  const auto* vhea = static_cast<const TT_VertHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_VHEA));
-  unsigned int maxAdvance = hhea ? hhea->advance_Width_Max : 0;
-  if (vhea) {
-    maxAdvance = std::max<unsigned int>(maxAdvance, vhea->advance_Height_Max);
-  }
-  if (!hhea || !maxAdvance || FT_HAS_MULTIPLE_MASTERS(face)) {
-    // Static header metrics need not describe a variation instance.
-    maxAdvance = std::numeric_limits<uint16_t>::max();
+  unsigned int maxAdvance = std::numeric_limits<uint16_t>::max();
+  if (hhea && hhea->advance_Width_Max && !FT_HAS_MULTIPLE_MASTERS(face)) {
+    // Static header maxima need not describe a variation instance.
+    const auto* vhea = static_cast<const TT_VertHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_VHEA));
+    unsigned int verticalAdvance;
+    if (FT_HAS_VERTICAL(face) && vhea) {
+      verticalAdvance = vhea->advance_Height_Max;
+    } else {
+      // FreeType synthesizes missing vertical advances from the typographic line height.
+      const auto* os2 = static_cast<const TT_OS2*>(FT_Get_Sfnt_Table(face, FT_SFNT_OS2));
+      verticalAdvance = os2 && os2->version != 0xFFFF
+                            ? std::abs(os2->sTypoAscender - os2->sTypoDescender)
+                            : std::abs(hhea->Ascender - hhea->Descender);
+    }
+    maxAdvance = std::max<unsigned int>(hhea->advance_Width_Max, verticalAdvance);
   }
   constexpr double kMaxAdvancePx = 32767.0;
   const double maxFacePx = std::min(kMaximumOversampledFaceSizePx,
