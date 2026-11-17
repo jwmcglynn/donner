@@ -1,13 +1,16 @@
 #include "donner/svg/renderer/RendererTinySkia.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <utility>
 #include <variant>
@@ -16,6 +19,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/Utils.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
@@ -43,6 +47,7 @@
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
+#include "tiny_skia/Stroker.h"
 #include "tiny_skia/filter/ColorSpace.h"
 #include "tiny_skia/shaders/Shaders.h"
 
@@ -259,6 +264,45 @@ bool CaptureTinyStrokeWithinOutputLimit(tiny_skia::SpanCapture& capture,
   return captured;
 }
 
+/**
+ * The tiny-skia dash for `stroke-dasharray` lengths and a `stroke-dashoffset`: an odd-length
+ * array is repeated once, as SVG specifies. Returns no dash when there are no lengths or tiny-skia
+ * rejects the pattern.
+ *
+ * @param lengths Dash lengths in user units.
+ * @param offset Dash offset in user units.
+ * @param onlyZeroLengthGaps Set to whether every gap of the dash has zero length.
+ */
+std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(std::span<const double> lengths,
+                                                      double offset, bool& onlyZeroLengthGaps) {
+  onlyZeroLengthGaps = false;
+  if (lengths.empty()) {
+    return std::nullopt;
+  }
+  const int repeats = (lengths.size() & 1u) != 0u ? 2 : 1;
+  std::vector<float> dashArray;
+  dashArray.reserve(lengths.size() * repeats);
+  for (int i = 0; i < repeats; ++i) {
+    for (double dash : lengths) {
+      dashArray.push_back(NarrowToFloat(dash));
+    }
+  }
+  onlyZeroLengthGaps = true;
+  for (std::size_t i = 1; i < dashArray.size(); i += 2) {
+    if (dashArray[i] != 0.0f) {
+      onlyZeroLengthGaps = false;
+      break;
+    }
+  }
+  return tiny_skia::StrokeDash::create(std::move(dashArray), NarrowToFloat(offset));
+}
+
+/// \ref ToTinyStrokeDash for a stroke's dash array and offset.
+std::optional<tiny_skia::StrokeDash> ToTinyStrokeDash(const StrokeParams& stroke,
+                                                      bool& onlyZeroLengthGaps) {
+  return ToTinyStrokeDash(stroke.dashArray, stroke.dashOffset, onlyZeroLengthGaps);
+}
+
 bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
                      bool dashHasOnlyZeroLengthGaps) {
   return dash.has_value() && dashHasOnlyZeroLengthGaps;
@@ -295,6 +339,282 @@ std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(
     drawBudget.reject();
   }
   return bitmap;
+}
+
+/**
+ * Charges the dash work of a text run's glyph paths through \p reserve, the whole run at once, as
+ * a dashed path's work is charged before it is stroked. A run whose dash work cannot be estimated
+ * or reserved rejects \p drawBudget.
+ *
+ * @param dash The run's stroke dash, if any.
+ * @param paths The run's glyph paths.
+ * @param reserve Reserves dash work units; returns false when the budget is exhausted.
+ * @param drawBudget Rejected when the work is not reserved.
+ * @return True when the run may be stroked.
+ */
+template <typename Reserve>
+bool ReserveTinyRunDashWork(const std::optional<tiny_skia::StrokeDash>& dash,
+                            std::span<const tiny_skia::Path> paths, Reserve&& reserve,
+                            RendererDrawBudget& drawBudget) {
+  if (!dash.has_value()) {
+    return true;
+  }
+  std::size_t total = 0;
+  for (const tiny_skia::Path& path : paths) {
+    const std::optional<std::size_t> work = EstimateDashWorkUnits(path, *dash);
+    if (!work.has_value() || *work > std::numeric_limits<std::size_t>::max() - total) {
+      drawBudget.reject();
+      return false;
+    }
+    total += *work;
+  }
+  if (!reserve(total)) {
+    drawBudget.reject();
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Fills a text run's glyph paths one by one. A run drawn after the draw budget was rejected, such
+ * as a stroke-first run whose stroke rejected it, draws no fill, as a path's fill does not reach
+ * the frame after its stroke is rejected.
+ */
+void FillTinyTextRun(tiny_skia::MutablePixmapView& pixmap, std::span<const tiny_skia::Path> glyphs,
+                     const tiny_skia::Paint& paint, const tiny_skia::Transform& transform,
+                     const tiny_skia::Mask* mask, const RendererDrawBudget& drawBudget) {
+  if (drawBudget.rejected()) {
+    return;
+  }
+  for (const tiny_skia::Path& glyph : glyphs) {
+    tiny_skia::Painter::fillPath(pixmap, glyph, paint, tiny_skia::FillRule::Winding, transform,
+                                 mask);
+  }
+}
+
+/// One path per text chunk, holding every contour of that chunk's glyph paths; chunks without
+/// contours are left out.
+/// @param paths A run's glyph paths, in order.
+/// @param chunks The run's text chunks over \p paths.
+std::vector<tiny_skia::Path> JoinTinyPathsByChunk(std::span<const tiny_skia::Path> paths,
+                                                  const TextChunkRanges& chunks) {
+  std::vector<tiny_skia::Path> joined;
+  for (const auto& [begin, end] : chunks.ranges(paths.size())) {
+    tiny_skia::PathBuilder builder;
+    for (const tiny_skia::Path& path : paths.subspan(begin, end - begin)) {
+      builder.pushPath(path);
+    }
+    if (std::optional<tiny_skia::Path> chunk = builder.finish()) {
+      joined.push_back(std::move(*chunk));
+    }
+  }
+  return joined;
+}
+
+/**
+ * Whether the stroke of \p glyph can reach the \p width x \p height target: its bounds, grown
+ * by the farthest a join or cap can reach from the outline, mapped by \p transform. A miter join
+ * reaches half the width times the miter limit, a square cap half the width times the square root
+ * of two, and anything else half the width. A glyph whose mapped bounds are not finite is kept.
+ */
+bool TinyStrokeMayReachTarget(const tiny_skia::Path& glyph, const tiny_skia::Stroke& stroke,
+                              const tiny_skia::Transform& transform, float width, float height) {
+  const bool miter = stroke.lineJoin == tiny_skia::LineJoin::Miter ||
+                     stroke.lineJoin == tiny_skia::LineJoin::MiterClip;
+  const float joinReach = miter ? std::max(stroke.miterLimit, 1.0f) : 1.0f;
+  const float capReach =
+      stroke.lineCap == tiny_skia::LineCap::Square ? std::numbers::sqrt2_v<float> : 1.0f;
+  const float reach = 0.5f * stroke.width * std::max(joinReach, capReach);
+  const tiny_skia::Rect bounds = glyph.bounds();
+  std::array<tiny_skia::Point, 4> corners = {
+      tiny_skia::Point::fromXY(bounds.left() - reach, bounds.top() - reach),
+      tiny_skia::Point::fromXY(bounds.right() + reach, bounds.top() - reach),
+      tiny_skia::Point::fromXY(bounds.right() + reach, bounds.bottom() + reach),
+      tiny_skia::Point::fromXY(bounds.left() - reach, bounds.bottom() + reach)};
+  transform.mapPoints(corners);
+  if (!std::ranges::all_of(corners, [](const tiny_skia::Point& corner) {
+        return std::isfinite(corner.x) && std::isfinite(corner.y);
+      })) {
+    return true;
+  }
+  const auto [left, right] = std::ranges::minmax(
+      corners | std::views::transform([](const tiny_skia::Point& corner) { return corner.x; }));
+  const auto [top, bottom] = std::ranges::minmax(
+      corners | std::views::transform([](const tiny_skia::Point& corner) { return corner.y; }));
+  // A pixel of margin keeps anti-aliased edges that touch the target.
+  return !(right < -1.0f || bottom < -1.0f || left > width + 1.0f || top > height + 1.0f);
+}
+
+/// Copies of an expanded stroke outline that are alive at once while it is drawn: the expansion
+/// itself, the joined chunk path, the fill's transformed copy, and the scan converter's edge list,
+/// which is about one more.
+constexpr std::size_t kTextStrokeExpansionCopies = 4;
+
+/// Expanded stroke outlines of one text chunk, ready to fill as one path.
+struct TinyTextChunkExpansion {
+  std::vector<tiny_skia::Path> pieces;  ///< Expanded outlines, in order.
+  std::size_t points = 0;               ///< Points across \ref pieces.
+  std::size_t verbs = 0;                ///< Verbs across \ref pieces.
+  bool rejected = false;                ///< Whether a charge or the chunk cap failed.
+
+  /// The pieces joined into one path, or none when there is nothing to fill.
+  [[nodiscard]] std::optional<tiny_skia::Path> join() const {
+    tiny_skia::PathBuilder joined;
+    joined.reserve(verbs, points);
+    for (const tiny_skia::Path& piece : pieces) {
+      joined.pushPath(piece);
+    }
+    return joined.finish();
+  }
+};
+
+/**
+ * Charges an expanded stroke outline to \p textBudget, \ref kTextStrokeExpansionCopies times
+ * over, and adds it to \p expansion; marks \p expansion rejected when the charge fails.
+ */
+void KeepTinyStrokeExpansion(tiny_skia::Path expanded, TinyTextChunkExpansion& expansion,
+                             RendererTextMaterializationBudget& textBudget) {
+  const std::size_t points = expanded.points().size();
+  const std::size_t verbs = expanded.verbs().size();
+  constexpr std::size_t kCopies = kTextStrokeExpansionCopies;
+  if (!textBudget.reserve({.commands = verbs * kCopies,
+                           .points = points * kCopies,
+                           .bytes = (points * sizeof(tiny_skia::Point) + verbs) * kCopies})) {
+    expansion.rejected = true;
+    return;
+  }
+  expansion.points += points;
+  expansion.verbs += verbs;
+  expansion.pieces.push_back(std::move(expanded));
+}
+
+/**
+ * Expands the stroke of \p piece under \p maxStrokePoints and the frame's remaining stroke output,
+ * charging what it emits to \p drawBudget, then charges the expansion to the text budget before
+ * it is kept (see \ref KeepTinyStrokeExpansion).
+ *
+ * @return False when a limit or a charge stopped it; \p expansion is then marked rejected.
+ */
+bool ExpandTinyStrokePiece(const tiny_skia::Path& piece, const tiny_skia::Stroke& stroke,
+                           float resScale, std::size_t maxStrokePoints,
+                           TinyTextChunkExpansion& expansion,
+                           RendererTextMaterializationBudget& textBudget,
+                           RendererDrawBudget& drawBudget, std::uint64_t& limitedStrokes) {
+  ++limitedStrokes;
+  tiny_skia::StrokeOutputLimit limit{
+      .maxPoints = std::min(maxStrokePoints, drawBudget.remainingStrokeOutputPoints())};
+  std::optional<tiny_skia::Path> expanded = piece.stroke(stroke, resScale, &limit);
+  if (limit.exceeded || !drawBudget.reserveStrokeOutputPoints(limit.emittedPoints)) {
+    expansion.rejected = true;
+    return false;
+  }
+  if (expanded.has_value()) {
+    KeepTinyStrokeExpansion(std::move(*expanded), expansion, textBudget);
+  }
+  return !expansion.rejected;
+}
+
+/**
+ * Expands the strokes of one text chunk's glyphs, each piece bounded and charged by
+ * \ref ExpandTinyStrokePiece. Stroking a path strokes its contours independently, so filling the
+ * kept pieces together equals stroking the joined chunk. An undashed chunk is expanded glyph by
+ * glyph. A dashed chunk is dashed whole, as the rasterizer dashes a path (its dash work is already
+ * charged), and its dashes are expanded as one piece under the same limits. A chunk none of whose
+ * glyph strokes can reach the target is not expanded at all; otherwise every glyph is, because the
+ * CPU rasterizer's coverage of one contour depends on the other contours of the path it fills, so
+ * leaving a glyph out would change the edges of the others.
+ */
+TinyTextChunkExpansion ExpandTinyTextChunkStroke(
+    std::span<const tiny_skia::Path> glyphs, const tiny_skia::Stroke& stroke,
+    const tiny_skia::Transform& transform, float resScale, float width, float height,
+    std::size_t maxStrokePoints, RendererTextMaterializationBudget& textBudget,
+    RendererDrawBudget& drawBudget, std::uint64_t& limitedStrokes) {
+  TinyTextChunkExpansion expansion;
+  if (std::ranges::none_of(glyphs, [&](const tiny_skia::Path& glyph) {
+        return TinyStrokeMayReachTarget(glyph, stroke, transform, width, height);
+      })) {
+    return expansion;
+  }
+  if (stroke.dash.has_value()) {
+    tiny_skia::PathBuilder source;
+    for (const tiny_skia::Path& glyph : glyphs) {
+      source.pushPath(glyph);
+    }
+    const std::optional<tiny_skia::Path> chunk = source.finish();
+    const std::optional<tiny_skia::Path> dashed =
+        chunk.has_value() ? chunk->dash(*stroke.dash, resScale) : std::nullopt;
+    if (dashed.has_value()) {
+      tiny_skia::Stroke solid = stroke;
+      solid.dash.reset();
+      ExpandTinyStrokePiece(*dashed, solid, resScale, maxStrokePoints, expansion, textBudget,
+                            drawBudget, limitedStrokes);
+    }
+    return expansion;
+  }
+  for (const tiny_skia::Path& glyph : glyphs) {
+    if (!ExpandTinyStrokePiece(glyph, stroke, resScale, maxStrokePoints, expansion, textBudget,
+                               drawBudget, limitedStrokes)) {
+      break;
+    }
+  }
+  return expansion;
+}
+
+/**
+ * Strokes a text run one chunk at a time, as resvg strokes the part of a span in one chunk: where
+ * the strokes of adjacent glyphs overlap, the overlap is covered once. A hairline stroke is drawn
+ * by the rasterizer without expansion. Otherwise each chunk's glyph strokes are expanded and
+ * charged one by one (see \ref ExpandTinyTextChunkStroke) and filled together; a failed charge
+ * rejects \p drawBudget and stops. A dashed run first charges its dash work (see
+ * \ref ReserveTinyRunDashWork). A run is not stroked once either budget is rejected.
+ */
+template <typename ReserveDashWork>
+void StrokeTinyTextRun(tiny_skia::MutablePixmapView& pixmap,
+                       std::span<const tiny_skia::Path> glyphs, const TextChunkRanges& chunks,
+                       const tiny_skia::Paint& paint, const tiny_skia::Stroke& stroke,
+                       const tiny_skia::Transform& transform, const tiny_skia::Mask* mask,
+                       ReserveDashWork&& reserveDashWork, std::size_t maxStrokePoints,
+                       RendererTextMaterializationBudget& textBudget,
+                       RendererDrawBudget& drawBudget, std::uint64_t& limitedStrokes) {
+  if (textBudget.rejected() || drawBudget.rejected() ||
+      !ReserveTinyRunDashWork(stroke.dash, glyphs, reserveDashWork, drawBudget)) {
+    return;
+  }
+  if (tiny_skia::detail::treatAsHairline(paint, stroke.width, transform).has_value()) {
+    for (const tiny_skia::Path& chunk : JoinTinyPathsByChunk(glyphs, chunks)) {
+      tiny_skia::Painter::strokePath(pixmap, chunk, paint, stroke, transform, mask);
+    }
+    return;
+  }
+  const float resScale = tiny_skia::PathStroker::computeResolutionScale(transform);
+  const auto width = static_cast<float>(pixmap.width());
+  const auto height = static_cast<float>(pixmap.height());
+  for (const auto& [begin, end] : chunks.ranges(glyphs.size())) {
+    const TinyTextChunkExpansion expansion = ExpandTinyTextChunkStroke(
+        glyphs.subspan(begin, end - begin), stroke, transform, resScale, width, height,
+        maxStrokePoints, textBudget, drawBudget, limitedStrokes);
+    if (expansion.rejected) {
+      drawBudget.reject();
+      return;
+    }
+    if (const std::optional<tiny_skia::Path> joined = expansion.join()) {
+      tiny_skia::Painter::fillPath(pixmap, *joined, paint, tiny_skia::FillRule::Winding, transform,
+                                   mask);
+    }
+  }
+}
+
+/// The text's fill re-applied to a span that has no resolved fill of its own, with the span's
+/// \p spanOpacity. A solid text fill is resolved from its color with the product of the text's
+/// `fill-opacity` and \p spanOpacity, quantized once; any other keeps \p resolvedTextFill, the
+/// text's already resolved fill color, and applies \p spanOpacity on top of it.
+css::RGBA ReappliedTextFill(const PaintParams& textPaint, const css::Color& resolvedTextFill,
+                            double spanOpacity) {
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&textPaint.fill)) {
+    return solid->color.resolve(textPaint.currentColor,
+                                NarrowToFloat(textPaint.fillOpacity * spanOpacity));
+  }
+  return resolvedTextFill.resolve(textPaint.currentColor, NarrowToFloat(spanOpacity));
 }
 
 #endif
@@ -577,6 +897,44 @@ const tiny_skia::Path& ResolveTinyPath(const PathShape& shape, TinyPathCloseBeha
   }
   return *slot;
 }
+
+#ifdef DONNER_TEXT_ENABLED
+/**
+ * A text run's glyph paths for its fill and stroke passes. When the stroke's dash has only
+ * zero-length gaps, each glyph's stroke path ends its contours with explicit closing lines instead
+ * of ClosePath, as a dashed path stroke's does, so the dash stroker caps each contour start.
+ */
+class TinyRunGlyphPaths {
+public:
+  /// @param openDashSeam Whether the run's stroke dash has only zero-length gaps.
+  explicit TinyRunGlyphPaths(bool openDashSeam) : openDashSeam_(openDashSeam) {}
+
+  /// Sets whether the run's stroke dash has only zero-length gaps; call before \ref add.
+  void setOpenDashSeam(bool openDashSeam) { openDashSeam_ = openDashSeam; }
+
+  /// Adds a placed glyph outline.
+  void add(const Path& glyph) {
+    fill_.push_back(toTinyPath(glyph));
+    if (openDashSeam_) {
+      stroke_.push_back(toTinyPath(glyph, TinyPathCloseBehavior::EndWithLine));
+    }
+  }
+
+  /// Number of glyph paths added.
+  [[nodiscard]] std::size_t size() const { return fill_.size(); }
+  /// Paths for the fill pass, borrowed from this object until the next \ref add.
+  [[nodiscard]] std::span<const tiny_skia::Path> fill() const UTILS_LIFETIME_BOUND { return fill_; }
+  /// Paths for the stroke pass, borrowed from this object until the next \ref add.
+  [[nodiscard]] std::span<const tiny_skia::Path> stroke() const UTILS_LIFETIME_BOUND {
+    return openDashSeam_ ? std::span<const tiny_skia::Path>(stroke_) : fill();
+  }
+
+private:
+  bool openDashSeam_;
+  std::vector<tiny_skia::Path> fill_;
+  std::vector<tiny_skia::Path> stroke_;
+};
+#endif
 
 /// Returns \p image's pixels premultiplied, converting them on a cache miss.
 ///
@@ -2599,27 +2957,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     tinyStroke.lineJoin = toTinyLineJoin(adjustedStroke.lineJoin);
 
     bool dashHasOnlyZeroLengthGaps = false;
-    if (!adjustedStroke.dashArray.empty()) {
-      const int repeats = (adjustedStroke.dashArray.size() & 1u) != 0u ? 2 : 1;
-      std::vector<float> dashArray;
-      dashArray.reserve(adjustedStroke.dashArray.size() * repeats);
-      for (int i = 0; i < repeats; ++i) {
-        for (double dash : adjustedStroke.dashArray) {
-          dashArray.push_back(NarrowToFloat(dash));
-        }
-      }
-
-      dashHasOnlyZeroLengthGaps = true;
-      for (std::size_t i = 1; i < dashArray.size(); i += 2) {
-        if (dashArray[i] != 0.0f) {
-          dashHasOnlyZeroLengthGaps = false;
-          break;
-        }
-      }
-
-      tinyStroke.dash = tiny_skia::StrokeDash::create(std::move(dashArray),
-                                                      NarrowToFloat(adjustedStroke.dashOffset));
-    }
+    tinyStroke.dash = ToTinyStrokeDash(adjustedStroke, dashHasOnlyZeroLengthGaps);
 
     // A zero-length gap still terminates one dash and starts the next. TinySkia otherwise joins
     // those ranges across ClosePath, filling the seam as if the stroke were solid. Replace only
@@ -3039,26 +3377,31 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // These read from paint_ (set by setPaint()) which the driver already populated.
   std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(textBounds);
   // The text element's own `opacity` belongs to the isolated layer the driver pushes for it, so
-  // glyph alpha carries only the span's own product and never `paint_.opacity`.
-  const auto makeSolidPaint = [&](const css::Color& color, double spanOpacity) {
+  // glyph alpha carries only the span's own product and never `paint_.opacity`. A span's
+  // `opacity` and its `fill-opacity` or `stroke-opacity` reach the alpha as one product, narrowed
+  // and quantized once by `Color::resolve`, as a path's paint opacity is: quantizing each factor
+  // on its own lands on a different alpha than the same paint on a path.
+  const auto makeSolidPaint = [&](const css::RGBA& rgba) {
     tiny_skia::Paint paint = makeBasePaint(antialias_);
-
-    css::RGBA rgba = color.rgba();
-    rgba.a = static_cast<uint8_t>(std::round(static_cast<double>(rgba.a) * spanOpacity));
     paint.shader = toTinyColor(rgba);
     return paint;
+  };
+  const auto spanPaintOpacity = [](double paintOpacity, double spanOpacity) {
+    return NarrowToFloat(paintOpacity * spanOpacity);
   };
 
   // Check if we have a stroke.
   const bool hasStroke = params.strokeParams.strokeWidth > 0.0;
   std::optional<tiny_skia::Paint> strokePaint;
   tiny_skia::Stroke tinyStroke;
+  bool dashHasOnlyZeroLengthGaps = false;
   if (hasStroke) {
     strokePaint = makeStrokePaint(textBounds, params.strokeParams);
     tinyStroke.width = NarrowToFloat(params.strokeParams.strokeWidth);
     tinyStroke.miterLimit = NarrowToFloat(params.strokeParams.miterLimit);
     tinyStroke.lineCap = toTinyLineCap(params.strokeParams.lineCap);
     tinyStroke.lineJoin = toTinyLineJoin(params.strokeParams.lineJoin);
+    tinyStroke.dash = ToTinyStrokeDash(params.strokeParams, dashHasOnlyZeroLengthGaps);
   }
 
   // Each draw spends at most the per-draw geometry allowance, and only what the frame has left.
@@ -3084,29 +3427,28 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     tiny_skia::Stroke spanTinyStroke = tinyStroke;
     PaintOrder spanPaintOrder;
     double spanOpacity = 1.0;
-    // Outline glyph paths for this run, collected so fill and stroke can be painted as
-    // two whole-run passes in `paint-order` (matching resvg, which paints the text's
-    // fill then the text's stroke as units rather than per-glyph).
-    std::vector<tiny_skia::Path> runGlyphPaths;
+    // Outline glyph paths for this run, collected so fill and stroke can be painted as two
+    // whole-run passes in `paint-order`, with the text chunk each one belongs to.
+    TinyRunGlyphPaths runGlyphPaths(
+        HasOpenDashSeam(spanTinyStroke.dash, dashHasOnlyZeroLengthGaps));
+    TextChunkRanges runChunks;
     if (runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
       spanPaintOrder = span.paintOrder;
       spanOpacity = span.opacity;
       const css::RGBA spanCurrentColor = paint_.currentColor;
-      const float spanFillOpacity = NarrowToFloat(span.fillOpacity);
-      const float spanStrokeOpacity = NarrowToFloat(span.strokeOpacity);
+      const float spanFillOpacity = spanPaintOpacity(span.fillOpacity, span.opacity);
+      const float spanStrokeOpacity = spanPaintOpacity(span.strokeOpacity, span.opacity);
 
       if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
         // Per-span solid fill color.
-        spanFillPaint = makeSolidPaint(
-            css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+        spanFillPaint = makeSolidPaint(solid->color.resolve(spanCurrentColor, spanFillOpacity));
       } else if (const auto* ref =
                      std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
         // Per-span gradient/pattern fill. Uses the text element's bbox (textBounds)
         // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
-        const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
         if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                                    spanCurrentColor, combinedOpacity)) {
+                                                    spanCurrentColor, spanFillOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader = std::move(*shader);
           spanFillPaint = paint;
@@ -3114,36 +3456,38 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader =
               tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                                 tiny_skia::FilterQuality::Bilinear,
-                                 NarrowToFloat(spanFillOpacity * static_cast<float>(span.opacity)),
+                                 tiny_skia::FilterQuality::Bilinear, spanFillOpacity,
                                  toTinyTransform(patternFillPaint_->targetFromPattern));
           spanFillPaint = paint;
         } else if (ref->fallback.has_value()) {
-          spanFillPaint = makeSolidPaint(
-              css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+          spanFillPaint = makeSolidPaint(ref->fallback->resolve(spanCurrentColor, spanFillOpacity));
         } else {
           // Keep the inherited paint for non-gradient refs such as patterns.
         }
       } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
-        // No explicit fill but has per-span opacity - re-apply with opacity.
-        spanFillPaint = makeSolidPaint(params.fillColor, span.opacity);
+        // No resolved span fill but a per-span opacity: re-apply the text's fill with it.
+        spanFillPaint = makeSolidPaint(ReappliedTextFill(paint_, params.fillColor, span.opacity));
       }
 
       spanTinyStroke.width = NarrowToFloat(span.strokeWidth);
       spanTinyStroke.miterLimit = NarrowToFloat(span.strokeMiterLimit);
       spanTinyStroke.lineCap = toTinyLineCap(span.strokeLinecap);
       spanTinyStroke.lineJoin = toTinyLineJoin(span.strokeLinejoin);
+      bool spanDashHasOnlyZeroLengthGaps = false;
+      spanTinyStroke.dash = ToTinyStrokeDash(span.strokeDashLengths(), span.strokeDashOffset,
+                                             spanDashHasOnlyZeroLengthGaps);
+      runGlyphPaths.setOpenDashSeam(
+          HasOpenDashSeam(spanTinyStroke.dash, spanDashHasOnlyZeroLengthGaps));
 
       if (span.strokeWidth > 0.0) {
         if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedStroke)) {
-          spanStrokePaint = makeSolidPaint(
-              css::Color(solid->color.resolve(spanCurrentColor, spanStrokeOpacity)), span.opacity);
+          spanStrokePaint =
+              makeSolidPaint(solid->color.resolve(spanCurrentColor, spanStrokeOpacity));
         } else if (const auto* ref =
                        std::get_if<components::PaintResolvedReference>(&span.resolvedStroke)) {
-          const float combinedOpacity = spanStrokeOpacity * static_cast<float>(span.opacity);
           if (auto shader =
                   instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                            spanCurrentColor, combinedOpacity)) {
+                                            spanCurrentColor, spanStrokeOpacity)) {
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = std::move(*shader);
             spanStrokePaint = paint;
@@ -3151,14 +3495,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = tiny_skia::Pattern(
                 patternStrokePaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                tiny_skia::FilterQuality::Bilinear,
-                NarrowToFloat(spanStrokeOpacity * static_cast<float>(span.opacity)),
+                tiny_skia::FilterQuality::Bilinear, spanStrokeOpacity,
                 toTinyTransform(patternStrokePaint_->targetFromPattern));
             spanStrokePaint = paint;
           } else if (ref->fallback.has_value()) {
-            spanStrokePaint = makeSolidPaint(
-                css::Color(ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity)),
-                span.opacity);
+            spanStrokePaint =
+                makeSolidPaint(ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity));
           } else {
             // Keep the inherited paint for non-gradient refs such as patterns.
           }
@@ -3194,14 +3536,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             std::optional<tiny_skia::Paint> decoFillPaint;
             if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.fill)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
-              const float fillOpacity = NarrowToFloat(decoration.fillOpacity);
-              decoFillPaint = makeSolidPaint(
-                  css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
+              decoFillPaint = makeSolidPaint(solid->color.resolve(
+                  spanCurrentColor, spanPaintOpacity(decoration.fillOpacity, span.opacity)));
             } else if (const auto* ref =
                            std::get_if<components::PaintResolvedReference>(&decoration.fill)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
-              const float combinedOpacity =
-                  NarrowToFloat(decoration.fillOpacity) * static_cast<float>(span.opacity);
+              const float combinedOpacity = spanPaintOpacity(decoration.fillOpacity, span.opacity);
               if (auto shader =
                       instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                 spanCurrentColor, combinedOpacity)) {
@@ -3217,9 +3557,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                 decoFillPaint = paint;
               } else if (ref->fallback) {
                 decoFillPaint =
-                    makeSolidPaint(css::Color(ref->fallback->resolve(
-                                       spanCurrentColor, NarrowToFloat(decoration.fillOpacity))),
-                                   span.opacity);
+                    makeSolidPaint(ref->fallback->resolve(spanCurrentColor, combinedOpacity));
               }
             }
             if (!span.decorations) {
@@ -3229,14 +3567,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             std::optional<tiny_skia::Paint> decoStrokePaint;
             if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.stroke)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
-              const float strokeOpacity = NarrowToFloat(decoration.strokeOpacity);
-              decoStrokePaint = makeSolidPaint(
-                  css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
+              decoStrokePaint = makeSolidPaint(solid->color.resolve(
+                  spanCurrentColor, spanPaintOpacity(decoration.strokeOpacity, span.opacity)));
             } else if (const auto* ref =
                            std::get_if<components::PaintResolvedReference>(&decoration.stroke)) {
               const css::RGBA spanCurrentColor = paint_.currentColor;
               const float combinedOpacity =
-                  NarrowToFloat(decoration.strokeOpacity) * static_cast<float>(span.opacity);
+                  spanPaintOpacity(decoration.strokeOpacity, span.opacity);
               if (auto shader =
                       instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                 spanCurrentColor, combinedOpacity)) {
@@ -3277,6 +3614,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     drawDecorations(kDecorationLinesBeneathText);
 
     for (const auto& glyph : run.glyphs) {
+      runChunks.noteGlyph(glyph, runGlyphPaths.size());
       if (glyph.glyphIndex == 0) {
         continue;  // .notdef glyph, skip.
       }
@@ -3343,31 +3681,35 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // `glyphPath` is already placed in document space (translate/rotate baked
       // in by placedGlyphOutline); the renderer's current transform maps it to
       // device space below. Collected for the ordered fill/stroke passes after the loop.
-      runGlyphPaths.push_back(toTinyPath(glyphPath));
+      runGlyphPaths.add(glyphPath);
     }
 
     // Honor `paint-order`: paint the whole run's fill and stroke in the resolved order
-    // (markers do not apply to text glyphs, so they are skipped). The fill and stroke
-    // are each painted across all glyphs as a unit so overlapping glyphs composite the
-    // same way resvg renders them.
+    // (markers do not apply to text glyphs, so they are skipped). The fill is painted
+    // glyph by glyph; the stroke is painted per text chunk, below.
     auto pixmapView = currentPixmapView();
     const auto drawRunFill = [&]() {
       if (!spanFillPaint) {
         return;
       }
-      for (const auto& tinyPath : runGlyphPaths) {
-        tiny_skia::Painter::fillPath(pixmapView, tinyPath, *spanFillPaint,
-                                     tiny_skia::FillRule::Winding,
-                                     toTinyTransform(deviceFromLocalTransform_), mask);
-      }
+      FillTinyTextRun(pixmapView, runGlyphPaths.fill(), *spanFillPaint,
+                      toTinyTransform(deviceFromLocalTransform_), mask, *drawBudget_);
     };
     const auto drawRunStroke = [&]() {
       if (!spanStrokePaint) {
         return;
       }
-      for (const auto& tinyPath : runGlyphPaths) {
-        strokeIntoWithinOutputLimit(pixmapView, tinyPath, *spanStrokePaint, spanTinyStroke, mask);
-      }
+      // One path for each text chunk of the run, as resvg strokes the part of a span in one
+      // chunk: where the strokes of adjacent glyphs overlap, the overlap is covered once instead
+      // of composited per glyph. Separate chunks are separate shapes.
+      // A dashed run spends the frame's dash work budget before any of it is stroked, as a dashed
+      // path does, so a run past the budget is rejected whole.
+      StrokeTinyTextRun(
+          pixmapView, runGlyphPaths.stroke(), runChunks, *spanStrokePaint, spanTinyStroke,
+          toTinyTransform(deviceFromLocalTransform_), mask,
+          [&](std::size_t work) { return dashedPathWorkBudget_->reserve(work); },
+          strokeOutputPointLimit_, *textMaterializationBudget_, *drawBudget_,
+          frameCounters_.limitedStrokes);
     };
 
     bool fillDrawn = false;
