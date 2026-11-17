@@ -108,7 +108,7 @@ jobs:
           TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
-          UNIFIED_RE_CI: ${{ vars.UNIFIED_RE_CI }}
+          UNIFIED_RE_CI: ${{ vars.UNIFIED_RE_CI == 'true' || (vars.UNIFIED_RE_CANARY_PR != '' && vars.UNIFIED_RE_CANARY_PR == format('{0}', github.event.pull_request.number)) }}
           VM_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
         shell: bash
         run: |
@@ -498,11 +498,10 @@ jobs:
           name: unified-linux-failures-${{ github.run_attempt }}
       - name: Upload macOS test evidence
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: unified-macos-failures-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/unified/*/test-artifacts
-          retention-days: 3
+          testlogs: ${{ runner.temp }}/unified/test-artifacts
 
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]

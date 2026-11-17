@@ -1,13 +1,13 @@
 """Execute both target platforms on one trusted Linux Actions runner."""
 
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
-import contextlib
 import time
 
 import lane
@@ -28,7 +28,7 @@ REMOTE_TEST = ["--strategy=TestRunner=remote", "--noremote_local_fallback"]
 def bazel(os_name):
     if os_name == "macos":
         # Keep the Linux analysis server, convenience symlinks and test logs independent.
-        return ["bazelisk", "--max_idle_secs=60", "--output_base=" + os.environ["MAC_BAZEL_BASE"]]
+        return ["bazelisk", "--max_idle_secs=60", "--host_jvm_args=-Xmx2048m", "--output_base=" + os.environ["MAC_BAZEL_BASE"]]
     return ["bazelisk"]
 
 
@@ -110,7 +110,7 @@ def execute_lane(job, phases, directory, remote=False):
             finally:
                 if remote and outcomes[phase]["outcome"] == "failure" and event_path.exists():
                     with event_path.open() as stream:
-                        shadow.stage_failed_test_outputs(stream, temp, phase, os.environ["MAC_BAZEL_BASE"],
+                        shadow.stage_failed_test_outputs(stream, directory, job + "-" + phase, os.environ["MAC_BAZEL_BASE"],
                                                          shadow.MAX_ARTIFACT_TOTAL_BYTES)
                 print("::endgroup::", flush=True)
     finally:
@@ -136,22 +136,29 @@ def run_os(os_name, directory):
     phases = ["build", "test", "browser_preflight", "browser_test", "geode_test"]
     if os.environ["CMAKE_AFFECTED"] == "true":
         phases.append("cmake_consumer")
-    execute_lane("macos-self-hosted", phases, directory, remote=True)
+    work = [("macos-self-hosted", phases)]
     if fallback or os.environ["BROWSER_AFFECTED"] == "true":
-        execute_lane("macos-browser", ["browser_preflight", "browser_test"], directory, remote=True)
+        work.append(("macos-browser", ["browser_preflight", "browser_test"]))
     if fallback or os.environ["METAL_AFFECTED"] == "true":
-        execute_lane("macos-metal", ["metal_profile", "metal_preflight", "metal_compiler", "metal_native"],
-                     directory, remote=True)
+        work.append(("macos-metal", ["metal_profile", "metal_preflight", "metal_compiler", "metal_native"]))
+    failed = []
+    for job, phases in work:
+        try:
+            execute_lane(job, phases, directory, remote=True)
+        except subprocess.CalledProcessError:
+            failed.append(job)
+    if failed:
+        raise RuntimeError("Failed macOS lanes: " + ", ".join(failed))
 
 
-def stop_children(children):
+def stop_children(children, grace=10):
     # A phase can leave a descendant after its leader exits. Account for the
     # group itself until the deadline, reaping leaders while we wait.
     groups = {child.pid for child in children}
     for group in groups:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(group, signal.SIGTERM)
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + grace
     while groups and time.monotonic() < deadline:
         for child in children:
             child.poll()
@@ -173,6 +180,24 @@ def interrupted(signum, frame):
     raise KeyboardInterrupt
 
 
+def supervise(commands):
+    children = []
+    try:
+        for command in commands:
+            children.append(subprocess.Popen(command, start_new_session=True))
+        return [child.wait() for child in children]
+    finally:
+        stop_children(children)
+
+
+def prepare_job(directory):
+    # Generate before starting either lane's analysis JVM on a memory-limited runner.
+    prepare(ROOT, directory / "cmake-inputs")
+    endpoint = routing("linux", directory)
+    if not endpoint or routing("macos", directory) != endpoint:
+        raise RuntimeError("Linux and macOS require the same configured remote executor")
+
+
 def combined(directory):
     signal.signal(signal.SIGTERM, interrupted)
     directory.mkdir()
@@ -190,18 +215,10 @@ def combined(directory):
     os.environ["DONNER_CI_XCODE_IDENTITY"] = shadow.xcode_identity()
     os.environ["BAZEL_MACOS_BUILD_FLAGS"] = ""
     os.environ["MAC_BAZEL_BASE"] = str(Path(os.environ["RUNNER_TOOL_CACHE"]) / "donner-unified-macos")
-    endpoint = routing("linux", directory)
-    if not endpoint or routing("macos", directory) != endpoint:
-        raise RuntimeError("Linux and macOS require the same configured remote executor")
-    prepare(ROOT, directory / "cmake-inputs")
-    children = []
-    try:
-        for os_name in ("linux", "macos"):
-            children.append(subprocess.Popen([sys.executable, __file__, str(directory), "--os", os_name],
-                                             start_new_session=True))
-        results = [child.wait() for child in children]
-    finally:
-        stop_children(children)
+    command = [sys.executable, __file__, str(directory), "--os"]
+    if any(supervise([[*command, "prepare"]])):
+        return 1
+    results = supervise([[*command, os_name] for os_name in ("linux", "macos")])
     receipts = coverage._load_receipts(directory)
     selection = coverage.selection_from_needs(json.loads(os.environ["NEEDS_JSON"]))
     problems, exceptions = coverage.check(json.loads((ROOT / coverage.MANIFEST).read_text()), receipts, selection)
@@ -212,9 +229,11 @@ def combined(directory):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--os", choices=["linux", "macos"])
+    parser.add_argument("--os", choices=["prepare", "linux", "macos"])
     args = parser.parse_args()
-    if args.os:
+    if args.os == "prepare":
+        prepare_job(args.directory)
+    elif args.os:
         run_os(args.os, args.directory)
     else:
         sys.exit(combined(args.directory))

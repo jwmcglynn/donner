@@ -1,6 +1,6 @@
 {
   "tree": {
-    "lines": 5925,
+    "lines": 5924,
     "comment_lines": 651,
     "multiline_runs": 75,
     "longest_run": 194,
@@ -97,7 +97,7 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1484,
+      "lines": 1483,
       "comment_lines": 211,
       "multiline_runs": 13,
       "longest_run": 36,

@@ -203,6 +203,12 @@ py_test(
 )
 
 # Compares a trusted pull request's coverage receipts with tools/ci/coverage_contract.json.
+py_library(
+    name = "ci_coverage_contract_lib",
+    srcs = ["ci_coverage_contract.py"],
+    visibility = ["//tools/ci:__pkg__"],
+)
+
 py_test(
     name = "ci_coverage_contract_tests",
     size = "small",

@@ -533,6 +533,22 @@ sh_test(
 
 # The advisory macOS remote-execution shadow lane, run by main.yml's macos-remote-shadow job and
 # tested by //tools:ci_macos_remote_shadow_tests.
+py_test(
+    name = "unified_ci_tests",
+    size = "small",
+    srcs = [
+        "remote_cmake.py",
+        "select_remote_cmake.py",
+        "unified_ci.py",
+        "unified_ci_tests.py",
+    ],
+    deps = [
+        ":lanes",
+        ":macos_remote_shadow",
+        "//tools:ci_coverage_contract_lib",
+    ],
+)
+
 py_library(
     name = "macos_remote_shadow",
     srcs = ["macos_remote_shadow.py"],

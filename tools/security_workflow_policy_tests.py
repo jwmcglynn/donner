@@ -4576,14 +4576,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         metal = SELF_HOSTED_NARROWING[(main, "macos-metal")]
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
-        self.assertEqual(1, files[main].count(gate + " }}"))
+        vm_gate = gate + SELF_HOSTED_NARROWING[(main, "macos-self-hosted")]
+        self.assertEqual(1, files[main].count(vm_gate + " }}"))
         self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
         self.assertEqual(1, files[main].count(gate + metal + " }}"))
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         bazel = "        bazel: ['7.x', '8.x']\n"
         self.assertEqual(1, files[bcr].count(bazel))
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
-            "ungated": (main, files[main].replace(gate + " }}", "true }}", 1), ungated),
+            "ungated": (main, files[main].replace(vm_gate + " }}", "true }}", 1), ungated),
             "browser narrowing widened": (main, files[main].replace(
                 gate + narrowing, gate + narrowing.replace(" && (", " || (", 1), 1), ungated),
             "browser narrowing dropped": (main, files[main].replace(

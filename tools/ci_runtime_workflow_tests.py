@@ -870,7 +870,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                   _repository_text("tools/ci/lane.py"))
                 elif path.endswith(".py"):
                     # Run by its steps as `python3 <path>`.
-                    self.assertIn("run: python3 %s " % path, self.main_text)
+                    self.assertRegex(self.main_text, r"run: python3 " + re.escape(path) + r"(?: |\n)")
                 else:
                     # A step body that a step or a lane phase runs, kept executable.
                     self.assertIn(path, self.main_text + lane_table)
@@ -1643,7 +1643,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertTrue(condition.endswith(
             "&& needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
             "(needs.determine-targets.outputs.fallback == 'true' || "
-            "needs.determine-targets.outputs.metal_affected == 'true') }}"), condition)
+            "needs.determine-targets.outputs.metal_affected == 'true') && "
+            "needs.gatekeeper.outputs.use_unified_re != 'true' }}"), condition)
         self.assertIn("determine-targets", native.split("    if:", 1)[0])
 
     def _coverage_jobs(self):
