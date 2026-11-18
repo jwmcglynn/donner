@@ -168,6 +168,13 @@ records the construction and checksums for `on-feImage`. The separate `optimizeS
 compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
 pixel centers through the inverse transform to select the nearest source texel.
 
+### Color-adjust filter labels
+
+The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
+outside the label bands. Both backends compare the live filtered squares against the original
+pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the reference construction and qualification.
+
 ### Upright Latin and crosshair coverage
 
 | Category | Test | Reference |
@@ -177,13 +184,6 @@ pixel centers through the inverse transform to select the nearest source texel.
 The historical crosshair coverage accounts for 731 of 733 differing pixels. Both CPU text
 tiers compare the complete scene against an outlined control with default parameters. The
 golden README records the font metrics, browser controls, and regeneration command.
-
-### Color-adjust filter labels
-
-The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
-outside the label bands. Both backends compare the live filtered squares against the original
-pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
-records the reference construction and qualification.
 
 ### Backend-difference goldens (text)
 

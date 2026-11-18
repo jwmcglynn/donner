@@ -226,6 +226,45 @@ bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 
+## Upright Latin outline reference
+
+`text/glyph-orientation-vertical/simple-case.svg` uses the SVG 2 alias
+`glyph-orientation-vertical="0"` for upright text. Donner implements that alias. Google Chrome
+158.0.8127.37 and Firefox 157 ignore it, so the browser control used `text-orientation: upright`
+with the same vendored Noto Sans face at 32 user units. Chrome's glyph centroids were within a
+device pixel of the historical PNG. Firefox used the same 43.60-user-unit advance and a higher
+synthesized origin. CSS Writing Modes leaves the origin to the user agent for faces without
+vertical metrics.
+
+The Noto Sans face has no `vmtx` or `VORG`. The control starts at y=30 and adds the scaled
+`hhea` ascent (1,069/1,000 em). Each letter advances by the `OS/2` typographic height (1,362/1,000
+em), giving four baselines at 64.208, 107.792, 151.376, and 194.960. Each letter is a separate
+horizontal text element with `x="100"`, `text-anchor="middle"`, and kerning disabled.
+usvg 0.49.0 converts those four letters to outlines using the corpus font. The expected SVG
+substitutes only those outlines. The crosshairs and frame are the original vector elements.
+
+At 500 × 500 the updated renderer differs from the historical PNG by 733 pixels in each CPU
+tier. Of these, 731 are on the crosshairs. At x=120 the PNG's stroke covers three rows with alpha
+32, 255, 32, while the current render covers two with alpha 128, 192. Stable Chrome also covers
+two rows. The outlined reference gives zero differences on both tiers at the default 0.02
+threshold and 100-pixel limit. It tests the full scene, including the strokes.
+
+| Input or output | SHA-256 |
+| --- | --- |
+| Corpus SVG | `fdfb95427efee7325fcef8f2a19949486bb1ba12b3b8adacc34965d508451240` |
+| Corpus PNG | `37a4b1991f55b498519f2b8dc06ea995d2f3bb5541b3c01b728a0a45a7b8f240` |
+| corpus Noto Sans Regular | `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9` |
+| `donner-upright-latin-outline.svg` | `8fb7c58c23e1c32899dbe610171d9d91a23106fbaf41e0ba0c3071d3d6c38693` |
+| `donner-upright-latin-outline.png` | `33bd0044926d60bbf4bb03dd2423d599e9141e6c62a9d4ebb436e2a3d072e766` |
+
+The checked-in outline SVG is the input for PNG regeneration:
+
+```sh
+bazel run //donner/svg/tool:donner-cli -- \
+  donner/svg/renderer/testdata/golden/donner-upright-latin-outline.svg \
+  --width 500 --height 500 --output donner/svg/renderer/testdata/golden/donner-upright-latin-outline.png
+```
+
 ## Donner-rendered font-size-adjust reference
 
 `resvg-font-size-adjust-simple-case.png` is Donner's own rendering of the unchanged
@@ -270,45 +309,6 @@ committing it:
 ```sh
 rm donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=*TextFontSizeAdjust*'
-```
-
-## Upright Latin outline reference
-
-`text/glyph-orientation-vertical/simple-case.svg` uses the SVG 2 alias
-`glyph-orientation-vertical="0"` for upright text. Donner implements that alias. Google Chrome
-158.0.8127.37 and Firefox 157 ignore it, so the browser control used `text-orientation: upright`
-with the same vendored Noto Sans face at 32 user units. Chrome's glyph centroids were within a
-device pixel of the historical PNG. Firefox used the same 43.60-user-unit advance and a higher
-synthesized origin. CSS Writing Modes leaves the origin to the user agent for faces without
-vertical metrics.
-
-The Noto Sans face has no `vmtx` or `VORG`. The control starts at y=30 and adds the scaled
-`hhea` ascent (1,069/1,000 em). Each letter advances by the `OS/2` typographic height (1,362/1,000
-em), giving four baselines at 64.208, 107.792, 151.376, and 194.960. Each letter is a separate
-horizontal text element with `x="100"`, `text-anchor="middle"`, and kerning disabled.
-usvg 0.49.0 converts those four letters to outlines using the corpus font. The expected SVG
-substitutes only those outlines. The crosshairs and frame are the original vector elements.
-
-At 500 × 500 the updated renderer differs from the historical PNG by 733 pixels in each CPU
-tier. Of these, 731 are on the crosshairs. At x=120 the PNG's stroke covers three rows with alpha
-32, 255, 32, while the current render covers two with alpha 128, 192. Stable Chrome also covers
-two rows. The outlined reference gives zero differences on both tiers at the default 0.02
-threshold and 100-pixel limit. It tests the full scene, including the strokes.
-
-| Input or output | SHA-256 |
-| --- | --- |
-| Corpus SVG | `fdfb95427efee7325fcef8f2a19949486bb1ba12b3b8adacc34965d508451240` |
-| Corpus PNG | `37a4b1991f55b498519f2b8dc06ea995d2f3bb5541b3c01b728a0a45a7b8f240` |
-| corpus Noto Sans Regular | `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9` |
-| `donner-upright-latin-outline.svg` | `8fb7c58c23e1c32899dbe610171d9d91a23106fbaf41e0ba0c3071d3d6c38693` |
-| `donner-upright-latin-outline.png` | `33bd0044926d60bbf4bb03dd2423d599e9141e6c62a9d4ebb436e2a3d072e766` |
-
-The checked-in outline SVG is the input for PNG regeneration:
-
-```sh
-bazel run //donner/svg/tool:donner-cli -- \
-  donner/svg/renderer/testdata/golden/donner-upright-latin-outline.svg \
-  --width 500 --height 500 --output donner/svg/renderer/testdata/golden/donner-upright-latin-outline.png
 ```
 
 ## structure/image: embedded SVG with text
