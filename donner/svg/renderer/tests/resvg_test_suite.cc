@@ -167,31 +167,32 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeBlend, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeColorMatrix, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "filters/feColorMatrix",
-            {
-                // Identity forms compare against a Donner golden: the references posterize dark
-                // tones through 8-bit linearRGB.
-                {"type=hueRotate-without-an-angle.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-with-empty-values.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-with-non-normalized-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")},
-                {"type=matrix-with-not-enough-values.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
-                {"type=saturate-with-a-large-coefficient.svg",
-                 Params::UndefinedBehavior("saturate 99999")},
-                {"type=saturate-with-negative-coefficient.svg",
-                 Params::UndefinedBehavior("saturate -0.5")},
-                {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
-                {"type=saturate.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                       "Larger threshold due to the reference's 8-bit linearRGB "
-                                       "steps, which one-level gradient rounding crosses")},
-                {"without-attributes.svg", ColorMatrixIdentityGolden()},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feColorMatrix",
+                {
+                    // Identity forms compare against a Donner golden: the references posterize dark
+                    // tones through 8-bit linearRGB.
+                    {"type=hueRotate-without-an-angle.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-with-empty-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-with-non-normalized-values.svg",
+                     Params::WithThreshold(
+                         0.03f, kDefaultMismatchedPixels,
+                         "Archived green varies along a constant-color gradient column")},
+                    {"type=matrix-with-not-enough-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=saturate-with-a-large-coefficient.svg",
+                     Params::UndefinedBehavior("saturate 99999")},
+                    {"type=saturate-with-negative-coefficient.svg",
+                     Params::UndefinedBehavior("saturate -0.5")},
+                    {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
+                    {"type=saturate.svg",
+                     Params::WithThreshold(
+                         0.03f, kDefaultMismatchedPixels,
+                         "Dark gradients cross an eight-bit linearRGB step in the reference")},
+                    {"without-attributes.svg", ColorMatrixIdentityGolden()},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeComponentTransfer, ImageComparisonTestFixture,
@@ -299,16 +300,17 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeImage, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory(
-                                     "filters/feMerge",
-                                     {
-                                         {"complex-transform.svg",
-                                          Params::WithThreshold(0.15f, kDefaultMismatchedPixels,
-                                                                "Minor blur shading differences")},
-                                     })),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFeMerge, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feMerge",
+                {
+                    {"complex-transform.svg",
+                     Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
+                                           "Reference blurs inputs before skew")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeMorphology, ImageComparisonTestFixture,
@@ -838,21 +840,10 @@ INSTANTIATE_TEST_SUITE_P(PaintingOverflow, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintingPaintOrder, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/paint-order",
-            {
-                // The vendored PNG loses e-x kerning at the paint-only tspan boundary. Donner's
-                // custom goldens preserve continuous shaping while still gating paint order.
-                {"on-tspan.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-paint-order-on-tspan.png")
-                     .withReason("Preserve cross-span kerning across a paint-only tspan boundary")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintingPaintOrder, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("painting/paint-order")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingShapeRendering, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("painting/shape-rendering")),

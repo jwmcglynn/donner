@@ -343,6 +343,19 @@ byte-identical at both revisions.
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
   SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
 
+The 500x500 paint-order image is generated from the original SVG with resvg
+v0.49.0 and the bundled Noto Sans face. It preserves kerning between the "e"
+and "x" across the paint-only span. An independent full-scene control shapes
+"Text" as a single run, converts its glyphs to outlines, and draws fill then
+stroke for "Te" and stroke then fill for "xt". It produces the same PNG.
+Shaping each span independently advances the "xt" origin by 20 font units.
+Chrome Stable 158 and Firefox 157 place the "x" at SVG x=99.20, consistent
+with separate shaping. Donner and resvg retain kerning at x=97.92.
+
+  resvg --skip-system-fonts --use-font-file fonts/NotoSans-Regular.ttf --width 500 --height 500 \
+    tests/painting/paint-order/on-tspan.svg tests/painting/paint-order/on-tspan.png
+  PNG SHA256: bfc95a4702cc5e435ddf039304e68e136af9fe0d5e43066b66e0a9ea88ebd84e
+
 The 500x500 point-light specular reference is a fresh render of the unchanged SVG
 with the resvg v0.49.0 release CLI under the same license. The point light sits
 directly above the flat center of the opaque gradient. Its specular constant

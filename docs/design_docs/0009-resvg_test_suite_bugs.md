@@ -66,7 +66,6 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/filter             | with-subregion-3                     | Firefox reference preserves the first blur's clipped edge ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
-| painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
