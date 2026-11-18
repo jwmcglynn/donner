@@ -16,10 +16,19 @@ def _tiers_impl(_settings, _attr):
 
 _tiers = transition(implementation = _tiers_impl, inputs = [], outputs = [_TEXT, _FULL])
 
-_Compiles = provider(fields = ["actions"])
+_Compiles = provider(fields = ["actions", "inputs"])
 
-def _compiles_impl(target, _ctx):
-    return [_Compiles(actions = [a for a in target.actions if a.mnemonic == "CppCompile"])]
+def _compiles_impl(target, ctx):
+    # CppCompile updates Action.inputs after discovering headers during execution.
+    # Compare the declared inputs from rule analysis so a warm and cold tier agree.
+    inputs = depset(
+        direct = ctx.rule.files.srcs + ctx.rule.files.additional_compiler_inputs,
+        transitive = [target[CcInfo].compilation_context.headers],
+    )
+    return [_Compiles(
+        actions = [a for a in target.actions if a.mnemonic == "CppCompile"],
+        inputs = inputs,
+    )]
 
 _compiles = aspect(implementation = _compiles_impl)
 
@@ -38,26 +47,24 @@ def _signature(action):
     return {
         "arguments": [_normalize_arg(arg) for arg in action.argv],
         "environment": {k: _normalize_arg(v) for k, v in action.env.items()},
-        "inputs": sorted([f.short_path for f in action.inputs.to_list()]),
     }
 
 def _compile_inputs_test_impl(ctx):
     env = unittest.begin(ctx)
     by_tier = {}
-    headers = {}
+    inputs = {}
     for tier, target in ctx.split_attr.core.items():
-        # Include eligible headers even when Bazel discovers the actually read
-        # subset later. Action.inputs alone can omit an unused public header.
-        headers[tier] = {f.short_path: True for f in target[CcInfo].compilation_context.headers.to_list()}
-        by_tier[tier] = {a.outputs.to_list()[0].short_path: a for a in target[_Compiles].actions}
+        core = target[_Compiles]
+        inputs[tier] = {f.short_path: True for f in core.inputs.to_list()}
+        by_tier[tier] = {a.outputs.to_list()[0].short_path: a for a in core.actions}
 
     reference = by_tier["off"]
     asserts.true(env, bool(reference), "Expected the SVG element implementations to compile C++ sources")
     for tier in ["basic", "full"]:
-        if headers["off"] != headers[tier]:
-            added = sorted([h for h in headers[tier] if h not in headers["off"]])
-            removed = sorted([h for h in headers["off"] if h not in headers[tier]])
-            unittest.fail(env, "Compile headers differ between text off and %s: added %s, removed %s" % (tier, added[:5], removed[:5]))
+        if inputs["off"] != inputs[tier]:
+            added = sorted([h for h in inputs[tier] if h not in inputs["off"]])
+            removed = sorted([h for h in inputs["off"] if h not in inputs[tier]])
+            unittest.fail(env, "Declared compile inputs differ between text off and %s: added %s, removed %s" % (tier, added[:5], removed[:5]))
             return unittest.end(env)
         if sorted(reference) != sorted(by_tier[tier]):
             asserts.equals(env, sorted(reference), sorted(by_tier[tier]), "Compile outputs for text " + tier)
