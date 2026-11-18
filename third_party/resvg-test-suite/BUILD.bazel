@@ -86,6 +86,15 @@ draws. Their SVG inputs are byte-identical at both revisions.
   tests/text/lengthAdjust/with-underline.png
   tests/text/text-decoration/with-textLength-on-a-single-character.png
 
+From the same revision and license, these PNGs were replaced with their 300x300 versions, which
+Donner matches within the default allowance on both CPU text tiers and on Geode with Metal (the
+Vulkan lanes were not measured). The snapshot's with-pattern-objectBoundingBox-in-use reference
+rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
+revisions.
+
+  tests/painting/context/with-pattern-objectBoundingBox-in-use.png
+  tests/painting/marker/orient=auto-on-M-C-C-4.png
+
 From the same revision and license, these raster-image PNGs were replaced with their 300x300
 versions. The snapshot's references mixed several historical upscalers: a browser's bilinear
 filter with 4-bit subpixel weights, an older resvg that resampled each image to its user-space
@@ -148,11 +157,44 @@ ascent and descent. Their SVG inputs are byte-identical at both revisions.
   tests/masking/clipPath/clip-path-with-transform-on-text.png
   tests/painting/visibility/bbox-impact-3.png
 
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references predate the current text-on-path layout, so Donner compared against its
+own renderings for most of them; Donner matches the v0.49.0 renderings within the default
+allowance on both CPU text tiers. Their SVG inputs are byte-identical at both revisions.
+
+  tests/text/textPath/m-A-path.png
+  tests/text/textPath/m-L-Z-path.png
+  tests/text/textPath/nested.png
+  tests/text/textPath/path-with-ClosePath.png
+  tests/text/textPath/simple-case.png
+  tests/text/textPath/spacing=auto.png
+  tests/text/textPath/startOffset=-100.png
+  tests/text/textPath/startOffset=10percent.png
+  tests/text/textPath/startOffset=30.png
+  tests/text/textPath/startOffset=5mm.png
+  tests/text/textPath/two-paths.png
+  tests/text/textPath/with-baseline-shift.png
+  tests/text/textPath/with-coordinates-on-text.png
+  tests/text/textPath/with-coordinates-on-textPath.png
+  tests/text/textPath/with-rotate.png
+  tests/text/textPath/with-text-anchor.png
+  tests/text/textPath/with-transform-on-a-referenced-path.png
+  tests/text/textPath/with-transform-outside-a-referenced-path.png
+
 From the same revision and license, this PNG was replaced with its 300x300 version. The
 snapshot's reference was opaque white where every other reference is transparent, and it
 matched only when composited over white. Its SVG input is byte-identical at both revisions.
 
   tests/text/textPath/link-to-rect.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions, which
+Donner's full text tier matches within 10 pixels. The snapshot's references differed on glyph
+and crosshair edge coverage. The SVG inputs are byte-identical at both revisions, except that
+upstream rotate-on-Arabic.svg changed only its title and a pull-request link.
+
+  tests/text/text/rotate-on-Arabic.png
+  tests/text/text/x-and-y-with-multiple-values-and-arabic-text.png
+  tests/text/text/zalgo.png
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions. The
 snapshot's references covered the crosshair and glyph edges with 4x4 supersampling, which
@@ -224,47 +266,24 @@ byte-identical at both revisions.
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
   SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions, which
-Donner matches within the default allowance on both CPU text tiers and on Geode with Metal (the
-Vulkan lanes were not measured). The snapshot's with-pattern-objectBoundingBox-in-use reference
-rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
-revisions.
+fonts/NotoSansArabic-Regular.ttf is not part of the resvg corpus. text/direction/rtl lists
+"Noto Sans Arabic" first, and its reference draws the Arabic in that face, which neither the
+snapshot nor resvg v0.49.0 ships. The file is the unhinted Regular face from the
+NotoSansArabic-v2.010 release of https://github.com/notofonts/arabic, and
+fonts/NotoSansArabic-LICENSE-OFL.txt is that release's OFL.txt (SIL Open Font License 1.1).
+Each release's unhinted Regular was compared with that reference on the full text tier (default
+threshold, 100-pixel limit): v2.010 differs by 71 pixels and v2.011 by 69, while v2.012 and
+v2.013 differ by 718 each. Neither of the later two matches the reference, so the pin must not
+move past v2.011; v2.010 is kept as the oldest release that matches.
 
-  tests/painting/context/with-pattern-objectBoundingBox-in-use.png
-  tests/painting/marker/orient=auto-on-M-C-C-4.png
+  https://github.com/notofonts/arabic/releases/download/NotoSansArabic-v2.010/NotoSansArabic-v2.010.zip
+  SHA256: a5a34ac1ea01d0d71c083f99440ebfb1f64224474a0d88bb7ef0e2f8d9a996d2
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references predate the current text-on-path layout, so Donner compared against its
-own renderings for most of them; Donner matches the v0.49.0 renderings within the default
-allowance on both CPU text tiers. Their SVG inputs are byte-identical at both revisions.
+  NotoSansArabic/unhinted/ttf/NotoSansArabic-Regular.ttf -> fonts/NotoSansArabic-Regular.ttf
+  SHA256: 81af59793116d576dd304caea4fded81123ba0bbd79ef513403c5cf0924d9f40
 
-  tests/text/textPath/m-A-path.png
-  tests/text/textPath/m-L-Z-path.png
-  tests/text/textPath/nested.png
-  tests/text/textPath/path-with-ClosePath.png
-  tests/text/textPath/simple-case.png
-  tests/text/textPath/spacing=auto.png
-  tests/text/textPath/startOffset=-100.png
-  tests/text/textPath/startOffset=10percent.png
-  tests/text/textPath/startOffset=30.png
-  tests/text/textPath/startOffset=5mm.png
-  tests/text/textPath/two-paths.png
-  tests/text/textPath/with-baseline-shift.png
-  tests/text/textPath/with-coordinates-on-text.png
-  tests/text/textPath/with-coordinates-on-textPath.png
-  tests/text/textPath/with-rotate.png
-  tests/text/textPath/with-text-anchor.png
-  tests/text/textPath/with-transform-on-a-referenced-path.png
-  tests/text/textPath/with-transform-outside-a-referenced-path.png
-
-From the same revision and license, these PNGs were replaced with their 300x300 versions, which
-Donner's full text tier matches within 10 pixels. The snapshot's references differed on glyph
-and crosshair edge coverage. The SVG inputs are byte-identical at both revisions, except that
-upstream rotate-on-Arabic.svg changed only its title and a pull-request link.
-
-  tests/text/text/rotate-on-Arabic.png
-  tests/text/text/x-and-y-with-multiple-values-and-arabic-text.png
-  tests/text/text/zalgo.png
+  ../OFL.txt -> fonts/NotoSansArabic-LICENSE-OFL.txt
+  SHA256: 07fc70bfeb985cc1a87a8587d0a0c80bab11c86c9dc3fd95b6f0cb332f983e96
 """
 
 package(default_visibility = ["//visibility:public"])

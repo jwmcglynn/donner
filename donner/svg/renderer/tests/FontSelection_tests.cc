@@ -235,6 +235,7 @@ TEST(FontSelection, NamedFamiliesResolveToVendoredFaces) {
   EXPECT_THAT(fonts.select("Noto Sans"), FaceFrom("NotoSans-Regular.ttf"));
   EXPECT_THAT(fonts.select("Source Sans Pro"), FaceFrom("SourceSansPro-Regular.ttf"));
   EXPECT_THAT(fonts.select("Mplus 1p"), FaceFrom("MPLUS1p-Regular.ttf"));
+  EXPECT_THAT(fonts.select("Noto Sans Arabic"), FaceFrom("NotoSansArabic-Regular.ttf"));
 }
 
 TEST(FontSelection, BoldRequestSelectsTheBoldFace) {
@@ -563,15 +564,22 @@ std::vector<GlyphFace> LayOutGlyphFaces(std::string_view utf8,
 }
 
 TEST(FontSelection, PerClusterFallbackKeepsThePrimaryFaceForClustersItCovers) {
-  // Mplus 1p covers the CJK, the space and nothing Arabic; only Amiri covers the Arabic word, so
-  // only those clusters fall back. A whole-span choice would either drop the Arabic glyphs or draw
-  // the CJK in a face without them.
+  // Mplus 1p covers the CJK, the space and nothing Arabic, so only the Arabic clusters fall back,
+  // to Amiri. A whole-span choice would either drop the Arabic glyphs or draw the CJK in a face
+  // without them.
   EXPECT_THAT(
       LayOutGlyphFaces("\u65e5\u672c \u062f\u0627\u0644", {"Mplus 1p"}),
       ElementsAre(
           GlyphFace{U'\u65e5', "MPLUS1p-Regular.ttf"}, GlyphFace{U'\u672c', "MPLUS1p-Regular.ttf"},
           GlyphFace{U' ', "MPLUS1p-Regular.ttf"}, GlyphFace{U'\u062f', "Amiri-Regular.ttf"},
           GlyphFace{U'\u0627', "Amiri-Regular.ttf"}, GlyphFace{U'\u0644', "Amiri-Regular.ttf"}));
+}
+
+TEST(FontSelection, PerClusterFallbackUsesTheFirstCoveringFaceInFileNameOrder) {
+  // Amiri and Noto Sans Arabic both cover Arabic, and no listed family does. The clusters take the
+  // first covering face in registration order, which is file-name order, as in resvg's harness.
+  EXPECT_THAT(LayOutGlyphFaces("\u062f\u0627\u0644", {"Noto Sans"}),
+              AllOf(SizeIs(3), Each(Field("source", &GlyphFace::source, Eq("Amiri-Regular.ttf")))));
 }
 
 TEST(FontSelection, PerClusterFallbackPrefersTheNextListedFamilyThatCoversTheCluster) {

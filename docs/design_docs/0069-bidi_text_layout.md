@@ -261,7 +261,7 @@ belongs to a later milestone (1b, 1c, or 2).
   - [ ] Make source bidi control characters non-addressable.
   - [ ] Add `bidi_conformance_tests`, `bidi_paragraph_tests`, and `bidi_paragraph_fuzzer` with its
         Fuzz workflow soak step.
-  - [ ] Remove the skips for `text/text/bidi-reordering` and `text/letter-spacing/mixed-scripts`,
+  - [x] Remove the skips for `text/text/bidi-reordering` and `text/letter-spacing/mixed-scripts`,
         requalify `text/direction/rtl`, and reclassify
         `text/direction/rtl-with-vertical-writing-mode` as `UndefinedBehavior`.
   - [ ] Measure the editor Geode package (compressed, raw, data segments) and the standalone
@@ -910,22 +910,21 @@ SVG contains right-to-left text, was enumerated from `resvg_test_suite.cc` and t
 stay `onlyTextFull()` or `requireFeature(RendererBackendFeature::TextFull)`; the simple tier is
 covered by layout-level tests.
 
-| Row                                                       | Current         | Browsers         | resvg   | Expected after this design                                 |
-| --------------------------------------------------------- | --------------- | ---------------- | ------- | ---------------------------------------------------------- |
-| `text/text/bidi-reordering`                               | Skip            | pass, pass, pass | pass    | Compare, full text (Milestone 2)                           |
-| `text/letter-spacing/mixed-scripts`                       | Skip            | fail, fail, fail | pass    | Compare, full text (Milestone 2)                           |
-| `text/direction/rtl`                                      | Skip            | pass, pass, pass | fail    | Order and anchor edge match; reference face not vendored   |
-| `text/unicode-bidi/bidi-override`                         | Compare, full   | pass, pass, pass | fail    | Compare, full text (Milestone 3)                           |
-| `text/tspan/bidi-reordering`                              | Skip            | pass, fail, fail | pass    | Compare, full text (Milestone 3)                           |
-| `text/writing-mode/mixed-languages-with-tb`               | Golden, full    | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172) |
-| `text/writing-mode/mixed-languages-with-tb-and-underline` | Skip, full text | pass, pass, fail | pass    | Remaining difference is the vertical underline (#1172)     |
-| `text/direction/rtl-with-vertical-writing-mode`           | Skip            | unknown          | unknown | `UndefinedBehavior` (SVG WG issue 618)                     |
+| Row                                                       | Current            | Browsers         | resvg   | Expected after this design                                  |
+| --------------------------------------------------------- | ------------------ | ---------------- | ------- | ----------------------------------------------------------- |
+| `text/text/bidi-reordering`                               | Compare, full text | pass, pass, pass | pass    | Compare, full text (Milestone 2)                            |
+| `text/letter-spacing/mixed-scripts`                       | Compare, full text | fail, fail, fail | pass    | Compare, full text (Milestone 2)                            |
+| `text/direction/rtl`                                      | Compare, full text | pass, pass, pass | fail    | Compare, full text, with the vendored Noto Sans Arabic face |
+| `text/unicode-bidi/bidi-override`                         | Compare, full text | pass, pass, pass | fail    | Compare, full text (Milestone 3)                            |
+| `text/tspan/bidi-reordering`                              | Compare, full text | pass, fail, fail | pass    | Compare, full text (Milestone 3)                            |
+| `text/writing-mode/mixed-languages-with-tb`               | Golden, full text  | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172)  |
+| `text/writing-mode/mixed-languages-with-tb-and-underline` | Skip, full text    | pass, pass, fail | pass    | Remaining difference is the vertical underline (#1172)      |
+| `text/direction/rtl-with-vertical-writing-mode`           | Render only (UB)   | unknown          | unknown | `UndefinedBehavior` (SVG WG issue 618)                      |
 
-`text/direction/rtl` asks for "Noto Sans Arabic", which is not in the vendored font set; the
-reference glyphs are drawn in a sans Arabic face while Donner falls back to Amiri. Bidi fixes the
-order and the right-edge anchor, but the glyph shapes cannot match. The plan is a reviewed
-project-owned golden rendered with the vendored face, after a layout-level test pins the order and
-anchor; if a project golden is unwanted, the row stays skipped as a harness mismatch.
+`text/direction/rtl` asks for "Noto Sans Arabic" first. The test fonts include that face from
+NotoSansArabic-v2.010, the oldest release whose glyphs match the reference (measurements and
+provenance in `third_party/resvg-test-suite/BUILD.bazel`), and the row compares at the default
+budget on the full-text tier. The simple tier draws isolated Arabic forms, so it does not run there.
 
 Rows that already compare and must not regress, rerun with `--gtest_also_run_disabled_tests` in the
 default and `text_full` lanes on every milestone: `text/font-kerning/arabic-script`,
@@ -1101,9 +1100,6 @@ property, and conformance data together.
 2. **Future property costs.** Measure typed `direction` and `unicode-bidi` on actual editor and
    standalone products before selecting their implementation. Historical probe headroom is not a
    current size allowance, and existing ceilings remain unchanged.
-3. **`text/direction/rtl` reference.** The plan is a reviewed project-owned golden rendered with the
-   vendored Arabic face. Is a project golden acceptable here, or should the row stay skipped as a
-   harness mismatch?
 
 ## Future Work
 

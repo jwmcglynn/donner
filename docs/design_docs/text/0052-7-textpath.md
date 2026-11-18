@@ -92,21 +92,21 @@ textLength checks.
 
 ## Test Coverage
 
-The `e-textPath-*` resvg test suite remains enabled, but custom goldens are now restricted to
-the human-approved pre-existing set only.
+The `e-textPath-*` resvg test suite remains enabled, and custom goldens are restricted to the
+human-approved set.
 
 ### Custom goldens and thresholds
 
-Any golden or tolerance change requires explicit human approval after visual retriage. Most rows
-compare at default settings against resvg v0.49.0's 300x300 references (provenance in
-`third_party/resvg-test-suite/BUILD.bazel`). The remaining exceptions are:
+Any golden or tolerance change requires explicit human approval after visual retriage. The 300x300 resvg v0.49.0 references use default comparison settings. Their provenance is in
+`third_party/resvg-test-suite/BUILD.bazel`.
 
 | Test | Setting | Reason |
 |------|---------|--------|
 | closed-path | threshold 0.1, 400 px | AA diffs |
 | dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
 | with-path, with-path-and-xlink-href | threshold 0.89 | Opaque reference background under the checkerboard comparison |
-| mixed-children-1, very-long-text | golden | SVG 2 endpoint continuation and AA differences |
+| method=stretch | golden | The snapshot depicts align placement. The Donner golden guards glyph warping. |
+| mixed-children-1, mixed-children-2, very-long-text | golden | SVG 2 continues text at the path end point. |
 | side=right | threshold 0.05 | Half-turned glyph edges |
 | tspan-with-absolute-position, with-underline | golden | Minor char advance diffs |
 | tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
@@ -116,8 +116,6 @@ compare at default settings against resvg v0.49.0's 300x300 references (provenan
 
 | Test | Disposition |
 | --- | --- |
-| method=stretch | Skip. The original snapshot depicts align placement. |
-| mixed-children-2 | Skip. The reference continues after the occupied glyphs instead of the geometric path endpoint. |
 | with-filter | Skip. The blur exposes a qualified glyph-coverage difference. |
 | with-invalid-path-and-xlink-href | Skip. The reference resolves a relative external URL as a local fragment. |
 | complex | Render only. The PNG is the suite's undefined-behavior marker. |
@@ -139,12 +137,13 @@ compare at default settings against resvg v0.49.0's 300x300 references (provenan
 ### Open Issues
 - [x] **012**: Mixed textPath/tspan/textPath continuation follows the SVG 2 text layout
   algorithm: unanchored text after each path starts at that path's geometric endpoint. The
-  historical reference instead continues from the occupied text extent, so it remains skipped.
+  historical reference instead continues from the occupied text extent, so the row compares
+  against a Donner golden whose ink matches Chrome within one device pixel.
   Independent renderer controls compare both continuations against explicit endpoint positions in
   `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and `_text_full` variants.
 
 ### Deferred Features
-- [ ] Implement `method=stretch` for glyph stretching along path curvature.
+- [x] Implement `method=stretch` for glyph stretching along path curvature.
 - [ ] Implement `spacing=auto` for automatic inter-character spacing on path.
 - [ ] Support `side=right` (SVG 2) for text on the opposite side of the path.
 - [ ] Support `path` attribute (SVG 2) for inline path data.
