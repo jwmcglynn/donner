@@ -39,7 +39,8 @@ comparison uses a 0.02 color threshold and allows 100 mismatched pixels.
 | `with-underline` | Committed legacy golden | 1 / 3 | 295 / 301 | 182 / 182 |
 
 The vendored `closed-path` reference differs by 381 / 373 pixels at the default color threshold,
-inside the existing 400-pixel limit. The historical 0.1 threshold yields 291 / 286 on those tiers. At 0.02, 307 / 300 mismatches are
+inside the existing 400-pixel limit on both macOS and Linux aarch64. The previous 0.1 color
+threshold yielded 291 / 286 in the macOS measurements. At 0.02, 307 / 300 mismatches are
 within one pixel of a glyph boundary and 73 / 72 lie on the gray guide alone. The remaining black
 pixel at (275, 97) has alpha 255 in Donner and 191 in the reference.
 SVG 2 limits a single closed subpath to one circuit.
