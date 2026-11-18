@@ -76,8 +76,8 @@ the other ledgers in this directory.
   `icc-color`, `dominant-baseline: reset-size/use-script`, `requiredFeatures`) are correctly
   render-only or ignored in Donner and need no new cases.
 
-Counts (148 matrix rows): covered 55 (of which 6 are covered only by the Donner extension corpus or
-Donner native scenarios), resvg-only-skipped 8, needs-new-suite-case 71 (several of which have
+Counts (148 matrix rows): covered 56 (of which 6 are covered only by the Donner extension corpus or
+Donner native scenarios), resvg-only-skipped 7, needs-new-suite-case 71 (several of which have
 Donner unit or renderer-golden coverage but no portable SVG/PNG pair; see column 6),
 removed-from-CR 14.
 
