@@ -118,7 +118,8 @@ private:
   /// Cache entry stored on the font entity.
   struct HbFontEntry;
 
-  /// Outline-load flags that suppress only a marked synthetic oblique transform.
+  /// Outline-load flags, which skip embedded bitmaps and suppress only a marked synthetic oblique
+  /// transform.
   /// @param font Face holding the cached transform classification.
   /// @param allowSyntheticOblique Per-glyph synthesis permission.
   /// @return FreeType glyph-load flags.

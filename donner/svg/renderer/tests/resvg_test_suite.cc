@@ -1707,9 +1707,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
-                     .withMaxPixelsDifferent(1100)
-                     .withReason(
-                         "resvg 0.47.0 reference; full-text small-font placement residual")},
+                     .withReason("resvg 0.47.0 reference (golden README)")},
                 {"m-A-path.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
@@ -1892,10 +1890,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params::Skip("Override order, script runs and Arabic joining match the "
-                                  "reference; Latin glyphs sit up to 1.5 px from the reference "
-                                  "individually (not kerning), leaving 122 px on the full tier")
-                         .onlyTextFull()},
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1933,7 +1928,13 @@ INSTANTIATE_TEST_SUITE_P(
                               "`Hi!` and is shaped unjoined in logical order, and the vertical "
                               "underline is not drawn (3180 px)")
                      .onlyTextFull()},
-                {"mixed-languages-with-tb.svg", Params().setCanvasSize(300, 300).onlyTextFull()},
+                {"mixed-languages-with-tb.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
+                     .setCanvasSize(300, 300)
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
+                                 "origin, where Firefox places them (golden README)")},
                 {"tb-and-punctuation.svg",
                  Params::Skip("Accepted difference (2026-11-13): punctuation forms and spacing "
                               "match; upright glyphs sit 0.026em lower (vhea ascender origin vs "

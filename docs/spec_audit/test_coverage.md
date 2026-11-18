@@ -62,8 +62,7 @@ the other ledgers in this directory.
   (skipped), `mixed-children-2` (skipped), clip-path `circle()` with `stroke-box`/`view-box`
   (skipped, harness background mismatch), `structure/use/xlink-to-an-external-file` (skipped),
   7 filter-function cases (skipped; count re-read at `b39a524a2`), `text/font-size-adjust`,
-  `text/direction/rtl`,
-  `text/unicode-bidi/bidi-override`, `text/glyph-orientation-vertical` (skipped).
+  `text/direction/rtl`, `text/glyph-orientation-vertical` (skipped).
 - Reference conflicts with the CR: `painting/stroke-linejoin/miter-clip.svg` encodes the
   `miter-clip` join that the CR removed (Issue 1065, March 2026) and Donner currently passes it by
   implementing `miter-clip`; the two `non-presentational-attribute.svg` cases encode SVG 1.1
