@@ -603,7 +603,8 @@ budget. Every command also passes
 `--incompatible_repo_env_ignores_action_env`: repository rules and module extensions run on the
 Linux runner, and without it Bazel 8 also hands them each `--action_env` value of the config (the
 macOS `PATH` of `ci-macos`, and any variable a runner's rc empties for the executor), so a fetch
-on the runner could lose what its own tools need. No other lane passes it.
+on the runner could lose what its own tools need. The mixed-platform canary sets the same flag in its
+opt-in `ci-platforms` config.
 
 **A starved executor.** Bazel rewrites its progress line with a growing elapsed time, so a stall
 watchdog that compares lines sees progress while nothing completes. The lane therefore stops a phase

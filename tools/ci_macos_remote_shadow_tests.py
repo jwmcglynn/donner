@@ -675,8 +675,11 @@ class LaneCommandTest(unittest.TestCase):
                 before = [word for word in command[position:]
                           if word.startswith("--config=remote-macos") or word in rc_options]
                 self.assertEqual([], before)
-        # No other lane passes it: it is not in the repository's rc.
-        self.assertNotIn("repo_env_ignores_action_env", _read(".bazelrc"))
+        # The mixed-platform canary also runs repository rules on the client.
+        rc_lines = [line.partition("#")[0].split() for line in _read(".bazelrc").splitlines()]
+        settings = [words for words in rc_lines
+                    if any("repo_env_ignores_action_env" in word for word in words)]
+        self.assertEqual([["build:ci-platforms", lane.CLIENT_REPO_ENV]], settings)
 
     def test_remote_execution_messages_of_failures_are_printed(self):
         # Bazel's default prints the messages a backend attaches to a failed remote action, which

@@ -125,8 +125,7 @@ CI_FLAGS = (
 # of ci-macos, and any variable a runner's rc empties for the executor, such as a library path, so
 # a local repository fetch can lose what the client's own tools need. With this flag they see the
 # client's environment plus --repo_env. Every Bazel command of the lane passes it, after the
-# config and the rc options, so the lane's output root never mixes two repository environments;
-# no other lane passes it.
+# config and the rc options, so the lane's output root never mixes two repository environments.
 CLIENT_REPO_ENV = "--incompatible_repo_env_ignores_action_env"
 
 # The editor's build identity action reads the checkout's commit and must then run on the client,
