@@ -3978,7 +3978,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIsNone(REMOTE_FALLBACK_FLAG.search("\n".join(
             line for line in _read(".bazelrc").splitlines()
             if not line.startswith("build:buildbuddy-re ")
-            and line != "build:remote-macos-base --noremote_local_fallback")))
+            and line not in ("build:remote-macos-base --noremote_local_fallback",
+                             "build:ci-platforms --noremote_local_fallback"))))
 
     def test_linux_package_change_invalidates_cache_with_the_same_runner_image(self):
         for route in (dict(event="push", write="fixture-key"),

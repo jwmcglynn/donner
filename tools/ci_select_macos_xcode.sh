@@ -12,8 +12,8 @@
 # XCODE_PROBE_PYTHON override tools in tests.
 set -euo pipefail
 
-if [[ $# -ne 0 ]]; then
-  echo "usage: $0" >&2
+if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--remote-canary-env" ) ]]; then
+  echo "usage: $0 [--remote-canary-env]" >&2
   exit 2
 fi
 
@@ -52,6 +52,21 @@ while IFS= read -r pin || [[ -n "${pin}" ]]; do
 done < "${pin_file}"
 if [[ ${#pins[@]} -eq 0 ]]; then
   echo "::error::The Xcode policy is empty."
+  exit 1
+fi
+# A Linux coordinator has no local Xcode to discover. Bind its action key to
+# the same policy file, and leave worker installation verification to enrollment.
+if [[ ${1:-} == --remote-canary-env ]]; then
+  rc="$(dirname "$pin_file")/../.bazelrc"
+  requested=$(sed -n 's/^build:ci-platforms --xcode_version=//p' "$rc")
+  for pin in "${pins[@]}"; do
+    read -r version build <<< "$pin"
+    if [[ $version == "$requested" ]]; then
+      printf 'DONNER_CI_XCODE_IDENTITY=%s-%s\n' "$version" "$build"
+      exit 0
+    fi
+  done
+  echo "Remote canary needs one approved Xcode version" >&2
   exit 1
 fi
 read -r version build <<< "${pins[0]}"

@@ -486,10 +486,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^build:ci-platforms --xcode_version=//p' .bazelrc)
-          DONNER_CI_XCODE_IDENTITY=$(awk -v v="$version" '$1 == v {print $1 "-" $2; n++} END {exit n != 1}' tools/ci_macos_xcode.txt)
-          export DONNER_CI_XCODE_IDENTITY
-          bazelisk test --config=ci --config=ci-platforms --test_output=all \
+          remote_identity=$(tools/ci_select_macos_xcode.sh --remote-canary-env)
+          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --test_output=all \
             --noskip_incompatible_explicit_targets --build_event_json_file="$RUNNER_TEMP/platform-canary.bep.json" \
             //donner/base:ci_linux_ndebug_test //donner/base:ci_macos_ndebug_test \
             //tools/ci:ci_linux_kernel_test //tools/ci:ci_macos_kernel_test
