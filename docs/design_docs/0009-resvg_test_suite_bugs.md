@@ -151,33 +151,21 @@ noted.
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
-| text/textPath        | m-L-Z-path                               | Minor char                                        |
 | text/textPath        | mixed-children-1                         | AA diffs                                          |
-| text/textPath        | nested                                   | Minor char                                        |
-| text/textPath        | path-with-ClosePath                      | Minor char                                        |
-| text/textPath        | simple-case                              | Minor char                                        |
-| text/textPath        | startOffset=-100                         | Minor char                                        |
-| text/textPath        | startOffset=10percent                    | Minor char                                        |
-| text/textPath        | startOffset=30                           | Minor char                                        |
-| text/textPath        | startOffset=5mm                          | Minor char                                        |
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
-| text/textPath        | two-paths                                | Minor char                                        |
 | text/textPath        | very-long-text                           | AA diffs                                          |
-| text/textPath        | with-baseline-shift                      | Minor char                                        |
-| text/textPath        | with-coordinates-on-text                 | Minor char                                        |
-| text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
-| text/textPath        | with-rotate                              | Minor char                                        |
-| text/textPath        | with-text-anchor                         | (no reason string)                                |
-| text/textPath        | with-transform-on-a-referenced-path      | Minor char                                        |
-| text/textPath        | with-transform-outside-a-referenced-path | Minor char                                        |
 | text/textPath        | with-underline                           | Minor char                                        |
 | text/text-decoration | indirect                                 | (no reason string)                                |
 
-> Two entries (`textPath/with-text-anchor`, `text-decoration/indirect`) carry no
-> `withReason`. They should either get one or migrate to a per-test threshold; the
-> "Minor char" cluster is the precedent. Tracked in
-> [0021](0021-resvg_feature_gaps.md).
+The other textPath rows that compare against a reference (m-A-path, m-L-Z-path, nested,
+path-with-ClosePath, simple-case, spacing=auto, the four startOffset rows, two-paths,
+with-baseline-shift, both with-coordinates rows, with-rotate, with-text-anchor and both
+with-transform rows) use resvg v0.49.0's 300x300 references at default settings (see
+`third_party/resvg-test-suite/BUILD.bazel`).
+
+> `text-decoration/indirect` carries no `withReason`. It should either get one or migrate to a
+> per-test threshold. Tracked in [0021](0021-resvg_feature_gaps.md).
 
 ## Golden files
 

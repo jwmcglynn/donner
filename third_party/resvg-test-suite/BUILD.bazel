@@ -232,6 +232,30 @@ revisions.
 
   tests/painting/context/with-pattern-objectBoundingBox-in-use.png
   tests/painting/marker/orient=auto-on-M-C-C-4.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references predate the current text-on-path layout, so Donner compared against its
+own renderings for most of them; Donner matches the v0.49.0 renderings within the default
+allowance on both CPU text tiers. Their SVG inputs are byte-identical at both revisions.
+
+  tests/text/textPath/m-A-path.png
+  tests/text/textPath/m-L-Z-path.png
+  tests/text/textPath/nested.png
+  tests/text/textPath/path-with-ClosePath.png
+  tests/text/textPath/simple-case.png
+  tests/text/textPath/spacing=auto.png
+  tests/text/textPath/startOffset=-100.png
+  tests/text/textPath/startOffset=10percent.png
+  tests/text/textPath/startOffset=30.png
+  tests/text/textPath/startOffset=5mm.png
+  tests/text/textPath/two-paths.png
+  tests/text/textPath/with-baseline-shift.png
+  tests/text/textPath/with-coordinates-on-text.png
+  tests/text/textPath/with-coordinates-on-textPath.png
+  tests/text/textPath/with-rotate.png
+  tests/text/textPath/with-text-anchor.png
+  tests/text/textPath/with-transform-on-a-referenced-path.png
+  tests/text/textPath/with-transform-outside-a-referenced-path.png
 """
 
 package(default_visibility = ["//visibility:public"])

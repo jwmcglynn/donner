@@ -97,21 +97,20 @@ the human-approved pre-existing set only.
 
 ### Custom goldens and thresholds
 
-Any golden or tolerance change requires explicit human approval after visual retriage.
+Any golden or tolerance change requires explicit human approval after visual retriage. Most rows
+compare at default settings against resvg v0.49.0's 300x300 references (provenance in
+`third_party/resvg-test-suite/BUILD.bazel`). The remaining exceptions are:
 
-| Tests | Reason |
-|-------|--------|
-| 001-005 | Minor char advance diffs |
-| 009-010 | Minor char advance diffs |
-| 011 | AA diffs |
-| 013-014 | Minor char advance diffs |
-| 015 | AA diffs |
-| 019-020 | Minor char advance diffs / AA diffs |
-| 021 | 250 px at 300x300: upright vmtx origin vs the reference's hhea-centered cell |
-| 022-023 | Minor char advance diffs |
-| 026-029 | Minor char advance diffs |
-| 032, 035-037 | Minor char advance diffs |
-| 034 | AA artifacts (WithThreshold 0.05) |
+| Test | Setting | Reason |
+|------|---------|--------|
+| closed-path | threshold 0.1, 400 px | AA diffs |
+| dy-with-tiny-coordinates | golden, 1100 px | resvg 0.47.0 reference; full-text small-font placement residual |
+| link-to-rect, with-path, with-path-and-xlink-href | threshold 0.89 | Opaque reference background under the checkerboard comparison |
+| mixed-children-1, very-long-text | golden | SVG 2 endpoint continuation and AA differences |
+| side=right | threshold 0.05 | Half-turned glyph edges |
+| tspan-with-absolute-position, with-underline | golden | Minor char advance diffs |
+| tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
+| writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
 
 ### Skipped Tests
 
