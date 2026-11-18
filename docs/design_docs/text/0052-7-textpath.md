@@ -104,7 +104,7 @@ compare at default settings against resvg v0.49.0's 300x300 references (provenan
 | Test | Setting | Reason |
 |------|---------|--------|
 | closed-path | threshold 0.1, 400 px | AA diffs |
-| dy-with-tiny-coordinates | golden, 1100 px | resvg 0.47.0 reference; full-text small-font placement residual |
+| dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
 | link-to-rect, with-path, with-path-and-xlink-href | threshold 0.89 | Opaque reference background under the checkerboard comparison |
 | mixed-children-1, very-long-text | golden | SVG 2 endpoint continuation and AA differences |
 | side=right | threshold 0.05 | Half-turned glyph edges |
