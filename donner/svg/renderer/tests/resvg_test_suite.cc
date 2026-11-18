@@ -212,55 +212,21 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
                     {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
                     {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
-                    // The convolve math (window, 180° flip, target offset, divisor,
-                    // preserveAlpha, linearRGB) is byte-equivalent to tiny-skia. The
-                    // remaining Geode diff is a ~1px positional band per convolved
-                    // feature, traced to the opacity-0.75 pattern *input* edge coverage
-                    // (slug_fill 4-sample vs tiny-skia analytic), which the kernel
-                    // spreads above threshold - the same root cause as the structure/svg
-                    // and feImage/svg parity gaps. Not the color-space round-trip.
-                    // Pixelmatch 2.0 checkerboard entries below: the new comparator
-                    // exposes pre-existing semi-transparent convolve-math deltas vs
-                    // resvg that white-blending masked. Each threshold is the measured
-                    // minimal passing hundredth at the existing pixel allowance
-                    // (PR #1285, see README_pixelmatch_2.md).
-                    {"edgeMode=none.svg",
-                     Params::WithThreshold(
-                         0.53f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
+                    // References refreshed to resvg v0.49.0 except edgeMode=wrap; see
+                    // third_party/resvg-test-suite/BUILD.bazel.
+                    {"edgeMode=none.svg", ResvgV049Reference()},
                     {"edgeMode=wrap.svg",
                      Params::WithThreshold(
                          0.43f, 200,
                          "Checkerboard exposes convolve edge-handling alpha delta; measured "
                          "minimal")},
-                    {"order=4-2.svg",
-                     Params::WithThreshold(
-                         0.48f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
-                    {"order=4-4.svg",
-                     Params::WithThreshold(
-                         0.48f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
-                    {"order=4.svg",
-                     Params::WithThreshold(
-                         0.48f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
-                    {"preserveAlpha=true.svg",
-                     Params::WithThreshold(
-                         0.16f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
-                    {"targetX=0.svg",
-                     Params::WithThreshold(
-                         0.15f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
-                    {"targetX=2.svg",
-                     Params::WithThreshold(
-                         0.15f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
-                    {"unset-order.svg",
-                     Params::WithThreshold(
-                         0.15f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes convolve alpha-math delta; measured minimal")},
+                    {"order=4-2.svg", ResvgV049Reference()},
+                    {"order=4-4.svg", ResvgV049Reference()},
+                    {"order=4.svg", ResvgV049Reference()},
+                    {"preserveAlpha=true.svg", ResvgV049Reference()},
+                    {"targetX=0.svg", ResvgV049Reference()},
+                    {"targetX=2.svg", ResvgV049Reference()},
+                    {"unset-order.svg", ResvgV049Reference()},
                     {"edgeMode=wrap-with-matrix-larger-than-target.svg",
                      Params::UndefinedBehavior("wrap with oversized kernel")},
                 })),
@@ -366,26 +332,14 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feMorphology",
-                {
-                    // Pixelmatch 2.0 checkerboard exposes the transparent-vs-white
-                    // background convention at eroded-shape boundaries. Each threshold
-                    // is the measured minimal passing hundredth at the existing pixel
-                    // allowance (PR #1285, see README_pixelmatch_2.md).
-                    {"radius=0.5.svg",
-                     Params::WithThreshold(
-                         0.89f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes background convention; measured minimal")},
-                    {"radius=1-10.svg",
-                     Params::WithThreshold(
-                         0.89f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes background convention; measured minimal")},
-                    {"radius=10-1.svg",
-                     Params::WithThreshold(
-                         0.89f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes background convention; measured minimal")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("filters/feMorphology",
+                                        {
+                                            // References refreshed to resvg v0.49.0; see
+                                            // third_party/resvg-test-suite/BUILD.bazel.
+                                            {"radius=0.5.svg", ResvgV049Reference()},
+                                            {"radius=1-10.svg", ResvgV049Reference()},
+                                            {"radius=10-1.svg", ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -410,19 +364,10 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "filters/feSpecularLighting",
                 {
-                    // Pixelmatch 2.0 checkerboard exposes pre-existing
-                    // specular-lighting output alpha deltas vs resvg that
-                    // white-blending masked. Each threshold is the measured minimal
-                    // passing hundredth at the existing pixel allowance (PR #1285, see
-                    // README_pixelmatch_2.md).
-                    {"with-feSpotLight-and-specular-and-exponent.svg",
-                     Params::WithThreshold(
-                         0.31f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes lighting alpha delta; measured minimal")},
-                    {"with-feSpotLight-and-specularConstant=5.svg",
-                     Params::WithThreshold(
-                         0.63f, kDefaultMismatchedPixels,
-                         "Checkerboard exposes lighting alpha delta; measured minimal")},
+                    // Spot-light references refreshed to resvg v0.49.0; see
+                    // third_party/resvg-test-suite/BUILD.bazel.
+                    {"with-feSpotLight-and-specular-and-exponent.svg", ResvgV049Reference()},
+                    {"with-feSpotLight-and-specularConstant=5.svg", ResvgV049Reference()},
                     {"with-fePointLight.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-with-fePointLight.png", 0.02f)
@@ -459,9 +404,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "filters/feTurbulence",
                 {
-                    {"color-interpolation-filters=sRGB.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                           "Minor shading differences")},
+                    {"color-interpolation-filters=sRGB.svg", ResvgV049Reference()},
                     {"complex-transform.svg", Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                                                     "Minor shading differences")},
                     {"stitchTiles=stitch.svg", Params::UndefinedBehavior("stitchTiles=stitch")},
@@ -1694,9 +1637,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
-                     .withMaxPixelsDifferent(1100)
-                     .withReason(
-                         "resvg 0.47.0 reference; full-text small-font placement residual")},
+                     .withReason("resvg 0.47.0 reference (golden README)")},
                 {"m-A-path.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
@@ -1879,10 +1820,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params::Skip("Override order, script runs and Arabic joining match the "
-                                  "reference; Latin glyphs sit up to 1.5 px from the reference "
-                                  "individually (not kerning), leaving 122 px on the full tier")
-                         .onlyTextFull()},
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1920,7 +1858,13 @@ INSTANTIATE_TEST_SUITE_P(
                               "`Hi!` and is shaped unjoined in logical order, and the vertical "
                               "underline is not drawn (3180 px)")
                      .onlyTextFull()},
-                {"mixed-languages-with-tb.svg", Params().setCanvasSize(300, 300).onlyTextFull()},
+                {"mixed-languages-with-tb.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
+                     .setCanvasSize(300, 300)
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
+                                 "origin, where Firefox places them (golden README)")},
                 {"tb-and-punctuation.svg",
                  Params::Skip("Accepted difference (2026-11-13): punctuation forms and spacing "
                               "match; upright glyphs sit 0.026em lower (vhea ascender origin vs "

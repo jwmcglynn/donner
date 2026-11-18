@@ -579,8 +579,8 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 **Current status:** normal horizontal BiDi, `direction`, and a `bidi-override` on the `<text>`
 element itself are implemented ([0069](0069-bidi_text_layout.md)). `text/unicode-bidi/bidi-override`
-matches in order and joining but stays skipped: individual Latin glyphs sit up to 1.5 px from
-the reference, leaving 122 pixels; disabling kerning does not change it. `text/direction/rtl` orders and anchors correctly but stays skipped: its
+compares on the full text tier at default parameters, with 100 differing pixels at the default
+limit of 100. `text/direction/rtl` orders and anchors correctly but stays skipped: its
 reference shapes Arabic with Noto Sans Arabic, which the test fonts lack.
 `text/direction/rtl-with-vertical-writing-mode` is undefined behavior (svgwg#618).
 
@@ -630,7 +630,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. They stay skipped because upright CJK sits 0.026em lower than the reference, and the underline case also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin; the underline case stays skipped because it also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
 
 ---
 

@@ -8,6 +8,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -16,6 +17,7 @@
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/ClassicNumberStream.h"
 #include "donner/base/MathUtils.h"
@@ -4184,11 +4186,40 @@ private:
   size_t remaining_ = 0;
 };
 
+/**
+ * The family names of the registered `@font-face` rules in declaration order, which cluster
+ * fallback tries after a span's listed families. One layout reads the list at most once and shares
+ * it across its spans. Faces are registered only outside layout, so the list stays current until
+ * the layout ends and is discarded with it.
+ */
+class DeclaredFaceFamilies {
+public:
+  explicit DeclaredFaceFamilies(const FontManager& fontManager) : fontManager_(fontManager) {}
+
+  /// The family names, one per registered rule, in declaration order.
+  const std::vector<RcString>& get() {
+    if (!families_) {
+      families_ = fontManager_.faceFamilyNamesInDeclarationOrder();
+      ++builds_;
+    }
+    return *families_;
+  }
+
+  /// Number of times the list was read from the font manager.
+  std::size_t builds() const { return builds_; }
+
+private:
+  const FontManager& fontManager_;
+  std::optional<std::vector<RcString>> families_;
+  std::size_t builds_ = 0;
+};
+
 /// Where a span's clusters may fall back, in priority order after the span's own face: its
 /// remaining font families, then every registered face, matched at the span's weight and style.
 struct ClusterFallback {
   FontManager& fontManager;
   FallbackCoverage& coverage;
+  DeclaredFaceFamilies& declaredFamilies;
   std::span<const RcString> families;
   int weight = 400;
   int style = 0;
@@ -5444,9 +5475,8 @@ private:
     if (fontManager.hasDefaultFamily()) {
       add(fontManager.defaultFamily());
     }
-    const size_t faceCount = fontManager.numFaces();
-    for (size_t index = 0; index < faceCount; ++index) {
-      add(fontManager.faceFamilyName(index));
+    for (const RcString& family : fallback_.declaredFamilies.get()) {
+      add(family);
     }
     // The primary face's check plus one query per candidate.
     fallback_.coverage.ensureGrantAtLeast(candidates_.size() + 1);
@@ -6576,7 +6606,8 @@ public:
                        std::size_t* fallbackCoverageEntries = nullptr,
                        std::size_t* bidiRunCandidates = nullptr,
                        bool* bidiNestedOwnersPreserved = nullptr,
-                       std::optional<size_t> bidiRunCandidateLimit = std::nullopt)
+                       std::optional<size_t> bidiRunCandidateLimit = std::nullopt,
+                       std::size_t* declaredFamilyListBuilds = nullptr)
       : registry_(registry),
         fontManager_(fontManager),
         backend_(backend),
@@ -6584,6 +6615,7 @@ public:
         params_(params),
         resourceRejected_(resourceRejected),
         fallbackCoverageEntries_(fallbackCoverageEntries),
+        declaredFamilyListBuilds_(declaredFamilyListBuilds),
         normalBidi_(registry, bidiRunCandidates, bidiNestedOwnersPreserved, bidiRunCandidateLimit) {
   }
 
@@ -6613,14 +6645,22 @@ public:
     applyInlineWrap();
     applyFinalAdjustments();
     ApplyPostTextPathTranslations(runs_, text_, postPathBoundaries_);
-    if (fallbackCoverageEntries_) {
-      *fallbackCoverageEntries_ = fallbackCoverage_.entries();
-    }
+    reportFallbackWork();
     return std::move(runs_);
   }
 
 private:
   using TextSpan = components::ComputedTextComponent::TextSpan;
+
+  /// Hands the fallback work counts of this layout to the engine's test counters.
+  void reportFallbackWork() {
+    if (fallbackCoverageEntries_) {
+      *fallbackCoverageEntries_ = fallbackCoverage_.entries();
+    }
+    if (declaredFamilyListBuilds_) {
+      *declaredFamilyListBuilds_ = declaredFamilies_.builds();
+    }
+  }
 
   struct SpanState {
     SpanState() = default;
@@ -7033,6 +7073,7 @@ private:
     fallbackCoverage_.grant(state.text.size());
     const ClusterFallback fallback{fontManager_,
                                    fallbackCoverage_,
+                                   declaredFamilies_,
                                    span.fontFamilyList().empty()
                                        ? std::span<const RcString>(params_.fontFamilies)
                                        : span.fontFamilyList(),
@@ -8160,7 +8201,9 @@ private:
   bool wrapped_ = false;
   bool* resourceRejected_ = nullptr;
   std::size_t* fallbackCoverageEntries_ = nullptr;
+  std::size_t* declaredFamilyListBuilds_ = nullptr;
   FallbackCoverage fallbackCoverage_;
+  DeclaredFaceFamilies declaredFamilies_{fontManager_};
   NormalBidiPlan normalBidi_;
   std::vector<BidiPlacement> bidiPlacements_;
 };
@@ -8178,13 +8221,14 @@ std::vector<TextRun> TextEngine::layoutWithResourceStatus(
     bool& resourceRejected) {
   ++layoutCallCount_;
   resourceRejected = false;
+  declaredFamilyListBuilds_ = 0;
   bidiRunCandidates_ = 0;
   bidiNestedOwnersPreserved_ = false;
-  auto runs =
-      TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected,
-                           &fallbackCoverageEntries_, &bidiRunCandidates_,
-                           &bidiNestedOwnersPreserved_, bidiRunCandidateLimit_)
-          .run();
+  auto runs = TextLayoutInvocation(registry_, fontManager_, *backend_, text, params,
+                                   &resourceRejected, &fallbackCoverageEntries_,
+                                   &bidiRunCandidates_, &bidiNestedOwnersPreserved_,
+                                   bidiRunCandidateLimit_, &declaredFamilyListBuilds_)
+                  .run();
   for (size_t index = 0; index < runs.size() && index < text.spans.size(); ++index) {
     const auto& span = text.spans[index];
     const bool allow = span.fontSynthesisStyle == FontSynthesisStyle::Auto ||

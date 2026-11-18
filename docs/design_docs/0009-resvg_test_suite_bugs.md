@@ -54,10 +54,7 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (57)
-
-The count is of overridden suite rows; the shared feColorMatrix table row covers seven of them
-and the drop-shadow-function row four. The color-adjust entry covers seven rows.
+## Active overrides
 
 ### resvg golden is wrong per spec
 
@@ -112,6 +109,18 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
+### Vertical text: resvg's own model
+
+| Category          | Test                    | Reason                                                      |
+| ----------------- | ----------------------- | ----------------------------------------------------------- |
+| text/writing-mode | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees |
+
+This reference encodes resvg's vertical model, and browser renders measurably side with Donner.
+resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`.
+CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
+upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
+in the golden README.
+
 ### Allowed nearest-neighbor reference differences
 
 CSS Images permits an implementation-selected edge-preserving algorithm for
@@ -165,7 +174,7 @@ noted.
 
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
-| text/textPath        | dy-with-tiny-coordinates                 | AA + minor char advance diffs (text vs text-full) |
+| text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
 | text/textPath        | m-L-Z-path                               | Minor char                                        |
 | text/textPath        | mixed-children-1                         | AA diffs                                          |
 | text/textPath        | nested                                   | Minor char                                        |

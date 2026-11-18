@@ -31,6 +31,7 @@
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
+#include "donner/svg/renderer/tests/TestFontDirectory.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -121,17 +122,23 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
     return it->second;
   }
 
+  std::error_code listError;
+  const std::vector<std::filesystem::path> fontPaths = ListFontFilesSorted(fontsDir, listError);
+  if (listError) {
+    // Not cached, so every test that needs this directory reports why its fonts are missing.
+    ADD_FAILURE() << "Cannot list test fonts in " << fontsDir << ": " << listError.message();
+    static const std::vector<css::FontFace> kNoFaces;
+    return kNoFaces;
+  }
+
   std::vector<css::FontFace> faces;
-  for (const auto& entry : std::filesystem::directory_iterator(fontsDir)) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    const auto ext = entry.path().extension().string();
-    if (ext != ".ttf" && ext != ".otf") {
+  for (const std::filesystem::path& fontPath : fontPaths) {
+    std::error_code typeError;
+    if (!std::filesystem::is_regular_file(fontPath, typeError)) {
       continue;
     }
 
-    std::ifstream fontFile(entry.path(), std::ios::binary);
+    std::ifstream fontFile(fontPath, std::ios::binary);
     if (!fontFile) {
       continue;
     }

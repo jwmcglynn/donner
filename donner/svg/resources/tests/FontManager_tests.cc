@@ -1495,6 +1495,49 @@ TEST(FontManagerTest, FallbackForAnUnloadableFaceIsRetriedRatherThanCached) {
   EXPECT_EQ(mgr.numLoadedFonts(), 2u);
 }
 
+namespace {
+
+/// The registered rules' family names in declaration order, as strings for readable failures.
+std::vector<std::string> DeclaredFamilies(const FontManager& manager) {
+  std::vector<std::string> families;
+  for (const RcString& family : manager.faceFamilyNamesInDeclarationOrder()) {
+    families.emplace_back(family);
+  }
+  return families;
+}
+
+}  // namespace
+
+/// Coverage fallback tries the registered faces in this order, so it follows declaration order and
+/// does not depend on how the registry stores the rules.
+TEST(FontManagerTest, FaceFamilyNamesEnumerateInDeclarationOrder) {
+  Registry registry;
+  FontManager manager(registry);
+  for (const std::string_view family : {"Alpha", "Bravo", "Charlie"}) {
+    manager.addFontFace(MakeEmbeddedFace(family));
+  }
+
+  EXPECT_THAT(DeclaredFamilies(manager), testing::ElementsAre("Alpha", "Bravo", "Charlie"));
+}
+
+/// Each manager numbers its own registrations, so a second manager on the same registry repeats the
+/// first manager's sequence numbers. The order stays total: equal numbers sort by entity
+/// identifier.
+TEST(FontManagerTest, FaceFamilyNamesBreakSequenceTiesByEntity) {
+  Registry registry;
+  FontManager first(registry);
+  first.addFontFace(MakeEmbeddedFace("Alpha"));
+  first.addFontFace(MakeEmbeddedFace("Bravo"));
+  FontManager second(registry);
+  second.addFontFace(MakeEmbeddedFace("Charlie"));
+
+  // Alpha and Charlie both carry sequence 0; Alpha has the lower entity identifier in this fresh
+  // registry.
+  const auto expected = testing::ElementsAre("Alpha", "Charlie", "Bravo");
+  EXPECT_THAT(DeclaredFamilies(first), expected);
+  EXPECT_THAT(DeclaredFamilies(second), expected);
+}
+
 /// Equally good faces resolve to the one declared last (CSS Fonts: a later `@font-face` wins).
 /// The two declarations here carry different bytes, so the assertion names which one won rather
 /// than only that the answer held still. Deduplication must not disturb the order either, so a
