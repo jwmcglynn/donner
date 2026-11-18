@@ -2,6 +2,7 @@
 /// @file
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -33,6 +34,20 @@ inline double BoundedSignedFilterPixels(double value) {
   }
   return std::clamp(value, -static_cast<double>(components::kMaximumFilterPixelOffset),
                     static_cast<double>(components::kMaximumFilterPixelOffset));
+}
+
+/**
+ * Clamp a device offset to the filter-work bound, treating an offset within a millionth of a pixel
+ * of a whole pixel as that whole pixel: unit conversions leave such residue on offsets authored as
+ * whole pixels, and resampling by it would only soften their edges.
+ *
+ * @param value Requested pixels.
+ */
+inline double BoundedFilterOffsetPixels(double value) {
+  constexpr double kWholePixelTolerance = 1e-6;
+  const double bounded = BoundedSignedFilterPixels(value);
+  const double whole = std::round(bounded);
+  return std::abs(bounded - whole) < kWholePixelTolerance ? whole : bounded;
 }
 
 /// The number of inputs a primitive reads through the filter attribute surface. feComposite,
@@ -97,12 +112,12 @@ struct FilterInputMargin {
 };
 
 /// Accumulates each primitive's input reach in device pixels, converting lengths with the same
-/// helpers and bounds the filter executors use. The executors round each primitive to whole
-/// pixels (offsets and morphology radii to the nearest pixel, blur kernels up), so each
-/// primitive's reach rounds up to whole pixels before the chain adds them.
+/// helpers and bounds the filter executors use. Each primitive's reach rounds up to whole pixels
+/// before the chain adds them: morphology radii round to the nearest pixel, blur kernels round up,
+/// and a fractional offset reads the whole pixels on both sides of its shift.
 ///
 /// Blur-family graphs under rotation or skew may instead run on the transformed path's local
-/// raster, scaled by each filter axis's length, where blurs and offsets round in local pixels
+/// raster, scaled by each filter axis's length, where blurs and offsets read whole local pixels
 /// before the result maps back to the device. Their reach is the larger of the two.
 struct FilterInputMarginBuilder {
   Transform2d deviceFromFilter;  ///< Filter user space to raster pixels.
@@ -165,18 +180,23 @@ struct FilterInputMarginBuilder {
     return Vector2d(std::abs(device.x), std::abs(device.y));
   }
 
-  /// Reach of an offset: rounded to whole device pixels on the device raster, or rounded to
-  /// whole local pixels on the local raster and mapped back. @param dx X offset. @param dy Y
-  /// offset.
+  /// Reach of an offset: a fractional offset blends the whole pixels on either side of it, so on
+  /// the device raster the reach rounds up to whole pixels, and on the local raster it is the
+  /// farthest of the whole local pixels around the offset, mapped back. @param dx X offset.
+  /// @param dy Y offset.
   Vector2d offsetReach(double dx, double dy) const {
-    const auto rounded = [](double value) {
-      const double limit = static_cast<double>(components::kMaximumFilterPixelOffset);
-      return std::isfinite(value) ? std::round(std::clamp(value, -limit, limit)) : 0.0;
+    const auto pixelsAround = [](double value) {
+      const double bounded = BoundedFilterOffsetPixels(value);
+      return std::array<double, 2>{std::floor(bounded), std::ceil(bounded)};
     };
-    const Vector2d device = wholePixels(offset(dx, dy));
-    const Vector2d local = localToDevice(
-        Vector2d(rounded(user(dx, 0) * localScale.x), rounded(user(dy, 1) * localScale.y)));
-    return Vector2d(std::max(device.x, local.x), std::max(device.y, local.y));
+    Vector2d reach = wholePixels(offset(dx, dy));
+    for (const double x : pixelsAround(user(dx, 0) * localScale.x)) {
+      for (const double y : pixelsAround(user(dy, 1) * localScale.y)) {
+        const Vector2d local = localToDevice(Vector2d(x, y));
+        reach = Vector2d(std::max(reach.x, local.x), std::max(reach.y, local.y));
+      }
+    }
+    return reach;
   }
 
   /// Reach of a blur: three standard deviations, rounded up to whole pixels on the device raster
@@ -956,8 +976,8 @@ private:
                                     : 0.0) *
                                3.0);
     const Vector2d offset = toPixelOffset(drop.dx, drop.dy);
-    const Vector2d rasterOffset(std::round(BoundedSignedFilterPixels(offset.x)),
-                                std::round(BoundedSignedFilterPixels(offset.y)));
+    const Vector2d rasterOffset(BoundedFilterOffsetPixels(offset.x),
+                                BoundedFilterOffsetPixels(offset.y));
     const Vector2d boundedOffset =
         historyInDeviceSpace ? rasterOffset : filterFromDevice.transformVector(rasterOffset);
     const Box2d expanded = expandByDeviceSupport(inputBounds, x, y);

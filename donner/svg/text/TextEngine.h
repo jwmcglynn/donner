@@ -99,6 +99,12 @@ public:
     return fallbackCoverageEntries_;
   }
 
+  /// Times the most recent layout read the registered faces' family list for cluster fallback,
+  /// for CPU-work regression tests.
+  [[nodiscard]] std::size_t declaredFamilyListBuildsForTesting() const {
+    return declaredFamilyListBuilds_;
+  }
+
   /// Run candidates examined by paragraph intersections, including binary-search comparisons.
   [[nodiscard]] std::size_t bidiRunCandidatesForTesting() const { return bidiRunCandidates_; }
 
@@ -180,6 +186,8 @@ public:
   struct GlyphOutline {
     Path path;                         ///< Glyph outline in text-element local coordinates.
     Entity sourceEntity = entt::null;  ///< Span source entity (text/tspan) that owns this glyph.
+    std::size_t run = 0;               ///< Layout run (one per text span) that placed the glyph.
+    bool startsTextChunk = false;      ///< Whether a text chunk of its run starts here.
   };
 
   /// Visibility-independent reference geometry in text-root local coordinates.
@@ -262,6 +270,7 @@ private:
   uint64_t observedHostFontKey_ = 0;
   std::size_t layoutCallCount_ = 0;
   std::size_t fallbackCoverageEntries_ = 0;
+  std::size_t declaredFamilyListBuilds_ = 0;
   std::size_t bidiRunCandidates_ = 0;
   std::optional<std::size_t> bidiRunCandidateLimit_;
   bool bidiNestedOwnersPreserved_ = false;

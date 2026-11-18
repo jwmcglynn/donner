@@ -23,15 +23,20 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -631,6 +636,215 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesStillCountTheirItems) {
   (void)render(tighter, overflows);
   EXPECT_TRUE(tighter.resourceStats().geometryBudgetRejected)
       << "Nine occurrences must be charged nine times their outline's items.";
+}
+
+/// Strokes wide enough that every glyph's stroke overlaps its neighbours', so a run's strokes form
+/// one connected shape.
+std::string TouchingStrokeRun(std::size_t glyphs) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+      font-family="Noto Sans" font-size="40"><text x="10" y="120" fill="none" stroke="black"
+      stroke-width="8">)svg") +
+         std::string(glyphs, 'e') + "</text></svg>";
+}
+
+/// The glyphs of \p run, a `TouchingStrokeRun`, drawn as separate `<text>` elements of
+/// \p groupSize glyphs each, every one placed where \p run places its first glyph. Each element is
+/// stroked as its own shape, so this is an independently authored picture of the run's strokes
+/// drawn group by group.
+std::string SeparatelyStrokedGroups(SVGDocument& run, std::size_t glyphs, std::size_t groupSize) {
+  const std::optional<SVGElement> text = run.querySelector("text");
+  EXPECT_TRUE(text.has_value());
+  std::string body = R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+      font-family="Noto Sans" font-size="40">)svg";
+  for (std::size_t first = 0; first < glyphs; first += groupSize) {
+    const Vector2d start = text->cast<SVGTextContentElement>().getStartPositionOfChar(first);
+    body += std::format(
+        R"svg(<text x="{}" y="{}" fill="none" stroke="black" stroke-width="8">{}</text>)svg",
+        start.x, start.y, std::string(std::min(groupSize, glyphs - first), 'e'));
+  }
+  return body + "</svg>";
+}
+
+/// When the path encoder cannot take a run's joined stroke, the stroke is still drawn and the frame
+/// is not rejected, as long as each glyph's own stroke fits.
+TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
+  SVGDocument one = parse(TouchingStrokeRun(1));
+  RendererGeode measure(sharedDevice());
+  ASSERT_GT(CountNonTransparentPixels(render(measure, one).bitmap), 0u);
+  const std::size_t itemsPerGlyph = measure.resourceStats().geometryItems;
+  ASSERT_GT(itemsPerGlyph, 0u);
+
+  const std::uint64_t drawsPerGlyph = measure.lastFrameTimings().counters.drawCalls;
+
+  SVGDocument run = parse(TouchingStrokeRun(4));
+  RendererGeode renderer(sharedDevice());
+  // The limit counts encoded geometry items, as `geometryItems` does: each glyph's stroke fits, the
+  // four joined do not.
+  renderer.setPathEncoderItemLimitForTesting(itemsPerGlyph + itemsPerGlyph / 2);
+  const Frame frame = render(renderer, run);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(frame.counters.drawCalls, testing::Eq(drawsPerGlyph + 3))
+      << "The rejected group is drawn glyph by glyph.";
+  SVGDocument glyphByGlyph = parse(SeparatelyStrokedGroups(run, 4, 1));
+  RendererGeode referenceRenderer(sharedDevice());
+  editor::tests::CompareBitmapToBitmap(frame.bitmap, render(referenceRenderer, glyphByGlyph).bitmap,
+                                       "stroked_run_past_encoder_limit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Touching strokes are joined into shapes of at most the group point limit, so a long, heavily
+/// stroked line is drawn as several shapes rather than one.
+TEST_F(GeodeGlyphInstancingTest, TouchingStrokesJoinUpToTheGroupPointLimit) {
+  SVGDocument one = parse(TouchingStrokeRun(1));
+  RendererGeode measure(sharedDevice());
+  const Frame single = render(measure, one);
+  const std::uint64_t pointsPerGlyph = single.counters.strokeOutlinePoints;
+  ASSERT_GT(pointsPerGlyph, 0u);
+
+  SVGDocument joined = parse(TouchingStrokeRun(4));
+  RendererGeode unsplit(sharedDevice());
+  const Frame whole = render(unsplit, joined);
+  EXPECT_THAT(whole.counters.drawCalls, testing::Eq(single.counters.drawCalls))
+      << "Four touching strokes are one shape.";
+
+  SVGDocument split = parse(TouchingStrokeRun(4));
+  RendererGeode renderer(sharedDevice());
+  // Two glyphs' outlines fit in a group, three do not.
+  renderer.setTextStrokeGroupPointLimitForTesting(2 * pointsPerGlyph + 1);
+  const Frame pairs = render(renderer, split);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(pairs.counters.drawCalls, testing::Eq(single.counters.drawCalls + 1))
+      << "Four touching strokes in groups of two are two shapes.";
+  SVGDocument twoByTwo = parse(SeparatelyStrokedGroups(split, 4, 2));
+  RendererGeode referenceRenderer(sharedDevice());
+  editor::tests::CompareBitmapToBitmap(pairs.bitmap, render(referenceRenderer, twoByTwo).bitmap,
+                                       "touching_strokes_in_pairs",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Strokes that do not touch stay separate shapes, so a long line of ordinary stroked text is not
+/// joined into one wide shape.
+TEST_F(GeodeGlyphInstancingTest, SeparateStrokesStaySeparateShapes) {
+  const auto parseRun = [&](std::size_t glyphs) {
+    return parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+        font-family="Noto Sans" font-size="20" letter-spacing="8"><text x="4" y="120" fill="none"
+        stroke="black" stroke-width="1">)svg") +
+                 std::string(glyphs, 'e') + "</text></svg>");
+  };
+  SVGDocument one = parseRun(1);
+  RendererGeode measure(sharedDevice());
+  const Frame single = render(measure, one);
+
+  SVGDocument run = parseRun(8);
+  RendererGeode renderer(sharedDevice());
+  const Frame frame = render(renderer, run);
+  EXPECT_THAT(frame.counters.drawCalls, testing::Eq(single.counters.drawCalls + 7))
+      << "Eight strokes that do not touch are eight shapes.";
+}
+
+/// Grouping a chunk's strokes tests only bounds that overlap along the chunk's longer axis, so a
+/// long run costs a near-linear number of tests in vertical writing as in horizontal.
+TEST_F(GeodeGlyphInstancingTest, StrokeGroupingStaysLinearInEitherWritingMode) {
+  constexpr std::size_t kGlyphs = 200;
+  for (const std::string_view writingMode : {"horizontal-tb", "vertical-rl"}) {
+    SCOPED_TRACE(writingMode);
+    SVGDocument document = parse(
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+            font-family="Noto Sans" font-size="4" letter-spacing="2"><text x="100" y="2"
+            writing-mode=")svg") +
+        std::string(writingMode) + R"svg(" fill="none" stroke="black" stroke-width="0.25">)svg" +
+        std::string(kGlyphs, 'e') + "</text></svg>");
+    RendererGeode renderer(sharedDevice());
+    const Frame frame = render(renderer, document);
+    EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Eq(kGlyphs));
+    EXPECT_THAT(frame.counters.textStrokeBoundsTests, testing::Le(2 * kGlyphs));
+  }
+}
+
+/// Each glyph stroke of a run whose glyphs overlap is tested against at least its predecessor, so
+/// the bounds-test counter sees every overlap the sweep visits.
+TEST_F(GeodeGlyphInstancingTest, OverlappingGlyphStrokesAreEachTestedForContact) {
+  constexpr std::size_t kGlyphs = 20;
+  SVGDocument document =
+      parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+          font-family="Noto Sans" font-size="16" letter-spacing="-4"><text x="10" y="100"
+          fill="none" stroke="black" stroke-width="1">)svg") +
+            std::string(kGlyphs, 'e') + "</text></svg>");
+  RendererGeode renderer(sharedDevice());
+  const Frame frame = render(renderer, document);
+  EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Eq(kGlyphs));
+  EXPECT_THAT(frame.counters.textStrokeBoundsTests,
+              testing::AllOf(testing::Ge(kGlyphs - 1), testing::Le(2 * kGlyphs)));
+}
+
+/// Grouping the strokes of a run whose glyphs all overlap, here every "e" drawn at the same place
+/// because letter-spacing cancels its 0.564 em advance, costs a linear number of bounds tests,
+/// not one for every pair of glyphs.
+TEST_F(GeodeGlyphInstancingTest, CoincidentGlyphStrokesGroupInLinearBoundsTests) {
+  constexpr std::size_t kGlyphs = 3000;
+  SVGDocument document =
+      parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+          font-family="Noto Sans" font-size="10" letter-spacing="-5.64"><text x="100" y="100"
+          fill="none" stroke="black" stroke-width="0.5">)svg") +
+            std::string(kGlyphs, 'e') + "</text></svg>");
+  RendererGeode renderer(sharedDevice());
+  const Frame frame = render(renderer, document);
+  EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Eq(kGlyphs));
+  EXPECT_THAT(frame.counters.textStrokeBoundsTests, testing::Le(4 * kGlyphs));
+}
+
+/// Expanded glyph strokes are charged to the frame geometry budget as each is produced, so a long
+/// run with a fine dash array is rejected after a bounded amount of expansion instead of expanding
+/// every glyph first.
+TEST_F(GeodeGlyphInstancingTest, DashedTextStrokeExpansionIsChargedAsItIsProduced) {
+  constexpr std::size_t kGlyphs = 400;
+  SVGDocument document =
+      parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+          font-family="Noto Sans" font-size="16"><text x="10" y="100" fill="none" stroke="black"
+          stroke-width="0.5" stroke-dasharray="0.05 0.05">)svg") +
+            std::string(kGlyphs, 'e') + "</text></svg>");
+  RendererGeode renderer(sharedDevice());
+  constexpr std::uint64_t kFrameBytes = std::uint64_t{1} << 20;
+  renderer.setGeometryBudgetForTesting(
+      std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max(), kFrameBytes,
+      std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::uint64_t>::max());
+  const Frame frame = render(renderer, document);
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_THAT(frame.counters.strokeOutlineFlattens, testing::Lt(kGlyphs))
+      << "Expansion stops once the expanded strokes exhaust the frame budget.";
+  EXPECT_THAT(frame.counters.strokeOutlinePoints * sizeof(Vector2d), testing::Lt(4 * kFrameBytes))
+      << "Expanded stroke points stay within a few times the frame budget.";
+}
+
+/// A stroke whose bounds touch only the union of a group's bounds, not any one member's, joins
+/// the group's shape. Its ink is more than two device pixels from every member's, so no pixel has
+/// coverage from both, and the joined shape paints exactly what drawing it on its own paints, even
+/// with a translucent stroke.
+TEST_F(GeodeGlyphInstancingTest, StrokeJoinedThroughGroupBoundsPaintsAsItsOwnShape) {
+  // Periods at font-size 100 (ink 72..196 x -14..121 font units, advance 26.8). The first two
+  // touch diagonally. The third sits above the second and right of the first, inside the pair's
+  // bounds but more than a device pixel from either; the fourth, far to the right, makes the run
+  // wider than it is tall, so the sweep runs along x and reaches the third while the pair's group
+  // is open. Pen positions only increase, so anchoring does not move the chunk.
+  constexpr std::string_view kHead =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" font-family="Noto Sans"
+          font-size="100" fill="none" stroke="black" stroke-width="2" stroke-opacity="0.5">)svg";
+  SVGDocument joined =
+      parse(std::string(kHead) +
+            R"svg(<text x="20" y="100" dx="0 -16.8 -18.8 85.2" dy="0 12 -19 7">....</text>
+            </svg>)svg");
+  SVGDocument separate = parse(std::string(kHead) +
+                               R"svg(<text x="20" y="100" dx="0 -16.8 93.2" dy="0 12 -12">...</text>
+            <text x="38" y="93">.</text></svg>)svg");
+  RendererGeode renderer(sharedDevice());
+  const Frame joinedFrame = render(renderer, joined);
+  const Frame separateFrame = render(renderer, separate);
+  EXPECT_THAT(joinedFrame.counters.drawCalls, testing::Eq(separateFrame.counters.drawCalls - 1))
+      << "The third period joins the pair's shape instead of being drawn on its own.";
+  EXPECT_THAT(joinedFrame.counters.strokeOutlineFlattens, testing::Eq(4u));
+  editor::tests::CompareBitmapToBitmap(joinedFrame.bitmap, separateFrame.bitmap,
+                                       "stroke_joined_through_group_bounds",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the

@@ -286,6 +286,7 @@ donner_cc_library(
         ":renderer_image_test_utils",
         ":renderer_test_backend",
         ":rgba_test_matchers",
+        ":test_font_directory",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/css:core",
@@ -318,6 +319,7 @@ donner_cc_library(
         ":renderer_image_test_utils",
         ":renderer_test_backend_wgpu_reference_linux",
         ":rgba_test_matchers",
+        ":test_font_directory",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/css:core",
@@ -1878,6 +1880,23 @@ donner_cc_test(
 )
 
 donner_cc_library(
+    name = "test_font_directory",
+    testonly = 1,
+    srcs = ["TestFontDirectory.cc"],
+    hdrs = ["TestFontDirectory.h"],
+)
+
+donner_cc_test(
+    name = "test_font_directory_tests",
+    srcs = ["TestFontDirectory_tests.cc"],
+    deps = [
+        ":test_font_directory",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
     name = "svg_suite_render",
     testonly = 1,
     srcs = ["SvgSuiteRender.cc"],
@@ -1887,6 +1906,7 @@ donner_cc_library(
     ],
     deps = [
         ":renderer_test_backend",
+        ":test_font_directory",
         "//donner/base",
         "//donner/css:core",
         "//donner/svg",

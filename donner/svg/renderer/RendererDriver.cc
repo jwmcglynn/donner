@@ -9,6 +9,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -597,10 +598,44 @@ Entity AuthoredTextEntity(Registry& registry, Entity styleEntity) {
   const auto* shadow = registry.try_get<components::ShadowEntityComponent>(styleEntity);
   return shadow ? shadow->lightEntity : styleEntity;
 }
+
+/**
+ * Resolves the stroke lengths of the element styled by \p properties into user units:
+ * font-relative units against that element's own font size, itself resolved against a 12 px
+ * base, then multiplied by \p scale.
+ */
+class StrokeLengthResolver {
+public:
+  /// @param properties Style of the element whose stroke lengths are resolved.
+  /// @param viewBox Viewport for percentage lengths.
+  /// @param scale Factor applied to every resolved length, such as a `non-scaling-stroke`
+  ///   adjustment.
+  StrokeLengthResolver(const PropertyRegistry& properties, const Box2d& viewBox, double scale = 1.0)
+      : viewBox_(viewBox),
+        fontMetrics_(FontMetrics::DefaultsWithFontSize(properties.fontSize.get().value().toPixels(
+            viewBox, FontMetrics::DefaultsWithFontSize(12.0)))),
+        scale_(scale) {}
+
+  /// \p length in user units, scaled.
+  double operator()(const Lengthd& length) const {
+    return length.toPixels(viewBox_, fontMetrics_, Lengthd::Extent::Mixed) * scale_;
+  }
+
+private:
+  Box2d viewBox_;
+  FontMetrics fontMetrics_;
+  double scale_;
+};
+
+/// Builds the decoration that \p declaringProperties declare, painted with the style of
+/// \p provider. Its stroke width resolves as the text root's does (\ref StrokeLengthResolver),
+/// against the provider's own font size, then multiplied by \p strokeScale, the text's
+/// `non-scaling-stroke` adjustment.
 template <typename ResolvePaint>
 std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
     Registry& registry, Entity provider, const PropertyRegistry& declaringProperties,
-    const Box2d& viewBox, const FontMetrics& baseFm, const ResolvePaint& resolveSpanPaint) {
+    const Box2d& viewBox, const FontMetrics& baseFm, double strokeScale,
+    const ResolvePaint& resolveSpanPaint) {
   const auto* providerStyle = registry.try_get<components::ComputedStyleComponent>(provider);
   if (!providerStyle || !providerStyle->properties) {
     return std::nullopt;
@@ -614,7 +649,8 @@ std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
         resolveSpanPaint(props.stroke.get().value(), providerStyle->externalStroke, true);
     origin.fillOpacity = props.fillOpacity.get().value();
     origin.strokeOpacity = props.strokeOpacity.get().value();
-    origin.strokeWidth = props.strokeWidth.get().value().toPixels(viewBox, baseFm);
+    origin.strokeWidth =
+        StrokeLengthResolver(props, viewBox, strokeScale)(props.strokeWidth.get().value());
     origin.paintOrder = props.paintOrder.get().value();
     origin.style =
         declaringProperties.textDecorationStyle.get().value_or(TextDecorationStyle::Solid);
@@ -673,7 +709,8 @@ Entity DecorationProvider(Registry& registry, Entity origin, Entity nearestText)
 template <typename ResolvePaint>
 void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
                             components::ComputedTextComponent::TextSpan& span, const Box2d& viewBox,
-                            const FontMetrics& baseFm, const ResolvePaint& resolveSpanPaint) {
+                            const FontMetrics& baseFm, double strokeScale,
+                            const ResolvePaint& resolveSpanPaint) {
   span.textDecoration = TextDecoration::None;
   span.decorations.reset();
   std::array<components::TextDecorationOrigin, components::TextDecorationData::kMaximumOrigins>
@@ -694,8 +731,9 @@ void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
         return;
       }
       const Entity provider = DecorationProvider(registry, walkEntity, nearestTextStyleEntity);
-      if (const auto origin = BuildDecorationOrigin(registry, provider, *walkStyle->properties,
-                                                    viewBox, baseFm, resolveSpanPaint)) {
+      if (const auto origin =
+              BuildDecorationOrigin(registry, provider, *walkStyle->properties, viewBox, baseFm,
+                                    strokeScale, resolveSpanPaint)) {
         origins[count++] = *origin;
       }
     }
@@ -703,6 +741,128 @@ void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
     walkEntity = tree ? tree->parent() : entt::null;
   }
   RetainSpanDecorations(registry, span, origins, count);
+}
+
+/// A text span's stroke width, dash lengths and dash offset in user units.
+struct SpanStrokeLengths {
+  double width = 0.0;                                    ///< `stroke-width`.
+  std::shared_ptr<const std::vector<double>> dashArray;  ///< `stroke-dasharray`; null when solid.
+  double dashOffset = 0.0;                               ///< `stroke-dashoffset`.
+};
+
+/// Resolves the stroke lengths of the spans styled by \p properties, as `toStrokeParams` resolves
+/// the text root's (\ref StrokeLengthResolver), multiplied by \p strokeScale, the text's
+/// `non-scaling-stroke` adjustment. The dash lengths are returned apart, for the caller to share.
+std::pair<SpanStrokeLengths, std::vector<double>> ResolveSpanStrokeLengths(
+    const PropertyRegistry& properties, const Box2d& viewBox, double strokeScale) {
+  const StrokeLengthResolver toPixels(properties, viewBox, strokeScale);
+
+  SpanStrokeLengths lengths;
+  lengths.width = toPixels(properties.strokeWidth.get().value());
+  lengths.dashOffset = toPixels(properties.strokeDashoffset.get().value());
+  std::vector<double> dashes;
+  if (const std::optional<StrokeDasharray> dashArray = properties.strokeDasharray.get()) {
+    dashes.reserve(dashArray->size());
+    for (const Lengthd& dashLength : *dashArray) {
+      dashes.push_back(toPixels(dashLength));
+    }
+  }
+  return {lengths, std::move(dashes)};
+}
+
+/**
+ * The stroke lengths of the spans of one text element, resolved once per style entity, with each
+ * distinct dash list kept once.
+ *
+ * Each text node becomes a span styled by its element, and every element inherits its parent's
+ * `stroke-dasharray`, so a text with many child elements, empty ones included, has many spans
+ * whose resolved dash lists are equal. Keeping one shared copy of each distinct list bounds the
+ * dash lengths the spans retain by the lists the document declares, not by its span count.
+ */
+class SpanStrokeLengthCache {
+public:
+  /// The stroke lengths of the spans styled by \p styleEntity, whose style is \p properties.
+  const SpanStrokeLengths& lengthsFor(Entity styleEntity, const PropertyRegistry& properties,
+                                      const Box2d& viewBox, double strokeScale) {
+    auto [found, inserted] = byStyle_.try_emplace(styleEntity);
+    if (inserted) {
+      auto [lengths, dashes] = ResolveSpanStrokeLengths(properties, viewBox, strokeScale);
+      lengths.dashArray = share(std::move(dashes));
+      found->second = std::move(lengths);
+    }
+    return found->second;
+  }
+
+private:
+  /// The kept copy of \p dashes, or null for a solid stroke.
+  std::shared_ptr<const std::vector<double>> share(std::vector<double> dashes) {
+    if (dashes.empty()) {
+      return nullptr;
+    }
+    std::size_t hash = dashes.size();
+    for (const double dash : dashes) {
+      hash = hash * 31 + std::hash<double>()(dash);
+    }
+    auto [first, last] = distinctDashes_.equal_range(hash);
+    for (; first != last; ++first) {
+      if (*first->second == dashes) {
+        return first->second;
+      }
+    }
+    auto shared = std::make_shared<const std::vector<double>>(std::move(dashes));
+    distinctDashes_.emplace(hash, shared);
+    return shared;
+  }
+
+  std::unordered_map<Entity, SpanStrokeLengths> byStyle_;
+  std::unordered_multimap<std::size_t, std::shared_ptr<const std::vector<double>>> distinctDashes_;
+};
+
+/// The viewport box that the spans of \p textRootHandle resolve their lengths against: the text
+/// root's, or, for a `<use>` copy, that of the copy's root.
+Box2d SpanStyleViewBox(Registry& registry, EntityHandle textRootHandle,
+                       const TextStyleContext* styleContext) {
+  if (!textRootHandle.registry()) {
+    return Box2d();
+  }
+  return components::LayoutSystem().getViewBox(
+      styleContext ? EntityHandle(registry, styleContext->rootEntity) : textRootHandle);
+}
+
+/// Sets \p span's stroke from \p properties, the style of \p styleEntity, with its stroke lengths
+/// from \p strokeLengths.
+void ResolveSpanStroke(const PropertyRegistry& properties, Entity styleEntity, const Box2d& viewBox,
+                       double strokeScale, SpanStrokeLengthCache& strokeLengths,
+                       components::ComputedTextComponent::TextSpan& span) {
+  const SpanStrokeLengths& lengths =
+      strokeLengths.lengthsFor(styleEntity, properties, viewBox, strokeScale);
+  span.strokeWidth = lengths.width;
+  span.strokeDashArray = lengths.dashArray;
+  span.strokeDashOffset = lengths.dashOffset;
+  span.strokeLinecap = properties.strokeLinecap.get().value();
+  span.strokeLinejoin = properties.strokeLinejoin.get().value();
+  span.strokeMiterLimit = properties.strokeMiterlimit.get().value();
+}
+
+/// The entity whose computed style a span with source \p sourceEntity takes, with that style: the
+/// source itself, or the nearest ancestor with computed style so inherited paint and decoration
+/// continue to work for nested tspans with no local ComputedStyleComponent. The style is null, or
+/// has no properties, when no such ancestor exists.
+std::pair<Entity, const components::ComputedStyleComponent*> SpanStyleSource(
+    Registry& registry, const TextStyleContext* styleContext, Entity sourceEntity) {
+  Entity styleEntity = styleContext ? styleContext->styleEntityFor(sourceEntity) : sourceEntity;
+  const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+  while ((!style || !style->properties) &&
+         registry.all_of<donner::components::TreeComponent>(styleEntity)) {
+    const auto& tree = registry.get<donner::components::TreeComponent>(styleEntity);
+    if (tree.parent() == entt::null) {
+      break;
+    }
+
+    styleEntity = tree.parent();
+    style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+  }
+  return {styleEntity, style};
 }
 
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
@@ -713,6 +873,10 @@ void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
 /// instantiation resolved the context paints (including any \ref components::PaintContextRemap)
 /// on the instance, and spans share the text element's coordinate space.
 ///
+/// `strokeScale` is the text's `non-scaling-stroke` adjustment (\ref TextStrokeLengthScale), which
+/// each span's stroke width and dash lengths, and each decoration's stroke width, take as the text
+/// root's stroke does.
+///
 /// `spansHaveOwnEffectInstances` says whether the copy being drawn has the per-span rendering
 /// instances that carry span-level `clip-path` / `mask` / `filter`. When it does not, every span is
 /// left for this draw to paint, without those effects.
@@ -720,7 +884,7 @@ void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
-                          const components::ResolvedPaintServer& contextStroke,
+                          const components::ResolvedPaintServer& contextStroke, double strokeScale,
                           bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership,
                           const TextStyleContext* styleContext = nullptr) {
   if (refreshLayoutAndOwnership) {
@@ -743,6 +907,9 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     return resolvePaintServer(registry, paint);
   };
 
+  const Box2d viewBox = SpanStyleViewBox(registry, textRootHandle, styleContext);
+  SpanStrokeLengthCache strokeLengths;
+
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
       continue;
@@ -755,28 +922,9 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       span.opacity = ownership.opacity;
     }
 
-    const Box2d viewBox =
-        textRootHandle.registry()
-            ? components::LayoutSystem().getViewBox(
-                  styleContext ? EntityHandle(registry, styleContext->rootEntity) : textRootHandle)
-            : Box2d();
     const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
 
-    // Walk up to the nearest ancestor with computed style so inherited paint and decoration
-    // continue to work for nested tspans with no local ComputedStyleComponent.
-    entt::entity styleEntity =
-        styleContext ? styleContext->styleEntityFor(span.sourceEntity) : span.sourceEntity;
-    auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
-    while ((!style || !style->properties) &&
-           registry.all_of<donner::components::TreeComponent>(styleEntity)) {
-      const auto& tree = registry.get<donner::components::TreeComponent>(styleEntity);
-      if (tree.parent() == entt::null) {
-        break;
-      }
-
-      styleEntity = tree.parent();
-      style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
-    }
+    const auto [styleEntity, style] = SpanStyleSource(registry, styleContext, span.sourceEntity);
 
     if (style && style->properties) {
       span.resolvedFill =
@@ -785,15 +933,12 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
           resolveSpanPaint(style->properties->stroke.get().value(), style->externalStroke, true);
       span.fillOpacity = style->properties->fillOpacity.get().value();
       span.strokeOpacity = style->properties->strokeOpacity.get().value();
-      span.strokeWidth = style->properties->strokeWidth.get().value().toPixels(
-          viewBox, baseFm, Lengthd::Extent::Mixed);
-      span.strokeLinecap = style->properties->strokeLinecap.get().value();
-      span.strokeLinejoin = style->properties->strokeLinejoin.get().value();
-      span.strokeMiterLimit = style->properties->strokeMiterlimit.get().value();
+      ResolveSpanStroke(*style->properties, styleEntity, viewBox, strokeScale, strokeLengths, span);
       span.paintOrder = style->properties->paintOrder.get().value();
     }
 
-    ResolveSpanDecorations(registry, styleEntity, span, viewBox, baseFm, resolveSpanPaint);
+    ResolveSpanDecorations(registry, styleEntity, span, viewBox, baseFm, strokeScale,
+                           resolveSpanPaint);
   }
 }
 
@@ -885,14 +1030,7 @@ StrokeParams toStrokeParams(Registry& registry,
   const auto& properties = style.properties.value();
 
   const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
-  const double fontSizePx = properties.fontSize.get().value().toPixels(viewBox, baseFontMetrics);
-  const FontMetrics fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
-
-  const auto toPixels = [&](const Lengthd& length,
-                            Lengthd::Extent extent = Lengthd::Extent::Mixed) {
-    return length.toPixels(viewBox, fontMetrics, extent);
-  };
+  const StrokeLengthResolver toPixels(properties, viewBox);
 
   stroke.strokeWidth = toPixels(properties.strokeWidth.get().value());
   stroke.lineCap = properties.strokeLinecap.get().value();
@@ -2106,6 +2244,25 @@ css::Color resolveFillColor(const components::RenderingInstanceComponent& instan
                               static_cast<uint8_t>(NarrowToFloat(currentColor.a) * fillOpacity)));
 }
 
+/// The `non-scaling-stroke` mode of a text element's stroke. A text stroke expands glyph outlines
+/// in local space, so it can never be handed host-space geometry and always takes the scalar width
+/// adjustment.
+NonScalingStrokeMode TextNonScalingStrokeMode(
+    const components::RenderingInstanceComponent& instance,
+    const components::ComputedStyleComponent& style) {
+  return ResolveNonScalingStrokeMode(style.properties->vectorEffect.getOr(VectorEffect::None),
+                                     instance.worldFromEntityTransform,
+                                     /*geometryMustStayLocal=*/true);
+}
+
+/// The factor that `non-scaling-stroke` applies to a text element's stroke lengths, which
+/// `toStrokeParams` applies to the text root's stroke and the span resolution to each span's.
+double TextStrokeLengthScale(const components::RenderingInstanceComponent& instance,
+                             const components::ComputedStyleComponent& style) {
+  return EffectiveStrokeWidth(1.0, TextNonScalingStrokeMode(instance, style),
+                              instance.worldFromEntityTransform);
+}
+
 TextParams toTextParams(Registry& registry, const components::RenderingInstanceComponent& instance,
                         const components::ComputedStyleComponent& style,
                         const components::TextComponent* textComp, EntityHandle textRootHandle) {
@@ -2123,13 +2280,8 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   // Always populate stroke params when there's any non-none stroke (solid, gradient, or pattern),
   // so that the renderer knows to stroke text outlines.
   if (!std::holds_alternative<PaintServer::None>(instance.resolvedStroke)) {
-    // A text stroke expands glyph outlines in local space, so it can never be handed host-space
-    // geometry and always takes the scalar width adjustment.
-    params.strokeParams = toStrokeParams(
-        registry, instance, style,
-        ResolveNonScalingStrokeMode(style.properties->vectorEffect.getOr(VectorEffect::None),
-                                    instance.worldFromEntityTransform,
-                                    /*geometryMustStayLocal=*/true));
+    params.strokeParams =
+        toStrokeParams(registry, instance, style, TextNonScalingStrokeMode(instance, style));
   }
 
   params.fontFamilies = properties.fontFamily.get().value();
@@ -2296,6 +2448,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   const auto* textComp = textRootHandle.try_get<components::TextComponent>();
   TextParams textParams =
       toTextParams(registry, instance, *textRootStyle, textComp, textRootHandle);
+  const double strokeLengthScale = TextStrokeLengthScale(instance, *textRootStyle);
 
   // A shadow instance (from `<use>`) paints the light tree's text, but the span instances that
   // carry `clip-path` / `mask` / `filter` were only created for the light tree, so this draw is the
@@ -2317,7 +2470,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
     if (!group.stylesResolved) {
       textPreparationStats.spanStyleVisits += group.text.spans.size();
       resolvePerSpanStyles(registry, group.text, textRootHandle, paint.fill, paint.stroke,
-                           /*spansHaveOwnEffectInstances=*/true,
+                           strokeLengthScale, /*spansHaveOwnEffectInstances=*/true,
                            /*refreshLayoutAndOwnership=*/false);
       group.stylesResolved = true;
     }
@@ -2348,9 +2501,9 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   }
   ++textPreparationStats.fullElementStylePasses;
   textPreparationStats.spanStyleVisits += text->spans.size();
-  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true,
-                       styleContext);
+  resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke, strokeLengthScale,
+                       spansHaveOwnEffectInstances,
+                       /*refreshLayoutAndOwnership=*/true, styleContext);
   renderer.drawText(registry, *text, textParams);
 }
 
