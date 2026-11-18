@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -1152,6 +1153,15 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   return result;
 }
 
+/// Pen-space inputs needed when an on-path cluster changes visual position.
+struct BidiPathPlacement {
+  size_t character;
+  double leadingAdvance;
+  double trailingSpacing;
+  double normalDisplacement;
+  double baseline;
+};
+
 /// A typographic cluster keeps glyph-local shaping offsets separate from path placement.
 struct TextPathCluster {
   size_t runIndex;
@@ -1162,6 +1172,8 @@ struct TextPathCluster {
   double baselineOffset;
   double advance = 0.0;
   TextAnchor circuitAnchor = TextAnchor::Start;
+  std::optional<double> absoluteAlong = std::nullopt;
+  std::optional<BidiPathPlacement> bidi = std::nullopt;
 };
 
 /// Reusable path pen and cluster storage for the current textPath scope.
@@ -1294,6 +1306,17 @@ double TextPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positi
              : 0.0;
 }
 
+/// Resolves the same authored coordinates used for ordinary path chunks.
+std::optional<double> TextPathAbsoluteAlong(const components::ComputedTextComponent::TextSpan& span,
+                                            unsigned int charIndex,
+                                            const TextLayoutParams& params) {
+  if (charIndex >= span.xList.size() || !span.xList[charIndex]) {
+    return std::nullopt;
+  }
+  return span.xList[charIndex]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X) +
+         TextPathDisplacement(span.dxList, charIndex, params, Lengthd::Extent::X);
+}
+
 /// Returns whether this glyph ends its run-local typographic cluster.
 bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int charIndex,
                          const ByteIndexMappings& mappings) {
@@ -1329,6 +1352,8 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       state.dy += TextPathDisplacement(dyList, charIndex, params, Lengthd::Extent::Y);
       state.clusters.push_back(
           {runIndex, gi, gi + 1, charIndex, state.advance, defaultY + state.dy});
+      state.clusters.back().circuitAnchor = span.textAnchor;
+      state.clusters.back().absoluteAlong = TextPathAbsoluteAlong(span, charIndex, params);
     }
     TextPathCluster& cluster = state.clusters.back();
     if (vertical) {
@@ -1357,37 +1382,22 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
   }
 }
 
-/// Returns whether a cluster starts a new horizontal path chunk.
-bool HasAbsoluteTextPathX(const components::ComputedTextComponent& text,
-                          const TextPathCluster& cluster) {
-  const auto& positions = text.spans[cluster.runIndex].xList;
-  return cluster.charIndex < positions.size() && positions[cluster.charIndex].has_value();
-}
-
 /// Applies absolute path coordinates without discarding the same cluster's relative displacement.
-void ResetTextPathCoordinates(const components::ComputedTextComponent& text,
-                              const TextLayoutParams& params,
-                              std::vector<TextPathCluster>& clusters) {
-  double xShift = 0.0;
+void ResetTextPathCoordinates(std::vector<TextPathCluster>& clusters) {
+  double shift = 0.0;
   for (TextPathCluster& cluster : clusters) {
-    const auto& span = text.spans[cluster.runIndex];
-    if (HasAbsoluteTextPathX(text, cluster)) {
-      const double dx =
-          TextPathDisplacement(span.dxList, cluster.charIndex, params, Lengthd::Extent::X);
-      xShift = span.xList[cluster.charIndex]->toPixels(params.viewBox, params.fontMetrics,
-                                                       Lengthd::Extent::X) +
-               dx - cluster.pathOffset;
+    if (cluster.absoluteAlong) {
+      shift = *cluster.absoluteAlong - cluster.pathOffset;
     }
-    cluster.pathOffset += xShift;
+    cluster.pathOffset += shift;
   }
 }
 
-/// Anchors each horizontal path chunk against all of its typographic extents.
-void AnchorTextPathClusters(const components::ComputedTextComponent& text,
-                            std::vector<TextPathCluster>& clusters) {
+/// Anchors each path chunk against all of its typographic extents.
+void AnchorTextPathClusters(std::vector<TextPathCluster>& clusters) {
   for (size_t first = 0; first < clusters.size();) {
     size_t end = first + 1;
-    while (end < clusters.size() && !HasAbsoluteTextPathX(text, clusters[end])) {
+    while (end < clusters.size() && !clusters[end].absoluteAlong) {
       ++end;
     }
     double minimum = std::numeric_limits<double>::infinity();
@@ -1397,7 +1407,7 @@ void AnchorTextPathClusters(const components::ComputedTextComponent& text,
       minimum = std::min({minimum, cluster.pathOffset, cluster.pathOffset + cluster.advance});
       maximum = std::max({maximum, cluster.pathOffset, cluster.pathOffset + cluster.advance});
     }
-    const TextAnchor anchor = text.spans[clusters[first].runIndex].textAnchor;
+    const TextAnchor anchor = clusters[first].circuitAnchor;
     const double alignment = anchor == TextAnchor::Middle ? (minimum + maximum) / 2.0
                              : anchor == TextAnchor::End  ? maximum
                                                           : minimum;
@@ -1523,8 +1533,8 @@ std::optional<Vector2d> TextPathContinuation(const Path::MeasuredPath& path, boo
 
 void placeTextPath(const components::ComputedTextComponent& text, const TextLayoutParams& params,
                    DeferredTextPath& path, std::vector<TextRun>& runs) {
-  ResetTextPathCoordinates(text, params, path.clusters);
-  AnchorTextPathClusters(text, path.clusters);
+  ResetTextPathCoordinates(path.clusters);
+  AnchorTextPathClusters(path.clusters);
   const auto& firstSpan = text.spans[path.firstRun];
   PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
                         path.clusters, firstSpan.textPathMethod, isVertical(params.writingMode));
@@ -4520,6 +4530,8 @@ public:
     if (!ordinaryScope(text, params)) {
       return true;
     }
+    pathOnly_ = std::any_of(text.spans.begin(), text.spans.end(),
+                            [](const TextSpan& span) { return span.pathSpline.has_value(); });
     const auto input = scanInputs(text);
     if (!input) {
       return reject();
@@ -4536,7 +4548,7 @@ public:
     characters.reserve(input->count);
     source.reserve(input->bytes * 3u);
     for (size_t index = 0; index < text.spans.size(); ++index) {
-      appendSpan(text.spans[index], index);
+      appendSpan(text, index);
     }
     if (!characters.empty()) {
       paragraphs.back().end = characters.size();
@@ -4627,6 +4639,10 @@ public:
     return result;
   }
 
+  bool appliesToSpan(const TextSpan& span) const { return enabled && spanInScope(span); }
+
+  bool appliesToFlatText() const { return enabled && !pathOnly_; }
+
   bool reject() {
     budget.rejected = true;
     return false;
@@ -4650,18 +4666,27 @@ private:
     size_t count = 0;
   };
 
+  /// Each path is a separate bidi scope. Flat spans keep their existing continuation pen.
+  bool pathOnly_ = false;
+
+  bool spanInScope(const TextSpan& span) const { return !pathOnly_ || span.pathSpline.has_value(); }
+
+  bool visibleSpanInScope(const TextSpan& span) const {
+    return spanInScope(span) && !span.hidden && !span.textPathFailed;
+  }
+
 #ifdef DONNER_TEXT_ENABLED
   bool ordinaryScope(const components::ComputedTextComponent& text,
                      const TextLayoutParams& params) const {
-    if (isVertical(params.writingMode) && hasVerticalLengthOwner(text, params)) {
+    const bool vertical = isVertical(params.writingMode);
+    if (vertical && hasVerticalLengthOwner(text, params)) {
       return false;
     }
     return params.inlineSizePx <= 0 &&
            std::none_of(text.spans.begin(), text.spans.end(), [&](const TextSpan& span) {
              const std::string_view value(span.text.data() + span.start, span.end - span.start);
-             return span.pathSpline ||
-                    (isVertical(params.writingMode) &&
-                     span.textOrientation == TextOrientation::Upright) ||
+             return (!vertical && span.pathSpline) ||
+                    (vertical && span.textOrientation == TextOrientation::Upright) ||
                     (PreservesSegmentBreaks(span.whiteSpace) &&
                      value.find_first_of("\n\t") != std::string_view::npos);
            });
@@ -4688,7 +4713,7 @@ private:
         return std::nullopt;
       }
       result.bytes += value.size();
-      if (span.hidden || span.textPathFailed) {
+      if (!visibleSpanInScope(span)) {
         continue;
       }
       for (size_t byte = 0; byte < value.size();) {
@@ -4981,8 +5006,8 @@ private:
   }
 
   bool startsParagraph(const TextSpan& span, size_t byte, size_t position, char32_t cp,
-                       bool previousJoiner) const {
-    if (paragraphs.empty()) {
+                       bool previousJoiner, bool pathBoundary) const {
+    if (paragraphs.empty() || pathBoundary) {
       return true;
     }
     // The first addressable origin owns leading controls, including those in earlier paint spans.
@@ -4995,8 +5020,8 @@ private:
   }
 
   void appendCharacter(const TextSpan& span, size_t spanIndex, uint32_t position, size_t byte,
-                       uint32_t sourceByte, char32_t cp, bool previousJoiner) {
-    if (startsParagraph(span, byte, position, cp, previousJoiner)) {
+                       uint32_t sourceByte, char32_t cp, bool previousJoiner, bool pathBoundary) {
+    if (startsParagraph(span, byte, position, cp, previousJoiner, pathBoundary)) {
       if (!paragraphs.empty()) {
         paragraphs.back().end = characters.size();
       }
@@ -5014,8 +5039,23 @@ private:
     Utf8::Append(cp, std::back_inserter(source));
   }
 
-  void appendSpan(const TextSpan& span, size_t spanIndex) {
+  bool startsPathScope(const components::ComputedTextComponent& text, const TextSpan& span) const {
+    if (characters.empty()) {
+      return false;
+    }
+    const auto path = SpanKerningPathSource(span);
+    const auto previous = SpanKerningPathSource(text.spans[characters.back().span]);
+    return path != previous || (path && *path == entt::null);
+  }
+
+  void appendSpan(const components::ComputedTextComponent& text, size_t spanIndex) {
+    const TextSpan& span = text.spans[spanIndex];
     Span mapping{source.size(), source.size(), characters.size(), characters.size()};
+    if (!visibleSpanInScope(span)) {
+      spans.push_back(mapping);
+      return;
+    }
+    const bool pathBoundary = startsPathScope(text, span);
     const std::string_view original(span.text.data() + span.start, span.end - span.start);
     std::optional<text_transform::FullWidthText> transformed;
     if (span.textTransform == TextTransform::FullWidth) {
@@ -5023,20 +5063,19 @@ private:
           original, span.preservesSpaces || PreservesSpaces(span.whiteSpace));
     }
     const std::string_view value = transformed ? std::string_view(transformed->text) : original;
-    if (!span.hidden && !span.textPathFailed) {
-      uint32_t position = 0;
-      size_t scalar = 0;
-      bool previousJoiner = false;
-      for (size_t byte = 0; byte < value.size(); ++scalar) {
-        const size_t start = byte;
-        const char32_t decoded = decodeUtf8(value, byte);
-        const char32_t cp = IsBlankShapingControl(decoded) ? U' ' : decoded;
-        const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
-        appendCharacter(span, spanIndex, position, start, sourceByte, cp, previousJoiner);
-        if (!BidiParagraph::IsControl(cp)) {
-          previousJoiner = cp == 0x200d;
-          ++position;
-        }
+    uint32_t position = 0;
+    size_t scalar = 0;
+    bool previousJoiner = false;
+    for (size_t byte = 0; byte < value.size(); ++scalar) {
+      const size_t start = byte;
+      const char32_t decoded = decodeUtf8(value, byte);
+      const char32_t cp = IsBlankShapingControl(decoded) ? U' ' : decoded;
+      const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
+      appendCharacter(span, spanIndex, position, start, sourceByte, cp, previousJoiner,
+                      pathBoundary && start == 0);
+      if (!BidiParagraph::IsControl(cp)) {
+        previousJoiner = cp == 0x200d;
+        ++position;
       }
     }
     mapping.end = characters.size();
@@ -6635,13 +6674,13 @@ public:
     for (const auto& span : text_.spans) {
       layoutSpan(span);
     }
+    finishTextPath();
     if (normalBidi_.enabled && !placeNormalBidi()) {
       if (resourceRejected_) {
         *resourceRejected_ = true;
       }
       return {};
     }
-    finishTextPath();
     applyInlineWrap();
     applyFinalAdjustments();
     ApplyPostTextPathTranslations(runs_, text_, postPathBoundaries_);
@@ -6896,7 +6935,7 @@ private:
   }
 
   bool prepareFullWidthShapingText(SpanState& state) {
-    if (normalBidi_.enabled) {
+    if (normalBidi_.appliesToSpan(*state.span)) {
       state.text = normalBidi_.spanText(state.span - text_.spans.data());
       return true;
     }
@@ -7082,7 +7121,8 @@ private:
                                    static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
-                             fallback, normalBidi_.enabled ? &normalBidi_ : nullptr,
+                             fallback,
+                             normalBidi_.appliesToSpan(*state.span) ? &normalBidi_ : nullptr,
                              state.span - text_.spans.data());
     EmergencyWrapOptions* emergency = emergencyOptions(state);
     state.shaping =
@@ -7489,7 +7529,7 @@ private:
   void recordBidiPlacement(const SpanState& state, const PreparedSpanChunk& prepared,
                            size_t glyphIndex, uint32_t codepoint, uint32_t positioningCluster,
                            const TextGlyph& glyph) {
-    if (!normalBidi_.enabled) {
+    if (!normalBidi_.appliesToFlatText() || state.span->pathSpline) {
       return;
     }
     const size_t span = state.span - text_.spans.data();
@@ -7539,25 +7579,62 @@ private:
     haveCurrentPosition_ = true;
   }
 
+  void recordBidiPathClusters(SpanState& state, size_t first) {
+    if (!normalBidi_.enabled || normalBidi_.budget.rejected) {
+      return;
+    }
+    const size_t spanIndex = state.span - text_.spans.data();
+    auto& clusters = pathStaging_.clusters;
+    for (size_t index = first; index < clusters.size(); ++index) {
+      auto& cluster = clusters[index];
+      const auto character = normalBidi_.characterAt(
+          spanIndex, GetPositioningCluster(state.run.glyphs[cluster.glyphStart]));
+      if (!character || !normalBidi_.budget.consume(normalBidi_.budget.remaining.glyphs,
+                                                    cluster.glyphEnd - cluster.glyphStart)) {
+        normalBidi_.reject();
+        return;
+      }
+      const auto& source = normalBidi_.characters[*character];
+      for (size_t glyph = cluster.glyphStart; glyph < cluster.glyphEnd; ++glyph) {
+        state.run.glyphs[glyph].rightToLeft = source.level % 2 != 0;
+      }
+      const double previousEnd = index == 0 ? 0.0
+                                            : clusters[index - 1].pathOffset +
+                                                  clusters[index - 1].advance +
+                                                  clusters[index - 1].bidi->trailingSpacing;
+      const double boundaryKern = index == first ? state.pathBoundaryKern : 0.0;
+      const double letter =
+          backend_.isCursive(source.codepoint) ? 0.0 : state.span->letterSpacingPx;
+      const double word = source.codepoint == 0x20 ? state.span->wordSpacingPx : 0.0;
+      cluster.bidi = BidiPathPlacement{
+          *character, cluster.pathOffset - previousEnd - boundaryKern, letter + word,
+          TextPathDisplacement(state.dyList, cluster.charIndex, params_, Lengthd::Extent::Y),
+          state.defaultY};
+    }
+  }
+
   void stageTextPathSpan(SpanState& state) {
     if (!firstPathRun_) {
       firstPathRun_ = runs_.size();
       previousTextPathSource_ = state.span->textPathSourceEntity;
     }
     const std::string_view logicalText =
-        state.fullWidthText ? std::string_view(state.fullWidthText->text)
-                            : std::string_view(state.span->text.data() + state.span->start,
-                                               state.span->end - state.span->start);
+        normalBidi_.enabled   ? state.text
+        : state.fullWidthText ? std::string_view(state.fullWidthText->text)
+                              : std::string_view(state.span->text.data() + state.span->start,
+                                                 state.span->end - state.span->start);
+    const size_t firstCluster = pathStaging_.clusters.size();
     StageTextPathRun(state.run, runs_.size(), *state.span, logicalText, state.indexMappings,
                      params_, backend_, state.defaultY, state.dxList, state.dyList,
                      state.pathBoundaryKern, pathStaging_);
+    recordBidiPathClusters(state, firstCluster);
     state.run.onPath = true;
   }
 
   /// Restore source byte indices only after shaping and path staging have consumed transformed
   /// text.
   void restoreSourceClusters(SpanState& state) const {
-    if (normalBidi_.enabled) {
+    if (normalBidi_.appliesToSpan(*state.span)) {
       const size_t span = state.span - text_.spans.data();
       for (auto& glyph : state.run.glyphs) {
         if (const auto index = normalBidi_.characterAt(span, glyph.cluster)) {
@@ -7715,10 +7792,81 @@ private:
                      clusterBytes);
   }
 
+  void applyBidiPathOrder() {
+    if (!normalBidi_.enabled || normalBidi_.budget.rejected || pathStaging_.clusters.empty()) {
+      return;
+    }
+    auto& clusters = pathStaging_.clusters;
+    const auto rank = [&](const TextPathCluster& cluster) {
+      const auto& source = normalBidi_.characters[cluster.bidi->character];
+      return std::tuple(source.paragraph, source.rank, cluster.runIndex, cluster.glyphStart);
+    };
+    const auto precedes = [&](const TextPathCluster& a, const TextPathCluster& b) {
+      return rank(a) < rank(b);
+    };
+    if (!std::is_sorted(clusters.begin(), clusters.end(), precedes)) {
+      std::sort(clusters.begin(), clusters.end(), precedes);
+    }
+    // Even an already visual run needs the logical origin attached to its first visual cluster.
+    double advance = 0.0;
+    double normal = 0.0;
+    const TextPathCluster* previous = nullptr;
+    std::optional<uint32_t> paragraph;
+    std::optional<BidiPathOrigin> origin;
+    for (auto& cluster : clusters) {
+      const auto& placement = *cluster.bidi;
+      const uint32_t clusterParagraph = normalBidi_.characters[placement.character].paragraph;
+      cluster.absoluteAlong.reset();
+      if (paragraph != clusterParagraph) {
+        paragraph = clusterParagraph;
+        origin = setBidiPathChunkStart(cluster, clusterParagraph);
+      }
+      advance += placement.leadingAdvance + bidiPathKern(cluster, previous);
+      if (origin && origin->character == placement.character) {
+        // The absolute reset already includes the logical origin's dx.
+        advance -= origin->dx;
+      }
+      normal += placement.normalDisplacement;
+      cluster.pathOffset = advance;
+      cluster.baselineOffset = normal + placement.baseline;
+      advance += cluster.advance + placement.trailingSpacing;
+      previous = &cluster;
+    }
+  }
+
+  struct BidiPathOrigin {
+    size_t character;
+    double dx;
+  };
+
+  std::optional<BidiPathOrigin> setBidiPathChunkStart(TextPathCluster& cluster, size_t paragraph) {
+    if (const auto origin = firstBidiAddressable(normalBidi_.paragraphs[paragraph])) {
+      const auto& logical = normalBidi_.characters[*origin];
+      const auto& span = text_.spans[logical.span];
+      cluster.absoluteAlong = TextPathAbsoluteAlong(span, logical.position, params_);
+      cluster.circuitAnchor = span.textAnchor;
+      if (cluster.absoluteAlong) {
+        return BidiPathOrigin{*origin, TextPathDisplacement(span.dxList, logical.position, params_,
+                                                            Lengthd::Extent::X)};
+      }
+    }
+    return std::nullopt;
+  }
+
+  double bidiPathKern(const TextPathCluster& cluster, const TextPathCluster* previous) const {
+    if (!previous) {
+      return 0.0;
+    }
+    return bidiCrossSpanKern(
+        {cluster.runIndex, cluster.glyphStart, cluster.bidi->character},
+        {previous->runIndex, previous->glyphEnd - 1, previous->bidi->character});
+  }
+
   void finishTextPath() {
     if (!firstPathRun_) {
       return;
     }
+    applyBidiPathOrder();
     const TextSpan& firstSpan = text_.spans[*firstPathRun_];
     constexpr size_t kMappingOverhead = sizeof(StretchedTextPath) + 2u * sizeof(void*);
     const Path& sourcePath = *firstSpan.pathSpline;
@@ -7918,16 +8066,28 @@ private:
     }
   }
 
+  struct BidiGlyphAddress {
+    size_t run;
+    size_t glyph;
+    size_t character;
+  };
+
   double bidiCrossSpanKern(const BidiPlacement& item, std::optional<size_t> previous) const {
     if (!previous) {
-      return 0;
+      return 0.0;
     }
     const auto& prior = bidiPlacements_[*previous];
+    return bidiCrossSpanKern({item.run, item.glyph, item.character},
+                             {prior.run, prior.glyph, prior.character});
+  }
+
+  double bidiCrossSpanKern(BidiGlyphAddress item, BidiGlyphAddress prior) const {
     const auto& source = normalBidi_.characters[item.character];
     const auto& priorSource = normalBidi_.characters[prior.character];
     const auto& priorSpan = text_.spans[prior.run];
     const auto& span = text_.spans[item.run];
-    if (prior.run == item.run || priorSource.shapingRun != source.shapingRun ||
+    if (prior.run == item.run || priorSource.paragraph != source.paragraph ||
+        priorSource.shapingRun != source.shapingRun ||
         priorSpan.fontKerning.value_or(params_.fontKerning) == FontKerning::None ||
         span.fontKerning.value_or(params_.fontKerning) == FontKerning::None) {
       return 0;
@@ -8146,6 +8306,9 @@ private:
   bool placeNormalBidi() {
     if (normalBidi_.budget.rejected || normalBidi_.work.rejected) {
       return normalBidi_.reject();
+    }
+    if (!normalBidi_.appliesToFlatText()) {
+      return true;
     }
     auto paragraphs = bidiParagraphItems();
     chunkBoundaries_.clear();

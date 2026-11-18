@@ -258,11 +258,11 @@ protected:
   }
 
   SVGDocument document(std::string_view contents, bool mplusFirst = false,
-                       std::string_view anchor = "start") const {
+                       std::string_view anchor = "start", std::string_view siblings = {}) const {
     const std::string families =
         mplusFirst ? "Mixed Mplus, Mixed Amiri" : "Mixed Amiri, Mixed Mplus";
     auto result = instantiateSubtree(
-        "<text id='text' x='160' y='30' font-family='" + families +
+        std::string(siblings) + "<text id='text' x='160' y='30' font-family='" + families +
             "' font-size='20' font-kerning='none' writing-mode='tb' text-anchor='" +
             std::string(anchor) + "'>" + std::string(contents) + "</text>",
         {}, {320, 320});
@@ -538,6 +538,20 @@ TEST_F(MixedVerticalTextConvergence, FallbackArabicUsesTheSameJoinedRotatedRun) 
   expectCjkAndPrimaryFace(actual, "Mixed Mplus");
   const auto records = arabicRecords(actual, {{"#text", -8}});
   EXPECT_THAT(records, testing::Pointwise(VerticalRunRecordNear(), expectedArabicRecords()));
+}
+
+TEST_F(MixedVerticalTextConvergence, VerticalTextPathJoinsArabicAcrossPaintSpans) {
+  auto actual = document(
+      "<textPath href='#path' startOffset='50'>A <tspan id='first' fill='red'>الي</tspan>"
+      "<tspan id='last' fill='blue'>ابان</tspan> B</textPath>",
+      false, "start", "<path id='path' d='M160 0V300' fill='none'/>");
+  const auto records = arabicRecords(actual, {{"#first", 0}, {"#last", 6}});
+  ASSERT_THAT(records, testing::SizeIs(joined_.glyphs.size()));
+  for (size_t i = 0; i < records.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_THAT(std::get<0>(records[i]), testing::Eq(joined_.glyphs[i].glyphIndex));
+    EXPECT_THAT(std::get<1>(records[i]), testing::Eq(joined_.glyphs[i].cluster));
+  }
 }
 
 TEST_F(MixedVerticalTextConvergence, JoiningAndTerminalNeutralSurviveSeparatePaintSpans) {
