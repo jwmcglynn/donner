@@ -1492,30 +1492,18 @@ INSTANTIATE_TEST_SUITE_P(
                                        .onlyTextFull()},
                     {"fill-rule=evenodd.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
-                    {"rotate-on-Arabic.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-rotate-on-Arabic.png")
-                         .onlyTextFull()
-                         .withReason("Arabic text shaping requires text-full,")},
+                    {"rotate-on-Arabic.svg", ResvgV049Reference().onlyTextFull().withReason(
+                                                 "Arabic text shaping requires text-full")},
                     {"rotate-with-multiple-values-and-complex-text.svg",
                      Params().onlyTextFull().withReason("Complex diatrics requires text-full")},
                     {"x-and-y-with-multiple-values-and-arabic-text.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/"
-                         "resvg-x-and-y-with-multiple-values-and-arabic-text.png")
-                         .withMaxPixelsDifferent(400)
-                         .onlyTextFull()
-                         .withReason("Arabic text shaping; vertical-axis AA diff not "
-                                     "the focus of the test")},
+                     ResvgV049Reference().onlyTextFull().withReason("Arabic text shaping")},
                     // The reference is resvg v0.49.0's 300x300 rendering, which draws all three
                     // lines in Mplus 1p, the only face in the test font set covering these CJK
                     // codepoints. The superseded one used per-language faces outside the set.
                     {"xml-lang=ja.svg", Params().setCanvasSize(300, 300)},
-                    {"zalgo.svg",
-                     Params().withMaxPixelsDifferent(265).onlyTextFull().withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                         "crosshair and diacritic edges; analytic residual 257 px, supersampled "
-                         "1 px; a 1 px text shift reaches 468")},
+                    {"zalgo.svg", ResvgV049Reference().onlyTextFull().withReason(
+                                      "Stacked combining marks need HarfBuzz")},
                     // These three differ from their PNGs only in edge coverage: the crosshair
                     // and glyph edges compare at 0 pixels under 4x4 supersampled coverage, and
                     // a 1 px text shift raises each residual past its budget (507, 435 and

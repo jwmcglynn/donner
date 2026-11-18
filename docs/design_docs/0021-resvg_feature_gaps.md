@@ -378,7 +378,6 @@ generation:`, only when all of the following hold:
 | `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | skip | 343 | 0 | 355 | 435 |
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
-| `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
 The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
 (1555 and 3134 pixels, #1176).
