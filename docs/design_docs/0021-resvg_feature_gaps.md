@@ -584,13 +584,12 @@ shaping workstream. Vertical layout on a path (`writing-mode=tb.svg`) compares w
 allowance for the reference's hhea-centered upright origin, 0.0175em from the font's vmtx origin.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
 filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) is an
-accepted difference (2026-11-13). Where browsers measurably place vertical text as Donner does
+accepted difference (2026-11-13). Where browser controls support Donner’s vertical placement
 and the reference encodes resvg's own model (`writing-mode/japanese-with-tb.svg`,
 `writing-mode/mixed-languages-with-tb.svg`, `writing-mode/tb-and-punctuation.svg`,
 `alignment-baseline/hanging-on-vertical.svg`), the row compares against a Donner rendering
-([0009](0009-resvg_test_suite_bugs.md)). `writing-mode/mixed-languages-with-tb-and-underline.svg`
-is skipped under #1172: its vertical underline differs from the reference in position and
-thickness.
+([0009](0009-resvg_test_suite_bugs.md)). The Japanese control quotes the family name so Chromium selects the same face. `writing-mode/mixed-languages-with-tb-and-underline.svg`
+is skipped under #1172: its vertical underline has the reference thickness and sits about 3 px to its right.
 
 ### F11: BiDi / RTL text shaping
 

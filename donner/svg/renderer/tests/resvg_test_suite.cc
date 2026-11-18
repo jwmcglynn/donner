@@ -1865,12 +1865,12 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
                      .onlyTextFull()
                      .withReason("Reference disagreement: the PNG places upright glyphs 5.6 px "
-                                 "below the font's vmtx origin, where browsers place them "
-                                 "(golden README)")},
+                                 "below the font's vmtx origin; Chromium matches with the "
+                                 "quoted family name (golden README)")},
                 {"mixed-languages-with-tb-and-underline.svg",
                  Params::Skip("Bug #1172: 1331 px differ, 929 of them at the vertical "
-                              "underline, which Donner draws 3 px right of and 1 px thicker "
-                              "than the reference (Chrome places it differently again); the "
+                              "underline, which has the reference thickness but is 3 px to "
+                              "its right, in agreement with Firefox; the "
                               "rest are the upright glyph, the sideways Latin and the "
                               "Arabic")
                      .onlyTextFull()},

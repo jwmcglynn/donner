@@ -113,12 +113,12 @@ fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 | Category                | Test                    | Reason                                                             |
 | ----------------------- | ----------------------- | ------------------------------------------------------------------ |
-| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin; Chrome matches Donner |
+| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin; quoted-family Chromium control agrees |
 | text/writing-mode       | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees        |
 | text/writing-mode       | tb-and-punctuation      | Punctuation forms 14 px off; Chrome matches Donner within 0.4 px   |
 | text/alignment-baseline | hanging-on-vertical     | No alignment-baseline in the PNG; Chrome matches Donner to 1.1 px  |
 
-These references encode resvg's vertical model where browsers lay the text out as Donner does.
+These references encode resvg's vertical model. For the Japanese fixture, Chromium's matching control quotes the font family.
 resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`,
 and it does not apply `alignment-baseline` in vertical layout. CSS Writing Modes 3 section 5.1.1
 requires the font's vertical metrics; Blink and Gecko take the upright origin from `VORG`, then
