@@ -2530,12 +2530,32 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   return params;
 }
 
+/// True when \p instance draws any marker.
+bool HasMarkers(const components::RenderingInstanceComponent& instance) {
+  return instance.markerStart.has_value() || instance.markerMid.has_value() ||
+         instance.markerEnd.has_value();
+}
+
 bool IsPlainVisibleLeaf(const components::RenderingInstanceComponent& instance) {
   return instance.visible && !instance.subtreeInfo.has_value() &&
          !instance.resolvedFilter.has_value() && !instance.mask.has_value() &&
-         !instance.hasClipPath() && !instance.clipRect.has_value() &&
-         !instance.markerStart.has_value() && !instance.markerMid.has_value() &&
-         !instance.markerEnd.has_value();
+         !instance.hasClipPath() && !instance.clipRect.has_value() && !HasMarkers(instance);
+}
+
+/// Device bounds for viewport culling a shape, or nullopt when the shape must not be culled. A
+/// shape with markers is never culled: its own bounds do not include the markers, which can reach
+/// onto the canvas from a path that lies off it.
+std::optional<Box2d> CullableDeviceBounds(const components::RenderingInstanceComponent& instance,
+                                          const EntityHandle& dataHandle,
+                                          const components::ComputedStyleComponent& style,
+                                          NonScalingStrokeMode strokeMode,
+                                          const Transform2d& worldFromEntity,
+                                          const Transform2d& surfaceFromCanvas) {
+  if (HasMarkers(instance)) {
+    return std::nullopt;
+  }
+  return DeviceDrawableBoundsWithStroke(dataHandle, style, strokeMode, worldFromEntity,
+                                        surfaceFromCanvas);
 }
 
 bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) {
@@ -3123,6 +3143,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     applyDrawTimeContextRemaps(paint, instance);
     renderer_.setPaint(paint);
 
+    skipUndrawnMarkerContent(view, registry, instance, filterHidesElement, /*cullDraw=*/false);
     if (instance.visible && !filterHidesElement) {
       if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                                  .try_get<components::ComputedPathComponent>()) {
@@ -3865,10 +3886,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(subtreeMarkers_);
       if (!insideFilterLayer) {
-        if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
-                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
-                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
-                surfaceFromCanvasTransform_);
+        if (const auto deviceBounds = CullableDeviceBounds(
+                instance, components::ShapeSystem::geometryHandle(instance.styleHandle(registry)),
+                style, ShapeNonScalingStrokeMode(instance, style),
+                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, cullingSurfaceSize());
         }
@@ -3876,6 +3897,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
 
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
+    skipUndrawnMarkerContent(view, registry, instance, filterHidesElement, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                                  .try_get<components::ComputedPathComponent>()) {
@@ -4102,10 +4124,10 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(localDeferred);
       if (!insideFilterLayer) {
-        if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
-                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
-                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
-                surfaceFromCanvasTransform_);
+        if (const auto deviceBounds = CullableDeviceBounds(
+                instance, components::ShapeSystem::geometryHandle(instance.styleHandle(registry)),
+                style, ShapeNonScalingStrokeMode(instance, style),
+                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, cullingSurfaceSize());
         }
@@ -4113,6 +4135,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
+    skipUndrawnMarkerContent(view, registry, instance, filterHidesElement, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                                  .try_get<components::ComputedPathComponent>()) {
@@ -4638,6 +4661,79 @@ void RendererDriver::drawHostSpaceStroke(const components::RenderingInstanceComp
   renderer_.setTransform(deviceFromLocalForShape);
 }
 
+void RendererDriver::skipUndrawnMarkerContent(
+    RenderingInstanceView& view, Registry& registry,
+    const components::RenderingInstanceComponent& instance, bool filterHidesElement,
+    bool cullDraw) {
+  // A drawn path skips its inline marker content in drawMarkers.
+  if (instance.visible && !filterHidesElement && !cullDraw) {
+    return;
+  }
+  skipInlineMarkerContent(view, registry, instance);
+}
+
+void RendererDriver::skipInlineMarkerContent(
+    RenderingInstanceView& view, Registry& registry,
+    const components::RenderingInstanceComponent& instance) {
+  if (!HasMarkers(instance)) {
+    return;
+  }
+  // Skip past inline marker definition entities to avoid double-rendering. A subtree is inline
+  // when it was instantiated by this shape (drawOrder ahead of the shape); subtrees shared from
+  // an earlier instantiation lie behind the cursor and are left alone. Skip to the furthest
+  // inline subtree.
+  int skipToDrawOrder = instance.drawOrder;
+  const auto considerMarkerSubtree = [&](const std::optional<components::ResolvedMarker>& marker) {
+    if (!marker.has_value() || !marker->subtreeInfo) {
+      return;
+    }
+
+    if (registry
+            .get<components::RenderingInstanceComponent>(marker->subtreeInfo->firstRenderedEntity)
+            .drawOrder <= instance.drawOrder) {
+      return;  // Shared subtree instantiated earlier; not inline.
+    }
+
+    const int lastDrawOrder =
+        registry
+            .get<components::RenderingInstanceComponent>(marker->subtreeInfo->lastRenderedEntity)
+            .drawOrder;
+    skipToDrawOrder = std::max(skipToDrawOrder, lastDrawOrder);
+  };
+  considerMarkerSubtree(instance.markerStart);
+  considerMarkerSubtree(instance.markerMid);
+  considerMarkerSubtree(instance.markerEnd);
+
+  // Marker render ranges intentionally exclude nested marker definitions because nested paths
+  // render those definitions through drawMarker(). Walk the active traversal snapshot in draw
+  // order and extend the cleanup frontier whenever an in-range instance owns another inline
+  // marker subtree. Do not scan the registry: it can contain offscreen filter instances that are
+  // deliberately absent from this view.
+  RenderingInstanceView nestedView = view;
+  while (!nestedView.done()) {
+    const auto& nestedInstance = nestedView.get();
+    if (nestedInstance.drawOrder > skipToDrawOrder) {
+      break;
+    }
+
+    if (nestedInstance.drawOrder > instance.drawOrder) {
+      considerMarkerSubtree(nestedInstance.markerStart);
+      considerMarkerSubtree(nestedInstance.markerMid);
+      considerMarkerSubtree(nestedInstance.markerEnd);
+      // Pattern and mask content drawn by marker content is instantiated after the marker
+      // subtree's last entity; it is drawn only through that content, so skip it too.
+      skipToDrawOrder = std::max(skipToDrawOrder, ContentLastDrawOrder(registry, nestedInstance));
+    }
+    nestedView.advance();
+  }
+
+  while (!view.done() &&
+         registry.get<components::RenderingInstanceComponent>(view.currentEntity()).drawOrder <=
+             skipToDrawOrder) {
+    view.advance();
+  }
+}
+
 void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry,
                                  const components::RenderingInstanceComponent& instance,
                                  const components::ComputedPathComponent& path,
@@ -4652,6 +4748,7 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
 
   const auto& commands = path.spline.commands();
   if (commands.size() < 2) {
+    skipInlineMarkerContent(view, registry, instance);
     return;
   }
 
@@ -4704,59 +4801,7 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
 
   markerPaintContexts_.pop_back();
 
-  // Skip past inline marker definition entities to avoid double-rendering. A subtree is inline
-  // when it was instantiated by this shape (drawOrder ahead of the shape); subtrees shared from
-  // an earlier instantiation lie behind the cursor and are left alone. Skip to the furthest
-  // inline subtree.
-  Entity skipToEntity = entt::null;
-  int skipToDrawOrder = instance.drawOrder;
-  const auto considerMarkerSubtree = [&](const std::optional<components::ResolvedMarker>& marker) {
-    if (!marker.has_value() || !marker->subtreeInfo) {
-      return;
-    }
-
-    if (registry
-            .get<components::RenderingInstanceComponent>(marker->subtreeInfo->firstRenderedEntity)
-            .drawOrder <= instance.drawOrder) {
-      return;  // Shared subtree instantiated earlier; not inline.
-    }
-
-    const int lastDrawOrder =
-        registry
-            .get<components::RenderingInstanceComponent>(marker->subtreeInfo->lastRenderedEntity)
-            .drawOrder;
-    if (lastDrawOrder > skipToDrawOrder) {
-      skipToDrawOrder = lastDrawOrder;
-      skipToEntity = marker->subtreeInfo->lastRenderedEntity;
-    }
-  };
-  considerMarkerSubtree(instance.markerStart);
-  considerMarkerSubtree(instance.markerMid);
-  considerMarkerSubtree(instance.markerEnd);
-
-  // Marker render ranges intentionally exclude nested marker definitions because nested paths
-  // render those definitions through drawMarker(). Walk the active traversal snapshot in draw
-  // order and extend the cleanup frontier whenever an in-range instance owns another inline
-  // marker subtree. Do not scan the registry: it can contain offscreen filter instances that are
-  // deliberately absent from this view.
-  RenderingInstanceView nestedView = view;
-  while (!nestedView.done()) {
-    const auto& nestedInstance = nestedView.get();
-    if (nestedInstance.drawOrder > skipToDrawOrder) {
-      break;
-    }
-
-    if (nestedInstance.drawOrder > instance.drawOrder) {
-      considerMarkerSubtree(nestedInstance.markerStart);
-      considerMarkerSubtree(nestedInstance.markerMid);
-      considerMarkerSubtree(nestedInstance.markerEnd);
-    }
-    nestedView.advance();
-  }
-
-  if (skipToEntity != entt::null) {
-    skipUntil(view, skipToEntity);
-  }
+  skipInlineMarkerContent(view, registry, instance);
 }
 
 namespace {
