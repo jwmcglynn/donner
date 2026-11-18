@@ -306,6 +306,24 @@ donner_cc_library(
     deps = ["//donner/base"],
 )
 
+donner_cc_library(
+    name = "geode_anchored_sampling",
+    srcs = ["GeodeAnchoredSampling.cc"],
+    hdrs = ["GeodeAnchoredSampling.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = ["//donner/base"],
+)
+
+donner_cc_test(
+    name = "geode_anchored_sampling_tests",
+    srcs = ["tests/GeodeAnchoredSampling_tests.cc"],
+    deps = [
+        ":geode_anchored_sampling",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
 donner_cc_test(
     name = "geode_nearest_sampling_tests",
     srcs = ["tests/GeodeNearestSampling_tests.cc"],
@@ -807,6 +825,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":geode_anchored_sampling",
         ":geode_device_api",
         ":geode_nearest_sampling",
         "//donner/base",
@@ -983,6 +1002,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",

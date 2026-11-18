@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Native offset acceptance using an independent rounded-coordinate reference.
+/// Native offset acceptance using an independent area-weighted translation reference.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -33,16 +33,37 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
   }
   return result;
 }
-inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 4>& input,
-                                     shader::programs::OffsetParams params, int32_t x, int32_t y) {
-  const int32_t sx = x - static_cast<int32_t>(std::round(params.dx));
-  const int32_t sy = y - static_cast<int32_t>(std::round(params.dy));
-  if (sx < 0 || sy < 0 || sx >= int32_t(kWidth) || sy >= int32_t(kHeight)) {
+/// Texel (\p x, \p y) of \p input, or transparent black outside it.
+inline std::array<float, 4> TexelOrClear(const std::array<float, kWidth * kHeight * 4>& input,
+                                         int32_t x, int32_t y) {
+  if (x < 0 || y < 0 || x >= int32_t(kWidth) || y >= int32_t(kHeight)) {
     return {};
   }
   std::array<float, 4> result{};
-  std::copy_n(input.begin() + (sy * kWidth + sx) * 4, 4, result.begin());
+  std::copy_n(input.begin() + (y * kWidth + x) * 4, 4, result.begin());
   return result;
+}
+/// Exact translation by (\p dx, \p dy), computed independently of the shader's arithmetic: output
+/// texel (x, y) is the area-weighted sum of the input texels that its square, moved back by the
+/// shift, overlaps, evaluated in double precision.
+inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 4>& input,
+                                     double dx, double dy, int32_t x, int32_t y) {
+  const auto overlap = [](double low, int32_t texel) {
+    return std::max(0.0, std::min(texel + 1.0, low + 1.0) - std::max(double(texel), low));
+  };
+  const double left = x - dx;
+  const double top = y - dy;
+  std::array<double, 4> sum{};
+  for (int32_t sy = int32_t(std::floor(top)); sy <= int32_t(std::floor(top)) + 1; ++sy) {
+    for (int32_t sx = int32_t(std::floor(left)); sx <= int32_t(std::floor(left)) + 1; ++sx) {
+      const double weight = overlap(left, sx) * overlap(top, sy);
+      const auto texel = TexelOrClear(input, sx, sy);
+      for (size_t channel = 0; channel < 4; ++channel) {
+        sum[channel] += weight * texel[channel];
+      }
+    }
+  }
+  return {float(sum[0]), float(sum[1]), float(sum[2]), float(sum[3])};
 }
 }  // namespace offset_scene
 /// Runs authored offset semantics with reflected bindings and workgroups on a native device.
@@ -50,7 +71,7 @@ inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 
 /// @param readbackBuffer Bounded native readback. @param dx X shift. @param dy Y shift.
 template <typename DeviceType, typename Readback>
 void CheckOffsetStorage(DeviceType& device, const shader::CompiledShaderView& shader,
-                        Readback readbackBuffer, float dx, float dy) {
+                        Readback readbackBuffer, double dx, double dy) {
   using namespace offset_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
   ASSERT_EQ(shader.entryPoints.front().stage, ShaderStage::Compute);
@@ -66,7 +87,7 @@ void CheckOffsetStorage(DeviceType& device, const shader::CompiledShaderView& sh
   const WorkgroupSize workgroupSize{shape[0], shape[1], shape[2]};
   const auto shaderDescriptor =
       shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "offset");
-  const shader::programs::OffsetParams params{dx, dy, 0, 0};
+  const shader::programs::OffsetParams params = shader::programs::MakeOffsetParams(dx, dy);
   Result<ShaderModule> shaderModule = device.createShaderModule(shaderDescriptor);
   ASSERT_THAT(shaderModule, HasResult());
   Result<BindGroupLayout> layout = device.createBindGroupLayout(BindGroupLayoutDescriptor{
@@ -164,7 +185,7 @@ void CheckOffsetStorage(DeviceType& device, const shader::CompiledShaderView& sh
     std::memcpy(actual->data().data() + y * kWidth * 4, bytes.result().data() + y * kBytesPerRow,
                 kWidth * 4 * sizeof(float));
     for (uint32_t x = 0; x < kWidth; ++x) {
-      const auto pixel = Expected(inputTexels, params, x, y);
+      const auto pixel = Expected(inputTexels, dx, dy, x, y);
       std::copy(pixel.begin(), pixel.end(), expected->data().begin() + (y * kWidth + x) * 4);
     }
   }

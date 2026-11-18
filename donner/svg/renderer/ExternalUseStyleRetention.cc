@@ -84,9 +84,12 @@ struct OccurrenceInputs {
   RetainedStyleCharge charge;
   /// Whether restyling the subtree for these inputs refused an inherited host resource.
   bool unsupportedResource = false;
+  /// Fonts the host lent; text laid out under other lent fonts must be laid out again.
+  std::uint64_t hostFontKey = 0;
 
   bool matches(const ExternalUseStyleContext& occurrence) const {
     return occurrence.parent.properties && parent == *occurrence.parent.properties &&
+           hostFontKey == occurrence.hostFontKey &&
            resourceOpacities == occurrence.parent.resourceOpacities &&
            IsProvablySamePaint(fill, occurrence.fill) &&
            IsProvablySamePaint(stroke, occurrence.stroke);
@@ -110,10 +113,13 @@ struct RenderTreeOccurrence {
   ResolvedPaintServer stroke;
   /// The viewport the `<use>` establishes for a referenced `<symbol>` or `<svg>`, if any.
   std::optional<Box2d> viewport;
+  /// Fonts the host lent when the instances were built.
+  std::uint64_t hostFontKey = 0;
 
   bool matches(const ExternalUseStyleContext& occurrence,
                const std::optional<Box2d>& occurrenceViewport) const {
-    return root == occurrence.root && IsProvablySamePaint(fill, occurrence.fill) &&
+    return root == occurrence.root && hostFontKey == occurrence.hostFontKey &&
+           IsProvablySamePaint(fill, occurrence.fill) &&
            IsProvablySamePaint(stroke, occurrence.stroke) && viewport == occurrenceViewport;
   }
 };
@@ -214,7 +220,8 @@ std::optional<OccurrenceInputs> SnapshotInputs(Registry& registry,
                           .resourceOpacities = occurrence.parent.resourceOpacities,
                           .fill = occurrence.fill,
                           .stroke = occurrence.stroke,
-                          .charge = RetainedStyleCharge(std::move(family), bytes)};
+                          .charge = RetainedStyleCharge(std::move(family), bytes),
+                          .hostFontKey = occurrence.hostFontKey};
 }
 
 /**
@@ -550,7 +557,8 @@ void ExternalUseStyleRetention::PrepareInstance(Registry& registry) {
     state->renderTree = RenderTreeOccurrence{.root = occurrence.root,
                                              .fill = occurrence.fill,
                                              .stroke = occurrence.stroke,
-                                             .viewport = viewport};
+                                             .viewport = viewport,
+                                             .hostFontKey = occurrence.hostFontKey};
   }
   if (HasUnexpandedUse(registry, occurrence.root)) {
     // A rebuild for another root re-expanded only the `<use>` elements that root presents, so

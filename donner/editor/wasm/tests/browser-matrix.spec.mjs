@@ -1683,7 +1683,12 @@ test("completion checks enforce by default and report only tracked misses", asyn
     Object.fromEntries(
       Object.entries(gates.kCompletionChecks).map(([check, { browser }]) => [check, browser]),
     ),
-    { coldZoomPresents: "chromium", dragInputsComplete: "firefox", heldDragPositions: "chromium" },
+    {
+      coldZoomPresents: "chromium",
+      dragInputsComplete: "firefox",
+      heldDragPositions: "chromium",
+      heldMaskedDragDamagePatch: "firefox",
+    },
   );
   assert.deepEqual(
     Object.fromEntries(
@@ -1693,8 +1698,9 @@ test("completion checks enforce by default and report only tracked misses", asyn
       coldZoomPresents: undefined,
       dragInputsComplete: undefined,
       heldDragPositions: ["geode-crown"],
+      heldMaskedDragDamagePatch: ["geode-crown"],
     },
-    "only the masked crown drag phase may report the held-position check",
+    "only the masked crown drag phase may report the held-position and damage patch checks",
   );
   const miss = new Error("every dispatched input must complete\n\nExpected: 60");
   const run = async (mode, browserName, assertion) => {
@@ -1769,6 +1775,33 @@ test("completion checks enforce by default and report only tracked misses", asyn
   assert.equal(gates.completionCheckTracks("dragInputsComplete", "firefox", "any-phase"), true);
   assert.equal(gates.completionCheckTracks("heldDragPositions", "chromium", "geode-crown"), true);
   assert.equal(
+    gates.completionCheckTracks("heldMaskedDragDamagePatch", "firefox", "geode-crown", "firefox-dpr1"),
+    true,
+  );
+  for (const [browserName, project] of [["firefox", "firefox"], ["chromium", "chromium-dpr1"]]) {
+    assert.equal(
+      gates.completionCheckTracks("heldMaskedDragDamagePatch", browserName, "geode-crown", project),
+      false,
+      `${project} runs the geode-crown phase at device pixel ratio 2 and stays enforced`,
+    );
+  }
+  const damagePatchMiss = new Error("every held masked-child result must take the fast path");
+  const runDamagePatch = (project) =>
+    gates.runCompletionCheck("heldMaskedDragDamagePatch", () => Promise.reject(damagePatchMiss), {
+      browserName: "firefox",
+      project,
+      phase: "geode-crown",
+      detail: "8 held results, 0 slow path, 6 rasterized unpatched",
+      mode: "report",
+      log: () => {},
+    }).then((result) => ({ result }), (error) => ({ error }));
+  assert.equal((await runDamagePatch("firefox-dpr1")).result?.mode, "report");
+  assert.equal(
+    (await runDamagePatch("firefox")).error,
+    damagePatchMiss,
+    "a damage patch miss in the firefox project stays enforced in report mode",
+  );
+  assert.equal(
     gates.completionCheckTracks("heldDragPositions", "chromium", "first-drag-193"),
     false,
   );
@@ -1802,15 +1835,76 @@ test("only the hosted macOS Perf job reports the completion checks without enfor
   );
 });
 
+test("the masked drag counters are checked in candidate runs and only measured in baseline runs", async () => {
+  const { summarizeMaskedDragResults } = await import("./masked-drag-counters.mjs");
+  const published = (completedResults, activeDragResult) => ({
+    completedResults,
+    countersPublished: true,
+    activeDragResult,
+  });
+  const records = [published(8, true), published(9, true), published(10, false), published(11, false)];
+  for (const baselineOnly of [false, true]) {
+    assert.deepEqual(summarizeMaskedDragResults(records, { baselineOnly }), {
+      countersPublished: true,
+      resultCount: 4,
+      held: records.slice(0, 2),
+      release: records.slice(2),
+      checkHeldResults: !baselineOnly,
+    });
+  }
+  // A historical bundle publishes no per-result counters; its results are not idle results.
+  const historical = [8, 9, 10].map((completedResults) => ({
+    completedResults,
+    countersPublished: false,
+    activeDragResult: null,
+  }));
+  assert.deepEqual(summarizeMaskedDragResults(historical, { baselineOnly: true }), {
+    countersPublished: false,
+    resultCount: 3,
+    held: [],
+    release: [],
+    checkHeldResults: false,
+  });
+  assert.equal(
+    summarizeMaskedDragResults(historical, { baselineOnly: false }).checkHeldResults,
+    true,
+    "a candidate bundle without the counters must still be checked, and fail",
+  );
+});
+
 test("only the tracked responsiveness checks go through the completion check helper", () => {
   const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
   assert.match(spec, /completionCheckMode\(\)/, "the mode must come from the run's environment");
   const calls = [...spec.matchAll(/completionCheck\(\s*"(\w+)"/g)];
   assert.deepEqual(
     calls.map(([, check]) => check),
-    ["heldDragPositions", "dragInputsComplete", "coldZoomPresents"],
+    ["heldDragPositions", "dragInputsComplete", "coldZoomPresents", "heldMaskedDragDamagePatch"],
   );
-  const [held, drag, coldZoom] = calls.map(({ index }) => index);
+  const [held, drag, coldZoom, damagePatch] = calls.map(({ index }) => index);
+  const damagePatchAssertion = spec.indexOf("() => expectHeldMaskedDragDamagePatch(results)");
+  assert.match(
+    spec.slice(damagePatch - 60, damagePatch),
+    /if \(results\.checkHeldResults\) \{\s*await $/,
+    "the damage patch check must run only when the summary asks for it",
+  );
+  assert.equal(
+    spec.split('baselineOnly: process.env.DONNER_BROWSER_BASELINE === "1"').length,
+    2,
+    "the masked drag summary must take baseline mode from the run's environment",
+  );
+  assert.ok(
+    damagePatchAssertion > damagePatch && damagePatchAssertion - damagePatch < 300,
+    "the damage patch check must run its assertion through the helper",
+  );
+  const damagePatchMessage =
+    "every held masked-child result must take the fast path and only patch its owning tile";
+  assert.equal(spec.split(damagePatchMessage).length, 2, "the damage patch check must appear once");
+  const assertionDefinition = spec.indexOf("function expectHeldMaskedDragDamagePatch(");
+  assert.ok(
+    assertionDefinition >= 0 && spec.indexOf(damagePatchMessage) > assertionDefinition
+      && spec.indexOf(damagePatchMessage) - assertionDefinition < 1500,
+    "the damage patch message must belong to the helper the check runs",
+  );
   assert.equal(
     spec.split('"geode-crown"').length,
     2,

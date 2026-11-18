@@ -96,8 +96,8 @@ struct Flood {
 
 /// Parameters for feOffset.
 struct Offset {
-  int dx = 0;  ///< Horizontal offset in pixels.
-  int dy = 0;  ///< Vertical offset in pixels.
+  double dx = 0.0;  ///< Horizontal offset in pixels; a fractional part translates by subpixels.
+  double dy = 0.0;  ///< Vertical offset in pixels; a fractional part translates by subpixels.
 };
 
 /// Parameters for feComposite.
@@ -192,8 +192,8 @@ struct DropShadow {
   std::uint8_t g = 0;    ///< Shadow color green (premultiplied sRGB).
   std::uint8_t b = 0;    ///< Shadow color blue (premultiplied sRGB).
   std::uint8_t a = 255;  ///< Shadow color alpha.
-  int dx = 0;            ///< Horizontal offset in pixels.
-  int dy = 0;            ///< Vertical offset in pixels.
+  double dx = 0.0;       ///< Horizontal offset in pixels; may be fractional.
+  double dy = 0.0;       ///< Vertical offset in pixels; may be fractional.
   double sigmaX = 0.0;   ///< Blur standard deviation X in pixels.
   double sigmaY = 0.0;   ///< Blur standard deviation Y in pixels.
 };

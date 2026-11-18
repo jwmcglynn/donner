@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Utf8.h"
@@ -3679,6 +3680,89 @@ TEST(TextEngineScriptedTest, GeometryCacheTransformsQuadraticAndCubicOutlineSegm
   EXPECT_THAT(paths[0].points(),
               ElementsAre(Vector2d(7.0, 9.0), Vector2d(12.0, -1.0), Vector2d(17.0, 9.0),
                           Vector2d(19.0, 14.0), Vector2d(9.0, 14.0), Vector2d(7.0, 19.0)));
+}
+
+namespace {
+
+/// Scripted backend that shapes `?` to `.notdef`, which has an outline when `notdefOutline` is set.
+class NotdefScriptedBackend : public ScriptedTextBackend {
+public:
+  bool notdefOutline = false;
+
+  ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
+                     size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
+                     bool forceLogicalOrder) const override {
+    ShapedRun run =
+        ScriptedTextBackend::shapeRun(font, fontSizePx, spanText, byteOffset, byteLength,
+                                      isVertical, fontVariant, forceLogicalOrder);
+    for (auto& glyph : run.glyphs) {
+      if (spanText[glyph.cluster] == '?') {
+        glyph.glyphIndex = 0;
+      }
+    }
+    return run;
+  }
+
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const override {
+    if (glyphIndex == 0 && notdefOutline) {
+      return PathBuilder().addRect(Box2d::FromXYWH(0.0, -8.0, 6.0, 8.0)).build();
+    }
+    return ScriptedTextBackend::glyphOutline(font, glyphIndex, scale);
+  }
+};
+
+/// The run and chunk-start tags of each glyph outline of \p root, in order.
+std::vector<std::pair<std::size_t, bool>> OutlineTags(const TextEngine& engine, Registry& registry,
+                                                      Entity root) {
+  std::vector<std::pair<std::size_t, bool>> tags;
+  for (const auto& outline : engine.computedGlyphOutlines(EntityHandle(registry, root))) {
+    tags.emplace_back(outline.run, outline.startsTextChunk);
+  }
+  return tags;
+}
+
+}  // namespace
+
+TEST(TextEngineScriptedTest, GlyphOutlinesRecordTheirRunAndChunkStarts) {
+  // "A?B" then a tspan "C": the chunk that `x` starts at `?`, a `.notdef` the renderers do not
+  // draw, starts with "B", the next outline of the run. "C" is the second run.
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry, std::make_unique<NotdefScriptedBackend>());
+  auto span = MakeSpan("A?B");
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), Lengthd(30.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, "A?BC", std::move(span));
+  const Entity child = registry.create();
+  registry.emplace<donner::components::TreeComponent>(child, xml::XMLQualifiedNameRef("tspan"));
+  registry.get<donner::components::TreeComponent>(root).appendChild(registry, child);
+  registry.emplace<components::ComputedStyleComponent>(child, MakeStyle());
+  auto childSpan = MakeSpan("C");
+  childSpan.sourceEntity = child;
+  registry.get<components::ComputedTextComponent>(root).spans.push_back(std::move(childSpan));
+
+  EXPECT_THAT(
+      OutlineTags(engine, registry, root),
+      ElementsAre(std::pair<std::size_t, bool>(0, false), std::pair<std::size_t, bool>(0, true),
+                  std::pair<std::size_t, bool>(1, false)));
+}
+
+TEST(TextEngineScriptedTest, GlyphOutlinesLeaveOutTheNotdefGlyphTheRenderersSkip) {
+  // A `.notdef` with an outline, then a glyph that `x` starts a chunk at. The renderers draw no
+  // `.notdef`, so the outlines hold only the second glyph, and it starts no chunk: no outline
+  // of its run comes before it.
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<NotdefScriptedBackend>();
+  backend->notdefOutline = true;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  auto span = MakeSpan("?A");
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), Lengthd(30.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, "?A", std::move(span));
+
+  EXPECT_THAT(OutlineTags(engine, registry, root),
+              ElementsAre(std::pair<std::size_t, bool>(0, false)));
 }
 
 TEST(TextEngineScriptedTest, GeometryCacheFilterExcludesEntitiesOutsideTree) {

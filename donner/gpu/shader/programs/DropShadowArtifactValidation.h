@@ -28,14 +28,14 @@ consteval bool ValidateDropShadowArtifact() {
   static_assert(shader.resource("params")->alignmentBytes == alignof(DropShadowParams));
   static_assert(shader.matchesMember("params", "color", offsetof(DropShadowParams, color),
                                      sizeof(DropShadowParams::color), ShaderScalarType::F32, 4));
-  static_assert(shader.matchesMember("params", "dx", offsetof(DropShadowParams, dx),
-                                     sizeof(DropShadowParams::dx), ShaderScalarType::F32));
-  static_assert(shader.matchesMember("params", "dy", offsetof(DropShadowParams, dy),
-                                     sizeof(DropShadowParams::dy), ShaderScalarType::F32));
-  static_assert(shader.matchesMember("params", "pad0", offsetof(DropShadowParams, pad0),
-                                     sizeof(DropShadowParams::pad0), ShaderScalarType::U32));
-  static_assert(shader.matchesMember("params", "pad1", offsetof(DropShadowParams, pad1),
-                                     sizeof(DropShadowParams::pad1), ShaderScalarType::U32));
+  static_assert(shader.matchesMember("params", "shiftX", offsetof(DropShadowParams, shiftX),
+                                     sizeof(DropShadowParams::shiftX), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "shiftY", offsetof(DropShadowParams, shiftY),
+                                     sizeof(DropShadowParams::shiftY), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "weightX", offsetof(DropShadowParams, weightX),
+                                     sizeof(DropShadowParams::weightX), ShaderScalarType::F32));
+  static_assert(shader.matchesMember("params", "weightY", offsetof(DropShadowParams, weightY),
+                                     sizeof(DropShadowParams::weightY), ShaderScalarType::F32));
   return true;
 }
 }  // namespace donner::gpu::shader::programs

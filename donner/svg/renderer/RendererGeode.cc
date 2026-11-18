@@ -8,11 +8,14 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <numeric>
 #include <optional>
+#include <queue>
 #include <span>
 #include <thread>
 #include <type_traits>
@@ -26,6 +29,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
@@ -44,6 +48,7 @@
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
+#include "donner/svg/renderer/geode/GeodeAnchoredSampling.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
@@ -1533,6 +1538,147 @@ struct DocumentResidency {
   geode::GeodePerDevice<DocumentDeviceResidency> devices;  //!< Residence per drawing device.
 };
 
+/// The axis a set of boxes is swept along: their longer extent, so a text run in either writing
+/// mode is swept along its advance.
+struct BoxSweepAxis {
+  bool alongY = false;  //!< True to sweep along y, false along x.
+
+  /// Returns the axis along the longer side of the boxes' union.
+  /// @param boxes Boxes to sweep.
+  static BoxSweepAxis LongerExtentOf(std::span<const Box2d> boxes) {
+    if (boxes.empty()) {
+      return {};
+    }
+    Box2d extent = boxes.front();
+    for (const Box2d& box : boxes) {
+      extent.addBox(box);
+    }
+    return {.alongY = extent.height() > extent.width()};
+  }
+
+  /// Returns the low end of \p box along the sweep axis.
+  double low(const Box2d& box) const { return alongY ? box.topLeft.y : box.topLeft.x; }
+
+  /// Returns the high end of \p box along the sweep axis.
+  double high(const Box2d& box) const { return alongY ? box.bottomRight.y : box.bottomRight.x; }
+
+  /// Returns the low end of \p box across the sweep axis.
+  double crossLow(const Box2d& box) const { return alongY ? box.topLeft.x : box.topLeft.y; }
+
+  /// Returns the high end of \p box across the sweep axis.
+  double crossHigh(const Box2d& box) const {
+    return alongY ? box.bottomRight.x : box.bottomRight.y;
+  }
+};
+
+/**
+ * Groups boxes by sweeping them along the longer extent of their union. Each open group keeps the
+ * union of its boxes' bounds, and a box joins every open group whose bounds it touches, merging
+ * them. Boxes that touch, directly or through other boxes, therefore share a group; a group can
+ * also take in a box that touches only the union of the group's bounds, not any one box of it.
+ *
+ * Open groups' bounds stay pairwise disjoint, and every open group reaches the sweep position, so
+ * their extents across the sweep axis are disjoint intervals: the groups a box touches are one
+ * contiguous run of them. Each box is tested against the groups it merges plus at most one more,
+ * and every merge removes a group, so N boxes cost fewer than 2N tests, wherever the boxes are.
+ */
+class BoxSweepGrouping {
+public:
+  /// @param boxes Boxes to group. The grouping borrows them, so they must outlive it.
+  explicit BoxSweepGrouping(std::span<const Box2d> boxes UTILS_LIFETIME_BOUND)
+      : boxes_(boxes), axis_(BoxSweepAxis::LongerExtentOf(boxes)), parent_(boxes.size()) {
+    std::iota(parent_.begin(), parent_.end(), std::size_t{0});
+  }
+
+  /**
+   * Returns, for each box, a representative of its group.
+   *
+   * @param tests Incremented once for each box tested against an open group's bounds.
+   */
+  std::vector<std::size_t> groups(std::uint64_t& tests) {
+    std::vector<std::size_t> order(boxes_.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+      return axis_.low(boxes_[a]) < axis_.low(boxes_[b]);
+    });
+    for (const std::size_t index : order) {
+      closeGroupsEndingBefore(axis_.low(boxes_[index]));
+      add(index, tests);
+    }
+    for (std::size_t index = 0; index < parent_.size(); ++index) {
+      parent_[index] = find(index);
+    }
+    return std::move(parent_);
+  }
+
+private:
+  /// An open group: the union of its boxes' bounds and one of its boxes.
+  struct Group {
+    Box2d bounds;          //!< Union of the group's boxes.
+    std::size_t member;    //!< Index of one box of the group.
+    std::uint64_t serial;  //!< Identifies this group among the closing entries.
+  };
+
+  /// A group's sweep end, for closing it once the sweep passes it.
+  struct Closing {
+    double high;           //!< The group's high end along the sweep axis.
+    double key;            //!< The group's key in \ref open_.
+    std::uint64_t serial;  //!< The group's \ref Group::serial.
+
+    bool operator>(const Closing& other) const { return high > other.high; }
+  };
+
+  std::size_t find(std::size_t index) {
+    while (parent_[index] != index) {
+      parent_[index] = parent_[parent_[index]];
+      index = parent_[index];
+    }
+    return index;
+  }
+
+  /// Closes the open groups whose sweep end is before \p low; merged-away groups are skipped.
+  void closeGroupsEndingBefore(double low) {
+    while (!closing_.empty() && closing_.top().high < low) {
+      const Closing entry = closing_.top();
+      closing_.pop();
+      const auto it = open_.find(entry.key);
+      if (it != open_.end() && it->second.serial == entry.serial) {
+        open_.erase(it);
+      }
+    }
+  }
+
+  /// Adds box \p index, merging it with every open group whose bounds it touches.
+  void add(std::size_t index, std::uint64_t& tests) {
+    Group merged{boxes_[index], index, nextSerial_++};
+    // Every open group starts at or before this box and ends at or after it along the sweep, so
+    // a group touches the box exactly when their extents across the sweep meet. Groups are sorted
+    // by their low cross extent and disjoint, so walk left from the last one starting at or before
+    // the box's high cross extent until one ends before the merged low cross extent.
+    auto it = open_.upper_bound(axis_.crossHigh(merged.bounds));
+    while (it != open_.begin()) {
+      const auto previous = std::prev(it);
+      ++tests;
+      if (axis_.crossHigh(previous->second.bounds) < axis_.crossLow(merged.bounds)) {
+        break;
+      }
+      merged.bounds.addBox(previous->second.bounds);
+      parent_[find(previous->second.member)] = find(index);
+      it = open_.erase(previous);
+    }
+    const double key = axis_.crossLow(merged.bounds);
+    closing_.push({axis_.high(merged.bounds), key, merged.serial});
+    open_.emplace(key, merged);
+  }
+
+  std::span<const Box2d> boxes_;  //!< The boxes passed to the constructor, borrowed.
+  BoxSweepAxis axis_;
+  std::vector<std::size_t> parent_;
+  std::map<double, Group> open_;  //!< Open groups by their low cross extent.
+  std::priority_queue<Closing, std::vector<Closing>, std::greater<Closing>> closing_;
+  std::uint64_t nextSerial_ = 0;
+};
+
 }  // namespace
 
 /// Gate for ordered cross-entity batching. Enabled: a batch's single draw can
@@ -1576,6 +1722,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::shared_ptr<RendererFilterPreparationBudget> filterPreparationBudget =
       std::make_shared<RendererFilterPreparationBudget>();
   bool ownsFilterPreparationBudget = true;
+  /// Per-path encoder limits; tests lower them to reach the limit with small paths.
+  geode::GeodePathEncoder::Limits pathEncoderLimits;
   std::shared_ptr<geode::GeodeFrameGeometryBudget> geometryBudget =
       std::make_shared<geode::GeodeFrameGeometryBudget>();
   bool ownsGeometryBudget = true;
@@ -3172,6 +3320,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                            !frame.localRasterRequiredForBudget);
   }
 
+  /// Composites a filtered local raster back to the device through \p deviceFromLocal.
+  void drawLocalRasterComposite(const gpu::Texture& composited,
+                                const GeodeLocalRasterGeometry& geometry,
+                                const Transform2d& deviceFromLocal) {
+    encoder->setTransform(deviceFromLocal);
+    const Box2d rasterRect = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry.width),
+                                             static_cast<double>(geometry.height));
+    // The raster moves with the content, so anchor at the device pixel holding its origin: a
+    // whole-pixel device move moves the anchor with it and leaves every weight unchanged. An
+    // origin beyond the integer pixel range has no anchor and samples with plain bilinear.
+    if (const std::optional<Vector2i> anchor =
+            geode::AnchorPixelFor(deviceFromLocal.transformPosition(Vector2d::Zero()))) {
+      encoder->drawTextureAnchored(composited, rasterRect, kWholeTextureUv, 1.0,
+                                   /*sourceIsPremultiplied=*/true, *anchor);
+    } else {
+      encoder->drawTexture(composited, rasterRect, kWholeTextureUv, 1.0, /*pixelated=*/false,
+                           /*sourceIsPremultiplied=*/true);
+    }
+    encoder->setTransform(Transform2d());
+  }
+
   TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
     const std::optional<GeodeLocalRasterGeometry> geometry = transformedFilterGeometry(frame);
     if (!geometry.has_value()) {
@@ -3217,14 +3386,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.y)) - regionY0);
     resampleEncoder->setTransform(localFromDevice);
     // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
-    // past the viewport's top-left corner.
-    resampleEncoder->drawTexture(frame.layerTexture,
-                                 Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
-                                                 -static_cast<double>(frame.filterBufferOffsetY),
-                                                 static_cast<double>(frame.layerDesc.size.width),
-                                                 static_cast<double>(frame.layerDesc.size.height)),
-                                 kWholeTextureUv, 1.0, /*pixelated=*/false,
-                                 /*sourceIsPremultiplied=*/true);
+    // past the viewport's top-left corner. The local raster follows the filter region while the
+    // capture follows the device grid, so a whole-pixel device move shifts the capture under the
+    // raster; anchoring the mapping at the raster origin keeps every bilinear weight unchanged.
+    resampleEncoder->drawTextureAnchored(
+        frame.layerTexture,
+        Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
+                        -static_cast<double>(frame.filterBufferOffsetY),
+                        static_cast<double>(frame.layerDesc.size.width),
+                        static_cast<double>(frame.layerDesc.size.height)),
+        kWholeTextureUv, 1.0, /*sourceIsPremultiplied=*/true, Vector2i::Zero());
     resampleEncoder->finish();
     retireFinishedEncoder(std::move(resampleEncoder));
 
@@ -3266,13 +3437,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     replaceActiveEncoder(std::move(compositeEncoder));
     updateEncoderScissor();
     if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
-      encoder->setTransform(deviceFromLocal);
-      encoder->drawTexture(*composited,
-                           Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
-                                           static_cast<double>(geometry->height)),
-                           kWholeTextureUv, 1.0, /*pixelated=*/false,
-                           /*sourceIsPremultiplied=*/true);
-      encoder->setTransform(Transform2d());
+      drawLocalRasterComposite(*composited, *geometry, deviceFromLocal);
     }
     releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
     releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
@@ -4091,13 +4256,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                             static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
   }
 
+  /// Encodes \p path at the current device tolerance, without admitting it to the frame.
+  geode::EncodedPath encodeAtDeviceTolerance(const Path& path, FillRule rule) {
+    device->countPathEncode();
+    return geode::GeodePathEncoder::encode(
+        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform), pathEncoderLimits);
+  }
+
   std::optional<geode::EncodedPath> encodeGeometry(const Path& path, FillRule rule) {
     if (geometryBudget->rejected()) {
       return std::nullopt;
     }
-    device->countPathEncode();
-    geode::EncodedPath encoded = geode::GeodePathEncoder::encode(
-        path, rule, geode::FillCubicToleranceFor(deviceFromLocalTransform));
+    geode::EncodedPath encoded = encodeAtDeviceTolerance(path, rule);
     if (encoded.rejected()) {
       geometryBudget->reject();
       return std::nullopt;
@@ -4112,6 +4282,163 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     transientTextEncodes.push_back(std::move(*encoded));
     return &transientTextEncodes.back();
+  }
+
+  /**
+   * Like \ref encodeTransientGeometry, but when the encoder's limits reject \p path, returns null
+   * and leaves the frame admitted, so the caller can encode the path's parts instead.
+   */
+  const geode::EncodedPath* encodeTransientGeometryOrSplit(const Path& path, FillRule rule) {
+    if (geometryBudget->rejected()) {
+      return &rejectedGeometry;
+    }
+    geode::EncodedPath encoded = encodeAtDeviceTolerance(path, rule);
+    if (encoded.rejected()) {
+      return nullptr;
+    }
+    transientTextEncodes.push_back(std::move(encoded));
+    return &transientTextEncodes.back();
+  }
+
+  /**
+   * Expands each glyph outline's stroke, skipping glyphs whose stroke is empty. Each expanded
+   * outline's storage is charged to the frame geometry budget as it is produced, so a chunk is
+   * never expanded past the budget before its strokes are encoded: once a charge fails, the frame
+   * is rejected, nothing more is expanded, and no outlines are returned. Release the returned
+   * outlines' charges with \ref releaseTextStrokeOutlines once they are drawn.
+   *
+   * @param glyphs Placed glyph outlines, in order.
+   * @param style Stroke to expand.
+   */
+  std::vector<Path> strokeGlyphOutlines(std::span<const Path> glyphs, const StrokeStyle& style) {
+    std::vector<Path> outlines;
+    outlines.reserve(glyphs.size());
+    for (const Path& glyph : glyphs) {
+      if (geometryBudget->rejected()) {
+        break;
+      }
+      Path stroked = glyph.strokeToFill(style, strokeFlattenTolerance());
+      if (stroked.empty()) {
+        continue;
+      }
+      countStrokeOutline(stroked);
+      const std::optional<std::size_t> bytes = stroked.retainedBytes();
+      if (!bytes.has_value() || !geometryBudget->reserve(0u, 0u, *bytes)) {
+        geometryBudget->reject();
+        break;
+      }
+      outlines.push_back(std::move(stroked));
+    }
+    if (geometryBudget->rejected()) {
+      releaseTextStrokeOutlines(outlines);
+      return {};
+    }
+    return outlines;
+  }
+
+  /// Releases the frame geometry charges \ref strokeGlyphOutlines made for \p outlines.
+  void releaseTextStrokeOutlines(std::span<const Path> outlines) {
+    for (const Path& outline : outlines) {
+      geometryBudget->release(0u, 0u, outline.retainedBytes().value_or(0u));
+    }
+  }
+
+  /// Most stroke outline points joined into one text stroke shape: far below the path encoder's
+  /// 1 << 20 limit, and it bounds how wide one shape of a long, heavily stroked line can get.
+  static constexpr std::size_t kMaximumTextStrokeGroupPoints = std::size_t{1} << 16;
+  /// \ref kMaximumTextStrokeGroupPoints, unless a test lowers it.
+  std::size_t textStrokeGroupPointLimit = kMaximumTextStrokeGroupPoints;
+
+  /// Bounds of each outline, grown by one device pixel, so outlines whose grown bounds do not meet
+  /// share no pixel.
+  std::vector<Box2d> grownTextStrokeBounds(std::span<const Path> outlines) const {
+    const Transform2d localFromDevice = deviceFromLocalTransform.inverse();
+    const double margin = std::max(localFromDevice.transformVector(Vector2d(1.0, 0.0)).length(),
+                                   localFromDevice.transformVector(Vector2d(0.0, 1.0)).length());
+    std::vector<Box2d> bounds;
+    bounds.reserve(outlines.size());
+    for (const Path& outline : outlines) {
+      bounds.push_back(outline.bounds().inflatedBy(margin));
+    }
+    return bounds;
+  }
+
+  /**
+   * Returns, for each box, a representative of its group from \ref BoxSweepGrouping: boxes that
+   * touch, directly or through other boxes, share a group. Each box tested against a group's
+   * bounds is counted in `counters.textStrokeBoundsTests`.
+   *
+   * @param boxes Boxes to group.
+   */
+  std::vector<std::size_t> touchingBoxSets(std::span<const Box2d> boxes) {
+    return BoxSweepGrouping(boxes).groups(counters.textStrokeBoundsTests);
+  }
+
+  /**
+   * Groups the stroke outlines of one text chunk into shapes. Outlines whose bounds, grown by a
+   * device pixel, touch, directly or through other outlines of the chunk, form one group, wherever
+   * they are in the run; outlines in different groups share no pixel. A group can also take in an
+   * outline that touches only the union of the group's bounds (see \ref BoxSweepGrouping); that
+   * outline shares no pixel with the group, so joining it changes how many shapes are drawn, not
+   * which pixels are covered or how often. A group is split, in run order, where its outline
+   * points would pass \ref textStrokeGroupPointLimit, and a pixel two parts both cover is then
+   * painted twice.
+   *
+   * @param outlines Stroke outlines of one text chunk's glyphs, in run order.
+   * @return Each group's outline indices, in run order.
+   */
+  std::vector<std::vector<std::size_t>> textStrokeGroups(std::span<const Path> outlines) {
+    const std::vector<std::size_t> sets = touchingBoxSets(grownTextStrokeBounds(outlines));
+    constexpr std::size_t kNoGroup = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> openGroupOfSet(outlines.size(), kNoGroup);
+    std::vector<std::vector<std::size_t>> groups;
+    std::vector<std::size_t> groupPoints;
+    for (std::size_t index = 0; index < outlines.size(); ++index) {
+      std::size_t& group = openGroupOfSet[sets[index]];
+      const std::size_t points = outlines[index].points().size();
+      if (group == kNoGroup || groupPoints[group] + points > textStrokeGroupPointLimit) {
+        group = groups.size();
+        groups.emplace_back();
+        groupPoints.push_back(0);
+      }
+      groups[group].push_back(index);
+      groupPoints[group] += points;
+    }
+    return groups;
+  }
+
+  /**
+   * Draws the stroke outlines of one text chunk's glyphs, joining each group from
+   * \ref textStrokeGroups into one NonZero shape, so a pixel where the strokes of touching glyphs
+   * overlap is covered once. A group the encoder rejects is drawn outline by outline, so overlaps
+   * inside it are painted twice, as when every glyph was its own shape; an outline that cannot be
+   * encoded on its own rejects the frame, as any path does.
+   *
+   * @param outlines Stroke outlines of the chunk's glyphs, in run order.
+   * @param draw Paints a shape: called with the joined outline and its encoding.
+   */
+  template <typename DrawFn>
+  void drawTextStrokeOutlines(std::span<const Path> outlines, const DrawFn& draw) {
+    for (const std::vector<std::size_t>& group : textStrokeGroups(outlines)) {
+      if (group.size() == 1) {
+        const Path& outline = outlines[group.front()];
+        draw(outline, encodeTransientGeometry(outline, FillRule::NonZero));
+        continue;
+      }
+      PathBuilder builder;
+      for (const std::size_t index : group) {
+        builder.addPath(outlines[index]);
+      }
+      const Path joined = builder.build();
+      if (const geode::EncodedPath* encoded =
+              encodeTransientGeometryOrSplit(joined, FillRule::NonZero)) {
+        draw(joined, encoded);
+        continue;
+      }
+      for (const std::size_t index : group) {
+        draw(outlines[index], encodeTransientGeometry(outlines[index], FillRule::NonZero));
+      }
+    }
   }
 
   /// Encode-side of the cache. Every path is admitted before insertion or transient upload.
@@ -6294,6 +6621,15 @@ void RendererGeode::setGeometryBudgetForTesting(std::size_t maximumDraws, std::s
   }
 }
 
+void RendererGeode::setPathEncoderItemLimitForTesting(std::size_t maximumItems) {
+  impl_->pathEncoderLimits.maximumEncodedGeometryItems =
+      std::min(geode::GeodePathEncoder::Limits{}.maximumEncodedGeometryItems, maximumItems);
+}
+
+void RendererGeode::setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints) {
+  impl_->textStrokeGroupPointLimit = std::min(Impl::kMaximumTextStrokeGroupPoints, maximumPoints);
+}
+
 void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
                                                std::uint64_t maximumBytes) {
   impl_->surfaceBudget->setLimitsForTesting({.bytes = maximumBytes, .surfaces = maximumSurfaces});
@@ -7845,6 +8181,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (span.strokeWidth > 0.0) {
           runStrokeParams.strokeWidth = span.strokeWidth;
         }
+        const std::span<const double> spanDash = span.strokeDashLengths();
+        runStrokeParams.dashArray.assign(spanDash.begin(), spanDash.end());
+        runStrokeParams.dashOffset = span.strokeDashOffset;
         if (!std::holds_alternative<PaintServer::None>(span.resolvedStroke)) {
           spanOverridesStroke = true;
           strokeServer = &span.resolvedStroke;
@@ -7907,6 +8246,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     };
     std::vector<RunGlyphOccurrence> runGlyphOccurrences;
     std::vector<Path> runGlyphPaths;
+    TextChunkRanges runChunks;
     if (glyphModes.residentFill || glyphModes.placedPaths) {
       runGlyphOccurrences.reserve(run.glyphs.size());
     }
@@ -7919,6 +8259,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const bool runNeedsGlyphGeometry = glyphModes.residentFill || glyphModes.placedPaths;
     for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
                                                    : std::span<const TextGlyph>()) {
+      runChunks.noteGlyph(glyph, runGlyphPaths.size());
       // The run's face is not bitmap-only here, so only a fallback face can be.
       const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, scale, false);
       if (!HasVectorGlyph(glyph, face)) {
@@ -8024,35 +8365,40 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         }
       }
     };
+    // Paints one stroke shape: a joined stroke outline and its encoding.
+    const auto drawStrokeShape = [&](const Path& stroked, const geode::EncodedPath* encoded) {
+      const FillRule strokeRule = FillRule::NonZero;
+      if (strokeIsGradient) {
+        // Gradient stroke: resolve against the text bbox (the *original*
+        // geometry, per SVG), fill the stroked outline.
+        impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
+                                      strokeRule, encoded);
+      } else if (usePatternStroke) {
+        impl_->syncTransform();
+        impl_->encoder->fillPathPattern(
+            stroked, strokeRule,
+            impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
+      } else {
+        impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
+      }
+    };
     const auto drawRunStroke = [&]() {
-      for (const Path& placed : runGlyphPaths) {
-        if (hasStrokePaint) {
-          // Stroke pieces share one winding and one draw, so overlaps stay covered
-          // without applying stroke opacity more than once within the glyph.
-          // Same device-aware tolerance as `drawPath`'s stroke: glyph outlines
-          // are submitted in text-local space and scaled on the GPU, so the
-          // flattening must track the draw transform or stroked glyphs facet
-          // at high zoom.
-          const Path stroked = placed.strokeToFill(*strokeStyle, impl_->strokeFlattenTolerance());
-          if (!stroked.empty()) {
-            impl_->countStrokeOutline(stroked);
-            const FillRule strokeRule = FillRule::NonZero;
-            const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(stroked, strokeRule);
-            if (strokeIsGradient) {
-              // Gradient stroke: resolve against the text bbox (the *original*
-              // geometry, per SVG), fill the stroked outline.
-              impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
-                                            strokeRule, encoded);
-            } else if (usePatternStroke) {
-              impl_->syncTransform();
-              impl_->encoder->fillPathPattern(
-                  stroked, strokeRule,
-                  impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
-            } else {
-              impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
-            }
-          }
-        }
+      if (!hasStrokePaint) {
+        return;
+      }
+      // Each text chunk of the run is stroked as one shape, as resvg strokes the part of a span in
+      // one chunk: the stroke pieces share one winding and one draw, so where the strokes of
+      // adjacent glyphs overlap, stroke opacity applies once. Each glyph's stroke is expanded on
+      // its own (stroking a path strokes its contours independently), with the same device-aware
+      // tolerance as `drawPath`'s stroke: glyph outlines are submitted in text-local space and
+      // scaled on the GPU, so the flattening must track the draw transform or stroked glyphs facet
+      // at high zoom.
+      const std::span<const Path> paths(runGlyphPaths);
+      for (const auto& [begin, end] : runChunks.ranges(paths.size())) {
+        const std::vector<Path> outlines =
+            impl_->strokeGlyphOutlines(paths.subspan(begin, end - begin), *strokeStyle);
+        impl_->drawTextStrokeOutlines(outlines, drawStrokeShape);
+        impl_->releaseTextStrokeOutlines(outlines);
       }
     };
 
