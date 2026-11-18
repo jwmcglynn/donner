@@ -560,10 +560,12 @@ private:
   /// NxM kernel convolution (feConvolveMatrix).
   /// @param input The input texture.
   /// @param primitive The feConvolveMatrix parameters.
+  /// @param wrapRegion Logical input region in the input texture's pixel coordinates.
   /// @return The convolved texture.
   FilterTexture applyConvolveMatrix(
       FilterResourceArena& arena, FilterTexture input,
-      const svg::components::filter_primitive::ConvolveMatrix& primitive);
+      const svg::components::filter_primitive::ConvolveMatrix& primitive,
+      const std::optional<Box2d>& wrapRegion);
 
   /// Perlin noise / fractal noise generator (feTurbulence).
   /// @param width Output texture width.

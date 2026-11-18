@@ -47,6 +47,17 @@ consteval bool ValidateConvolveMatrixArtifact() {
                                      offsetof(ConvolveMatrixParams, kernel),
                                      sizeof(ConvolveMatrixParams::kernel), ShaderScalarType::F32, 1,
                                      kConvolveMatrixKernelCapacity, sizeof(float)));
+  static_assert(shader.matchesMember("params", "wrapLeft", offsetof(ConvolveMatrixParams, wrapLeft),
+                                     sizeof(ConvolveMatrixParams::wrapLeft),
+                                     ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "wrapTop", offsetof(ConvolveMatrixParams, wrapTop),
+                                     sizeof(ConvolveMatrixParams::wrapTop), ShaderScalarType::I32));
+  static_assert(
+      shader.matchesMember("params", "wrapWidth", offsetof(ConvolveMatrixParams, wrapWidth),
+                           sizeof(ConvolveMatrixParams::wrapWidth), ShaderScalarType::I32));
+  static_assert(
+      shader.matchesMember("params", "wrapHeight", offsetof(ConvolveMatrixParams, wrapHeight),
+                           sizeof(ConvolveMatrixParams::wrapHeight), ShaderScalarType::I32));
   return true;
 }
 

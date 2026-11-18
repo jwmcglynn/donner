@@ -140,25 +140,53 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
 
 namespace {
 
+/// The full raster or a logical subrectangle used by wrapping samples.
+struct FloatSampleBounds {
+  int left;
+  int top;
+  int right;
+  int bottom;
+};
+
+FloatSampleBounds floatSampleBounds(int w, int h, ConvolveEdgeMode mode,
+                                    std::optional<ScreenIntRect> wrapRegion) {
+  if (mode != ConvolveEdgeMode::Wrap || !wrapRegion) {
+    return {0, 0, w, h};
+  }
+  return {static_cast<int>(std::min(wrapRegion->left(), static_cast<std::uint32_t>(w))),
+          static_cast<int>(std::min(wrapRegion->top(), static_cast<std::uint32_t>(h))),
+          static_cast<int>(std::min(wrapRegion->right(), static_cast<std::uint32_t>(w))),
+          static_cast<int>(std::min(wrapRegion->bottom(), static_cast<std::uint32_t>(h)))};
+}
+
+int wrapCoordinate(int value, int first, int length) {
+  const int relative = (value - first) % length;
+  return first + (relative < 0 ? relative + length : relative);
+}
+
 /// Fetch a premultiplied pixel from a float source with edge mode handling.
-/// Returns premultiplied RGBA as doubles in [0, 1].
-void fetchPixelFloat(const std::span<const float>& srcData, int w, int h, int x, int y,
-                     ConvolveEdgeMode edgeMode, double& r, double& g, double& b, double& a) {
-  if (x < 0 || x >= w || y < 0 || y >= h) {
+void fetchPixelFloat(const std::span<const float>& srcData, int stride, int x, int y,
+                     ConvolveEdgeMode edgeMode, const FloatSampleBounds& bounds, double& r,
+                     double& g, double& b, double& a) {
+  if (x < bounds.left || x >= bounds.right || y < bounds.top || y >= bounds.bottom) {
     switch (edgeMode) {
       case ConvolveEdgeMode::Duplicate:
-        x = std::clamp(x, 0, w - 1);
-        y = std::clamp(y, 0, h - 1);
+        x = std::clamp(x, bounds.left, bounds.right - 1);
+        y = std::clamp(y, bounds.top, bounds.bottom - 1);
         break;
       case ConvolveEdgeMode::Wrap:
-        x = ((x % w) + w) % w;
-        y = ((y % h) + h) % h;
+        if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
+          r = g = b = a = 0.0;
+          return;
+        }
+        x = wrapCoordinate(x, bounds.left, bounds.right - bounds.left);
+        y = wrapCoordinate(y, bounds.top, bounds.bottom - bounds.top);
         break;
       case ConvolveEdgeMode::None: r = g = b = a = 0.0; return;
     }
   }
 
-  const int idx = (y * w + x) * 4;
+  const int idx = (y * stride + x) * 4;
   r = srcData[idx + 0];
   g = srcData[idx + 1];
   b = srcData[idx + 2];
@@ -167,7 +195,8 @@ void fetchPixelFloat(const std::span<const float>& srcData, int w, int h, int x,
 
 }  // namespace
 
-void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolveParams& params) {
+void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolveParams& params,
+                    std::optional<ScreenIntRect> wrapRegion) {
   const int w = static_cast<int>(src.width());
   const int h = static_cast<int>(src.height());
 
@@ -183,6 +212,7 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
   auto dstData = dst.data();
 
   const ConvolveNormalization normalization(params.divisor);
+  const FloatSampleBounds bounds = floatSampleBounds(w, h, params.edgeMode, wrapRegion);
 
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
@@ -202,7 +232,7 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
               params.kernel[(params.orderY - 1 - ky) * params.orderX + (params.orderX - 1 - kx)];
 
           double pr, pg, pb, pa;
-          fetchPixelFloat(srcData, w, h, srcX, srcY, params.edgeMode, pr, pg, pb, pa);
+          fetchPixelFloat(srcData, w, srcX, srcY, params.edgeMode, bounds, pr, pg, pb, pa);
 
           if (params.preserveAlpha && pa > 0.0) {
             const double invA = 1.0 / pa;

@@ -2254,7 +2254,15 @@ FilterTexture FilterNodeExecution::apply(const fp::ComponentTransfer& primitive)
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::ConvolveMatrix& primitive) {
-  return engine.applyConvolveMatrix(arena, toNodeSpace(input), primitive);
+  std::optional<Box2d> wrapRegion;
+  if (primitive.edgeMode == fp::ConvolveMatrix::EdgeMode::Wrap) {
+    const Box2d inputRegion = coordinates.resolveInputSubregion(svg::FilterInputOrDefault(node, 0));
+    const auto bounded = svg::IntersectFilterBoxes(inputRegion, coordinates.filterRegion);
+    wrapRegion = bounded
+                     ? coordinates.deviceFromFilter.transformBox(*bounded) - execution.tileOrigin
+                     : Box2d::CreateEmpty(Vector2d::Zero());
+  }
+  return engine.applyConvolveMatrix(arena, toNodeSpace(input), primitive, wrapRegion);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Turbulence& primitive) {
@@ -2861,11 +2869,30 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
   return result;
 }
 
+/// Round outward to the raster cells occupied by the logical input image.
+void setConvolveWrapRegion(gpu::shader::programs::ConvolveMatrixParams& params, const Box2d& bounds,
+                           uint32_t width, uint32_t height) {
+  if (!(bounds.width() > 0 && bounds.height() > 0)) {
+    params.wrapWidth = 0;
+    params.wrapHeight = 0;
+    return;
+  }
+  const double maxX = static_cast<double>(width);
+  const double maxY = static_cast<double>(height);
+  params.wrapLeft = static_cast<int32_t>(std::floor(std::clamp(bounds.topLeft.x, 0.0, maxX)));
+  params.wrapTop = static_cast<int32_t>(std::floor(std::clamp(bounds.topLeft.y, 0.0, maxY)));
+  const auto right = static_cast<int32_t>(std::ceil(std::clamp(bounds.bottomRight.x, 0.0, maxX)));
+  const auto bottom = static_cast<int32_t>(std::ceil(std::clamp(bounds.bottomRight.y, 0.0, maxY)));
+  params.wrapWidth = right - params.wrapLeft;
+  params.wrapHeight = bottom - params.wrapTop;
+}
+
 }  // namespace
 
 FilterTexture GeodeFilterEngine::applyConvolveMatrix(
     FilterResourceArena& arena, FilterTexture input,
-    const svg::components::filter_primitive::ConvolveMatrix& primitive) {
+    const svg::components::filter_primitive::ConvolveMatrix& primitive,
+    const std::optional<Box2d>& wrapRegion) {
   if (!input) {
     return {};
   }
@@ -2875,7 +2902,7 @@ FilterTexture GeodeFilterEngine::applyConvolveMatrix(
 
   const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
   const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
-  const std::optional<gpu::shader::programs::ConvolveMatrixParams> params =
+  std::optional<gpu::shader::programs::ConvolveMatrixParams> params =
       BuildConvolveMatrixParams(primitive);
   if (!params.has_value()) {
     if (verbose_) {
@@ -2886,6 +2913,10 @@ FilterTexture GeodeFilterEngine::applyConvolveMatrix(
     // Return a transparent texture (matches CPU reference behavior).
     return createTransparentIntermediateTexture(arena, width, height,
                                                 "FilterConvolveMatrixTransparent");
+  }
+
+  if (wrapRegion) {
+    setConvolveWrapRegion(*params, *wrapRegion, width, height);
   }
 
   const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{

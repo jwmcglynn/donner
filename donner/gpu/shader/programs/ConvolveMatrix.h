@@ -23,9 +23,13 @@ struct ConvolveMatrixParams {
   uint32_t edgeMode;       //!< Zero duplicates, one wraps, and two samples transparent black.
   uint32_t preserveAlpha;  //!< One retains source alpha and convolves straight RGB.
   float kernel[kConvolveMatrixKernelCapacity];  //!< Coefficients rotated when sampled.
+  int32_t wrapLeft = 0;                         //!< First column of the logical input image.
+  int32_t wrapTop = 0;                          //!< First row of the logical input image.
+  int32_t wrapWidth = -1;   //!< Width of the wrap domain. Negative selects the full texture.
+  int32_t wrapHeight = -1;  //!< Height of the wrap domain. Negative selects the full texture.
 };
 
-static_assert(sizeof(ConvolveMatrixParams) == 132);
+static_assert(sizeof(ConvolveMatrixParams) == 148);
 static_assert(offsetof(ConvolveMatrixParams, kernel) == 32);
 
 /**

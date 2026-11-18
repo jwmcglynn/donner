@@ -4996,17 +4996,20 @@ TEST_F(RendererRegressionTests, ConvolveWrapUsesTheLogicalInputEdge) {
         <filter id="f" filterUnits="userSpaceOnUse" x="8" y="8" width="8" height="8">
           <feOffset x="10" y="10" width="4" height="4" result="bounded"/>
           <feConvolveMatrix in="bounded" order="3 1" kernelMatrix="0 0 1" edgeMode="wrap"/>
-        </filter>)svg") : std::string(R"svg(
+        </filter>)svg")
+                                       : std::string(R"svg(
         <filter id="f" filterUnits="userSpaceOnUse" x="10" y="10" width="4" height="4">
           <feConvolveMatrix order="3 1" kernelMatrix="0 0 1" edgeMode="wrap"/>
         </filter>)svg");
       SCOPED_TRACE(named ? "bounded previous result" : "source graphic");
-      SVGDocument document = instantiateSubtree(
-          source + "<g transform=\"" + std::string(test.transform) +
-          "\"><g filter=\"url(#f)\">" + std::string(kMarkup), {}, Vector2i(80, 64));
+      SVGDocument document =
+          instantiateSubtree(source + "<g transform=\"" + std::string(test.transform) +
+                                 "\"><g filter=\"url(#f)\">" + std::string(kMarkup),
+                             {}, Vector2i(80, 64));
       const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
       EXPECT_THAT(PixelAt(actual, test.wrapped.x, test.wrapped.y), test::RgbaEq(0, 0, 255, 255));
-      EXPECT_THAT(PixelAt(actual, test.transparent.x, test.transparent.y), test::RgbaEq(0, 0, 0, 0));
+      EXPECT_THAT(PixelAt(actual, test.transparent.x, test.transparent.y),
+                  test::RgbaEq(0, 0, 0, 0));
     }
   }
 }
