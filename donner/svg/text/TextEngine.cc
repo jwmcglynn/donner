@@ -7811,10 +7811,21 @@ private:
     double advance = 0.0;
     double normal = 0.0;
     const TextPathCluster* previous = nullptr;
+    std::optional<uint32_t> paragraph;
+    std::optional<BidiPathOrigin> origin;
     for (auto& cluster : clusters) {
       const auto& placement = *cluster.bidi;
-      setBidiPathChunkStart(cluster, previous);
+      const uint32_t clusterParagraph = normalBidi_.characters[placement.character].paragraph;
+      cluster.absoluteAlong.reset();
+      if (paragraph != clusterParagraph) {
+        paragraph = clusterParagraph;
+        origin = setBidiPathChunkStart(cluster, clusterParagraph);
+      }
       advance += placement.leadingAdvance + bidiPathKern(cluster, previous);
+      if (origin && origin->character == placement.character) {
+        // The absolute reset already includes the logical origin's dx.
+        advance -= origin->dx;
+      }
       normal += placement.normalDisplacement;
       cluster.pathOffset = advance;
       cluster.baselineOffset = normal + placement.baseline;
@@ -7823,19 +7834,23 @@ private:
     }
   }
 
-  void setBidiPathChunkStart(TextPathCluster& cluster, const TextPathCluster* previous) {
-    cluster.absoluteAlong.reset();
-    const auto& source = normalBidi_.characters[cluster.bidi->character];
-    if (previous &&
-        normalBidi_.characters[previous->bidi->character].paragraph == source.paragraph) {
-      return;
-    }
-    if (const auto origin = firstBidiAddressable(normalBidi_.paragraphs[source.paragraph])) {
+  struct BidiPathOrigin {
+    size_t character;
+    double dx;
+  };
+
+  std::optional<BidiPathOrigin> setBidiPathChunkStart(TextPathCluster& cluster, size_t paragraph) {
+    if (const auto origin = firstBidiAddressable(normalBidi_.paragraphs[paragraph])) {
       const auto& logical = normalBidi_.characters[*origin];
       const auto& span = text_.spans[logical.span];
       cluster.absoluteAlong = TextPathAbsoluteAlong(span, logical.position, params_);
       cluster.circuitAnchor = span.textAnchor;
+      if (cluster.absoluteAlong) {
+        return BidiPathOrigin{*origin, TextPathDisplacement(span.dxList, logical.position, params_,
+                                                            Lengthd::Extent::X)};
+      }
     }
+    return std::nullopt;
   }
 
   double bidiPathKern(const TextPathCluster& cluster, const TextPathCluster* previous) const {
