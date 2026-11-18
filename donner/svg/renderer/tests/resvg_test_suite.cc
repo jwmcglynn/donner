@@ -1507,6 +1507,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "Reference rasterizer generation: 4x4 supersampled coverage on the "
                          "crosshair and diacritic edges; analytic residual 257 px, supersampled "
                          "1 px; a 1 px text shift reaches 468")},
+                    // These three differ from their PNGs only in edge coverage: the crosshair
+                    // and glyphs in the older snapshot use a different antialiasing grid.
                     // Only the full tier applies the Amiri font's GSUB fi ligature. The SVGs
                     // swap the order of the Amiri and Noto Sans runs to test both boundaries.
                     {"ligatures-handling-in-mixed-fonts-1.svg",
