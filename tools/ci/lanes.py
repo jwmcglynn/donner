@@ -115,10 +115,7 @@ REQUIRE_EXECUTOR = (
 REMOTE_TRANSPORT = ("--remote_local_fallback=false",
                     "--incompatible_remote_local_fallback_for_remote_cache=false",
                     "--remote_timeout=60s")
-# Keep this Starlark semantics flag identical through fetch, build and test so the venue
-# aspect can inspect the configured actions without reloading the repository at the Test step.
-VENUE_METADATA = "--experimental_google_legacy_api"
-SELF_HOSTED_REMOTE = (REMOTE_ONLY, VENUE_METADATA, *REMOTE_TRANSPORT)
+SELF_HOSTED_REMOTE = (REMOTE_ONLY, *REMOTE_TRANSPORT)
 VENUE_ANALYSIS = (
     "--aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue",
     "--noexperimental_merged_skyframe_analysis_execution",
@@ -185,7 +182,7 @@ LINUX_LANES = {
             RequireSelection("the test step"),
             MapRemoteGpu(),
             bazel("test", *LINUX, "--test_output=errors", REMOTE_OR_DISPLAY,
-                  VENUE_METADATA, *REMOTE_TRANSPORT, *VENUE_ANALYSIS, *DIAG_TEST,
+                  *REMOTE_TRANSPORT, *VENUE_ANALYSIS, *DIAG_TEST,
                   tags("-manual", "-perf", "-local-gpu-isolated", "-fuzz_soak"),
                   *diagnostics("test"), REMOTE_GPU_SELECTED,
                   wrappers=TEST_WRAPPER + watchdog("test"), startup=(REQUIRE_EXECUTOR,)),

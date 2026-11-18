@@ -308,7 +308,6 @@ COUNTERPART_ALLOWLIST = {
        "own executor. Tests remain on the hosted runner for its display dependencies."),
     **_counterpart_entries("linux", "linux-self-hosted", [
         ("Build", "flag-pr-only", lanes.REMOTE_ONLY),
-        ("*", "flag-pr-only", lanes.VENUE_METADATA),
         ("*", "flag-pr-only", "--remote_local_fallback=false"),
         ("*", "flag-pr-only", "--incompatible_remote_local_fallback_for_remote_cache=false"),
         ("*", "flag-pr-only", "--remote_timeout=60s"),
@@ -363,7 +362,6 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
     ("Test", "startup-pr-only", lanes.REQUIRE_EXECUTOR),
     ("Test", "flag-pr-only", lanes.REMOTE_OR_DISPLAY),
     ("Build", "flag-pr-only", lanes.REMOTE_ONLY),
-    ("*", "flag-pr-only", lanes.VENUE_METADATA),
     *[("Test", "flag-pr-only", flag) for flag in lanes.VENUE_ANALYSIS],
     ("Test deterministic fuzzer soak wrapper", "flag-pr-only", lanes.REMOTE_ONLY),
     ("Test", "tag-filter-main-only", "-ci-remote-gpu"),

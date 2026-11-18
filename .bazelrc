@@ -47,6 +47,10 @@ common --noexperimental_collect_system_network_usage
 
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
 build --enable_platform_specific_config
+query --enable_platform_specific_config
+# The Linux venue aspect reads configured TestRunner execution_info. Starlark semantics are an
+# external repository cache input, so use the same setting for native CI, CMake and plain queries.
+common:linux --experimental_google_legacy_api
 
 # Recover within the active build when an action-cache entry references an
 # input that has already been evicted from a remote content-addressable store.

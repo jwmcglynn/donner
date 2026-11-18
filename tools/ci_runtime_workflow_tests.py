@@ -1116,6 +1116,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for line in invocations:
             self.assertIn('xvfb-run -a -s "$xvfb_server_args" ', line)
 
+        self.assertIn("common:linux --experimental_google_legacy_api", self.bazelrc.splitlines())
+        for command in ("build", "query"):
+            self.assertIn(command + " --enable_platform_specific_config", self.bazelrc.splitlines())
         self.assertNotIn("Test local Xvfb targets", local)
         test = self._step_body(local, "Test")
         for flag in ("--strategy=TestRunner=remote,local", "--remote_local_fallback=false",
