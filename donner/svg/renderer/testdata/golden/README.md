@@ -324,6 +324,35 @@ Corpus `fonts/NotoSans-Regular.ttf` SHA-256
 
 [svg2-bbox]: https://www.w3.org/TR/SVG2/coords.html#BoundingBoxes
 
+## Gaussian blur primitive subregions
+
+The `filters/filter/subregion-and-primitiveUnits=objectBoundingBox-{1,2}.svg`
+inputs express the same half-size primitive as a fraction and as a percentage.
+The 160-unit object box gives a blur deviation of 1.6 units and a primitive
+width and height of 80. Its default origin is the filter region origin (4,4).
+`half-box-blur.svg` expresses the region in user units and clips the blurred
+rectangle explicitly. The historical PNG stores reduced alpha even in the
+opaque interior. Rendering the original input with resvg 0.49.0 also extends
+the clip past the expected edge. Chrome 158 and Firefox 157 agree with the
+explicit construction. At 800×800 the fixture’s 0.5-unit crosshair spans two
+whole pixels, so fractional crosshair sampling does not mask filter regressions.
+
+From this directory, reproduce the shared 800×800 PNG with:
+
+```sh
+resvg --width 800 --height 800 half-box-blur.svg resvg-half-box-blur.png
+```
+
+For `filters/filter/with-subregion-3.svg`, the first blur is clipped at x=135
+on the original 500×500 canvas. The second blur places the half-alpha crossing
+at x=135 on the interior scanline y=100 in Chrome, Firefox and resvg 0.49.0.
+The historical PNG crosses at x=133.32. `firefox-double-subregion-blur.png`
+comes from Firefox 157.0 at 500×500. To reproduce it, give the original root
+SVG explicit width and height of 500, decode it as an SVG image, draw it at
+(0,0) at its intrinsic size on a transparent 500×500 sRGB HTML canvas, and
+export that canvas as PNG. All three tests compare the original SVG inputs
+at the default threshold and count limit.
+
 ## Nearest-neighbor sampling for `on-feImage`
 
 The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
@@ -383,6 +412,25 @@ This reference qualifies the full-text CPU rendering path. Geode currently skips
 bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
+
+### Color emoji bitmap sampling
+
+`text/text/compound-emojis` and `text/text/emojis` use 500 × 500 resvg v0.49.0
+renders of the unchanged corpus SVGs with the bundled Noto Color Emoji font. The
+first scene draws one joined rainbow flag. The second draws four centered faces.
+The full CPU text tier agrees with resvg on the visible color bounds of every
+glyph. The remaining differences are compatible with bitmap resampling.
+
+| Fixture | Differences at 0.02 | Differences at 0.10 |
+| --- | ---: | ---: |
+| `compound-emojis` | 375 | 0 |
+| `emojis` | 657 | 0 |
+
+The comparison uses 0.10 and the ordinary 100-pixel allowance. The Linux and
+macOS resvg renders are byte-identical, as are the two sets of Donner outputs.
+The corpus [BUILD file](../../../../../third_party/resvg-test-suite/BUILD.bazel)
+records the reproduction command and checksums. Both fixtures require full CPU
+text for the font's color bitmap strikes.
 
 ## Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent`
 

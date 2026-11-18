@@ -36,6 +36,35 @@ unchanged; the reference remains under the MIT notice in LICENSE-resvg-MIT.
   tests/text/textLength/zero.png
   SHA256: 5d16080849d72f911878f6ba7f1a10674e427b1969b6a09317847c0ca7e963d0
 
+The following 500x500 references were rendered with the resvg v0.49.0 release CLI
+(revision 66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba) from the unchanged SVGs.
+The MIT notice is in LICENSE-resvg-MIT. Run `resvg --width 500 --height 500`
+with each original SVG and its PNG path.
+
+The transformed turbulence fixture uses linearRGB. A fixed-seed noise control
+agrees with the sampled Donner output, and the released image keeps the default
+comparison. The explicit sRGB control eliminates the measured Donner/resvg
+difference. The archived image also differs in alpha, which is independent of
+the color transfer.
+
+The four marker fixtures draw the same five clipped squares and produce the same
+resvg image. The top clip edge covers exactly half of the pixel at (230, 12).
+The resvg reference has alpha 127 there, and equivalent rectangles give 128
+in Firefox and Chrome. The Chrome marker and Donner Metal captures give 0 and
+255 respectively. The default comparator excludes antialiased edges. Its passing
+result permits this difference in the underlying clip coverage.
+
+  tests/filters/feTurbulence/complex-transform.png
+  SHA256: 1eadc77ae59a0ad99e590b86a13179303e990ae1783c274e003d71f2ada80d4d
+  tests/painting/marker/default-clip.png
+  SHA256: 7c4a332633c76f71c1681ca14aadc3c4324d0320bb33c5f89cefcf7b2299fb42
+  tests/painting/marker/with-a-large-stroke.png
+  SHA256: 7c4a332633c76f71c1681ca14aadc3c4324d0320bb33c5f89cefcf7b2299fb42
+  tests/painting/marker/with-invalid-markerUnits.png
+  SHA256: 7c4a332633c76f71c1681ca14aadc3c4324d0320bb33c5f89cefcf7b2299fb42
+  tests/painting/marker/with-markerUnits=userSpaceOnUse.png
+  SHA256: 7c4a332633c76f71c1681ca14aadc3c4324d0320bb33c5f89cefcf7b2299fb42
+
 Refreshed references: these tests now live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). The snapshot
 above predates resvg placing sideways vertical glyphs on the central baseline
@@ -103,6 +132,26 @@ The snapshot differs at the crosshair and glyph edges.
   tests/text/tspan/tspan-bbox-2.png
   tests/text/text/ligatures-handling-in-mixed-fonts-1.png
   tests/text/text/ligatures-handling-in-mixed-fonts-2.png
+
+The two color emoji PNGs were regenerated at their original 500x500 size with the
+resvg v0.49.0 release CLI and the bundled NotoColorEmoji.ttf, under the same MIT
+notice. These renders use the unchanged vendored SVGs.
+
+  for stem in compound-emojis emojis; do
+    resvg --skip-system-fonts --use-font-file fonts/NotoColorEmoji.ttf \
+      --width 500 --height 500 "tests/text/text/$stem.svg" "tests/text/text/$stem.png"
+  done
+
+  fonts/NotoColorEmoji.ttf
+  SHA256: 21fc478e003fc871200ba3bcf4215295a80e06a5c1b96f5368adc2183956f01a
+  tests/text/text/compound-emojis.svg
+  SHA256: cf81c26730434118cc90e21901645af25c8a4b1559c42932a60a2476a60b98d5
+  tests/text/text/compound-emojis.png
+  SHA256: feb28562eb2ba441bd1cab1b9a8bf77a5a6584b9ec1868bcda8b4ad712278d66
+  tests/text/text/emojis.svg
+  SHA256: d0734e65187b8a58cca7ffd46573589cc009a51950c2dfa122278e79f51be837
+  tests/text/text/emojis.png
+  SHA256: ab8dd188c3a11e2ebf4c9bce19e8bfc7fcde82d41eb46935f420998063aaa6e6
 
 From the same revision and license, these PNGs were replaced with their 300x300
 versions. The snapshot's vertical.png placed its sideways glyphs 0.28 units across
@@ -293,6 +342,18 @@ byte-identical at both revisions.
   SHA256: d36c7e4d895c1d274b89f191f751df376d218f34fd54ecff3050af632f6fa648
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
   SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
+
+The 500x500 point-light specular reference is a fresh render of the unchanged SVG
+with the resvg v0.49.0 release CLI under the same license. The point light sits
+directly above the flat center of the opaque gradient. Its specular constant
+and color give a saturated opaque highlight at the center. The snapshot drops
+that highlight to zero alpha.
+
+  resvg --width 500 --height 500 tests/filters/feSpecularLighting/with-fePointLight.svg \
+    tests/filters/feSpecularLighting/with-fePointLight.png
+
+  tests/filters/feSpecularLighting/with-fePointLight.png
+  SHA256: 7ca2b373b0188e04b08892eeadc3236bd8846d46df1db6ff7c8a7cd43d5bb0f0
 
 The 300x300 edgeMode=wrap PNG below is byte-identical to resvg v0.49.0 from the same
 revision and license. Its SVG is unchanged. The snapshot's 500x500 PNG reduces the
