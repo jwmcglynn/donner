@@ -821,6 +821,7 @@ try-import %workspace%/.bazelrc.user
 
 # The test targets transition to their own target platforms in this invocation.
 build:ci-platforms --config=ci-test-lane
+build:ci-platforms --platforms=//tools/ci:linux_ci
 build:ci-platforms --extra_execution_platforms=//tools/ci:linux_ci,//tools/ci:remote_macos_aarch64
 build:ci-platforms --use_target_platform_for_tests
 build:ci-platforms --spawn_strategy=remote

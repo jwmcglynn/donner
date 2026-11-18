@@ -810,7 +810,7 @@ py_test(
 
 platform(
     name = "linux_ci",
-    parents = ["//:linux_aarch64"],
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
     exec_properties = {"OSFamily": "linux", "ISA": "aarch64", "container-image": "none"},
     visibility = ["//visibility:public"],
 )
@@ -820,6 +820,7 @@ platform(
     parents = [":remote_macos_aarch64"],
     flags = [
         "--host_platform=//tools/ci:remote_macos_aarch64",
+        "--//build_defs:llvm_latest=0",
         "--xcode_version_config=//tools/ci:remote_macos_xcodes",
         "--xcode_version=27.2",
         "--macos_minimum_os=13.3",
