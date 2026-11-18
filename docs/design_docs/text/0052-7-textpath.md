@@ -104,7 +104,6 @@ Any golden or tolerance change requires explicit human approval after visual ret
 |------|---------|--------|
 | closed-path | threshold 0.1, 400 px | AA diffs |
 | dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
-| with-path, with-path-and-xlink-href | threshold 0.89 | Opaque reference background under the checkerboard comparison |
 | method=stretch | golden | The snapshot depicts align placement. The Donner golden guards glyph warping. |
 | mixed-children-1, mixed-children-2, very-long-text | golden | SVG 2 continues text at the path end point. |
 | side=right | threshold 0.05 | Half-turned glyph edges |
@@ -112,12 +111,14 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
 | writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
 
+For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
+[fixture coverage matrix](../../spec_audit/test_coverage.md#text-layout-and-fonts).
+
 ### Skipped and render-only cases
 
 | Test | Disposition |
 | --- | --- |
 | with-filter | Skip. The blur exposes a qualified glyph-coverage difference. |
-| with-invalid-path-and-xlink-href | Skip. The reference resolves a relative external URL as a local fragment. |
 | complex | Render only. The PNG is the suite's undefined-behavior marker. |
 | with-baseline-shift-and-rotate | Render only. The interaction has no defined result in this fixture. |
 

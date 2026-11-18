@@ -1692,12 +1692,9 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
                               "5% lighter than the reference's, which only a blur makes visible "
                               "away from the glyph edges")},
-                {"with-invalid-path-and-xlink-href.svg",
-                 Params::Skip("Reference disagrees with the corpus: after invalid `path` is "
-                              "ignored, relative `xlink:href=\"path1\"` names an external "
-                              "document, not the local element. Without an admitted external SVG "
-                              "resource it is unresolved; independent control-scene coverage pins "
-                              "that policy")},
+                // An invalid path falls back to xlink:href. The relative URL names an external
+                // document and is unresolved in this fixture, leaving the guide path and frame.
+                {"with-invalid-path-and-xlink-href.svg", ResvgV049Reference()},
                 {"with-rotate.svg", ResvgV049Reference()},
                 {"with-text-anchor.svg", ResvgV049Reference()},
                 {"with-transform-on-a-referenced-path.svg", ResvgV049Reference()},
