@@ -110,6 +110,15 @@ ImageComparisonParams ColorMatrixIdentityGolden() {
       "Reference disagreement: identity output; the reference stores linearRGB in 8 bits");
 }
 
+/// These references preserve the vendored filter pixels. Only the independently outlined
+/// labels use each backend's path coverage. Both path arguments refer to string literals.
+ImageComparisonParams ColorAdjustReference(std::string_view cpuPath, std::string_view geodePath) {
+  return Params::WithGoldenOverride(cpuPath, kDefaultThreshold,
+                                    "Reference disagreement: font smoothing on labels; original "
+                                    "filter pixels and per-backend coverage of usvg label outlines")
+      .withGeodeGoldenOverride(geodePath);
+}
+
 /// Params for a reference replaced by its 300x300 rendering from resvg release v0.49.0; the
 /// provenance is recorded in third_party/resvg-test-suite/BUILD.bazel.
 ImageComparisonParams ResvgV049Reference() {
@@ -489,63 +498,41 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG applies functions around a missing "
                               "URL; Filter Effects ignores the entire chain "
                               "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
-                // Residuals are 354 simple, 370 full and 375 Geode pixels; under 4x4
-                // supersampled coverage they are 302 and 297, so these PNGs are not only a
-                // rasterizer generation apart. Against resvg v0.49.0's rendering the labels
-                // compare at 5 (simple) and 52 (full) pixels under 4x4 coverage. A 1 px label
-                // shift reaches 1508 pixels, and a 10% change to the brightness, opacity or sepia
-                // amount reaches 5358 or more; the grayscale change stays under the 0.02 color
-                // threshold for every pixel. The registration parser reads each entry, so the
-                // identical budget is spelled out per case.
                 {"color-adjust-functions-0percent.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-0percent.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-0percent.png")},
                 {"color-adjust-functions-100percent.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-100percent.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-100percent.png")},
                 {"color-adjust-functions-2.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-200percent.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-200percent.png")},
                 {"color-adjust-functions-200percent.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-200percent.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-200percent.png")},
                 {"color-adjust-functions-50percent.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-50percent.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-50percent.png")},
                 {"color-adjust-functions-default-value.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-100percent.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-100percent.png")},
                 {"color-adjust-functions-negative.svg",
-                 WithMaxPixels(390,
-                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
-                               "labels about 14% heavier, with 4x4 supersampled coverage; "
-                               "residual confined to the three label bands; analytic residual "
-                               "375 px, supersampled 302 px; filtered squares compare exactly "
-                               "(#1167, #1169)")},
+                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                      "donner-color-adjust-functions-negative.png",
+                                      "donner/svg/renderer/testdata/golden/geode/"
+                                      "donner-color-adjust-functions-negative.png")},
                 // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"drop-shadow-function-color-last.svg",
                  DropShadowFunctionGolden(
@@ -1243,9 +1230,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"rtl-with-vertical-writing-mode.svg",
                      Params::UndefinedBehavior("rtl with vertical writing-mode (svgwg#618)")},
                     {"rtl.svg",
-                     Params::Skip("Reference disagreement: the reference shapes Arabic with Noto "
-                                  "Sans Arabic, which the test fonts lack; Donner falls back to "
-                                  "Amiri. Order, anchoring and the Latin run match")},
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1650,18 +1635,25 @@ INSTANTIATE_TEST_SUITE_P(
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
+                // The vendored PNG is byte-identical to simple-case.png (align placement), so it
+                // does not depict method="stretch". The golden is Donner's own rendering, a
+                // regression guard; testdata/golden/README.md records its evidence and
+                // regeneration.
                 {"method=stretch.svg",
-                 Params::Skip("Implemented by warping outline endpoints and control points along "
-                              "path normals; the vendored reference is byte-identical to "
-                              "simple-case.png and therefore pins align placement. Independent "
-                              "geometry and renderer regressions cover the stretch contract")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-method=stretch.png")
+                     .withReason("Reference disagreement: the vendored PNG is align placement")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
-                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
+                // SVG 2 continues the text after a textPath from the path's end point; the
+                // vendored PNG continues from the end of the glyphs on the path, so the golden is
+                // Donner's own rendering; testdata/golden/README.md records its evidence.
                 {"mixed-children-2.svg",
-                 Params::Skip("SVG 2 positions text after textPath at the geometric path endpoint; "
-                              "the reference continues from the occupied text extent")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png")
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"nested.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-nested.png")
                      .withReason("Minor char")},
@@ -1713,7 +1705,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
-                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
                 {"with-baseline-shift.svg",
