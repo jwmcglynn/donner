@@ -23,6 +23,170 @@ Both compare at the ordinary 100-pixel budget. `dy-with-tiny-coordinates` sets a
 under `scale(100)`; its former 1100-pixel allowance covered full-tier advances rounded to 1/64
 pixel of that tiny face, which the full tier no longer does.
 
+## Donner-rendered textPath/method=stretch reference
+
+`resvg-method=stretch.png` is Donner's own rendering of the unchanged corpus
+`text/textPath/method=stretch.svg`. It is used because the vendored PNG does not depict
+the feature: it is byte-identical to the original snapshot’s `text/textPath/simple-case.png`, which is
+`method="align"` placement, and the suite's `results.csv` flags every engine except svgnet
+as failing the case. [SVG 2 `method="stretch"`](https://www.w3.org/TR/SVG2/text.html#TextPathElementMethodAttribute)
+converts glyph outlines into paths whose points are moved along the path's normals, so
+glyphs bend with the path.
+
+This reference is a regression guard for Donner's warp, not an independent oracle. It
+differs from the vendored align image in 4664 pixels. The warp is pinned by geometry
+and renderer tests: `TextEngineTest.TextPathStretchFollowsEachGlyphChord`,
+`TextPathStretchKeepsCombiningMarkInBaseClusterFrame` and
+`TextPathStretchMappingStopsAtItsOwningRunRange` pin the per-glyph frame;
+`TextEngineScriptedTest.StretchTextPathRotatesShapedOffsetsLikeAlign` pins shaped
+offsets against align; and `TextPathStretchCurvedGeometryDiffersFromAlign` and the other
+`RendererPublicApiTest.TextPathStretch*` cases pin the curved outlines. The independent
+check is `RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`,
+which requires stretch on a straight path to equal ordinary rotated text.
+
+The image was created from the simple text tier on TinySkia with the suite's
+golden-creation path, with the renderer sources of main at
+`630d99965cc3d65f05a5c1819b334bbf30cbf133`. The simple text tier matches it with no
+differing pixels and the full text tier differs in 3 pixels, within the default
+100-pixel budget; the Geode resvg lane skips `text/*` rows through its backend
+feature gate.
+
+Corpus SVG SHA-256: `bcd6cbd182b1055635b780924dd32e2021f3a5994177fd616ebd0f98d0c7fc28`.
+
+Reference PNG SHA-256: `ba6c92599b34f0327da5a06536fa4b2f36d8487b83cab4138caa6be03f0e7626`.
+
+To regenerate after an intended rendering change, delete the image, run the
+command below from the repository root, and review the new image before
+committing it:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-method=stretch.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*method_stretch'
+```
+
+## Donner-rendered textPath continuation references
+
+`resvg-mixed-children-1.png` and `resvg-very-long-text.png` are Donner's own renderings of
+the unchanged corpus `text/textPath/mixed-children-1.svg` and `very-long-text.svg`. In both,
+a `textPath` ends with a space and a green `Text` follows it.
+[SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules)
+continue the text after a `textPath` from the end point of the path, and
+[CSS Text 3 section 4.1.1](https://www.w3.org/TR/css-text-3/#white-space-phase-1) keeps the
+textPath's trailing space on the path and collapses the space after it, so `Text` starts at
+the end point. The vendored PNGs continue from the end of the glyphs on the path instead.
+
+Ink of the green `Text`, in device px at the 500x500 (2.5x) canvas; the Chrome column is a
+Chrome 157 rendering of the same SVG with the corpus `NotoSans-Regular.ttf` loaded through
+`@font-face`:
+
+| Case             | Path end point | Vendored PNG         | Chrome 157           | This reference       |
+| ---------------- | -------------- | -------------------- | -------------------- | -------------------- |
+| mixed-children-1 | (450, 250)     | x 419-499, y 146-188 | x 451-499, y 207-249 | x 451-499, y 207-249 |
+| very-long-text   | (250, 250)     | x 290-402, y 210-252 | x 251-363, y 207-249 | x 251-363, y 207-249 |
+
+Rendered headless at 500x500 with the suite fonts and compared at the suite's default settings,
+Chromium 151 differs from these references by 67 pixels (mixed-children-1) and 31 pixels
+(very-long-text), all on glyph edges. Firefox 153 differs by 589 and 1,197 pixels, all at the
+green `Text`, because it does not continue the text after a `textPath` from the path's end
+point.
+
+`TextEngineScriptedTest.PostTextPathCursorBoundarySpaceStaysOnThePath` pins the collapse
+rule. The images were created from the simple text tier on TinySkia with the suite's
+golden-creation path, at the collapse rule change. The Geode resvg lane skips `text/*` rows
+through its backend feature gate.
+
+| Case             | Corpus SVG SHA-256                                                 | Reference PNG SHA-256                                              |
+| ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| mixed-children-1 | `1d9adcd5eff2c995932b4276b9d22713e470ed75c6168deffd855544bca46fcd` | `2ea922a8be96b59e9ed1950eae3bfcda2368710c80a8a6d4a24eb5db6d92a054` |
+| very-long-text   | `17eba4ca25ea86b8241dab58d646ce9ea5b64411e8e24ff084b1ea209099aa59` | `6392266f206470a9459514291d4b7b811f3a0b9d406c7fc2d81fdb3ded914021` |
+
+To regenerate after an intended rendering change, delete the images, run the command below
+from the repository root, and review the new images before committing them:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png donner/svg/renderer/testdata/golden/resvg-very-long-text.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_1:TextTextPath/*very_long_text'
+```
+
+## Donner-rendered textPath/mixed-children-2 reference
+
+`resvg-mixed-children-2.png` is Donner's own rendering of the unchanged corpus
+`text/textPath/mixed-children-2.svg`. It is used because the vendored PNG does not follow
+[SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules),
+which continue the text after a `textPath` from the end point of the path: the PNG continues
+`long` and the trailing `.` from the end of the glyphs laid out on each path instead. The
+suite's `results.csv` flags Chrome and Firefox as failing the case and Safari and resvg as
+passing it.
+
+Each `textPath` here ends with a space and is followed by more spaced text.
+[CSS Text 3 section 4.1.1](https://www.w3.org/TR/css-text-3/#white-space-phase-1) removes a
+collapsible space that follows another one across element boundaries, so the textPath's own
+trailing space stays on the path and the text after it starts at the end point. Two browser
+behaviors bear on this row, measured headless with the corpus font loaded through `@font-face`:
+- Space attribution. Chrome 157 and Firefox 160 both keep the trailing space on the textPath:
+  `getNumberOfChars()` is 5 for each textPath and for the green tspan (`very `, `long `,
+  `text `).
+- Continuation. Chrome 157 starts the text after each path at that path's end point (below).
+  Firefox 160 does not: `getStartPositionOfChar` puts the `l` of `long` at user (54.12, 0) and
+  the `.` at (49.32, 0), so `long` lands on the top edge and the `.` falls outside the canvas.
+  At the suite's default settings, Chromium 151 differs from this reference by 46 pixels, all on
+  glyph edges, and Firefox 153 by 1,458 pixels.
+
+Evidence, measured as ink bounding boxes in device px at the 500x500 (2.5x) canvas. The Chrome
+column is a Chrome 157 rendering of the same SVG with the corpus `NotoSans-Regular.ttf` loaded
+through `@font-face`; Chrome's `getStartPositionOfChar` puts the first character of each run
+after a path at exactly that path's end point.
+
+| Ink          | Path end point | Vendored PNG         | Chrome 157           | This reference       |
+| ------------ | -------------- | -------------------- | -------------------- | -------------------- |
+| green `long` | (200, 250)     | x 189-304, y 270-329 | x 205-320, y 204-263 | x 205-320, y 205-263 |
+| trailing `.` | (450, 250)     | x 385-392, y 178-185 | x 454-461, y 242-250 | x 454-461, y 243-250 |
+
+`TextEngineTest.TextAfterTextPathStartsAtGeometricEndpoint` and the
+`TextEngineScriptedTest.PostTextPathCursor*` cases pin the continuation point numerically,
+including `PostTextPathCursorBoundarySpaceStaysOnThePath` for a space at the boundary, and
+`RendererPublicApiTest.PostTextPathCursorOpenEndpointMatchesExplicitTail` requires the
+continued text to equal the same text placed explicitly at the end point.
+
+The image was created from the simple text tier on TinySkia with the suite's golden-creation
+path, with the renderer sources of commit `913bb7fd2d7872f18ea80236017b6ea9a2ffb0a5`; a
+re-render from those sources reproduces it byte for byte. The Geode resvg lane skips `text/*`
+rows through its backend feature gate.
+
+Corpus SVG SHA-256: `7db835973f2d650ee3a698f207831e313c95e2973fb70382d4efeabac658941d`.
+
+Reference PNG SHA-256: `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0`.
+
+To regenerate after an intended rendering change, delete the image, run the
+command below from the repository root, and review the new image before
+committing it:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_2'
+```
+
+## Nearest-neighbor sampling for `on-feImage`
+
+The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
+`image-rendering="optimizeSpeed"`. Its 500 × 500 vendored reference uses a different sampling
+grid. The reference introduced in [#1767](https://github.com/jwmcglynn/donner/pull/1767)
+samples the embedded PNG independently at destination pixel centers.
+
+To reconstruct `resvg-on-feImage.png`, start with the vendored `on-feImage.png` and decode the
+PNG in the SVG's data URL. The default filter region expands the 120-unit square by 10% on
+each side. At 2.5 device pixels per unit it occupies the 360 × 360 square starting at (70, 70).
+For each integer destination coordinate `70 <= x, y < 430`, copy the embedded RGBA texel at
+`floor((x - 70 + 0.5) * 64 / 360)`, `floor((y - 70 + 0.5) * 64 / 360)`. Keep the vendored
+pixels outside that square, including the frame.
+
+| SHA-256 input or result | Digest |
+| --- | --- |
+| Vendored SVG | `2f08caa2e27c3f5911bc14328e63cd9564d79e7e9840b765c36110c403e3d773` |
+| Vendored PNG | `94be9637ef48a9996c6d223fdc0187e6df98a0bff125d0f9709601067bb5f5b4` |
+| Reconstructed pixels, row-major RGBA8 | `c7dadd180384db409d6ad349be742cd02a7eef087d7be74e48ae9998d167ca9e` |
+| Committed golden PNG | `e94b02b863268c3579d36929691e9a8cfb5c389976fe459f00d2f3aa122a4154` |
+
 ## Emoji positioning reference
 
 `resvg-compound-emojis-and-coordinates-list.png` is generated independently with
@@ -277,3 +441,70 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 | `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Blink and Gecko take from VORG and then from vmtx, as Donner does. resvg centers upright glyphs on the hhea ascent and descent instead, and the vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
 | `text/writing-mode/tb-and-punctuation` | Mplus 1p kana, ideographs and vertical punctuation forms at 16 user units. Blink (OpenTypeVerticalData::GetVerticalTranslationsForGlyphs) and Gecko (gfxHarfBuzzShaper::GetGlyphVOrigin) take the upright vertical origin from VORG, then from the vmtx top side bearing over the glyph top, and only then synthesize one, and CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics. Mplus 1p has vhea and vmtx, with a vertical origin of 860 units for every glyph here; resvg ignores vmtx and centers the glyph on the hhea ascent and descent, as the vendored PNG does. Donner and Chrome 156 both place the vertical comma and full stop forms (U+3001, U+3002) about 14 device px right of the vendored PNG, in the upper right of their cells, and agree within 0.4 px on all 12 ink clusters, which sit up to 1.65 px above the PNG; the punctuation forms clearly favor Donner. 228 px differ. The corpus results mark Chrome and Firefox as passing and Safari and resvg as failing this row. | `100f4e24b2fd7013e554303f71b9b63199789863e81e86f8b046f340c6e34028` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` |
 | `text/alignment-baseline/hanging-on-vertical` | alignment-baseline: hanging in vertical text. resvg does not apply alignment-baseline in vertical layout, so the vendored PNG shows the default central baseline and wider spacing. Donner and Chrome 156 both apply the hanging baseline and agree within 1.1 device px on all 7 ink clusters, which sit 1.1 to 46 px from the PNG along the column when matched in reading order (1.1 and 21.9 px for the two upright glyphs, 44 to 46 px for the five sideways letters), so the browser measurement clearly favors Donner. The upright U+65E5 and U+672C sit at Mplus 1p's vmtx origin; the sideways "Japan" is rotated onto the hanging baseline and has no vertical origin of its own. The corpus results mark Chrome and Safari as passing and Firefox and resvg as failing. The simple text tier differs from this full-tier rendering by 10 px. | `cb9c38a6b0542998f1be4ff2efbc14cd39eb656f4e29547542d65bebca6378d6` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
+
+## Color-adjust filter references
+
+The seven `filters/filter-functions/color-adjust-functions-*` inputs keep their live text and
+filters. Their references preserve every original pixel outside the three text bands, including
+all seven filtered squares and the frame. The historical PNGs draw heavier labels: switching
+Chromium on macOS from `-webkit-font-smoothing: antialiased` to `auto` reduces mismatches
+from 461 to 7 against the transparent reference. Firefox’s `-moz-osx-font-smoothing: antialiased`
+to `auto` gives 450 to 12 with both images composited on white. Font bytes, layout, filters
+and device scale remain fixed within each pair. The original PNG producer is unknown.
+
+usvg 0.49.0 shapes the seven strings with the vendored Noto Sans Regular font
+(SHA-256 `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9`).
+The resulting scene contains only vector outlines. TinySkia and Geode each rasterize those
+paths at 500 × 500. The labels therefore test Donner’s face selection, shaping and placement
+against independent geometry while accounting for each renderer’s glyph-edge coverage.
+The filter expectations come entirely from the vendored PNGs.
+
+At 500 × 500, each of the seven fixtures gives the same whole-image mismatch count on macOS
+and Linux. The threshold is 0.02 and the ordinary limit is 100 pixels.
+
+| Comparison | CPU simple | CPU full | Geode (Metal and software Vulkan) |
+| --- | ---: | ---: | ---: |
+| Vendored PNG before the full-tier shaping precision update | 354 | 370 | 375 |
+| Outlined-label reference | 25 | 15 | 0 |
+
+In the original qualification on `4a5e9abb`, changing one square from 50% to 45% brightness failed by at least 10,000 pixels. Moving the
+labels right by one device pixel failed by at least 1,412 pixels across the two CPU tiers and
+native Metal. These comparisons cover the whole image.
+
+The 100% and omitted-value cases share
+one PNG per backend, as do 200% and 2. Each pair has identical decoded reference pixels.
+
+### Reproduction
+
+From the repository root, with Python, Pillow, defusedxml and usvg 0.49.0 installed, extract
+the common label scene and convert it to paths:
+
+```sh
+python3 tools/resvg_test_suite_upgrade/color_adjust_references.py labels /tmp/color-adjust-labels.svg
+usvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf \
+  /tmp/color-adjust-labels.svg /tmp/color-adjust-paths.svg
+```
+
+To reproduce the masks, use a disposable checkout of Donner at `4a5e9abb2bd2433ba9566375d7d8ee34ff7cd104`.
+In that checkout, replace only `third_party/resvg-test-suite/tests/filters/filter-functions/color-adjust-functions-0percent.svg`
+with `color-adjust-paths.svg`. Run the two renderer targets below. The diagnostic comparison to
+the full upstream scene fails because the path input contains only the labels. Retain the
+`actual_*.png` from the selected test in each target’s `test.outputs` directory. Check for
+`[TinySkia]` in the first test log and `[Geode]` in the second.
+
+```sh
+bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_adjust_functions_0percent' \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text
+bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_adjust_functions_0percent_GeodeGolden' \
+  //donner/svg/renderer/tests:resvg_test_suite_geode
+```
+
+Copy the two actual PNGs to `/tmp/tinyskia-labels.png` and `/tmp/geode-labels.png`, respectively.
+Return to the checkout containing the reproduction script and the unchanged corpus SVGs. The
+command writes five PNGs for each backend and checks that the two shared pairs agree byte-for-byte
+in RGBA.
+
+```sh
+python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
+  /tmp/tinyskia-labels.png /tmp/geode-labels.png /tmp/color-adjust-references
+```

@@ -124,9 +124,9 @@ bottom for completeness.
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
-| F10 | Remaining `textPath` vertical and kerning cases                         |                              2 | Feature                                                                                                                                                                                             |
+| F10 | Remaining `textPath` vertical case                                      |                              1 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
+| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -145,7 +145,7 @@ reference qualifications and independent rendering assertions. Most use `CssFilt
 
 | Assigned cases | Disposition |
 | --- | --- |
-| Seven `color-adjust-functions-*` cases | Compare with a 390-pixel reference label glyph budget. Every mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular (see [B7](#b7-text-reference-qualification)). |
+| Seven `color-adjust-functions-*` cases | Compare at the default threshold and 100-pixel limit on both backends. The references retain the upstream filter squares and frame. The labels use independently shaped Noto Sans outlines (see [B7](#b7-text-reference-qualification)). |
 | Four `drop-shadow-function*` cases | Compare against Donner goldens (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)). Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For `drop-shadow-function` and `color-last` the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner translates the shadow by the exact offset and resamples the half pixel. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80), consistent with the resolved user lengths truncated to whole units before scaling and the scaled offset truncated toward zero. Color order, currentColor, em/mm resolution and alpha compare independently. |
 | `two-exact-urls`                             | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `two-urls`                                   | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -327,15 +327,10 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
   differing pixels. resvg v0.49.0 draws 900 with Noto Sans Black, so registering
   the other weights belongs with a refresh of those references.
-- **Color-adjust labels:** the seven `color-adjust-functions-*` labels are 8-unit
-  Noto Sans Regular, and their pixels are identical across all seven references in
-  each reference set. Against the vendored 500x500 PNGs they differ by 354 simple,
-  370 full and 375 Geode pixels, all inside the three label bands; those PNGs carry
-  about 14% more label ink than Donner's Noto Sans Regular. Against resvg v0.49.0's
-  300x300 rendering label ink agrees within 2%, and a 4x4 supersampled prototype of
-  Donner's rasterizer brings the residual from 364 simple and 377 full pixels to 5
-  and 52. They compare with a 390-pixel label glyph budget (see
-  [Reference label glyph budgets](#reference-label-glyph-budgets)).
+- **Color-adjust labels:** the 8-unit Noto Sans Regular labels have identical geometry across
+  the seven cases. The vendored PNGs reproduce macOS font smoothing and draw more ink at the
+  glyph edges. The [qualified references](#color-adjust-label-references) keep the upstream
+  filter pixels and compare all seven live-text inputs at default settings.
 - **Remaining:** `text/font/simple-case` disagrees on the unitless
   `font` shorthand (see the reference qualification table).
 - **Default family:** CSS leaves the face for a family list that matches nothing
@@ -403,7 +398,7 @@ justified by what each setting detects:
   px shift. Counting anti-aliased pixels would catch it (940 against 1235), but makes the budget a
   measure of glyph-edge coverage rather than of the crosshair, so it is not used.
 
-`//tools/resvg_parity:parity_report_tests` checks the form of this class and the next. Such a
+`//tools/resvg_parity:parity_report_tests` checks the form of these reference-generation budgets. Such a
 compared case:
 
 - comes from a per-case override, not a category default;
@@ -412,31 +407,19 @@ compared case:
 - has a budget at most its stated analytic residual plus 3%, rounded up to 5 pixels;
 - states its supersampled residual, which for this class must be within the default allowance.
 
-The parity report counts them as `reference_generation_budget_cases` and
-`reference_label_glyph_budget_cases`.
+The parity report counts these cases as `reference_generation_budget_cases`.
 
-### Reference label glyph budgets
+### Color-adjust label references
 
-The seven `filters/filter-functions/color-adjust-functions-*` cases fail the first condition. They
-differ from their vendored 500x500 PNGs by 354 simple, 370 full and 375 Geode pixels, all inside
-the three label bands; the filtered squares compare exactly. Under 4x4 coverage the difference is
-still 302 and 297 pixels, because those PNGs draw the 8-unit Noto Sans labels about 14% heavier.
-Against resvg v0.49.0's rendering, 4x4 coverage brings the labels to 5 and 52 pixels.
+Switching only font smoothing in Chromium reduces the difference against each original 500 × 500
+reference from 461 pixels to 7. Firefox reproduces the effect over white (450 to 12). The
+filtered squares agree independently. An upstream resvg 0.48.1 render at the same size still
+differs by more than 100 pixels on the 0% case. Even identical glyph paths differ at their
+edges when rasterized by different backends.
 
-They compare with a 390-pixel budget whose reason starts `Reference label glyphs:` and states the
-analytic and supersampled residuals. Detection was measured on the residual-bearing PNGs:
-
-| Regression | Pixels (simple / full) | Budget |
-| --- | ---: | ---: |
-| none | 354 / 370 | 390 |
-| 1 px label shift | 1508 / 1524 | fails |
-| brightness 50% to 45% on one square | 10354 / 10370 | fails |
-| opacity 50% to 45% on one square | 5358 / 5374 | fails |
-| sepia 2 to 0.9 on one square | 10354 / 10370 | fails |
-| grayscale 2 to 0.9 on one square | 354 / 370 | passes: no pixel moves past the 0.02 threshold |
-
-The grayscale change is invisible to any comparison at the default color threshold, budgeted or
-not.
+The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the independent outline construction, the per-backend rasterization and the comparison
+controls. Only the label bands are replaced. All seven rows use the ordinary comparison settings.
 
 ### Removed budgets
 
@@ -569,19 +552,24 @@ difference.
 ### F10: `textPath` SVG2 attributes
 
 Inline `path`, geometry references, `side=right`, `method=stretch`, and `spacing=auto` are
-implemented. Their focused geometry and renderer contracts are active. The vendored
-`method=stretch` image is identical to the align reference, so that corpus row stays skipped while
+implemented. Their focused geometry and renderer contracts are active. The vendored `method=stretch`
+image is identical to the original snapshot’s align reference, so that corpus row compares against a Donner-rendered
+reference (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)) while
 independent curved-outline tests distinguish the methods. A fragment-free relative `xlink:href`
 under the secure static resource policy does not resolve to a same-document element or initiate an
-external fetch; its conflicting corpus image is also skipped. The
+external fetch; its conflicting corpus image is skipped. The
 `TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank` case enforces that policy in
 `//donner/svg/renderer/tests:renderer_public_api_tests` and
-`//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and
-a resource loader that records requests.
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and a
+resource loader that records requests.
 
-**Remaining impact:** 1 in `text/textPath/`: kerning across mixed children, which belongs to the
-shaping workstream. Vertical layout on a path (`writing-mode=tb.svg`) compares with a 250 px
-allowance for the reference's hhea-centered upright origin, 0.0175em from the font's vmtx origin.
+`mixed-children-2.svg` compares against a Donner-rendered reference: SVG 2 continues the text
+after a `textPath` from the path's end point, while the vendored image continues from the end of
+the glyphs on the path (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)).
+
+**Remaining impact:** 1 in `text/textPath/`: vertical layout on a path (`writing-mode=tb.svg`)
+compares with a 250 px allowance for the reference's hhea-centered upright origin, 0.0175em from
+the font's vmtx origin.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
 filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) is an
 accepted difference (2026-11-13). Where browser controls support Donner’s vertical placement
@@ -601,8 +589,8 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 **Current status:** normal horizontal BiDi, `direction`, and a `bidi-override` on the `<text>`
 element itself are implemented ([0069](0069-bidi_text_layout.md)). `text/unicode-bidi/bidi-override`
 compares on the full text tier at default parameters, with 100 differing pixels at the default
-limit of 100. `text/direction/rtl` orders and anchors correctly but stays skipped: its
-reference shapes Arabic with Noto Sans Arabic, which the test fonts lack.
+limit of 100. `text/direction/rtl` compares on the full text tier at default parameters against
+the vendored Noto Sans Arabic face its reference uses.
 `text/direction/rtl-with-vertical-writing-mode` is undefined behavior (svgwg#618).
 
 ### F12: `transform-origin` on paint-servers / `<image>` / text
@@ -630,7 +618,7 @@ content-placement transform.
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc). |
 | structure/style           |     0 | `external-CSS` compares after CSS `@import` loading landed: imports load through the document resource loader with cycle, depth, count and byte bounds; `//donner/svg/renderer/tests:css_import_tests` covers fetches, relative resolution, limits and cascade order.                                                                                |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                     |
-| painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` compares against resvg v0.49.0 on TinySkia and is disabled on Geode, whose interpolated texture coordinate lands just below texel boundaries on pixel centers.          |
+| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage) documents the `on-feImage` sampling grid. Both TinySkia and Geode compare `optimizeSpeed` against resvg v0.49.0. |
 | masking/clipPath          |     0 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text case compares against resvg v0.49.0 with zero differing pixels; both use the glyph-cell text box.                                                 |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                      |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                |
@@ -651,7 +639,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case is skipped: its vertical underline differs from the reference in position and thickness. `tb-and-punctuation` compares against a Donner rendering. |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case is skipped: the underline sits about 3 px to the right of the reference at the same thickness. `tb-and-punctuation` compares against a Donner rendering. |
 
 ---
 
