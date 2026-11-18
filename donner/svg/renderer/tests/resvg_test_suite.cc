@@ -348,7 +348,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory("filters/fePointLight",
                                         {
                                             {"complex-transform.svg",
-                                             Params::WithThreshold(0.11f, 120,
+                                             Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
                                                                    "Minor shading differences")},
                                         })),
             ValuesIn(ActiveComparisonModes())),
@@ -643,7 +643,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-patternTransform.svg",
                      Params::UndefinedBehavior("Invalid patternTransform")},
                     {"out-of-order-referencing.svg",
-                     Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
+                     Params::WithThreshold(0.6f, kDefaultMismatchedPixels,
+                                           "Nested pattern tile edge coverage")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
                     {"recursive-on-child.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
@@ -657,7 +658,7 @@ INSTANTIATE_TEST_SUITE_P(
                     // The reference resamples a rasterized pattern tile, so only the tile's thin
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
-                     Params::WithThreshold(0.5f, 1150,
+                     Params::WithThreshold(0.5f, kDefaultMismatchedPixels,
                                            "Larger threshold due to pattern tile resampling at "
                                            "fractional tile edges")},
                 })),
@@ -1195,6 +1196,10 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::Skip("Reference limitation: resvg does not apply alignment-baseline "
                                   "in vertical layout; Donner follows the vertical baseline axis "
                                   "and still differs in mixed upright/sideways glyph geometry.")},
+                    {"two-textPath-with-middle-on-first.svg",
+                     Params().withMaxPixelsDifferent(200).withReason(
+                         "Sub-pixel glyph placement along the two paths; ~108 scattered "
+                         "edge pixels, no positional drift (bounding boxes match exactly)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
