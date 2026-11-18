@@ -285,9 +285,8 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/geode/"
                          "filters_feGaussianBlur_complex-transform.png",
-                         "Geode's analytic coverage on this rotated rect is geometrically "
-                         "exact (area matches a 16x scan-conversion to <0.3px, no missed "
-                         "content); resvg's finite-sample scan-converter differs at the edge, "
+                         "The covered area of the rotated rect agrees with a 16x scan "
+                         "control to <0.3 px in total. Coverage along its edges differs, "
                          "and the directional stdDeviation=\"12 0\" blur widens that into a "
                          "thin band (263 px on Metal, 248 on software Vulkan at the default "
                          "threshold). TinySkia differs by 99 px from the vendored reference.")},
@@ -300,19 +299,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeImage, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feImage",
-                {
-                    {"svg.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
-                         .withReason(
-                             "Reference disagreement: rasterize the nested SVG at its device size "
-                             "and copy the resulting texels at one-to-one scale")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeImage, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feImage")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory(
@@ -345,12 +335,14 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeOffset, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFePointLight, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/fePointLight",
-                                        {
-                                            {"complex-transform.svg",
-                                             Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
-                                                                   "Minor shading differences")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/fePointLight",
+                {
+                    {"complex-transform.svg",
+                     Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
+                                           "Point-light shading differs even on the flat part of "
+                                           "the transformed surface; cause tracked in #1185")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -644,7 +636,8 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::UndefinedBehavior("Invalid patternTransform")},
                     {"out-of-order-referencing.svg",
                      Params::WithThreshold(0.6f, kDefaultMismatchedPixels,
-                                           "Nested pattern tile edge coverage")},
+                                           "Nested tile coverage: the reference disagrees on fully "
+                                           "covered and empty interior pixels")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
                     {"recursive-on-child.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,

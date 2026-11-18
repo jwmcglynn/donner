@@ -44,6 +44,16 @@ inputs are byte-identical at both revisions.
   tests/text/writing-mode/tb-with-dx-on-tspan.png
   tests/text/writing-mode/tb-with-dy-on-second-tspan.png
 
+For filters/feImage/svg the reference is rendered at the original 500x500 canvas size with
+resvg v0.49.0. The embedded resource has intrinsic viewBox 0 0 100 100. Placing it directly
+in the filter region (x=28, y=28, width=144, height=144) gives the same decoded image.
+From the suite root:
+
+  resvg --skip-system-fonts --width 500 --height 500 tests/filters/feImage/svg.svg tests/filters/feImage/svg.png
+
+  tests/filters/feImage/svg.png
+  SHA256: 62fd05f566585e73a3537a729f0b7fc874e397e70310f7e4f7d44d6aee268614
+
 From the same revision and license, both the SVG and the PNG of these tests were
 replaced, because upstream quoted their `'Mplus 1p'` font-family. Unquoted, that
 value is not a valid family name, and the old references were drawn in a

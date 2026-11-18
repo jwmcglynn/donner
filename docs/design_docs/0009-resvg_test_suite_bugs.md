@@ -61,7 +61,6 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | Category                   | Test                                  | Reason (`withReason`)                                          |
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
 | filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
-| filters/feImage            | svg                                   | Device-size raster of the nested SVG, placed one to one        |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
