@@ -294,3 +294,70 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 | Case | Why the vendored reference is not used | SVG SHA-256 | PNG SHA-256 |
 | ---- | -------------------------------------- | ----------- | ----------- |
 | `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Blink and Gecko take from VORG and then from vmtx, as Donner does. resvg centers upright glyphs on the hhea ascent and descent instead, and the vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
+
+## Color-adjust filter references
+
+The seven `filters/filter-functions/color-adjust-functions-*` inputs keep their live text and
+filters. Their references preserve every original pixel outside the three text bands, including
+all seven filtered squares and the frame. The historical PNGs draw heavier labels: switching
+Chromium on macOS from `-webkit-font-smoothing: antialiased` to `auto` reduces mismatches
+from 461 to 7 against the transparent reference. Firefox’s `-moz-osx-font-smoothing: antialiased`
+to `auto` gives 450 to 12 with both images composited on white. Font bytes, layout, filters
+and device scale remain fixed within each pair. The original PNG producer is unknown.
+
+usvg 0.49.0 shapes the seven strings with the vendored Noto Sans Regular font
+(SHA-256 `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9`).
+The resulting scene contains only vector outlines. TinySkia and Geode each rasterize those
+paths at 500 × 500. The labels therefore test Donner’s face selection, shaping and placement
+against independent geometry while accounting for each renderer’s glyph-edge coverage.
+The filter expectations come entirely from the vendored PNGs.
+
+At 500 × 500, each of the seven fixtures gives the same whole-image mismatch count on macOS
+and Linux. The threshold is 0.02 and the ordinary limit is 100 pixels.
+
+| Comparison | CPU simple | CPU full | Geode (Metal and software Vulkan) |
+| --- | ---: | ---: | ---: |
+| Vendored PNG before the full-tier shaping precision update | 354 | 370 | 375 |
+| Outlined-label reference | 25 | 15 | 0 |
+
+In the original qualification on `4a5e9abb`, changing one square from 50% to 45% brightness failed by at least 10,000 pixels. Moving the
+labels right by one device pixel failed by at least 1,412 pixels across the two CPU tiers and
+native Metal. These comparisons cover the whole image.
+
+The 100% and omitted-value cases share
+one PNG per backend, as do 200% and 2. Each pair has identical decoded reference pixels.
+
+### Reproduction
+
+From the repository root, with Python, Pillow, defusedxml and usvg 0.49.0 installed, extract
+the common label scene and convert it to paths:
+
+```sh
+python3 tools/resvg_test_suite_upgrade/color_adjust_references.py labels /tmp/color-adjust-labels.svg
+usvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf \
+  /tmp/color-adjust-labels.svg /tmp/color-adjust-paths.svg
+```
+
+To reproduce the masks, use a disposable checkout of Donner at `4a5e9abb2bd2433ba9566375d7d8ee34ff7cd104`.
+In that checkout, replace only `third_party/resvg-test-suite/tests/filters/filter-functions/color-adjust-functions-0percent.svg`
+with `color-adjust-paths.svg`. Run the two renderer targets below. The diagnostic comparison to
+the full upstream scene fails because the path input contains only the labels. Retain the
+`actual_*.png` from the selected test in each target’s `test.outputs` directory. Check for
+`[TinySkia]` in the first test log and `[Geode]` in the second.
+
+```sh
+bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_adjust_functions_0percent' \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text
+bazel test --test_sharding_strategy=disabled --test_arg='--gtest_filter=*color_adjust_functions_0percent_GeodeGolden' \
+  //donner/svg/renderer/tests:resvg_test_suite_geode
+```
+
+Copy the two actual PNGs to `/tmp/tinyskia-labels.png` and `/tmp/geode-labels.png`, respectively.
+Return to the checkout containing the reproduction script and the unchanged corpus SVGs. The
+command writes five PNGs for each backend and checks that the two shared pairs agree byte-for-byte
+in RGBA.
+
+```sh
+python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
+  /tmp/tinyskia-labels.png /tmp/geode-labels.png /tmp/color-adjust-references
+```
