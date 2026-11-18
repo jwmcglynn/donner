@@ -19,6 +19,10 @@ resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/Not
 resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf --width 500 third_party/resvg-test-suite/tests/text/textPath/dy-with-tiny-coordinates.svg donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png
 ```
 
+Both compare at the ordinary 100-pixel budget. `dy-with-tiny-coordinates` sets a 0.24 font size
+under `scale(100)`; its former 1100-pixel allowance covered full-tier advances rounded to 1/64
+pixel of that tiny face, which the full tier no longer does.
+
 ## Nearest-neighbor sampling for `on-feImage`
 
 The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
@@ -270,3 +274,23 @@ To regenerate, delete the files and run from the repository root:
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*drop_shadow_function*'
 ```
+
+## Donner-rendered references
+
+The references below are Donner renderings. Each replaces a vendored reference that encodes a
+renderer's own model where browsers measurably agree with Donner instead; a self-rendered golden
+guards against regressions but does not prove correctness, so each entry names the independent
+evidence. Each was rendered by the full text tier with the basic (TinySkia) backend and compares at
+default parameters.
+
+To regenerate one, delete its PNG and run from the repository root (the fixture writes a missing
+golden):
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_max -- '--gtest_filter=*<case_with_underscores>*'
+```
+
+| Case | Why the vendored reference is not used | SVG SHA-256 | PNG SHA-256 |
+| ---- | -------------------------------------- | ----------- | ----------- |
+| `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Blink and Gecko take from VORG and then from vmtx, as Donner does. resvg centers upright glyphs on the hhea ascent and descent instead, and the vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
