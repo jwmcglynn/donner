@@ -2132,6 +2132,41 @@ TEST(TextEngineScriptedTest, VerticalTextPathPreservesInlineAdvancesAndGlyphOffs
                 GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
 }
 
+#ifdef DONNER_TEXT_ENABLED
+TEST(TextEngineScriptedTest, VerticalTextPathUsesOneBidiRunAcrossPaintSpans) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const Path path =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  const Entity pathOwner = registry.create();
+  components::ComputedTextComponent text;
+  for (const std::string_view character : {"A", "\xD7\x90", "\xD7\x91", "B"}) {
+    auto span = MakeSpan(std::string(character));
+    span.pathSpline = path;
+    span.textPathSourceEntity = pathOwner;
+    span.pathStartOffset = 100.0;
+    span.textAnchor = TextAnchor::Middle;
+    span.fontKerning = FontKerning::None;
+    span.startsNewChunk = false;
+    text.spans.push_back(std::move(span));
+  }
+
+  // The two Hebrew glyphs remain distinct paint spans. The entire centered chunk still follows
+  // visual order A, bet, alef, B on the vertical line.
+  for (const WritingMode mode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.writingMode = mode;
+    const auto runs = engine.layout(text, params);
+    EXPECT_THAT(runs,
+                ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(80, 1e-6)))),
+                            RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(100, 1e-6)))),
+                            RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(90, 1e-6)))),
+                            RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(110, 1e-6))))));
+  }
+}
+#endif
+
 TEST(TextEngineScriptedTest, VerticalTextPathRotatesUprightCombiningClusterOffsets) {
   Registry registry;
   FontManager fontManager(registry);
