@@ -481,6 +481,17 @@ jobs:
           find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
             -print -exec rm -rf {} + 2>/dev/null || true
 
+      - name: Test Linux and macOS with native platform transitions
+        if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^build:ci-platforms --xcode_version=//p' .bazelrc)
+          DONNER_CI_XCODE_IDENTITY=$(awk -v v="$version" '$1 == v {print $1 "-" $2; n++} END {exit n != 1}' tools/ci_macos_xcode.txt)
+          export DONNER_CI_XCODE_IDENTITY
+          bazelisk test --config=ci --config=ci-platforms --test_output=errors \
+            //tools/ci:dual_platform_canary
+
       - name: Fetch Bazel LLVM toolchain
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted fetch
