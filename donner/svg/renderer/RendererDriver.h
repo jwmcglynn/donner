@@ -383,6 +383,15 @@ private:
   /// instances draw, which can be instantiated after the subtree's last entity.
   void skipDrawnContent(RenderingInstanceView& view, Registry& registry,
                         const components::SubtreeInfo& subtree);
+  /// After a shape draws its markers, skip the inline marker subtrees it instantiated, including
+  /// nested markers and the pattern and mask content their elements draw.
+  void skipInlineMarkerContent(RenderingInstanceView& view, Registry& registry,
+                               const components::RenderingInstanceComponent& instance);
+  /// For a shape the traversal does not draw (hidden, hidden by its filter, or culled), skip the
+  /// inline marker content it instantiated; a drawn shape does this in drawMarkers.
+  void skipUndrawnMarkerContent(RenderingInstanceView& view, Registry& registry,
+                                const components::RenderingInstanceComponent& instance,
+                                bool filterHidesElement, bool cullDraw);
   /// Draw a shape's fill, stroke, and markers honoring the resolved `paint-order`
   /// property. `paint` is the shape's resolved paint state; `drawFillComponent` /
   /// `drawStrokeComponent` are toggled per pass so a single shape draw emits one
