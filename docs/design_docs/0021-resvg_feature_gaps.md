@@ -583,9 +583,14 @@ a resource loader that records requests.
 shaping workstream. Vertical layout on a path (`writing-mode=tb.svg`) compares with a 250 px
 allowance for the reference's hhea-centered upright origin, 0.0175em from the font's vmtx origin.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
-filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) and the
-0.026em upright origin in `writing-mode/tb-and-punctuation.svg` are accepted differences
-(2026-11-13).
+filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) is an
+accepted difference (2026-11-13). Where browsers measurably place vertical text as Donner does
+and the reference encodes resvg's own model (`writing-mode/japanese-with-tb.svg`,
+`writing-mode/mixed-languages-with-tb.svg`, `writing-mode/tb-and-punctuation.svg`,
+`alignment-baseline/hanging-on-vertical.svg`), the row compares against a Donner rendering
+([0009](0009-resvg_test_suite_bugs.md)). `writing-mode/mixed-languages-with-tb-and-underline.svg`
+is skipped under #1172: its vertical underline differs from the reference in position and
+thickness.
 
 ### F11: BiDi / RTL text shaping
 
@@ -647,7 +652,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin; the underline case stays skipped because it also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case is skipped: its vertical underline differs from the reference in position and thickness. `tb-and-punctuation` compares against a Donner rendering. |
 
 ---
 

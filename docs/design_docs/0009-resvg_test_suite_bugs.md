@@ -54,10 +54,7 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (51)
-
-The count is of overridden suite rows; the shared feColorMatrix table row covers seven of them
-and the drop-shadow-function row four.
+## Active overrides
 
 ### resvg golden is wrong per spec
 
@@ -114,15 +111,18 @@ fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 ### Vertical text: resvg's own model
 
-| Category          | Test                    | Reason                                                      |
-| ----------------- | ----------------------- | ----------------------------------------------------------- |
-| text/writing-mode | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees |
+| Category                | Test                    | Reason                                                             |
+| ----------------------- | ----------------------- | ------------------------------------------------------------------ |
+| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin; Chrome matches Donner |
+| text/writing-mode       | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees        |
+| text/writing-mode       | tb-and-punctuation      | Punctuation forms 14 px off; Chrome matches Donner within 0.4 px   |
+| text/alignment-baseline | hanging-on-vertical     | No alignment-baseline in the PNG; Chrome matches Donner to 1.1 px  |
 
-This reference encodes resvg's vertical model, and browser renders measurably side with Donner.
-resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`.
-CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
-upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
-in the golden README.
+These references encode resvg's vertical model where browsers lay the text out as Donner does.
+resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`,
+and it does not apply `alignment-baseline` in vertical layout. CSS Writing Modes 3 section 5.1.1
+requires the font's vertical metrics; Blink and Gecko take the upright origin from `VORG`, then
+from the `vmtx` top side bearing, as Donner does. Measurements are in the golden README.
 
 ### Allowed nearest-neighbor reference differences
 
