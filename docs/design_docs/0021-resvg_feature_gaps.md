@@ -124,7 +124,7 @@ bottom for completeness.
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
-| F10 | Remaining `textPath` vertical and kerning cases                         |                              2 | Feature                                                                                                                                                                                             |
+| F10 | Remaining `textPath` vertical case                                      |                              1 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
 | B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
@@ -563,9 +563,13 @@ external fetch; its conflicting corpus image is skipped. The
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and a
 resource loader that records requests.
 
-**Remaining impact:** 1 in `text/textPath/`: kerning across mixed children, which belongs to the
-shaping workstream. Vertical layout on a path (`writing-mode=tb.svg`) compares with a 250 px
-allowance for the reference's hhea-centered upright origin, 0.0175em from the font's vmtx origin.
+`mixed-children-2.svg` compares against a Donner-rendered reference: SVG 2 continues the text
+after a `textPath` from the path's end point, while the vendored image continues from the end of
+the glyphs on the path (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)).
+
+**Remaining impact:** 1 in `text/textPath/`: vertical layout on a path (`writing-mode=tb.svg`)
+compares with a 250 px allowance for the reference's hhea-centered upright origin, 0.0175em from
+the font's vmtx origin.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
 filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) and the
 0.026em upright origin in `writing-mode/tb-and-punctuation.svg` are accepted differences

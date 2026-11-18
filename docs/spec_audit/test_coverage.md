@@ -59,7 +59,7 @@ the other ledgers in this directory.
 - Where resvg does cover an SVG 2 feature, Donner usually runs it, but several SVG 2 rows rest on
   skipped or render-only cases: radialGradient `fr=0.7` (skipped, reference disagreement) and
   `fr=0.5`/`fr=-1` (render-only UB), `with-invalid-path-and-xlink-href`
-  (skipped), `mixed-children-2` (skipped), clip-path `circle()` with `stroke-box`/`view-box`
+  (skipped), clip-path `circle()` with `stroke-box`/`view-box`
   (skipped, harness background mismatch), `structure/use/xlink-to-an-external-file` (skipped),
   7 filter-function cases (skipped; count re-read at `b39a524a2`), `text/font-size-adjust`,
   `text/glyph-orientation-vertical` (skipped).
@@ -76,8 +76,8 @@ the other ledgers in this directory.
   `icc-color`, `dominant-baseline: reset-size/use-script`, `requiredFeatures`) are correctly
   render-only or ignored in Donner and need no new cases.
 
-Counts (148 matrix rows): covered 55 (of which 6 are covered only by the Donner extension corpus or
-Donner native scenarios), resvg-only-skipped 8, needs-new-suite-case 71 (several of which have
+Counts (148 matrix rows): covered 56 (of which 6 are covered only by the Donner extension corpus or
+Donner native scenarios), resvg-only-skipped 7, needs-new-suite-case 71 (several of which have
 Donner unit or renderer-golden coverage but no portable SVG/PNG pair; see column 6),
 removed-from-CR 14.
 
@@ -170,7 +170,7 @@ relative to the checkout.
 | TC62 | `textPath` `method="stretch"`                                                                           | CR/text.html#TextPathElementMethodAttribute                                | 1: text/textPath/method=stretch.svg (original snapshot reference identical to align)                                                                            | golden-override (Donner regression guard; original snapshot reference identical to align)                      | unit geometry tests; straight-path invariant (RendererPublicApi_tests.cc)                                                   | covered                                                        |
 | TC63 | `textPath` `spacing="auto"`                                                                             | CR/text.html#TextPathElementSpacingAttribute                               | 1: text/textPath/spacing=auto.svg                                                                                                             | golden-override                                                                              | none                                                                                                                        | covered                                                        |
 | TC64 | `textLength`/`lengthAdjust` on `textPath`                                                               | CR/text.html#TextPathAttributes                                            | none (lengthAdjust and textLength directories test `text`/`tspan`)                                                                            | n-a                                                                                          | parser `AttributeParser_tests.cc`                                                                                           | needs-new-suite-case                                           |
-| TC65 | Text after a `textPath` continues from the path end point                                               | CR/text.html#TextpathLayoutRules                                           | 2: text/textPath/mixed-children-1.svg, text/textPath/mixed-children-2.svg                                                                     | golden-override (1); skipped (2)                                                             | none                                                                                                                        | resvg-only-skipped                                             |
+| TC65 | Text after a `textPath` continues from the path end point                                               | CR/text.html#TextpathLayoutRules                                           | 2: text/textPath/mixed-children-1.svg, text/textPath/mixed-children-2.svg                                                                     | golden-override (1, 2)                                                                       | TextEngineScripted_tests.cc PostTextPathCursor*                                                                             | covered                                                        |
 | TC66 | `writing-mode` CSS values `horizontal-tb`, `vertical-rl`, `vertical-lr`                                 | CR/text.html#WritingModeProperty                                           | 3: text/writing-mode/horizontal-tb.svg, text/writing-mode/vertical-rl.svg, text/writing-mode/vertical-lr.svg (plus 20 legacy `tb`/`lr` cases) | default                                                                                      | `VerticalTextGeode_tests.cc`                                                                                                | covered                                                        |
 | TC67 | `text-orientation`                                                                                      | CR/styling.html#RequiredProperties (css-writing-modes-3)                   | none                                                                                                                                          | n-a                                                                                          | `donner/svg/renderer/tests/svg_document_raster_corpus/vertical_text_orientation_aliases.svg`, `TextEngineScripted_tests.cc` | needs-new-suite-case                                           |
 | TC68 | `tref` removed                                                                                          | CR/changes.html#text                                                       | 12: text/tref/*, painting/display/none-on-tref.svg                                                                                            | render-only (DeprecatedInSVG2)                                                               | none needed                                                                                                                 | removed-from-CR                                                |
@@ -527,9 +527,10 @@ rationale.
   `feat:svg2-render/test-harness-backdrop` in [color_compositing.md](color_compositing.md)). The
   missing backdrop is rated low for the library API and is an unmet requirement for standalone
   output. Whether flattening in the harness would let these cases compare was not established.
-- RC7 `text/textPath/mixed-children-2.svg` (skipped): SVG 2 continues text after a `textPath` from
-  the path end point; the reference continues from the occupied text extent. Donner cites
-  CR/text.html#TextpathLayoutRules behavior in its skip; not re-verified here.
+- RC7 `text/textPath/mixed-children-2.svg` (golden-override): SVG 2 continues text after a
+  `textPath` from the path end point; the reference continues from the end of the glyphs on the
+  path. The row compares against a Donner rendering whose ink matches Chrome 157 within one device
+  pixel, including the CSS Text 3 boundary space that stays on the path.
 - RC8 `text/textPath/method=stretch.svg` (golden-override): the original snapshot’s reference is byte-identical
   to its `align` case, so it cannot assert stretch. The row compares against a Donner rendering with
   visibly warped glyphs, a regression guard rather than an independent oracle;

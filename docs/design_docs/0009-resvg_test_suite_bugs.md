@@ -74,6 +74,7 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
@@ -88,6 +89,13 @@ is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`textPath/mixed-children-2` runs against a committed Donner render
+(`resvg-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
+end point of the path; the vendored PNG continues `long` and the trailing `.` from the
+end of the glyphs laid out on each path. The golden's ink matches a Chrome rendering of
+the case within one device pixel. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `textPath/mixed-children-1` and `textPath/very-long-text` run against committed Donner
 renders. SVG 2 continues the text after a `textPath` from the end point of the path, and

@@ -104,7 +104,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | 001-005 | Minor char advance diffs |
 | 007 | Donner regression golden: the vendored PNG is byte-identical to the original snapshot’s align case |
 | 009-010 | Minor char advance diffs |
-| 011 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
+| 011-012 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
 | 013-014 | Minor char advance diffs |
 | 015 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
 | 019-020 | Minor char advance diffs / AA diffs |
@@ -119,7 +119,6 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | Test | Reason |
 |------|--------|
 | 008 | `spacing=auto` not implemented |
-| 012 | Reference disagreement: SVG 2 geometric endpoint continuation |
 | 016 | Link to `<rect>` (SVG 2 feature) |
 | 030 | UB: reference is the resvg UB marker image (vertical text on a circular path) |
 | 033 | UB: baseline-shift + rotate interaction |
@@ -144,7 +143,8 @@ Any golden or tolerance change requires explicit human approval after visual ret
 ### Open Issues
 - [x] **012**: Mixed textPath/tspan/textPath continuation follows the SVG 2 text layout
   algorithm: unanchored text after each path starts at that path's geometric endpoint. The
-  historical reference instead continues from the occupied text extent, so it remains skipped.
+  historical reference instead continues from the occupied text extent, so the row compares
+  against a Donner golden whose ink matches Chrome within one device pixel.
   Independent renderer controls compare both continuations against explicit endpoint positions in
   `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and `_text_full` variants.
 
