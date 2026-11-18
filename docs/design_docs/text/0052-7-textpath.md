@@ -112,7 +112,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
 
 For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
-[fixture coverage matrix](../../spec_audit/test_coverage.md#text-layout-and-fonts).
+[fixture coverage matrix](../../spec_audit/test_coverage.md#text).
 
 ### Skipped and render-only cases
 
