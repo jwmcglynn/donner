@@ -634,15 +634,23 @@ INSTANTIATE_TEST_SUITE_P(
                                            "Nested tile coverage: the reference disagrees on fully "
                                            "covered and empty interior pixels")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
+                    // The references resample a rasterized tile, blurring the tile-edge strokes;
+                    // testdata/golden/README.md has the exact coverage these goldens hold.
                     {"recursive-on-child.svg",
-                     Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to recursive pattern seams.")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "donner-pattern-recursive-on-child.png")
+                         .withReason("Reference disagreement: exact tile-edge stroke coverage, and "
+                                     "the mutually recursive fill paints one level deep (#1185)")},
                     {"self-recursive-on-child.svg",
-                     Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to recursive pattern seams.")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "donner-pattern-self-recursive.png")
+                         .withReason(
+                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
                     {"self-recursive.svg",
-                     Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to recursive pattern seams.")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "donner-pattern-self-recursive.png")
+                         .withReason(
+                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
                     // The reference resamples a rasterized pattern tile, so only the tile's thin
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",

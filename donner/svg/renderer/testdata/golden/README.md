@@ -741,6 +741,110 @@ bazel run //donner/svg/tool:donner-cli -- \
   --output donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.png
 ```
 
+## Donner renderings of recursive pattern references
+
+`paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.
+`self-recursive` and `self-recursive-on-child` render identically and share
+`donner-pattern-self-recursive.png`. All three are 500x500 renderings by the software renderer
+with simple text at default settings. Full text and Geode on Linux lavapipe (aarch64) render all
+three identically (0 pixels counted).
+
+Each tile is a 40 x 25 unit rect whose 1-unit stroke straddles the tile edge, so each tile
+clips half of its stroke and two neighboring tiles draw the two halves. In the self-recursive rows
+the rect's fill references its own pattern, a circular reference, so that fill layer is not
+painted (SVG 2 Linking, "circular references"; Painting, "Specifying paint": an invalid paint
+server reference without a fallback paints nothing for that layer).
+
+In `recursive-on-child` the two patterns fill their rects with each other. Only the reference that
+revisits a pattern already being rendered is circular, so `patt1`'s rect is filled with `patt2`'s
+tile, whose rect keeps its stroke and drops only its fill. The tile therefore holds two layers of
+the stroke in both rects, as Firefox 153 draws it (see the table below). Donner's seam columns
+read 96, 255, 255 and 96, and Firefox reads 102 to 114. Both layers contribute fully;
+the difference is where the two coincident half-strokes are composited:
+
+- Tiles rasterize at twice the device scale of their parent surface: the outer tile at 5 raster
+  pixels per unit, the nested tile at 10. Each layer's half stroke (39.5 to 40 units) covers half
+  of outer texel 197 (39.4 to 39.6 units).
+- Source-over treats the two half-covers as independent: 0.5 + 0.5 x 0.5 = 0.75 for texel 197.
+  Device column 98 averages texels 196 (0) and 197 (0.75), giving 0.375, alpha 96. The
+  horizontal seam gives 0.875 the same way, alpha 224.
+- Measured: either layer alone reads 64 on column 98 (and 192 on the horizontal seam), on the
+  software renderer and on Geode.
+- Browsers composite the layers at device resolution instead: 1 - (1 - 0.25)^2 = 0.44, alpha 112.
+  The true coverage of two coincident strokes is 0.25, so neither is exact; each counts the
+  overlap at a different resolution.
+
+The seam numbers below are for the self-recursive tiles, the single-layer case. At 2.5 device pixels
+per unit, the vertical seam at x = 40 units covers device x 98.75 to 101.25. The exact coverage of
+columns 98 to 101 is therefore 0.25, 1, 1 and 0.25, which is alpha 64, 255, 255 and 64. Donner draws
+exactly that.
+
+Donner does not draw pattern tiles analytically. Both backends rasterize the tile at twice its
+device scale (`ComputePatternTileRasterMetrics`) and sample it bilinearly with repeat wrapping.
+These rows come out exact because of their alignment. At 2.5 device pixels per unit, the
+40 x 25 unit tile is exactly 200 x 125 raster pixels, and every stroke edge sits on a multiple of
+half a raster pixel (98.75 device = 197.5 raster). Each device pixel center then falls on a
+raster pixel boundary, so bilinear sampling averages exactly two raster pixels per axis. That
+2x box filter reproduces the exact coverage of edges at those positions. Content whose edges fall
+elsewhere in the tile is not reproduced exactly; `paint-servers/pattern/text-child` is reported
+to read 57 on a glyph edge whose exact coverage is 64.
+
+The vendored PNGs read 89, 242, 242 and 90, the profile of a rasterized tile resampled with a
+filter. At the default threshold the rows differ from those PNGs by 4,053 (recursive-on-child) and
+5,503 pixels, and by 0 pixels under a 0.2 color threshold.
+
+`results.csv` records Chrome, Firefox and resvg passing all three vendored PNGs (Safari fails).
+That is a visual verdict, and it cannot separate the two profiles: they differ by 25 of 255
+levels on the two partial columns and 13 on the full ones, and both cover the seam with 2.5 to
+2.6 pixels of stroke, a 4% difference in width at 2.5 pixels per unit.
+
+What the browsers draw, measured on Chromium 147 and Firefox 153 at 500x500 (stroke coverage per
+pixel, 0-255):
+
+| Rendering | Vertical seam, x = 40 units (pixel-aligned), cols 98-101 | Horizontal seam, y = 25 units (fractional), rows 60-64 |
+| --- | --- | --- |
+| Donner | 64, 255, 255, 64 | 0, 192, 255, 192, 0 |
+| Vendored PNG | 89, 242, 242, 90 | 12, 165, 255, 166, 13 |
+| Chromium 147, self-recursive | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
+| Firefox 153, self-recursive | 59, 255, 255, 64 | 28, 148, 255, 160, 33 |
+| Vendored PNG, recursive-on-child lower rect (`rect4`) | 134, 248, 248, 135 | 18, 210, 255, 210, 19 |
+| Chromium 147, recursive-on-child upper rect (`rect3`) | 110, 255, 255, 112 | 56, 184, 255, 184, 56 |
+| Chromium 151, recursive-on-child lower rect (`rect4`) | 63, 255, 255, 64 | 32, 159, 255, 159, 32 |
+| Firefox 153, recursive-on-child, both rects | 102, 255, 255, 114 | 49, 175, 255, 184, 57 |
+
+The vendored PNG row above it is the self-recursive rows and the upper rect of
+recursive-on-child.
+
+Both browsers draw the exact coverage where the tile edge falls on a pixel boundary. Where it falls
+mid-pixel (y = 25 units is device y 62.5), they draw a resampled tile, as the vendored PNG does
+everywhere. Keeping the exact seams is a maintainer decision.
+
+On `recursive-on-child`, `rect3` is filled with `patt1` and `rect4` with `patt2`. The second
+stroke layer described above is drawn by Firefox 153 in both rects, by Chromium (147 and 151) in
+`rect3` only, by the vendored PNG in `rect4` only, and by Donner in both rects: 96, 255, 255, 96
+on the vertical seam and 0, 224, 255, 224, 0 on the horizontal one, in each rect. Donner
+therefore draws the layer in the same rects as Firefox, and its partial columns read 96 where
+Firefox reads 102 to 114, for the compositing reason above. SVG 2 does not say which reference of
+a two-pattern cycle is the circular one; Donner treats only the reference that revisits a pattern
+already being rendered as circular.
+
+resvg v0.49.0's 300x300 references are no closer (3,282 to 3,617 pixels). At 1.5 device pixels
+per unit, the horizontal seam at y = 50 units (device y 75) covers device y 74.25 to 75.75, which
+is alpha 192 on rows 74 and 75. Those references read 63, 255 and 192 over rows 74 to 76: about
+2.0 pixels of coverage where the exact stroke is 1.5, so the stroke is widened and offset. Donner
+reads 192, 192 and 0.
+
+PNG SHA-256:
+- `donner-pattern-recursive-on-child.png`: `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65`
+- `donner-pattern-self-recursive.png`: `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17`
+
+To regenerate, delete the files and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*PaintServersPattern*recursive*'
+```
+
 ## Color-adjust filter references
 
 The seven `filters/filter-functions/color-adjust-functions-*` inputs keep their live text and

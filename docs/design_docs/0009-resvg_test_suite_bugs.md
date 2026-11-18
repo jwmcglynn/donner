@@ -180,6 +180,20 @@ records the construction and checksums for `on-feImage`. The separate `optimizeS
 compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
 pixel centers through the inverse transform to select the nearest source texel.
 
+### Exact pattern-tile seams (reference rasterization, not a spec violation)
+
+The specification does not say how a pattern tile is rasterized, so these are not "wrong per
+spec". On these rows Donner draws the exact coverage of each tile's stroke at the seams; the
+vendored PNGs resample a rasterized tile. Keeping the exact seams is a maintainer decision.
+`testdata/golden/README.md` has the measurements, including what current Chromium and Firefox
+draw: exact coverage on pixel-aligned seams and a resampled tile on fractional ones.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
+| paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
+
 ### Color-adjust filter labels
 
 The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference

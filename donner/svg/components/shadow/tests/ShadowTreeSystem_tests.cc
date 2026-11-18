@@ -21,6 +21,8 @@
 
 using testing::Eq;
 using testing::IsEmpty;
+using testing::Ne;
+using testing::Optional;
 using testing::SizeIs;
 
 namespace donner::svg::components {
@@ -581,7 +583,9 @@ TEST_F(ShadowTreeSystemTest, FullRebuildResetsLatchedResourceBudget) {
   EXPECT_EQ(budget.generatedEntities(), 0u);
 }
 
-TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenPaintTargetParentRecursionWarns) {
+/// A cloned element whose own fill points at a host parent stays in a fill branch: only that paint
+/// layer is circular, and the renderer stops it on the active render chain.
+TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenPaintTargetParentKeepsElement) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <g id="parent">
@@ -604,10 +608,40 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenPaintTargetParentRecursion
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenFill,
                                         lightEntity.entity(), RcString("#light"), warnings);
 
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result.value(), 0u);
+  EXPECT_THAT(result, Optional(0u));
   EXPECT_EQ(shadow.offscreenShadowCount(), 1u);
-  EXPECT_TRUE(shadow.offscreenShadowRoot(0) == entt::null);
+  EXPECT_THAT(shadow.offscreenShadowRoot(0), Ne(Entity(entt::null)));
+  EXPECT_THAT(warnings.warnings(), SizeIs(0));
+}
+
+/// Other offscreen branches still drop a cloned element whose own reference of the branch's kind
+/// points at a host parent.
+TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenMaskTargetParentRecursionWarns) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g id="parent">
+        <g id="host"/>
+      </g>
+      <rect id="light" width="10" height="10"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto hostEntity = document.querySelector("#host")->entityHandle();
+  auto lightEntity = document.querySelector("#light")->entityHandle();
+
+  auto& offscreen = registry.emplace<OffscreenShadowTreeComponent>(lightEntity.entity());
+  offscreen.setBranchHref(ShadowBranchType::OffscreenMask, "#parent");
+
+  ShadowTreeSystem system;
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+  auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenMask,
+                                        lightEntity.entity(), RcString("#light"), warnings);
+
+  EXPECT_THAT(result, Optional(0u));
+  EXPECT_EQ(shadow.offscreenShadowCount(), 1u);
+  EXPECT_THAT(shadow.offscreenShadowRoot(0), Eq(Entity(entt::null)));
   EXPECT_THAT(warnings.warnings(), SizeIs(1));
 }
 

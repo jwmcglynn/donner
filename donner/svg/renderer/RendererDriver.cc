@@ -4200,6 +4200,26 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
   }
 }
 
+void RendererDriver::skipDrawnContent(RenderingInstanceView& view, Registry& registry,
+                                      const components::SubtreeInfo& subtree) {
+  const auto* lastInstance =
+      registry.try_get<components::RenderingInstanceComponent>(subtree.lastRenderedEntity);
+  if (lastInstance == nullptr) {
+    skipUntil(view, subtree.lastRenderedEntity);
+    return;
+  }
+  int lastDrawOrder = lastInstance->drawOrder;
+  while (!view.done()) {
+    const auto& instance =
+        registry.get<components::RenderingInstanceComponent>(view.currentEntity());
+    if (instance.drawOrder > lastDrawOrder) {
+      break;
+    }
+    lastDrawOrder = std::max(lastDrawOrder, ContentLastDrawOrder(registry, instance));
+    view.advance();
+  }
+}
+
 void RendererDriver::skipUntil(RenderingInstanceView& view, Entity endEntity) {
   while (!view.done()) {
     const bool isEnd = view.currentEntity() == endEntity;
@@ -4342,7 +4362,7 @@ void RendererDriver::renderMaskContents(RenderingInstanceView& view, Registry& r
       }
     }
   } else if (subtreeAhead) {
-    skipUntil(view, mask.subtreeInfo->lastRenderedEntity);
+    skipDrawnContent(view, registry, *mask.subtreeInfo);
   }
 }
 
@@ -4416,6 +4436,36 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   return static_cast<int>(chain.size());
 }
 
+void RendererDriver::renderPatternTileContents(RenderingInstanceView& view, Registry& registry,
+                                               Entity pattern,
+                                               const components::SubtreeInfo& subtree,
+                                               bool subtreeAhead) {
+  struct ActivePatternScope {
+    std::vector<ActivePatternTile>& tiles;
+    ~ActivePatternScope() { tiles.pop_back(); }
+  };
+  activePatternTiles_.push_back(ActivePatternTile{&registry, pattern});
+  const ActivePatternScope activePattern{activePatternTiles_};
+  RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_, registry);
+  if (subtreeAhead) {
+    traverseRange(view, registry, subtree.firstRenderedEntity, subtree.lastRenderedEntity);
+  } else {
+    // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
+    // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
+    const RenderingInstanceView::SavedState savedPosition = view.save();
+    view.restore(RenderingInstanceView::SavedState{0});
+    traverseRange(view, registry, subtree.firstRenderedEntity, subtree.lastRenderedEntity);
+    view.restore(savedPosition);
+  }
+}
+
+bool RendererDriver::isActivePatternTile(const Registry& registry, Entity pattern) const {
+  return std::any_of(activePatternTiles_.begin(), activePatternTiles_.end(),
+                     [&](const ActivePatternTile& tile) {
+                       return tile.registry == &registry && tile.pattern == pattern;
+                     });
+}
+
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
                                    const components::RenderingInstanceComponent& instance,
                                    const components::PaintResolvedReference& refIn,
@@ -4451,7 +4501,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
           .drawOrder > instance.drawOrder;
   const auto skipSubtree = [&]() {
     if (subtreeAhead) {
-      skipUntil(view, ref.subtreeInfo->lastRenderedEntity);
+      skipDrawnContent(view, registry, *ref.subtreeInfo);
     }
   };
 
@@ -4463,6 +4513,12 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
 
   Box2d rect = computedPattern->tileRect;
   if (NearZero(rect.width()) || NearZero(rect.height())) {
+    skipSubtree();
+    return;
+  }
+
+  // A pattern already being rendered further up closes a cycle: this layer paints nothing.
+  if (isActivePatternTile(registry, target.entity())) {
     skipSubtree();
     return;
   }
@@ -4482,22 +4538,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   const std::optional<Vector2i> savedDrawSurfaceSize =
       std::exchange(drawSurfaceSize_, std::nullopt);
   surfaceFromCanvasTransform_ = placement->patternContentFromPatternTile;
-  {
-    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
-                                                                          registry);
-    if (subtreeAhead) {
-      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                    ref.subtreeInfo->lastRenderedEntity);
-    } else {
-      // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
-      // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
-      const RenderingInstanceView::SavedState savedPosition = view.save();
-      view.restore(RenderingInstanceView::SavedState{0});
-      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                    ref.subtreeInfo->lastRenderedEntity);
-      view.restore(savedPosition);
-    }
-  }
+  renderPatternTileContents(view, registry, target.entity(), *ref.subtreeInfo, subtreeAhead);
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
   drawSurfaceSize_ = savedDrawSurfaceSize;

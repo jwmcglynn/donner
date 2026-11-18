@@ -379,6 +379,10 @@ private:
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);
   void skipUntil(RenderingInstanceView& view, Entity endEntity);
+  /// Skip a subtree that will not be drawn, together with the mask, marker and pattern content its
+  /// instances draw, which can be instantiated after the subtree's last entity.
+  void skipDrawnContent(RenderingInstanceView& view, Registry& registry,
+                        const components::SubtreeInfo& subtree);
   /// Draw a shape's fill, stroke, and markers honoring the resolved `paint-order`
   /// property. `paint` is the shape's resolved paint state; `drawFillComponent` /
   /// `drawStrokeComponent` are toggled per pass so a single shape draw emits one
@@ -412,6 +416,12 @@ private:
   int renderMask(RenderingInstanceView& view, Registry& registry,
                  const components::RenderingInstanceComponent& instance,
                  const components::ResolvedMask& mask);
+  /// Render a pattern tile's content subtree with \p pattern on the active chain.
+  void renderPatternTileContents(RenderingInstanceView& view, Registry& registry, Entity pattern,
+                                 const components::SubtreeInfo& subtree, bool subtreeAhead);
+  /// True when \p pattern of \p registry's document is already being rendered further up the
+  /// active chain.
+  bool isActivePatternTile(const Registry& registry, Entity pattern) const;
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
@@ -656,6 +666,21 @@ private:
   /// invariant. Shared across nested `RendererDriver` instances by copying the parent's value into
   /// the sub-driver (see `preRenderFeImageFragments`).
   int feImageFragmentDepth_ = 0;
+
+  /// A pattern element on the active render chain, keyed by its document's registry because this
+  /// driver also traverses sub-documents, whose entity ids overlap the host's.
+  struct ActivePatternTile {
+    const Registry* registry;  ///< Registry of the pattern's document.
+    Entity pattern;            ///< The pattern element.
+  };
+
+  /// Pattern elements whose tiles are being rendered, outermost first. A pattern reference that
+  /// revisits one of them closes a cycle on the active render chain, so that paint layer draws
+  /// nothing (SVG 2 Linking, circular references; Painting, invalid paint server). Each nested
+  /// tile adds a pattern not yet on the chain, so a cycle stops when it revisits one.
+  /// \ref renderPatternTileContents adds and removes entries with a scoped guard, so the chain is
+  /// empty between frames.
+  std::vector<ActivePatternTile> activePatternTiles_;
 
   RendererFilterPreparationBudget ownedFilterPreparationBudget_;
   RendererFilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
