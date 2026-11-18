@@ -340,6 +340,39 @@ RendererBitmap RenderReferenceContract(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
+TEST_F(RendererRegressionTests, GradientUrlResolvesDigitLeadingId) {
+  const auto actual = RenderReferenceContract(R"svg(
+      <defs><linearGradient id="0-1">
+        <stop offset=".5" stop-color="red"/><stop offset=".5" stop-color="blue"/>
+      </linearGradient></defs>
+      <rect x="8" y="8" width="48" height="48" fill="url(#0-1)"/>)svg");
+  const auto expected = RenderReferenceContract(R"svg(
+      <rect x="8" y="8" width="24" height="48" fill="red"/>
+      <rect x="32" y="8" width="24" height="48" fill="blue"/>)svg");
+  EXPECT_THAT(PixelAt(actual, 16, 32), testing::ElementsAre(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(actual, 48, 32), testing::ElementsAre(0, 0, 255, 255));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "gradient_digit_leading_id",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, UseResolvesNumericAndCyrillicIds) {
+  // Spell the Cyrillic ID as UTF-8 bytes independently of the C++ execution character set.
+  const auto actual = RenderReferenceContract(
+      "<defs>"
+      "<rect id='1' width='24' height='16' fill='lime'/>"
+      "<rect id='\xD1\x82\xD0\xB5\xD1\x81\xD1\x82' width='12' height='20' fill='blue'/>"
+      "</defs>"
+      "<use x='4' y='6' xlink:href='#1'/>"
+      "<use x='40' y='32' xlink:href='#\xD1\x82\xD0\xB5\xD1\x81\xD1\x82'/>");
+  const auto expected = RenderReferenceContract(R"svg(
+      <rect x="4" y="6" width="24" height="16" fill="lime"/>
+      <rect x="40" y="32" width="12" height="20" fill="blue"/>)svg");
+  EXPECT_THAT(PixelAt(actual, 12, 14), testing::ElementsAre(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actual, 46, 42), testing::ElementsAre(0, 0, 255, 255));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "use_numeric_and_cyrillic_ids",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 RendererBitmap RenderReferenceRadial(std::string_view attributes, bool singleStop = false) {
   return RenderReferenceContract(
       std::string(R"svg(<radialGradient id="g" )svg") + std::string(attributes) +
