@@ -284,6 +284,15 @@ byte-identical at both revisions.
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
   SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
 
+The 300x300 edgeMode=wrap PNG below is byte-identical to resvg v0.49.0 from the same
+revision and license. Its SVG is unchanged. The snapshot's 500x500 PNG reduces the
+alpha of flat regions where the two 0.75-opacity pattern shapes overlap from 239
+to 196. A normalized convolution preserves the source alpha in a constant region.
+At the top-left boundary the replacement samples the wrapped input.
+
+  tests/filters/feConvolveMatrix/edgeMode=wrap.png
+  SHA256: d44d434e3420f50fff8fbbe82f408ac38ab8c06647f44925f58118802202f43b
+
 fonts/NotoSansArabic-Regular.ttf is not part of the resvg corpus. text/direction/rtl lists
 "Noto Sans Arabic" first, and its reference draws the Arabic in that face, which neither the
 snapshot nor resvg v0.49.0 ships. The file is the unhinted Regular face from the

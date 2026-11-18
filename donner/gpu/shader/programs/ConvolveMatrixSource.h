@@ -18,6 +18,10 @@ struct ConvolveMatrixParams {
   edgeMode: u32,
   preserveAlpha: u32,
   coefficients: array<f32, 25>,
+  wrapLeft: i32,
+  wrapTop: i32,
+  wrapWidth: i32,
+  wrapHeight: i32,
 }
 
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
@@ -30,8 +34,18 @@ fn sampleEdge(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
     return textureLoad(inputTexture, clamped, 0i);
   }
   if ((params.edgeMode == 1u)) {
-    let wrapped = vec2<i32>((((coord.x % size.x) + size.x) % size.x), (((coord.y % size.y) + size.y) % size.y));
-    return textureLoad(inputTexture, wrapped, 0i);
+    var origin = vec2<i32>(0i);
+    var extent = size;
+    if ((params.wrapWidth >= 0i)) {
+      origin = vec2<i32>(params.wrapLeft, params.wrapTop);
+      extent = vec2<i32>(params.wrapWidth, params.wrapHeight);
+    }
+    if (any((extent <= vec2<i32>(0i)))) {
+      return vec4<f32>(0f);
+    }
+    let relative = (coord - origin);
+    let wrapped = vec2<i32>((((relative.x % extent.x) + extent.x) % extent.x), (((relative.y % extent.y) + extent.y) % extent.y));
+    return textureLoad(inputTexture, (origin + wrapped), 0i);
   }
   if ((any((coord < vec2<i32>(0i))) || any((coord >= size)))) {
     return vec4<f32>(0f);

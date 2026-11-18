@@ -212,14 +212,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
                     {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
                     {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
-                    // References refreshed to resvg v0.49.0 except edgeMode=wrap; see
-                    // third_party/resvg-test-suite/BUILD.bazel.
+                    // The refreshed references keep the convolution output's transparency.
                     {"edgeMode=none.svg", ResvgV049Reference()},
-                    {"edgeMode=wrap.svg",
-                     Params::WithThreshold(
-                         0.43f, 200,
-                         "Checkerboard exposes convolve edge-handling alpha delta; measured "
-                         "minimal")},
+                    {"edgeMode=wrap.svg", ResvgV049Reference()},
                     {"order=4-2.svg", ResvgV049Reference()},
                     {"order=4-4.svg", ResvgV049Reference()},
                     {"order=4.svg", ResvgV049Reference()},
