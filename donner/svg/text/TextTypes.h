@@ -1,8 +1,10 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Path.h"
@@ -110,6 +112,9 @@ struct TextGlyph {
   std::optional<uint32_t> visualOrder;
   /// This visual chunk origin applies an authored inline absolute position.
   bool absoluteInlinePosition = false;
+  /// First glyph, in storage order, of an SVG text chunk. Within a run, the glyphs from one such
+  /// glyph up to the next belong to one chunk.
+  bool startsTextChunk = false;
   /// Intrinsic vertical glyph-origin X offset from its pen, excluding baseline alignment.
   double verticalCrossOffset = 0;
   /// Full intrinsic vertical inline offset, including sideways shaping offsets when available.
@@ -140,5 +145,48 @@ struct TextRun {
 inline FontHandle GlyphFont(const TextRun& run, const TextGlyph& glyph) {
   return glyph.font ? glyph.font : run.font;
 }
+
+/**
+ * Groups the glyph outlines a renderer collects from one run by SVG text chunk, so each chunk can
+ * be painted as one shape. Glyphs without an outline collect nothing and are only noted.
+ */
+class TextChunkRanges {
+public:
+  /**
+   * Notes \p glyph before its outline, if any, is collected.
+   *
+   * @param glyph Glyph about to be collected.
+   * @param collected Number of outlines collected from the run so far.
+   */
+  void noteGlyph(const TextGlyph& glyph, std::size_t collected) {
+    if (glyph.startsTextChunk && collected > 0 &&
+        (starts_.empty() || starts_.back() != collected)) {
+      starts_.push_back(collected);
+    }
+  }
+
+  /**
+   * Returns each chunk's half-open range of collected outlines, in order, skipping empty ones.
+   *
+   * @param count Number of outlines collected from the run.
+   */
+  [[nodiscard]] std::vector<std::pair<std::size_t, std::size_t>> ranges(std::size_t count) const {
+    std::vector<std::pair<std::size_t, std::size_t>> result;
+    std::size_t begin = 0;
+    for (const std::size_t start : starts_) {
+      if (start > begin && start <= count) {
+        result.emplace_back(begin, start);
+        begin = start;
+      }
+    }
+    if (count > begin) {
+      result.emplace_back(begin, count);
+    }
+    return result;
+  }
+
+private:
+  std::vector<std::size_t> starts_;  ///< Outline index where each chunk after the first begins.
+};
 
 }  // namespace donner::svg

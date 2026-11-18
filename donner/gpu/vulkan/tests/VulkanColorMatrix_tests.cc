@@ -250,7 +250,7 @@ TEST_F(VulkanColorMatrixTest, TileWrapsAndPreservesFloatStorage) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
-TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndRoundsHalfOffsets) {
+TEST_F(VulkanColorMatrixTest, DropShadowUsesSharedInputsAndResamplesHalfOffsets) {
   gpu::tests::CheckDropShadowStorage(
       *device_, shader::programs::DropShadowNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); });
@@ -584,6 +584,17 @@ TEST_F(VulkanColorMatrixTest, ImageBlitNearest) {
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
                              {gpu::tests::image_blit_scene::Case::Nearest});
 }
+// The anchored bilinear mapping samples the same pixels as a bilinear reference under a sub-pixel
+// translation, a rotation and a non-uniform scale.
+TEST_F(VulkanColorMatrixTest, ImageBlitAnchoredMatchesBilinearReference) {
+  using gpu::tests::image_blit_scene::Case;
+  for (const Case kind : {Case::AnchoredTranslate, Case::AnchoredRotate, Case::AnchoredScale}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
+                               [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                               {kind});
+  }
+}
 TEST_F(VulkanColorMatrixTest, ImageBlitLinear) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
@@ -870,11 +881,13 @@ TEST_F(VulkanColorMatrixTest, FilterResolveUsesReflectedTableBindingAndWorkgroup
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
-TEST_F(VulkanColorMatrixTest, OffsetPreservesRoundingAndTransparentEdges) {
+TEST_F(VulkanColorMatrixTest, OffsetResamplesFractionalShiftsAndTransparentEdges) {
   const auto& shader = shader::programs::OffsetNativeShader();
-  const std::array<std::array<float, 2>, 10> shifts{
+  const std::array<std::array<double, 2>, 12> shifts{
       {{0, 0},
        {2, -3},
+       {0.6, -2.3},
+       {-1.7, 0.35},
        {0.5f, -0.5f},
        {-0.5f, 0.5f},
        {2.5f, -2.5f},

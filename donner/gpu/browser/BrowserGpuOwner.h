@@ -3,6 +3,7 @@
 /// Dispatches browser GPU primitives to the editor's canvas-owning application thread.
 
 #include <cstddef>
+#include <cstdint>
 #include <type_traits>
 
 namespace donner::gpu::browser {
@@ -80,5 +81,20 @@ void StopBrowserGpuOwner();
 
 /// Whether this module has registered a shared browser GPU owner.
 [[nodiscard]] bool UsesBrowserGpuOwner();
+
+/// Running totals of cross-thread owner dispatches from every client thread. Owner-local calls are
+/// excluded. Each field wraps or saturates as the matching `__donnerReadGpuOwnerWaitStats` field.
+struct BrowserGpuOwnerDispatchTotals {
+  /// Dispatches requested; each blocks its calling thread until the owner has run it.
+  std::uint32_t requested = 0;
+  /// One-millisecond wait slices that expired while a dispatch was still pending.
+  std::uint32_t waitSliceTimeouts = 0;
+  /// Saturating wall time requesting threads spent blocked on dispatches, in microseconds.
+  std::uint32_t dispatchWaitUs = 0;
+};
+
+/// Read the dispatch totals without synchronizing with dispatches in flight. All zero without a
+/// registered owner and outside pthread builds.
+[[nodiscard]] BrowserGpuOwnerDispatchTotals ReadBrowserGpuOwnerDispatchTotals();
 
 }  // namespace donner::gpu::browser

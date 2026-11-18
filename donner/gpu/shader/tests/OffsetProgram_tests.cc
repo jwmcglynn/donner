@@ -1,9 +1,10 @@
 /// @file
-/// Reflected offset interfaces, deterministic compilation and half-pixel rounding contract.
+/// Reflected offset interfaces, deterministic compilation and fractional resampling contract.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <span>
 #include <string>
 
@@ -24,10 +25,10 @@ TEST(OffsetProgramTests, ReflectsUniformLayoutAndComputeSurface) {
   EXPECT_EQ(params->minSizeBytes, sizeof(programs::OffsetParams));
   EXPECT_EQ(params->binding, 2u);
   EXPECT_EQ(params->type, BindingType::UniformBuffer);
-  EXPECT_TRUE(shader.matchesMember("params", "dx", 0, 4, ShaderScalarType::F32));
-  EXPECT_TRUE(shader.matchesMember("params", "dy", 4, 4, ShaderScalarType::F32));
-  EXPECT_TRUE(shader.matchesMember("params", "pad0", 8, 4, ShaderScalarType::U32));
-  EXPECT_TRUE(shader.matchesMember("params", "pad1", 12, 4, ShaderScalarType::U32));
+  EXPECT_TRUE(shader.matchesMember("params", "shiftX", 0, 4, ShaderScalarType::I32));
+  EXPECT_TRUE(shader.matchesMember("params", "shiftY", 4, 4, ShaderScalarType::I32));
+  EXPECT_TRUE(shader.matchesMember("params", "weightX", 8, 4, ShaderScalarType::F32));
+  EXPECT_TRUE(shader.matchesMember("params", "weightY", 12, 4, ShaderScalarType::F32));
 }
 TEST(OffsetProgramTests, OrdinaryAndFrozenNativeProjectionsAgree) {
   const auto parsed = wgsl::Parse(programs::kOffsetSource.view());
@@ -69,17 +70,26 @@ TEST(OffsetProgramTests, MutationPropagatesThroughDescriptorAndBindingLayout) {
   ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(1));
   EXPECT_EQ(descriptor.bufferBindings->front().binding, 7u);
 }
-TEST(OffsetProgramTests, KeepsHalfAwayRoundingAndTransparentSourceEdges) {
+TEST(OffsetProgramTests, BlendsByTheHostSplitWeightAndKeepsTransparentSourceEdges) {
   const auto source = programs::kOffsetSource.view();
-  EXPECT_THAT(source, testing::HasSubstr("floor(magnitude)"));
   // Native image robustness would mask removal of this authored early return in pixel tests.
   EXPECT_THAT(source, testing::HasSubstr(
                           "if (((gid.x >= extent.x) || (gid.y >= extent.y))) {\n    return;\n  }"));
-  EXPECT_THAT(source, testing::HasSubstr("sign(x)"));
-  EXPECT_THAT(source, testing::HasSubstr("(magnitude - integral) >= 0.5f"));
-  EXPECT_THAT(source, testing::Not(testing::HasSubstr("round(")));
   EXPECT_THAT(source,
-              testing::HasSubstr("textureStore(outputTexture, coords, vec4<f32>(0f, 0f, 0f, 0f))"));
+              testing::HasSubstr("let base = (coords - vec2<i32>(params.shiftX, params.shiftY));"));
+  EXPECT_THAT(source, testing::Not(testing::HasSubstr("floor(")));
+  EXPECT_THAT(source, testing::Not(testing::HasSubstr("round(")));
+  EXPECT_THAT(source, testing::HasSubstr("return vec4<f32>(0f);"));
+}
+// The split is made once per shift, so every pixel blends by the same weight: a fractional shift
+// of 0.6 blends input pixels x - 1 and x by 0.4, and -2.3 blends x + 2 and x + 3 by 0.3.
+TEST(OffsetProgramTests, SplitsShiftsIntoAWholeBaseAndAConstantWeight) {
+  using programs::SplitPixelShift;
+  EXPECT_THAT(SplitPixelShift(3.0), testing::FieldsAre(3, 0.0f));
+  EXPECT_THAT(SplitPixelShift(-2.0), testing::FieldsAre(-2, 0.0f));
+  EXPECT_THAT(SplitPixelShift(0.6), testing::FieldsAre(1, static_cast<float>(1.0 - 0.6)));
+  EXPECT_THAT(SplitPixelShift(-2.3),
+              testing::FieldsAre(-2, static_cast<float>(1.0 - (-2.3 - std::floor(-2.3)))));
 }
 }  // namespace
 }  // namespace donner::gpu::shader

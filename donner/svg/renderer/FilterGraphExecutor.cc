@@ -327,10 +327,7 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Flood& primitive,
 tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Offset& primitive,
                                                    const PrimitiveConversionState& state) {
   const Vector2d offset = state.context.primitiveToPixelOffset(primitive.dx, primitive.dy);
-  return gp::Offset{
-      BoundedRoundedFilterPixels(offset.x, components::kMaximumFilterPixelOffset),
-      BoundedRoundedFilterPixels(offset.y, components::kMaximumFilterPixelOffset),
-  };
+  return gp::Offset{BoundedFilterOffsetPixels(offset.x), BoundedFilterOffsetPixels(offset.y)};
 }
 
 tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Composite& primitive,
@@ -412,8 +409,8 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::DropShadow& primiti
   dropShadow.g = color.g;
   dropShadow.b = color.b;
   dropShadow.a = color.a;
-  dropShadow.dx = BoundedRoundedFilterPixels(offset.x, components::kMaximumFilterPixelOffset);
-  dropShadow.dy = BoundedRoundedFilterPixels(offset.y, components::kMaximumFilterPixelOffset);
+  dropShadow.dx = BoundedFilterOffsetPixels(offset.x);
+  dropShadow.dy = BoundedFilterOffsetPixels(offset.y);
   dropShadow.sigmaX =
       primitive.stdDeviationX >= 0
           ? BoundedPositiveFilterPixels(state.context.primitiveToPixelX(primitive.stdDeviationX))

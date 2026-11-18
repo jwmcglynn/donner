@@ -315,7 +315,7 @@ TEST(FilterGraphExecutorTest, AppliesOffsetsUsingCapturedFilterTransform) {
   EXPECT_THAT(GetPixel(pixmap, 3, 1), Rgba(255, 0, 0, 255));
 }
 
-TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
+TEST(FilterGraphExecutorTest, FractionalOffsetsSplitCoverageAcrossNeighboringPixels) {
   auto maybePixmap = tiny_skia::Pixmap::fromSize(24, 24);
   ASSERT_TRUE(maybePixmap.has_value());
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
@@ -330,10 +330,12 @@ TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d::Scale(2.5), std::nullopt);
 
-  // dx=5.0 with Scale(2.5) → pixel offset = lround(12.5) = 13.
-  // Pixel at (1,1) moves to (14,1).
-  EXPECT_THAT(GetPixel(pixmap, 14, 1), Rgba(255, 0, 0, 255));
-  EXPECT_THAT(GetPixel(pixmap, 13, 1), Rgba(0, 0, 0, 0));
+  // dx=5.0 with Scale(2.5) is a 12.5 pixel offset: the pixel at x=1 covers [13.5, 14.5), half of
+  // pixel 13 and half of pixel 14.
+  EXPECT_THAT(GetPixel(pixmap, 12, 1), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 13, 1), Rgba(128, 0, 0, 128));
+  EXPECT_THAT(GetPixel(pixmap, 14, 1), Rgba(128, 0, 0, 128));
+  EXPECT_THAT(GetPixel(pixmap, 15, 1), Rgba(0, 0, 0, 0));
 }
 
 /// Box-blurring primitives whose spill past the raster edge the edge tests check: even and odd
@@ -2715,16 +2717,20 @@ TEST(FilterInputMarginTest, SkewedReachCoversTheDeviceFootprint) {
                   .pixels,
               testing::FieldsAre(testing::DoubleNear(9.0 + 4.0 * localY + 1.0, 1e-9),
                                  testing::DoubleNear(localY + 1.0, 1e-9)));
-  // An offset is already a device vector: (2, 2) in filter units moves (10, 2) device pixels.
+  // An offset of (2, 2) in filter units moves (10, 2) device pixels. On the local raster its Y
+  // part is 2 sqrt(17) local pixels, which blends local pixels 8 and 9; local pixel 9 lies farther
+  // than the device offset along both device axes.
+  const double offsetLocalY = std::ceil(2.0 * std::sqrt(17.0)) / std::sqrt(17.0);
   EXPECT_THAT(
       ComputeFilterSamplingReach(SinglePrimitiveGraph(filter_primitive::Offset{2.0, 2.0}), skew)
           .pixels,
-      testing::Eq(Vector2d(11.0, 3.0)));
+      testing::FieldsAre(testing::DoubleNear(2.0 + 4.0 * offsetLocalY + 1.0, 1e-9),
+                         testing::DoubleNear(offsetLocalY + 1.0, 1e-9)));
 }
 
-// Both executors round each primitive to whole pixels, so every primitive's reach rounds up before
-// the chain adds them: eight offsets of 0.6 move content 8 pixels, and a blur of 0.5 reads
-// 2 pixels on each side, not 1.5.
+// Every primitive's reach rounds up to whole pixels before the chain adds them: each of eight
+// offsets of 0.6 blends the pixel past its shift, so together they read 8 pixels, and a blur of
+// 0.5 reads 2 pixels on each side, not 1.5.
 TEST(FilterInputMarginTest, ReachRoundsEachPrimitiveUpToWholePixels) {
   using namespace components;
   FilterGraph offsets;
@@ -2749,10 +2755,11 @@ TEST(FilterInputMarginTest, ReachRoundsEachPrimitiveUpToWholePixels) {
 }
 
 // The transformed blur path runs offsets on a local raster whose scale is each filter axis's
-// length, and rounds them there. Under matrix(1 0 1 1 0 0) an offset of (0.6, -0.6) rounds to
-// (1, -1) local pixels, which is (1 - 1/sqrt(2), -1/sqrt(2)) device pixels; on the device raster it
-// would round to (0, -1). Each offset reaches the larger of the two on each axis.
-TEST(FilterInputMarginTest, SkewedOffsetsReachTheirLocalRasterRounding) {
+// length, 1 along X and sqrt(2) along Y under matrix(1 0 1 1 0 0). A fractional offset of
+// (0.6, -0.85) local pixels blends local pixels 0 to 1 along X and -1 to 0 along Y; the farthest of
+// those, local (1, 0) and (0, -1), lie 1 and 1/sqrt(2) device pixels away. On the device raster
+// the same offset moves (0, -0.6) pixels, which reaches 1 pixel along Y.
+TEST(FilterInputMarginTest, SkewedOffsetsReachTheirLocalRasterPixels) {
   using namespace components;
   Transform2d skew;
   skew.data[2] = 1.0;  // matrix(1 0 1 1 0 0)
@@ -2762,11 +2769,9 @@ TEST(FilterInputMarginTest, SkewedOffsetsReachTheirLocalRasterRounding) {
     node.primitive = filter_primitive::Offset{0.6, -0.6};
     graph.nodes.push_back(node);
   }
-  // 32 offsets, each 1 - 1/sqrt(2) along X and 1 along Y, plus a rounding pixel.
-  const double localX = 1.0 - 1.0 / std::sqrt(2.0);
+  // 32 offsets, each reaching 1 pixel along each axis, plus a rounding pixel.
   EXPECT_THAT(ComputeFilterSamplingReach(graph, skew).pixels,
-              testing::FieldsAre(testing::DoubleNear(32.0 * localX + 1.0, 1e-9),
-                                 testing::DoubleNear(33.0, 1e-9)));
+              testing::FieldsAre(testing::DoubleNear(33.0, 1e-9), testing::DoubleNear(33.0, 1e-9)));
 }
 
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {

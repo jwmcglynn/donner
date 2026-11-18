@@ -137,6 +137,10 @@ struct GeodeCounters {
   /// zoomed-in curves render as visible polygons.
   uint64_t strokeOutlinePoints = 0;
 
+  /// Text stroke outline bounds tested against an open group's bounds while grouping a text
+  /// chunk's strokes into shapes: fewer than two for each outline, however the glyphs overlap.
+  uint64_t textStrokeBoundsTests = 0;
+
   /// Glyph occurrences this frame that resolved to an already-cached glyph
   /// outline. A text run repeats a handful of outlines across many
   /// occurrences, so this is the direct measure of the glyph cache doing its

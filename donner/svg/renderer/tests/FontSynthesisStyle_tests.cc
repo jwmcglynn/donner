@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -87,6 +89,8 @@ protected:
           <text id="fallback-auto" font-family="PrimaryMissing,sans-serif" font-style="italic">&#x3a9;</text>
           <text id="fallback-none" font-family="PrimaryMissing,sans-serif" font-style="italic" style="font-synthesis-style:none">&#x3a9;</text>
           <text id="document" font-family="DocumentFace" font-style="italic">A</text>
+          <text id="stem" font-size="64.3">l</text>
+          <text id="bold-stem" font-size="64.3" font-weight="bold">l</text>
         </g>
       </svg>)",
                                               warnings);
@@ -330,6 +334,29 @@ TEST_F(FontSynthesisStyleTest, ExistingDocumentFaceWithoutSynthesisKeepsItsGeome
   setPolicy("document", "none");
   EXPECT_THAT(observe("document").outline.points(), ElementsAreArray(original.outline.points()));
 }
+
+#ifdef DONNER_TEXT_FULL
+// The full tier emboldens a synthesized bold face by 3% of the text size, however finely the face
+// is sized to keep a fractional size's precision; the simple tier synthesizes no bold. FreeType
+// applies the strength on the 26.6 grid of the face, which is sized at the whole multiple
+// clamp(floor(2048 / size), 1, 16) of the text size, so one grid unit is 1 / (64 * multiple) px.
+// The strength truncates to whole units, and FT_Outline_EmboldenXY halves it with integer division
+// and moves one side of a straight stem by twice that half. The stem therefore widens by the
+// strength less under 2 grid units, a range derived from the grid rather than a tolerance.
+TEST_F(FontSynthesisStyleTest, SyntheticBoldStrengthIsAFractionOfTheTextSize) {
+  constexpr float kTextSizePx = 64.3f;  // The font-size of #stem and #bold-stem.
+  const double multiple = std::clamp(std::floor(2048.0 / kTextSizePx), 1.0, 16.0);
+  const double gridUnitPx = 1.0 / (64.0 * multiple);
+  const double strengthPx = static_cast<double>(kTextSizePx) * 0.03;
+  const auto regular = observe("stem");
+  const auto bold = observe("bold-stem");
+  const Box2d regularBounds = regular.outline.bounds();
+  const Box2d boldBounds = bold.outline.bounds();
+  ASSERT_THAT(regularBounds.width(), testing::Gt(1.0));
+  EXPECT_THAT(boldBounds.width() - regularBounds.width(),
+              testing::AllOf(testing::Le(strengthPx), testing::Gt(strengthPx - 2.0 * gridUnitPx)));
+}
+#endif
 
 }  // namespace
 }  // namespace donner::svg

@@ -4,15 +4,20 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <functional>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/ClassicNumberStream.h"
 #include "donner/base/MathUtils.h"
@@ -877,10 +882,57 @@ void ResolveBidiEmbeddings(Registry& registry, Entity styleEntity,
   std::reverse(span.bidiEmbeddings.begin(), span.bidiEmbeddings.end());
 }
 
+/**
+ * The font-family lists of the spans of one text element, resolved once per style entity, with
+ * each distinct list kept once.
+ *
+ * Each text node becomes a span styled by its element, and every element inherits its parent's
+ * `font-family`, so a text with many child elements, empty ones included, has many spans whose
+ * lists are equal. Within one text element, its spans then hold one copy of each distinct list
+ * rather than one per span. This bounds the spans only: each element's computed style still holds
+ * its own copy of an inherited list, and the sharing does not reach across text elements.
+ */
+class SpanFontFamilyLists {
+public:
+  /// The font-family list of the spans styled by \p styleEntity, whose style is \p properties.
+  std::shared_ptr<const SmallVector<RcString, 1>> listFor(Entity styleEntity,
+                                                          const PropertyRegistry& properties) {
+    auto [found, inserted] = byStyle_.try_emplace(styleEntity);
+    if (inserted) {
+      found->second = share(properties.fontFamily.get().value());
+    }
+    return found->second;
+  }
+
+private:
+  /// The kept copy of \p families.
+  std::shared_ptr<const SmallVector<RcString, 1>> share(SmallVector<RcString, 1> families) {
+    std::size_t hash = families.size();
+    for (const RcString& family : families) {
+      hash = hash * 31 + std::hash<std::string_view>()(std::string_view(family));
+    }
+    const std::span<const RcString> list(families.data(), families.size());
+    auto [first, last] = distinct_.equal_range(hash);
+    for (; first != last; ++first) {
+      const std::span<const RcString> kept(first->second->data(), first->second->size());
+      if (std::ranges::equal(kept, list)) {
+        return first->second;
+      }
+    }
+    auto shared = std::make_shared<const SmallVector<RcString, 1>>(std::move(families));
+    distinct_.emplace(hash, shared);
+    return shared;
+  }
+
+  std::unordered_map<Entity, std::shared_ptr<const SmallVector<RcString, 1>>> byStyle_;
+  std::unordered_multimap<std::size_t, std::shared_ptr<const SmallVector<RcString, 1>>> distinct_;
+};
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
                                 const Box2d& viewBox, const FontMetrics& fontMetrics,
                                 const TextStyleContext* styleContext = nullptr) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+  SpanFontFamilyLists fontFamilyLists;
 
   for (auto& [owner, fontSize] : text.textLengthOwnerFontSizes) {
     const Entity styleEntity = styleContext ? styleContext->styleEntityFor(owner) : owner;
@@ -961,7 +1013,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
     span.hasResolvedFontSize = true;
-    span.fontFamilies = style->properties->fontFamily.get().value();
+    span.fontFamilies = fontFamilyLists.listFor(styleEntity, *style->properties);
     span.visibility = style->properties->visibility.get().value();
     span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
         viewBox, fontMetrics, Lengthd::Extent::X);
@@ -2742,6 +2794,16 @@ void MarkRejectedAnchorRange(const std::vector<TextRun>& runs, const TextAnchorR
   }
 }
 
+/// Flags the first glyph of every text chunk, so a renderer can paint each chunk's glyphs of a run
+/// as one shape.
+void MarkTextChunkStarts(std::vector<TextRun>& runs, std::span<const ChunkBoundary> chunks) {
+  for (const ChunkBoundary& chunk : chunks) {
+    if (chunk.runIndex < runs.size() && chunk.glyphIndex < runs[chunk.runIndex].glyphs.size()) {
+      runs[chunk.runIndex].glyphs[chunk.glyphIndex].startsTextChunk = true;
+    }
+  }
+}
+
 void CompactRejectedAnchorGlyphs(std::vector<TextRun>& runs,
                                  const std::vector<std::vector<bool>>& rejected) {
   for (size_t ri = 0; ri < rejected.size(); ++ri) {
@@ -3696,11 +3758,19 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
 struct FontResolutionState {
   uint64_t revision = 0;                         ///< Current font resource revision.
   uint64_t familySelectionRevision = 0;          ///< Revision of the last family selection change.
+  uint64_t hostFontKey = 0;                      ///< Identity of the lent host fonts, if any.
   std::span<const FontFaceDependency> resolved;  ///< Current provider dependencies.
 };
 
 template <typename Geometry>
 bool FontDependenciesChanged(Geometry& geometry, const FontResolutionState& state) {
+  // Prepared under other lent fonts, or none: whatever it resolved may name faces this document
+  // does not see now.
+  if (geometry.hostFontKey != state.hostFontKey) {
+    geometry.hostFontKey = state.hostFontKey;
+    geometry.fontResourceRevision = state.revision;
+    return true;
+  }
   if (geometry.fontResourceRevision == state.revision) {
     return false;
   }
@@ -3784,7 +3854,7 @@ TextEngine::~TextEngine() = default;
 
 bool TextEngine::needsFontResourceRefresh() const {
   return fontManager_.fontResourceRevision() != observedFontResourceRevision_ ||
-         fontManager_.needsResourceRefresh();
+         fontManager_.hostFontKey() != observedHostFontKey_ || fontManager_.needsResourceRefresh();
 }
 
 std::vector<Entity> TextEngine::refreshFontResources() {
@@ -3792,6 +3862,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   const auto resolved = fontManager_.faceDependencies();
   const FontResolutionState state{.revision = fontManager_.fontResourceRevision(),
                                   .familySelectionRevision = fontManager_.familySelectionRevision(),
+                                  .hostFontKey = fontManager_.hostFontKey(),
                                   .resolved = resolved};
 
   std::vector<Entity> changedRoots;
@@ -3818,6 +3889,7 @@ std::vector<Entity> TextEngine::refreshFontResources() {
           components::DirtyFlagsComponent::RenderInstance,
       changedRoots);
   observedFontResourceRevision_ = state.revision;
+  observedHostFontKey_ = state.hostFontKey;
   return changedRoots;
 }
 
@@ -3919,9 +3991,9 @@ bool HasPaintedTextGlyphs(const components::ComputedTextComponent::TextSpan& spa
 /// Resolves a span's inherited font family and face attributes.
 FontHandle ResolveSpanFace(FontManager& fontManager,
                            const components::ComputedTextComponent::TextSpan& span,
-                           const SmallVector<RcString, 1>& families, FontHandle fallback) {
-  const SmallVector<RcString, 1>& spanFamilies =
-      span.fontFamilies.empty() ? families : span.fontFamilies;
+                           std::span<const RcString> families, FontHandle fallback) {
+  const std::span<const RcString> spanFamilies =
+      span.fontFamilyList().empty() ? families : span.fontFamilyList();
   FontHandle spanFont = FindFirstAvailableFont(fontManager, spanFamilies);
   if (!spanFont) {
     // A list that matches nothing resolves to the user agent's default family at the span's own
@@ -4114,11 +4186,40 @@ private:
   size_t remaining_ = 0;
 };
 
+/**
+ * The family names of the registered `@font-face` rules in declaration order, which cluster
+ * fallback tries after a span's listed families. One layout reads the list at most once and shares
+ * it across its spans. Faces are registered only outside layout, so the list stays current until
+ * the layout ends and is discarded with it.
+ */
+class DeclaredFaceFamilies {
+public:
+  explicit DeclaredFaceFamilies(const FontManager& fontManager) : fontManager_(fontManager) {}
+
+  /// The family names, one per registered rule, in declaration order.
+  const std::vector<RcString>& get() {
+    if (!families_) {
+      families_ = fontManager_.faceFamilyNamesInDeclarationOrder();
+      ++builds_;
+    }
+    return *families_;
+  }
+
+  /// Number of times the list was read from the font manager.
+  std::size_t builds() const { return builds_; }
+
+private:
+  const FontManager& fontManager_;
+  std::optional<std::vector<RcString>> families_;
+  std::size_t builds_ = 0;
+};
+
 /// Where a span's clusters may fall back, in priority order after the span's own face: its
 /// remaining font families, then every registered face, matched at the span's weight and style.
 struct ClusterFallback {
   FontManager& fontManager;
   FallbackCoverage& coverage;
+  DeclaredFaceFamilies& declaredFamilies;
   std::span<const RcString> families;
   int weight = 400;
   int style = 0;
@@ -5374,9 +5475,8 @@ private:
     if (fontManager.hasDefaultFamily()) {
       add(fontManager.defaultFamily());
     }
-    const size_t faceCount = fontManager.numFaces();
-    for (size_t index = 0; index < faceCount; ++index) {
-      add(fontManager.faceFamilyName(index));
+    for (const RcString& family : fallback_.declaredFamilies.get()) {
+      add(family);
     }
     // The primary face's check plus one query per candidate.
     fallback_.coverage.ensureGrantAtLeast(candidates_.size() + 1);
@@ -6481,12 +6581,11 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
   }
   const auto& properties = *style->properties;
   components::ComputedTextComponent::TextSpan span;
-  span.fontFamilies = properties.fontFamily.get().value();
+  const SmallVector<RcString, 1> families = properties.fontFamily.get().value();
   span.fontWeight = properties.fontWeight.get().value();
   span.fontStyle = properties.fontStyle.get().value();
   span.fontStretch = static_cast<FontStretch>(properties.fontStretch.get().value());
-  FontHandle font =
-      ResolveSpanFace(fontManager_, span, span.fontFamilies, fontManager_.fallbackFont());
+  FontHandle font = ResolveSpanFace(fontManager_, span, families, fontManager_.fallbackFont());
   font = selectBackendSafeFont(*backend_, fontManager_, font);
   const float size = CheckedFontSizePx(
       properties.fontSize.get().value().toPixels(viewBox, fontMetrics, Lengthd::Extent::Mixed));
@@ -6507,7 +6606,8 @@ public:
                        std::size_t* fallbackCoverageEntries = nullptr,
                        std::size_t* bidiRunCandidates = nullptr,
                        bool* bidiNestedOwnersPreserved = nullptr,
-                       std::optional<size_t> bidiRunCandidateLimit = std::nullopt)
+                       std::optional<size_t> bidiRunCandidateLimit = std::nullopt,
+                       std::size_t* declaredFamilyListBuilds = nullptr)
       : registry_(registry),
         fontManager_(fontManager),
         backend_(backend),
@@ -6515,6 +6615,7 @@ public:
         params_(params),
         resourceRejected_(resourceRejected),
         fallbackCoverageEntries_(fallbackCoverageEntries),
+        declaredFamilyListBuilds_(declaredFamilyListBuilds),
         normalBidi_(registry, bidiRunCandidates, bidiNestedOwnersPreserved, bidiRunCandidateLimit) {
   }
 
@@ -6544,14 +6645,22 @@ public:
     applyInlineWrap();
     applyFinalAdjustments();
     ApplyPostTextPathTranslations(runs_, text_, postPathBoundaries_);
-    if (fallbackCoverageEntries_) {
-      *fallbackCoverageEntries_ = fallbackCoverage_.entries();
-    }
+    reportFallbackWork();
     return std::move(runs_);
   }
 
 private:
   using TextSpan = components::ComputedTextComponent::TextSpan;
+
+  /// Hands the fallback work counts of this layout to the engine's test counters.
+  void reportFallbackWork() {
+    if (fallbackCoverageEntries_) {
+      *fallbackCoverageEntries_ = fallbackCoverage_.entries();
+    }
+    if (declaredFamilyListBuilds_) {
+      *declaredFamilyListBuilds_ = declaredFamilies_.builds();
+    }
+  }
 
   struct SpanState {
     SpanState() = default;
@@ -6962,13 +7071,15 @@ private:
     state.indexMappings = buildByteIndexMappings(state.text);
     const TextSpan& span = *state.span;
     fallbackCoverage_.grant(state.text.size());
-    const ClusterFallback fallback{
-        fontManager_,
-        fallbackCoverage_,
-        span.fontFamilies.empty() ? params_.fontFamilies : span.fontFamilies,
-        span.fontWeight,
-        static_cast<int>(span.fontStyle),
-        static_cast<int>(span.fontStretch)};
+    const ClusterFallback fallback{fontManager_,
+                                   fallbackCoverage_,
+                                   declaredFamilies_,
+                                   span.fontFamilyList().empty()
+                                       ? std::span<const RcString>(params_.fontFamilies)
+                                       : span.fontFamilyList(),
+                                   span.fontWeight,
+                                   static_cast<int>(span.fontStyle),
+                                   static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
                              fallback, normalBidi_.enabled ? &normalBidi_ : nullptr,
@@ -7704,6 +7815,7 @@ private:
     if (runs_.empty()) {
       return;
     }
+    MarkTextChunkStarts(runs_, chunkBoundaries_);
     if (wrapped_) {
       placeDeferredTextPaths();
       return;
@@ -8089,7 +8201,9 @@ private:
   bool wrapped_ = false;
   bool* resourceRejected_ = nullptr;
   std::size_t* fallbackCoverageEntries_ = nullptr;
+  std::size_t* declaredFamilyListBuilds_ = nullptr;
   FallbackCoverage fallbackCoverage_;
+  DeclaredFaceFamilies declaredFamilies_{fontManager_};
   NormalBidiPlan normalBidi_;
   std::vector<BidiPlacement> bidiPlacements_;
 };
@@ -8107,13 +8221,14 @@ std::vector<TextRun> TextEngine::layoutWithResourceStatus(
     bool& resourceRejected) {
   ++layoutCallCount_;
   resourceRejected = false;
+  declaredFamilyListBuilds_ = 0;
   bidiRunCandidates_ = 0;
   bidiNestedOwnersPreserved_ = false;
-  auto runs =
-      TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected,
-                           &fallbackCoverageEntries_, &bidiRunCandidates_,
-                           &bidiNestedOwnersPreserved_, bidiRunCandidateLimit_)
-          .run();
+  auto runs = TextLayoutInvocation(registry_, fontManager_, *backend_, text, params,
+                                   &resourceRejected, &fallbackCoverageEntries_,
+                                   &bidiRunCandidates_, &bidiNestedOwnersPreserved_,
+                                   bidiRunCandidateLimit_, &declaredFamilyListBuilds_)
+                  .run();
   for (size_t index = 0; index < runs.size() && index < text.spans.size(); ++index) {
     const auto& span = text.spans[index];
     const bool allow = span.fontSynthesisStyle == FontSynthesisStyle::Auto ||
@@ -8204,7 +8319,8 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
       registry_.remove<components::FontMetricDependenciesComponent>(geometryOwner);
     } else {
       registry_.emplace_or_replace<components::FontMetricDependenciesComponent>(
-          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision());
+          geometryOwner, std::move(dependencies), fontManager_.fontResourceRevision(),
+          fontManager_.hostFontKey());
     }
   }
   return measured;
@@ -8364,7 +8480,12 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
       return;
     }
     const Box2d extent = transformed.bounds();
-    cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
+    // The renderers draw no `.notdef`, so its outline is not cached with the ones they draw. Its
+    // extent still counts toward the ink bounds and the character's extent.
+    if (glyph.glyphIndex != 0) {
+      cache.glyphs.push_back(
+          {.sourceEntity = span.sourceEntity, .path = std::move(transformed), .extent = extent});
+    }
     addBox(cache.inkBounds, hasInkBounds, extent);
     addBox(charGeom.extent, charGeom.hasExtent, extent);
   } else if (const auto extent = BitmapGlyphExtent(
@@ -8374,8 +8495,40 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
   }
 }
 
+/**
+ * Tags the cached outlines of one layout run with the run and the text chunk starts. Chunk starts
+ * are noted as the renderer notes them: a glyph that starts a chunk splits the run's outlines
+ * there once the run has an earlier outline, even when that glyph has none itself.
+ */
+class CachedRunOutlineTagger {
+public:
+  /// @param runIndex Index of the layout run whose outlines are tagged.
+  explicit CachedRunOutlineTagger(std::size_t runIndex) : runIndex_(runIndex) {}
+
+  /// Notes \p glyph before its outline, if any, is cached.
+  void noteGlyph(const TextGlyph& glyph) {
+    chunkStartPending_ = chunkStartPending_ || (glyph.startsTextChunk && runOutlines_ > 0);
+  }
+
+  /// Tags the outline cached since \p outlinesBefore, if one was.
+  void tagNewOutline(components::ComputedTextGeometryComponent& cache, std::size_t outlinesBefore) {
+    if (cache.glyphs.size() <= outlinesBefore) {
+      return;
+    }
+    cache.glyphs.back().run = runIndex_;
+    cache.glyphs.back().startsTextChunk = chunkStartPending_;
+    chunkStartPending_ = false;
+    ++runOutlines_;
+  }
+
+private:
+  std::size_t runIndex_;
+  std::size_t runOutlines_ = 0;
+  bool chunkStartPending_ = false;
+};
+
 void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& fontManager,
-                           Entity textRootEntity, const TextRun& run,
+                           Entity textRootEntity, std::size_t runIndex, const TextRun& run,
                            const components::ComputedTextComponent::TextSpan& span, bool vertical,
                            components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
                            bool& hasEmBoxBounds, std::size_t& objectBoundingBoxSpanVisits,
@@ -8407,16 +8560,26 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& 
     AddTextObjectBounds(cache, span.sourceEntity, *runEmBounds);
   }
   const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
+  CachedRunOutlineTagger tagger(runIndex);
+  // The cached outlines are the ones the renderers draw: every glyph of the run but `.notdef` (see
+  // PopulateCachedGlyph), whether or not it maps to an addressable character. A glyph that maps to
+  // none still gets its outline, against character geometry that is not kept.
   for (const auto& glyph : run.glyphs) {
+    tagger.noteGlyph(glyph);
     const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
                                       ? apiMappings.byteToFirstUnit[glyph.cluster]
                                       : 0;
+    // Character geometry for a glyph that maps to no addressable character, which is not kept.
+    components::ComputedTextGeometryComponent::CharacterGeometry unaddressedScratch;
+    components::ComputedTextGeometryComponent::CharacterGeometry* charGeom = &unaddressedScratch;
     if (localCharIndex < localCharCount) {
-      PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
-                          runFontSizePx, hasPaintedGlyphs, vertical,
-                          cache.characters[charBaseIndex + localCharIndex], cache, hasInkBounds,
-                          stretchedCacheReservation);
+      charGeom = &cache.characters[charBaseIndex + localCharIndex];
     }
+    const std::size_t outlinesBefore = cache.glyphs.size();
+    PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
+                        runFontSizePx, hasPaintedGlyphs, vertical, *charGeom, cache, hasInkBounds,
+                        stretchedCacheReservation);
+    tagger.tagNewOutline(cache, outlinesBefore);
   }
   ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
 }
@@ -8466,10 +8629,14 @@ bool ReserveTextReferenceSpan(const components::ComputedTextComponent::TextSpan&
   if (span.start > span.end || span.end > span.text.size()) {
     return work.reject();
   }
-  const std::array counts{
-      span.end - span.start, span.fontFamilies.size(), span.ancestorBaselineShifts.size(),
-      span.xList.size(),     span.yList.size(),        span.dxList.size(),
-      span.dyList.size(),    span.rotateList.size()};
+  const std::array counts{span.end - span.start,
+                          span.fontFamilyList().size(),
+                          span.ancestorBaselineShifts.size(),
+                          span.xList.size(),
+                          span.yList.size(),
+                          span.dxList.size(),
+                          span.dyList.size(),
+                          span.rotateList.size()};
   for (const std::size_t count : counts) {
     if (!work.reserve(count)) {
       return false;
@@ -8758,7 +8925,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
     const bool workCanRetry =
         !TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
-    if (!existing->retryAfterTextPathWorkRejection || !workCanRetry) {
+    const bool sameLentFonts = existing->hostFontKey == fontManager_.hostFontKey();
+    if (sameLentFonts && (!existing->retryAfterTextPathWorkRejection || !workCanRetry)) {
       fontManager_.recordDependencies(existing->fontDependencies);
       return *existing;
     }
@@ -8788,13 +8956,14 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     runs = const_cast<TextEngine*>(this)->layout(styledText, params);
   }
   cache.fontResourceRevision = fontManager_.fontResourceRevision();
+  cache.hostFontKey = fontManager_.hostFontKey();
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
   std::size_t stretchedCacheReservation = 0u;
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
     PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, fontManager_, textRootEntity,
-                          runs[runIndex], styledText.spans[runIndex],
+                          runIndex, runs[runIndex], styledText.spans[runIndex],
                           isVertical(params.writingMode), cache, hasInkBounds, hasEmBoxBounds,
                           objectBoundingBoxSpanVisits_, stretchedCacheReservation);
   }
@@ -8825,7 +8994,8 @@ std::vector<TextEngine::GlyphOutline> TextEngine::computedGlyphOutlines(EntityHa
   std::vector<GlyphOutline> result;
   for (const auto& glyph : cache.glyphs) {
     if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
-      result.push_back(GlyphOutline{glyph.path, glyph.sourceEntity});
+      result.push_back(
+          GlyphOutline{glyph.path, glyph.sourceEntity, glyph.run, glyph.startsTextChunk});
     }
   }
   return result;

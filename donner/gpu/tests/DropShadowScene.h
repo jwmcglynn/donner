@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Native shadow composition, shared input bindings, and offset rounding acceptance.
+/// Native shadow composition, shared input bindings, and fractional offset acceptance.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -15,13 +15,29 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/ReflectedComputePipeline.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 
 namespace donner::gpu::tests {
 
-/// Composes a translucent blue shadow beneath a translucent red source at half-pixel offsets.
+/// Blurred alpha the (0.5, -0.5) shadow offset reads for output texel (\p x, \p y) of a 4x4
+/// texture: the mean of texels x - 1 and x in rows y and y + 1, with transparent texels outside.
+/// @param values RGBA texels. @param x Output column. @param y Output row.
+inline float HalfPixelShadowAlpha(const std::array<float, 64>& values, int32_t x, int32_t y) {
+  float sum = 0;
+  for (int32_t sampleY : {y, y + 1}) {
+    for (int32_t sampleX : {x - 1, x}) {
+      const bool inside = sampleX >= 0 && sampleY >= 0 && sampleX < 4 && sampleY < 4;
+      sum += inside ? values[(sampleY * 4 + sampleX) * 4 + 3] : 0.0f;
+    }
+  }
+  return sum / 4;
+}
+
+/// Composes a translucent blue shadow beneath a translucent red source at half-pixel offsets,
+/// which blend the four blurred texels around each shifted position.
 /// @param device Native device with bounded wait/readback support.
 /// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
@@ -94,12 +110,18 @@ void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView
     auto uniform = device.createBuffer(
         BufferDescriptor{"shadow parameters", 32, BufferUsage::Uniform | BufferUsage::CopyDst});
     ASSERT_THAT(uniform, HasResult());
-    const std::array<float, 8> params{0, 0, 1, 0.5f, 0.5f, -0.5f, 0, 0};
-    ASSERT_THAT(
-        device.writeBuffer(uniform.result(), 0,
-                           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),
-                                                    sizeof(params))),
-        IsOk());
+    shader::programs::DropShadowParams params{};
+    params.color[2] = 1;
+    params.color[3] = 0.5f;
+    const shader::programs::OffsetParams shift = shader::programs::MakeOffsetParams(0.5, -0.5);
+    params.shiftX = shift.shiftX;
+    params.shiftY = shift.shiftY;
+    params.weightX = shift.weightX;
+    params.weightY = shift.weightY;
+    ASSERT_THAT(device.writeBuffer(uniform.result(), 0,
+                                   std::span<const uint8_t>(
+                                       reinterpret_cast<const uint8_t*>(&params), sizeof(params))),
+                IsOk());
     auto group = device.createBindGroup(BindGroupDescriptor{
         "drop shadow",
         compute.layout,
@@ -143,13 +165,8 @@ void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView
       for (int32_t x = 0; x < 4; ++x) {
         const size_t offset = (y * 4 + x) * 4;
         std::copy_n(sourceValues.begin() + offset, 4, expected->data().begin() + offset);
-        const int32_t sampleX = x - 1;
-        const int32_t sampleY = y + 1;
-        if (sampleX < 0 || sampleY >= 4) {
-          continue;
-        }
-        const auto& alphaValues = aliasedInputs ? sourceValues : blurredValues;
-        const float shadowAlpha = 0.5f * alphaValues[(sampleY * 4 + sampleX) * 4 + 3];
+        const float shadowAlpha =
+            0.5f * HalfPixelShadowAlpha(aliasedInputs ? sourceValues : blurredValues, x, y);
         const float remaining = 1 - sourceValues[offset + 3];
         expected->data()[offset + 2] += shadowAlpha * remaining;
         expected->data()[offset + 3] += shadowAlpha * remaining;
