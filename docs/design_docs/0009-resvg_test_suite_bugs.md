@@ -69,8 +69,6 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
-| text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
-| text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
@@ -90,9 +88,6 @@ The seven feColorMatrix identity forms (without-attributes, type=matrix without 
 empty, short or long value lists, and type=saturate and type=hueRotate without a value) share
 `donner-feColorMatrix-identity.png`; the evidence that the 8-bit tables posterize the references
 is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
-
-`named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
-named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
 
 `textPath/mixed-children-2` runs against a committed Donner render
 (`resvg-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
@@ -200,6 +195,19 @@ The seven `filters/filter-functions/color-adjust-functions-*` rows retain the ve
 outside the label bands. Both backends compare the live filtered squares against the original
 pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
 records the reference construction and qualification.
+
+### Named font sizes (CSS Fonts 4 table, a maintainer decision)
+
+The absolute-size table in CSS Fonts 4 section 2.5 is a guideline for user agents, not a
+requirement, so these references are not wrong per spec. Donner follows that table (3/5, 3/4,
+8/9, 1, 6/5, 3/2 and 2 times `medium`) by maintainer decision; the vendored PNGs step by 1.2 per
+keyword, as CSS 2 did. `testdata/golden/README.md` has the measured sizes, including the table
+current browsers use.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| text/font-size | named-value | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
+| text/font-size | named-value-without-a-parent | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
 
 ### Backend-difference goldens (text)
 
