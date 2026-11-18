@@ -171,7 +171,6 @@ own renderings for most of them; Donner matches the v0.49.0 renderings within th
 allowance on both CPU text tiers. Their SVG inputs are byte-identical at both revisions.
 
   tests/text/textPath/m-A-path.png
-  tests/text/textPath/m-L-Z-path.png
   tests/text/textPath/nested.png
   tests/text/textPath/path-with-ClosePath.png
   tests/text/textPath/simple-case.png
