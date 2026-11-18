@@ -1084,7 +1084,8 @@ INSTANTIATE_TEST_SUITE_P(
             {
                 {"funcIRI-parsing.svg", Params::UndefinedBehavior("FuncIRI parsing")},
                 {"funcIRI-with-invalid-characters.svg",
-                 Params::UndefinedBehavior("FuncIRI with invalid chars")},
+                 Params::UndefinedBehavior(
+                     "The upstream reference is the UB marker for a digit-leading XML ID")},
                 {"invalid-id-attribute-1.svg", Params::UndefinedBehavior("Invalid id attribute")},
                 {"invalid-id-attribute-2.svg", Params::UndefinedBehavior("Invalid id attribute")},
                 {"no-size.svg",
