@@ -4530,6 +4530,8 @@ public:
     if (!ordinaryScope(text, params)) {
       return true;
     }
+    pathOnly_ = std::any_of(text.spans.begin(), text.spans.end(),
+                            [](const TextSpan& span) { return span.pathSpline.has_value(); });
     const auto input = scanInputs(text);
     if (!input) {
       return reject();
@@ -4637,6 +4639,10 @@ public:
     return result;
   }
 
+  bool appliesToSpan(const TextSpan& span) const { return enabled && spanInScope(span); }
+
+  bool appliesToFlatText() const { return enabled && !pathOnly_; }
+
   bool reject() {
     budget.rejected = true;
     return false;
@@ -4659,6 +4665,15 @@ private:
     size_t bytes = 0;
     size_t count = 0;
   };
+
+  /// Each path is a separate bidi scope. Flat spans keep their existing continuation pen.
+  bool pathOnly_ = false;
+
+  bool spanInScope(const TextSpan& span) const { return !pathOnly_ || span.pathSpline.has_value(); }
+
+  bool visibleSpanInScope(const TextSpan& span) const {
+    return spanInScope(span) && !span.hidden && !span.textPathFailed;
+  }
 
 #ifdef DONNER_TEXT_ENABLED
   bool ordinaryScope(const components::ComputedTextComponent& text,
@@ -4698,7 +4713,7 @@ private:
         return std::nullopt;
       }
       result.bytes += value.size();
-      if (span.hidden || span.textPathFailed) {
+      if (!visibleSpanInScope(span)) {
         continue;
       }
       for (size_t byte = 0; byte < value.size();) {
@@ -5035,8 +5050,12 @@ private:
 
   void appendSpan(const components::ComputedTextComponent& text, size_t spanIndex) {
     const TextSpan& span = text.spans[spanIndex];
-    const bool pathBoundary = startsPathScope(text, span);
     Span mapping{source.size(), source.size(), characters.size(), characters.size()};
+    if (!visibleSpanInScope(span)) {
+      spans.push_back(mapping);
+      return;
+    }
+    const bool pathBoundary = startsPathScope(text, span);
     const std::string_view original(span.text.data() + span.start, span.end - span.start);
     std::optional<text_transform::FullWidthText> transformed;
     if (span.textTransform == TextTransform::FullWidth) {
@@ -5044,21 +5063,19 @@ private:
           original, span.preservesSpaces || PreservesSpaces(span.whiteSpace));
     }
     const std::string_view value = transformed ? std::string_view(transformed->text) : original;
-    if (!span.hidden && !span.textPathFailed) {
-      uint32_t position = 0;
-      size_t scalar = 0;
-      bool previousJoiner = false;
-      for (size_t byte = 0; byte < value.size(); ++scalar) {
-        const size_t start = byte;
-        const char32_t decoded = decodeUtf8(value, byte);
-        const char32_t cp = IsBlankShapingControl(decoded) ? U' ' : decoded;
-        const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
-        appendCharacter(span, spanIndex, position, start, sourceByte, cp, previousJoiner,
-                        pathBoundary && start == 0);
-        if (!BidiParagraph::IsControl(cp)) {
-          previousJoiner = cp == 0x200d;
-          ++position;
-        }
+    uint32_t position = 0;
+    size_t scalar = 0;
+    bool previousJoiner = false;
+    for (size_t byte = 0; byte < value.size(); ++scalar) {
+      const size_t start = byte;
+      const char32_t decoded = decodeUtf8(value, byte);
+      const char32_t cp = IsBlankShapingControl(decoded) ? U' ' : decoded;
+      const uint32_t sourceByte = transformed ? transformed->sourceByteOffsets[scalar] : start;
+      appendCharacter(span, spanIndex, position, start, sourceByte, cp, previousJoiner,
+                      pathBoundary && start == 0);
+      if (!BidiParagraph::IsControl(cp)) {
+        previousJoiner = cp == 0x200d;
+        ++position;
       }
     }
     mapping.end = characters.size();
@@ -6918,7 +6935,7 @@ private:
   }
 
   bool prepareFullWidthShapingText(SpanState& state) {
-    if (normalBidi_.enabled) {
+    if (normalBidi_.appliesToSpan(*state.span)) {
       state.text = normalBidi_.spanText(state.span - text_.spans.data());
       return true;
     }
@@ -7104,7 +7121,8 @@ private:
                                    static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
-                             fallback, normalBidi_.enabled ? &normalBidi_ : nullptr,
+                             fallback,
+                             normalBidi_.appliesToSpan(*state.span) ? &normalBidi_ : nullptr,
                              state.span - text_.spans.data());
     EmergencyWrapOptions* emergency = emergencyOptions(state);
     state.shaping =
@@ -7511,7 +7529,7 @@ private:
   void recordBidiPlacement(const SpanState& state, const PreparedSpanChunk& prepared,
                            size_t glyphIndex, uint32_t codepoint, uint32_t positioningCluster,
                            const TextGlyph& glyph) {
-    if (!normalBidi_.enabled || state.span->pathSpline) {
+    if (!normalBidi_.appliesToFlatText() || state.span->pathSpline) {
       return;
     }
     const size_t span = state.span - text_.spans.data();
@@ -7616,7 +7634,7 @@ private:
   /// Restore source byte indices only after shaping and path staging have consumed transformed
   /// text.
   void restoreSourceClusters(SpanState& state) const {
-    if (normalBidi_.enabled) {
+    if (normalBidi_.appliesToSpan(*state.span)) {
       const size_t span = state.span - text_.spans.data();
       for (auto& glyph : state.run.glyphs) {
         if (const auto index = normalBidi_.characterAt(span, glyph.cluster)) {
@@ -8273,6 +8291,9 @@ private:
   bool placeNormalBidi() {
     if (normalBidi_.budget.rejected || normalBidi_.work.rejected) {
       return normalBidi_.reject();
+    }
+    if (!normalBidi_.appliesToFlatText()) {
+      return true;
     }
     auto paragraphs = bidiParagraphItems();
     chunkBoundaries_.clear();
