@@ -373,8 +373,9 @@ generation:`, only when all of the following hold:
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
 | `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
-The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
-(1555 and 3134 pixels, #1176).
+The two mixed-font ligature fixtures compare against resvg v0.49.0 at the default settings on
+the full text tier. These fixtures exercise the Amiri font's GSUB substitution, which the
+simple tier does not implement.
 
 Moving `nested-with-baseline` and `hanging` from a 0.1 color threshold with 100 pixels to a 0.02
 count is not tighter on both axes: the count is larger and the color threshold smaller. It is
