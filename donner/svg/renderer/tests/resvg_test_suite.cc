@@ -1391,9 +1391,13 @@ INSTANTIATE_TEST_SUITE_P(
     TextGlyphOrientationVertical, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "text/glyph-orientation-vertical",
-                {{"simple-case.svg", Params::Skip("upright Latin reference comparison remains "
-                                                  "unresolved after orientation and cell-metric "
-                                                  "coverage")}})),
+                {
+                    {"simple-case.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/donner-upright-latin-outline.png")
+                         .withReason("Reference disagreement: the vendored crosshairs use "
+                                     "different stroke coverage (golden README)")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
