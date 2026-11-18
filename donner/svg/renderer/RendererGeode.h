@@ -586,6 +586,12 @@ public:
                                    std::uint64_t maximumFrameBytes, std::uint64_t maximumCacheBytes,
                                    std::uint64_t maximumResidentBytes);
 
+  /// Lower the path encoder's per-path item limit for boundary tests; never raises it.
+  void setPathEncoderItemLimitForTesting(std::size_t maximumItems);
+
+  /// Lower the outline points joined into one text stroke shape (65536) for tests; never raises it.
+  void setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints);
+
   /// Shrink the aggregate frame-surface budget for boundary tests.
   void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes);
 

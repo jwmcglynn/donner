@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -603,11 +604,13 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
   }
 }
 
-// Renders `source` with `selector` translated by `translation` in a fresh compositor and returns
-// the owner layer's texture, the reference for a held-drag owner texture.
+// Renders `source` with `selector` translated by `translation` in a fresh compositor, through
+// `surfaceFromCanvas`, and returns the owner layer's texture, the reference for a held-drag owner
+// texture.
 RendererBitmap FreshOwnerTexture(std::string_view source, const char* ownerSelector,
                                  const char* selector, const Vector2d& translation,
-                                 const RenderViewport& viewport, Vector2d* canvasOffset) {
+                                 const RenderViewport& viewport, Vector2d* canvasOffset,
+                                 const Transform2d& surfaceFromCanvas = Transform2d()) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_FALSE(parsed.hasError());
@@ -620,7 +623,7 @@ RendererBitmap FreshOwnerTexture(std::string_view source, const char* ownerSelec
   CompositorConfig config;
   config.deferFirstFrameWarmup = false;
   CompositorController compositor(document, renderer, config);
-  compositor.renderFrame(viewport);
+  compositor.renderFrame(viewport, surfaceFromCanvas);
   const auto owner = document.querySelector(ownerSelector);
   EXPECT_TRUE(owner.has_value());
   const CompositorLayer* layer = compositor.findLayerForTest(owner->unsafeEntityHandle().entity());
@@ -636,15 +639,18 @@ struct HeldMaskedDragResult {
   std::uint64_t fastPathFrames = 0;
   std::uint64_t slowPathFrames = 0;
   int maskedChildComposeTiles = 0;
+  int damagePatchTiles = 0;
   RendererBitmap ownerTexture;
   Vector2d ownerCanvasOffset;
 };
 
 // Drags `selector` inside the masked `ownerSelector` group through `steps` held frames, each
-// translating it by `stepTranslation`, and reports the fast-path counters for those frames.
+// translating it by `stepTranslation` and rendered through `surfaceFromCanvas`, and reports the
+// fast-path counters for those frames.
 HeldMaskedDragResult RunHeldMaskedDrag(std::string_view source, const char* ownerSelector,
                                        const char* selector, const Vector2d& stepTranslation,
-                                       int steps, const RenderViewport& viewport) {
+                                       int steps, const RenderViewport& viewport,
+                                       const Transform2d& surfaceFromCanvas = Transform2d()) {
   HeldMaskedDragResult result;
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
@@ -655,7 +661,7 @@ HeldMaskedDragResult RunHeldMaskedDrag(std::string_view source, const char* owne
   CompositorConfig config;
   config.deferFirstFrameWarmup = false;
   CompositorController compositor(document, renderer, config);
-  compositor.renderFrame(viewport);
+  compositor.renderFrame(viewport, surfaceFromCanvas);
   const auto owner = document.querySelector(ownerSelector);
   const auto target = document.querySelector(selector);
   EXPECT_TRUE(owner.has_value());
@@ -675,7 +681,7 @@ HeldMaskedDragResult RunHeldMaskedDrag(std::string_view source, const char* owne
     const std::uint64_t generationBefore = ownerLayer != nullptr ? ownerLayer->generation() : 0;
     target->cast<SVGGraphicsElement>().setTransform(
         Transform2d::Translate(stepTranslation * static_cast<double>(step)));
-    compositor.renderFrame(viewport);
+    compositor.renderFrame(viewport, surfaceFromCanvas);
     EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation()) << selector << " step " << step;
     ownerLayer = compositor.findLayerForTest(ownerEntity);
     EXPECT_NE(ownerLayer, nullptr);
@@ -684,6 +690,7 @@ HeldMaskedDragResult RunHeldMaskedDrag(std::string_view source, const char* owne
           << selector << " must update its owning masked tile on held step " << step;
     }
     result.maskedChildComposeTiles += compositor.lastRenderFrameStats().maskedChildComposeTileCount;
+    result.damagePatchTiles += compositor.lastRenderFrameStats().damagePatchTileCount;
   }
   const CompositorController::FastPathCounters after = compositor.fastPathCountersForTesting();
   result.fastPathFrames = after.fastPathFrames - before.fastPathFrames;
@@ -1893,6 +1900,76 @@ TEST(CompositorGeodeSplashTest, FilteredDragCrossingArtboardReturnsToOwningTile)
       "filtered_glow_held_owner_vs_fresh", editor::tests::PixelmatchIdentityParams());
   EXPECT_EQ(compositor.promoteEntity(entity, InteractionHint::ActiveDrag),
             CompositorController::PromoteResult::OwningTilesRequired);
+}
+
+// A zoomed, scrolled editor view rasterizes through a fractional scale and offset. The compose
+// transform of an unmoved tile then carries rounding instead of exact identity, which must not stop
+// a masked child's held drag from updating its owner tile incrementally.
+TEST(CompositorGeodeSplashTest, MaskedChildHeldDragStaysIncrementalUnderFractionalSurfaceScale) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  RenderViewport viewport;
+  viewport.size = Vector2d(1536, 1024);
+  viewport.devicePixelRatio = 1.0;
+  constexpr int kSteps = 3;
+  struct Surface {
+    const char* label;
+    Transform2d surfaceFromCanvas;
+  };
+  for (const Surface& surface :
+       {Surface{"translate_then_scale_1_1",
+                Transform2d::Translate(-264.0, -191.0) * Transform2d::Scale(1.1)},
+        Surface{"scale_1_5_then_translate",
+                Transform2d::Scale(1.5) * Transform2d::Translate(-33.3, -77.7)}}) {
+    SCOPED_TRACE(surface.label);
+    {
+      // This face sits inside a clipped crystal, so its drag patches the damaged rectangle.
+      SCOPED_TRACE("damage patch");
+      const Vector2d step(4, 0);
+      const HeldMaskedDragResult held =
+          RunHeldMaskedDrag(source.contents, "#cavity-artwork", "#central-crown-face-3", step,
+                            kSteps, viewport, surface.surfaceFromCanvas);
+      EXPECT_EQ(held.fastPathFrames, static_cast<std::uint64_t>(kSteps));
+      EXPECT_EQ(held.slowPathFrames, 0u);
+      EXPECT_EQ(held.damagePatchTiles, kSteps)
+          << "each held move must patch its damage instead of re-rasterizing the owner tile";
+      Vector2d referenceOffset;
+      const RendererBitmap reference =
+          FreshOwnerTexture(source.contents, "#cavity-artwork", "#central-crown-face-3",
+                            step * static_cast<double>(kSteps), viewport, &referenceOffset,
+                            surface.surfaceFromCanvas);
+      ASSERT_FALSE(held.ownerTexture.empty());
+      ASSERT_FALSE(reference.empty());
+      EXPECT_THAT(held.ownerCanvasOffset, Vector2Eq(referenceOffset.x, referenceOffset.y));
+      editor::tests::CompareBitmapToBitmap(
+          held.ownerTexture, reference, std::string(surface.label) + "_damage_patch_vs_full_owner",
+          editor::tests::PixelmatchIdentityParams());
+    }
+    {
+      // This facet has a plain path to the owner, so its drag recomposes the owner from pieces.
+      SCOPED_TRACE("pieces");
+      const Vector2d step(12, 0);
+      const HeldMaskedDragResult held =
+          RunHeldMaskedDrag(source.contents, "#cavity-artwork", "#cavity-facet-001", step, kSteps,
+                            viewport, surface.surfaceFromCanvas);
+      EXPECT_EQ(held.fastPathFrames, static_cast<std::uint64_t>(kSteps));
+      EXPECT_EQ(held.slowPathFrames, 0u);
+      EXPECT_EQ(held.maskedChildComposeTiles, kSteps)
+          << "each held move must recompose the owner from its pieces";
+      Vector2d referenceOffset;
+      const RendererBitmap reference =
+          FreshOwnerTexture(source.contents, "#cavity-artwork", "#cavity-facet-001",
+                            step * static_cast<double>(kSteps), viewport, &referenceOffset,
+                            surface.surfaceFromCanvas);
+      ASSERT_FALSE(held.ownerTexture.empty());
+      ASSERT_FALSE(reference.empty());
+      EXPECT_THAT(held.ownerCanvasOffset, Vector2Eq(referenceOffset.x, referenceOffset.y));
+      editor::tests::CompareBitmapToBitmap(held.ownerTexture, reference,
+                                           std::string(surface.label) + "_pieces_vs_full_owner",
+                                           kRecomposedOwnerParams);
+    }
+  }
 }
 
 }  // namespace

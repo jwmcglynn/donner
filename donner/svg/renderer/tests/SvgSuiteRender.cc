@@ -23,6 +23,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/renderer/tests/SvgSuiteReferenceFonts.h"
+#include "donner/svg/renderer/tests/TestFontDirectory.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -81,25 +82,24 @@ LoadedFont loadFont(const std::filesystem::path& path, size_t remainingBytes) {
 
 std::string loadFontsFromDirectory(const std::filesystem::path& fontsDir,
                                    std::vector<css::FontFace>& faces) {
-  size_t remainingBytes = 128u * 1024u * 1024u;
   std::error_code error;
-  std::filesystem::directory_iterator entry(fontsDir, error);
-  while (!error && entry != std::filesystem::directory_iterator()) {
-    const auto path = entry->path();
-    const auto extension = path.extension();
-    if (extension == ".ttf" || extension == ".otf") {
-      auto font = loadFont(path, remainingBytes);
-      if (!font.error.empty()) {
-        return font.error;
-      }
-      remainingBytes -= font.byteCount;
-      if (font.face) {
-        faces.push_back(std::move(*font.face));
-      }
-    }
-    entry.increment(error);
+  const std::vector<std::filesystem::path> fontPaths = ListFontFilesSorted(fontsDir, error);
+  if (error) {
+    return "font directory is unreadable or has no supported regular/bold fonts";
   }
-  if (error || faces.empty()) {
+
+  size_t remainingBytes = 128u * 1024u * 1024u;
+  for (const std::filesystem::path& path : fontPaths) {
+    auto font = loadFont(path, remainingBytes);
+    if (!font.error.empty()) {
+      return font.error;
+    }
+    remainingBytes -= font.byteCount;
+    if (font.face) {
+      faces.push_back(std::move(*font.face));
+    }
+  }
+  if (faces.empty()) {
     return "font directory is unreadable or has no supported regular/bold fonts";
   }
   return {};

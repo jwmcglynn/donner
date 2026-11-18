@@ -94,7 +94,7 @@ CapturedStyleGlyph CaptureStyleGlyph(const FontFamilyProvider* provider, std::st
   span.start = 0;
   span.end = 1;
   span.startsNewChunk = true;
-  span.fontFamilies.emplace_back(family);
+  span.setFontFamilies({RcString(family)});
   span.fontStyle = request.style;
   span.fontWeight = request.weight;
   span.fontSynthesisStyle = policy;
@@ -235,7 +235,7 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
     span.start = 0;
     span.end = 1;
     span.startsNewChunk = true;
-    span.fontFamilies.emplace_back("CapturedFace");
+    span.setFontFamilies({RcString("CapturedFace")});
     span.fontSynthesisStyle = FontSynthesisStyle::None;
     text.spans.push_back(span);
     TextLayoutParams layout;
@@ -322,7 +322,7 @@ TEST(FontSynthesisStyleSnapshotTest, SameBytesKeepDistinctRequestsAcrossAllPrepa
         span.start = 0;
         span.end = 1;
         span.startsNewChunk = true;
-        span.fontFamilies.emplace_back("sans-serif");
+        span.setFontFamilies({RcString("sans-serif")});
         span.fontStyle = style;
         span.fontSynthesisStyle = policy;
         text.spans.push_back(span);

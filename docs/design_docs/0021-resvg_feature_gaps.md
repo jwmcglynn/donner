@@ -119,7 +119,7 @@ bottom for completeness.
 
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` coverage                                     | **DONE** (27/43 files compare) | All cases execute; 16 reference qualifications have independent contract tests.                                                                                                                                           |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (33/43 files compare) | All cases execute; 10 reference qualifications have independent contract tests.                                                                                                                                           |
 | B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and v0.49.0 raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
@@ -138,15 +138,15 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-All 43 fixtures execute. Twenty-eight retain ordinary comparisons, including `blur-function` and
-`drop-shadow-function-filter-region`; fifteen have explicit reference qualifications and independent
-rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
-`FilterReferenceStages`. No threshold or golden is changed.
+All 43 fixtures execute. Twenty-nine retain ordinary comparisons, including `blur-function` and
+`drop-shadow-function-filter-region`; four compare against Donner goldens, and ten have explicit
+reference qualifications and independent rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
+`FilterReferenceStages`.
 
 | Assigned cases | Disposition |
 | --- | --- |
 | Seven `color-adjust-functions-*` cases | Compare with a 390-pixel reference label glyph budget. Every mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular (see [B7](#b7-text-reference-qualification)). |
-| Five remaining `drop-shadow-function*` cases | Reference disagreement. Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For the three `4 5 6` cases the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner rounds to (10, 13) under its half-pixel rounding contract, and an exact half-pixel shadow still differs from the reference by 447 pixels. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80). Reproducing them needs two truncations: the resolved user lengths to whole units before scaling (12.8 19.2 to 12 19, and 11.34 15.12 to 11 15), a hypothesis the current usvg source does not show, and the scaled offset toward zero, which resvg's `apply_drop_shadow` does with `dx as i32`. Color order, currentColor, em/mm resolution and alpha compare independently. |
+| Four `drop-shadow-function*` cases | Compare against Donner goldens (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)). Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For `drop-shadow-function` and `color-last` the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner translates the shadow by the exact offset and resamples the half pixel. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80), consistent with the resolved user lengths truncated to whole units before scaling and the scaled offset truncated toward zero. Color order, currentColor, em/mm resolution and alpha compare independently. |
 | `two-exact-urls`                             | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `two-urls`                                   | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `url-and-grayscale`                          | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -162,9 +162,9 @@ rejected declarations preserve the prior value at the same cascade priority.
 
 The named gates are `properties_tests`, `renderer_driver_tests`, the three
 `renderer_regression_tests` configurations and all three resvg corpus targets. A raster sanitizer
-seed covers valid translucent shadows and invalid declarations. The qualified corpus cases are
-skips that name their cause: label-glyph differences under #1167, and drop-shadow references whose
-offsets are truncated, which are reference disagreements. #1169 tracks these classifications.
+seed covers valid translucent shadows and invalid declarations. The qualified corpus cases name
+their cause: label-glyph differences under #1167, and drop-shadow references whose offsets are
+truncated, which compare against Donner goldens. #1169 tracks these classifications.
 `two-urls` now compares by default after the box blur edge fix; the remaining filter-region and
 sampling cases stay with #1170.
 
@@ -344,7 +344,7 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   `fallback-1` draws Noto Serif like the reference; the product default remains
   the embedded Public Sans.
 
-> The remaining sub-1000-px CPU thresholds (feColorMatrix matrix/saturate variants,
+> The remaining sub-1000-px CPU thresholds (feColorMatrix saturate and non-normalized values,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
 > plausible coverage-geometry differences; audit opportunistically but they are not
 > promoted bugs.
@@ -441,9 +441,8 @@ not.
 ### Removed budgets
 
 Budgets that already passed at default settings were removed from 39 cases, including the
-`structure/transform-origin` category default (0.13 threshold, 300 pixels; `on-image`,
-`on-text-path` and `on-text` still need it and keep it per case), `text/text/xml-space` (1400
-pixels) and `painting/fill/pattern-on-text` (2100 pixels). Measured at default settings, their
+`structure/transform-origin` category default (0.13 threshold, 300 pixels), `text/text/xml-space`
+(1400 pixels) and `painting/fill/pattern-on-text` (2100 pixels). Measured at default settings, their
 largest residuals are:
 
 - 54 pixels on either CPU tier, macOS and Linux alike;
@@ -597,8 +596,8 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 **Current status:** normal horizontal BiDi, `direction`, and a `bidi-override` on the `<text>`
 element itself are implemented ([0069](0069-bidi_text_layout.md)). `text/unicode-bidi/bidi-override`
-matches in order and joining but stays skipped: individual Latin glyphs sit up to 1.5 px from
-the reference, leaving 122 pixels; disabling kerning does not change it. `text/direction/rtl` orders and anchors correctly but stays skipped: its
+compares on the full text tier at default parameters, with 100 differing pixels at the default
+limit of 100. `text/direction/rtl` orders and anchors correctly but stays skipped: its
 reference shapes Arabic with Noto Sans Arabic, which the test fonts lack.
 `text/direction/rtl-with-vertical-writing-mode` is undefined behavior (svgwg#618).
 
@@ -648,7 +647,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. They stay skipped because upright CJK sits 0.026em lower than the reference, and the underline case also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin; the underline case stays skipped because it also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
 
 ---
 

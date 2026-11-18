@@ -8,15 +8,18 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <source_location>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/MathUtils.h"
@@ -28,10 +31,13 @@
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/geode/GeodeNearestSampling.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -532,6 +538,39 @@ TEST_F(RendererRegressionTests, CssFilterContractShadowColorAlphaIsAppliedOnce) 
   ExpectBitmapsIdentical(actual, expected, "shadow_color_alpha_once");
 }
 
+// Every identity form of feColorMatrix passes its input through unchanged, so the dark tones that
+// a linearRGB round trip held in eight bits would collapse onto a few levels (sRGB 0, 13, 22,
+// 28...) survive. The gradient spans those tones and a translucent edge, so the comparison sees
+// both.
+TEST_F(RendererRegressionTests, IdentityColorMatrixLeavesLinearRgbInputUnchanged) {
+  constexpr std::string_view kGradient = R"svg(
+    <linearGradient id="g"><stop offset="0" stop-color="#cc00cc"/>
+      <stop offset=".5" stop-color="#400000"/><stop offset=".7" stop-color="black"/>
+      <stop offset="1" stop-color="#0a0a3c" stop-opacity=".5"/></linearGradient>)svg";
+  const auto render = [&](std::string_view primitive) {
+    SVGDocument document = instantiateSubtree(
+        std::string(kGradient) + R"svg(<filter id="f">)svg" + std::string(primitive) +
+            R"svg(</filter><rect x="4" y="4" width="56.5" height="40" fill="url(#g)")svg" +
+            (primitive.empty() ? std::string("/>") : std::string(R"svg( filter="url(#f)"/>)svg")),
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const auto unfiltered = render("");
+  ExpectVisibleBitmap(unfiltered, "identity_color_matrix_source_visible");
+  for (std::string_view primitive :
+       {R"svg(<feColorMatrix/>)svg", R"svg(<feColorMatrix type="matrix" values=""/>)svg",
+        R"svg(<feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0"/>)svg",
+        // A list with other than 20 values is invalid, so the matrix keeps its identity default.
+        R"svg(<feColorMatrix values="2 0 0 0 0 0 2 0 0 0 0 0 2 0 0"/>)svg",
+        R"svg(<feColorMatrix values="2 0 0 0 0 0 2 0 0 0 0 0 2 0 0 0 0 0 2 0 0 0 0 0 0"/>)svg",
+        R"svg(<feColorMatrix type="saturate"/>)svg",
+        R"svg(<feColorMatrix type="hueRotate"/>)svg"}) {
+    SCOPED_TRACE(primitive);
+    editor::tests::CompareBitmapToBitmap(render(primitive), unfiltered, "identity_color_matrix",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractColorAmountsMatchIndependentEndpoints) {
   for (const auto& [function, color] : std::array<std::pair<std::string_view, std::string_view>, 7>{
            {{"brightness", "black"},
@@ -572,15 +611,62 @@ TEST_F(RendererRegressionTests, CssFilterContractColorAmountSyntaxDefaultsAndInv
   }
 }
 
-TEST_F(RendererRegressionTests, CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels) {
-  const auto actual = RenderCssFilterContract("drop-shadow(blue 12.5px 6.5px 0)", true);
-  SVGDocument expectedDocument = instantiateSubtree(R"svg(
-    <rect x="25" y="19" width="20" height="20" fill="blue"/>
-    <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
-                                                    {}, Vector2i(64, 64));
-  ExpectBitmapsIdentical(actual,
-                         RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
-                         "shadow_half_pixel_rounding_contract");
+// Offsets translate the image by their exact device vector: a fractional part leaves the same
+// partial edge coverage as the shape drawn at that fractional position. Each case moves by a
+// fraction along one axis only, so the shapes have no fractional corners and both backends
+// rasterize the expected edges exactly.
+TEST_F(RendererRegressionTests, CssFilterContractShadowFractionalOffsetsTranslateBySubpixels) {
+  for (const auto& [filter, x, y] :
+       std::array<std::tuple<std::string_view, std::string_view, std::string_view>, 2>{{
+           {"drop-shadow(blue 12.5px 6px 0)", "24.5", "18"},
+           {"drop-shadow(blue 12px 6.25px 0)", "24", "18.25"},
+       }}) {
+    SCOPED_TRACE(filter);
+    SVGDocument expectedDocument = instantiateSubtree(
+        std::string(R"svg(<rect x=")svg") + std::string(x) + R"svg(" y=")svg" + std::string(y) +
+            R"svg(" width="20" height="20" fill="blue"/>
+          <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
+        {}, Vector2i(64, 64));
+    editor::tests::CompareBitmapToBitmap(
+        RenderCssFilterContract(filter, true),
+        RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+        "shadow_subpixel_offset_contract", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, FilterFractionalOffsetsTranslateBySubpixels) {
+  const auto render = [](std::string_view svg) {
+    SVGDocument document = instantiateSubtree(svg, {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  // Saturated channels keep premultiplied values off rounding ties, so the filtered and the
+  // rasterized partial coverage quantize alike.
+  const std::string source = R"svg(<rect x="12" y="24" width="20" height="20" fill="lime")svg";
+  for (const auto& [dx, dy, x, y] : std::array<
+           std::tuple<std::string_view, std::string_view, std::string_view, std::string_view>, 2>{{
+           {"12.5", "-6", "24.5", "18"},
+           {"12", "-6.25", "24", "17.75"},
+       }}) {
+    SCOPED_TRACE(testing::Message() << "dx=" << dx << " dy=" << dy);
+    const auto filtered = [&](std::string_view primitive) {
+      return render(std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0"
+                                              width="64" height="64">)svg") +
+                    std::string(primitive) + "</filter>" + source + R"svg( filter="url(#f)"/>)svg");
+    };
+    const std::string shifted = std::string(R"svg(<rect x=")svg") + std::string(x) +
+                                R"svg(" y=")svg" + std::string(y) +
+                                R"svg(" width="20" height="20" fill=")svg";
+    editor::tests::CompareBitmapToBitmap(
+        filtered(std::string(R"svg(<feOffset dx=")svg") + std::string(dx) + R"svg(" dy=")svg" +
+                 std::string(dy) + R"svg("/>)svg"),
+        render(shifted + R"svg(lime"/>)svg"), "fe_offset_subpixel_translation",
+        editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(
+        filtered(std::string(R"svg(<feDropShadow dx=")svg") + std::string(dx) + R"svg(" dy=")svg" +
+                 std::string(dy) + R"svg(" stdDeviation="0" flood-color="blue"/>)svg"),
+        render(shifted + R"svg(blue"/>)svg" + source + "/>"), "fe_drop_shadow_subpixel_translation",
+        editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST_F(RendererRegressionTests, CssFilterContractUrlChainsMatchEquivalentPrimitiveGraphs) {
@@ -1846,6 +1932,485 @@ TEST_F(RendererRegressionTests, MixedScriptSpanMatchesSpansNamingEachFace) {
   }
 }
 
+/// Every glyph outline of the rendered text element matching \p selector, in the element's user
+/// space, in glyph order.
+std::vector<Path> GlyphOutlines(SVGDocument& document, std::string_view selector) {
+  auto access = document.writeAccess();
+  const std::optional<SVGElement> text = document.querySelector(selector);
+  EXPECT_THAT(text, testing::Ne(std::nullopt)) << selector;
+  if (text == std::nullopt) {
+    return {};
+  }
+  TextEngine& engine = document.registry().ctx().get<TextEngine>();
+  const components::ComputedTextGeometryComponent& geometry =
+      engine.ensureComputedTextGeometryComponent(text->entityHandle());
+  EXPECT_THAT(geometry.glyphs, testing::Not(testing::IsEmpty())) << selector;
+  std::vector<Path> outlines;
+  for (const components::ComputedTextGeometryComponent::GlyphGeometry& glyph : geometry.glyphs) {
+    outlines.push_back(glyph.path);
+  }
+  return outlines;
+}
+
+/// Path data of \p outlines joined into one path.
+std::string JoinedPathData(std::span<const Path> outlines) {
+  PathBuilder joined;
+  for (const Path& outline : outlines) {
+    joined.addPath(outline);
+  }
+  return std::string(joined.build().toSVGPathData());
+}
+
+/// Path data of every glyph outline of the rendered text element matching \p selector, in the
+/// element's user space, as one path.
+std::string GlyphOutlinePathData(SVGDocument& document, std::string_view selector) {
+  return JoinedPathData(GlyphOutlines(document, selector));
+}
+
+/// A text stroke paint, with the definitions it needs. Gradients and patterns use user space units,
+/// so the text and a path drawn from its outlines resolve them identically.
+struct TextStrokePaintCase {
+  std::string_view label;  ///< Name of the comparison.
+  std::string_view defs;   ///< Paint server definitions, or empty.
+  std::string_view paint;  ///< `stroke` attribute value.
+};
+
+constexpr std::array<TextStrokePaintCase, 3> kTextStrokePaints = {{
+    {"solid", "", "rgb(0,0,255)"},
+    {"linear_gradient",
+     R"svg(<linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="20" x2="180">)svg"
+     R"svg(<stop offset="0" stop-color="blue"/><stop offset="1" stop-color="red"/>)svg"
+     R"svg(</linearGradient>)svg",
+     "url(#paint)"},
+    {"pattern",
+     R"svg(<pattern id="paint" patternUnits="userSpaceOnUse" width="10" height="10">)svg"
+     R"svg(<rect width="5" height="10" fill="blue"/><rect x="5" width="5" height="10")svg"
+     R"svg( fill="red"/></pattern>)svg",
+     "url(#paint)"},
+}};
+
+/// The stroke attributes of the stroke-overlap comparisons: at this width the strokes of adjacent
+/// glyphs overlap, and the translucent stroke shows how often an overlap is painted.
+std::string TranslucentTextStroke(const TextStrokePaintCase& paint) {
+  return R"svg(fill="none" stroke=")svg" + std::string(paint.paint) +
+         R"svg(" stroke-opacity="0.5" stroke-width="8")svg";
+}
+
+/// `<defs>` holding \p paint's definitions, or nothing when it has none.
+std::string TextStrokePaintDefs(const TextStrokePaintCase& paint) {
+  return paint.defs.empty() ? std::string() : "<defs>" + std::string(paint.defs) + "</defs>";
+}
+
+TEST_F(RendererRegressionTests, TextStrokeOutlinesTheRunAsOnePath) {
+  for (const TextStrokePaintCase& paint : kTextStrokePaints) {
+    SCOPED_TRACE(paint.label);
+    const std::string stroke = TranslucentTextStroke(paint);
+    SVGDocument textDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) +
+            R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
+            stroke + ">Text</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    // One path made of every glyph outline of the run.
+    SVGDocument pathDocument =
+        instantiateSubtree(TextStrokePaintDefs(paint) + "<path d=\"" +
+                               GlyphOutlinePathData(textDocument, "#text") + "\" " + stroke + "/>",
+                           parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_run_outline_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_run_outline_" + std::string(paint.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, DashedTextStrokeMatchesDashedGlyphOutlines) {
+  // stroke-dasharray and stroke-dashoffset apply to text as to any shape: the stroked run matches
+  // a `<path>` of the same glyph outlines with the same dashed stroke. "5 0" has only zero-length
+  // gaps, so each dash still ends with a cap where a contour starts.
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 2> kDashes = {{
+      {"gaps", R"svg(stroke-dasharray="6 4" stroke-dashoffset="2")svg"},
+      {"zero_gaps", R"svg(stroke-dasharray="5 0" stroke-linecap="square")svg"},
+  }};
+  for (const auto& [label, dash] : kDashes) {
+    SCOPED_TRACE(label);
+    const std::string stroke =
+        R"svg(fill="none" stroke="black" stroke-width="2" )svg" + std::string(dash);
+    SVGDocument textDocument = instantiateSubtree(
+        R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" + stroke +
+            ">Text</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    SVGDocument pathDocument = instantiateSubtree(
+        "<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " + stroke + "/>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "dashed_text_stroke_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "dashed_text_stroke_" + std::string(label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// Strokes of a "Te<tspan>xt</tspan>" text element and of the `<path>` that must draw the same
+/// pixels.
+struct SpanStrokeCase {
+  std::string_view label;
+  std::string_view textAttributes;   ///< Attributes of the `<text>`.
+  std::string_view spanAttributes;   ///< Attributes of the `<tspan>` around "xt".
+  std::string_view groupAttributes;  ///< Attributes of the `<g>` around both expected paths.
+  std::string_view textStroke;       ///< Attributes of the path of the "Te" outlines.
+  std::string_view spanStroke;       ///< Attributes of the path of the "xt" outlines.
+};
+
+/// Renders \p testCase's text and compares it with a `<path>` of the "Te" glyph outlines and one of
+/// the "xt" outlines, stroked as the case states.
+void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
+  SCOPED_TRACE(testCase.label);
+  SVGDocument textDocument = instantiateSubtree(
+      R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
+          std::string(testCase.textAttributes) + ">Te<tspan " +
+          std::string(testCase.spanAttributes) + ">xt</tspan></text>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+  const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
+  ASSERT_THAT(outlines, testing::SizeIs(4));
+  const std::vector<Path> textOutlines(outlines.begin(), outlines.begin() + 2);
+  const std::vector<Path> spanOutlines(outlines.begin() + 2, outlines.end());
+  SVGDocument pathDocument = instantiateSubtree(
+      "<g " + std::string(testCase.groupAttributes) + "><path " + std::string(testCase.textStroke) +
+          " d=\"" + JoinedPathData(textOutlines) + "\"/><path " + std::string(testCase.spanStroke) +
+          " d=\"" + JoinedPathData(spanOutlines) + "\"/></g>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+  AssertVisibleFixture(expected, "span_stroke_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected,
+                                       "span_stroke_" + std::string(testCase.label),
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, TextSpanResolvesItsOwnStrokeDash) {
+  // Each span strokes with its own computed stroke-dasharray and stroke-dashoffset: "Te" takes the
+  // text's dash and "xt" its tspan's.
+  constexpr std::string_view kStroke = R"svg(fill="none" stroke="black" stroke-width="2")svg";
+  const std::array<SpanStrokeCase, 3> cases = {{
+      {"span_none", R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(stroke-dasharray="none")svg", kStroke, R"svg(stroke-dasharray="6 4")svg", ""},
+      {"span_pattern", kStroke, R"svg(stroke-dasharray="3 2")svg", kStroke, "",
+       R"svg(stroke-dasharray="3 2")svg"},
+      {"span_offset", R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(stroke-dashoffset="3")svg", kStroke, R"svg(stroke-dasharray="6 4")svg",
+       R"svg(stroke-dasharray="6 4" stroke-dashoffset="3")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
+TEST_F(RendererRegressionTests, TextSpanStrokeLengthsResolveAgainstTheSpanFontSize) {
+  // Font-relative stroke-width, stroke-dasharray and stroke-dashoffset resolve against the font
+  // size of the element that styles the span: 60 for the text, 40 for a tspan that sets its own.
+  // An ex is half an em.
+  constexpr std::string_view kPaint = R"svg(fill="none" stroke="black")svg";
+  const std::array<SpanStrokeCase, 3> cases = {{
+      {"em",
+       R"svg(fill="none" stroke="black" stroke-width="0.04em" stroke-dasharray="0.1em 0.05em" stroke-dashoffset="0.05em")svg",
+       "", kPaint, R"svg(stroke-width="2.4" stroke-dasharray="6 3" stroke-dashoffset="3")svg",
+       R"svg(stroke-width="2.4" stroke-dasharray="6 3" stroke-dashoffset="3")svg"},
+      {"ex",
+       R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="0.2ex 0.1ex" stroke-dashoffset="0.1ex")svg",
+       "", kPaint, R"svg(stroke-width="2" stroke-dasharray="6 3" stroke-dashoffset="3")svg",
+       R"svg(stroke-width="2" stroke-dasharray="6 3" stroke-dashoffset="3")svg"},
+      {"span_font_size",
+       R"svg(fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(font-size="40" stroke-width="0.05em" stroke-dasharray="0.1em 0.05em" stroke-dashoffset="0.05em")svg",
+       kPaint, R"svg(stroke-width="2" stroke-dasharray="6 4")svg",
+       R"svg(stroke-width="2" stroke-dasharray="4 2" stroke-dashoffset="2")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
+TEST_F(RendererRegressionTests, NonScalingTextStrokeKeepsEachSpanAtItsAuthoredLengths) {
+  // Under `vector-effect: non-scaling-stroke` the text's stroke width and dash lengths stay at
+  // their authored values on the canvas, for the text's own pattern and a tspan's, as for a
+  // `<path>` of the same outlines under the same transform.
+  constexpr std::string_view kText =
+      R"svg(transform="scale(1.5) translate(-15 -60)" vector-effect="non-scaling-stroke" fill="none" stroke="black" stroke-width="2" stroke-dasharray="6 4" stroke-dashoffset="2")svg";
+  constexpr std::string_view kGroup =
+      R"svg(transform="scale(1.5) translate(-15 -60)" fill="none" stroke="black" stroke-width="2")svg";
+  const std::array<SpanStrokeCase, 2> cases = {{
+      {"text_pattern", kText, "", kGroup,
+       R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg",
+       R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg"},
+      {"span_pattern", kText,
+       R"svg(stroke-width="3" stroke-dasharray="3 2" stroke-dashoffset="1")svg", kGroup,
+       R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg",
+       R"svg(vector-effect="non-scaling-stroke" stroke-width="3" stroke-dasharray="3 2" stroke-dashoffset="1")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
+TEST_F(RendererRegressionTests, DashedTextStrokeIsChargedToTheFrameDashBudget) {
+  // A dashed text stroke spends the frame's dash work budget as a dashed path does. Each "l"
+  // here (an 88 x 760 font-unit rectangle, 1696 units round at font-size 1000) dashes into about
+  // 150,000 segments, so each chunk stays under the rasterizer's per-path dash limit and its
+  // expansion under the stroke output limit, while the eight together pass the frame's
+  // one-million-unit dash budget. The text is then
+  // rejected exactly as a `<path>` of the same outlines is, its fill included when the stroke is
+  // painted first. One "l" alone stays under every limit and draws.
+  if (ActiveRendererBackend() != RendererBackend::TinySkia) {
+    GTEST_SKIP() << "The dash work budget is the CPU renderer's";
+  }
+  constexpr std::string_view kStroke =
+      R"svg(stroke="black" stroke-width="2" stroke-dasharray="0.00565")svg";
+  const auto render = [](const std::string& body) {
+    SVGDocument document =
+        instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+    return RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  };
+  const std::string text =
+      R"svg(<text x="20" y="120" font-family="Noto Sans" font-size="1000" )svg" +
+      std::string(kStroke) + R"svg( fill="none">l</text>)svg";
+  AssertVisibleFixture(render(text), "dashed_text_stroke_under_budget_visible");
+
+  for (const std::string_view fill :
+       {R"svg(fill="none")svg", R"svg(fill="green" paint-order="stroke")svg"}) {
+    SCOPED_TRACE(fill);
+    SVGDocument textDocument = instantiateSubtree(
+        R"svg(<text id="text" x="20 278 536 794 1052 1310 1568 1826" y="120" font-family="Noto Sans" font-size="1000" )svg" +
+            std::string(kStroke) + " " + std::string(fill) + ">llllllll</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual =
+        RenderDocumentWithBackend(textDocument, RendererBackend::TinySkia);
+    const RendererBitmap expected =
+        render("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " +
+               std::string(kStroke) + " " + std::string(fill) + "/>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "dashed_text_stroke_dash_budget",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, TextStrokeMatchesItsOutlinesWhereGlyphsMeetTheTargetEdge) {
+  // The CPU backend does not expand a text chunk whose glyph strokes cannot reach the drawing
+  // target. These runs place glyphs across and just beyond the target's edge, under rotation and
+  // skew, with miter joins and square caps that reach farther than the stroke's half width, and
+  // inside a pattern tile, a filter and a mask, whose targets are their own surfaces, and as a
+  // hairline. Each must match a `<path>` of the same glyph outlines, which is never culled.
+  struct Case {
+    std::string_view label;
+    std::string_view defs;
+    std::string_view open;
+    std::string_view close;
+    std::string_view text;
+  };
+  constexpr std::array<Case, 6> kCases = {{
+      {"rotated_miter", "", R"svg(<g transform="rotate(25 100 100) skewX(15)">)svg", "</g>",
+       R"svg(x="150" y="60" font-size="60" stroke-width="8" stroke-linejoin="miter"
+             stroke-miterlimit="10">WWWW)svg"},
+      {"skewed_square_cap", "", R"svg(<g transform="skewY(-20)">)svg", "</g>",
+       R"svg(x="-30" y="215" font-size="60" stroke-width="10" stroke-linecap="square">x-x)svg"},
+      {"pattern",
+       R"svg(<pattern id="tile" width="40" height="40" patternUnits="userSpaceOnUse">CONTENT</pattern>)svg",
+       R"svg(<rect width="200" height="200" fill="url(#tile)"/>)svg", "",
+       R"svg(x="20" y="30" font-size="40" stroke-width="3">WW)svg"},
+      {"filter", R"svg(<filter id="soft"><feGaussianBlur stdDeviation="1"/></filter>)svg",
+       R"svg(<g filter="url(#soft)">)svg", "</g>",
+       R"svg(x="120" y="120" font-size="80" stroke-width="4">WW)svg"},
+      {"mask", R"svg(<mask id="clipper"><rect width="150" height="150" fill="white"/></mask>)svg",
+       R"svg(<g mask="url(#clipper)">)svg", "</g>",
+       R"svg(x="100" y="160" font-size="80" stroke-width="4">WW)svg"},
+      {"hairline", "", "", "", R"svg(x="10" y="120" font-size="40" stroke-width="0.4">Text)svg"},
+  }};
+  for (const Case& testCase : kCases) {
+    SCOPED_TRACE(testCase.label);
+    const auto document = [&](const std::string& content) {
+      std::string defs(testCase.defs);
+      std::string body = "<defs>";
+      const std::size_t marker = defs.find("CONTENT");
+      if (marker != std::string::npos) {
+        defs.replace(marker, std::string("CONTENT").size(), content);
+        body += defs + "</defs>" + std::string(testCase.open) + std::string(testCase.close);
+      } else {
+        body +=
+            defs + "</defs>" + std::string(testCase.open) + content + std::string(testCase.close);
+      }
+      return body;
+    };
+    SVGDocument textDocument = instantiateSubtree(
+        document(R"svg(<text id="text" font-family="Noto Sans" fill="none" stroke="black" )svg" +
+                 std::string(testCase.text) + "</text>"),
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    const std::string text(testCase.text);
+    const std::string strokeAttributes =
+        text.substr(text.find("stroke-width"), text.find('>') - text.find("stroke-width"));
+    SVGDocument pathDocument =
+        instantiateSubtree(document("<path d=\"" + GlyphOutlinePathData(textDocument, "#text") +
+                                    "\" fill=\"none\" stroke=\"black\" " + strokeAttributes + "/>"),
+                           parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_target_edge_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_target_edge_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, TextStrokeCoversOverlapsOfNonAdjacentGlyphsOnce) {
+  // Glyphs whose strokes overlap without being neighbours in the run: `dx`/`dy` move "x" back
+  // onto "T" while "e" touches neither, and in a mixed-direction run the right-to-left glyphs are
+  // drawn in the reverse of their order in the text. Each chunk is still one shape.
+  constexpr std::array<std::pair<std::string_view, std::string_view>, 2> kCases = {{
+      {"moved_back", R"svg(font-family="Noto Sans" dx="0 0 -60" dy="0 100 -100">Tex)svg"},
+      {"mixed_direction", R"svg(font-family="Amiri">AB&#x628;&#x62A;&#x646;)svg"},
+  }};
+  const std::string stroke = TranslucentTextStroke(kTextStrokePaints[0]);
+  for (const auto& [label, text] : kCases) {
+    SCOPED_TRACE(label);
+    SVGDocument textDocument =
+        instantiateSubtree(R"svg(<text id="text" x="20" y="120" font-size="60" )svg" + stroke +
+                               " " + std::string(text) + "</text>",
+                           parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    SVGDocument pathDocument = instantiateSubtree(
+        "<path d=\"" + GlyphOutlinePathData(textDocument, "#text") + "\" " + stroke + "/>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_non_adjacent_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_non_adjacent_" + std::string(label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, TextStrokeOutlinesEachChunkAsItsOwnShape) {
+  // The second x starts a new text chunk at "ext", moved left so its stroke overlaps the stroke of
+  // "T". Each chunk is one shape, so that overlap is painted once per chunk: twice.
+  for (const TextStrokePaintCase& paint : kTextStrokePaints) {
+    SCOPED_TRACE(paint.label);
+    const std::string stroke = TranslucentTextStroke(paint);
+    SVGDocument textDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) +
+            R"svg(<text id="text" x="20 42" y="120" font-family="Noto Sans" font-size="60" )svg" +
+            stroke + ">Text</text>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+
+    const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
+    ASSERT_THAT(outlines, testing::SizeIs(4));
+    const std::span<const Path> glyphs(outlines);
+    SVGDocument pathDocument = instantiateSubtree(
+        TextStrokePaintDefs(paint) + "<path d=\"" + JoinedPathData(glyphs.first(1)) + "\" " +
+            stroke + "/><path d=\"" + JoinedPathData(glyphs.subspan(1)) + "\" " + stroke + "/>",
+        parser::SVGParser::Options(), Vector2i(200, 200));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "text_stroke_chunk_outlines_visible");
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "text_stroke_chunk_outlines_" + std::string(paint.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// One text element of the editor's "Text and Style" sample: its attributes and content.
+struct EditorSampleText {
+  std::string_view attributes;  //!< Attributes, without `id`.
+  std::string_view content;     //!< Character data.
+};
+
+/// The editor's "Text and Style" sample (`donner/editor/art/samples/text-style.svg`) at \p width x
+/// \p height device pixels, with \p stroke inherited by every text element. Each text element is
+/// drawn by \p drawText from its index and definition. Its `Inter, sans-serif` family falls back
+/// to the embedded Public Sans, as in the editor.
+std::string EditorTextStyleSample(
+    int width, int height, std::string_view stroke,
+    const std::function<std::string(size_t, const EditorSampleText&)>& drawText) {
+  constexpr std::array<EditorSampleText, 4> kTexts = {{
+      {R"svg(class="heading" x="48" y="110")svg", "Donner editor"},
+      {R"svg(class="body" x="48" y="158")svg", "Text and style inspection"},
+      {R"svg(x="48" y="270" fill="#f8f9fa" font-family="Inter, sans-serif" font-size="24px")svg",
+       "Editable SVG source"},
+      {R"svg(x="48" y="310" fill="#aeb6bf" font-family="Inter, sans-serif" font-size="18px")svg"
+       R"svg( font-style="italic")svg",
+       "Selectors, inheritance, and typography"},
+  }};
+  std::ostringstream svg;
+  svg << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width=")svg" << width
+      << R"svg(" height=")svg" << height << R"svg(" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#17202a"/>
+  <style>
+    .heading { fill: #f8f9fa; font-family: Inter, sans-serif; font-size: 42px; font-weight: bold; }
+    .body { fill: #9fe3c0; font-family: Inter, sans-serif; font-size: 22px; }
+    .rule { stroke: #f0b429; stroke-width: 5; }
+  </style>
+  <g )svg"
+      << stroke << ">";
+  for (size_t i = 0; i < kTexts.size(); ++i) {
+    svg << drawText(i, kTexts[i]);
+  }
+  svg << R"svg(</g>
+  <line class="rule" x1="48" y1="202" x2="592" y2="202"/>
+</svg>)svg";
+  return svg.str();
+}
+
+TEST_F(RendererRegressionTests, EditorTextSampleStrokeMatchesStrokedGlyphOutlines) {
+  // Adding a stroke to this sample was reported to draw the lowercase t crossbar as a rectangle
+  // detached from its stem; no detached crossbar reproduces here. What this checks is that each
+  // text element's stroke, with its fill removed, renders exactly like the stroke of a path made of
+  // its glyph outlines, at the sample's own size and at twice that.
+  const std::array<std::pair<Vector2i, std::string_view>, 4> cases = {{
+      {Vector2i(640, 360), "1"},
+      {Vector2i(640, 360), "2"},
+      {Vector2i(640, 360), "4"},
+      {Vector2i(1280, 720), "2"},
+  }};
+  for (const auto& [size, strokeWidth] : cases) {
+    SCOPED_TRACE(testing::Message() << size << " stroke-width=" << strokeWidth);
+    const std::string stroke =
+        std::string(R"svg(stroke="#e8590c" stroke-width=")svg") + std::string(strokeWidth) + "\"";
+    SVGDocument textDocument = ParseSvg(EditorTextStyleSample(
+        size.x, size.y, stroke, [](size_t index, const EditorSampleText& text) {
+          return "<text id=\"t" + std::to_string(index) + "\" style=\"fill: none\" " +
+                 std::string(text.attributes) + ">" + std::string(text.content) + "</text>";
+        }));
+    const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
+    SVGDocument pathDocument = ParseSvg(EditorTextStyleSample(
+        size.x, size.y, stroke, [&textDocument](size_t index, const EditorSampleText& text) {
+          return "<path d=\"" + GlyphOutlinePathData(textDocument, "#t" + std::to_string(index)) +
+                 "\" style=\"fill: none\" " + std::string(text.attributes) + "/>";
+        }));
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+    AssertVisibleFixture(expected, "editor_text_sample_outlines_visible");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected,
+        "editor_text_sample_stroke_" + std::to_string(size.x) + "_" + std::string(strokeWidth),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
   const Path path = PathBuilder()
                         .moveTo({30, 10})
@@ -1986,6 +2551,75 @@ TEST_F(RendererRegressionTests, MarkerPercentResolvesAgainstReferencingViewport)
 
   SVGDocument document = loadSVG(svg, ResvgResourceRoot());
   renderAndCompare(document, svg, golden, GoldenParams());
+}
+
+/// Renders a stroked, unfilled underlined text with \p attributes, holding \p content, in a
+/// 200 x 200 document. The default content is preserved spaces, which have no outlines, so only
+/// the underline is drawn.
+RendererBitmap RenderStrokedUnderline(std::string_view attributes,
+                                      std::string_view content = "        ") {
+  SVGDocument document = instantiateSubtree(
+      R"svg(<text font-family="Noto Sans" font-size="40" xml:space="preserve" fill="none" stroke="black" style="text-decoration: underline" )svg" +
+          std::string(attributes) + ">" + std::string(content) + "</text>",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, TextDecorationStrokeWidthResolvesAgainstItsFontSize) {
+  // A font-relative stroke-width on a decoration resolves against the font size of the element
+  // that provides the decoration's paint, here the text: 0.1em and 0.2ex at font size 40 stroke
+  // the underline 4 wide, also over a tspan of font size 10, whose own 0.1em would be 1.
+  const RendererBitmap expected =
+      RenderStrokedUnderline(R"svg(x="20" y="100" stroke-width="4")svg");
+  AssertVisibleFixture(expected, "decoration_stroke_width_visible");
+  constexpr std::string_view kSmallSpan = R"svg(<tspan font-size="10">        </tspan>)svg";
+  const RendererBitmap expectedOverSpan =
+      RenderStrokedUnderline(R"svg(x="20" y="100" stroke-width="4")svg", kSmallSpan);
+  AssertVisibleFixture(expectedOverSpan, "decoration_stroke_width_over_span_visible");
+  struct Case {
+    std::string_view label;
+    std::string_view width;
+    std::string_view content;
+  };
+  for (const Case& testCase : {Case{"em", "0.1em", "        "}, Case{"ex", "0.2ex", "        "},
+                               Case{"em_over_span", "0.1em", kSmallSpan}}) {
+    SCOPED_TRACE(testCase.label);
+    const RendererBitmap actual = RenderStrokedUnderline(
+        R"svg(x="20" y="100" stroke-width=")svg" + std::string(testCase.width) + "\"",
+        testCase.content);
+    editor::tests::CompareBitmapToBitmap(
+        actual, testCase.content == kSmallSpan ? expectedOverSpan : expected,
+        "decoration_stroke_width_" + std::string(testCase.label),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, NonScalingTextDecorationStrokeKeepsItsAuthoredWidth) {
+  // Under `vector-effect: non-scaling-stroke` the underline's stroke takes the text stroke's
+  // adjustment: its local width is the authored width divided by the square root of the
+  // transform's determinant, as a stroke of that local width without the vector effect is.
+  struct Case {
+    std::string_view label;
+    std::string_view transform;
+    double determinant;
+  };
+  for (const Case& testCase :
+       {Case{"uniform", "scale(2)", 4.0}, Case{"non_uniform", "scale(2 1)", 2.0}}) {
+    SCOPED_TRACE(testCase.label);
+    const std::string placed =
+        R"svg(x="10" y="50" transform=")svg" + std::string(testCase.transform) + "\" ";
+    std::ostringstream localWidth;
+    localWidth << std::setprecision(17) << 4.0 / std::sqrt(testCase.determinant);
+    const RendererBitmap actual = RenderStrokedUnderline(
+        placed + R"svg(vector-effect="non-scaling-stroke" stroke-width="4")svg");
+    const RendererBitmap expected =
+        RenderStrokedUnderline(placed + "stroke-width=\"" + localWidth.str() + "\"");
+    AssertVisibleFixture(expected, "non_scaling_decoration_visible_" + std::string(testCase.label));
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "non_scaling_decoration_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST_F(RendererRegressionTests, TextDecorationUnderlineRenders) {
@@ -4065,50 +4699,82 @@ TEST_F(RendererRegressionTests, SkewedBlurCropsSourceToFilterRegion) {
   }
 }
 
-// Both executors round each feOffset to whole pixels, so eight offsets of 0.6 move content 8
-// pixels, not 4.8. The capture must reach that far: a square just past the left edge lands at the
-// left edge, matching the same square drawn there without a filter.
-TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachTheirRoundedDistance) {
+/// Renders \p markup on a 64x64 canvas and again shifted 32 device pixels right on a 96x64 canvas,
+/// and checks the two agree over the shared 64x64 window. Offsets blend by a weight fixed per
+/// shift, so the same content resamples identically wherever it sits on the raster. The shifted
+/// copy keeps everything the filter reads on the canvas, so a difference means the capture near the
+/// left edge fell short.
+void ExpectFilterMatchesRenderWithRoom(std::string_view markup, std::string_view label) {
+  SVGDocument atEdge = instantiateSubtree(markup, {}, Vector2i(64, 64));
+  SVGDocument withRoom = instantiateSubtree(
+      std::string(R"svg(<g transform="translate(32 0)">)svg") + std::string(markup) + "</g>", {},
+      Vector2i(96, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(atEdge, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, std::string(label) + "_visible");
+  editor::tests::CompareBitmapToBitmap(
+      actual,
+      editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
+                                Vector2i(32, 0), Vector2i(64, 64)),
+      label, editor::tests::PixelmatchIdentityParams());
+}
+
+// Eight offsets of 0.6 move content 4.8 pixels and each reads the pixel beyond its fractional
+// shift, so the capture must reach 8 pixels: a square just past the left edge then renders as it
+// does with room around it.
+TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachPastTheCanvasEdge) {
   std::string offsets;
   for (int i = 0; i < 8; ++i) {
     offsets += R"svg(<feOffset dx="0.6"/>)svg";
   }
-  SVGDocument document = instantiateSubtree(
+  ExpectFilterMatchesRenderWithRoom(
       R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-50" y="0" width="114" height="64">)svg" +
           offsets + R"svg(</filter>
       <g filter="url(#f)"><rect x="-8" y="8" width="8" height="16" fill="lime"/></g>)svg",
-      {}, Vector2i(64, 64));
-  SVGDocument expected = instantiateSubtree(
-      R"svg(<rect x="0" y="8" width="8" height="16" fill="lime"/>)svg", {}, Vector2i(64, 64));
-  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
-                                       RenderDocumentWithBackend(expected, ActiveRendererBackend()),
-                                       "chained_fractional_offsets",
-                                       editor::tests::PixelmatchIdentityParams());
+      "chained_fractional_offsets");
 }
 
-// Under a skew the transformed blur path runs offsets on a local raster scaled by each filter
-// axis's length and rounds them there. Under matrix(1 0 1 1 0 0) an offset of (0.6, -0.6) moves
-// nothing along device X before rounding, but rounds to (1, -1) local pixels, which moves content
-// about 0.29 device pixels right; 24 of them, with the blur that selects the transformed path,
-// move it about 7 pixels. Content just past the left edge then lands inside the canvas, at
-// (2, 25).
-TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachTheirRoundedDistance) {
+// Under a skew the transformed blur path runs offsets on a local raster whose axes are the filter
+// axes. Under matrix(1 0 1 1 0 0) each fractional (0.6, -0.6) offset blends local pixels on both
+// sides of its shift, so 24 of them, with the blur that selects the transformed path, read content
+// well past the left edge; that content renders as it does with room around it.
+TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachPastTheCanvasEdge) {
   std::string primitives;
   for (int i = 0; i < 24; ++i) {
     primitives += R"svg(<feOffset dx="0.6" dy="-0.6"/>)svg";
   }
   primitives += R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg";
-  SVGDocument document = instantiateSubtree(
+  ExpectFilterMatchesRenderWithRoom(
       R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-100" y="0" width="200" height="64">)svg" +
           primitives + R"svg(</filter>
       <g transform="matrix(1 0 1 1 0 0)" filter="url(#f)">
-        <rect x="-52" y="36" width="8" height="12" fill="lime"/>
+        <rect x="-40" y="36" width="8" height="12" fill="lime"/>
       </g>)svg",
-      {}, Vector2i(64, 64));
-  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
-  EXPECT_THAT(PixelAt(actual, 2, 25),
-              test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
-      << "the offset content must land inside the canvas";
+      "skewed_local_raster_offsets");
+}
+
+// A fractional offset blends neighboring colors in the primitive's color-interpolation-filters
+// space. Shifting a red and blue seam by a quarter pixel leaves the seam pixel a quarter red and
+// three quarters blue: sRGB (137, 0, 225) when the blend runs in linearRGB, the default, and
+// (64, 0, 191) when the filter interpolates in sRGB.
+TEST_F(RendererRegressionTests, FractionalOffsetBlendsInTheInterpolationSpace) {
+  const auto seam = [](std::string_view space) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64"
+                                height="64" color-interpolation-filters=")svg") +
+            std::string(space) + R"svg("><feOffset dx="0.25"/></filter>
+          <g filter="url(#f)"><rect x="8" y="8" width="16" height="16" fill="red"/>
+            <rect x="24" y="8" width="16" height="16" fill="blue"/></g>)svg",
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const RendererBitmap linear = seam("linearRGB");
+  const RendererBitmap srgb = seam("sRGB");
+  WriteBitmapToTestOutputs(linear, "fractional_offset_seam_linear");
+  WriteBitmapToTestOutputs(srgb, "fractional_offset_seam_srgb");
+  EXPECT_THAT(PixelAt(linear, 24, 16), test::RgbaEq(137, 0, 225, 255));
+  EXPECT_THAT(PixelAt(srgb, 24, 16), test::RgbaEq(64, 0, 191, 255));
+  EXPECT_THAT(PixelAt(linear, 16, 16), test::RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(linear, 32, 16), test::RgbaEq(0, 0, 255, 255));
 }
 
 // A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom
@@ -4542,6 +5208,224 @@ TEST(ClipContourClosure, NormalOpenStrokeKeepsItsEndpoints) {
   const auto expected = RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
   editor::tests::CompareBitmapToBitmap(actual, expected, "clip_closure_preserves_open_stroke",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// An feImage fragment whose content is filled with the pattern that draws the filtered element: the
+// fragment cycle is bounded by the feImage fragment guard. The document must render the same way
+// on every draw through one renderer.
+constexpr std::string_view kFeImagePatternCycle = R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="#r" />
+    </filter>
+    <rect id="r" width="8" height="8" fill="url(#a)" stroke="black" stroke-width="2" />
+  </defs>
+  <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
+    <rect width="8" height="8" fill="black" filter="url(#f)" />
+  </pattern>
+  <rect width="16" height="16" fill="url(#a)" />)svg";
+
+TEST_F(RendererRegressionTests, FeImagePatternCycleDrawsTheSameEachTime) {
+  SVGDocument document = instantiateSubtree(kFeImagePatternCycle, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  renderer->draw(document);
+  const RendererBitmap second = renderer->takeSnapshot();
+  renderer->draw(document);
+  const RendererBitmap third = renderer->takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(second, first, "feimage_pattern_cycle_second_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(third, first, "feimage_pattern_cycle_third_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Number of `OffscreenFeImage` shadow branches across all hosts in @p document.
+std::size_t FeImageBranchCount(SVGDocument& document) {
+  std::size_t count = 0;
+  for (auto view = document.registry().view<const components::ComputedShadowTreeComponent>();
+       const Entity host : view) {
+    for (const auto& branch :
+         view.get<const components::ComputedShadowTreeComponent>(host).branches) {
+      count += branch.branchType == components::ShadowBranchType::OffscreenFeImage ? 1 : 0;
+    }
+  }
+  return count;
+}
+
+// Draws @p document three times through one renderer and returns the shadow branch count after
+// each draw.
+std::vector<std::size_t> FeImageBranchCountsOverThreeDraws(SVGDocument& document) {
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  std::vector<std::size_t> counts;
+  for (int draw = 0; draw < 3; ++draw) {
+    renderer->draw(document);
+    counts.push_back(FeImageBranchCount(document));
+  }
+  return counts;
+}
+
+// A plain feImage fragment whose target is not in the render tree (it is in `<defs>`).
+constexpr std::string_view kFeImageFragment = R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="#r" />
+    </filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect width="16" height="16" fill="black" filter="url(#f)" />)svg";
+
+// Drawing an feImage fragment again without a render-tree rebuild reuses the fragment's shadow
+// tree: it must not add another shadow branch and more rendering instances on every frame.
+TEST_F(RendererRegressionTests, FeImageFragmentRedrawKeepsOneShadowTree) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  const auto instanceCount = [&]() {
+    return document.registry().view<components::RenderingInstanceComponent>().size();
+  };
+
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  const std::size_t firstInstances = instanceCount();
+  EXPECT_EQ(FeImageBranchCount(document), 1u);
+  for (int draw = 2; draw <= 3; ++draw) {
+    renderer->draw(document);
+    EXPECT_EQ(FeImageBranchCount(document), 1u) << "draw " << draw;
+    EXPECT_EQ(instanceCount(), firstInstances) << "draw " << draw;
+    editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
+                                         "feimage_fragment_redraw_" + std::to_string(draw),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// A plain feImage fragment drawn repeatedly renders the same way each time through one renderer,
+// and after its target changes it renders the new target: the same image a fresh document with the
+// new target gives, rendered by a separate renderer.
+TEST_F(RendererRegressionTests, FeImageFragmentRedrawFollowsItsTarget) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  ASSERT_NE(renderer, nullptr);
+  renderer->draw(document);
+  const RendererBitmap first = renderer->takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  EXPECT_THAT(PixelAt(first, 8, 8), test::RgbaEq(255, 0, 0, 255));
+  renderer->draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(), first,
+                                       "feimage_fragment_second_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  auto target = document.querySelector("#r");
+  ASSERT_TRUE(target.has_value());
+  target->setAttribute("fill", "blue");
+  renderer->draw(document);
+  const RendererBitmap mutated = renderer->takeSnapshot();
+  EXPECT_THAT(PixelAt(mutated, 8, 8), test::RgbaEq(0, 0, 255, 255));
+  EXPECT_EQ(FeImageBranchCount(document), 1u);
+
+  std::string blueMarkup(kFeImageFragment);
+  blueMarkup.replace(blueMarkup.find("fill=\"red\""), std::string_view("fill=\"red\"").size(),
+                     "fill=\"blue\"");
+  SVGDocument fresh = instantiateSubtree(blueMarkup, {}, Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      mutated, RenderDocumentWithBackend(fresh, ActiveRendererBackend()),
+      "feimage_fragment_target_mutation", editor::tests::PixelmatchIdentityParams());
+}
+
+// A fragment target that renders nothing (display none, or an empty group) keeps one shadow branch:
+// its empty instantiation is remembered instead of repeated every frame.
+TEST_F(RendererRegressionTests, FeImageFragmentWithoutContentKeepsOneShadowTree) {
+  for (const std::string_view target :
+       {std::string_view(R"svg(<rect id="r" width="16" height="16" display="none" />)svg"),
+        std::string_view(R"svg(<g id="r" />)svg")}) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<defs><filter id="f" x="0" y="0" width="1" height="1">
+          <feImage href="#r" /></filter>)svg") +
+            std::string(target) +
+            R"svg(</defs><rect width="16" height="16" fill="black" filter="url(#f)" />)svg",
+        {}, Vector2i(16, 16));
+    EXPECT_THAT(FeImageBranchCountsOverThreeDraws(document), testing::ElementsAre(1u, 1u, 1u))
+        << target;
+  }
+}
+
+// Two hosts sharing one fragment target keep one branch each.
+TEST_F(RendererRegressionTests, FeImageFragmentSharedByTwoHostsKeepsOneBranchEach) {
+  SVGDocument document = instantiateSubtree(R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1"><feImage href="#r" /></filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect width="8" height="16" fill="black" filter="url(#f)" />
+  <rect x="8" width="8" height="16" fill="black" filter="url(#f)" />)svg",
+                                            {}, Vector2i(16, 16));
+  EXPECT_THAT(FeImageBranchCountsOverThreeDraws(document), testing::ElementsAre(2u, 2u, 2u));
+}
+
+// Removing the host rebuilds the render tree, which tears its fragment branch down.
+TEST_F(RendererRegressionTests, FeImageFragmentBranchGoesAwayWithItsHost) {
+  SVGDocument document = instantiateSubtree(R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1"><feImage href="#r" /></filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect id="host" width="16" height="16" fill="black" filter="url(#f)" />)svg",
+                                            {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  renderer->draw(document);
+  EXPECT_EQ(FeImageBranchCount(document), 1u);
+  auto host = document.querySelector("#host");
+  ASSERT_TRUE(host.has_value());
+  host->remove();
+  renderer->draw(document);
+  EXPECT_EQ(FeImageBranchCount(document), 0u);
+}
+
+// When the rendering instances are cleared but the shadow trees survive (as a retained update
+// that rebuilds only instances does), the fragment branch is rebuilt in place, not duplicated.
+TEST_F(RendererRegressionTests, FeImageFragmentBranchIsRebuiltInPlaceAfterInstancesClear) {
+  SVGDocument document = instantiateSubtree(R"svg(
+  <defs>
+    <filter id="f" x="0" y="0" width="1" height="1"><feImage href="#r" /></filter>
+    <rect id="r" width="16" height="16" fill="red" />
+  </defs>
+  <rect id="host" width="16" height="16" fill="black" filter="url(#f)" />)svg",
+                                            {}, Vector2i(16, 16));
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  renderer->draw(document);
+  ASSERT_EQ(FeImageBranchCount(document), 1u);
+
+  Registry& registry = document.registry();
+  const Entity host = document.querySelector("#host")->entityHandle().entity();
+  const Entity target = document.querySelector("#r")->entityHandle().entity();
+  auto& renderingContext = registry.ctx().get<components::RenderingContext>();
+  for (int round = 0; round < 3; ++round) {
+    registry.clear<components::RenderingInstanceComponent>();
+    const auto rebuilt = renderingContext.createFeImageShadowTree(host, target, false);
+    EXPECT_TRUE(rebuilt.has_value()) << "round " << round;
+    EXPECT_EQ(FeImageBranchCount(document), 1u) << "round " << round;
+  }
+}
+
+// Fragment instances are drawn only into their fragment; rectangle queries must not return them.
+TEST_F(RendererRegressionTests, FeImageFragmentInstancesAreNotReturnedByRectQueries) {
+  SVGDocument document = instantiateSubtree(kFeImageFragment, {}, Vector2i(16, 16));
+  auto& renderingContext = [&]() -> components::RenderingContext& {
+    Registry& registry = document.registry();
+    if (!registry.ctx().contains<components::RenderingContext>()) {
+      registry.ctx().emplace<components::RenderingContext>(registry);
+    }
+    return registry.ctx().get<components::RenderingContext>();
+  }();
+  const Box2d canvas = Box2d::FromXYWH(0, 0, 16, 16);
+  const std::vector<Entity> beforeDraw = renderingContext.findIntersectingRect(canvas);
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(ActiveRendererBackend());
+  for (int draw = 0; draw < 3; ++draw) {
+    renderer->draw(document);
+  }
+  EXPECT_THAT(renderingContext.findIntersectingRect(canvas), testing::ElementsAreArray(beforeDraw));
 }
 
 }  // namespace
