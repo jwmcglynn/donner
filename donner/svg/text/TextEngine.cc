@@ -7804,10 +7804,10 @@ private:
     const auto precedes = [&](const TextPathCluster& a, const TextPathCluster& b) {
       return rank(a) < rank(b);
     };
-    if (std::is_sorted(clusters.begin(), clusters.end(), precedes)) {
-      return;
+    if (!std::is_sorted(clusters.begin(), clusters.end(), precedes)) {
+      std::sort(clusters.begin(), clusters.end(), precedes);
     }
-    std::sort(clusters.begin(), clusters.end(), precedes);
+    // Even an already visual run needs the logical origin attached to its first visual cluster.
     double advance = 0.0;
     double normal = 0.0;
     const TextPathCluster* previous = nullptr;
