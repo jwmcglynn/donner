@@ -1,4 +1,4 @@
-"""Build the private Geode browser fixture with the browser backend and basic text."""
+"""Select the renderer configuration on each private browser or standalone test package."""
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 
@@ -27,18 +27,39 @@ _geode_browser_test_transition = transition(
     ],
 )
 
-def _geode_browser_test_package_impl(ctx):
+def _test_package_impl(ctx):
     package = ctx.attr.package
     if type(package) == "list":
         if len(package) != 1:
-            fail("Geode browser transition produced {} packages, expected 1".format(len(package)))
+            fail("Test package transition produced {} packages, expected 1".format(len(package)))
         package = package[0]
     return [DefaultInfo(files = package[DefaultInfo].files)]
 
 geode_browser_test_package = rule(
-    implementation = _geode_browser_test_package_impl,
+    implementation = _test_package_impl,
     attrs = {
         "package": attr.label(cfg = _geode_browser_test_transition, mandatory = True),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+)
+
+def _enable_text_impl(_settings, _attr):
+    return {"//donner/svg/renderer:text": True}
+
+_enable_text = transition(
+    implementation = _enable_text_impl,
+    inputs = [],
+    outputs = ["//donner/svg/renderer:text"],
+)
+
+# The pixel test consumes the shipped renderer while the resource test consumes
+# this page. Both modules can be built in one size-optimized action graph.
+text_enabled_test_package = rule(
+    implementation = _test_package_impl,
+    attrs = {
+        "package": attr.label(cfg = _enable_text, mandatory = True),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),
