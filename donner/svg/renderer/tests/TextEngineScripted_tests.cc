@@ -2165,6 +2165,30 @@ TEST(TextEngineScriptedTest, VerticalTextPathUsesOneBidiRunAcrossPaintSpans) {
                             RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(110, 1e-6))))));
   }
 }
+TEST(TextEngineScriptedTest, VerticalBidiPathKeepsInitialXOnTheVisualChunk) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xD7\x90\xD7\x91");
+  span.xList = {Lengthd(50.0, Lengthd::Unit::None)};
+  span.pathSpline =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(span));
+
+  auto params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  // The shaper already emits bet before alef. The authored x belongs to the chunk start.
+  EXPECT_THAT(
+      runs, ElementsAre(RunGlyphsAre(ElementsAre(AllOf(Field("cluster", &TextGlyph::cluster, 2u),
+                                                       GlyphYPositionIs(DoubleNear(50, 1e-6))),
+                                                 AllOf(Field("cluster", &TextGlyph::cluster, 0u),
+                                                       GlyphYPositionIs(DoubleNear(60, 1e-6)))))));
+}
+
 TEST(TextEngineScriptedTest, VerticalBidiPathPreservesFlatContinuationAtAnAbsoluteX) {
   Registry registry;
   FontManager fontManager(registry);
