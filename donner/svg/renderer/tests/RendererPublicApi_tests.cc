@@ -4475,27 +4475,6 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeIsNotExpandedForGlyphsOutsideTheCan
   EXPECT_EQ(expansionPoints("OO"), one);
 }
 
-/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
-/// snapshot. An empty snapshot fails the calling test instead of covering no pixel of the rect.
-std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1,
-                          std::source_location caller = std::source_location::current()) {
-  if (!test::ExpectSnapshotHasPixels(snapshot, caller)) {
-    return 0;
-  }
-  const RendererBitmap normalized = NormalizeSnapshot(snapshot);
-  std::size_t covered = 0;
-  for (int y = std::max(y0, 0); y < std::min(y1, normalized.dimensions.y); ++y) {
-    for (int x = std::max(x0, 0); x < std::min(x1, normalized.dimensions.x); ++x) {
-      const std::size_t offset =
-          static_cast<std::size_t>(y) * normalized.rowBytes + static_cast<std::size_t>(x) * 4u + 3u;
-      if (normalized.pixels[offset] != 0) {
-        ++covered;
-      }
-    }
-  }
-  return covered;
-}
-
 TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
   constexpr std::string_view kChild =
       "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' "
@@ -4813,6 +4792,26 @@ std::string StrokedGlyphs(std::string_view transform, int count = 1) {
   return R"svg(<text )svg" + std::string(transform) +
          R"svg( x="-5" y="29" font-size="80" fill="none" stroke="black" stroke-width="20">)svg" +
          std::string(static_cast<std::size_t>(count), 'O') + "</text>";
+}
+
+// Dashed text uses the frame's dash accounting on both the expanded and hairline paths.
+TEST(RendererPublicApiTest, DashedTextAccountsForBothStrokePaths) {
+  for (const std::string_view width : {"3", "0.5"}) {
+    SCOPED_TRACE(width);
+    SVGDocument document = HundredSquareDocument(
+        R"svg(<text x="10" y="65" font-size="48" fill="none" stroke="black" stroke-width=")svg" +
+        std::string(width) + R"svg(" stroke-dasharray="4 2">O</text>)svg");
+    RendererTinySkia renderer;
+    renderer.draw(document);
+    const RendererResourceStats stats = renderer.resourceStats();
+    EXPECT_THAT(stats.dashMeasureSteps, Gt(0u));
+    EXPECT_EQ(stats.drawBudgetRejected, false);
+    if (width == "0.5") {
+      EXPECT_EQ(stats.strokeOutputPoints, 0u);
+    } else {
+      EXPECT_THAT(stats.strokeOutputPoints, Gt(0u));
+    }
+  }
 }
 
 TEST(RendererTinySkiaSecurityTest, GlyphStrokeExpansionStopsAtTheOutputLimit) {
