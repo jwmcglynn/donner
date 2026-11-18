@@ -87,8 +87,8 @@ draws. Their SVG inputs are byte-identical at both revisions.
   tests/text/text-decoration/with-textLength-on-a-single-character.png
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions, which
-Donner matches within the default allowance on both CPU text tiers and on Geode with Metal (the
-Vulkan lanes were not measured). The snapshot's with-pattern-objectBoundingBox-in-use reference
+Donner matches within the default allowance on both CPU text tiers and on Geode with Metal or
+software Vulkan. The snapshot's with-pattern-objectBoundingBox-in-use reference
 rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
 revisions.
 
