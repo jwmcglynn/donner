@@ -129,18 +129,33 @@ class LaneTest(unittest.TestCase):
     # --- Selection. ------------------------------------------------------------------------------
 
     def test_selection_is_the_affected_labels_or_everything_on_a_fallback(self):
-        result, calls = self.run_phase("macos", "build", TARGETS_FALLBACK="false",
+        result, calls = self.run_phase("macos", "test", TARGETS_FALLBACK="false",
                                        TARGETS_AFFECTED="//a:a  //b:b\n//c:c\n",
                                        BAZEL_MACOS_BUILD_FLAGS="--xcode_version=26.1")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.bazel_calls(calls), [[
-            "bazelisk", "build", "--config=ci", "--config=lane-macos", "--xcode_version=26.1",
-            "//a:a", "//b:b", "//c:c"]])
+        [call] = self.bazel_calls(calls)
+        self.assertEqual(call[:2], ["bazelisk", "test"])
+        self.assertIn("--nobuild_tests_only", call)
+        self.assertIn("--xcode_version=26.1", call)
+        self.assertEqual(call[-3:], ["//a:a", "//b:b", "//c:c"])
         self.reset()
-        result, calls = self.run_phase("macos", "build", TARGETS_FALLBACK="true",
+        result, calls = self.run_phase("macos", "test", TARGETS_FALLBACK="true",
                                        TARGETS_AFFECTED="//a:a")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.bazel_calls(calls)[0][-1], "//...")
+
+    def test_hosted_linux_build_preserves_cloud_and_affected_roots(self):
+        for flags, fallback, expected in (
+                ("--config=buildbuddy-re", "true", ["//..."]),
+                ("--config=buildbuddy-re", "false", ["//...", "//pkg:explicit"]),
+                ("", "false", ["//pkg:explicit"])):
+            with self.subTest(flags=flags, fallback=fallback):
+                self.reset()
+                result, calls = self.run_phase("linux", "build", TARGETS_FALLBACK=fallback,
+                                               TARGETS_AFFECTED="//pkg:explicit", BUILDBUDDY_FLAGS=flags)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                [call] = self.bazel_calls(calls)
+                self.assertEqual([word for word in call if word.startswith("//")], expected)
 
     def test_buildbuddy_flags_split_into_words(self):
         result, calls = self.run_phase("linux", "build", TARGETS_FALLBACK="false",
@@ -149,7 +164,7 @@ class LaneTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.bazel_calls(calls), [[
             "bazelisk", "build", "--config=ci", "--config=latest_llvm",
-            "--config=buildbuddy-re", "--x=1", "//a:a"]])
+            "--config=buildbuddy-re", "--x=1", "//...", "//a:a"]])
 
     def test_empty_selection_fails_a_guarded_phase_before_bazel(self):
         for lane, phase, where in (("linux", "test", "the test step"),
@@ -252,7 +267,7 @@ class LaneTest(unittest.TestCase):
                                        GITHUB_RUN_ID="7", GITHUB_RUN_ATTEMPT="2")
         self.assertEqual(result.returncode, 1)
         self.assertEqual([call[0] for call in calls], ["bazelisk", "jq"])
-        self.assertIn("--copt=-DBUILDBUDDY_RE_PROBE_7_2", calls[0])
+        self.assertIn("--per_file_copt=^donner/base/AsyncifySuspendProbe[.]cc$@-DBUILDBUDDY_RE_PROBE_7_2", calls[0])
         self.assertEqual(calls[1][-1], "%s/buildbuddy-execution.json" % self.runner_temp)
 
     def test_an_unset_runner_variable_fails_like_an_unbound_variable(self):

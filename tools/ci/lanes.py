@@ -6,10 +6,11 @@ step id (or, for a step without one, a name given here). A step runs its phase w
 run-time values filled in. tools/ci/lane.py owns how the actions run; this file only says what
 runs, so a change here is a change to what CI builds and tests.
 
-A command's arguments are words, with three kinds of run-time value:
+A command's arguments are words, with these run-time values:
   - SELECTED: the planner's target selection (`//...` on a fallback, otherwise the affected
     labels, which may be the //tools/ci:no_affected_targets placeholder), from the
     TARGETS_FALLBACK and TARGETS_AFFECTED environment the job passes.
+  - HOSTED_BUILD_SELECTED: the same roots plus the full tree when verifying hosted cloud builds.
   - REMOTE_GPU_SELECTED: that selection with each locally isolated GPU suite swapped for its
     remote wrapper, from a MapRemoteGpu action earlier in the phase.
   - Split(name): an environment variable split into words, empty when unset. It carries flags
@@ -23,9 +24,10 @@ Standard library only: the phases run under each runner's system python3.
 
 import collections
 
-Selected = collections.namedtuple("Selected", "remote_gpu")
-SELECTED = Selected(remote_gpu=False)
-REMOTE_GPU_SELECTED = Selected(remote_gpu=True)
+Selected = collections.namedtuple("Selected", "kind")
+SELECTED = Selected("affected")
+REMOTE_GPU_SELECTED = Selected("remote-gpu")
+HOSTED_BUILD_SELECTED = Selected("hosted-build")
 Split = collections.namedtuple("Split", "name")
 
 # Actions, run in order; the first failure ends the phase with its status unless `defer` is set,
@@ -120,17 +122,19 @@ WGPU_REFERENCE = ("--test_tag_filters=", "--test_env=XDG_RUNTIME_DIR=/tmp")
 
 LINUX_LANES = {
     "linux": Lane(startup=(), phases={
-        # A cold remote compile proves the cloud executor runs C++ actions; then the whole tree.
+        # Salt only the probe source so normal base-library compiles retain their action keys.
+        # The regular build owns the full tree under the same cloud configuration.
         "buildbuddy_verify": Phase("Verify BuildBuddy remote execution", (
             bazel("build", *LINUX, BUILDBUDDY, "--remote_accept_cached=false", "--disk_cache=",
-                  "--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}",
+                  "--per_file_copt=^donner/base/AsyncifySuspendProbe[.]cc$@"
+                  "-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}",
                   "--execution_log_json_file=${RUNNER_TEMP}/buildbuddy-execution.json",
                   "//tools/ci:buildbuddy_compile_probe"),
             command("jq", "-s", "-e", 'any(.[]; .mnemonic == "CppCompile" and .runner == '
-                    '"remote" and .cacheHit != true)', "${RUNNER_TEMP}/buildbuddy-execution.json"),
-            bazel("build", *LINUX, BUILDBUDDY, "//..."),
+                    '"remote" and .cacheHit != true and (.commandArgs | '
+                    'index("-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}")) != null)', "${RUNNER_TEMP}/buildbuddy-execution.json"),
         )),
-        "build": Phase("Build", (bazel("build", *LINUX, BUILDBUDDY, SELECTED),)),
+        "build": Phase("Build", (bazel("build", *LINUX, BUILDBUDDY, HOSTED_BUILD_SELECTED),)),
         "test": Phase("Test", (
             RequireSelection("the test step"),
             bazel("test", *LINUX, BUILDBUDDY, "--test_output=errors",
@@ -177,7 +181,7 @@ LINUX_LANES = {
         "local_xvfb": Phase("Test local Xvfb targets", (
             RequireSelection("the local Xvfb test step"),
             bazel("test", *LINUX, "--nocache_test_results", "--test_output=errors",
-                  "--test_env=PATH", tags("requires_xvfb", "-fuzz_soak"), *SELF_HOSTED_REMOTE,
+                  tags("requires_xvfb", "-fuzz_soak"), *SELF_HOSTED_REMOTE,
                   "--strategy=TestRunner=local", SELECTED, wrappers=TEST_WRAPPER),
         )),
     }),
@@ -257,8 +261,7 @@ MACOS_LANES = {
     # replay stays in the suites.
     "macos": Lane(startup=(), phases={
         "refresh_xcode": _REFRESH_XCODE,
-        "build": Phase("Build", (bazel("build", "--config=ci", *MACOS_BUILD, SELECTED),)),
-        "test": Phase("Test", (
+        "test": Phase("Build and test", (
             RequireSelection("the test step"),
             # The hosted image ships Xcode without the offline Metal compiler, a separate
             # download. The MSL validation suite fails rather than skips without it, so this lane
@@ -277,7 +280,8 @@ MACOS_LANES = {
                        "-requires_shader_validation", "-ci-remote-gpu", "-launches-browser",
                        "-fuzz_soak"),
                   "--config=hosted-macos-quarantine", "--config=hosted-macos-unvalidated",
-                  *_macos("macos"), *BROWSER_STALL, SELECTED, wrappers=TEST_WRAPPER),
+                  *_macos("macos"), *BROWSER_STALL, "--nobuild_tests_only", SELECTED,
+                  wrappers=TEST_WRAPPER),
         )),
         # Browser tests hold wall-clock deadlines that a browser starved of CPU cannot meet. On
         # the three-core hosted runner, browsers co-scheduled with the rest of the suite missed
@@ -316,16 +320,13 @@ MACOS_LANES = {
     # changes no action key.
     "macos-self-hosted": Lane(startup=NO_HOST_RC, phases={
         "refresh_xcode": _REFRESH_XCODE,
-        "build": Phase("Build", (
-            bazel("build", "--config=ci", "--config=macos-vm", *MACOS_BUILD, SELECTED),
-        )),
-        "test": Phase("Test", (
+        "test": Phase("Build and test", (
             RequireSelection("the test step"),
             bazel("test", "--config=ci", "--config=macos-vm", "--test_output=errors",
                   tags("-manual", "-perf", "-requires_shader_validation",
                        "-requires_metal_toolchain", "-ci-remote-gpu", "-launches-browser",
                        "-fuzz_soak"),
-                  *_macos("macos-self-hosted"), SELECTED, wrappers=TEST_WRAPPER),
+                  *_macos("macos-self-hosted"), "--nobuild_tests_only", SELECTED, wrappers=TEST_WRAPPER),
         )),
         # Browser tests share the GPU with native replays and need their own serial phase;
         # tests that need a desktop session run in the macos-browser lane.

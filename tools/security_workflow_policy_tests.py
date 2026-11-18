@@ -3582,7 +3582,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_buildbuddy_policy_rejects_widened_key_access(self):
         # A hosted macOS phase that turns the local fallback off, read back through the workflow.
         with lane_view.edited_lane("macos", lane_view.replacing(
-                "--config=ci", "--config=ci", "--remote_local_fallback=false"), ("build",)):
+                "--config=ci", "--config=ci", "--remote_local_fallback=false"), ("test",)):
             fallback_off = _read_supply_chain_files()[".github/workflows/main.yml"]
         files = self.supply_chain_files
         main = ".github/workflows/main.yml"
@@ -3891,10 +3891,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         main = self.supply_chain_files[".github/workflows/main.yml"]
         probe = _step_body(main, "Verify BuildBuddy remote execution")
         self.assertIn("--remote_accept_cached=false --disk_cache=", probe)
-        self.assertIn("--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}", probe)
-        self.assertIn('.runner == "remote" and .cacheHit != true', probe)
-        self.assertIn("bazelisk build --config=ci --config=latest_llvm $BUILDBUDDY_FLAGS //...",
-                      probe)
+        self.assertIn("--per_file_copt=^donner/base/AsyncifySuspendProbe[.]cc$@-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}", probe)
+        self.assertIn('.runner == "remote" and .cacheHit != true and (.commandArgs | '
+                      'index("-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}")) != null', probe)
+        self.assertNotIn(" //...", probe)
+        build = _step_body(_jobs(main)["linux"], "Build")
+        self.assertIn("bazelisk build --config=ci --config=latest_llvm $BUILDBUDDY_FLAGS //... @selected_targets", build)
+        self.assertNotIn("--remote_accept_cached=false", build)
         # Every hosted Linux Bazel step selects the declared LLVM toolchain itself, so a run
         # without the cloud credential builds what main builds. Only the linker canary keeps the
         # runner's toolchain, because it checks the runner's non-lld linker.

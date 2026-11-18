@@ -756,11 +756,7 @@ jobs:
         shell: bash
         run: python3 tools/ci/lane.py phase macos refresh_xcode
 
-      - name: Build
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos build
-
-      - name: Test
+      - name: Build and test
         id: test
         shell: bash
         run: python3 tools/ci/lane.py phase macos test
@@ -1089,12 +1085,7 @@ jobs:
         shell: bash
         run: python3 tools/ci/lane.py phase macos-self-hosted refresh_xcode
 
-      - name: Build
-        id: build
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted build
-
-      - name: Test
+      - name: Build and test
         id: test
         shell: bash
         run: python3 tools/ci/lane.py phase macos-self-hosted test
