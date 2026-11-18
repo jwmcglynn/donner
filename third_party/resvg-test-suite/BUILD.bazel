@@ -223,6 +223,15 @@ byte-identical at both revisions.
   SHA256: d36c7e4d895c1d274b89f191f751df376d218f34fd54ecff3050af632f6fa648
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
   SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions, which
+Donner matches within the default allowance on both CPU text tiers and on Geode with Metal (the
+Vulkan lanes were not measured). The snapshot's with-pattern-objectBoundingBox-in-use reference
+rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
+revisions.
+
+  tests/painting/context/with-pattern-objectBoundingBox-in-use.png
+  tests/painting/marker/orient=auto-on-M-C-C-4.png
 """
 
 package(default_visibility = ["//visibility:public"])

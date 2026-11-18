@@ -742,16 +742,12 @@ INSTANTIATE_TEST_SUITE_P(PaintingColor, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingContext, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "painting/context",
-                {
-                    {"with-pattern-objectBoundingBox-in-use.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "resvg-with-pattern-objectBoundingBox-in-use.png")
-                         .withReason("resvg golden bakes fractional-tile rounding (56.57px tile "
-                                     "rasterized as 57px, ~0.8% period drift); Donner tiles at "
-                                     "the exact computed context box, see doc 0009")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("painting/context",
+                                        {
+                                            // The 300x300 resvg v0.49.0 rendering.
+                                            {"with-pattern-objectBoundingBox-in-use.svg",
+                                             ResvgV049Reference()},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -827,10 +823,8 @@ INSTANTIATE_TEST_SUITE_P(
             "painting/marker",
             {
                 {"default-clip.svg", WithMaxPixels(300, "Marker clip edge AA")},
-                {"orient=auto-on-M-C-C-4.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
-                     .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
+                // The 300x300 resvg v0.49.0 rendering.
+                {"orient=auto-on-M-C-C-4.svg", ResvgV049Reference()},
                 {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
