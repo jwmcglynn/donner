@@ -138,6 +138,19 @@ independently positioned outline reference and Amiri's primary-face underline me
 compares the full 500 × 500 scene at default parameters. The golden README records the layout,
 browser controls, and reproduction command.
 
+### Opaque vendored references
+
+These vendored PNGs are opaque white, while Donner's canvas and the other references are
+transparent, and resvg v0.49.0 has no usable replacement. Chromium 151 draws all three rows within 47 pixels of the goldens,
+and Firefox 153 draws the two `path` rows within 38 pixels but anchors the `y`-only chunk of
+coordinates-list differently. `testdata/golden/README.md` has the evidence.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| text/text-anchor | coordinates-list | Harness mismatch: opaque background; glyphs match under 4x4 coverage |
+| text/textPath | with-path | Reference disagreement: v0.49.0 ignores `path`; opaque PNG |
+| text/textPath | with-path-and-xlink-href | Reference disagreement: v0.49.0 ignores `path`; opaque PNG |
+
 ### Reference does not depict the feature
 
 | Category      | Test           | Reason (`withReason`)                                       |
