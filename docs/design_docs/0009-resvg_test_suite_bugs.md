@@ -69,6 +69,8 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
+| painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
@@ -76,6 +78,11 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
+
+`painting/stroke/{linear,radial}-gradient-on-text` compare against independently captured
+Firefox renderings at the suite's default comparison settings. The vendored images map the
+gradient through glyph ink extents. SVG's text bounding box uses full glyph cells. See the
+[reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gradient-strokes-on-text).
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
 rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
