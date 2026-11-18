@@ -166,6 +166,55 @@ rm donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_2'
 ```
 
+## Gradient strokes on text
+
+The two `painting/stroke/*-gradient-on-text.svg` fixtures draw "Text" in Noto Sans at 60 user
+units. The vendored references map the gradients through the glyph ink extents, about
+42.80..156.08 by 66.96..110.40 user units. The [SVG 2 bounding-box algorithm][svg2-bbox] uses the
+full glyph cells, including each glyph's advance and the font's ascent and descent. At the
+rendered text origin the full box is about 42.20..157.40 by 45.66..127.38. The default linear
+gradient only sees the horizontal difference. The radial gradient sees both dimensions.
+
+resvg 0.49.0 uses the glyph-cell box. Its 300-pixel renders were compared with Donner both as text
+and as the same explicit `usvg` paths with user-space gradient matrices. On the explicit paths,
+the two engines agree exactly on the color of 4,769 mutually opaque text pixels. Within each
+engine the coverage is identical for the solid and gradient versions of the path.
+
+The earlier 4x4 scan diagnostic still counted 116 differences in each row. Every flagged pixel
+was on the curved glyph boundaries and differed by one to four covered samples, allowing one
+alpha code for rounding. Holding color constant and substituting the reference coverage reduced
+both counts to zero, even with edge pixels included. A separate control used one immutable
+expanded stroke for both scans in tiny-skia 0.12.0, the rasterizer used by resvg 0.49.0. Its
+internal 4x4 scan allows coarser curve subdivisions than a large aliased render. On the same
+sample grid, changing only the subdivision scale to match the internal scan removed all 233
+alpha differences larger than one code. A one-code accumulation rounding difference remains.
+
+Firefox 153.0 independently rendered both fixtures at 500 x 500, device pixel ratio 1, using the
+suite's Noto Sans Regular font. The harness compares with these images at its default 0.02
+threshold and 100-pixel allowance. The Geode corpus lane has a separate feature gate for text.
+
+| Gradient | Simple text | Full text |
+| --- | ---: | ---: |
+| Linear | 84 | 39 |
+| Radial | 92 | 44 |
+
+To reproduce the captures, serve each corpus SVG as an SVG document with a `style` element
+registering `Noto Sans` at weight 400 and normal style from the corpus font. Wait for the face to
+load and capture the 500 x 500 document over black and white backgrounds in a borderless iframe.
+For each pixel, recover alpha as `round(255 - mean(whiteRGB - blackRGB))`, clamped to 0..255.
+Divide the black-background channels by `alpha / 255` and round and clamp to get straight RGB.
+At alpha zero write RGB zero.
+
+Corpus `fonts/NotoSans-Regular.ttf` SHA-256
+`6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9`.
+
+| Gradient | Corpus SVG SHA-256 | Firefox PNG SHA-256 |
+| --- | --- | --- |
+| Linear | `2f16b9c4f8c9023d3e1cc131514084d27da62e6c76ea918cba379766d2686a62` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` |
+| Radial | `aaa4629608d0bba3aab4d50c8be80410f6c5d8038e56dc03c787330e2e61c45b` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` |
+
+[svg2-bbox]: https://www.w3.org/TR/SVG2/coords.html#BoundingBoxes
+
 ## Nearest-neighbor sampling for `on-feImage`
 
 The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
