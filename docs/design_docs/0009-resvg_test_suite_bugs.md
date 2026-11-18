@@ -54,10 +54,7 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (51)
-
-The count is of overridden suite rows; the shared feColorMatrix table row covers seven of them
-and the drop-shadow-function row four.
+## Active overrides
 
 ### resvg golden is wrong per spec
 
@@ -74,6 +71,9 @@ and the drop-shadow-function row four.
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+| text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
 rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
@@ -84,6 +84,20 @@ The seven feColorMatrix identity forms (without-attributes, type=matrix without 
 empty, short or long value lists, and type=saturate and type=hueRotate without a value) share
 `donner-feColorMatrix-identity.png`; the evidence that the 8-bit tables posterize the references
 is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
+
+`textPath/mixed-children-2` runs against a committed Donner render
+(`resvg-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
+end point of the path; the vendored PNG continues `long` and the trailing `.` from the
+end of the glyphs laid out on each path. The golden's ink matches a Chrome rendering of
+the case within one device pixel. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
+
+`textPath/mixed-children-1` and `textPath/very-long-text` run against committed Donner
+renders. SVG 2 continues the text after a `textPath` from the end point of the path, and
+CSS Text 3 keeps the textPath's trailing space on the path, so the green `Text` starts at
+the end point; the vendored PNGs continue from the end of the glyphs on the path. Both
+renders match Chrome's ink. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `font-size-adjust/simple-case` runs against a committed Donner render
 (`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
@@ -119,6 +133,43 @@ CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink an
 upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
 in the golden README.
 
+### Reference does not depict the feature
+
+| Category      | Test           | Reason (`withReason`)                                       |
+| ------------- | -------------- | ----------------------------------------------------------- |
+| text/textPath | method=stretch | Reference disagreement: the vendored PNG is align placement |
+
+`textPath/method=stretch` runs against a committed Donner render
+(`resvg-method=stretch.png`). The vendored PNG is byte-identical to the original snapshot’s `simple-case.png`,
+which is align placement, so it cannot assert the stretch warp. The golden is a
+regression guard for the warp rather than an independent oracle;
+`RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`, which
+requires stretch on a straight path to equal ordinary rotated text, is the independent
+check. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
+
+### Allowed nearest-neighbor reference differences
+
+CSS Images permits an implementation-selected edge-preserving algorithm for
+`crisp-edges`; deprecated `optimizeSpeed` maps to that value. An alternate nearest
+sampling grid does not establish that the upstream reference violates the specification.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
+
+The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage)
+records the construction and checksums for `on-feImage`. The separate `optimizeSpeed` fixture
+compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
+pixel centers through the inverse transform to select the nearest source texel.
+
+### Color-adjust filter labels
+
+The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
+outside the label bands. Both backends compare the live filtered squares against the original
+pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the reference construction and qualification.
+
 ### Named font sizes (CSS Fonts 4 table, a maintainer decision)
 
 The absolute-size table in CSS Fonts 4 section 2.5 is a guideline for user agents, not a
@@ -131,30 +182,6 @@ current browsers use.
 | --- | --- | --- |
 | text/font-size | named-value | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
 | text/font-size | named-value-without-a-parent | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
-
-### Allowed nearest-neighbor reference differences
-
-CSS Images permits an implementation-selected edge-preserving algorithm for
-`crisp-edges`; deprecated `optimizeSpeed` maps to that value. An alternate nearest
-sampling grid does not establish that the upstream reference violates the specification.
-
-| Category | Test | Reason |
-| --- | --- | --- |
-| painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
-
-The project reference retains all vendored reference pixels outside the image
-primitive. Inside, the decoded 64 x 64 RGBA source is sampled with
-`source_index = floor((destination_index + 0.5) * 64 / destination_extent)`.
-The default filter region expands the `(40, 40, 120, 120)` object box by 10% on
-each side, producing `(70, 70, 360, 360)` after the `500 / 200` viewport scale.
-All 129,600 image-region pixels follow this independent geometric construction.
-The separate `optimizeSpeed` fixture compares against its resvg v0.49.0
-rendering, which TinySkia matches. Geode stays disabled for it: at 3.75 device
-pixels per texel, every second texel boundary falls on a pixel center, and
-Geode's interpolated texture coordinate lands just below it where tiny-skia's
-float inverse transform lands on it, so Geode picks the previous texel. All 564
-differing pixels are inside the image; this is a sampling-position rounding
-difference, not missing SVG support.
 
 ### Backend-difference goldens (text)
 
@@ -180,7 +207,6 @@ noted.
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
 | text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | mixed-children-1                         | AA diffs                                          |
 | text/textPath        | nested                                   | Minor char                                        |
 | text/textPath        | path-with-ClosePath                      | Minor char                                        |
 | text/textPath        | simple-case                              | Minor char                                        |
@@ -191,7 +217,6 @@ noted.
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
 | text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | very-long-text                           | AA diffs                                          |
 | text/textPath        | with-baseline-shift                      | Minor char                                        |
 | text/textPath        | with-coordinates-on-text                 | Minor char                                        |
 | text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
