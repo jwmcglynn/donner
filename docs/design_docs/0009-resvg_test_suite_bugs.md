@@ -208,31 +208,13 @@ noted.
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
-| text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | nested                                   | Minor char                                        |
-| text/textPath        | path-with-ClosePath                      | Minor char                                        |
-| text/textPath        | simple-case                              | Minor char                                        |
-| text/textPath        | startOffset=-100                         | Minor char                                        |
-| text/textPath        | startOffset=10percent                    | Minor char                                        |
-| text/textPath        | startOffset=30                           | Minor char                                        |
-| text/textPath        | startOffset=5mm                          | Minor char                                        |
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
-| text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | with-baseline-shift                      | Minor char                                        |
-| text/textPath        | with-coordinates-on-text                 | Minor char                                        |
-| text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
-| text/textPath        | with-rotate                              | Minor char                                        |
-| text/textPath        | with-text-anchor                         | (no reason string)                                |
-| text/textPath        | with-transform-on-a-referenced-path      | Minor char                                        |
-| text/textPath        | with-transform-outside-a-referenced-path | Minor char                                        |
 | text/textPath        | with-underline                           | Minor char                                        |
 | text/text-decoration | indirect                                 | (no reason string)                                |
 
-> Two entries (`textPath/with-text-anchor`, `text-decoration/indirect`) carry no
-> `withReason`. They should either get one or migrate to a per-test threshold; the
-> "Minor char" cluster is the precedent. Tracked in
-> [0021](0021-resvg_feature_gaps.md).
+> `text-decoration/indirect` carries no `withReason`. It should either get one or migrate to a
+> per-test threshold. Tracked in [0021](0021-resvg_feature_gaps.md).
 
 ## Golden files
 

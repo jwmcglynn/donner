@@ -1619,11 +1619,8 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
                      .withReason("resvg 0.47.0 reference (golden README)")},
-                {"m-A-path.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
-                {"m-L-Z-path.svg", Params::WithGoldenOverride(
-                                       "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
-                                       .withReason("Minor char")},
+                // ResvgV049Reference() rows compare against resvg v0.49.0's 300x300 renderings.
+                {"m-A-path.svg", ResvgV049Reference()},
                 // The vendored PNG is byte-identical to simple-case.png (align placement), so it
                 // does not depict method="stretch". The golden is Donner's own rendering, a
                 // regression guard; testdata/golden/README.md records its evidence and
@@ -1643,43 +1640,18 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
-                {"nested.svg",
-                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-nested.png")
-                     .withReason("Minor char")},
-                {"path-with-ClosePath.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-path-with-ClosePath.png")
-                     .withReason("Minor char")},
+                {"nested.svg", ResvgV049Reference()},
+                {"path-with-ClosePath.svg", ResvgV049Reference()},
                 {"side=right.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                        "Half-turned glyph edges: 3427 of 3430 raw differences are "
                                        "boundary texels, centroid within 0.1px, ink within 0.03%")},
-                {"simple-case.svg", Params::WithGoldenOverride(
-                                        "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
-                                        .withReason("Minor char")},
-                {"spacing=auto.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-simple-case.png")
-                     .withReason("spacing=auto lets the user agent choose, and Donner chooses the "
-                                 "same spacing as exact, so this draws the same picture as "
-                                 "simple-case.svg and shares its reference; its own vendored PNG "
-                                 "is byte-identical to the stale simple-case.png")},
-                {"startOffset=-100.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-startOffset=-100.png")
-                     .withReason("Minor char")},
-                {"startOffset=10percent.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-startOffset=10percent.png")
-                     .withReason("Minor char")},
-                {"startOffset=30.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-startOffset=30.png")
-                     .withReason("Minor char")},
-                {"startOffset=5mm.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-startOffset=5mm.png")
-                     .withReason("Minor char")},
+                {"simple-case.svg", ResvgV049Reference()},
+                {"spacing=auto.svg", ResvgV049Reference()},
+                {"startOffset=-100.svg", ResvgV049Reference()},
+                {"startOffset=10percent.svg", ResvgV049Reference()},
+                {"startOffset=30.svg", ResvgV049Reference()},
+                {"startOffset=5mm.svg", ResvgV049Reference()},
                 {"tspan-with-absolute-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-absolute-position.png")
@@ -1688,27 +1660,16 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png")
                      .withReason("Reference generated independently with resvg 0.47.0")},
-                {"two-paths.svg", Params::WithGoldenOverride(
-                                      "donner/svg/renderer/testdata/golden/resvg-two-paths.png")
-                                      .withReason("Minor char")},
+                {"two-paths.svg", ResvgV049Reference()},
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
-                {"with-baseline-shift.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-with-baseline-shift.png")
-                     .withReason("Minor char")},
-                {"with-coordinates-on-text.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-with-coordinates-on-text.png")
-                     .withReason("Minor char")},
-                {"with-coordinates-on-textPath.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-with-coordinates-on-textPath.png")
-                     .withReason("Minor char")},
+                {"with-baseline-shift.svg", ResvgV049Reference()},
+                {"with-coordinates-on-text.svg", ResvgV049Reference()},
+                {"with-coordinates-on-textPath.svg", ResvgV049Reference()},
                 // The filter itself is applied to the textPath now, but Donner's glyph coverage
                 // is about 5% lighter than the reference's (measured on the unfiltered
                 // text/tspan/with-clip-path case: 1140473 versus 1208567 total alpha over the
@@ -1719,26 +1680,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
                               "5% lighter than the reference's, which only a blur makes visible "
                               "away from the glyph edges")},
-                {"with-invalid-path-and-xlink-href.svg",
-                 Params::Skip("Reference disagrees with the corpus: after invalid `path` is "
-                              "ignored, relative `xlink:href=\"path1\"` names an external "
-                              "document, not the local element. Without an admitted external SVG "
-                              "resource it is unresolved; independent control-scene coverage pins "
-                              "that policy")},
-                {"with-rotate.svg", Params::WithGoldenOverride(
-                                        "donner/svg/renderer/testdata/golden/resvg-with-rotate.png")
-                                        .withReason("Minor char")},
-                {"with-text-anchor.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-with-text-anchor.png")},
-                {"with-transform-on-a-referenced-path.svg",
-                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                            "resvg-with-transform-on-a-referenced-path.png")
-                     .withReason("Minor char")},
-                {"with-transform-outside-a-referenced-path.svg",
-                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                            "resvg-with-transform-outside-a-referenced-path.png")
-                     .withReason("Minor char")},
+                // An invalid path falls back to xlink:href. The relative URL names an external
+                // document and is unresolved in this fixture, leaving the guide path and frame.
+                {"with-invalid-path-and-xlink-href.svg", ResvgV049Reference()},
+                {"with-rotate.svg", ResvgV049Reference()},
+                {"with-text-anchor.svg", ResvgV049Reference()},
+                {"with-transform-on-a-referenced-path.svg", ResvgV049Reference()},
+                {"with-transform-outside-a-referenced-path.svg", ResvgV049Reference()},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
