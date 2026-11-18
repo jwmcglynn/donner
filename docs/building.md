@@ -462,8 +462,8 @@ Renovate pull requests alone.
 ## Remote macOS execution {#RemoteMacosExecution}
 
 `--config=remote-macos` builds and tests for macOS arm64 with every action, tests included, on a
-remote macOS executor. The client can be a Linux or macOS machine and needs no Xcode. No CI
-workflow uses it yet.
+remote macOS executor. The client can be a Linux or macOS machine and needs no Xcode. The only CI
+workflow use is the advisory shadow lane described [below](#RemoteMacosShadowLane).
 
 ```sh
 DONNER_CI_XCODE_IDENTITY=27.2-27B52 bazel test --config=remote-macos //donner/base/...
@@ -535,6 +535,173 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
   with `--jobs`, after the config; otherwise the executor decides.
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
+
+### Remote macOS shadow lane {#RemoteMacosShadowLane}
+
+The `macos-remote-shadow` job in `.github/workflows/main.yml` runs this config in CI as an advisory
+lane, so its speed, cache reuse and failures can be compared with the self-hosted macOS lane. It
+runs on the self-hosted Linux runners, behind the self-hosted Linux lane's trust gate, and only
+when a trusted pull request carries the `ci:macos-remote-shadow` label or the repository variable
+`MACOS_REMOTE_SHADOW_LANE` is `true` (every trusted pull request). The label is read from the
+event that started the run: add it before pushing; a rerun does not read labels again.
+
+**Admission and its cost.** The lane starts only after its run's `linux-self-hosted` job has
+finished, whether that passed or failed, so it never delays its own run's gating job. While it runs
+it occupies one runner of the self-hosted Linux class outside the Linux lane's admission accounting,
+so an admitted Linux job of another run can wait for a runner for up to the shadow's duration: at
+most its 90-minute budget, and a starved executor stops a phase after 20 minutes. A turnstile with a
+pool of one runs a single shadow at a time against the macOS executor. It fails closed: after 30
+minutes without admission the shadow lane is skipped. An older run still in its Linux lane counts
+against that pool until its own shadow job is created or skipped, so under load a shadow run can
+wait and then be skipped this way. A run that can no longer create a shadow job does not count: one
+whose Linux lane was skipped or cancelled, such as a push to `main`, and one with no shadow job 5
+minutes after its Linux lane and shadow turnstile ended, such as a pull request from a branch
+without this lane (the turnstile's `pool-upstream` and `upstream-grace-minutes` inputs). A run
+released only because that grace passed is read again on every poll, since its shadow job may still
+appear; an unreadable or partly listed run still counts. That cost is why the lane is opt-in per
+pull request, and turning it on for every trusted pull request should wait for dedicated runner
+capacity. While the shadow lane runs, the pull request's checks stay pending.
+
+The job runs the lane as every lane runs, `python3 tools/ci/lane.py phase macos-remote-shadow
+shadow`, whose one phase in `tools/ci/lanes.py` runs `tools/ci/macos_remote_shadow.py` on the
+planner's selection with the lane's budget. That script is the whole lane (`--dry-run` prints
+its commands):
+
+1. A preflight: two `bazel build --nobuild` probes, with the config and without it. The lane stops
+   with "this runner is not configured for the remote macOS lane" when the runner's rc files set no
+   remote executor for the config, or the same executor as for a build without it (an executor
+   bound unconditionally would send macOS actions to the wrong backend). It compares the values
+   without printing them and deletes both build event files. A failed probe stops the preflight at
+   once, and a repository rule that could not run on the runner is reported as such. It then runs
+   `//tools/ci:remote_macos_probe`, a manual, never-cached test that passes only on macOS arm64,
+   under the config, and stops the lane unless that test passed and ran remotely, uncached, in this
+   invocation; this also catches an executor bound under a config the remote macOS config expands,
+   such as `re`. The probe is stopped if no action of it completes within 10 minutes.
+2. `bazel test --config=remote-macos` of the planner's selection (`//...` on a fallback): every
+   selected target is built, and every selected test runs except GPU-opening tests and tests
+   tagged `manual`, `perf`, `requires_shader_validation`, `requires_metal_toolchain`,
+   `ci-remote-gpu`, `launches-browser`, `fuzz_soak`, `requires_desktop_session`, `requires_xvfb`,
+   `local`, `no-remote` or `no-remote-exec`. The first seven are the self-hosted macOS lane's
+   exclusions, so the lane runs a subset of that lane's tests; the rest cannot run on a remote
+   executor.
+3. `bazel test --config=remote-macos-gpu --jobs=4 --build_tests_only` of the GPU-opening tests
+   (tagged `resources:local_gpu:1`, the local GPU resource). The `--jobs=4` after the config bounds
+   the invocation, and so the GPU tests, at four concurrent actions; their build actions are cache
+   hits from step 2.
+
+Every Bazel command of the lane uses its own output root in the runner's persistent tool cache
+(`$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output`), outside the workspace, so the Linux
+lane's server and analysis cache are left alone while the lane keeps its own repository and
+analysis caches between runs; the lane shuts its server down when it ends. It passes
+`--config=ci-test-lane`, the test-lane config that `ci` composes, for the editor's fixed
+placeholder commit, so the editor's build-information action runs remotely. It never passes
+`--config=ci`, which on a self-hosted Linux runner carries the Linux lane's executor; it passes the
+parts of `ci` it needs itself. Both phases pass `--keep_going`, unlike the gating lanes: the lane
+is advisory, so one failed action, an executor-side error included, must not hide the result of
+everything that does not depend on it. A broken build can then run longer, within the lane's
+budget. Every command also passes
+`--incompatible_repo_env_ignores_action_env`: repository rules and module extensions run on the
+Linux runner, and without it Bazel 8 also hands them each `--action_env` value of the config (the
+macOS `PATH` of `ci-macos`, and any variable a runner's rc empties for the executor), so a fetch
+on the runner could lose what its own tools need. The mixed-platform canary sets the same flag in its
+opt-in `ci-platforms` config.
+
+**A starved executor.** Bazel rewrites its progress line with a growing elapsed time, so a stall
+watchdog that compares lines sees progress while nothing completes. The lane therefore stops a phase
+when the `[done / total]` counter of Bazel's progress has not advanced for 20 minutes while actions
+remain (longer than the slowest legitimate single action: the longest test timeout here is `long`,
+900 seconds), interrupting the Bazel client as Ctrl-C would, reports "executor starved or
+unavailable" and skips the remaining phase. The job's 90-minute budget covers a full run, which is
+expected within the self-hosted macOS lane's 60 minutes, and keeps a stuck run from holding a
+self-hosted Linux runner for hours.
+
+**The lane's own budget.** The workflow passes `--budget-minutes 70`. It is a deadline on this
+advisory lane's own runtime, not on any test: when it runs out, the running Bazel command is
+stopped the same way, the later phase is skipped, and the lane still stages failed tests' outputs,
+writes its report, summary and job summary, and exits with a failure status so the upload steps
+run. A stopped phase's line in the report gives the actions and tests completed of their totals,
+actions per minute, and the executed actions and action cache hits from its build events, so a
+cold cache reads differently from a starved executor. A stop interrupts the command's process
+group, then ends what is left of it, and the lane shuts the Bazel server down before it reads the
+stopped command's build events: the server, outside that group, finishes the cancelled command and
+its build event file first. A stop in the preflight or the routing probe is reported as out of time
+in the same way. The budget plus a 15-minute margin for stopping Bazel (at most 150 seconds),
+shutting the server down, the summary and the uploads stays below the job's 90-minute timeout, so
+the runner never cancels the job before the lane has reported.
+
+**How a result shows.** The lane never fails a pull request or the coverage contract, which does
+not read it:
+
+- a failed phase, an unconfigured runner or a crash of the script: the job is green, with an
+  annotation on the failed step and, unless the script crashed, the job summary saying what
+  failed;
+- a job timeout, a lost runner, or a failed checkout or upload, in the lane job or its admission
+  job: that check entry is red or cancelled, and the workflow run still succeeds, because both
+  jobs continue on error.
+
+Each run writes a table to the job summary (targets built, failed and skipped, tests, passed,
+flaky, failed, not run and skipped, executed and cached, actions, cache hits, spawns by runner,
+wall time). A target incompatible with the target platform is skipped, not failed, and so is its
+test. The tests counted are the ones Bazel counts in its own "Executed N out of M tests" line: the
+targets it tested, an alias of a test included, and the tests the phase's tag filters select that
+were skipped or not built. Tests that were not built or never started count as not run, apart
+from tests that ran and failed, and only targets that failed to build raise the build-failure
+warning. Failed
+actions are split by their build events into remote execution errors (Bazel's remote exit codes or
+a remote execution failure detail: an executor-side fault, not a macOS build break) and actions
+that failed with their own exit status; a phase with either says so in a warning and in the job
+summary. The table is uploaded, with `shadow-summary.json` and the Bazel profiles, as the
+`macos-remote-shadow-<attempt>` artifact. The profiles are uploaded as Bazel wrote them: they
+record absolute paths on the runner, the URL of each repository download and local command lines,
+and their remote events can name the executor's host. The build event and execution logs and any
+stall note stay on the runner.
+
+**What the job log shows.** The job log shows the build's normal output, as in the other lanes:
+progress, warnings, errors with the compiler or tool output that explains them, the messages a
+remote backend attaches to a failed action, and test results. It can include the remote
+executor's host name and absolute paths on the runner and on the executor.
+
+When a phase has a test that did not pass, the lane copies the `test.log`, `test.xml` and undeclared
+outputs (`test.outputs/outputs.zip`, such as a pixel comparison's actual, expected and diff images)
+that the phase's build events name for that test to `test-artifacts/<phase>/<configuration>/`, and
+the job uploads them through the test-artifact collector the other lanes use, as the
+`macos-remote-shadow-test-failures-<attempt>` artifact. Only results of the current invocation
+select files, so a log another run left in the lane's persistent output root is never uploaded.
+Only regular files with a single link inside the lane's output root, reached without symbolic
+links, are copied, at most 64 MB each and 256 MB per run; a larger file is skipped with a warning
+that names the test. Each phase prints how many files and bytes it staged, and warns when it had
+results that did not pass but staged nothing.
+Earlier attempts of a retried test are not kept, only its final attempt. The lane downloads
+outputs with `--remote_download_outputs=minimal` plus a `--remote_download_regex` for `test.log`,
+`test.xml` and `outputs.zip`. Bazel has no download mode that depends on a test's result, so those
+three files come back for every test the lane runs, and nothing else does.
+
+This makes the job upload output produced on the remote executor as a public artifact, where
+before everything from the executor stayed on the runner. These files are uploaded as produced: a
+failed test's log, XML and zipped undeclared outputs can include host names, the executor's
+absolute working-directory paths and anything the test prints.
+
+A runner must provide, in its own rc files under `build:remote-macos-base`:
+
+- `--remote_executor` and `--remote_cache` for the macOS executor, and any instance name;
+- TLS or other credentials for them;
+- `--remote_execution_priority` and any remote timeout;
+- a `--jobs` cap for ordinary invocations (the GPU phase overrides it with `--jobs=4`);
+- empty values for any action, host action or test environment variables that the runner's own
+  unconditional rc lines set for its Linux lanes;
+- room for the lane's own output root, `$RUNNER_TOOL_CACHE/donner-macos-remote-shadow-output`,
+  which grows over time (external repositories, the action cache and one install base per Bazel
+  version) and which runner owners should prune. Its server exits after 10 idle minutes
+  (`--max_idle_secs=600`) if a killed job leaves it behind.
+
+Do not bind an executor, cache or credentials under `build:re`, `build:macos` or `build:ci-macos`
+in a runner's system rc: the config expands those after the system rc's `remote-macos-base` lines,
+so they would win. Do not enable `--enable_platform_specific_config` in a runner rc line that
+applies after the config. Emptying a variable for the executor with `--action_env=NAME=` is fine;
+do not take a variable the runner's own tools need away from repository rules with `--repo_env`.
+Bazel can print the executor address in a connection error, and the job log is public, so keep
+credentials out of the executor and cache URLs (use TLS client files, a credential helper or
+headers in the rc instead) and keep any build event service out of the config.
 
 ## Frequently Asked Questions (FAQ)
 

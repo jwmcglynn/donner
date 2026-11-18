@@ -13,6 +13,9 @@ Input:
       "capacity": 4,
       "me": 42,
       "pool": ["linux-self-hosted"],
+      "upstream": [],          # optional, see upstream_state
+      "grace_seconds": 300,    # optional, with upstream
+      "now": 1700000000.0,     # optional, with upstream: epoch seconds
       "runs": [
         {"id": 41, "jobs": {"jobs": [{"name": "...", "status": "..."}]}},
         {"id": 40, "jobs": null}
@@ -25,6 +28,7 @@ failed. Output:
     {"admit": false, "occupancy": 4, "blockers": ["41 (active)", ...]}
 """
 
+from datetime import datetime, timezone
 import json
 import sys
 
@@ -44,11 +48,22 @@ _PENDING_STATES = frozenset({"queued", "requested", "waiting", "pending"})
 #          Callers treat an older run in this state as holding a slot; this is
 #          the only state that covers the window between a run being created
 #          and its job list materializing.
-# CLEAR    every pool job reached a terminal state, so the run holds nothing.
+# CLEAR    every pool job reached a terminal state, or the pool job can never be
+#          created, so the run holds nothing and never will again in this attempt.
+# RELEASED the run holds nothing now only because the grace after its upstream jobs
+#          completed has passed without a pool job appearing. That is provisional: the
+#          pool job may still be listed later, so callers read the run again every poll.
 ACTIVE = "active"
 PENDING = "pending"
 ABSENT = "absent"
 CLEAR = "clear"
+RELEASED = "released"
+# States in which a run holds no slot.
+_FREE = frozenset({CLEAR, RELEASED})
+
+# Conclusions of a job the pool job needs after which the pool job can never be created: the
+# pool job requires each upstream job to have run (succeeded or failed).
+_NEVER_AFTER = frozenset({"skipped", "cancelled"})
 
 
 def workflow_ids(workflows_payload, wanted_names):
@@ -79,14 +94,23 @@ def is_pool_job(name, pool):
     return any(name == job or name.endswith(" / " + job) for job in pool)
 
 
-def pool_state(jobs_payload, pool):
+def _incomplete(jobs_payload):
+    """Whether a jobs payload lists fewer jobs than its total_count, so a page is missing."""
+    total = jobs_payload.get("total_count")
+    return isinstance(total, int) and total > len(jobs_payload.get("jobs") or [])
+
+
+def pool_state(jobs_payload, pool, upstream=(), now=None, grace_seconds=0.0):
     """Reduce one run's jobs payload to how it occupies the pool.
 
-    A payload of None means the Actions API could not be read for that run.
-    That is reported as ACTIVE on purpose: an API hiccup should narrow the
-    pool rather than open it.
+    A payload of None means the Actions API could not be read for that run,
+    and a payload that lists fewer jobs than its total_count is read as if it
+    could not be. That is reported as ACTIVE on purpose: an API hiccup should
+    narrow the pool rather than open it. A run with no pool job is ABSENT
+    unless the pool names the jobs its pool job needs (`upstream`); see
+    upstream_state.
     """
-    if jobs_payload is None:
+    if jobs_payload is None or _incomplete(jobs_payload):
         return ACTIVE
 
     states = [
@@ -95,12 +119,55 @@ def pool_state(jobs_payload, pool):
         if is_pool_job(job.get("name"), pool)
     ]
     if not states:
+        if upstream:
+            return upstream_state(jobs_payload, upstream, now, grace_seconds)
         return ABSENT
     if "in_progress" in states:
         return ACTIVE
     if any(state in _PENDING_STATES for state in states):
         return PENDING
     return CLEAR
+
+
+def _completed_at(job):
+    """A job's completion time in epoch seconds, or None when it is missing or malformed."""
+    try:
+        moment = datetime.strptime(job.get("completed_at") or "", "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return None
+    return moment.replace(tzinfo=timezone.utc).timestamp()
+
+
+def upstream_state(jobs_payload, upstream, now, grace_seconds):
+    """How a run with no pool job occupies the pool, from the jobs its pool job needs.
+
+    `upstream` names those jobs, the first being the one that every run of the
+    pool's workflows creates. The Actions API lists a job only once the jobs it
+    needs have finished, so a pool job can still appear while any of them is
+    unfinished, and briefly after they all completed. The run is:
+
+      * ABSENT (it may still create its pool job) while the first upstream job
+        is not listed, while any listed upstream job has not completed, or
+        within `grace_seconds` of the last upstream completion, or when a
+        completion time cannot be read;
+      * CLEAR when any upstream job concluded skipped or cancelled, since the
+        pool job can then never run;
+      * RELEASED once the grace has passed after every listed upstream job
+        completed without a pool job appearing, which is how a run that does not
+        opt in, or whose workflow has no pool job, shows. It is provisional.
+    """
+    listed = [job for job in jobs_payload.get("jobs") or []
+              if is_pool_job(job.get("name"), upstream)]
+    if not any(is_pool_job(job.get("name"), upstream[:1]) for job in listed):
+        return ABSENT
+    if any(job.get("status") != "completed" for job in listed):
+        return ABSENT
+    if any(job.get("conclusion") in _NEVER_AFTER for job in listed):
+        return CLEAR
+    finished = [_completed_at(job) for job in listed]
+    if now is None or None in finished or now - max(finished) < grace_seconds:
+        return ABSENT
+    return RELEASED
 
 
 def decide(request):
@@ -130,15 +197,18 @@ def decide(request):
     capacity = int(request["capacity"])
     me = int(request["me"])
     pool = list(request["pool"])
+    upstream = list(request.get("upstream") or [])
+    now = request.get("now")
+    grace_seconds = float(request.get("grace_seconds") or 0)
 
     blockers = []
     for run in request.get("runs") or []:
         run_id = int(run["id"])
         if run_id == me:
             continue
-        state = pool_state(run.get("jobs"), pool)
+        state = pool_state(run.get("jobs"), pool, upstream, now, grace_seconds)
         if run_id < me:
-            holds = state != CLEAR
+            holds = state not in _FREE
         else:
             holds = state == ACTIVE
         if holds:

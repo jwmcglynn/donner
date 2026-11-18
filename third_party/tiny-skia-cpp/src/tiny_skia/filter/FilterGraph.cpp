@@ -76,6 +76,20 @@ struct Box {
   }
 };
 
+/// Round outward to the raster cells occupied by the logical input image.
+ScreenIntRect wrapSamplingRect(const Box& bounds, int w, int h) {
+  if (!(bounds.x1 > bounds.x0 && bounds.y1 > bounds.y0)) {
+    return {};
+  }
+  const double maxX = static_cast<double>(w);
+  const double maxY = static_cast<double>(h);
+  const auto left = static_cast<std::uint32_t>(std::floor(std::clamp(bounds.x0, 0.0, maxX)));
+  const auto top = static_cast<std::uint32_t>(std::floor(std::clamp(bounds.y0, 0.0, maxY)));
+  const auto right = static_cast<std::uint32_t>(std::ceil(std::clamp(bounds.x1, 0.0, maxX)));
+  const auto bottom = static_cast<std::uint32_t>(std::ceil(std::clamp(bounds.y1, 0.0, maxY)));
+  return ScreenIntRect::fromXYWH(left, top, right - left, bottom - top).value_or(ScreenIntRect{});
+}
+
 FloatPixmap createTransparentFloat(int w, int h) {
   auto fp = FloatPixmap::fromSize(static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h));
   if (!fp.has_value()) {
@@ -695,7 +709,12 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               params.targetY = primitive.targetY;
               params.edgeMode = primitive.edgeMode;
               params.preserveAlpha = primitive.preserveAlpha;
-              convolveMatrix(input->in(nodeLinearRGB), fpOut, params);
+              std::optional<ScreenIntRect> wrapRegion;
+              if (params.edgeMode == ConvolveEdgeMode::Wrap) {
+                const Box inputRegion = resolveInputSubregion(inputOrDefault(node, 0));
+                wrapRegion = wrapSamplingRect(inputRegion.intersect(filterRegionBox), w, h);
+              }
+              convolveMatrix(input->in(nodeLinearRGB), fpOut, params, wrapRegion);
             }
             // An unusable kernel leaves transparent black, which carries no color and so needs no
             // conversion whichever space consumes it.

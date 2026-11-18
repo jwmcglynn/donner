@@ -481,6 +481,21 @@ jobs:
           find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
             -print -exec rm -rf {} + 2>/dev/null || true
 
+      - name: Test Linux and macOS with native platform transitions
+        if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_identity=$(tools/ci_select_macos_xcode.sh --remote-canary-env)
+          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --test_output=all \
+            --noskip_incompatible_explicit_targets --build_event_json_file="$RUNNER_TEMP/platform-canary.bep.json" \
+            //tools/ci:dual_platform_canary
+          jq -c 'select(.testResult) | {label: .id.testResult.label, result: .testResult}' \
+            "$RUNNER_TEMP/platform-canary.bep.json" | jq -se '
+              (map(select(.result.status == "PASSED" and .result.executionInfo.strategy == "remote"
+                          and (.result.cachedLocally != true) and (.result.executionInfo.cachedRemotely != true))
+               | .label) | unique | length) == 4'
+
       - name: Fetch Bazel LLVM toolchain
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted fetch
@@ -567,6 +582,83 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+  # Advisory macOS shadow lane: the selection built and tested for macOS from a self-hosted Linux
+  # runner, every action on a remote macOS executor. Opt-in, never gating, after this run's Linux
+  # lane, one at a time; "Remote macOS shadow lane" in docs/building.md describes it.
+  macos-remote-shadow-turnstile:
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper, determine-targets, linux-self-hosted]
+    if: ${{ !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') }}
+    # Advisory like the lane: a crash or timeout here never fails the run.
+    continue-on-error: true
+    timeout-minutes: 40
+    outputs:
+      admitted: ${{ steps.wait.outputs.admitted }}
+    steps:
+      - name: Checkout turnstile action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Wait for the macOS remote shadow lane
+        id: wait
+        uses: ./.github/actions/re-turnstile
+        with:
+          lane: macos-remote-shadow
+          pool: macos-remote-shadow
+          pool-workflows: main.yml pr_base_change.yml
+          pool-upstream: linux-self-hosted macos-remote-shadow-turnstile
+          upstream-grace-minutes: "5"
+          capacity: "1"
+          token: ${{ github.token }}
+          timeout-minutes: "30"
+          timeout-result: skip
+
+  macos-remote-shadow:
+    runs-on: [self-hosted, linux, arm64]
+    needs: [gatekeeper, determine-targets, linux-self-hosted, macos-remote-shadow-turnstile]
+    if: ${{ !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') && needs.macos-remote-shadow-turnstile.outputs.admitted == 'true' }}
+    # Never fails the run, even when the runner or the job itself fails.
+    continue-on-error: true
+    # The lane's --budget-minutes in tools/ci/lanes.py stays below this with room to report.
+    timeout-minutes: 90
+    env:
+      # The planner's selection, which tools/ci/lane.py reads.
+      TARGETS_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
+      TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build and test for macOS on the remote executor
+        id: shadow
+        continue-on-error: true
+        shell: bash
+        run: python3 tools/ci/lane.py phase macos-remote-shadow shadow
+
+      # Derived files only; consoles, build event and execution logs stay on the runner.
+      - name: Upload shadow lane summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-remote-shadow-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/macos-remote-shadow/report.md
+            ${{ runner.temp }}/macos-remote-shadow/shadow-summary.json
+            ${{ runner.temp }}/macos-remote-shadow/*/profile.gz
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Staged by the lane; the lane step continues on error, so its outcome decides.
+      - name: Upload failed test logs and outputs
+        if: ${{ !cancelled() && steps.shadow.outcome == 'failure' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: macos-remote-shadow-test-failures-${{ github.run_attempt }}
+          testlogs: ${{ runner.temp }}/macos-remote-shadow/test-artifacts
 
   macos:
     runs-on: xcode-27

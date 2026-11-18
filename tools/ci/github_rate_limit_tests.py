@@ -264,6 +264,17 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(self.sent[1]["If-none-match"], '"v1"')
         self.assertEqual((self.client.requests, self.client.not_modified), (2, 1))
 
+    def test_github_time_comes_from_the_date_header(self):
+        self.assertIsNone(self.client.server_time)
+        self.answers = [FakeResponse(200, self._budget(900, Date="Mon, 16 Nov 2026 01:30:00 GMT"),
+                                     b"{}"),
+                        FakeResponse(200, self._budget(899, Date="not a date"), b"{}")]
+        self.client.get_json("https://api.github.com/x")
+        self.assertEqual(1794792600.0, self.client.server_time)
+        # A malformed Date keeps the last good one.
+        self.client.get_json("https://api.github.com/y")
+        self.assertEqual(1794792600.0, self.client.server_time)
+
     def test_budget_is_tracked_and_logged_once(self):
         self.answers = [FakeResponse(200, self._budget(900), b"{}"),
                         FakeResponse(200, self._budget(899), b"{}")]

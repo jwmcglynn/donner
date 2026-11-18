@@ -818,3 +818,17 @@ try-import %workspace%/.buildbuddy.bazelrc
 # credentials for `--config=re`. The file is git-ignored and absent by default,
 # so try-import is a silent no-op. Keep it last so it can override the above.
 try-import %workspace%/.bazelrc.user
+
+# The test targets transition to their own target platforms in this invocation.
+build:ci-platforms --platforms=//tools/ci:linux_ci
+build:ci-platforms --extra_execution_platforms=//tools/ci:linux_ci,//tools/ci:remote_macos_aarch64
+build:ci-platforms --use_target_platform_for_tests
+build:ci-platforms --spawn_strategy=remote
+build:ci-platforms --strategy=TestRunner=remote
+build:ci-platforms --noremote_local_fallback
+build:ci-platforms --incompatible_repo_env_ignores_action_env
+test:ci-platforms --test_tag_filters=
+build:ci-platforms --xcode_version_config=//tools/ci:remote_macos_xcodes
+build:ci-platforms --xcode_version=27.2
+build:ci-platforms --macos_minimum_os=13.3
+test:ci-platforms --nocache_test_results

@@ -369,14 +369,12 @@ generation:`, only when all of the following hold:
 | Case | Before | Residual (px) | 4x4 (px) | Budget | 1 px text shift |
 | --- | --- | ---: | ---: | ---: | ---: |
 | `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
-| `text/text/ligatures-handling-in-mixed-fonts-1` (full text) | skip | 399 | 0 | 415 | 507 |
-| `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | skip | 343 | 0 | 355 | 435 |
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
-| `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
-The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
-(1555 and 3134 pixels, #1176).
+The two mixed-font ligature fixtures compare against resvg v0.49.0 at the default settings on
+the full text tier. These fixtures exercise the Amiri font's GSUB substitution, which the
+simple tier does not implement.
 
 Moving `nested-with-baseline` and `hanging` from a 0.1 color threshold with 100 pixels to a 0.02
 count is not tighter on both axes: the count is larger and the color threshold smaller. It is
@@ -484,8 +482,8 @@ Geode (a 16-tap cubic image-blit sampling mode), matching the kernel `feImage` a
 mapping on both backends: `smooth` is bilinear there too, and a pure translation samples the
 containing texel, as tiny-skia does for `<image>`. That also removed a cubic filtering pass that
 rotated `feImage` placement and nested-SVG `feImage` rasters received at one-to-one scale, which
-re-enabled `filters/feImage/with-subregion-5` and refreshed the Donner-generated
-`filters/feImage/svg` goldens. The raster-image
+re-enabled `filters/feImage/with-subregion-5` and lets `filters/feImage/svg` compare directly
+against a 500x500 resvg v0.49.0 reference. The raster-image
 references were replaced by their v0.49.0 renderings, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
@@ -571,9 +569,13 @@ the glyphs on the path (see the [golden README](../../donner/svg/renderer/testda
 compares with a 250 px allowance for the reference's hhea-centered upright origin, 0.0175em from
 the font's vmtx origin.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
-filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) and the
-0.026em upright origin in `writing-mode/tb-and-punctuation.svg` are accepted differences
-(2026-11-13).
+filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) is an
+accepted difference (2026-11-13). Where browser controls support Donner’s vertical placement
+and the reference encodes resvg's own model (`writing-mode/japanese-with-tb.svg`,
+`writing-mode/mixed-languages-with-tb.svg`, `writing-mode/tb-and-punctuation.svg`,
+`alignment-baseline/hanging-on-vertical.svg`), the row compares against a Donner rendering
+([0009](0009-resvg_test_suite_bugs.md)). The Japanese control quotes the family name so Chromium selects the same face. `writing-mode/mixed-languages-with-tb-and-underline.svg`
+compares against an independent outline with the primary Amiri face's underline geometry.
 
 ### F11: BiDi / RTL text shaping
 
@@ -635,7 +637,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin; the underline case stays skipped because it also lacks bidi runs and its vertical underline. `tb-and-punctuation` is an accepted difference (2026-11-13). |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case compares against the font-derived full-scene outline reference. `tb-and-punctuation` compares against a Donner rendering. |
 
 ---
 
@@ -746,7 +748,7 @@ historical reference.
 | filters/filter `in=Background*-with-enable-background`                    |     2 | `Params::DeprecatedInSVG2`: the BackgroundImage/BackgroundAlpha snapshot comes from `enable-background`.                                                                                                                                                                          |
 | text/tref, painting/display/none-on-tref                                  | 9 + 1 | `Params::DeprecatedInSVG2`: `<tref>` removed in SVG 2.                                                                                                                                                                                                                            |
 | text/kerning                                                              |     2 | `Params::DeprecatedInSVG2`: `kerning` property removed in SVG 2.                                                                                                                                                                                                                  |
-| text/glyph-orientation-horizontal                                         |     1 | `Params::DeprecatedInSVG2`: removed in SVG 2. `glyph-orientation-vertical` is implemented and keeps a residual skip.                                                                                                                                                              |
+| text/glyph-orientation-horizontal                                         |     1 | `Params::DeprecatedInSVG2`: removed in SVG 2. `glyph-orientation-vertical` compares against an independently outlined reference at default settings.                                                                                                                                                              |
 | painting/fill `icc-color`, `valid-FuncIRI-with-a-fallback-ICC-color`      |     2 | `Params::DeprecatedInSVG2`: SVG 1.1 `icc-color()` paint is not in the SVG 2 paint grammar.                                                                                                                                                                                        |
 | structure/style-attribute, structure/style `non-presentational-attribute` |     2 | `Params::DeprecatedInSVG2`: `<svg version="1.1">` semantics; SVG 2 removed the `version` attribute.                                                                                                                                                                               |
 | masking/clip                                                              |     1 | `Params::DeprecatedInSVG2`: the CSS `clip` property is deprecated by CSS Masking in favor of `clip-path`.                                                                                                                                                                         |
@@ -808,9 +810,10 @@ goldens, all now fixed/closed:
 - `painting/marker/orient=auto-on-M-L-Z` — degenerate zero-area closed stroke
   decomposed into overlapping triangles; fixed by de-closing collinear closed subpaths
   before `strokeToFill` → 0 px.
-- `filters/feColorMatrix/type=matrix-with-non-normalized-values` + `filters/feImage/svg`
-  — Geode verified-correct, differs from resvg's finite-sample reference; **per-backend
-  Geode goldens** (`withGeodeGoldenOverride`).
+- `filters/feColorMatrix/type=matrix-with-non-normalized-values` uses a Geode-specific golden.
+- `filters/feImage/svg` compares on both backends at default settings against a 500x500 resvg
+  v0.49.0 rendering. Explicitly positioning the nested SVG in the filter region produces the
+  same reference.
 
 **Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
 problem — inspect whether a coverage change actually moves it before attributing it.

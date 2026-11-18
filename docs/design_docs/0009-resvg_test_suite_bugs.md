@@ -61,21 +61,23 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | Category                   | Test                                  | Reason (`withReason`)                                          |
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
 | filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
-| filters/feImage            | svg                                   | We render higher quality                                       |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
-| painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
-| painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
+| painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
-| text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
-| text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
+
+`painting/stroke/{linear,radial}-gradient-on-text` compare against independently captured
+Firefox renderings at the suite's default comparison settings. The vendored images map the
+gradient through glyph ink extents. SVG's text bounding box uses full glyph cells. See the
+[reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gradient-strokes-on-text).
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
 rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
@@ -86,9 +88,6 @@ The seven feColorMatrix identity forms (without-attributes, type=matrix without 
 empty, short or long value lists, and type=saturate and type=hueRotate without a value) share
 `donner-feColorMatrix-identity.png`; the evidence that the 8-bit tables posterize the references
 is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
-
-`named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
-named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
 
 `textPath/mixed-children-2` runs against a committed Donner render
 (`resvg-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
@@ -111,32 +110,40 @@ anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
 `font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
 command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
-`with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
-(`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
-(TinyGolden and GeodeGolden pass at the default budget). Evidence that resvg's
-golden is the artifact: resvg rasterizes pattern tiles at a rounded integer pixel
-size, and this test's context bounding box yields a fractional 56.57px on-screen
-tile that resvg draws as 57px, stretching the tile period by ~0.8%. Donner repeats
-the tile at the exact period. A numeric grid fit confirms it: Donner's render fits
-an ideal diamond grid anchored at the computed context box
-`(31.82, -116.67), 226.27²` with score 1.0, while resvg's golden fits _no_ ideal
-grid (best score 0.899 — its grid drifts, consistent with per-tile rounding). The
-integer-tile pattern goldens in the same category (`with-pattern-in-use`,
-`with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
-exact pixel sizes) match Donner exactly, isolating the discrepancy to the
-fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
-
 ### Vertical text: resvg's own model
 
-| Category          | Test                    | Reason                                                      |
-| ----------------- | ----------------------- | ----------------------------------------------------------- |
-| text/writing-mode | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees |
+| Category                | Test                    | Reason                                                             |
+| ----------------------- | ----------------------- | ------------------------------------------------------------------ |
+| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin; quoted-family Chromium control agrees |
+| text/writing-mode       | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees        |
+| text/writing-mode       | tb-and-punctuation      | Punctuation forms 14 px off; Chrome matches Donner within 0.4 px   |
+| text/alignment-baseline | hanging-on-vertical     | No alignment-baseline in the PNG; Chrome matches Donner to 1.1 px  |
 
-This reference encodes resvg's vertical model, and browser renders measurably side with Donner.
-resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`.
-CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
-upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
-in the golden README.
+These references encode resvg's vertical model. For the Japanese fixture, Chromium's matching control quotes the font family.
+resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`,
+and it does not apply `alignment-baseline` in vertical layout. CSS Writing Modes 3 section 5.1.1
+requires the font's vertical metrics; Blink and Gecko take the upright origin from `VORG`, then
+from the `vmtx` top side bearing, as Donner does. Measurements are in the golden README.
+
+### Mixed vertical underline
+
+The full-text `text/writing-mode/mixed-languages-with-tb-and-underline` comparison uses an
+independently positioned outline reference and Amiri's primary-face underline metrics. It
+compares the full 500 × 500 scene at default parameters. The golden README records the layout,
+browser controls, and reproduction command.
+
+### Opaque vendored references
+
+These vendored PNGs are opaque white, while Donner's canvas and the other references are
+transparent, and resvg v0.49.0 has no usable replacement. Chromium 151 draws all three rows within 47 pixels of the goldens,
+and Firefox 153 draws the two `path` rows within 38 pixels but anchors the `y`-only chunk of
+coordinates-list differently. `testdata/golden/README.md` has the evidence.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| text/text-anchor | coordinates-list | Harness mismatch: opaque background; glyphs match under 4x4 coverage |
+| text/textPath | with-path | Reference disagreement: v0.49.0 ignores `path`; opaque PNG |
+| text/textPath | with-path-and-xlink-href | Reference disagreement: v0.49.0 ignores `path`; opaque PNG |
 
 ### Reference does not depict the feature
 
@@ -168,12 +175,39 @@ records the construction and checksums for `on-feImage`. The separate `optimizeS
 compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
 pixel centers through the inverse transform to select the nearest source texel.
 
+### Exact pattern-tile seams (reference rasterization, not a spec violation)
+
+The specification does not say how a pattern tile is rasterized, so these are not "wrong per
+spec". On these rows Donner draws the exact coverage of each tile's stroke at the seams; the
+vendored PNGs resample a rasterized tile. Keeping the exact seams is a maintainer decision.
+`testdata/golden/README.md` has the measurements, including what current Chromium and Firefox
+draw: exact coverage on pixel-aligned seams and a resampled tile on fractional ones.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
+| paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
+
 ### Color-adjust filter labels
 
 The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
 outside the label bands. Both backends compare the live filtered squares against the original
 pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
 records the reference construction and qualification.
+
+### Named font sizes (CSS Fonts 4 table, a maintainer decision)
+
+The absolute-size table in CSS Fonts 4 section 2.5 is a guideline for user agents, not a
+requirement, so these references are not wrong per spec. Donner follows that table (3/5, 3/4,
+8/9, 1, 6/5, 3/2 and 2 times `medium`) by maintainer decision; the vendored PNGs step by 1.2 per
+keyword, as CSS 2 did. `testdata/golden/README.md` has the measured sizes, including the table
+current browsers use.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| text/font-size | named-value | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
+| text/font-size | named-value-without-a-parent | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
 
 ### Backend-difference goldens (text)
 
@@ -185,8 +219,16 @@ Donner backend the test runs under.
 | --------- | -------------------------------------------- | --------------------------------------------------- |
 | text/text | complex-graphemes-and-coordinates-list       | Simple text can't compose combining marks           |
 | text/text | compound-emojis-and-coordinates-list         | Emoji bitmap scaling differs from the golden        |
-| text/text | rotate-on-Arabic                             | Arabic shaping requires text-full                   |
-| text/text | x-and-y-with-multiple-values-and-arabic-text | Arabic shaping; vertical-axis AA diff not the focus |
+
+### Upright Latin and crosshair coverage
+
+| Category | Test | Reference |
+| --- | --- | --- |
+| text/glyph-orientation-vertical | simple-case | Font-derived letter outlines plus the original vector crosshairs and frame |
+
+The historical crosshair coverage accounts for 731 of 733 differing pixels. Both CPU text
+tiers compare the complete scene against an outlined control with default parameters. The
+golden README records the font metrics, browser controls, and regeneration command.
 
 ### Blessed minor diffs (textPath / text-decoration)
 
@@ -198,31 +240,13 @@ noted.
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
-| text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | nested                                   | Minor char                                        |
-| text/textPath        | path-with-ClosePath                      | Minor char                                        |
-| text/textPath        | simple-case                              | Minor char                                        |
-| text/textPath        | startOffset=-100                         | Minor char                                        |
-| text/textPath        | startOffset=10percent                    | Minor char                                        |
-| text/textPath        | startOffset=30                           | Minor char                                        |
-| text/textPath        | startOffset=5mm                          | Minor char                                        |
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
-| text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | with-baseline-shift                      | Minor char                                        |
-| text/textPath        | with-coordinates-on-text                 | Minor char                                        |
-| text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
-| text/textPath        | with-rotate                              | Minor char                                        |
-| text/textPath        | with-text-anchor                         | (no reason string)                                |
-| text/textPath        | with-transform-on-a-referenced-path      | Minor char                                        |
-| text/textPath        | with-transform-outside-a-referenced-path | Minor char                                        |
 | text/textPath        | with-underline                           | Minor char                                        |
 | text/text-decoration | indirect                                 | (no reason string)                                |
 
-> Two entries (`textPath/with-text-anchor`, `text-decoration/indirect`) carry no
-> `withReason`. They should either get one or migrate to a per-test threshold; the
-> "Minor char" cluster is the precedent. Tracked in
-> [0021](0021-resvg_feature_gaps.md).
+> `text-decoration/indirect` carries no `withReason`. It should either get one or migrate to a
+> per-test threshold. Tracked in [0021](0021-resvg_feature_gaps.md).
 
 ## Golden files
 

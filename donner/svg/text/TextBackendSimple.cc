@@ -413,6 +413,9 @@ public:
         result.vmtx_ = vmtx;
       }
     }
+    if (!result.vmtx_) {
+      result.fallbackAscent_ = readFallbackAscent(manager, font);
+    }
     if (const auto os2 = manager.sfntTable(font, "OS/2"); os2 && os2->size() >= 78) {
       result.cell_ = ReadInt16Be(*os2, 68) - ReadInt16Be(*os2, 70);
     }
@@ -445,6 +448,11 @@ public:
    */
   int originY(int glyphIndex, int yMin, int yMax) const {
     if (!vmtx_) {
+      // One synthesized origin keeps upright letters with different ink heights on the same
+      // baseline.
+      if (fallbackAscent_ > 0) {
+        return fallbackAscent_;
+      }
       // FreeType truncates the centered top side bearing to whole font units.
       return yMax + (cell_ - (yMax - yMin)) / 2;
     }
@@ -456,9 +464,18 @@ public:
   }
 
 private:
+  static int readFallbackAscent(const FontManager& manager, FontHandle font) {
+    if (manager.sfntTable(font, "VORG")) {
+      return 0;
+    }
+    const auto hhea = manager.sfntTable(font, "hhea");
+    return hhea && hhea->size() >= 6 ? ReadInt16Be(*hhea, 4) : 0;
+  }
+
   std::optional<std::span<const uint8_t>> vmtx_;
   size_t longMetrics_ = 0;  //!< Clamped `numOfLongVerMetrics`; nonzero whenever vmtx_ is set.
   int cell_ = 0;            //!< Ascent minus descent of the synthesized vertical em cell.
+  int fallbackAscent_ = 0;  //!< Nonpositive when the face cannot supply a fallback from hhea.
 };
 
 /// Sets the advance axis for horizontal, sideways, or upright vertical text.

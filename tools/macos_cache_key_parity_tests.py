@@ -1081,6 +1081,27 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual(disk_cache, [
             "bcr-${{ matrix.os }}-${{ matrix.bazel }}-${{ env.DONNER_CI_XCODE_IDENTITY }}"])
 
+    def test_remote_canary_identity_requires_one_pinned_tuple(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            tools = root / "tools"
+            tools.mkdir()
+            script = tools / "ci_select_macos_xcode.sh"
+            script.write_text(_read(SELECT_SCRIPT))
+            (tools / "ci_macos_xcode.txt").write_text("27.1 27A123\n27.2 27B456\n")
+            for options, expected in [
+                (["27.2"], "DONNER_CI_XCODE_IDENTITY=27.2-27B456"),
+                (["27.3"], None),
+                (["27.1", "27.2"], None),
+            ]:
+                (root / ".bazelrc").write_text("".join(
+                    "build:ci-platforms --xcode_version=" + version + "\n" for version in options))
+                result = subprocess.run(["bash", str(script), "--remote-canary-env"],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, expected is not None, result.stderr)
+                if expected is not None:
+                    self.assertEqual(result.stdout.strip(), expected)
+
     def test_identity_has_no_config_or_workflow_override(self):
         identity = "DONNER_CI_XCODE_IDENTITY"
         lines = [line.split("#", 1)[0].strip() for line in _read(".bazelrc").splitlines()]

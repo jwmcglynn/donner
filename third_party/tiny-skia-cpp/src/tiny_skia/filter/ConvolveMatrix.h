@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <span>
 
 #include "tiny_skia/Pixmap.h"
@@ -42,6 +43,12 @@ struct ConvolveParams {
 void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params);
 
 /// Float-precision version of convolveMatrix.
-void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolveParams& params);
+/// @param src Source pixmap (premultiplied RGBA).
+/// @param dst Destination pixmap (must be same size as src).
+/// @param params Convolution parameters.
+/// @param wrapRegion Logical input image for wrapping, clipped to the source pixmap. A missing
+/// region uses the full pixmap. An empty region supplies transparent black.
+void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolveParams& params,
+                    std::optional<ScreenIntRect> wrapRegion = std::nullopt);
 
 }  // namespace tiny_skia::filter

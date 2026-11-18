@@ -2132,6 +2132,141 @@ TEST(TextEngineScriptedTest, VerticalTextPathPreservesInlineAdvancesAndGlyphOffs
                 GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
 }
 
+#ifdef DONNER_TEXT_ENABLED
+TEST(TextEngineScriptedTest, VerticalTextPathUsesOneBidiRunAcrossPaintSpans) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const Path path =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  const Entity pathOwner = registry.create();
+  components::ComputedTextComponent text;
+  for (const std::string_view character : {"A", "\xD7\x90", "\xD7\x91", "B"}) {
+    auto span = MakeSpan(std::string(character));
+    span.pathSpline = path;
+    span.textPathSourceEntity = pathOwner;
+    span.pathStartOffset = 100.0;
+    span.textAnchor = TextAnchor::Middle;
+    span.fontKerning = FontKerning::None;
+    span.startsNewChunk = false;
+    text.spans.push_back(std::move(span));
+  }
+
+  // The two Hebrew glyphs remain distinct paint spans. The entire centered chunk still follows
+  // visual order A, bet, alef, B on the vertical line.
+  for (const WritingMode mode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.writingMode = mode;
+    const auto runs = engine.layout(text, params);
+    EXPECT_THAT(runs,
+                ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(80, 1e-6)))),
+                            RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(100, 1e-6)))),
+                            RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(90, 1e-6)))),
+                            RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(110, 1e-6))))));
+  }
+}
+TEST(TextEngineScriptedTest, VerticalBidiPathKeepsInitialXOnTheVisualChunk) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xD7\x90\xD7\x91");
+  span.xList = {Lengthd(50.0, Lengthd::Unit::None)};
+  span.pathSpline =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(span));
+
+  auto params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  // The shaper already emits bet before alef. The authored x belongs to the chunk start.
+  EXPECT_THAT(
+      runs, ElementsAre(RunGlyphsAre(ElementsAre(AllOf(Field("cluster", &TextGlyph::cluster, 2u),
+                                                       GlyphYPositionIs(DoubleNear(50, 1e-6))),
+                                                 AllOf(Field("cluster", &TextGlyph::cluster, 0u),
+                                                       GlyphYPositionIs(DoubleNear(60, 1e-6)))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalBidiPathResolvesEachAuthoredChunkOriginOnce) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xD7\x90\xD7\x91\xD7\x92\xD7\x93");
+  span.xList = {Lengthd(50.0, Lengthd::Unit::None), std::nullopt,
+                Lengthd(100.0, Lengthd::Unit::None)};
+  span.dxList = {Lengthd(7.0, Lengthd::Unit::None), std::nullopt,
+                 Lengthd(-4.0, Lengthd::Unit::None)};
+  span.pathSpline =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(span));
+
+  auto params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  // Each authored x starts a separate bidi paragraph. Its dx follows the visual chunk origin.
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(Field("cluster", &TextGlyph::cluster, 2u), GlyphYPositionIs(DoubleNear(57, 1e-6))),
+          AllOf(Field("cluster", &TextGlyph::cluster, 0u), GlyphYPositionIs(DoubleNear(67, 1e-6))),
+          AllOf(Field("cluster", &TextGlyph::cluster, 6u), GlyphYPositionIs(DoubleNear(96, 1e-6))),
+          AllOf(Field("cluster", &TextGlyph::cluster, 4u),
+                GlyphYPositionIs(DoubleNear(106, 1e-6)))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalBidiPathPreservesFlatContinuationAtAnAbsoluteX) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const Path path =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  const Entity pathOwner = registry.create();
+
+  const auto layout = [&](std::string pathText) {
+    components::ComputedTextComponent text;
+    auto before = MakeSpan("A");
+    before.xList = {Lengthd(150.0, Lengthd::Unit::None)};
+    before.yList = {Lengthd(30.0, Lengthd::Unit::None)};
+    before.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(before));
+
+    auto onPath = MakeSpan(pathText);
+    onPath.pathSpline = path;
+    onPath.textPathSourceEntity = pathOwner;
+    onPath.pathStartOffset = 20.0;
+    onPath.dyList = {Lengthd(12.0, Lengthd::Unit::None)};
+    onPath.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(onPath));
+
+    auto after = MakeSpan("Z");
+    after.xList = {Lengthd(70.0, Lengthd::Unit::None)};
+    after.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(after));
+
+    auto params = MakeTextParams(20.0);
+    params.writingMode = WritingMode::VerticalRl;
+    return engine.layout(text, params);
+  };
+
+  // The scripted font gives these two-letter strings equal advances. Reordering the on-path
+  // glyphs leaves the ordinary continuation position and its authored x unchanged.
+  const auto ltr = layout("XY");
+  const auto rtl = layout("\xD7\x90\xD7\x91");
+  ASSERT_THAT(ltr, SizeIs(3));
+  ASSERT_THAT(rtl, SizeIs(3));
+  ASSERT_THAT(ltr.back().glyphs, SizeIs(1));
+  EXPECT_THAT(
+      rtl.back().glyphs,
+      ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(ltr.back().glyphs[0].xPosition, 1e-6)),
+                        GlyphYPositionIs(DoubleNear(ltr.back().glyphs[0].yPosition, 1e-6)))));
+}
+#endif
+
 TEST(TextEngineScriptedTest, VerticalTextPathRotatesUprightCombiningClusterOffsets) {
   Registry registry;
   FontManager fontManager(registry);

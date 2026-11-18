@@ -108,6 +108,8 @@ SELF_HOSTED_JOBS = {
     (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
+    # The advisory macOS shadow lane: a remote-execution client on the Linux lane's runners.
+    (".github/workflows/main.yml", "macos-remote-shadow"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "macos-metal"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "macos-vm-qualification"): "use_self_hosted_macos",
@@ -117,6 +119,10 @@ SELF_HOSTED_JOBS = {
 # needed job failed or was skipped. Joined with `&&`, it still requires the whole gate.
 SELF_HOSTED_STATUS_PREFIX = {
     (".github/workflows/main.yml", "coverage-contract"): "!cancelled() && ",
+    # The shadow lane runs after its run's Linux lane has finished, whether it passed or failed.
+    (".github/workflows/main.yml", "macos-remote-shadow"):
+        "!cancelled() && (needs.linux-self-hosted.result == 'success' || "
+        "needs.linux-self-hosted.result == 'failure') && ",
 }
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
@@ -130,6 +136,13 @@ SELF_HOSTED_NARROWING = {
         "needs.determine-targets.outputs.browser_affected == 'true')",
     (".github/workflows/main.yml", "macos-vm-qualification"):
         " && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
+    # Opt-in while it is compared with the self-hosted macOS lane: a labelled pull request, or
+    # every trusted pull request once the repository variable turns it on. Both only narrow.
+    (".github/workflows/main.yml", "macos-remote-shadow"):
+        " && github.event_name == 'pull_request' && "
+        "(contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || "
+        "vars.MACOS_REMOTE_SHADOW_LANE == 'true') && "
+        "needs.macos-remote-shadow-turnstile.outputs.admitted == 'true'",
     (".github/workflows/main.yml", "macos-metal"):
         " && (needs.determine-targets.outputs.fallback == 'true' || "
         "needs.determine-targets.outputs.metal_affected == 'true')",
@@ -635,8 +648,9 @@ def _cited_environment_violations(where, job):
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
 # the runner's effective configuration, so they never leave the runner.
+# shadow-summary.json is the macOS shadow lane's counts, derived from its build event files.
 SELF_HOSTED_UPLOAD_FILES = {"cmake-cache-receipt.json", "coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
-                            "stall.txt", "target-list.txt"}
+                            "shadow-summary.json", "stall.txt", "target-list.txt"}
 
 # Triggers that run with repository credentials on behalf of an event someone else controls.
 PRIVILEGED_TRIGGERS = {"discussion_comment", "issue_comment", "issues", "pull_request_review",
@@ -2154,7 +2168,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             result = subprocess.run(
                 ["bash", "-c", textwrap.dedent(scripts[0])],
                 cwd=workspace,
-                env={**os.environ, "RUNNER_TEMP": str(runner)},
+                # An explicit environment: an ambient TESTLOGS, RUNNER_* or GITHUB_* value must
+                # not choose another tree. GitHub passes an omitted input as empty.
+                env={"PATH": os.environ.get("PATH", os.defpath), "RUNNER_TEMP": str(runner),
+                     "TESTLOGS": ""},
                 capture_output=True,
                 text=True,
                 timeout=test_timing.STALL_GUARD_SECONDS,
@@ -3961,7 +3978,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIsNone(REMOTE_FALLBACK_FLAG.search("\n".join(
             line for line in _read(".bazelrc").splitlines()
             if not line.startswith("build:buildbuddy-re ")
-            and line != "build:remote-macos-base --noremote_local_fallback")))
+            and line not in ("build:remote-macos-base --noremote_local_fallback",
+                             "build:ci-platforms --noremote_local_fallback"))))
 
     def test_linux_package_change_invalidates_cache_with_the_same_runner_image(self):
         for route in (dict(event="push", write="fixture-key"),
@@ -4617,8 +4635,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cmake = _jobs(files[".github/workflows/cmake.yml"])
         receipts = _upload_paths(cmake["cmake-cache-producer"]) + _upload_paths(cmake["cmake-cache-consumer"])
         self.assertEqual([["${{ runner.temp }}/cmake-cache-receipt.json"]] * 2, receipts)
+        shadow = _upload_paths(main["macos-remote-shadow"])
+        self.assertEqual([[
+            "${{ runner.temp }}/macos-remote-shadow/report.md",
+            "${{ runner.temp }}/macos-remote-shadow/shadow-summary.json",
+            "${{ runner.temp }}/macos-remote-shadow/*/profile.gz"]], shadow)
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
-                         {entry.rsplit("/", 1)[-1] for group in [*uploads, *receipts] for entry in group})
+                         {entry.rsplit("/", 1)[-1]
+                          for group in [*uploads, *receipts, *shadow] for entry in group})
         self.assertIn(["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"], uploads)
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):

@@ -635,26 +635,29 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjkUsesFontVerticalMetrics) {
   }
 }
 
-TEST_P(TextBackendTest, UprightWithoutVerticalMetricsCentersInTypographicCell) {
+TEST_P(TextBackendTest, UprightWithoutVerticalMetricsSharesTheHorizontalAscent) {
   const FontHandle font = loadFont("NotoSans-Regular.ttf", "Noto Sans");
   ASSERT_TRUE(static_cast<bool>(font));
   ASSERT_THAT(fontManager_.sfntTable(font, "vmtx").has_value(), testing::IsFalse());
+  ASSERT_THAT(fontManager_.sfntTable(font, "VORG").has_value(), testing::IsFalse());
+  const auto hhea = fontManager_.sfntTable(font, "hhea");
+  ASSERT_THAT(hhea.has_value(), testing::IsTrue());
+  ASSERT_GE(hhea->size(), 6u);
+  const int ascent = static_cast<int16_t>(ReadBe16(*hhea, 4));
   const auto os2 = fontManager_.sfntTable(font, "OS/2");
   ASSERT_THAT(os2.has_value(), testing::IsTrue());
   ASSERT_GE(os2->size(), 78u);
   const int unitsPerEm = backend().fontVMetrics(font).unitsPerEm;
   ASSERT_THAT(unitsPerEm, Gt(0));
-  // Without vmtx, FreeType synthesizes an advance from the OS/2 typographic ascent and descent
-  // and centers the glyph box in it, truncating the top side bearing to whole font units. An
-  // empty glyph (the space) has a zero-height box.
+  // The typographic line height provides the advance even when the ink heights differ.
   const int cell =
       static_cast<int16_t>(ReadBe16(*os2, 68)) - static_cast<int16_t>(ReadBe16(*os2, 70));
   // FreeType scales vertical metrics at an integer ppem, so use an integral size.
   constexpr float kFontSizePx = 64.0f;
   const double scale = kFontSizePx / unitsPerEm;
-  // FreeType rounds the bearing and the box top to 26.6 separately before HarfBuzz adds them.
+  // Allow the backends' conversion to scaled font positions.
   constexpr double kPositionTolerance = 2.0 / 64.0;
-  const std::string text = "HE ";
+  const std::string text = "Hx ";
   const auto horizontal = backend().shapeRun(font, kFontSizePx, text, 0, text.size(), false,
                                              FontVariant::Normal, false);
   const auto shaped = backend().shapeRun(font, kFontSizePx, text, 0, text.size(), true,
@@ -665,18 +668,11 @@ TEST_P(TextBackendTest, UprightWithoutVerticalMetricsCentersInTypographicCell) {
     const auto& glyph = shaped.glyphs[i];
     SCOPED_TRACE(text.substr(i, 1));
     ASSERT_THAT(glyph.glyphIndex, Gt(0));
-    // H and E have straight edges, so the outline box is the glyph box.
-    const Path outline = backend().glyphOutline(font, glyph.glyphIndex, 1.0f);
-    const int yMax =
-        outline.empty() ? 0 : static_cast<int>(std::lround(-outline.bounds().topLeft.y));
-    const int height =
-        outline.empty() ? 0 : static_cast<int>(std::lround(outline.bounds().height()));
-    const double origin = yMax + (cell - height) / 2;
     EXPECT_THAT(
         glyph,
         AllOf(GlyphYAdvanceIs(DoubleNear(cell * scale, kPositionTolerance)),
               GlyphXOffsetIs(DoubleNear(-horizontal.glyphs[i].xAdvance / 2.0, kPositionTolerance)),
-              GlyphYOffsetIs(DoubleNear(origin * scale, kPositionTolerance))));
+              GlyphYOffsetIs(DoubleNear(ascent * scale, kPositionTolerance))));
   }
 }
 
