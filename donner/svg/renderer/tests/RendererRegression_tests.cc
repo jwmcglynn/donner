@@ -4974,6 +4974,43 @@ TEST_F(RendererRegressionTests, WrapEdgesReadTheOppositeRegionEdgeBeyondTheCanva
   }
 }
 
+TEST_F(RendererRegressionTests, ConvolveWrapUsesTheLogicalInputEdge) {
+  constexpr std::string_view kMarkup = R"svg(
+      <rect x="10" y="10" width="1" height="4" fill="red"/>
+      <rect x="13" y="10" width="1" height="2" fill="blue"/>
+    </g></g>)svg";
+  struct Case {
+    std::string_view transform;
+    Vector2i wrapped;
+    Vector2i transparent;
+  };
+  constexpr std::array<Case, 3> cases = {{
+      {"translate(0)", {10, 10}, {10, 13}},
+      {"translate(20 12) scale(2)", {40, 32}, {40, 38}},
+      {"rotate(90) translate(10 -30)", {16, 23}, {17, 23}},
+  }};
+  for (const Case& test : cases) {
+    SCOPED_TRACE(test.transform);
+    for (const bool named : {false, true}) {
+      const std::string source = named ? std::string(R"svg(
+        <filter id="f" filterUnits="userSpaceOnUse" x="8" y="8" width="8" height="8">
+          <feOffset x="10" y="10" width="4" height="4" result="bounded"/>
+          <feConvolveMatrix in="bounded" order="3 1" kernelMatrix="0 0 1" edgeMode="wrap"/>
+        </filter>)svg") : std::string(R"svg(
+        <filter id="f" filterUnits="userSpaceOnUse" x="10" y="10" width="4" height="4">
+          <feConvolveMatrix order="3 1" kernelMatrix="0 0 1" edgeMode="wrap"/>
+        </filter>)svg");
+      SCOPED_TRACE(named ? "bounded previous result" : "source graphic");
+      SVGDocument document = instantiateSubtree(
+          source + "<g transform=\"" + std::string(test.transform) +
+          "\"><g filter=\"url(#f)\">" + std::string(kMarkup), {}, Vector2i(80, 64));
+      const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+      EXPECT_THAT(PixelAt(actual, test.wrapped.x, test.wrapped.y), test::RgbaEq(0, 0, 255, 255));
+      EXPECT_THAT(PixelAt(actual, test.transparent.x, test.transparent.y), test::RgbaEq(0, 0, 0, 0));
+    }
+  }
+}
+
 // An empty edge entry means the case does not discriminate on that edge and is not run there.
 constexpr std::array<SpreadingFilterCase, 15> kSpreadingFilterCases = {{
     {"Blur", R"svg(<feGaussianBlur stdDeviation="3"/>)svg",
