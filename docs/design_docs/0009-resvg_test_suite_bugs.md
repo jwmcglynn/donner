@@ -155,19 +155,17 @@ sampling grid does not establish that the upstream reference violates the specif
 | --- | --- | --- |
 | painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
 
-The project reference retains all vendored reference pixels outside the image
-primitive. Inside, the decoded 64 x 64 RGBA source is sampled with
-`source_index = floor((destination_index + 0.5) * 64 / destination_extent)`.
-The default filter region expands the `(40, 40, 120, 120)` object box by 10% on
-each side, producing `(70, 70, 360, 360)` after the `500 / 200` viewport scale.
-All 129,600 image-region pixels follow this independent geometric construction.
-The separate `optimizeSpeed` fixture compares against its resvg v0.49.0
-rendering, which TinySkia matches. Geode stays disabled for it: at 3.75 device
-pixels per texel, every second texel boundary falls on a pixel center, and
-Geode's interpolated texture coordinate lands just below it where tiny-skia's
-float inverse transform lands on it, so Geode picks the previous texel. All 564
-differing pixels are inside the image; this is a sampling-position rounding
-difference, not missing SVG support.
+The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage)
+records the construction and checksums for `on-feImage`. The separate `optimizeSpeed` fixture
+compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
+pixel centers through the inverse transform to select the nearest source texel.
+
+### Color-adjust filter labels
+
+The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
+outside the label bands. Both backends compare the live filtered squares against the original
+pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the reference construction and qualification.
 
 ### Backend-difference goldens (text)
 
