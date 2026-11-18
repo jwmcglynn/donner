@@ -1249,9 +1249,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"rtl-with-vertical-writing-mode.svg",
                      Params::UndefinedBehavior("rtl with vertical writing-mode (svgwg#618)")},
                     {"rtl.svg",
-                     Params::Skip("Reference disagreement: the reference shapes Arabic with Noto "
-                                  "Sans Arabic, which the test fonts lack; Donner falls back to "
-                                  "Amiri. Order, anchoring and the Latin run match")},
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
