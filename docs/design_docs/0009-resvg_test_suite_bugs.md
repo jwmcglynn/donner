@@ -17,19 +17,12 @@ There are two distinct reasons an override is justified:
    a curved baseline, a font-backend difference) where pinning a Donner golden is
    cleaner than carrying a per-test pixel threshold.
 
-Custom goldens live in `donner/svg/renderer/testdata/golden/resvg-<test-name>.png`,
-named with the **new** (post-Great-Rename) test stem. The rationale for each is
+Custom goldens live in `donner/svg/renderer/testdata/golden/`: `resvg-<test-name>.png`,
+named with the test stem, and `donner-<test-name>.png` for the Donner renderings whose evidence
+is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md). The rationale for each is
 the `.withReason("…")` argument chained onto the override in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc) — grep
 the test name there to find it inline.
-
-> Naming note: these used the old `a-*` / `e-*` convention before the suite
-> upgrade ([0022](0022-resvg_test_suite_upgrade.md)). The four originally
-> documented here mapped forward as: `a-filter-013`/`a-filter-015` →
-> `drop-shadow-function-mm-values`/`drop-shadow-function-em-values` (now parked,
-> see below); `e-marker-045`/`e-marker-051` (closed-shape / cusp marker
-> direction) were superseded upstream and retired — the surviving marker
-> override is `orient=auto-on-M-C-C-4`.
 
 ## Invalid filter URL reference qualifications
 
@@ -52,18 +45,16 @@ remain transparent.
 
 `filters/filter/complex-order-and-xlink-href.svg` filters a rect through a filter that inherits
 its blur and height through `xlink:href` and sets its own `x`, so the filter region cuts the
-blur's input at its left and bottom edges. The vendored reference now is resvg v0.49.0's
-300x300 rendering; the snapshot's reference had been flattened onto white (see
-`third_party/resvg-test-suite/BUILD.bazel`). Against it, Donner's region geometry and its free
-blur edges match. The remaining pixels (1,275 on TinySkia; Geode adds 3 frame-corner pixels)
-lie within 5 px of the two clipped edges: resvg approximates the blur with five box passes over a
+blur's input at its left and bottom edges. resvg approximates the blur with five box passes over a
 region-sized buffer, and each pass drops what spreads past the buffer, so the first row and column
-inside read alpha 84. Donner keeps that spill and reads 143, close to the 144 of a single
-Gaussian of the clipped input. The row is a reference-disagreement skip; a raised pixel budget
-would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
-the clipped render to equal the visible part of the rect blurred with room around it.
+inside read alpha 84. Donner keeps that spill and reads 143, close to the 144.4 of the exact
+Gaussian of the clipped input; resvg v0.49.0 renders like the vendored reference. The row compares
+at default settings against `donner-complex-order-and-xlink-href.png`, a Donner rendering whose
+evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
+`RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
+requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (38)
+## Active overrides
 
 ### resvg golden is wrong per spec
 
@@ -71,17 +62,47 @@ the clipped render to equal the visible part of the rect blurred with room aroun
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
 | filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
 | filters/feImage            | svg                                   | We render higher quality                                       |
+| filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
+| filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
+| filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
-| painting/marker            | with-an-image-child                   | We (correctly) render the image child                          |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+| text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
+
+`structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
+rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
+fonts by the harness; see [0021](0021-resvg_feature_gaps.md) and
+[`testdata/golden/README.md`](../../donner/svg/renderer/testdata/golden/README.md).
+
+The seven feColorMatrix identity forms (without-attributes, type=matrix without values or with
+empty, short or long value lists, and type=saturate and type=hueRotate without a value) share
+`donner-feColorMatrix-identity.png`; the evidence that the 8-bit tables posterize the references
+is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`textPath/mixed-children-2` runs against a committed Donner render
+(`resvg-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
+end point of the path; the vendored PNG continues `long` and the trailing `.` from the
+end of the glyphs laid out on each path. The golden's ink matches a Chrome rendering of
+the case within one device pixel. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
+
+`textPath/mixed-children-1` and `textPath/very-long-text` run against committed Donner
+renders. SVG 2 continues the text after a `textPath` from the end point of the path, and
+CSS Text 3 keeps the textPath's trailing space on the path, so the green `Text` starts at
+the end point; the vendored PNGs continue from the end of the glyphs on the path. Both
+renders match Chrome's ink. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `font-size-adjust/simple-case` runs against a committed Donner render
 (`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
@@ -105,6 +126,33 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
+### Vertical text: resvg's own model
+
+| Category          | Test                    | Reason                                                      |
+| ----------------- | ----------------------- | ----------------------------------------------------------- |
+| text/writing-mode | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees |
+
+This reference encodes resvg's vertical model, and browser renders measurably side with Donner.
+resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`.
+CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
+upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
+in the golden README.
+
+### Reference does not depict the feature
+
+| Category      | Test           | Reason (`withReason`)                                       |
+| ------------- | -------------- | ----------------------------------------------------------- |
+| text/textPath | method=stretch | Reference disagreement: the vendored PNG is align placement |
+
+`textPath/method=stretch` runs against a committed Donner render
+(`resvg-method=stretch.png`). The vendored PNG is byte-identical to the original snapshot’s `simple-case.png`,
+which is align placement, so it cannot assert the stretch warp. The golden is a
+regression guard for the warp rather than an independent oracle;
+`RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`, which
+requires stretch on a straight path to equal ordinary rotated text, is the independent
+check. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
+
 ### Allowed nearest-neighbor reference differences
 
 CSS Images permits an implementation-selected edge-preserving algorithm for
@@ -115,19 +163,17 @@ sampling grid does not establish that the upstream reference violates the specif
 | --- | --- | --- |
 | painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
 
-The project reference retains all vendored reference pixels outside the image
-primitive. Inside, the decoded 64 x 64 RGBA source is sampled with
-`source_index = floor((destination_index + 0.5) * 64 / destination_extent)`.
-The default filter region expands the `(40, 40, 120, 120)` object box by 10% on
-each side, producing `(70, 70, 360, 360)` after the `500 / 200` viewport scale.
-All 129,600 image-region pixels follow this independent geometric construction.
-The separate `optimizeSpeed` fixture compares against its resvg v0.49.0
-rendering, which TinySkia matches. Geode stays disabled for it: at 3.75 device
-pixels per texel, every second texel boundary falls on a pixel center, and
-Geode's interpolated texture coordinate lands just below it where tiny-skia's
-float inverse transform lands on it, so Geode picks the previous texel. All 564
-differing pixels are inside the image; this is a sampling-position rounding
-difference, not missing SVG support.
+The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage)
+records the construction and checksums for `on-feImage`. The separate `optimizeSpeed` fixture
+compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
+pixel centers through the inverse transform to select the nearest source texel.
+
+### Color-adjust filter labels
+
+The seven `filters/filter-functions/color-adjust-functions-*` rows retain the vendored reference
+outside the label bands. Both backends compare the live filtered squares against the original
+pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
+records the reference construction and qualification.
 
 ### Backend-difference goldens (text)
 
@@ -151,9 +197,8 @@ noted.
 
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
-| text/textPath        | dy-with-tiny-coordinates                 | AA + minor char advance diffs (text vs text-full) |
+| text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
 | text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | mixed-children-1                         | AA diffs                                          |
 | text/textPath        | nested                                   | Minor char                                        |
 | text/textPath        | path-with-ClosePath                      | Minor char                                        |
 | text/textPath        | simple-case                              | Minor char                                        |
@@ -164,7 +209,6 @@ noted.
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
 | text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | very-long-text                           | AA diffs                                          |
 | text/textPath        | with-baseline-shift                      | Minor char                                        |
 | text/textPath        | with-coordinates-on-text                 | Minor char                                        |
 | text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
@@ -180,34 +224,11 @@ noted.
 > "Minor char" cluster is the precedent. Tracked in
 > [0021](0021-resvg_feature_gaps.md).
 
-## Parked goldens (2) - filters/filter-functions triage
+## Golden files
 
-`resvg-drop-shadow-function-mm-values.png` and
-`resvg-drop-shadow-function-em-values.png` are the migrated successors of the old
-`a-filter-013` / `a-filter-015` drop-shadow blur-halo cases: Donner's three-pass
-box-blur approximation (correct per CSS Filter Effects L1 §8 / SVG §15.9) produces
-a different halo shape than resvg's blur, so a Donner golden is required.
-
-They are currently **unreferenced**. The `filters/filter-functions` category is active, with 26 of
-43 files comparing on both backends and 17 explicit `Triage:` skips. No project-owned oracle has
-been accepted for the two unit-based drop-shadow cases yet. **Keep both files** until normative
-specification/browser triage decides whether each mismatch is a Donner defect, a vendored-oracle
-difference, or a justified project golden. Do not delete them as "orphans".
-
-## Removed goldens (cleanup, 2026-05-15)
-
-Three goldens added by [#515](https://github.com/jwmcglynn/donner/pull/515) were
-never referenced by any override and were removed as dead data (recoverable from
-git history if a real override need surfaces):
-
-- `resvg-em-on-the-root-element.png`
-- `resvg-ex-on-the-root-element.png`
-- `resvg-percent-value-without-a-parent.png`
-
-The corresponding `text/font-size` tests pass against the upstream golden — only
-`named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds exactly 39 `resvg-*.png`: 37 active + the 2 parked drop-shadow
-goldens above.
+Every `resvg-*.png` and `donner-*.png` in `golden/` is referenced by an override above. The
+`text/font-size` tests other than `named-value{,-without-a-parent}` compare against the upstream
+references.
 
 ## Maintenance
 

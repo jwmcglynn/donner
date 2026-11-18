@@ -105,7 +105,6 @@ REVIEWED_WORKFLOW_CALLS = {
 SELF_HOSTED_JOBS = {
     (".github/workflows/cmake.yml", "cmake-cache-producer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): "use_self_hosted_linux",
-    (".github/workflows/cmake.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",

@@ -433,15 +433,10 @@ void CollapsePendingBoundary(PendingTextSpan& current, PendingTextSpan& next) {
     return;
   }
 
-  // When collapsing across a textPath boundary, remove the textPath span's trailing space
-  // (keeping it off the path) rather than the next span's leading space. This ensures the
-  // inter-element space survives as flat text.
-  if (current.handle.all_of<TextPathComponent>() &&
-      current.handle.entity() != next.handle.entity()) {
-    removeTrailingSpace(current.text);
-  } else {
-    removeLeadingSpace(next.text);
-  }
+  // CSS Text 3 section 4.1.1: a collapsible space that follows another one is removed, even
+  // across element boundaries. At a textPath end this keeps the textPath's trailing space on the
+  // path, so the text after it starts at the path's end point, as Chrome renders it.
+  removeLeadingSpace(next.text);
 }
 
 void CollapseAdjacentPendingSpaces(std::vector<PendingTextSpan>& pendingSpans) {

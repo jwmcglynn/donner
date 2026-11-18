@@ -20,14 +20,21 @@ struct alignas(16) ImageBlitParams {
   float maskBounds[4];                  //!< Half-open target-pixel mask rectangle.
   uint32_t blendMode;                   //!< Zero source-over, one through fifteen CSS blend modes.
   uint32_t hasClipMask;                 //!< Nonzero enables the path-clip texture.
-  uint32_t samplingMode;                //!< Zero linear, one nearest, two pixelated, three cubic.
-  uint32_t blendPadding;                //!< Reserved shader padding.
-  float pixelatedScale[2];              //!< Device pixels per source texel.
-  uint32_t samplingPadding[2];          //!< Reserved shader padding.
-  float texelFromTargetX[4];  //!< Nearest sampling: x, y and constant terms of the texel x.
-  float texelFromTargetY[4];  //!< Nearest sampling: x, y and constant terms of the texel y.
+  uint32_t samplingMode;  //!< Zero linear, one nearest, two pixelated, three cubic, four anchored.
+  uint32_t blendPadding;  //!< Reserved shader padding.
+  float pixelatedScale[2];  //!< Device pixels per source texel.
+  int32_t texelWholeX;      //!< Anchored sampling: whole texel x of the anchor pixel.
+  int32_t texelWholeY;      //!< Anchored sampling: whole texel y of the anchor pixel.
+  /// Nearest sampling: x, y and constant terms of the texel x. Anchored sampling: x and y terms
+  /// and the anchor's fractional texel x.
+  float texelFromTargetX[4];
+  /// The same terms for the texel y.
+  float texelFromTargetY[4];
+  int32_t anchorX;            //!< Anchored sampling: the anchor pixel's x.
+  int32_t anchorY;            //!< Anchored sampling: the anchor pixel's y.
+  uint32_t anchorPadding[2];  //!< Reserved shader padding.
 };
-static_assert(sizeof(ImageBlitParams) == 208);
+static_assert(sizeof(ImageBlitParams) == 224);
 /// Returns authored WGSL and reflected image-blit interfaces.
 /// @return Stable view into a process-lifetime artifact.
 const CompiledShaderView& ImageBlitShader();

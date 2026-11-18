@@ -8,7 +8,7 @@
 
 namespace donner::svg {
 
-inline constexpr std::array<std::string_view, 17> kSvgSuiteReferenceFontHashes = {
+inline constexpr std::array<std::string_view, 18> kSvgSuiteReferenceFontHashes = {
     "f3615b08cc3d78409474c28ed7c9e0fb5cc42435e12080a385e1a4163ab46708",  // Amiri-Regular.ttf
     "c6a5f15dcbce870497c580de7fa578a75eb8846d2b5603a65eb8fb69ab949892",  // MPLUS1p-Regular.ttf
     "21fc478e003fc871200ba3bcf4215295a80e06a5c1b96f5368adc2183956f01a",  // NotoColorEmoji.ttf
@@ -21,6 +21,7 @@ inline constexpr std::array<std::string_view, 17> kSvgSuiteReferenceFontHashes =
     "539961bfcb5dd4257bfd62edfd754e5a9b303f6c535984c63d1d15e39e8f57a5",  // NotoSans-Light.ttf
     "6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9",  // NotoSans-Regular.ttf
     "7aa7005d6d306c572da543a1eb99e13b209ff9ac0989d6e952df2fcb3b1f5077",  // NotoSans-Thin.ttf
+    "81af59793116d576dd304caea4fded81123ba0bbd79ef513403c5cf0924d9f40",  // NotoSansArabic-Regular.ttf
     "84cda635b5395e22f428c5802b6c36eaeec66750c8b387279424a48545ac1d74",  // NotoSansDevanagari-Regular.ttf
     "0fa6d56e4d826f72c1bc6c287b43fa1ae85b4369339f989cfa5bdf1595f22673",  // NotoSerif-Regular.ttf
     "3938a6df923b0a560b385014903f8ed64317bd456dc0cc8af287216f08b59696",  // SedgwickAveDisplay-Regular.ttf

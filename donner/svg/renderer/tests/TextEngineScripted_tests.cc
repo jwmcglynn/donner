@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Utf8.h"
@@ -3681,6 +3682,89 @@ TEST(TextEngineScriptedTest, GeometryCacheTransformsQuadraticAndCubicOutlineSegm
                           Vector2d(19.0, 14.0), Vector2d(9.0, 14.0), Vector2d(7.0, 19.0)));
 }
 
+namespace {
+
+/// Scripted backend that shapes `?` to `.notdef`, which has an outline when `notdefOutline` is set.
+class NotdefScriptedBackend : public ScriptedTextBackend {
+public:
+  bool notdefOutline = false;
+
+  ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
+                     size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
+                     bool forceLogicalOrder) const override {
+    ShapedRun run =
+        ScriptedTextBackend::shapeRun(font, fontSizePx, spanText, byteOffset, byteLength,
+                                      isVertical, fontVariant, forceLogicalOrder);
+    for (auto& glyph : run.glyphs) {
+      if (spanText[glyph.cluster] == '?') {
+        glyph.glyphIndex = 0;
+      }
+    }
+    return run;
+  }
+
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const override {
+    if (glyphIndex == 0 && notdefOutline) {
+      return PathBuilder().addRect(Box2d::FromXYWH(0.0, -8.0, 6.0, 8.0)).build();
+    }
+    return ScriptedTextBackend::glyphOutline(font, glyphIndex, scale);
+  }
+};
+
+/// The run and chunk-start tags of each glyph outline of \p root, in order.
+std::vector<std::pair<std::size_t, bool>> OutlineTags(const TextEngine& engine, Registry& registry,
+                                                      Entity root) {
+  std::vector<std::pair<std::size_t, bool>> tags;
+  for (const auto& outline : engine.computedGlyphOutlines(EntityHandle(registry, root))) {
+    tags.emplace_back(outline.run, outline.startsTextChunk);
+  }
+  return tags;
+}
+
+}  // namespace
+
+TEST(TextEngineScriptedTest, GlyphOutlinesRecordTheirRunAndChunkStarts) {
+  // "A?B" then a tspan "C": the chunk that `x` starts at `?`, a `.notdef` the renderers do not
+  // draw, starts with "B", the next outline of the run. "C" is the second run.
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry, std::make_unique<NotdefScriptedBackend>());
+  auto span = MakeSpan("A?B");
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), Lengthd(30.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, "A?BC", std::move(span));
+  const Entity child = registry.create();
+  registry.emplace<donner::components::TreeComponent>(child, xml::XMLQualifiedNameRef("tspan"));
+  registry.get<donner::components::TreeComponent>(root).appendChild(registry, child);
+  registry.emplace<components::ComputedStyleComponent>(child, MakeStyle());
+  auto childSpan = MakeSpan("C");
+  childSpan.sourceEntity = child;
+  registry.get<components::ComputedTextComponent>(root).spans.push_back(std::move(childSpan));
+
+  EXPECT_THAT(
+      OutlineTags(engine, registry, root),
+      ElementsAre(std::pair<std::size_t, bool>(0, false), std::pair<std::size_t, bool>(0, true),
+                  std::pair<std::size_t, bool>(1, false)));
+}
+
+TEST(TextEngineScriptedTest, GlyphOutlinesLeaveOutTheNotdefGlyphTheRenderersSkip) {
+  // A `.notdef` with an outline, then a glyph that `x` starts a chunk at. The renderers draw no
+  // `.notdef`, so the outlines hold only the second glyph, and it starts no chunk: no outline
+  // of its run comes before it.
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<NotdefScriptedBackend>();
+  backend->notdefOutline = true;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  auto span = MakeSpan("?A");
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), Lengthd(30.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, "?A", std::move(span));
+
+  EXPECT_THAT(OutlineTags(engine, registry, root),
+              ElementsAre(std::pair<std::size_t, bool>(0, false)));
+}
+
 TEST(TextEngineScriptedTest, GeometryCacheFilterExcludesEntitiesOutsideTree) {
   Registry registry;
   FontManager fontManager(registry);
@@ -4854,6 +4938,91 @@ TEST_P(RtlPreservedNewlineAxisTest, KeepsInlineDisplacementAndBlockProgression) 
 INSTANTIATE_TEST_SUITE_P(AllAxes, RtlPreservedNewlineAxisTest,
                          testing::Values(WritingMode::HorizontalTb, WritingMode::VerticalRl,
                                          WritingMode::VerticalLr));
+
+// CSS Text 3 section 4.1.1 collapses a space that follows another collapsible space across inline
+// element boundaries, so at a textPath end the textPath's own trailing space survives (laid on the
+// path) and the following span's leading space is removed. Chrome 157 and Firefox 160 both
+// attribute the surviving space to the textPath, and in Chrome the text after the path starts
+// exactly at the end point.
+TEST(TextEngineScriptedTest, PostTextPathCursorBoundarySpaceStaysOnThePath) {
+  constexpr int kSpaceGlyph = ' ' + 1;
+  constexpr int kBGlyph = 'B' + 1;
+  for (std::string_view markup : {
+           std::string_view("<textPath href='#p'>A </textPath> B"),
+           std::string_view("<textPath href='#p'>\n  A\n  </textPath>\n  <tspan>B</tspan>\n"),
+       }) {
+    SCOPED_TRACE(markup);
+    const auto glyphs = LayoutParsedTextPath(markup, true, "M0 50H100");
+    ASSERT_THAT(glyphs, SizeIs(3));
+    EXPECT_THAT(glyphs[1], AllOf(GlyphIndexIs(Eq(kSpaceGlyph)), GlyphXPositionIs(Lt(100.0)),
+                                 GlyphYPositionIs(DoubleEq(50.0))));
+    EXPECT_THAT(glyphs[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphXPositionIs(DoubleEq(100.0)),
+                                 GlyphYPositionIs(DoubleEq(50.0))));
+  }
+}
+
+// A space that only follows the textPath (none inside it) is ordinary text after the path: it is
+// laid at the end point and the next glyph follows it.
+TEST(TextEngineScriptedTest, PostTextPathCursorSpaceAfterThePathStartsAtTheEndpoint) {
+  constexpr int kSpaceGlyph = ' ' + 1;
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p'>A</textPath> B", true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphIndexIs(Eq(kSpaceGlyph)), GlyphXPositionIs(DoubleEq(100.0)),
+                               GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(glyphs[2], GlyphXPositionIs(Gt(100.0)));
+}
+
+// White-space processing discards the collapsed leading space, so it is not an addressable
+// character, and SVG 2 assigns per-character values only to addressable characters, in order.
+// B takes dx[0] and rotate[0], and C takes dx[1] and rotate[1]. The end point absorbs B's dx, as
+// PostTextPathCursorFirstRelativeShiftIsAbsorbedByEndpoint pins.
+TEST(TextEngineScriptedTest, PostTextPathCursorCollapsedBoundarySpaceTakesNoPositionValue) {
+  constexpr int kBGlyph = 'B' + 1;
+  constexpr int kCGlyph = 'C' + 1;
+  const auto shifted = LayoutParsedTextPath(
+      "<textPath href='#p'>A </textPath><tspan dx='7 2'> BC</tspan>", true, "M0 50H100");
+  ASSERT_THAT(shifted, SizeIs(4));
+  EXPECT_THAT(shifted[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphXPositionIs(DoubleEq(100.0)),
+                                GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(shifted[3], AllOf(GlyphIndexIs(Eq(kCGlyph)), GlyphXPositionIs(DoubleEq(113.0))));
+
+  const auto rotated = LayoutParsedTextPath(
+      "<textPath href='#p'>A </textPath><tspan rotate='30 60'> BC</tspan>", true, "M0 50H100");
+  ASSERT_THAT(rotated, SizeIs(4));
+  EXPECT_THAT(rotated[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphRotateDegreesIs(DoubleEq(30.0))));
+  EXPECT_THAT(rotated[3], AllOf(GlyphIndexIs(Eq(kCGlyph)), GlyphRotateDegreesIs(DoubleEq(60.0))));
+}
+
+// Between two textPaths the first keeps its trailing space on its path. The inter-element space
+// and the second path's leading space each follow a collapsible space, so CSS Text 3 section 4.1.1
+// removes them.
+TEST(TextEngineScriptedTest, AdjacentTextPathsKeepOnlyTheFirstPathsBoundarySpace) {
+  constexpr int kSpaceGlyph = ' ' + 1;
+  constexpr int kBGlyph = 'B' + 1;
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p'>A </textPath> <textPath path='M200 80H300'> B</textPath>", true,
+      "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphIndexIs(Eq(kSpaceGlyph)), GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(glyphs[2], AllOf(GlyphIndexIs(Eq(kBGlyph)), GlyphXPositionIs(DoubleEq(200.0)),
+                               GlyphYPositionIs(DoubleEq(80.0))));
+}
+
+// A textPath whose reference does not resolve is not rendered, but its characters still take part
+// in white-space processing, so its trailing space collapses the following one: the visible text
+// is "X", one space, then B.
+TEST(TextEngineScriptedTest, UnresolvedTextPathBoundaryKeepsOneVisibleSpace) {
+  constexpr int kXGlyph = 'X' + 1;
+  constexpr int kSpaceGlyph = ' ' + 1;
+  constexpr int kBGlyph = 'B' + 1;
+  const auto glyphs =
+      LayoutParsedTextPath("X <textPath href='#missing'>A </textPath> B", true, "M0 50H100");
+  std::vector<int> indices;
+  for (const TextGlyph& glyph : glyphs) {
+    indices.push_back(glyph.glyphIndex);
+  }
+  EXPECT_THAT(indices, ElementsAre(kXGlyph, kSpaceGlyph, kBGlyph));
+}
 
 }  // namespace
 

@@ -235,6 +235,7 @@ TEST(FontSelection, NamedFamiliesResolveToVendoredFaces) {
   EXPECT_THAT(fonts.select("Noto Sans"), FaceFrom("NotoSans-Regular.ttf"));
   EXPECT_THAT(fonts.select("Source Sans Pro"), FaceFrom("SourceSansPro-Regular.ttf"));
   EXPECT_THAT(fonts.select("Mplus 1p"), FaceFrom("MPLUS1p-Regular.ttf"));
+  EXPECT_THAT(fonts.select("Noto Sans Arabic"), FaceFrom("NotoSansArabic-Regular.ttf"));
 }
 
 TEST(FontSelection, BoldRequestSelectsTheBoldFace) {
@@ -563,15 +564,22 @@ std::vector<GlyphFace> LayOutGlyphFaces(std::string_view utf8,
 }
 
 TEST(FontSelection, PerClusterFallbackKeepsThePrimaryFaceForClustersItCovers) {
-  // Mplus 1p covers the CJK, the space and nothing Arabic; only Amiri covers the Arabic word, so
-  // only those clusters fall back. A whole-span choice would either drop the Arabic glyphs or draw
-  // the CJK in a face without them.
+  // Mplus 1p covers the CJK, the space and nothing Arabic, so only the Arabic clusters fall back,
+  // to Amiri. A whole-span choice would either drop the Arabic glyphs or draw the CJK in a face
+  // without them.
   EXPECT_THAT(
       LayOutGlyphFaces("\u65e5\u672c \u062f\u0627\u0644", {"Mplus 1p"}),
       ElementsAre(
           GlyphFace{U'\u65e5', "MPLUS1p-Regular.ttf"}, GlyphFace{U'\u672c', "MPLUS1p-Regular.ttf"},
           GlyphFace{U' ', "MPLUS1p-Regular.ttf"}, GlyphFace{U'\u062f', "Amiri-Regular.ttf"},
           GlyphFace{U'\u0627', "Amiri-Regular.ttf"}, GlyphFace{U'\u0644', "Amiri-Regular.ttf"}));
+}
+
+TEST(FontSelection, PerClusterFallbackUsesTheFirstCoveringFaceInFileNameOrder) {
+  // Amiri and Noto Sans Arabic both cover Arabic, and no listed family does. The clusters take the
+  // first covering face in registration order, which is file-name order, as in resvg's harness.
+  EXPECT_THAT(LayOutGlyphFaces("\u062f\u0627\u0644", {"Noto Sans"}),
+              AllOf(SizeIs(3), Each(Field("source", &GlyphFace::source, Eq("Amiri-Regular.ttf")))));
 }
 
 TEST(FontSelection, PerClusterFallbackPrefersTheNextListedFamilyThatCoversTheCluster) {
@@ -675,6 +683,35 @@ private:
   SmallVector<RcString, 1> families_;
   std::size_t coverageEntries_ = 0;
 };
+
+TEST(FontSelection, FallbackReadsTheDeclaredFacesOncePerLayout) {
+  // Every span needs fallback for its Arabic letter, which Noto Sans lacks. The registered faces'
+  // family list is read once for the layout rather than once per span, so fallback work does not
+  // grow with the number of spans times the number of faces.
+  HermeticFontSet fonts;
+  TextEngine engine(fonts.fontManager(), fonts.registry());
+
+  constexpr size_t kSpans = 8;
+  components::ComputedTextComponent text;
+  for (size_t index = 0; index < kSpans; ++index) {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("\u062f");
+    span.start = 0;
+    span.end = span.text.size();
+    span.startsNewChunk = index == 0;
+    text.spans.push_back(span);
+  }
+
+  TextLayoutParams params;
+  params.fontFamilies.emplace_back(RcString("Noto Sans"));
+  params.fontSize = Lengthd(32, Lengthd::Unit::Px);
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  const std::vector<TextRun> runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(kSpans));
+  EXPECT_THAT(engine.declaredFamilyListBuildsForTesting(), Eq(1u));
+}
 
 TEST(FontSelection, FallbackSearchesEveryCandidateFaceForAShortSpan) {
   // One Latin letter must reach the covering face after 40 faces that lack it, even though that
