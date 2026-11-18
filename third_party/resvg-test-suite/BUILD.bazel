@@ -196,7 +196,7 @@ matched only when composited over white. Its SVG input is byte-identical at both
   tests/text/textPath/link-to-rect.png
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions, which
-Donner's full text tier matches within 10 pixels. The snapshot's references differed on glyph
+Donner's full text tier matches within 11 pixels. The snapshot's references differed on glyph
 and crosshair edge coverage. The SVG inputs are byte-identical at both revisions, except that
 upstream rotate-on-Arabic.svg changed only its title and a pull-request link.
 
