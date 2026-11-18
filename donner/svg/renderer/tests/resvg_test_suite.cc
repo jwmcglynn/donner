@@ -1500,19 +1500,15 @@ INSTANTIATE_TEST_SUITE_P(
                          "crosshair and diacritic edges; analytic residual 257 px, supersampled "
                          "1 px; a 1 px text shift reaches 468")},
                     // These three differ from their PNGs only in edge coverage: the crosshair
-                    // and glyph edges compare at 0 pixels under 4x4 supersampled coverage, and
-                    // a 1 px text shift raises each residual past its budget (507, 435 and
-                    // 441 pixels). The simple tier lacks the mixed-font ligature shaping.
+                    // and glyphs in the older snapshot use a different antialiasing grid.
+                    // Only the full tier applies the Amiri font's GSUB fi ligature. The SVGs
+                    // swap the order of the Amiri and Noto Sans runs to test both boundaries.
                     {"ligatures-handling-in-mixed-fonts-1.svg",
-                     Params().withMaxPixelsDifferent(415).onlyTextFull().withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                         "crosshair and glyph edges; analytic residual 399 px, supersampled 0 px; "
-                         "simple tier: Bug #1176, mixed-font ligature shaping")},
+                     ResvgV049Reference().onlyTextFull().withReason(
+                         "Mixed-font ligature shaping requires HarfBuzz")},
                     {"ligatures-handling-in-mixed-fonts-2.svg",
-                     Params().withMaxPixelsDifferent(355).onlyTextFull().withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                         "crosshair and glyph edges; analytic residual 343 px, supersampled 0 px; "
-                         "simple tier: Bug #1176, mixed-font ligature shaping")},
+                     ResvgV049Reference().onlyTextFull().withReason(
+                         "Mixed-font ligature shaping requires HarfBuzz")},
                     // The 300x300 resvg v0.49.0 rendering; the superseded PNG's supersampled
                     // crosshair and glyph edges differed from Donner's by 397 px.
                     {"real-text-height.svg", ResvgV049Reference()},
@@ -1798,8 +1794,7 @@ INSTANTIATE_TEST_SUITE_P(
                 // The 300x300 resvg v0.49.0 rendering; the superseded PNG's supersampled
                 // crosshair differed from Donner's by 387 px.
                 {"nested-whitespaces.svg", ResvgV049Reference()},
-                {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
-                                         "Crosshair thin-line AA + underline uses")},
+                {"tspan-bbox-2.svg", ResvgV049Reference()},
                 // Same cause as text/textPath/with-filter.svg: the span filter applies, but
                 // Donner's glyph coverage is about 5% lighter than the reference's, which only
                 // a blur makes visible away from the glyph edges.

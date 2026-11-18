@@ -75,6 +75,17 @@ revisions.
   tests/text/font-family/serif.png
   tests/text/text/xml-lang=ja.png
 
+From the same revision and license, these 300x300 PNGs use byte-identical SVG inputs.
+The text decoration in tspan-bbox-2 takes its paint from the declaring text element
+(SVG 2 section 11.11). The glyph fill is the child's gradient. Stable Chrome 158 and
+resvg v0.49.0 paint the underline black. Firefox 157 and the snapshot use the gradient.
+The two ligature fixtures shape the Amiri and Noto Sans runs separately; Amiri forms fi.
+The snapshot differs at the crosshair and glyph edges.
+
+  tests/text/tspan/tspan-bbox-2.png
+  tests/text/text/ligatures-handling-in-mixed-fonts-1.png
+  tests/text/text/ligatures-handling-in-mixed-fonts-2.png
+
 From the same revision and license, these PNGs were replaced with their 300x300
 versions. The snapshot's vertical.png placed its sideways glyphs 0.28 units across
 the line from both Donner and resvg v0.49.0, consistent with a rendering from before
