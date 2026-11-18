@@ -826,6 +826,36 @@ bazel run //donner/svg/tool:donner-cli -- \
   --output donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.png
 ```
 
+## Explicit tile geometry for nested and skewed patterns
+
+The two 500×500 references use resvg 0.49.0 with explicit SVG tiles. The
+comparison still renders each original pattern SVG at its original size.
+
+- `out-of-order-referencing` fills a 160×70 rectangle with 24×21 user-unit
+  tiles. The nested pattern in the lower rectangle fills a 10×10 object box
+  with 1.5×3 tiles. Its green rectangle crosses the tile boundary, leaving
+  only 0.5 units of its width visible per tile. `nested-rectangles.svg`
+  expands both grids with rectangles and clips their outer bounds. Rendering
+  the original with resvg 0.49.0 also rounds the upper 52.5-device-pixel
+  period; simply taking that PNG would preserve a different error.
+- `text-child` clips the border and text to each 40×25 cell, then skews the
+  grid by 10 degrees. `skewed-text-tiles.svg` applies these operations
+  explicitly and clips the result to the original rounded rectangle.
+
+Chrome Stable 158 and Firefox 157 differ from the explicit grids at fractional
+boundaries. In the nested case, the archival PNG also disagrees on fully opaque
+and empty interiors. Moving the nested cells by 0.5 user units or removing the
+text-grid skew produces thousands of differences against the original Donner
+renders at the ordinary settings.
+
+From this directory, reproduce both references with:
+
+```sh
+resvg --width 500 --height 500 nested-rectangles.svg resvg-nested-rectangles.png
+resvg --skip-system-fonts --use-font-file ../../../../../third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf \
+  --width 500 --height 500 skewed-text-tiles.svg resvg-skewed-text-tiles.png
+```
+
 ## Donner renderings of recursive pattern references
 
 `paint-servers/pattern/recursive-on-child` compares against `donner-pattern-recursive-on-child.png`.
