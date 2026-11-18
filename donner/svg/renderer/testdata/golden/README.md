@@ -278,7 +278,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 
 `resvg-method=stretch.png` is Donner's own rendering of the unchanged corpus
 `text/textPath/method=stretch.svg`. It is used because the vendored PNG does not depict
-the feature: it is byte-identical to `text/textPath/simple-case.png`, which is
+the feature: it is byte-identical to the original snapshot’s `text/textPath/simple-case.png`, which is
 `method="align"` placement, and the suite's `results.csv` flags every engine except svgnet
 as failing the case. [SVG 2 `method="stretch"`](https://www.w3.org/TR/SVG2/text.html#TextPathElementMethodAttribute)
 converts glyph outlines into paths whose points are moved along the path's normals, so

@@ -102,7 +102,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | Tests | Reason |
 |-------|--------|
 | 001-005 | Minor char advance diffs |
-| 007 | Donner regression golden: the vendored PNG is byte-identical to the align case |
+| 007 | Donner regression golden: the vendored PNG is byte-identical to the original snapshot’s align case |
 | 009-010 | Minor char advance diffs |
 | 011 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
 | 013-014 | Minor char advance diffs |

@@ -137,7 +137,7 @@ in the golden README.
 | text/textPath | method=stretch | Reference disagreement: the vendored PNG is align placement |
 
 `textPath/method=stretch` runs against a committed Donner render
-(`resvg-method=stretch.png`). The vendored PNG is byte-identical to `simple-case.png`,
+(`resvg-method=stretch.png`). The vendored PNG is byte-identical to the original snapshot’s `simple-case.png`,
 which is align placement, so it cannot assert the stretch warp. The golden is a
 regression guard for the warp rather than an independent oracle;
 `RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`, which

@@ -570,7 +570,7 @@ difference.
 
 Inline `path`, geometry references, `side=right`, `method=stretch`, and `spacing=auto` are
 implemented. Their focused geometry and renderer contracts are active. The vendored `method=stretch`
-image is identical to the align reference, so that corpus row compares against a Donner-rendered
+image is identical to the original snapshot’s align reference, so that corpus row compares against a Donner-rendered
 reference (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)) while
 independent curved-outline tests distinguish the methods. A fragment-free relative `xlink:href`
 under the secure static resource policy does not resolve to a same-document element or initiate an
