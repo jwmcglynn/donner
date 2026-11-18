@@ -829,3 +829,7 @@ build:ci-platforms --strategy=TestRunner=remote
 build:ci-platforms --noremote_local_fallback
 build:ci-platforms --incompatible_repo_env_ignores_action_env
 test:ci-platforms --test_tag_filters=
+build:ci-platforms --xcode_version_config=//tools/ci:remote_macos_xcodes
+build:ci-platforms --xcode_version=27.2
+build:ci-platforms --macos_minimum_os=13.3
+test:ci-platforms --nocache_test_results

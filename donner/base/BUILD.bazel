@@ -1,4 +1,4 @@
-load("@bazel_lib//lib:transitions.bzl", "platform_transition_test")
+load("//build_defs:rules.bzl", "ci_platform_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -396,9 +396,10 @@ donner_cc_test(
 )
 
 
-[platform_transition_test(
+[ci_platform_test(
     name = "ci_" + os + "_ndebug_test",
-    binary = ":base_tests_ndebug",
+    dep = ":base_tests_ndebug",
+    darwin = os == "macos",
     target_platform = "//tools/ci:" + os + "_ci",
     visibility = ["//tools/ci:__pkg__"],
     tags = ["manual"],

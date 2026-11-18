@@ -1,4 +1,4 @@
-load("@bazel_lib//lib:transitions.bzl", "platform_transition_test")
+load("//build_defs:rules.bzl", "ci_platform_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -819,13 +819,6 @@ platform(
 platform(
     name = "macos_ci",
     parents = [":remote_macos_aarch64"],
-    flags = [
-        "--host_platform=//tools/ci:remote_macos_aarch64",
-        "--//build_defs:llvm_latest=0",
-        "--xcode_version_config=//tools/ci:remote_macos_xcodes",
-        "--xcode_version=27.2",
-        "--macos_minimum_os=13.3",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -835,9 +828,10 @@ sh_binary(
     srcs = ["check_worker_kernel.sh"],
 )
 
-[platform_transition_test(
+[ci_platform_test(
     name = "ci_" + os + "_kernel_test",
-    binary = ":check_worker_kernel",
+    dep = ":check_worker_kernel",
+    darwin = os == "macos",
     args = kernel,
     exec_compatible_with = ["@platforms//os:" + os],
     tags = ["manual", "external"],
