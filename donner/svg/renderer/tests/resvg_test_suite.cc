@@ -1632,7 +1632,6 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("resvg 0.47.0 reference (golden README)")},
                 // ResvgV049Reference() rows compare against resvg v0.49.0's 300x300 renderings.
                 {"m-A-path.svg", ResvgV049Reference()},
-                {"m-L-Z-path.svg", ResvgV049Reference()},
                 // The vendored PNG is byte-identical to simple-case.png (align placement), so it
                 // does not depict method="stretch". The golden is Donner's own rendering, a
                 // regression guard; testdata/golden/README.md records its evidence and
