@@ -273,3 +273,35 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 | Case | Why the vendored reference is not used | SVG SHA-256 | PNG SHA-256 |
 | ---- | -------------------------------------- | ----------- | ----------- |
 | `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Blink and Gecko take from VORG and then from vmtx, as Donner does. resvg centers upright glyphs on the hhea ascent and descent instead, and the vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
+
+## painting/stroke: gradient strokes on text
+
+Disposition: reference disagreement. `resvg-stroke-linear-gradient-on-text.png` and
+`resvg-stroke-radial-gradient-on-text.png` are Donner CPU renderings of the unchanged corpus files
+`tests/painting/stroke/linear-gradient-on-text.svg` and `radial-gradient-on-text.svg`, at the
+500x500 size of their vendored references, rendered by the resvg suite harness at the commit that
+adds them. Both CPU text tiers compare with them at the default settings (full text differs by 41
+and 44 pixels); the Geode suite does not run text rows yet.
+
+The vendored references map the stroke gradient through the glyph ink extents of "Text"
+(42.80..156.08 x 66.96..110.40 user units at font-size 60) instead of its glyph cells, advance by
+ascent and descent (42.20..157.40 x 45.66..127.38), which Donner and resvg v0.49.0 use. The resvg
+v0.49.0 renderings use the glyph cells, but still differ from Donner by 354 and 359 pixels, along
+the stroke edges. resvg's own conversion of the text to paths, drawn by Donner, differs from them
+by 343 and 348, so layout and paint mapping agree. The residual is consistent with 4x4
+supersampled reference coverage: a 4x4 supersampled rendering of Donner's geometry brings it to
+116 pixels (100 for the path conversion), and about 116 pixels remain unexplained. The CPU
+backend, a port of the rasterizer library resvg uses, computes edge coverage analytically where
+the upstream library supersamples it 4x4, which is where the two differ along edges.
+
+Corpus SVG SHA-256: `2f16b9c4f8c9023d3e1cc131514084d27da62e6c76ea918cba379766d2686a62` (linear),
+`aaa4629608d0bba3aab4d50c8be80410f6c5d8038e56dc03c787330e2e61c45b` (radial).
+
+PNG SHA-256: `56e920b34af31e47daf191e5243cd9e0aab66381798aee4cb05b952881bff268` (linear),
+`015f6a57468ba184197f1ceffd0da050fe34545c52ce75e9d000817ccd8a03ef` (radial).
+
+To regenerate, delete the PNGs and run:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text -- --gtest_filter='*gradient_on_text*'
+```

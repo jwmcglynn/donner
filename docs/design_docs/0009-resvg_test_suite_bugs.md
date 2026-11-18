@@ -54,10 +54,7 @@ evidence is in the [golden README](../../donner/svg/renderer/testdata/golden/REA
 `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` independently
 requires the clipped render to equal the visible part of the rect blurred with room around it.
 
-## Active overrides (51)
-
-The count is of overridden suite rows; the shared feColorMatrix table row covers seven of them
-and the drop-shadow-function row four.
+## Active overrides
 
 ### resvg golden is wrong per spec
 
@@ -72,10 +69,19 @@ and the drop-shadow-function row four.
 | painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
 | painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
+| painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+
+`painting/stroke/{linear,radial}-gradient-on-text` are reference disagreements and run against
+Donner CPU renderings (`resvg-stroke-{linear,radial}-gradient-on-text.png`). The vendored references
+map the stroke gradient through the glyph ink extents of the text instead of its glyph cells; the
+resvg v0.49.0 renderings use the glyph cells but keep a stroke-edge residual consistent with 4x4
+supersampled coverage, of which about 116 px remain unexplained. Provenance is in
+[`testdata/golden/README.md`](../../donner/svg/renderer/testdata/golden/README.md).
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
 rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test

@@ -129,7 +129,7 @@ backends.**
 | B15 | `painting/fill/radial-gradient-on-text`   | 14562 → 3                      | un-gated   |
 | B16 | `painting/stroke/pattern-on-text`         | 13115 → 39                     | un-gated   |
 | B18 | `painting/fill/linear-gradient-on-text`   | 10195 → 1                      | un-gated   |
-| B17 | `painting/stroke/linear-gradient-on-text` | 11917 → 465                    | edge-floor |
+| B17 | `painting/stroke/linear-gradient-on-text` | 11917 → 465                    | reference disagreement golden |
 | B11 | `text/tspan/tspan-bbox-2`                 | 2929 → 694                     | edge-floor |
 | B12 | `text/tspan/tspan-bbox-1`                 | 1803 → 702                     | edge-floor |
 

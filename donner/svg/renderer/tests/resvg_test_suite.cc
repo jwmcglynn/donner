@@ -892,26 +892,20 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke",
                 {
-                    // Both vendored references map a stroke paint server's objectBoundingBox units
-                    // through the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..
-                    // 110.40 user units at font-size 60) instead of its glyph cells: advance width
-                    // by the font's ascent and descent (42.20..157.40 x 45.66..127.38), which
-                    // Donner and resvg v0.49.0 use for fill and stroke alike.
-                    //
-                    // A default linear gradient runs along x only, where the two boxes differ by
-                    // under 2 user units, so it stays inside a loosened per-pixel tolerance. The
-                    // radial gradient sees the full 1.9x height difference and cannot. Against
-                    // resvg v0.49.0's 300x300 rendering, which uses the glyph cells, 358 and 364
-                    // simple-text pixels (352 and 361 full text) still differ, with no alpha delta
-                    // above 58 of 255 and no opaque color delta above 3. The root cause of that
-                    // residual is not yet identified, so these references are not replaced.
+                    // Reference disagreement: the vendored references map the stroke paint server
+                    // through the glyph ink extents of the text instead of its glyph cells, and the
+                    // resvg v0.49.0 renderings keep a supersampled stroke-edge residual. Compared
+                    // against Donner renderings; see testdata/golden/README.md.
                     {"linear-gradient-on-text.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                           "Reference uses text ink extents for stroke paint")
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-stroke-linear-gradient-on-text.png")
+                         .withReason("Reference disagreement: paint mapped by glyph ink extents")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"radial-gradient-on-text.svg",
-                     Params::Skip("Reference disagreement: appears to use ink extents; "
-                                  "SVG2 text paint uses glyph-cell bounds")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-stroke-radial-gradient-on-text.png")
+                         .withReason("Reference disagreement: paint mapped by glyph ink extents")
+                         .requireFeature(RendererBackendFeature::Text, "text rendering")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
