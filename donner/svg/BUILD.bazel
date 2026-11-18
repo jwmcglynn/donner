@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_library")
+load(":svg_core_compile_tests.bzl", "svg_core_text_tests")
 
 donner_cc_library(
     name = "svg_document_handle",
@@ -207,6 +208,11 @@ donner_cc_library(
         "//donner/svg/resources:sandboxed_file_resource_loader",
         "//donner/svg/text:text_engine_headers",
     ],
+)
+
+svg_core_text_tests(
+    name = "svg_core",
+    core = ":svg_element_impl",
 )
 
 donner_cc_library(
