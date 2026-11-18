@@ -15,6 +15,17 @@ load(
 )
 
 filegroup(
+    name = "resvg_test_policy_sources",
+    srcs = [
+        "BUILD.bazel",
+        "ImageComparisonTestFixture.h",
+        "RendererTestBackendGeode.cc",
+        "RendererTestBackendTinySkia.cc",
+    ],
+    visibility = ["//tools/resvg_parity:__pkg__"],
+)
+
+filegroup(
     name = "resvg_test_registration_source",
     srcs = ["resvg_test_suite.cc"],
     visibility = ["//tools/resvg_parity:__pkg__"],
@@ -434,12 +445,12 @@ donner_cc_test(
         "//donner/svg/components",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:rendering_context",
         "//donner/svg/renderer:tiny_skia_deps",
         "//donner/svg/renderer/geode:geode_nearest_sampling",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
-        "//donner/svg/renderer:rendering_context",
     ],
 )
 

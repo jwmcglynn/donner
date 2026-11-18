@@ -26,17 +26,10 @@ PR**. Golden overrides (where Donner is right and resvg's golden is wrong) live 
 
 ## How a test can be "not passing"
 
-There are **five** supported ways the suite records a known gap. All of them must
-be expressed through the normal `Params` path close to the affected tests:
-
-| State                                                      |    Call sites | Meaning                                                                                                                                                                                  |
-| ---------------------------------------------------------- | ------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Params::Skip("reason")`                                   |            77 | Not run. Feature gap, known bug, reference disagreement, harness mismatch or API policy. The bulk of this doc.                                                                           |
-| `Params::UndefinedBehavior("reason")`                      |            51 | Rendered, **not** compared. Undefined or implementation-defined behavior; see the policy below.                                                                                          |
-| `Params::DeprecatedInSVG2("reason")`                       | 23 (39 cases) | Rendered, **not** compared. Feature removed from or deprecated in SVG 2 that Donner does not implement.                                                                                  |
-| Commented-out `INSTANTIATE_TEST_SUITE_P`                   |             0 | Every vendored category is instantiated.                                                                                                                                                 |
-| `Params::WithThreshold(…, maxPx)` / local max-pixel budget |           103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
-| Geode-disabled local `Params` entries                      |             0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
+The suite records explicit skips, render-only policies, comparison settings, and
+capability requirements through the normal `Params` path close to the cases.
+A disabled registration is tracked separately from an active case. A numeric
+override can tighten an assertion or preserve a measured residual.
 
 **Rendering without a comparison has two named buckets.** A case that renders without a pixel
 comparison hides every regression in its output, so it needs one of two factories:
@@ -48,6 +41,9 @@ comparison hides every regression in its output, so it needs one of two factorie
   marker unless `SPEC_UB_ALLOWLIST` in `tools/resvg_parity/parity_report.py` lists the case with
   its specification-level reason (today only `feGaussianBlur/huge-stdDeviation`, an
   implementation-defined blur resource limit).
+  A marker records the absence of a qualified upstream pixel reference. The report keeps that
+  provenance separate from normative classification. Known valid examples such as the tile
+  transform and stitched turbulence retain no-crash coverage with a defined-input disposition.
 - `Params::DeprecatedInSVG2(reason)` marks a feature that SVG 2 removed or deprecated and Donner
   deliberately does not implement, such as `enable-background`, `<tref>`, the `kerning` property
   or `icc-color()` paint. Each case must fall under a feature named in
@@ -60,20 +56,65 @@ bugs and missing features, reference disagreements where Donner follows the spec
 harness or background mismatches, and API policy differences are `Params::Skip` with a bug number
 or reason; skipped cases do not render at all. A UB marker reference does not by itself make a
 case undefined behavior: a `Not impl:` or `Deferred:` feature on a marker reference stays a skip.
-A case that passes the default comparison compares. The parity report counts 91 render-only cases
-(52 undefined behavior: 51 on the UB marker reference plus the allowlisted case; 39 deprecated in
-SVG 2), 37 skipped cases and 1551 compared cases.
+A case that passes the default comparison compares.
 
 ## Current totals
 
-|                                       |                                                                                                                                                      Count |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| `Params::Skip(...)`                   |                                                                                                                             77 (`grep -o 'Params::Skip('`) |
-| `Params::UndefinedBehavior(...)`      |                                                                                                     51 (render-must-not-crash, no pixel compare; 51 cases) |
-| `Params::DeprecatedInSVG2(...)`       |                                                                        23 (render-must-not-crash, no pixel compare; 39 cases including a category default) |
-| `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
-| Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
-| Commented-out category blocks         |                                                                                                                                                          0 |
+The report keeps static registrations separate from measured test results. Numeric
+settings, reference paths and replacement provenance, configured states, and
+observed outcomes are available per lane. The [exception catalog](../../tools/resvg_parity/exception_policies.json)
+records scoped evidence, the issue or disposition, and the condition for removing each
+skip, reference override, or comparison allowance. Named source policies cover
+render-only cases and capability gates. The exact zero-difference dash seam remains
+a stronger pixel assertion.
+
+Regenerate this inventory with
+`python3 tools/resvg_parity/parity_report.py --inventory-markdown`.
+`//tools/resvg_parity:parity_report_tests` checks the generated block against this document.
+The lane counts below are eligibility from source. The normal Geode corpus does
+not enable the text capabilities, including for text-dependent fixtures outside
+the `text/` category. Focused tests exercise Geode text directly.
+
+<!-- BEGIN RESVG INVENTORY -->
+
+| Registered SVG fixtures | Count |
+| --- | ---: |
+| Total | 1,679 |
+| Pixel comparisons | 1,571 |
+| Comparisons with a numeric setting or custom golden | 91 |
+| Render-only, undefined-behavior registration | 53 |
+| Render-only, legacy feature | 43 |
+| Explicit skips | 12 |
+| Fixtures in disabled categories | 0 |
+
+| Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
+| --- | ---: | ---: | ---: | ---: |
+| `default_text` | 1,544 | 96 | 27 | 12 |
+| `max` | 1,571 | 96 | 0 | 12 |
+| `geode` | 1,238 | 69 | 360 | 12 |
+
+<!-- END RESVG INVENTORY -->
+
+### Reading observed coverage
+
+The report defaults every outcome to `unobserved`. Use per-shard GoogleTest XML
+to report what ran. Supply one XML file or a directory of disjoint receipt files
+for a lane. Each import requires the revision of the executed source. For example:
+
+```sh
+rev=$(git rev-parse HEAD)
+python3 tools/resvg_parity/parity_report.py \
+  --execution "$rev:default_text=reports/simple" \
+  --execution "$rev:max=reports/full" \
+  --execution "$rev:geode=reports/geode"
+```
+
+Use `--revision` with a source archive or a dirty checkout to supply a caller
+assertion about the executed source. Each imported result records the caller's
+revision assertion and the XML hashes. XML reports a test result, and cannot by
+itself prove that the test executed a pixel comparison. For example, a golden
+update also completes successfully. Unlisted cases stay unobserved. A suppressed
+test is reported separately from a run that emitted a runtime skip.
 
 ---
 
@@ -130,7 +171,7 @@ bottom for completeness.
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
-| —   | other deprecated/UB skips                                               |                            ~30 | **Out of scope**                                                                                                                                                                                    |
+| —   | other deprecated/UB render-only cases                                               |       See the current inventory | **Out of scope**                                                                                                                                                                                    |
 
 ---
 
@@ -817,9 +858,9 @@ goldens, all now fixed/closed:
 
 **Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
 problem — inspect whether a coverage change actually moves it before attributing it.
-No active resvg case is backend-disabled. Verified analytic-vs-finite-sample edge
-residuals, including `feGaussianBlur/complex-transform`, use exact Geode goldens so the
-backend remains fully gated. paint-order `on-text` and the rotated pattern case
+The registry has no explicit per-fixture backend disable. The Geode corpus still
+applies its feature gate for text. Verified analytic-vs-finite-sample edge
+residuals, including `feGaussianBlur/complex-transform`, use exact Geode goldens. Paint-order `on-text` and the rotated pattern case
 (`transform-and-patternTransform`) compare on Geode against their vendored references at default
 settings (42 and 55 pixels on Metal and on Linux lavapipe).
 
