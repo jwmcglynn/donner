@@ -97,35 +97,30 @@ human-approved set.
 
 ### Custom goldens and thresholds
 
-Any golden or tolerance change requires explicit human approval after visual retriage.
+Any golden or tolerance change requires explicit human approval after visual retriage. The 300x300 resvg v0.49.0 references use default comparison settings. Their provenance is in
+`third_party/resvg-test-suite/BUILD.bazel`.
 
-| Tests | Reason |
-|-------|--------|
-| 001-005 | Minor char advance diffs |
-| 007 | Donner regression golden: the vendored PNG is byte-identical to the original snapshot’s align case |
-| 009-010 | Minor char advance diffs |
-| 011-012 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
-| 013-014 | Minor char advance diffs |
-| 015 | Reference disagreement: SVG 2 endpoint continuation (Donner golden matching Chrome) |
-| 019-020 | Minor char advance diffs / AA diffs |
-| 021 | 250 px at 300x300: upright vmtx origin vs the reference's hhea-centered cell |
-| 022-023 | Minor char advance diffs |
-| 026-029 | Minor char advance diffs |
-| 032, 035-037 | Minor char advance diffs |
-| 034 | AA artifacts (WithThreshold 0.05) |
+| Test | Setting | Reason |
+|------|---------|--------|
+| closed-path | threshold 0.1, 400 px | AA diffs |
+| dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
+| method=stretch | golden | The snapshot depicts align placement. The Donner golden guards glyph warping. |
+| mixed-children-1, mixed-children-2, very-long-text | golden | SVG 2 continues text at the path end point. |
+| side=right | threshold 0.05 | Half-turned glyph edges |
+| tspan-with-absolute-position, with-underline | golden | Minor char advance diffs |
+| tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
+| writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
 
-### Skipped Tests
+For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
+[fixture coverage matrix](../../spec_audit/test_coverage.md#text).
 
-| Test | Reason |
-|------|--------|
-| 008 | `spacing=auto` not implemented |
-| 016 | Link to `<rect>` (SVG 2 feature) |
-| 030 | UB: reference is the resvg UB marker image (vertical text on a circular path) |
-| 033 | UB: baseline-shift + rotate interaction |
-| 040 | Filter on textPath not implemented |
-| 041 | `side=right` (SVG 2 feature) |
-| 042 | `path` attribute (SVG 2 feature) |
-| 043-044 | `path` + `href` interaction (SVG 2) |
+### Skipped and render-only cases
+
+| Test | Disposition |
+| --- | --- |
+| with-filter | Skip. The blur exposes a qualified glyph-coverage difference. |
+| complex | Render only. The PNG is the suite's undefined-behavior marker. |
+| with-baseline-shift-and-rotate | Render only. The interaction has no defined result in this fixture. |
 
 ## Key Files
 

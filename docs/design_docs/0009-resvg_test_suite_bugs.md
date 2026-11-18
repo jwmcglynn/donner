@@ -66,8 +66,6 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
-| painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
-| painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
@@ -110,21 +108,6 @@ it on the unkerned advance, 4.03 device px left of the kerned center, while SVG 
 anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
 `font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
 command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
-
-`with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
-(`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
-(TinyGolden and GeodeGolden pass at the default budget). Evidence that resvg's
-golden is the artifact: resvg rasterizes pattern tiles at a rounded integer pixel
-size, and this test's context bounding box yields a fractional 56.57px on-screen
-tile that resvg draws as 57px, stretching the tile period by ~0.8%. Donner repeats
-the tile at the exact period. A numeric grid fit confirms it: Donner's render fits
-an ideal diamond grid anchored at the computed context box
-`(31.82, -116.67), 226.27²` with score 1.0, while resvg's golden fits _no_ ideal
-grid (best score 0.899 — its grid drifts, consistent with per-tile rounding). The
-integer-tile pattern goldens in the same category (`with-pattern-in-use`,
-`with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
-exact pixel sizes) match Donner exactly, isolating the discrepancy to the
-fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 ### Vertical text: resvg's own model
 
@@ -198,8 +181,6 @@ Donner backend the test runs under.
 | --------- | -------------------------------------------- | --------------------------------------------------- |
 | text/text | complex-graphemes-and-coordinates-list       | Simple text can't compose combining marks           |
 | text/text | compound-emojis-and-coordinates-list         | Emoji bitmap scaling differs from the golden        |
-| text/text | rotate-on-Arabic                             | Arabic shaping requires text-full                   |
-| text/text | x-and-y-with-multiple-values-and-arabic-text | Arabic shaping; vertical-axis AA diff not the focus |
 
 ### Blessed minor diffs (textPath / text-decoration)
 
@@ -211,31 +192,13 @@ noted.
 | Category             | Test                                     | Reason                                            |
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
-| text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | nested                                   | Minor char                                        |
-| text/textPath        | path-with-ClosePath                      | Minor char                                        |
-| text/textPath        | simple-case                              | Minor char                                        |
-| text/textPath        | startOffset=-100                         | Minor char                                        |
-| text/textPath        | startOffset=10percent                    | Minor char                                        |
-| text/textPath        | startOffset=30                           | Minor char                                        |
-| text/textPath        | startOffset=5mm                          | Minor char                                        |
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
-| text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | with-baseline-shift                      | Minor char                                        |
-| text/textPath        | with-coordinates-on-text                 | Minor char                                        |
-| text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
-| text/textPath        | with-rotate                              | Minor char                                        |
-| text/textPath        | with-text-anchor                         | (no reason string)                                |
-| text/textPath        | with-transform-on-a-referenced-path      | Minor char                                        |
-| text/textPath        | with-transform-outside-a-referenced-path | Minor char                                        |
 | text/textPath        | with-underline                           | Minor char                                        |
 | text/text-decoration | indirect                                 | (no reason string)                                |
 
-> Two entries (`textPath/with-text-anchor`, `text-decoration/indirect`) carry no
-> `withReason`. They should either get one or migrate to a per-test threshold; the
-> "Minor char" cluster is the precedent. Tracked in
-> [0021](0021-resvg_feature_gaps.md).
+> `text-decoration/indirect` carries no `withReason`. It should either get one or migrate to a
+> per-test threshold. Tracked in [0021](0021-resvg_feature_gaps.md).
 
 ## Golden files
 

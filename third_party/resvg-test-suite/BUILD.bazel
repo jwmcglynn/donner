@@ -44,6 +44,14 @@ inputs are byte-identical at both revisions.
   tests/text/writing-mode/tb-with-dx-on-tspan.png
   tests/text/writing-mode/tb-with-dy-on-second-tspan.png
 
+From the same revision and license, this PNG was replaced with its 300x300 version. The
+relative xlink:href names an external document. It stays unresolved after the invalid path
+attribute is ignored, so the reference draws the guide path and frame. The SVG input is
+byte-identical at both revisions.
+
+  tests/text/textPath/with-invalid-path-and-xlink-href.png
+  SHA256: afd5561d73d9239ea9f30d279fea63c78a175830608854cd4c101237fee553d3
+
 From the same revision and license, both the SVG and the PNG of these tests were
 replaced, because upstream quoted their `'Mplus 1p'` font-family. Unquoted, that
 value is not a valid family name, and the old references were drawn in a
@@ -85,6 +93,15 @@ draws. Their SVG inputs are byte-identical at both revisions.
   tests/text/lengthAdjust/vertical.png
   tests/text/lengthAdjust/with-underline.png
   tests/text/text-decoration/with-textLength-on-a-single-character.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions, which
+Donner matches within the default allowance on both CPU text tiers and on Geode with Metal or
+software Vulkan. The snapshot's with-pattern-objectBoundingBox-in-use reference
+rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
+revisions.
+
+  tests/painting/context/with-pattern-objectBoundingBox-in-use.png
+  tests/painting/marker/orient=auto-on-M-C-C-4.png
 
 From the same revision and license, these raster-image PNGs were replaced with their 300x300
 versions. The snapshot's references mixed several historical upscalers: a browser's bilinear
@@ -148,11 +165,43 @@ ascent and descent. Their SVG inputs are byte-identical at both revisions.
   tests/masking/clipPath/clip-path-with-transform-on-text.png
   tests/painting/visibility/bbox-impact-3.png
 
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references predate the current text-on-path layout, so Donner compared against its
+own renderings for most of them; Donner matches the v0.49.0 renderings within the default
+allowance on both CPU text tiers. Their SVG inputs are byte-identical at both revisions.
+
+  tests/text/textPath/m-A-path.png
+  tests/text/textPath/nested.png
+  tests/text/textPath/path-with-ClosePath.png
+  tests/text/textPath/simple-case.png
+  tests/text/textPath/spacing=auto.png
+  tests/text/textPath/startOffset=-100.png
+  tests/text/textPath/startOffset=10percent.png
+  tests/text/textPath/startOffset=30.png
+  tests/text/textPath/startOffset=5mm.png
+  tests/text/textPath/two-paths.png
+  tests/text/textPath/with-baseline-shift.png
+  tests/text/textPath/with-coordinates-on-text.png
+  tests/text/textPath/with-coordinates-on-textPath.png
+  tests/text/textPath/with-rotate.png
+  tests/text/textPath/with-text-anchor.png
+  tests/text/textPath/with-transform-on-a-referenced-path.png
+  tests/text/textPath/with-transform-outside-a-referenced-path.png
+
 From the same revision and license, this PNG was replaced with its 300x300 version. The
 snapshot's reference was opaque white where every other reference is transparent, and it
 matched only when composited over white. Its SVG input is byte-identical at both revisions.
 
   tests/text/textPath/link-to-rect.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions, which
+Donner's full text tier matches within 11 pixels. The snapshot's references differed on glyph
+and crosshair edge coverage. The SVG inputs are byte-identical at both revisions, except that
+upstream rotate-on-Arabic.svg changed only its title and a pull-request link.
+
+  tests/text/text/rotate-on-Arabic.png
+  tests/text/text/x-and-y-with-multiple-values-and-arabic-text.png
+  tests/text/text/zalgo.png
 
 From the same revision and license, these PNGs were replaced with their 300x300 versions. The
 snapshot's references covered the crosshair and glyph edges with 4x4 supersampling, which
