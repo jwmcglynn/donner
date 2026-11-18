@@ -17,6 +17,25 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "style_system_headers",
+    hdrs = [
+        "ExternalUseStyleContext.h",
+        "SelectorContent.h",
+        "StyleSystem.h",
+    ],
+    visibility = [
+        "//donner/svg:__pkg__",
+        "//donner/svg/components/shape:__pkg__",
+    ],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/css",
+        "//donner/svg/components:components_core",
+    ],
+)
+
 donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
@@ -26,11 +45,8 @@ donner_perf_sensitive_cc_library(
         "StyleSystem.cc",
     ],
     hdrs = [
-        "ExternalUseStyleContext.h",
         "PaintAnimationStyle.h",
         "ScalarAnimationStyle.h",
-        "SelectorContent.h",
-        "StyleSystem.h",
     ],
     visibility = [
         "//donner/editor:__pkg__",
@@ -39,6 +55,7 @@ donner_perf_sensitive_cc_library(
     ],
     deps = [
         ":components",
+        ":style_system_headers",
         "//donner/base",
         "//donner/base/parser",
         "//donner/base/xml",

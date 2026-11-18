@@ -35,18 +35,27 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "paint_system_headers",
+    hdrs = ["PaintSystem.h"],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/svg/components/style:components",
+    ],
+)
+
+donner_cc_library(
     name = "paint_system",
     srcs = [
         "PaintSystem.cc",
-    ],
-    hdrs = [
-        "PaintSystem.h",
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
         ":components",
+        ":paint_system_headers",
         "//donner/base",
         "//donner/svg/components:components_core",
         "//donner/svg/components/layout:layout_system",

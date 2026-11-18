@@ -37,15 +37,23 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "presentation_attribute_parsing_headers",
+    hdrs = ["PresentationAttributeParsing.h"],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        ":property_parsing",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "properties",
     srcs = [
         "PresentationAttributeParsing.cc",
     ],
-    hdrs = [
-        "PresentationAttributeParsing.h",
-    ],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
+        ":presentation_attribute_parsing_headers",
         ":property_parsing",
         "//donner/svg/components/filter:components",
         "//donner/svg/components/layout:layout_system",

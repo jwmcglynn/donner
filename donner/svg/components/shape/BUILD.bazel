@@ -29,14 +29,25 @@ cc_library(
 )
 
 cc_library(
+    name = "shape_system_headers",
+    hdrs = [
+        "BoundsGeometry.h",
+        "ShapeSystem.h",
+    ],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/svg/components/style:components",
+        "//donner/svg/components/style:style_system_headers",
+    ],
+)
+
+cc_library(
     name = "shape_system",
     srcs = [
         "BoundsGeometry.cc",
         "ShapeSystem.cc",
-    ],
-    hdrs = [
-        "BoundsGeometry.h",
-        "ShapeSystem.h",
     ],
     defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
@@ -48,6 +59,7 @@ cc_library(
     ],
     deps = [
         ":components",
+        ":shape_system_headers",
         "//donner/base",
         "//donner/svg/components:components_core",
         "//donner/svg/components/animation:animation_system",

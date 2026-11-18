@@ -6,6 +6,7 @@ donner_cc_library(
         "ImageComponent.h",
     ],
     visibility = [
+        "//donner/svg:__pkg__",
         "//donner/svg/components:__subpackages__",
     ],
     deps = [

@@ -14,8 +14,10 @@ donner_cc_library(
     ],
 )
 
+# Compile the common element implementations against the system interfaces.
+# The public core below supplies the implementations for the selected text tier.
 donner_cc_library(
-    name = "svg_core",
+    name = "svg_element_impl",
     srcs = [
         "DonnerController.cc",
         "ElementFactory.cc",
@@ -174,13 +176,41 @@ donner_cc_library(
         "SVGUnknownElement.h",
         "SVGUseElement.h",
     ],
-    visibility = [
-        "//:__pkg__",
-        "//donner/svg/parser:__pkg__",
-        "//donner/svg/properties/tests:__pkg__",
-        "//donner/svg/renderer:__subpackages__",
-        "//donner/svg/tests:__pkg__",
+    deps = [
+        ":element_type",
+        ":svg_document_handle",
+        "//donner/base",
+        "//donner/base/parser",
+        "//donner/base/xml",
+        "//donner/base/xml/components",
+        "//donner/css",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components:font_resource_graph_headers",
+        "//donner/svg/components/animation:animation_system_headers",
+        "//donner/svg/components/animation:components",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/components/layout:layout_system_headers",
+        "//donner/svg/components/paint:paint_system_headers",
+        "//donner/svg/components/resources:components",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/components/shadow:shadow_tree_system",
+        "//donner/svg/components/shape:shape_system_headers",
+        "//donner/svg/components/style:style_system_headers",
+        "//donner/svg/components/text:text_element_headers",
+        "//donner/svg/core",
+        "//donner/svg/parser:parser_core",
+        "//donner/svg/properties:presentation_attribute_parsing_headers",
+        "//donner/svg/properties:property_parsing",
+        "//donner/svg/renderer:rendering_context_headers",
+        "//donner/svg/resources:font_catalog_types",
+        "//donner/svg/resources:resource_loader_interface",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
+        "//donner/svg/text:text_engine_headers",
     ],
+)
+
+donner_cc_library(
+    name = "svg_system_implementations",
     deps = [
         ":svg_document_handle",
         "//donner/svg/components",
@@ -200,6 +230,21 @@ donner_cc_library(
         "//donner/svg/text:text_engine",
         ":element_type",
         "//donner/svg/properties:property_parsing",
+    ],
+)
+
+donner_cc_library(
+    name = "svg_core",
+    visibility = [
+        "//:__pkg__",
+        "//donner/svg/parser:__pkg__",
+        "//donner/svg/properties/tests:__pkg__",
+        "//donner/svg/renderer:__subpackages__",
+        "//donner/svg/tests:__pkg__",
+    ],
+    deps = [
+        ":svg_element_impl",
+        ":svg_system_implementations",
     ],
 )
 
