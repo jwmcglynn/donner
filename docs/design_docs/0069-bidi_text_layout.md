@@ -930,7 +930,7 @@ Rows that already compare and must not regress, rerun with `--gtest_also_run_dis
 default and `text_full` lanes on every milestone: `text/font-kerning/arabic-script`,
 `text/letter-spacing/on-Arabic`, `text/text-anchor/on-tspan-with-arabic`,
 `text/text/fill-rule=evenodd`, `text/text/rotate-on-Arabic`,
-`text/text/x-and-y-with-multiple-values-and-arabic-text` (golden override, 400 pixel budget),
+`text/text/x-and-y-with-multiple-values-and-arabic-text`,
 `text/textLength/arabic-with-lengthAdjust`, `text/textLength/arabic`, and
 `text/writing-mode/arabic-with-rl`. The `UndefinedBehavior` rows `text/writing-mode/tb-with-rotate`
 and `tb-with-rotate-and-underline` render without comparing; they are rerun only to catch crashes.

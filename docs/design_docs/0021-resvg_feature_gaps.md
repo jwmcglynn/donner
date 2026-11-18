@@ -371,7 +371,6 @@ generation:`, only when all of the following hold:
 | `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
-| `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
 
 The two mixed-font ligature fixtures compare against resvg v0.49.0 at the default settings on
 the full text tier. These fixtures exercise the Amiri font's GSUB substitution, which the

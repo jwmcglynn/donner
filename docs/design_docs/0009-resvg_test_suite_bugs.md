@@ -185,8 +185,6 @@ Donner backend the test runs under.
 | --------- | -------------------------------------------- | --------------------------------------------------- |
 | text/text | complex-graphemes-and-coordinates-list       | Simple text can't compose combining marks           |
 | text/text | compound-emojis-and-coordinates-list         | Emoji bitmap scaling differs from the golden        |
-| text/text | rotate-on-Arabic                             | Arabic shaping requires text-full                   |
-| text/text | x-and-y-with-multiple-values-and-arabic-text | Arabic shaping; vertical-axis AA diff not the focus |
 
 ### Upright Latin and crosshair coverage
 
