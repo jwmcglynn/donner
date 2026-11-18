@@ -879,18 +879,16 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke",
                 {
-                    // Reference disagreement: the vendored references map the stroke paint server
-                    // through the glyph ink extents of the text instead of its glyph cells, and the
-                    // resvg v0.49.0 renderings keep a supersampled stroke-edge residual. Compared
-                    // against Donner renderings; see testdata/golden/README.md.
+                    // SVG uses glyph cells for a text element's object bounding box. The
+                    // vendored images use ink extents; the Firefox references use glyph cells.
                     {"linear-gradient-on-text.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "resvg-stroke-linear-gradient-on-text.png")
+                                                "firefox-stroke-linear-gradient-on-text.png")
                          .withReason("Reference disagreement: paint mapped by glyph ink extents")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"radial-gradient-on-text.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "resvg-stroke-radial-gradient-on-text.png")
+                                                "firefox-stroke-radial-gradient-on-text.png")
                          .withReason("Reference disagreement: paint mapped by glyph ink extents")
                          .requireFeature(RendererBackendFeature::Text, "text rendering")},
                 })),

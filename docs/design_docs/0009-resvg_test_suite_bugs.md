@@ -79,12 +79,10 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
 
-`painting/stroke/{linear,radial}-gradient-on-text` are reference disagreements and run against
-Donner CPU renderings (`resvg-stroke-{linear,radial}-gradient-on-text.png`). The vendored references
-map the stroke gradient through the glyph ink extents of the text instead of its glyph cells; the
-resvg v0.49.0 renderings use the glyph cells but keep a stroke-edge residual consistent with 4x4
-supersampled coverage, of which about 116 px remain unexplained. Provenance is in
-[`testdata/golden/README.md`](../../donner/svg/renderer/testdata/golden/README.md).
+`painting/stroke/{linear,radial}-gradient-on-text` compare against independently captured
+Firefox renderings at the suite's default comparison settings. The vendored images map the
+gradient through glyph ink extents. SVG's text bounding box uses full glyph cells. See the
+[reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gradient-strokes-on-text).
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
 rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
