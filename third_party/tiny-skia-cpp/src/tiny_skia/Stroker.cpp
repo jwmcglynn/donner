@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #include "tiny_skia/Math.h"
@@ -53,7 +54,7 @@ bool QuadConstruct::initWithStart(const QuadConstruct& parent) {
     return false;
   }
   quad[0] = parent.quad[0];
-  tangentStart = parent.tangentStart;
+  directionStart = parent.directionStart;
   startSet = true;
   return true;
 }
@@ -63,7 +64,7 @@ bool QuadConstruct::initWithEnd(const QuadConstruct& parent) {
     return false;
   }
   quad[2] = parent.quad[2];
-  tangentEnd = parent.tangentEnd;
+  directionEnd = parent.directionEnd;
   endSet = true;
   return true;
 }
@@ -74,8 +75,25 @@ bool QuadConstruct::initWithEnd(const QuadConstruct& parent) {
 
 bool setNormalUnitNormal(Point before, Point after, float scale, float radius, Point& normal,
                          Point& unitNormal) {
-  if (!unitNormal.setNormalize((after.x - before.x) * scale, (after.y - before.y) * scale)) {
-    return false;
+  const float dx = (after.x - before.x) * scale;
+  const float dy = (after.y - before.y) * scale;
+  if (std::isfinite(dx) && std::isfinite(dy)) {
+    if (!unitNormal.setNormalize(dx, dy)) {
+      return false;
+    }
+  } else {
+    // A finite direction can overflow float before normalization at extreme zoom. Widen both
+    // the coordinate subtraction and the zoom multiplication. The usual zero-length decision
+    // still uses the caller's float resolution.
+    const double wideX = (static_cast<double>(after.x) - before.x) * scale;
+    const double wideY = (static_cast<double>(after.y) - before.y) * scale;
+    const double length = std::hypot(wideX, wideY);
+    if (!(length > 0.0 && std::isfinite(length))) {
+      unitNormal = Point::zero();
+      return false;
+    }
+    unitNormal =
+        Point::fromXY(static_cast<float>(wideX / length), static_cast<float>(wideY / length));
   }
   unitNormal.rotateCounterClockwise();
   normal = unitNormal.scaled(radius);
@@ -290,24 +308,24 @@ bool sharpAngle(const Point quad[3]) {
   return dot > 0.0f;
 }
 
-bool ptInQuadBounds(const Point quad[3], Point pt, float invResScale) {
+bool ptInQuadBounds(const Point quad[3], Point pt, Point tolerance) {
   float xMin = std::min({quad[0].x, quad[1].x, quad[2].x});
-  if (pt.x + invResScale < xMin) {
+  if (pt.x + tolerance.x < xMin) {
     return false;
   }
 
   float xMax = std::max({quad[0].x, quad[1].x, quad[2].x});
-  if (pt.x - invResScale > xMax) {
+  if (pt.x - tolerance.x > xMax) {
     return false;
   }
 
   float yMin = std::min({quad[0].y, quad[1].y, quad[2].y});
-  if (pt.y + invResScale < yMin) {
+  if (pt.y + tolerance.y < yMin) {
     return false;
   }
 
   float yMax = std::max({quad[0].y, quad[1].y, quad[2].y});
-  if (pt.y - invResScale > yMax) {
+  if (pt.y - tolerance.y > yMax) {
     return false;
   }
 
@@ -707,24 +725,20 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
         moveTo(segment->pts[0]);
         break;
       case PathSegment::Kind::LineTo:
-        limitSegmentResolution({prevPt_, segment->pts[0]});
         lineTo(segment->pts[0], &iter);
         lastSegmentIsLine = true;
         break;
       case PathSegment::Kind::QuadTo:
-        limitSegmentResolution({prevPt_, segment->pts[0], segment->pts[1]});
         quadTo(segment->pts[0], segment->pts[1]);
         lastSegmentIsLine = false;
         break;
       case PathSegment::Kind::CubicTo:
-        limitSegmentResolution({prevPt_, segment->pts[0], segment->pts[1], segment->pts[2]});
         cubicTo(segment->pts[0], segment->pts[1], segment->pts[2]);
         lastSegmentIsLine = false;
         break;
       case PathSegment::Kind::Close:
         if (lineCap != LineCap::Butt) {
           if (hasOnlyMoveTo()) {
-            limitSegmentResolution({prevPt_, moveToPt()});
             lineTo(moveToPt(), nullptr);
             lastSegmentIsLine = true;
             continue;
@@ -745,36 +759,109 @@ std::optional<Path> PathStroker::strokeInner(const Path& path, float width, floa
   return finish(lastSegmentIsLine);
 }
 
-void PathStroker::setCurveTolerance(float resScale) {
-  // The '4' below matches the fill scan converter's error term.
-  float baseInvResScale = 1.0f / (resScale * 4.0f);
-  // For thin strokes (radius < 2px), loosen tolerance proportionally.
-  // Subpixel precision is wasted when the stroke is only a few pixels wide.
-  if (radius_ > 0.0f && radius_ < 2.0f) {
-    float scale = std::min(2.0f / radius_, 2.0f);
-    invResScale_ = baseInvResScale * scale;
-  } else {
-    invResScale_ = baseInvResScale;
-  }
-  invResScaleSquared_ = invResScale_ * invResScale_;
+float PathStroker::curveToleranceForScale(float resScale) const {
+  // The '4' matches the fill scan converter's error term.
+  const float tolerance = kStrokeToleranceAtUnitScale / resScale;
+  // A thin stroke uses a looser tolerance.
+  return radius_ > 0.0f && radius_ < 2.0f ? tolerance * std::min(2.0f / radius_, 2.0f) : tolerance;
 }
 
-// Donner addition: the stroke's curve tolerances are distances in the path's own coordinates,
-// the device tolerance divided by the resolution scale. Each segment keeps its curve tolerance at
-// least one float step of the coordinates its offsetting works in: its own points, grown by the
-// stroke radius, which bounds every offset point. Miter tips and caps are placed directly,
-// without this tolerance. A segment far from the origin therefore cannot coarsen another segment
-// of the path.
-//
-// Only the curve approximation takes the floored tolerance (invResScale_ and invResScaleSquared_:
-// how close an offset quad must come to the offset curve, and when a piece of curve is close
-// enough to a straight line to be emitted as one, both errors bounded by that tolerance). The
-// tests that decide whether a segment exists at all keep the caller's resolution: the zero-length
-// line test (teenyLineTolerance_) and the zero-length direction test of the normals (resScale_).
-void PathStroker::limitSegmentResolution(std::initializer_list<Point> points) {
-  setCurveTolerance(PrecisionLimitedResScale(
-      resScale_, MaxAbsCoordinate(std::span<const Point>(points.begin(), points.size()), radius_),
-      kStrokeToleranceAtUnitScale));
+void PathStroker::setCurveTolerance(float resScale) {
+  invResScale_ = curveToleranceForScale(resScale);
+  invResScaleSquared_ = invResScale_ * invResScale_;
+  curveTolerance_ = Point::fromXY(invResScale_, invResScale_);
+}
+
+bool PathStroker::hasDirectionalCurveTolerance() const {
+  return curveTolerance_.x != curveTolerance_.y && curveTolerance_.isFinite() &&
+         curveTolerance_.x > 0.0f && curveTolerance_.y > 0.0f;
+}
+
+bool PathStroker::withinCurveTolerance(Point a, Point b, float fraction) const {
+  if (!hasDirectionalCurveTolerance()) {
+    return pointsWithinDist(a, b, invResScale_ * fraction);
+  }
+  const double dx = (static_cast<double>(a.x) - b.x) / curveTolerance_.x;
+  const double dy = (static_cast<double>(a.y) - b.y) / curveTolerance_.y;
+  return dx * dx + dy * dy <= static_cast<double>(fraction) * fraction;
+}
+
+namespace {
+
+// By Sterbenz's lemma, subtracting two same-sign numeric values within a factor of two
+// is exact. Use that to rebase one axis without losing detail on any authored control point.
+float curveAxisOrigin(std::span<const Point> points, float Point::* axis) {
+  const float origin = points.front().*axis;
+  const double magnitude = std::abs(origin);
+  for (const Point point : points) {
+    const double coordinate = origin < 0.0f ? -static_cast<double>(point.*axis) : point.*axis;
+    if (coordinate < magnitude * 0.5 || coordinate > magnitude * 2.0) {
+      return 0.0f;
+    }
+  }
+  return origin;
+}
+
+// Evaluate the fit in units of each axis's tolerance. Like ptToLine, use the distance
+// to the base if the projection falls outside the segment. The supplied direction is
+// relative to the base and can be computed before rounding a large coordinate difference.
+double curveFitDistanceSquared(Point point, Point base, double directionX, double directionY,
+                               Point tolerance) {
+  const double px = (static_cast<double>(point.x) - base.x) / tolerance.x;
+  const double py = (static_cast<double>(point.y) - base.y) / tolerance.y;
+  const double dx = directionX / tolerance.x;
+  const double dy = directionY / tolerance.y;
+  const double lengthSquared = dx * dx + dy * dy;
+  const double t = lengthSquared > 0.0 ? (px * dx + py * dy) / lengthSquared : 0.0;
+  if (t < 0.0 || t > 1.0) {
+    return px * px + py * py;
+  }
+  const double xError = px - t * dx;
+  const double yError = py - t * dy;
+  return xError * xError + yError * yError;
+}
+
+float coordinateWithStrokeReach(float magnitude, float radius) {
+  const double reach = static_cast<double>(magnitude) + radius;
+  return static_cast<float>(
+      std::min(reach, static_cast<double>(std::numeric_limits<float>::max())));
+}
+
+Point restoreCurvePoint(Point point, Point origin) {
+  return origin.isZero() ? point : point + origin;
+}
+
+}  // namespace
+
+// Donner addition: a far coordinate can otherwise round a small normal or tangent away before the
+// fit tests even see it. Offset and fit each curve in its own frame, choosing each axis separately,
+// and round to absolute float coordinates only when appending to the contour. Keep the joins and
+// caps in the original frame. Where a local coordinate still needs a precision floor, floor only
+// that axis so its rounding cannot hide differences in the other axis.
+Point PathStroker::prepareCurve(std::span<Point> points) {
+  const float scale = PrecisionLimitedResScale(
+      resScale_, coordinateWithStrokeReach(MaxAbsCoordinate(points, 0.0f), radius_),
+      kStrokeToleranceAtUnitScale);
+  setCurveTolerance(resScale_);
+  if (!(scale < resScale_)) {
+    return Point::zero();
+  }
+
+  const Point origin =
+      Point::fromXY(curveAxisOrigin(points, &Point::x), curveAxisOrigin(points, &Point::y));
+  Point largest = Point::zero();
+  for (Point& point : points) {
+    point = restoreCurvePoint(point, -origin);
+    largest.x = std::max(largest.x, std::abs(point.x));
+    largest.y = std::max(largest.y, std::abs(point.y));
+  }
+  const float scaleX = PrecisionLimitedResScale(
+      resScale_, coordinateWithStrokeReach(largest.x, radius_), kStrokeToleranceAtUnitScale);
+  const float scaleY = PrecisionLimitedResScale(
+      resScale_, coordinateWithStrokeReach(largest.y, radius_), kStrokeToleranceAtUnitScale);
+  setCurveTolerance(std::min(scaleX, scaleY));
+  curveTolerance_ = Point::fromXY(curveToleranceForScale(scaleX), curveToleranceForScale(scaleY));
+  return origin;
 }
 
 // Donner addition: outline points emitted by the stroke in progress.
@@ -839,6 +926,7 @@ void PathStroker::lineTo(Point p, const PathSegmentsIter* iter) {
 
 void PathStroker::quadTo(Point p1, Point p2) {
   Point quad[3] = {prevPt_, p1, p2};
+  const Point origin = prepareCurve(quad);
   auto [reduction, reductionType] = checkQuadLinear(quad);
   if (reductionType == ReductionType::Point) {
     lineTo(p2, nullptr);
@@ -851,7 +939,7 @@ void PathStroker::quadTo(Point p1, Point p2) {
   }
 
   if (reductionType == ReductionType::Degenerate) {
-    lineTo(reduction, nullptr);
+    lineTo(restoreCurvePoint(reduction, origin), nullptr);
     JoinProc saveJoiner = joiner_;
     joiner_ = roundJoiner;
     lineTo(p2, nullptr);
@@ -871,9 +959,9 @@ void PathStroker::quadTo(Point p1, Point p2) {
 
   QuadConstruct quadPoints;
   initQuad(StrokeType::Outer, NormalizedF32::ZERO, NormalizedF32::ONE, quadPoints);
-  quadStroke(quad, quadPoints);
+  quadStroke(quad, quadPoints, origin);
   initQuad(StrokeType::Inner, NormalizedF32::ZERO, NormalizedF32::ONE, quadPoints);
-  quadStroke(quad, quadPoints);
+  quadStroke(quad, quadPoints, origin);
 
   bool ok = setNormalUnitNormal(quad[1], quad[2], resScale_, radius_, normalBc, unitBc);
   if (!ok) {
@@ -886,6 +974,7 @@ void PathStroker::quadTo(Point p1, Point p2) {
 
 void PathStroker::cubicTo(Point pt1, Point pt2, Point pt3) {
   Point cubic[4] = {prevPt_, pt1, pt2, pt3};
+  const Point origin = prepareCurve(cubic);
   Point reduction[3] = {Point::zero(), Point::zero(), Point::zero()};
   Point tangentPt = Point::zero();
   ReductionType reductionType = checkCubicLinear(cubic, reduction, &tangentPt);
@@ -900,14 +989,14 @@ void PathStroker::cubicTo(Point pt1, Point pt2, Point pt3) {
   }
 
   if (reductionType >= ReductionType::Degenerate && reductionType <= ReductionType::Degenerate3) {
-    lineTo(reduction[0], nullptr);
+    lineTo(restoreCurvePoint(reduction[0], origin), nullptr);
     JoinProc saveJoiner = joiner_;
     joiner_ = roundJoiner;
     if (reductionType >= ReductionType::Degenerate2) {
-      lineTo(reduction[1], nullptr);
+      lineTo(restoreCurvePoint(reduction[1], origin), nullptr);
     }
     if (reductionType == ReductionType::Degenerate3) {
-      lineTo(reduction[2], nullptr);
+      lineTo(restoreCurvePoint(reduction[2], origin), nullptr);
     }
     lineTo(pt3, nullptr);
     joiner_ = saveJoiner;
@@ -919,7 +1008,7 @@ void PathStroker::cubicTo(Point pt1, Point pt2, Point pt3) {
   Point unitAb = Point::zero();
   Point normalCd = Point::zero();
   Point unitCd = Point::zero();
-  if (!preJoinTo(tangentPt, false, normalAb, unitAb)) {
+  if (!preJoinTo(restoreCurvePoint(tangentPt, origin), false, normalAb, unitAb)) {
     lineTo(pt3, nullptr);
     return;
   }
@@ -939,15 +1028,16 @@ void PathStroker::cubicTo(Point pt1, Point pt2, Point pt3) {
 
     QuadConstruct quadPoints;
     initQuad(StrokeType::Outer, lastT, nextT, quadPoints);
-    cubicStroke(cubic, quadPoints);
+    cubicStroke(cubic, quadPoints, origin);
     initQuad(StrokeType::Inner, lastT, nextT, quadPoints);
-    cubicStroke(cubic, quadPoints);
+    cubicStroke(cubic, quadPoints, origin);
     lastT = nextT;
   }
 
   auto cusp = pathGeometry::findCubicCusp(cubic);
   if (cusp.has_value()) {
-    Point cuspLoc = pathGeometry::evalCubicPosAt(cubic, cusp->toNormalized());
+    const Point cuspLoc =
+        restoreCurvePoint(pathGeometry::evalCubicPosAt(cubic, cusp->toNormalized()), origin);
     cusper_.pushCircle(cuspLoc.x, cuspLoc.y, radius_);
   }
 
@@ -957,16 +1047,16 @@ void PathStroker::cubicTo(Point pt1, Point pt2, Point pt3) {
   postJoinTo(pt3, normalCd, unitCd);
 }
 
-bool PathStroker::cubicStroke(const Point cubic[4], QuadConstruct& quadPoints) {
+bool PathStroker::cubicStroke(const Point cubic[4], QuadConstruct& quadPoints, Point origin) {
   if (exceedsOutputLimit()) {
     return false;  // Donner addition: stop subdividing once the output limit is passed.
   }
   if (!foundTangents_) {
     ResultType resultType = tangentsMeet(cubic, quadPoints);
     if (resultType != ResultType::Quad) {
-      bool ok = pointsWithinDist(quadPoints.quad[0], quadPoints.quad[2], invResScale_);
+      bool ok = withinCurveTolerance(quadPoints.quad[0], quadPoints.quad[2]);
       if ((resultType == ResultType::Degenerate || ok) && cubicMidOnLine(cubic, quadPoints)) {
-        addDegenerateLine(quadPoints);
+        addDegenerateLine(quadPoints, origin);
         return true;
       }
     } else {
@@ -977,18 +1067,15 @@ bool PathStroker::cubicStroke(const Point cubic[4], QuadConstruct& quadPoints) {
   if (foundTangents_) {
     ResultType resultType = compareQuadCubic(cubic, quadPoints);
     if (resultType == ResultType::Quad) {
-      const Point* stroke = quadPoints.quad;
-      if (strokeType_ == StrokeType::Outer) {
-        outer_.quadTo(stroke[1].x, stroke[1].y, stroke[2].x, stroke[2].y);
-      } else {
-        inner_.quadTo(stroke[1].x, stroke[1].y, stroke[2].x, stroke[2].y);
-      }
+      PathBuilder& path = strokeType_ == StrokeType::Outer ? outer_ : inner_;
+      path.quadToPt(restoreCurvePoint(quadPoints.quad[1], origin),
+                    restoreCurvePoint(quadPoints.quad[2], origin));
       return true;
     }
 
     if (resultType == ResultType::Degenerate) {
       if (!quadPoints.oppositeTangents) {
-        addDegenerateLine(quadPoints);
+        addDegenerateLine(quadPoints, origin);
         return true;
       }
     }
@@ -1005,22 +1092,22 @@ bool PathStroker::cubicStroke(const Point cubic[4], QuadConstruct& quadPoints) {
 
   QuadConstruct half;
   if (!half.initWithStart(quadPoints)) {
-    addDegenerateLine(quadPoints);
+    addDegenerateLine(quadPoints, origin);
     recursionDepth_ -= 1;
     return true;
   }
 
-  if (!cubicStroke(cubic, half)) {
+  if (!cubicStroke(cubic, half, origin)) {
     return false;
   }
 
   if (!half.initWithEnd(quadPoints)) {
-    addDegenerateLine(quadPoints);
+    addDegenerateLine(quadPoints, origin);
     recursionDepth_ -= 1;
     return true;
   }
 
-  if (!cubicStroke(cubic, half)) {
+  if (!cubicStroke(cubic, half, origin)) {
     return false;
   }
 
@@ -1031,8 +1118,13 @@ bool PathStroker::cubicStroke(const Point cubic[4], QuadConstruct& quadPoints) {
 bool PathStroker::cubicMidOnLine(const Point cubic[4], QuadConstruct& quadPoints) {
   Point strokeMid = Point::zero();
   cubicQuadMid(cubic, quadPoints, strokeMid);
-  float dist = ptToLine(strokeMid, quadPoints.quad[0], quadPoints.quad[2]);
-  return dist < invResScaleSquared_;
+  const Point start = quadPoints.quad[0];
+  const Point end = quadPoints.quad[2];
+  if (hasDirectionalCurveTolerance()) {
+    return curveFitDistanceSquared(strokeMid, start, static_cast<double>(end.x) - start.x,
+                                   static_cast<double>(end.y) - start.y, curveTolerance_) < 1.0;
+  }
+  return ptToLine(strokeMid, start, end) < invResScaleSquared_;
 }
 
 void PathStroker::cubicQuadMid(const Point cubic[4], QuadConstruct& quadPoints, Point& mid) {
@@ -1129,13 +1221,13 @@ void PathStroker::cubicQuadEnds(const Point cubic[4], QuadConstruct& quadPoints)
   if (!quadPoints.startSet) {
     Point cubicStartPt = Point::zero();
     cubicPerpRay(cubic, quadPoints.startT, cubicStartPt, quadPoints.quad[0],
-                 &quadPoints.tangentStart);
+                 &quadPoints.directionStart);
     quadPoints.startSet = true;
   }
 
   if (!quadPoints.endSet) {
     Point cubicEndPt = Point::zero();
-    cubicPerpRay(cubic, quadPoints.endT, cubicEndPt, quadPoints.quad[2], &quadPoints.tangentEnd);
+    cubicPerpRay(cubic, quadPoints.endT, cubicEndPt, quadPoints.quad[2], &quadPoints.directionEnd);
     quadPoints.endSet = true;
   }
 }
@@ -1225,29 +1317,24 @@ void PathStroker::initQuad(StrokeType strokeType, NormalizedF32 start, Normalize
                            QuadConstruct& quadPoints) {
   strokeType_ = strokeType;
   foundTangents_ = false;
+  recursionDepth_ = 0;
   quadPoints.init(start, end);
 }
 
-bool PathStroker::quadStroke(const Point quad[3], QuadConstruct& quadPoints) {
+bool PathStroker::quadStroke(const Point quad[3], QuadConstruct& quadPoints, Point origin) {
   if (exceedsOutputLimit()) {
     return false;  // Donner addition: stop subdividing once the output limit is passed.
   }
   ResultType resultType = compareQuadQuad(quad, quadPoints);
   if (resultType == ResultType::Quad) {
-    PathBuilder* path;
-    if (strokeType_ == StrokeType::Outer) {
-      path = &outer_;
-    } else {
-      path = &inner_;
-    }
-
-    path->quadTo(quadPoints.quad[1].x, quadPoints.quad[1].y, quadPoints.quad[2].x,
-                 quadPoints.quad[2].y);
+    PathBuilder& path = strokeType_ == StrokeType::Outer ? outer_ : inner_;
+    path.quadToPt(restoreCurvePoint(quadPoints.quad[1], origin),
+                  restoreCurvePoint(quadPoints.quad[2], origin));
     return true;
   }
 
   if (resultType == ResultType::Degenerate) {
-    addDegenerateLine(quadPoints);
+    addDegenerateLine(quadPoints, origin);
     return true;
   }
 
@@ -1257,13 +1344,22 @@ bool PathStroker::quadStroke(const Point quad[3], QuadConstruct& quadPoints) {
   }
 
   QuadConstruct half;
-  half.initWithStart(quadPoints);
-  if (!quadStroke(quad, half)) {
+  // As in cubicStroke, stop when there is no representable parameter between the endpoints.
+  if (!half.initWithStart(quadPoints)) {
+    addDegenerateLine(quadPoints, origin);
+    recursionDepth_ -= 1;
+    return true;
+  }
+  if (!quadStroke(quad, half, origin)) {
     return false;
   }
 
-  half.initWithEnd(quadPoints);
-  if (!quadStroke(quad, half)) {
+  if (!half.initWithEnd(quadPoints)) {
+    addDegenerateLine(quadPoints, origin);
+    recursionDepth_ -= 1;
+    return true;
+  }
+  if (!quadStroke(quad, half, origin)) {
     return false;
   }
 
@@ -1275,13 +1371,14 @@ ResultType PathStroker::compareQuadQuad(const Point quad[3], QuadConstruct& quad
   // get the quadratic approximation of the stroke
   if (!quadPoints.startSet) {
     Point quadStartPt = Point::zero();
-    quadPerpRay(quad, quadPoints.startT, quadStartPt, quadPoints.quad[0], &quadPoints.tangentStart);
+    quadPerpRay(quad, quadPoints.startT, quadStartPt, quadPoints.quad[0],
+                &quadPoints.directionStart);
     quadPoints.startSet = true;
   }
 
   if (!quadPoints.endSet) {
     Point quadEndPt = Point::zero();
-    quadPerpRay(quad, quadPoints.endT, quadEndPt, quadPoints.quad[2], &quadPoints.tangentEnd);
+    quadPerpRay(quad, quadPoints.endT, quadEndPt, quadPoints.quad[2], &quadPoints.directionEnd);
     quadPoints.endSet = true;
   }
 
@@ -1310,8 +1407,7 @@ void PathStroker::setRayPoints(Point tp, Point& dxy, Point& onP, Point* tangent)
   onP.y = tp.y - axisFlip * dxy.x;
 
   if (tangent != nullptr) {
-    tangent->x = onP.x + dxy.x;
-    tangent->y = onP.y + dxy.y;
+    *tangent = dxy;
   }
 }
 
@@ -1327,12 +1423,10 @@ void PathStroker::quadPerpRay(const Point quad[3], NormalizedF32 t, Point& tp, P
   setRayPoints(tp, dxy, onP, tangent);
 }
 
-void PathStroker::addDegenerateLine(const QuadConstruct& quadPoints) {
-  if (strokeType_ == StrokeType::Outer) {
-    outer_.lineTo(quadPoints.quad[2].x, quadPoints.quad[2].y);
-  } else {
-    inner_.lineTo(quadPoints.quad[2].x, quadPoints.quad[2].y);
-  }
+void PathStroker::addDegenerateLine(const QuadConstruct& quadPoints, Point origin) {
+  const Point end = restoreCurvePoint(quadPoints.quad[2], origin);
+  PathBuilder& path = strokeType_ == StrokeType::Outer ? outer_ : inner_;
+  path.lineTo(end.x, end.y);
 }
 
 ResultType PathStroker::strokeCloseEnough(const Point stroke[3], const Point ray[2],
@@ -1340,7 +1434,7 @@ ResultType PathStroker::strokeCloseEnough(const Point stroke[3], const Point ray
   NormalizedF32 half = NormalizedF32::newClamped(0.5f);
   Point strokeMid = pathGeometry::evalQuadAt(stroke, half);
   // measure the distance from the curve to the quad-stroke midpoint
-  if (pointsWithinDist(ray[0], strokeMid, invResScale_)) {
+  if (withinCurveTolerance(ray[0], strokeMid)) {
     if (sharpAngle(quadPoints.quad)) {
       return ResultType::Split;
     }
@@ -1348,7 +1442,7 @@ ResultType PathStroker::strokeCloseEnough(const Point stroke[3], const Point ray
   }
 
   // measure the distance to quad's bounds (quick reject)
-  if (!ptInQuadBounds(stroke, ray[0], invResScale_)) {
+  if (!ptInQuadBounds(stroke, ray[0], curveTolerance_)) {
     return ResultType::Split;
   }
 
@@ -1361,8 +1455,8 @@ ResultType PathStroker::strokeCloseEnough(const Point stroke[3], const Point ray
   }
 
   Point quadPt = pathGeometry::evalQuadAt(stroke, roots[0].toNormalized());
-  float error = invResScale_ * (1.0f - std::abs(roots[0].get() - 0.5f) * 2.0f);
-  if (pointsWithinDist(ray[0], quadPt, error)) {
+  const float fraction = 1.0f - std::abs(roots[0].get() - 0.5f) * 2.0f;
+  if (withinCurveTolerance(ray[0], quadPt, fraction)) {
     if (sharpAngle(quadPoints.quad)) {
       return ResultType::Split;
     }
@@ -1376,27 +1470,45 @@ ResultType PathStroker::strokeCloseEnough(const Point stroke[3], const Point ray
 ResultType PathStroker::intersectRay(IntersectRayType intersectRayType, QuadConstruct& quadPoints) {
   Point start = quadPoints.quad[0];
   Point end = quadPoints.quad[2];
-  Point aLen = quadPoints.tangentStart - start;
-  Point bLen = quadPoints.tangentEnd - end;
+  const bool directional = hasDirectionalCurveTolerance();
+  const Point tangentStart = start + quadPoints.directionStart;
+  const Point tangentEnd = end + quadPoints.directionEnd;
+  const Point aLen = directional ? quadPoints.directionStart : tangentStart - start;
+  const Point bLen = directional ? quadPoints.directionEnd : tangentEnd - end;
 
-  float denom = aLen.cross(bLen);
+  const auto cross = [directional](Point a, Point b) -> double {
+    return directional ? static_cast<double>(a.x) * b.y - static_cast<double>(a.y) * b.x
+                       : a.cross(b);
+  };
+  const double denom = cross(aLen, bLen);
   if (denom == 0.0f || !std::isfinite(denom)) {
     quadPoints.oppositeTangents = aLen.dot(bLen) < 0.0f;
     return ResultType::Degenerate;
   }
 
   quadPoints.oppositeTangents = false;
-  Point ab0 = start - end;
-  float numerA = bLen.cross(ab0);
-  float numerB = aLen.cross(ab0);
+  const auto crossAgainstOffset = [directional, start, end](Point direction) -> double {
+    if (!directional) {
+      return direction.cross(start - end);
+    }
+    const double dx = static_cast<double>(start.x) - end.x;
+    const double dy = static_cast<double>(start.y) - end.y;
+    return static_cast<double>(direction.x) * dy - static_cast<double>(direction.y) * dx;
+  };
+  const double numerA = crossAgainstOffset(bLen);
+  const double numerB = crossAgainstOffset(aLen);
   if ((numerA >= 0.0f) == (numerB >= 0.0f)) {
     // if the control point is outside the quad ends
 
     // if the perpendicular distances from the quad points to the opposite
     // tangent line are small, a straight line is good enough
-    float dist1 = ptToLine(start, end, quadPoints.tangentEnd);
-    float dist2 = ptToLine(end, start, quadPoints.tangentStart);
-    if (std::max(dist1, dist2) <= invResScaleSquared_) {
+    const bool closeToTangents =
+        directional
+            ? curveFitDistanceSquared(start, end, bLen.x, bLen.y, curveTolerance_) <= 1.0 &&
+                  curveFitDistanceSquared(end, start, aLen.x, aLen.y, curveTolerance_) <= 1.0
+            : std::max(ptToLine(start, end, tangentEnd), ptToLine(end, start, tangentStart)) <=
+                  invResScaleSquared_;
+    if (closeToTangents) {
       return ResultType::Degenerate;
     }
 
@@ -1404,12 +1516,24 @@ ResultType PathStroker::intersectRay(IntersectRayType intersectRayType, QuadCons
   }
 
   // check to see if the denominator is teeny relative to the numerator
-  numerA /= denom;
-  bool validDivide = numerA > numerA - 1.0f;
+  const double t =
+      directional ? numerA / denom : static_cast<float>(numerA) / static_cast<float>(denom);
+  const bool validDivide = directional ? t > t - 1.0 : t > static_cast<float>(t) - 1.0f;
   if (validDivide) {
     if (intersectRayType == IntersectRayType::CtrlPt) {
-      quadPoints.quad[1].x = start.x * (1.0f - numerA) + quadPoints.tangentStart.x * numerA;
-      quadPoints.quad[1].y = start.y * (1.0f - numerA) + quadPoints.tangentStart.y * numerA;
+      if (directional) {
+        const double x = start.x + static_cast<double>(aLen.x) * t;
+        const double y = start.y + static_cast<double>(aLen.y) * t;
+        const double maxCoordinate = std::numeric_limits<float>::max();
+        if (!(std::abs(x) <= maxCoordinate && std::abs(y) <= maxCoordinate)) {
+          return ResultType::Split;
+        }
+        quadPoints.quad[1] = Point::fromXY(static_cast<float>(x), static_cast<float>(y));
+      } else {
+        const float parameter = static_cast<float>(t);
+        quadPoints.quad[1].x = start.x * (1.0f - parameter) + tangentStart.x * parameter;
+        quadPoints.quad[1].y = start.y * (1.0f - parameter) + tangentStart.y * parameter;
+      }
     }
     return ResultType::Quad;
   }

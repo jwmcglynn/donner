@@ -1,7 +1,7 @@
 #pragma once
 
-#include <initializer_list>
 #include <optional>
+#include <span>
 
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
@@ -50,8 +50,8 @@ struct SwappableBuilders {
 
 struct QuadConstruct {
   Point quad[3] = {};
-  Point tangentStart = Point::zero();
-  Point tangentEnd = Point::zero();
+  Point directionStart = Point::zero();
+  Point directionEnd = Point::zero();
   NormalizedF32 startT = NormalizedF32::ZERO;
   NormalizedF32 midT = NormalizedF32::ZERO;
   NormalizedF32 endT = NormalizedF32::ZERO;
@@ -82,8 +82,8 @@ class PathStroker {
   /// scale. The '4' matches the fill scan converter's error term.
   static constexpr float kStrokeToleranceAtUnitScale = 0.25f;
 
-  /// Strokes \p path. For each segment, \p resolutionScale is lowered as
-  /// \ref PrecisionLimitedResScale states for that segment's own coordinates (a Donner addition).
+  /// Strokes \p path. Each curve may use a local coordinate frame before applying the
+  /// precision floor to its approximation tolerance (a Donner addition).
   /// With \p limits, stops and returns no path once the emitted outline passes
   /// `limits->maxOutlinePoints`, setting `limits->exceeded` (a Donner addition; see StrokeLimits).
   std::optional<Path> stroke(const Path& path, const Stroke& stroke, float resolutionScale,
@@ -100,7 +100,7 @@ class PathStroker {
   void lineTo(Point p, const PathSegmentsIter* iter);
   void quadTo(Point p1, Point p2);
   void cubicTo(Point pt1, Point pt2, Point pt3);
-  bool cubicStroke(const Point cubic[4], QuadConstruct& quadPoints);
+  bool cubicStroke(const Point cubic[4], QuadConstruct& quadPoints, Point origin);
   bool cubicMidOnLine(const Point cubic[4], QuadConstruct& quadPoints);
   void cubicQuadMid(const Point cubic[4], QuadConstruct& quadPoints, Point& mid);
   void cubicPerpRay(const Point cubic[4], NormalizedF32 t, Point& tPt, Point& onPt, Point* tangent);
@@ -117,12 +117,12 @@ class PathStroker {
 
   void initQuad(StrokeType strokeType, NormalizedF32 start, NormalizedF32 end,
                 QuadConstruct& quadPoints);
-  bool quadStroke(const Point quad[3], QuadConstruct& quadPoints);
+  bool quadStroke(const Point quad[3], QuadConstruct& quadPoints, Point origin);
   ResultType compareQuadQuad(const Point quad[3], QuadConstruct& quadPoints);
 
   void setRayPoints(Point tp, Point& dxy, Point& onP, Point* tangent);
   void quadPerpRay(const Point quad[3], NormalizedF32 t, Point& tp, Point& onP, Point* tangent);
-  void addDegenerateLine(const QuadConstruct& quadPoints);
+  void addDegenerateLine(const QuadConstruct& quadPoints, Point origin);
 
   ResultType strokeCloseEnough(const Point stroke[3], const Point ray[2],
                                QuadConstruct& quadPoints);
@@ -131,8 +131,11 @@ class PathStroker {
 
   std::optional<Path> finish(bool isLine);
   bool exceedsOutputLimit();
+  float curveToleranceForScale(float resScale) const;
   void setCurveTolerance(float resScale);
-  void limitSegmentResolution(std::initializer_list<Point> points);
+  bool hasDirectionalCurveTolerance() const;
+  bool withinCurveTolerance(Point a, Point b, float fraction = 1.0f) const;
+  Point prepareCurve(std::span<Point> points);
   std::size_t pendingPoints() const;
   bool passesOutlineLimit(std::size_t emitted) const;
   bool hasOnlyMoveTo() const;
@@ -143,6 +146,7 @@ class PathStroker {
   float resScale_ = 1.0f;
   float invResScale_ = 1.0f;
   float invResScaleSquared_ = 1.0f;
+  Point curveTolerance_ = Point::fromXY(1.0f, 1.0f);
 
   Point firstNormal_ = Point::zero();
   Point prevNormal_ = Point::zero();
@@ -171,7 +175,7 @@ class PathStroker {
   bool joinCompleted_ = false;
 
   // Donner addition: the zero-length line tolerance at the caller's resolution, which the
-  // precision floor does not change (see limitSegmentResolution).
+  // precision floor does not change (see prepareCurve).
   float teenyLineTolerance_ = 0.0f;
 
   // Donner addition: the caller's bounds, if any (see StrokeLimits).
@@ -197,7 +201,7 @@ std::size_t intersectQuadRay(const Point line[2], const Point quad[3],
                              NormalizedF32Exclusive roots[3]);
 bool pointsWithinDist(Point nearPt, Point farPt, float limit);
 bool sharpAngle(const Point quad[3]);
-bool ptInQuadBounds(const Point quad[3], Point pt, float invResScale);
+bool ptInQuadBounds(const Point quad[3], Point pt, Point tolerance);
 
 // Cap/join functions.
 void buttCapper(Point pivot, Point normal, Point stop, const PathBuilder* otherPath,

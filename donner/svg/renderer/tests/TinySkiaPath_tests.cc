@@ -635,6 +635,100 @@ TEST(PathTest, StrokeOfABentQuadFarFromTheOriginKeepsTheUnflooredError) {
   }
 }
 
+TEST(PathTest, StrokeKeepsTheFineAxisOfAFarQuadratic) {
+  constexpr float kFar = 4000000.0f;
+  for (const bool transpose : {false, true}) {
+    const auto point = [transpose](float x, float y) {
+      return transpose ? tiny_skia::Point::fromXY(y, x) : tiny_skia::Point::fromXY(x, y);
+    };
+    const auto curve =
+        QuadPath(point(kFar, 0.0f), point(kFar + 1.0f, 0.2f), point(kFar + 2.0f, 0.0f));
+    for (const float width : {0.1f, 1.0f}) {
+      SCOPED_TRACE(width);
+      SCOPED_TRACE(transpose);
+      tiny_skia::Stroke stroke;
+      stroke.width = width;
+      const auto outline = curve.stroke(stroke, 1000.0f);
+      ASSERT_THAT(outline, Optional(testing::_));
+      const auto bounds = outline->computeTightBounds();
+      ASSERT_THAT(bounds, Optional(testing::_));
+      // A symmetric quadratic with a horizontal tangent at the midpoint. Its upper offset is
+      // half the control height plus the stroke radius.
+      EXPECT_NEAR(transpose ? bounds->right() : bounds->bottom(), 0.1f + width * 0.5f, 0.0005f);
+    }
+  }
+}
+
+TEST(PathTest, StrokeUsesASeparateFrameForEachCurveInAContour) {
+  constexpr float kFar = 4000000.0f;
+  tiny_skia::PathBuilder outbound;
+  outbound.moveTo(0.0f, 0.0f).lineTo(kFar, 0.0f);
+  outbound.quadTo(kFar + 1.0f, 0.2f, kFar + 2.0f, 0.0f);
+  tiny_skia::PathBuilder inbound;
+  inbound.moveTo(-kFar, 0.0f).lineTo(0.0f, 0.0f);
+  inbound.quadTo(0.125f, 0.2f, 0.25f, 0.0f);
+  tiny_skia::Stroke stroke;
+  stroke.width = 0.1f;
+  for (auto* builder : {&outbound, &inbound}) {
+    const auto path = builder->finish();
+    ASSERT_THAT(path, Optional(testing::_));
+    const auto outline = path->stroke(stroke, 1000.0f);
+    ASSERT_THAT(outline, Optional(testing::_));
+    const auto bounds = outline->computeTightBounds();
+    ASSERT_THAT(bounds, Optional(testing::_));
+    EXPECT_NEAR(bounds->bottom(), 0.15f, 0.0005f);
+  }
+}
+
+TEST(PathTest, StrokeRetainsFineAxisAcrossAQuadraticThatCannotRebase) {
+  // This curve straddles x=0. A translation can't reduce the size of both x endpoints.
+  const auto curve = QuadPath(tiny_skia::Point::fromXY(-4000000.0f, 0.0f),
+                              tiny_skia::Point::fromXY(0.0f, 20000.0f),
+                              tiny_skia::Point::fromXY(4000000.0f, 0.0f));
+  tiny_skia::Stroke stroke;
+  stroke.width = 0.1f;
+  const auto outline = curve.stroke(stroke, 1000.0f);
+  ASSERT_THAT(outline, Optional(testing::_));
+  const auto bounds = outline->computeTightBounds();
+  ASSERT_THAT(bounds, Optional(testing::_));
+  EXPECT_NEAR(bounds->bottom(), 10000.05f, 0.002f);
+}
+
+TEST(PathTest, PreciseFarStrokeStillSharesTheOutlineLimit) {
+  const auto curve = QuadPath(tiny_skia::Point::fromXY(4000000.0f, 0.0f),
+                              tiny_skia::Point::fromXY(4000010.0f, 0.2f),
+                              tiny_skia::Point::fromXY(4000020.0f, 0.0f));
+  tiny_skia::Stroke stroke;
+  stroke.width = 0.00002f;
+  tiny_skia::StrokeLimits limits{.maxOutlinePoints = 5, .outlinePoints = 2};
+  EXPECT_THAT(curve.stroke(stroke, 1.0e6f, &limits), testing::Eq(std::nullopt));
+  EXPECT_TRUE(limits.exceeded);
+  // Each quadratic append adds at most two points before the next budget check.
+  EXPECT_LE(limits.outlinePoints, limits.maxOutlinePoints + 2);
+}
+
+TEST(PathTest, FarStrokeAtMaximumFiniteScaleHonorsTheOutlineLimit) {
+  const auto curve = QuadPath(tiny_skia::Point::fromXY(4000000.0f, 0.0f),
+                              tiny_skia::Point::fromXY(4000002.0f, 0.2f),
+                              tiny_skia::Point::fromXY(4000004.0f, 0.0f));
+  tiny_skia::Stroke stroke;
+  stroke.width = 0.1f;
+  // The two-unit tangent cannot be multiplied by the zoom in float before normalization.
+  constexpr float kScale = std::numeric_limits<float>::max();
+  tiny_skia::StrokeLimits tight{.maxOutlinePoints = 8};
+  EXPECT_THAT(curve.stroke(stroke, kScale, &tight), testing::Eq(std::nullopt));
+  EXPECT_TRUE(tight.exceeded);
+  EXPECT_LE(tight.outlinePoints, tight.maxOutlinePoints + 2);
+
+  tiny_skia::StrokeLimits ample{.maxOutlinePoints = 128};
+  const auto outline = curve.stroke(stroke, kScale, &ample);
+  ASSERT_THAT(outline, Optional(testing::_));
+  EXPECT_FALSE(ample.exceeded);
+  const auto bounds = outline->computeTightBounds();
+  ASSERT_THAT(bounds, Optional(testing::_));
+  EXPECT_NEAR(bounds->bottom(), 0.15f, 0.0005f);
+}
+
 TEST(PathTest, DashOfABentQuadFarFromTheOriginMatchesItAtTheOrigin) {
   // A quad four million units out that bends by one float step (0.25) and rises 0.8, dashed
   // `0.05 0.05` at a resolution scale of 1,000. Measured relative to its first point, it dashes to
