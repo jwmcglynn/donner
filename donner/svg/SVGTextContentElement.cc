@@ -60,7 +60,7 @@ std::vector<TextGlyphOutline> SVGTextContentElement::computedGlyphOutlines() con
         glyph.sourceEntity != entt::null
             ? SVGElement::CreateFromEntityHandle(EntityHandle(registry, glyph.sourceEntity))
             : SVGElement::CreateFromEntityHandle(handle_);
-    result.push_back(TextGlyphOutline{glyph.path, source});
+    result.push_back(TextGlyphOutline{glyph.path, source, glyph.run, glyph.startsTextChunk});
   }
   return result;
 }

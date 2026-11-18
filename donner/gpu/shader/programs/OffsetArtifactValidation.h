@@ -26,14 +26,14 @@ consteval bool ValidateOffsetArtifact() {
   static_assert(shader.entryPoints.size() == 1 &&
                 shader.entryPoints.front().stage == ShaderStage::Compute);
   static_assert(shader.entryPoints.front().workgroupSize[2] == 1);
-  static_assert(shader.matchesMember("params", "dx", offsetof(OffsetParams, dx),
-                                     sizeof(OffsetParams::dx), ShaderScalarType::F32));
-  static_assert(shader.matchesMember("params", "dy", offsetof(OffsetParams, dy),
-                                     sizeof(OffsetParams::dy), ShaderScalarType::F32));
-  static_assert(shader.matchesMember("params", "pad0", offsetof(OffsetParams, pad0),
-                                     sizeof(OffsetParams::pad0), ShaderScalarType::U32));
-  static_assert(shader.matchesMember("params", "pad1", offsetof(OffsetParams, pad1),
-                                     sizeof(OffsetParams::pad1), ShaderScalarType::U32));
+  static_assert(shader.matchesMember("params", "shiftX", offsetof(OffsetParams, shiftX),
+                                     sizeof(OffsetParams::shiftX), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "shiftY", offsetof(OffsetParams, shiftY),
+                                     sizeof(OffsetParams::shiftY), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "weightX", offsetof(OffsetParams, weightX),
+                                     sizeof(OffsetParams::weightX), ShaderScalarType::F32));
+  static_assert(shader.matchesMember("params", "weightY", offsetof(OffsetParams, weightY),
+                                     sizeof(OffsetParams::weightY), ShaderScalarType::F32));
   return true;
 }
 }  // namespace donner::gpu::shader::programs

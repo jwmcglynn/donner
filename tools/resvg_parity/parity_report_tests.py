@@ -594,6 +594,93 @@ class ParityReportTests(unittest.TestCase):
                 )
                 self.assertEqual(report["cases"][0]["primary_state"], "compare")
 
+    def test_params_helpers_are_classified_by_the_expression_they_return(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        self.fixture.add_case("painting/fill/b.svg")
+        helpers = textwrap.dedent(
+            """
+            ImageComparisonParams SharedGolden() {
+              return Params::WithGoldenOverride("shared.png", kDefaultThreshold, "shared why");
+            }
+            ImageComparisonParams NamedGolden(std::string_view path) {
+              return Params::WithGoldenOverride(path, kDefaultThreshold, "path is kept");
+            }
+            """
+        )
+        report = parity_report.build_report(
+            helpers
+            + _registration(
+                "PaintingFill",
+                '\"painting/fill\", {{\"a.svg\", SharedGolden()}, '
+                '{\"b.svg\", NamedGolden(\"named.png\").setCanvasSize(10, 10)}}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        cases = {case["path"]: case for case in report["cases"]}
+        self.assertEqual(cases["painting/fill/a.svg"]["exception_types"], ["shared_golden"])
+        self.assertEqual(cases["painting/fill/a.svg"]["reason"], "shared why")
+        self.assertEqual(cases["painting/fill/b.svg"]["exception_types"], ["shared_golden"])
+        self.assertEqual(cases["painting/fill/b.svg"]["reason"], "path is kept")
+        self.assertIn('"named.png"', cases["painting/fill/b.svg"]["raw_params_expression"])
+
+    def test_params_helper_arity_is_checked(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        source = (
+            "ImageComparisonParams Golden(std::string_view path) {\n"
+            "  return Params::WithGoldenOverride(path);\n}\n"
+            + _registration("PaintingFill", '\"painting/fill\", {{\"a.svg\", Golden()}}')
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "takes 1 arguments"):
+            parity_report.build_report(source, self.fixture.tests_root)
+
+    def test_free_helpers_are_not_expanded(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        source = (
+            "ImageComparisonParams ResvgV049Reference() {\n"
+            "  return ImageComparisonParams().setCanvasSize(300, 300);\n}\n"
+            + _registration("PaintingFill",
+                            '\"painting/fill\", {{\"a.svg\", ResvgV049Reference()}}')
+        )
+        case = parity_report.build_report(source, self.fixture.tests_root)["cases"][0]
+        self.assertEqual(case["raw_params_expression"], "ResvgV049Reference()")
+        self.assertEqual(case["exception_types"], [])
+
+    def test_category_default_params_helper_is_expanded(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        self.fixture.add_case("painting/fill/b.svg")
+        source = (
+            "ImageComparisonParams SharedGolden() {\n"
+            '  return Params::WithGoldenOverride("shared.png", kDefaultThreshold, "why");\n}\n'
+            + _registration("PaintingFill", '\"painting/fill\", {}, SharedGolden()')
+        )
+        report = parity_report.build_report(source, self.fixture.tests_root)
+        self.assertEqual([case["exception_types"] for case in report["cases"]],
+                         [["shared_golden"], ["shared_golden"]])
+
+    def test_params_helper_calling_a_helper_is_rejected(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        source = (
+            "ImageComparisonParams Inner() {\n"
+            '  return Params::WithGoldenOverride("g.png");\n}\n'
+            "ImageComparisonParams Outer() {\n  return Inner().setCanvasSize(10, 10);\n}\n"
+            + _registration("PaintingFill", '\"painting/fill\", {{\"a.svg\", Outer()}}')
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "calls params helper Inner"):
+            parity_report.build_report(source, self.fixture.tests_root)
+
+    def test_params_helper_defined_twice_is_rejected(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        source = (
+            "ImageComparisonParams Golden() {\n"
+            '  return Params::WithGoldenOverride("a.png");\n}\n'
+            "ImageComparisonParams Golden(std::string_view path) {\n"
+            "  return Params::WithGoldenOverride(path);\n}\n"
+            + _registration("PaintingFill", '\"painting/fill\", {{\"a.svg\", Golden()}}')
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "defined more than once"):
+            parity_report.build_report(source, self.fixture.tests_root)
+
     def test_cli_resolves_explicit_repo_root_independent_of_cwd(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         source_path = self.fixture.root / parity_report.REGISTRATION_SOURCE

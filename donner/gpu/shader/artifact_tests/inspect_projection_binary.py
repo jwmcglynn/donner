@@ -25,7 +25,7 @@ PAYLOAD_MARKERS = {
     "gaussian": (b"struct BlurParams", b"donner_msl_member_stdDeviation"),
     "convolve": (b"struct ConvolveMatrixParams", b"donner_msl_member_coefficients"),
     "filter_resolve": (b"const kTransferCount:", b"donner_msl_member_userX0"),
-    "offset": (b"struct OffsetParams", b"donner_msl_member_dx"),
+    "offset": (b"struct OffsetParams", b"donner_msl_member_shiftX"),
     "specular_lighting": (b"struct LightingParams", b"donner_msl_member_specularExponent"),
     "slug_fill": (b"struct InstanceRecord", b"donner_msl_member_clipRectActive"),
     "image_blit": (b"fn sample_pixelated(", b"donner_msl_member_pixelatedScale"),

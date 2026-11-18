@@ -286,6 +286,7 @@ donner_cc_library(
         ":renderer_image_test_utils",
         ":renderer_test_backend",
         ":rgba_test_matchers",
+        ":test_font_directory",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/css:core",
@@ -318,6 +319,7 @@ donner_cc_library(
         ":renderer_image_test_utils",
         ":renderer_test_backend_wgpu_reference_linux",
         ":rgba_test_matchers",
+        ":test_font_directory",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/css:core",
@@ -437,6 +439,7 @@ donner_cc_test(
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
+        "//donner/svg/renderer:rendering_context",
     ],
 )
 
@@ -564,7 +567,10 @@ donner_cc_test(
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
-    data = ["//third_party/public-sans:public-sans_resource_files"],
+    data = [
+        "//third_party/public-sans:public-sans_resource_files",
+        "//third_party/resvg-test-suite:fonts",
+    ],
     defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
@@ -581,6 +587,8 @@ donner_cc_test(
     deps = [
         ":mock_renderer_interface",
         ":renderer_test_backend",
+        "//donner/base:runfiles",
+        "//donner/base/encoding:base64",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer",
         "//donner/svg/renderer/tests:rgba_test_matchers",
@@ -1871,6 +1879,23 @@ donner_cc_test(
 )
 
 donner_cc_library(
+    name = "test_font_directory",
+    testonly = 1,
+    srcs = ["TestFontDirectory.cc"],
+    hdrs = ["TestFontDirectory.h"],
+)
+
+donner_cc_test(
+    name = "test_font_directory_tests",
+    srcs = ["TestFontDirectory_tests.cc"],
+    deps = [
+        ":test_font_directory",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
     name = "svg_suite_render",
     testonly = 1,
     srcs = ["SvgSuiteRender.cc"],
@@ -1880,6 +1905,7 @@ donner_cc_library(
     ],
     deps = [
         ":renderer_test_backend",
+        ":test_font_directory",
         "//donner/base",
         "//donner/css:core",
         "//donner/svg",

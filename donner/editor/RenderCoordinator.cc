@@ -71,6 +71,15 @@ WorkerTilePayloadCounts CountWorkerTilePayloads(const RenderResult& result) {
   return counts;
 }
 
+/// Whether the worker rendered this result for an active drag request rather than a selection,
+/// release or idle request.
+bool RepresentsActiveDrag(const RenderResult& result) {
+  return result.compositedPreview.has_value() &&
+         result.compositedPreview->representedDragPreview.has_value() &&
+         result.compositedPreview->representedDragPreview->interactionKind ==
+             svg::compositor::InteractionHint::ActiveDrag;
+}
+
 // clang-format off
 EM_JS(int, WorkerResultBoundaryKnown,
       (int supplied, double admissionSequence, double producerGeneration, double captureId), {
@@ -85,13 +94,13 @@ EM_JS(int, WorkerResultBoundaryKnown,
 // Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
 // result cannot overwrite an earlier one's accounting. The wait-site name points to a string
 // literal whose storage outlives the proxy hop.
-void PublishWorkerTimingStats(
-    const RenderResult& result, const EditorApp& app,
-    const svg::compositor::CompositorController::RenderFrameStats& compositorStats,
-    std::optional<std::uint64_t> presentationAdmissionSequence,
-    std::optional<std::uint64_t> presentationProducerGeneration) {
+void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
+                              std::optional<std::uint64_t> presentationAdmissionSequence,
+                              std::optional<std::uint64_t> presentationProducerGeneration) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 45;
+  const auto& compositorStats = result.compositorFrameStats;
+  const auto& fastPath = result.compositorFastPathDelta;
+  constexpr std::size_t kValueCount = 59;
   const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
   const double values[kValueCount] = {
       result.workerMs,
@@ -138,7 +147,21 @@ void PublishWorkerTimingStats(
       timing.idleYieldMs,
       timing.idleCallbackMs,
       timing.idleLockMs,
-      timing.idleWaitMs};
+      timing.idleWaitMs,
+      static_cast<double>(fastPath.fastPathFrames),
+      static_cast<double>(fastPath.slowPathFramesWithDirty),
+      static_cast<double>(fastPath.noDirtyFrames),
+      static_cast<double>(fastPath.segmentResyncRebuilds),
+      static_cast<double>(fastPath.paintOrderSnapshots),
+      static_cast<double>(compositorStats.damagePatchTileCount),
+      static_cast<double>(compositorStats.damagePatchGeometryDraws),
+      static_cast<double>(compositorStats.maskedChildComposeTileCount),
+      static_cast<double>(compositorStats.mainComposeCount),
+      static_cast<double>(timing.gpuOwnerDispatchCount),
+      static_cast<double>(timing.gpuOwnerWaitSliceTimeouts),
+      timing.gpuOwnerDispatchWaitMs,
+      static_cast<double>(result.compositorRenderCount),
+      static_cast<double>(RepresentsActiveDrag(result))};
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -213,6 +236,27 @@ void PublishWorkerTimingStats(
         stats['idleCallbackMs'] = heap[b + 42];
         stats['idleLockMs'] = heap[b + 43];
         stats['idleWaitMs'] = heap[b + 44];
+        // This result's own compositor counters and tile work across its compositor renders, the
+        // number of those renders, and the browser GPU owner activity while the worker produced it.
+        const resultCounterNames = ([
+          'fastPathFrames',
+          'slowPathFramesWithDirty',
+          'noDirtyFrames',
+          'segmentResyncRebuilds',
+          'paintOrderSnapshots',
+          'damagePatchTileCount',
+          'damagePatchGeometryDraws',
+          'maskedChildComposeTileCount',
+          'mainComposeCount',
+          'gpuOwnerDispatchCount',
+          'gpuOwnerWaitSliceTimeouts',
+          'gpuOwnerDispatchWaitMs',
+          'compositorRenderCount'
+        ]);
+        for (let index = 0; index < resultCounterNames.length; ++index) {
+          stats[resultCounterNames[index]] = heap[b + 45 + index];
+        }
+        stats['activeDragResult'] = heap[b + 58] > 0;
         const totals = ([
           [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
           [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
@@ -1804,12 +1848,12 @@ void RenderCoordinator::consumePolledRenderResult(
   (void)presentationProducerGeneration;
 #endif
   const auto& result = *resultOpt;
-  const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
 #ifdef __EMSCRIPTEN__
-  PublishWorkerTimingStats(result, app, compositorStats, presentationAdmissionSequence,
+  PublishWorkerTimingStats(result, app, presentationAdmissionSequence,
                            presentationProducerGeneration);
 #endif
-  lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
+  lastFrameCostBreakdown_.compositedRender =
+      CompositedRenderCostFromStats(result.compositorFrameStats);
   lastFrameCostBreakdown_.compositedRender.presentationCoverageRepair =
       result.presentationCoverageRepair;
   lastFrameCostBreakdown_.compositedRender.presentationRepairReason =

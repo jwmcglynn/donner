@@ -5503,10 +5503,10 @@ TEST(TextEngineTest, RtlPreservedNewlineKeepsArabicFallbackLinesInSourceOrder) {
   components::ComputedTextComponent text;
   auto span = MakeSpan("\xD8\xA8\xD8\xA8\n\xD8\xAA\xD8\xAA");
   span.whiteSpace = WhiteSpace::Pre;
-  span.fontFamilies = {RcString("Latin primary"), RcString("Arabic fallback")};
+  span.setFontFamilies({RcString("Latin primary"), RcString("Arabic fallback")});
   text.spans.push_back(span);
   auto params = MakeTextParams(20);
-  params.fontFamilies = span.fontFamilies;
+  params.fontFamilies = *span.fontFamilies;
   const auto runs = engine.layout(text, params);
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5))));
   EXPECT_THAT(runs[0].font, testing::Eq(primary));

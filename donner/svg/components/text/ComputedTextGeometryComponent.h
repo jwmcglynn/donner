@@ -25,6 +25,8 @@ struct ComputedTextGeometryComponent {
   /// keeps its own dependency even when the manager reused an existing face lookup.
   std::vector<FontFaceDependency> fontDependencies;
   uint64_t fontResourceRevision = 0;  ///< Font resolution revision used for this geometry.
+  /// \ref FontManager::hostFontKey when this was prepared; a different key makes it stale.
+  uint64_t hostFontKey = 0;
   bool retryAfterTextPathWorkRejection = false;  ///< Retry in a fresh preparation/query epoch.
   /**
    * Outline geometry for a single rendered glyph.
@@ -33,6 +35,12 @@ struct ComputedTextGeometryComponent {
     entt::entity sourceEntity = entt::null;  ///< Span source entity that owns this glyph.
     Path path;                               ///< Glyph outline in text-element local coordinates.
     Box2d extent;                            ///< Ink bounds in text-element local coordinates.
+    /// Index of the layout run (one per text span) that placed this glyph.
+    std::size_t run = 0;
+    /// Whether a text chunk starts with this glyph within its run: a glyph since the run's
+    /// previous outline, this one included, starts a chunk, and the run has an earlier outline.
+    /// The renderer strokes each chunk of a run as one shape.
+    bool startsTextChunk = false;
   };
 
   /**
