@@ -1344,10 +1344,15 @@ struct VerticalMetricAdmission {
   TextBackend::ShapingContext::WorkBudget& work;
   std::size_t& originCalls;
   std::size_t& advanceCalls;
+  std::optional<hb_position_t> synthesizedOrigin = std::nullopt;
+  bool bounded = true;
 
   bool admit(hb_codepoint_t glyph) {
     if (work.rejected) {
       return false;
+    }
+    if (!bounded) {
+      return true;
     }
     const auto complexity = glyph <= static_cast<hb_codepoint_t>(std::numeric_limits<int>::max())
                                 ? manager.glyphOutlineComplexity(handle, static_cast<int>(glyph))
@@ -1368,10 +1373,12 @@ hb_bool_t BoundedVerticalOrigin(hb_font_t* font, void* data, hb_codepoint_t glyp
   auto& admission = *static_cast<VerticalMetricAdmission*>(data);
   *x = *y = 0;
   if (admission.admit(glyph)) {
-    ++admission.originCalls;
+    admission.originCalls += admission.bounded;
     if (!hb_font_get_glyph_v_origin(hb_font_get_parent(font), glyph, x, y)) {
       admission.work.rejected = true;
       *x = *y = 0;
+    } else if (admission.synthesizedOrigin) {
+      *y = *admission.synthesizedOrigin;
     }
   }
   // Success suppresses HarfBuzz's outline-extents fallback; the entire result is rejected later.
@@ -1383,7 +1390,7 @@ hb_position_t BoundedVerticalAdvance(hb_font_t* font, void* data, hb_codepoint_t
   if (!admission.admit(glyph)) {
     return 0;
   }
-  ++admission.advanceCalls;
+  admission.advanceCalls += admission.bounded;
   return hb_font_get_glyph_v_advance(hb_font_get_parent(font), glyph);
 }
 
@@ -1412,16 +1419,37 @@ TextBackend::ShapingContext::WorkBudget& SelectMetricWork(
   return context && context->work ? *context->work : fallback;
 }
 
-/// Shapes through the bounded child only for untrusted vertical fonts.
+/// Synthesizes a common origin for upright glyphs when the font has no vertical origin.
+std::optional<hb_position_t> SynthesizedVerticalOrigin(hb_font_t* parent,
+                                                       const VerticalMetricAdmission& admission) {
+  FT_Face face = hb_ft_font_get_ft_face(parent);
+  if (!face || !face->size || !FT_IS_SCALABLE(face) || FT_HAS_VERTICAL(face) ||
+      admission.manager.sfntTable(admission.handle, "VORG")) {
+    return std::nullopt;
+  }
+  const auto* hhea = static_cast<const TT_HoriHeader*>(FT_Get_Sfnt_Table(face, FT_SFNT_HHEA));
+  if (!hhea || hhea->Ascender <= 0) {
+    return std::nullopt;
+  }
+  const FT_Pos origin = FT_MulFix(hhea->Ascender, face->size->metrics.y_scale);
+  return origin > 0 && origin <= std::numeric_limits<hb_position_t>::max()
+             ? std::optional(static_cast<hb_position_t>(origin))
+             : std::nullopt;
+}
+
+/// Uses a range-local child for synthesized origins and bounded vertical metric calls.
 bool ShapeWithMetricAdmission(hb_font_t* parent, hb_buffer_t* buffer, const hb_feature_t* features,
                               unsigned int numFeatures, VerticalMetricAdmission& admission) {
   if (admission.work.rejected) {
     return false;
   }
   HbFontOwner metricFont(nullptr, &hb_font_destroy);
-  if (hb_buffer_get_direction(buffer) == HB_DIRECTION_TTB &&
-      !admission.manager.isTrustedFont(admission.handle)) {
-    metricFont = MakeVerticalMetricFont(parent, admission);
+  if (hb_buffer_get_direction(buffer) == HB_DIRECTION_TTB) {
+    admission.bounded = !admission.manager.isTrustedFont(admission.handle);
+    admission.synthesizedOrigin = SynthesizedVerticalOrigin(parent, admission);
+    if (admission.bounded || admission.synthesizedOrigin) {
+      metricFont = MakeVerticalMetricFont(parent, admission);
+    }
   }
   if (admission.work.rejected) {
     return false;
