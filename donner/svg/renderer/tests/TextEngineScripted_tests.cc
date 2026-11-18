@@ -2165,6 +2165,52 @@ TEST(TextEngineScriptedTest, VerticalTextPathUsesOneBidiRunAcrossPaintSpans) {
                             RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(110, 1e-6))))));
   }
 }
+TEST(TextEngineScriptedTest, VerticalBidiPathPreservesFlatContinuationAtAnAbsoluteX) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  const Path path =
+      PathBuilder().moveTo(Vector2d(100.0, 0.0)).lineTo(Vector2d(100.0, 200.0)).build();
+  const Entity pathOwner = registry.create();
+
+  const auto layout = [&](std::string pathText) {
+    components::ComputedTextComponent text;
+    auto before = MakeSpan("A");
+    before.xList = {Lengthd(150.0, Lengthd::Unit::None)};
+    before.yList = {Lengthd(30.0, Lengthd::Unit::None)};
+    before.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(before));
+
+    auto onPath = MakeSpan(pathText);
+    onPath.pathSpline = path;
+    onPath.textPathSourceEntity = pathOwner;
+    onPath.pathStartOffset = 20.0;
+    onPath.dyList = {Lengthd(12.0, Lengthd::Unit::None)};
+    onPath.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(onPath));
+
+    auto after = MakeSpan("Z");
+    after.xList = {Lengthd(70.0, Lengthd::Unit::None)};
+    after.fontKerning = FontKerning::None;
+    text.spans.push_back(std::move(after));
+
+    auto params = MakeTextParams(20.0);
+    params.writingMode = WritingMode::VerticalRl;
+    return engine.layout(text, params);
+  };
+
+  // The scripted font gives these two-letter strings equal advances. Reordering the on-path
+  // glyphs leaves the ordinary continuation position and its authored x unchanged.
+  const auto ltr = layout("XY");
+  const auto rtl = layout("\xD7\x90\xD7\x91");
+  ASSERT_THAT(ltr, SizeIs(3));
+  ASSERT_THAT(rtl, SizeIs(3));
+  ASSERT_THAT(ltr.back().glyphs, SizeIs(1));
+  EXPECT_THAT(
+      rtl.back().glyphs,
+      ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(ltr.back().glyphs[0].xPosition, 1e-6)),
+                        GlyphYPositionIs(DoubleNear(ltr.back().glyphs[0].yPosition, 1e-6)))));
+}
 #endif
 
 TEST(TextEngineScriptedTest, VerticalTextPathRotatesUprightCombiningClusterOffsets) {
