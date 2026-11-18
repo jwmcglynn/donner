@@ -23,6 +23,113 @@ Both compare at the ordinary 100-pixel budget. `dy-with-tiny-coordinates` sets a
 under `scale(100)`; its former 1100-pixel allowance covered full-tier advances rounded to 1/64
 pixel of that tiny face, which the full tier no longer does.
 
+## Retained textPath reference comparisons
+
+These measurements use the fixture's exact SVG and the suite's Noto Sans Regular face,
+with a 500×500 canvas on both macOS arm64 CPU text tiers unless indicated otherwise. The default
+comparison uses a 0.02 color threshold and allows 100 mismatched pixels.
+
+| Fixture | Current reference | Simple / full at current settings | Independent resvg v0.49.0 at 300×300, default settings | Independent resvg v0.49.0 at 500×500, default settings |
+| --- | --- | ---: | ---: | ---: |
+| `closed-path` | Vendored resvg snapshot, default color threshold and 400-pixel limit | 381 / 373 | 147 / 148 | 265 / 263 |
+| `side=right` | Vendored resvg snapshot, 0.05 color threshold and 100-pixel limit | 63 / 64 | 2,245 / 2,250 | 7,387 / 7,398 |
+| `dy-with-tiny-coordinates` | resvg 0.47.0 | 70 / 71 | 100 / 102 | — |
+| `tspan-with-relative-position` | resvg 0.47.0 | 54 / 54 | — | — |
+| `tspan-with-absolute-position` | Committed legacy golden | 25 / 30 | 135 / 138 | 183 / 179 |
+| `with-underline` | Committed legacy golden | 1 / 3 | 295 / 301 | 182 / 182 |
+
+The vendored `closed-path` reference differs by 381 / 373 pixels at the default color threshold,
+inside the existing 400-pixel limit on both macOS and Linux aarch64. The previous 0.1 color
+threshold yielded 291 / 286 in the macOS measurements. At 0.02, 307 / 300 mismatches are
+within one pixel of a glyph boundary and 73 / 72 lie on the gray guide alone. The remaining black
+pixel at (275, 97) has alpha 255 in Donner and 191 in the reference.
+SVG 2 limits a single closed subpath to one circuit.
+`RendererPublicApiTest.ClosedTextPathAbsoluteXOutsideCircuitHasNoInk` compares placement on a
+closed segment against an ordinary positioned glyph and tests the two out-of-circuit directions
+against an explicitly hidden glyph. [SVG 2 textPath layout](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules).
+
+The vendored `side=right` reference differs by 110 / 112 pixels at the default threshold, above the
+100-pixel limit. At 0.025 the same CPU tiers differ by 97 / 99, leaving one pixel of margin on
+the full tier. At 0.02, 48 / 50 mismatches are within one pixel of a glyph boundary and 61 / 61
+lie on the gray cubic guide alone. The remaining black pixel at (394, 218) has alpha 232 / 234
+in Donner and 255 in the reference.
+Stable Google Chrome 158.0.8127.37 starts the first glyph at x=180.42 near the path's original end
+and advances back to x=173.53. `TextSystemTest.TextPathSideRightReversesTravelDirection`,
+`TextPathSideRightMeasuresStartOffsetFromTheOriginalEnd`, and
+`TextPathSideRightAppliesToInlinePathGeometry` exercise the reversal on referenced and inline
+geometry. [SVG 2 side attribute](https://www.w3.org/TR/SVG2/text.html#TextPathElementSideAttribute).
+
+For the boundary counts, use the red pixels of the default pixelmatch diff. A glyph boundary
+is the one-pixel band around the black ink mask (alpha ≥ 128 and all color channels ≤ 32).
+For the guide-only count, check for a pixel center within two device pixels of the authored
+path, excluding the glyph band. The circle is centered at (250, 250) and has radius 150
+device pixels. The right-side fixture uses its two authored cubic segments at 2.5× scale.
+
+### Legacy PNGs
+
+The two committed PNGs below first appear in `0c5402b1d` under the numbered corpus names and
+retain their bytes through the rename in `4aef2b23c`. The original renderer and generation
+commands are unrecorded. The images serve as regression guards and have separate placement
+and paint evidence. Both 300×300 release PNGs and the independently generated 500×500 alternatives
+exceed the default allowance. The steps below reproduce the independent reference measurements.
+
+| Golden | SHA-256 |
+| --- | --- |
+| `resvg-tspan-with-absolute-position.png` | `754eba7cfe125e9ae873187015247f89d7e9f5e8614f604a0ef7880c8c03eaa7` |
+| `resvg-with-underline.png` | `3ff550f2200e10a348a24a74aef99196e867fbd4a9249c7c109ea85aca982af2` |
+
+- `tspan-with-absolute-position` exercises absolute distance along a horizontal text path. Chrome
+  places the green span's first character at (24.84, 108.77) in SVG user units. On the rendered
+  canvas its green-ink centroid differs from the golden by 0.54 px horizontally and 0.07 px
+  vertically. `TextEngineScriptedTest.TextPathAbsoluteXPreservesSameGlyphDx` checks the authored
+  on-path distance separately. The original snapshot differs from the current renderer by
+  603 / 610 pixels at default settings. [SVG 2 text positioning on a path](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules).
+- `with-underline` exercises decoration paint along the placed text. Donner uses Noto Sans's
+  `post` table for the automatic underline offset and width. The font gives a width of 50
+  units per 1,000-unit em, which is 1.2 user units at the fixture's 24-unit font size. When
+  each rendering is compared against its own undecorated text on the same path, 958 of the
+  golden's 1,028 additional dark pixels overlap Chrome's decoration mask. Chrome draws
+  2,293 additional dark pixels under that control, a wider band. The default decoration
+  thickness is user-agent selected. The original snapshot differs from the current renderer
+  by 779 / 788 pixels at default settings. [CSS Text Decoration 4 thickness](https://www.w3.org/TR/css-text-decor-4/#text-decoration-thickness-property).
+
+To reproduce the current legacy comparisons, run these focused cases:
+
+```sh
+bazel test //donner/svg/renderer/tests:resvg_test_suite_default_text \
+  //donner/svg/renderer/tests:resvg_test_suite_max --test_sharding_strategy=disabled \
+  --test_output=all \
+  --test_arg='--gtest_filter=TextTextPath/*tspan_with_absolute_position:TextTextPath/*with_underline'
+```
+
+For the current-render PNG and the canonical diff, use a scratch checkout and append
+`.withMaxPixelsDifferent(0)` to the two legacy comparison parameters. The nonzero
+differences cause the test to write its `actual_`, `expected_`, and `diff_` PNGs under
+the test's undeclared outputs. The current-render image provides a contemporary
+regeneration candidate with known inputs and settings. The committed legacy PNGs
+continue to guard the validated placement and underline paint.
+
+To reproduce the independent 500×500 alternatives, run the resvg v0.49.0 release CLI with
+only the checked-in Noto Sans face. The direct 300×300 comparisons use the PNGs under
+`crates/resvg/tests/tests/text/textPath/` at resvg revision
+`66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba`.
+
+```sh
+corpus=third_party/resvg-test-suite
+for fixture in closed-path side=right tspan-with-absolute-position with-underline; do
+  resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" \
+    --width 500 --height 500 "$corpus/tests/text/textPath/$fixture.svg" "$fixture.png"
+done
+```
+
+Capture Chrome at device scale 1 on a 500×500 transparent canvas. Embed the exact SVG
+inline and load `NotoSans-Regular.ttf` as the `Noto Sans` family with `@font-face`.
+After `document.fonts.ready`, capture the PNG and read the SVG text element's character
+positions with `getStartPositionOfChar` and `getEndPositionOfChar`. To isolate the underline,
+compare the alpha ≥ 128 black ink against `with-path` after expanding each undecorated
+mask by one pixel on each axis. The same fixture path, string, font, and size are used for
+both renders.
+
 ## Donner-rendered textPath/method=stretch reference
 
 `resvg-method=stretch.png` is Donner's own rendering of the unchanged corpus
