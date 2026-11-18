@@ -105,27 +105,23 @@ compare at default settings against resvg v0.49.0's 300x300 references (provenan
 |------|---------|--------|
 | closed-path | threshold 0.1, 400 px | AA diffs |
 | dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
-| link-to-rect, with-path, with-path-and-xlink-href | threshold 0.89 | Opaque reference background under the checkerboard comparison |
+| with-path, with-path-and-xlink-href | threshold 0.89 | Opaque reference background under the checkerboard comparison |
 | mixed-children-1, very-long-text | golden | SVG 2 endpoint continuation and AA differences |
 | side=right | threshold 0.05 | Half-turned glyph edges |
 | tspan-with-absolute-position, with-underline | golden | Minor char advance diffs |
 | tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
 | writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
 
-### Skipped Tests
+### Skipped and render-only cases
 
-| Test | Reason |
-|------|--------|
-| 007 | `method=stretch` not implemented |
-| 008 | `spacing=auto` not implemented |
-| 012 | Reference disagreement: SVG 2 geometric endpoint continuation |
-| 016 | Link to `<rect>` (SVG 2 feature) |
-| 030 | UB: reference is the resvg UB marker image (vertical text on a circular path) |
-| 033 | UB: baseline-shift + rotate interaction |
-| 040 | Filter on textPath not implemented |
-| 041 | `side=right` (SVG 2 feature) |
-| 042 | `path` attribute (SVG 2 feature) |
-| 043-044 | `path` + `href` interaction (SVG 2) |
+| Test | Disposition |
+| --- | --- |
+| method=stretch | Skip. The original snapshot depicts align placement. |
+| mixed-children-2 | Skip. The reference continues after the occupied glyphs instead of the geometric path endpoint. |
+| with-filter | Skip. The blur exposes a qualified glyph-coverage difference. |
+| with-invalid-path-and-xlink-href | Skip. The reference resolves a relative external URL as a local fragment. |
+| complex | Render only. The PNG is the suite's undefined-behavior marker. |
+| with-baseline-shift-and-rotate | Render only. The interaction has no defined result in this fixture. |
 
 ## Key Files
 
