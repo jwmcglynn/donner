@@ -108,6 +108,64 @@ rm donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png donner/svg/ren
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_1:TextTextPath/*very_long_text'
 ```
 
+## Donner-rendered textPath/mixed-children-2 reference
+
+`resvg-mixed-children-2.png` is Donner's own rendering of the unchanged corpus
+`text/textPath/mixed-children-2.svg`. It is used because the vendored PNG does not follow
+[SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules),
+which continue the text after a `textPath` from the end point of the path: the PNG continues
+`long` and the trailing `.` from the end of the glyphs laid out on each path instead. The
+suite's `results.csv` flags Chrome and Firefox as failing the case and Safari and resvg as
+passing it.
+
+Each `textPath` here ends with a space and is followed by more spaced text.
+[CSS Text 3 section 4.1.1](https://www.w3.org/TR/css-text-3/#white-space-phase-1) removes a
+collapsible space that follows another one across element boundaries, so the textPath's own
+trailing space stays on the path and the text after it starts at the end point. Two browser
+behaviors bear on this row, measured headless with the corpus font loaded through `@font-face`:
+- Space attribution. Chrome 157 and Firefox 160 both keep the trailing space on the textPath:
+  `getNumberOfChars()` is 5 for each textPath and for the green tspan (`very `, `long `,
+  `text `).
+- Continuation. Chrome 157 starts the text after each path at that path's end point (below).
+  Firefox 160 does not: `getStartPositionOfChar` puts the `l` of `long` at user (54.12, 0) and
+  the `.` at (49.32, 0), so `long` lands on the top edge and the `.` falls outside the canvas.
+  At the suite's default settings, Chromium 151 differs from this reference by 46 pixels, all on
+  glyph edges, and Firefox 153 by 1,458 pixels.
+
+Evidence, measured as ink bounding boxes in device px at the 500x500 (2.5x) canvas. The Chrome
+column is a Chrome 157 rendering of the same SVG with the corpus `NotoSans-Regular.ttf` loaded
+through `@font-face`; Chrome's `getStartPositionOfChar` puts the first character of each run
+after a path at exactly that path's end point.
+
+| Ink          | Path end point | Vendored PNG         | Chrome 157           | This reference       |
+| ------------ | -------------- | -------------------- | -------------------- | -------------------- |
+| green `long` | (200, 250)     | x 189-304, y 270-329 | x 205-320, y 204-263 | x 205-320, y 205-263 |
+| trailing `.` | (450, 250)     | x 385-392, y 178-185 | x 454-461, y 242-250 | x 454-461, y 243-250 |
+
+`TextEngineTest.TextAfterTextPathStartsAtGeometricEndpoint` and the
+`TextEngineScriptedTest.PostTextPathCursor*` cases pin the continuation point numerically,
+including `PostTextPathCursorBoundarySpaceStaysOnThePath` for a space at the boundary, and
+`RendererPublicApiTest.PostTextPathCursorOpenEndpointMatchesExplicitTail` requires the
+continued text to equal the same text placed explicitly at the end point.
+
+The image was created from the simple text tier on TinySkia with the suite's golden-creation
+path, with the renderer sources of commit `913bb7fd2d7872f18ea80236017b6ea9a2ffb0a5`; a
+re-render from those sources reproduces it byte for byte. The Geode resvg lane skips `text/*`
+rows through its backend feature gate.
+
+Corpus SVG SHA-256: `7db835973f2d650ee3a698f207831e313c95e2973fb70382d4efeabac658941d`.
+
+Reference PNG SHA-256: `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0`.
+
+To regenerate after an intended rendering change, delete the image, run the
+command below from the repository root, and review the new image before
+committing it:
+
+```sh
+rm donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_2'
+```
+
 ## Nearest-neighbor sampling for `on-feImage`
 
 The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
@@ -445,62 +503,4 @@ in RGBA.
 ```sh
 python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
   /tmp/tinyskia-labels.png /tmp/geode-labels.png /tmp/color-adjust-references
-```
-
-## Donner-rendered textPath/mixed-children-2 reference
-
-`resvg-mixed-children-2.png` is Donner's own rendering of the unchanged corpus
-`text/textPath/mixed-children-2.svg`. It is used because the vendored PNG does not follow
-[SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules),
-which continue the text after a `textPath` from the end point of the path: the PNG continues
-`long` and the trailing `.` from the end of the glyphs laid out on each path instead. The
-suite's `results.csv` flags Chrome and Firefox as failing the case and Safari and resvg as
-passing it.
-
-Each `textPath` here ends with a space and is followed by more spaced text.
-[CSS Text 3 section 4.1.1](https://www.w3.org/TR/css-text-3/#white-space-phase-1) removes a
-collapsible space that follows another one across element boundaries, so the textPath's own
-trailing space stays on the path and the text after it starts at the end point. Two browser
-behaviors bear on this row, measured headless with the corpus font loaded through `@font-face`:
-- Space attribution. Chrome 157 and Firefox 160 both keep the trailing space on the textPath:
-  `getNumberOfChars()` is 5 for each textPath and for the green tspan (`very `, `long `,
-  `text `).
-- Continuation. Chrome 157 starts the text after each path at that path's end point (below).
-  Firefox 160 does not: `getStartPositionOfChar` puts the `l` of `long` at user (54.12, 0) and
-  the `.` at (49.32, 0), so `long` lands on the top edge and the `.` falls outside the canvas.
-  At the suite's default settings, Chromium 151 differs from this reference by 46 pixels, all on
-  glyph edges, and Firefox 153 by 1,458 pixels.
-
-Evidence, measured as ink bounding boxes in device px at the 500x500 (2.5x) canvas. The Chrome
-column is a Chrome 157 rendering of the same SVG with the corpus `NotoSans-Regular.ttf` loaded
-through `@font-face`; Chrome's `getStartPositionOfChar` puts the first character of each run
-after a path at exactly that path's end point.
-
-| Ink          | Path end point | Vendored PNG         | Chrome 157           | This reference       |
-| ------------ | -------------- | -------------------- | -------------------- | -------------------- |
-| green `long` | (200, 250)     | x 189-304, y 270-329 | x 205-320, y 204-263 | x 205-320, y 205-263 |
-| trailing `.` | (450, 250)     | x 385-392, y 178-185 | x 454-461, y 242-250 | x 454-461, y 243-250 |
-
-`TextEngineTest.TextAfterTextPathStartsAtGeometricEndpoint` and the
-`TextEngineScriptedTest.PostTextPathCursor*` cases pin the continuation point numerically,
-including `PostTextPathCursorBoundarySpaceStaysOnThePath` for a space at the boundary, and
-`RendererPublicApiTest.PostTextPathCursorOpenEndpointMatchesExplicitTail` requires the
-continued text to equal the same text placed explicitly at the end point.
-
-The image was created from the simple text tier on TinySkia with the suite's golden-creation
-path, with the renderer sources of commit `913bb7fd2d7872f18ea80236017b6ea9a2ffb0a5`; a
-re-render from those sources reproduces it byte for byte. The Geode resvg lane skips `text/*`
-rows through its backend feature gate.
-
-Corpus SVG SHA-256: `7db835973f2d650ee3a698f207831e313c95e2973fb70382d4efeabac658941d`.
-
-Reference PNG SHA-256: `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0`.
-
-To regenerate after an intended rendering change, delete the image, run the
-command below from the repository root, and review the new image before
-committing it:
-
-```sh
-rm donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png
-UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_2'
 ```
