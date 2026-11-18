@@ -1202,10 +1202,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png")
                          .withReason("Reference disagreement: resvg ignores alignment-baseline "
                                      "in vertical text, which Chromium applies (golden README)")},
-                    {"two-textPath-with-middle-on-first.svg",
-                     Params().withMaxPixelsDifferent(200).withReason(
-                         "Sub-pixel glyph placement along the two paths; ~108 scattered "
-                         "edge pixels, no positional drift (bounding boxes match exactly)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
