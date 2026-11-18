@@ -1190,13 +1190,10 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::UndefinedBehavior("reference is the resvg UB marker image")},
 
                     {"hanging-on-vertical.svg",
-                     Params::Skip("Reference limitation: resvg does not apply alignment-baseline "
-                                  "in vertical layout; Donner follows the vertical baseline axis "
-                                  "and still differs in mixed upright/sideways glyph geometry.")},
-                    {"two-textPath-with-middle-on-first.svg",
-                     Params().withMaxPixelsDifferent(200).withReason(
-                         "Sub-pixel glyph placement along the two paths; ~108 scattered "
-                         "edge pixels, no positional drift (bounding boxes match exactly)")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png")
+                         .withReason("Reference disagreement: resvg ignores alignment-baseline "
+                                     "in vertical text, which Chromium applies (golden README)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1839,17 +1836,18 @@ INSTANTIATE_TEST_SUITE_P(
                 // them at that size (provenance in third_party/resvg-test-suite/BUILD.bazel).
                 {"inheritance.svg", Params().setCanvasSize(300, 300)},
                 {"japanese-with-tb.svg",
-                 Params::Skip(
-                     "Reference/spec disagreement: available vmtx origin is 860; historical PNG "
-                     "places upright glyphs lower. Covered by TextBackendFullVerticalOrigin."
-                     "SvgUprightPlacementUsesAvailableVerticalOrigins")
-                     .onlyTextFull()},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: the PNG places upright glyphs 5.6 px "
+                                 "below the font's vmtx origin; Chromium matches with the "
+                                 "quoted family name (golden README)")},
                 {"mixed-languages-with-tb-and-underline.svg",
-                 Params::Skip("Bug #1172: per-cluster fallback draws every glyph, but without "
-                              "bidi runs the Arabic word shares the left-to-right Amiri run with "
-                              "`Hi!` and is shaped unjoined in logical order, and the vertical "
-                              "underline is not drawn (3180 px)")
-                     .onlyTextFull()},
+                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                            "donner-mixed-vertical-underline-outline.png")
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: primary-face underline metrics and "
+                                 "mixed vertical glyph geometry (golden README)")},
                 {"mixed-languages-with-tb.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
@@ -1858,11 +1856,13 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
                                  "origin, where Firefox places them (golden README)")},
                 {"tb-and-punctuation.svg",
-                 Params::Skip("Accepted difference (2026-11-13): punctuation forms and spacing "
-                              "match; upright glyphs sit 0.026em lower (vhea ascender origin vs "
-                              "resvg centering on hhea ascent/descent), 371 px")
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png")
                      .setCanvasSize(300, 300)
-                     .onlyTextFull()},
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: vertical punctuation forms 14 px from "
+                                 "where browsers place them, and hhea-centered upright glyphs "
+                                 "(golden README)")},
                 {"tb-rl.svg", Params().setCanvasSize(300, 300)},
                 {"tb-with-alignment.svg", Params().setCanvasSize(300, 300)},
                 {"tb-with-dx-on-second-tspan.svg", Params().setCanvasSize(300, 300)},

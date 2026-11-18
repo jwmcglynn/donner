@@ -135,15 +135,25 @@ fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 ### Vertical text: resvg's own model
 
-| Category          | Test                    | Reason                                                      |
-| ----------------- | ----------------------- | ----------------------------------------------------------- |
-| text/writing-mode | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees |
+| Category                | Test                    | Reason                                                             |
+| ----------------------- | ----------------------- | ------------------------------------------------------------------ |
+| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin; quoted-family Chromium control agrees |
+| text/writing-mode       | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees        |
+| text/writing-mode       | tb-and-punctuation      | Punctuation forms 14 px off; Chrome matches Donner within 0.4 px   |
+| text/alignment-baseline | hanging-on-vertical     | No alignment-baseline in the PNG; Chrome matches Donner to 1.1 px  |
 
-This reference encodes resvg's vertical model, and browser renders measurably side with Donner.
-resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`.
-CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
-upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
-in the golden README.
+These references encode resvg's vertical model. For the Japanese fixture, Chromium's matching control quotes the font family.
+resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`,
+and it does not apply `alignment-baseline` in vertical layout. CSS Writing Modes 3 section 5.1.1
+requires the font's vertical metrics; Blink and Gecko take the upright origin from `VORG`, then
+from the `vmtx` top side bearing, as Donner does. Measurements are in the golden README.
+
+### Mixed vertical underline
+
+The full-text `text/writing-mode/mixed-languages-with-tb-and-underline` comparison uses an
+independently positioned outline reference and Amiri's primary-face underline metrics. It
+compares the full 500 × 500 scene at default parameters. The golden README records the layout,
+browser controls, and reproduction command.
 
 ### Reference does not depict the feature
 

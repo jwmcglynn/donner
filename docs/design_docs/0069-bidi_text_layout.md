@@ -285,8 +285,8 @@ belongs to a later milestone (1b, 1c, or 2).
   - [ ] Order right-to-left runs against the vertical inline axis.
   - [ ] Analyze `inline-size` text as one paragraph and reorder each wrapped line.
   - [ ] Verify textPath chunks and anchoring with direction.
-  - [ ] Reduce the `text/writing-mode/mixed-languages-with-tb-and-underline` difference to the
-        vertical underline that [#1172](https://github.com/jwmcglynn/donner/issues/1172) owns.
+  - [x] Compare `text/writing-mode/mixed-languages-with-tb-and-underline` against the
+        independent mixed-script and primary-font underline reference.
 - [ ] Milestone 6: Documentation (small)
   - [ ] Apply the [Amendments to 0062](#amendments-to-0062) to
         [0062-svg_parity_completion](0062-svg_parity_completion.md) Milestone 12.
@@ -918,7 +918,7 @@ covered by layout-level tests.
 | `text/unicode-bidi/bidi-override`                         | Compare, full text | pass, pass, pass | fail    | Compare, full text (Milestone 3)                            |
 | `text/tspan/bidi-reordering`                              | Compare, full text | pass, fail, fail | pass    | Compare, full text (Milestone 3)                            |
 | `text/writing-mode/mixed-languages-with-tb`               | Golden, full text  | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172)  |
-| `text/writing-mode/mixed-languages-with-tb-and-underline` | Skip, full text    | pass, pass, fail | pass    | Remaining difference is the vertical underline (#1172)      |
+| `text/writing-mode/mixed-languages-with-tb-and-underline` | Outline, full text | pass, pass, fail | pass    | Font-derived mixed-script layout and primary-font underline |
 | `text/direction/rtl-with-vertical-writing-mode`           | Render only (UB)   | unknown          | unknown | `UndefinedBehavior` (SVG WG issue 618)                      |
 
 `text/direction/rtl` asks for "Noto Sans Arabic" first. The test fonts include that face from
