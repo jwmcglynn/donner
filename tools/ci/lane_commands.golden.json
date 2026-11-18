@@ -853,6 +853,36 @@
   ],
   "step": "Refresh Xcode toolchain configuration"
  },
+ "macos-remote-shadow shadow": {
+  "actions": [
+   {
+    "actions": [
+     {
+      "action": "require_selection",
+      "error": "::error::Empty target selection reached the macOS remote shadow lane."
+     },
+     {
+      "action": "run",
+      "argv": "python3 tools/ci/macos_remote_shadow.py --budget-minutes 70 --targets @selected_targets"
+     }
+    ],
+    "scenarios": [
+     "main-push",
+     "trusted-pr",
+     "trusted-pr-native-only",
+     "trusted-pr-fallback",
+     "untrusted-pr",
+     "renovate-pr"
+    ]
+   }
+  ],
+  "runs_in": [
+   "trusted-pr",
+   "trusted-pr-native-only",
+   "trusted-pr-fallback"
+  ],
+  "step": "Build and test for macOS on the remote executor"
+ },
  "macos-self-hosted browser_context_diagnostic": {
   "actions": [
    {

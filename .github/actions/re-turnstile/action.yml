@@ -56,6 +56,20 @@ inputs:
       pool run that is still initializing. Defaults to this run's own workflow.
     required: false
     default: ""
+  pool-upstream:
+    description: >-
+      Whitespace-separated names of the jobs a pool job needs, first the one every run
+      creates. Given, an older run with no pool job stops holding a slot once one of them
+      concluded skipped or cancelled, or upstream-grace-minutes after all of them completed;
+      it still holds one while any is unfinished. Empty keeps every such run holding a slot.
+    required: false
+    default: ""
+  upstream-grace-minutes:
+    description: >-
+      With pool-upstream, how long after its upstream jobs completed a run may still
+      create its pool job.
+    required: false
+    default: "5"
   capacity:
     description: >-
       How many pool jobs may be admitted at once. Default 1 preserves the
@@ -68,8 +82,8 @@ inputs:
   timeout-minutes:
     description: >-
       Safety cap. If the wait exceeds this, the turnstile proceeds anyway
-      (fail-open) rather than blocking. Keep below the hosted prerequisite
-      job's timeout. Transient Actions API failures keep waiting within this
+      (fail-open) rather than blocking, unless timeout-result is "skip".
+      Keep below the hosted prerequisite job's timeout. Transient Actions API failures keep waiting within this
       same cap rather than releasing every gated job at once.
     required: false
     default: "150"
@@ -80,6 +94,13 @@ inputs:
       every N times this, up to max-poll-seconds.
     required: false
     default: "60"
+  timeout-result:
+    description: >-
+      What the safety timeout means. "proceed" (the default, for gating lanes) fails open: the
+      dependent job runs anyway. "skip" (for an advisory lane) fails closed: the `admitted`
+      output is "false", and the dependent job must require it to be "true".
+    required: false
+    default: "proceed"
   max-poll-seconds:
     description: >-
       Longest interval between polls. Bounds how late a run far back in the
@@ -87,18 +108,29 @@ inputs:
     required: false
     default: "300"
 
+outputs:
+  admitted:
+    description: >-
+      With timeout-result "skip": "true" once admitted, "false" after the safety timeout. Empty
+      with the default.
+    value: ${{ steps.wait.outputs.admitted }}
+
 runs:
   using: composite
   steps:
     - name: Wait for remote-execution turnstile
+      id: wait
       shell: bash
       env:
         TURNSTILE_LANE: ${{ inputs.lane }}
         TURNSTILE_POOL: ${{ inputs.pool }}
         TURNSTILE_POOL_WORKFLOWS: ${{ inputs.pool-workflows }}
+        TURNSTILE_POOL_UPSTREAM: ${{ inputs.pool-upstream }}
+        TURNSTILE_UPSTREAM_GRACE_MINUTES: ${{ inputs.upstream-grace-minutes }}
         TURNSTILE_CAPACITY: ${{ inputs.capacity }}
         TURNSTILE_TOKEN: ${{ inputs.token }}
         TURNSTILE_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        TURNSTILE_TIMEOUT_RESULT: ${{ inputs.timeout-result }}
         TURNSTILE_POLL_SECONDS: ${{ inputs.poll-seconds }}
         TURNSTILE_MAX_POLL_SECONDS: ${{ inputs.max-poll-seconds }}
         TURNSTILE_ACTION_PATH: ${{ github.action_path }}

@@ -311,7 +311,9 @@ class RemoteMacosConfigTest(unittest.TestCase):
 
     def test_only_the_variants_use_the_base_and_no_workflow_names_them(self):
         # The base turns local fallback off (an exception to the BuildBuddy fallback policy), so it
-        # must not reach any other config or any CI lane unseen.
+        # must not reach any other config or any CI lane unseen. The one CI lane that selects the
+        # variants does so through tools/ci/macos_remote_shadow.py, in an advisory job that
+        # //tools:ci_macos_remote_shadow_tests pins.
         users = {name: [flag for _, flags in lines for flag in flags
                         if flag.startswith("--config=remote-macos")]
                  for name, lines in _configs().items()}

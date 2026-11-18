@@ -385,4 +385,22 @@ MACOS_LANES = {
     }),
 }
 
-LANES = {**LINUX_LANES, **MACOS_LANES}
+# --- macOS from a Linux client. ------------------------------------------------------------------
+
+# The advisory shadow lane: every action on a remote macOS executor, from a self-hosted Linux
+# runner. Its one phase is its own script, which runs the preflight, both test phases, the
+# starvation guard and the lane's budget, stages failed tests' outputs and prints only scrubbed,
+# allow-listed lines (see "Remote macOS shadow lane" in docs/building.md). --budget-minutes keeps
+# it inside the job's timeout-minutes with room to report and upload
+# (//tools:ci_macos_remote_shadow_tests).
+SHADOW_LANES = {
+    "macos-remote-shadow": Lane(startup=(), phases={
+        "shadow": Phase("Build and test for macOS on the remote executor", (
+            RequireSelection("the macOS remote shadow lane"),
+            command("python3", "tools/ci/macos_remote_shadow.py", "--budget-minutes", "70",
+                    "--targets", SELECTED),
+        )),
+    }),
+}
+
+LANES = {**LINUX_LANES, **MACOS_LANES, **SHADOW_LANES}

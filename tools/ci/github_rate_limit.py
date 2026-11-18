@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
+import email.utils
 import http.client
 import json
 import subprocess
@@ -289,6 +290,9 @@ class ApiClient:
         self.requests = 0
         self.not_modified = 0
         self._reported_limit = False
+        # GitHub's clock, from the Date header of the last response that carried one (epoch
+        # seconds), for callers that compare with GitHub's timestamps; None until then.
+        self.server_time: float | None = None
 
     def get_json(self, url: str) -> Any:
         """The decoded JSON body of `url`. Raises RateLimited or ApiError."""
@@ -315,6 +319,7 @@ class ApiClient:
         # does not replace the remembered primary budget.
         window = from_headers(response_headers)
         self._observe(window)
+        self._observe_date(response_headers)
         if status == 304 and cached:
             self.not_modified += 1
             return cached[1]
@@ -330,6 +335,13 @@ class ApiClient:
         if etag:
             self._etags[url] = (etag, value)
         return value
+
+    def _observe_date(self, response_headers: Mapping[str, str]) -> None:
+        date = {key.lower(): value for key, value in response_headers.items()}.get("date")
+        try:
+            self.server_time = email.utils.parsedate_to_datetime(date).timestamp()
+        except (TypeError, ValueError, IndexError):
+            pass
 
     def _observe(self, window: RateLimit) -> None:
         if window.remaining is None and window.limit is None:

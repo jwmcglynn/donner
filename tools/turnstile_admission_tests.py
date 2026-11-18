@@ -7,6 +7,7 @@ queue. So the rules live in a pure unit that these tests drive with fabricated
 Actions API payloads, and the workflow wiring that feeds it is pinned here too.
 """
 
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 import re
@@ -243,6 +244,258 @@ class WorkflowResolutionTests(unittest.TestCase):
         )
 
 
+# The advisory shadow lane's own pool of one (macos-remote-shadow), as the jobs API reports it. A
+# job still waiting on `needs` is not listed at all, so a run whose Linux lane is still going has no
+# shadow job yet.
+_SHADOW_LANE = "macos-remote-shadow"
+_SHADOW_POOL = [_SHADOW_LANE]
+
+
+class ShadowPoolTests(unittest.TestCase):
+    def _decide(self, runs, me=20):
+        return _decide(me, runs, capacity=1, pool=_SHADOW_POOL)
+
+    def test_an_older_run_still_in_its_linux_lane_holds_the_slot(self):
+        # Its shadow job is not listed yet, which reads as absent and may still be created.
+        older = _run(10, _jobs((_LINUX_LANE, "in_progress")))
+        self.assertEqual(admission.ABSENT, admission.pool_state(older["jobs"], _SHADOW_POOL))
+        self.assertFalse(self._decide([older])["admit"])
+
+    def test_a_running_or_queued_shadow_job_holds_the_slot(self):
+        for status in ("in_progress", "queued", "waiting"):
+            with self.subTest(status=status):
+                older = _run(10, _jobs((_LINUX_LANE, "completed"), (_SHADOW_LANE, status)))
+                self.assertFalse(self._decide([older])["admit"])
+
+    def test_a_skipped_or_finished_shadow_job_releases_the_slot(self):
+        older = _run(10, _jobs((_LINUX_LANE, "completed"), (_SHADOW_LANE, "completed")))
+        self.assertEqual(admission.CLEAR, admission.pool_state(older["jobs"], _SHADOW_POOL))
+        self.assertTrue(self._decide([older])["admit"])
+
+    def test_a_newer_run_blocks_only_while_its_shadow_job_runs(self):
+        self.assertTrue(self._decide([_run(30, _jobs((_LINUX_LANE, "in_progress")))])["admit"])
+        self.assertFalse(self._decide([_run(30, _jobs((_LINUX_LANE, "completed"),
+                                                      (_SHADOW_LANE, "in_progress")))])["admit"])
+
+    def test_the_linux_pool_never_counts_the_shadow_job(self):
+        # The shadow job runs outside the Linux lane's accounting (see docs/building.md).
+        payload = _jobs((_LINUX_LANE, "completed"), (_SHADOW_LANE, "in_progress"))
+        self.assertEqual(admission.CLEAR, admission.pool_state(payload, [_LINUX_LANE]))
+
+
+# The jobs the shadow job needs, first the Linux lane that every run of the pool workflows lists.
+_SHADOW_UPSTREAM = [_LINUX_LANE, _SHADOW_LANE + "-turnstile"]
+_GRACE = 300.0
+
+
+def _epoch(stamp):
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+
+
+def _job(name, status, conclusion=None, started_at=None, completed_at=None):
+    """One job as /actions/runs/{id}/jobs lists it (the fields admission reads)."""
+    return {"name": name, "status": status, "conclusion": conclusion,
+            "started_at": started_at, "completed_at": completed_at}
+
+
+# Sanitized shapes of real runs of this repository (2026-11-16).
+# A push to main: the Linux lane is skipped, so neither shadow job is ever listed.
+_MAIN_PUSH = {"jobs": [
+    _job("gatekeeper", "completed", "success", "2026-11-16T01:10:40Z", "2026-11-16T01:12:04Z"),
+    _job("linux-self-hosted-turnstile", "completed", "skipped", "2026-11-16T01:12:06Z",
+         "2026-11-16T01:12:06Z"),
+    _job(_LINUX_LANE, "completed", "skipped", "2026-11-16T01:12:06Z", "2026-11-16T01:12:06Z"),
+    _job("macos", "in_progress", None, "2026-11-16T01:12:10Z", None)]}
+# A pull request whose workflow revision has no shadow jobs, after its Linux lane passed.
+_OTHER_PULL_REQUEST = {"jobs": [
+    _job("linux-self-hosted-turnstile", "completed", "success", "2026-11-16T01:54:26Z",
+         "2026-11-16T01:55:48Z"),
+    _job(_LINUX_LANE, "completed", "success", "2026-11-16T01:55:50Z", "2026-11-16T02:01:56Z"),
+    _job("macos-browser", "in_progress", None, "2026-11-16T01:56:02Z", None)]}
+# A pull request with the shadow jobs that did not opt in: both are listed as skipped at once.
+_OPTED_OUT = {"jobs": [
+    _job(_LINUX_LANE, "completed", "success", "2026-11-15T23:32:43Z", "2026-11-15T23:38:14Z"),
+    _job(_SHADOW_LANE + "-turnstile", "completed", "skipped", "2026-11-15T23:38:14Z",
+         "2026-11-15T23:38:14Z"),
+    _job(_SHADOW_LANE, "completed", "skipped", "2026-11-15T23:38:14Z", "2026-11-15T23:38:14Z")]}
+# A pull request still in its Linux lane.
+_IN_LINUX_LANE = {"jobs": [
+    _job("linux-self-hosted-turnstile", "completed", "success", "2026-11-16T01:58:24Z",
+         "2026-11-16T01:59:44Z"),
+    _job(_LINUX_LANE, "in_progress", None, "2026-11-16T02:03:05Z", None)]}
+# An opted-in pull request waiting at its own shadow turnstile: the shadow job is not listed yet.
+_AT_SHADOW_TURNSTILE = {"jobs": [
+    _job(_LINUX_LANE, "completed", "success", "2026-11-16T01:22:46Z", "2026-11-16T01:51:02Z"),
+    _job(_SHADOW_LANE + "-turnstile", "in_progress", None, "2026-11-16T01:51:04Z", None)]}
+
+
+class ShadowUpstreamTests(unittest.TestCase):
+    """A run whose shadow job is absent holds the shadow slot only while it may still create it."""
+
+    def _state(self, payload, now):
+        return admission.pool_state(payload, _SHADOW_POOL, _SHADOW_UPSTREAM, _epoch(now), _GRACE)
+
+    def test_a_main_push_with_a_skipped_linux_lane_never_holds_the_slot(self):
+        # At once, inside the grace: a skipped Linux lane can never create the shadow job.
+        self.assertEqual(admission.CLEAR, self._state(_MAIN_PUSH, "2026-11-16T01:12:10Z"))
+
+    def test_a_run_without_shadow_jobs_releases_the_slot_after_the_grace(self):
+        self.assertEqual(admission.ABSENT, self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:02:56Z"))
+        # Released, not clear: provisional, so the wait loop reads the run again every poll.
+        self.assertEqual(admission.RELEASED,
+                         self._state(_OTHER_PULL_REQUEST, "2026-11-16T02:07:00Z"))
+
+    def test_the_grace_runs_from_the_last_upstream_completion(self):
+        # The Linux lane ended ten minutes ago, the shadow turnstile admitted it one minute ago:
+        # its shadow job may appear any moment.
+        payload = {"jobs": [
+            _job(_LINUX_LANE, "completed", "success", "2026-11-16T01:00:00Z",
+                 "2026-11-16T01:20:00Z"),
+            _job(_SHADOW_LANE + "-turnstile", "completed", "success", "2026-11-16T01:20:02Z",
+                 "2026-11-16T01:29:00Z")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T01:30:00Z"))
+
+    def test_a_cancelled_linux_lane_never_holds_the_slot(self):
+        payload = {"jobs": [_job(_LINUX_LANE, "completed", "cancelled", "2026-11-16T01:00:00Z",
+                                 "2026-11-16T01:10:00Z")]}
+        self.assertEqual(admission.CLEAR, self._state(payload, "2026-11-16T01:10:01Z"))
+
+    def test_a_jobs_listing_missing_a_page_holds_the_slot(self):
+        payload = dict(_MAIN_PUSH, total_count=150)
+        self.assertEqual(admission.ACTIVE, self._state(payload, "2026-11-16T01:12:10Z"))
+        self.assertEqual(admission.ACTIVE, admission.pool_state(payload, [_LINUX_LANE]))
+        # A complete listing, as the pool workflows' 10 to 13 jobs are today, reads as before.
+        complete = dict(_MAIN_PUSH, total_count=len(_MAIN_PUSH["jobs"]))
+        self.assertEqual(admission.CLEAR, self._state(complete, "2026-11-16T01:12:10Z"))
+        self.assertEqual(admission.CLEAR, admission.pool_state(complete, [_LINUX_LANE]))
+
+    def test_an_opted_out_run_lists_skipped_shadow_jobs(self):
+        self.assertEqual(admission.CLEAR, self._state(_OPTED_OUT, "2026-11-15T23:38:15Z"))
+
+    def test_a_run_still_in_its_linux_lane_holds_the_slot(self):
+        self.assertEqual(admission.ABSENT, self._state(_IN_LINUX_LANE, "2026-11-16T05:00:00Z"))
+
+    def test_an_opted_in_run_waiting_at_its_turnstile_holds_the_slot(self):
+        self.assertEqual(admission.ABSENT,
+                         self._state(_AT_SHADOW_TURNSTILE, "2026-11-16T03:00:00Z"))
+
+    def test_an_unfinished_upstream_job_holds_even_with_a_completion_time(self):
+        # The status decides, not a timestamp: a queued rerun of a job can carry an old one.
+        payload = {"jobs": [_job(_LINUX_LANE, "queued", None, None, "2026-11-16T01:00:00Z")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T03:00:00Z"))
+
+    def test_a_run_not_yet_listing_its_linux_lane_holds_the_slot(self):
+        payload = {"jobs": [_job("gatekeeper", "in_progress")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T03:00:00Z"))
+
+    def test_an_unreadable_completion_time_or_clock_holds_the_slot(self):
+        payload = {"jobs": [_job(_LINUX_LANE, "completed", "success", None, "yesterday")]}
+        self.assertEqual(admission.ABSENT, self._state(payload, "2026-11-16T03:00:00Z"))
+        self.assertEqual(admission.ABSENT, admission.pool_state(
+            _OTHER_PULL_REQUEST, _SHADOW_POOL, _SHADOW_UPSTREAM, None, _GRACE))
+
+    def test_a_listed_shadow_job_or_an_api_failure_still_decides_first(self):
+        for status, expected in (("queued", admission.PENDING),
+                                 ("in_progress", admission.ACTIVE)):
+            with self.subTest(status=status):
+                payload = {"jobs": _MAIN_PUSH["jobs"] + [_job(_SHADOW_LANE, status)]}
+                self.assertEqual(expected, self._state(payload, "2026-11-16T03:00:00Z"))
+        self.assertEqual(admission.ACTIVE, self._state(None, "2026-11-16T03:00:00Z"))
+
+    def test_without_upstream_every_run_without_a_pool_job_holds(self):
+        # The Linux pool, and any pool that names no upstream, keeps the original rule.
+        self.assertEqual(admission.ABSENT, admission.pool_state(_OTHER_PULL_REQUEST, _SHADOW_POOL))
+        self.assertEqual(admission.ABSENT, admission.pool_state(
+            {"jobs": [_job("gatekeeper", "completed", "success")]}, [_LINUX_LANE]))
+
+    def test_the_queue_admits_past_runs_that_can_no_longer_take_the_slot(self):
+        runs = [_run(10, _MAIN_PUSH), _run(11, _OTHER_PULL_REQUEST), _run(12, _OPTED_OUT)]
+        request = {"capacity": 1, "me": 20, "pool": _SHADOW_POOL, "runs": runs,
+                   "upstream": _SHADOW_UPSTREAM, "grace_seconds": _GRACE,
+                   "now": _epoch("2026-11-16T02:30:00Z")}
+        self.assertEqual({"occupancy": 0, "admit": True, "blockers": []},
+                         admission.decide(request))
+        request["runs"] = runs + [_run(13, _IN_LINUX_LANE)]
+        self.assertEqual(["13 (absent)"], admission.decide(request)["blockers"])
+        # Without the upstream data, the old rule counts the runs that never create the job.
+        self.assertEqual(["10 (absent)", "11 (absent)"], admission.decide(
+            dict(request, upstream=[], runs=runs))["blockers"])
+
+
+def _main_job(name, status, conclusion=None, attempt=None):
+    job = {"name": name, "status": status, "conclusion": conclusion}
+    if attempt is not None:
+        job["run_attempt"] = attempt
+    return job
+
+
+# The Linux pool's jobs listings as the Actions API returns them today, with the state the
+# admission rules on main give each. The expected states and decisions below were produced by
+# running main's admission.py (the revision this branch is based on) on these same fixtures;
+# this branch's rules must give the same, since the gating Linux turnstile passes no upstream.
+_LINUX_FIXTURES = (
+    ("main push, Linux lane skipped", {"jobs": [
+        _main_job("gatekeeper", "completed", "success"),
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "skipped"),
+        _main_job(_LINUX_LANE, "completed", "skipped"), _main_job("macos", "in_progress")]},
+     "clear"),
+    ("pull request after its Linux lane", {"jobs": [
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "success"),
+        _main_job(_LINUX_LANE, "completed", "success"),
+        _main_job("macos-browser", "in_progress")]}, "clear"),
+    ("opted out", {"jobs": [
+        _main_job(_LINUX_LANE, "completed", "success"),
+        _main_job(_SHADOW_LANE + "-turnstile", "completed", "skipped"),
+        _main_job(_SHADOW_LANE, "completed", "skipped")]}, "clear"),
+    ("in its Linux lane", {"jobs": [
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "success"),
+        _main_job(_LINUX_LANE, "in_progress")]}, "active"),
+    ("Linux lane queued", {"jobs": [
+        _main_job(_LINUX_LANE + "-turnstile", "completed", "success"),
+        _main_job(_LINUX_LANE, "queued")]}, "pending"),
+    ("at its shadow turnstile", {"jobs": [
+        _main_job(_LINUX_LANE, "completed", "success"),
+        _main_job(_SHADOW_LANE + "-turnstile", "in_progress")]}, "clear"),
+    ("before its Linux lane is listed", {"jobs": [_main_job("gatekeeper", "in_progress")]},
+     "absent"),
+    ("no jobs yet", {"jobs": []}, "absent"),
+    ("called workflow in its Linux lane", {"jobs": [
+        _main_job("base-change-ci / " + _LINUX_LANE, "in_progress")]}, "active"),
+    # A partial rerun of a failed job other than the pool job keeps the completed Linux lane
+    # job of the first attempt in the listing; it holds nothing.
+    ("partial rerun, retained completed Linux lane", {"total_count": 3, "jobs": [
+        _main_job(_LINUX_LANE, "completed", "success", 1),
+        _main_job("macos", "in_progress", None, 2),
+        _main_job("gatekeeper", "completed", "success", 1)]}, "clear"),
+    ("partial rerun, Linux lane rerun", {"total_count": 3, "jobs": [
+        _main_job(_LINUX_LANE, "queued", None, 2),
+        _main_job("gatekeeper", "completed", "success", 1),
+        _main_job("macos", "completed", "success", 1)]}, "pending"),
+    ("complete listing with its count", {"total_count": 2, "jobs": [
+        _main_job(_LINUX_LANE, "in_progress"), _main_job("macos", "queued")]}, "active"),
+)
+
+
+class LinuxTurnstileUnchangedTests(unittest.TestCase):
+    """The gating Linux turnstile decides exactly as on main for today's listings."""
+
+    def test_each_listing_reads_as_on_main(self):
+        for name, payload, expected in _LINUX_FIXTURES:
+            with self.subTest(listing=name):
+                self.assertEqual(expected, admission.pool_state(payload, [_LINUX_LANE]))
+
+    def test_the_admission_decision_is_main_s(self):
+        runs = [_run(40 + index, payload)
+                for index, (_, payload, _) in enumerate(_LINUX_FIXTURES)] + [_run(60, None)]
+        blockers = ["43 (active)", "44 (pending)", "46 (absent)", "47 (absent)", "48 (active)",
+                    "50 (pending)", "51 (active)", "60 (active)"]
+        for capacity, admit in ((4, False), (8, False), (9, True)):
+            with self.subTest(capacity=capacity):
+                self.assertEqual({"occupancy": 8, "admit": admit, "blockers": blockers},
+                                 admission.decide({"capacity": capacity, "me": 55,
+                                                   "pool": [_LINUX_LANE], "runs": runs}))
+
+
 class TurnstileWiringTests(unittest.TestCase):
     """The rules only help if the self-hosted lane is actually gated by them."""
 
@@ -252,21 +505,53 @@ class TurnstileWiringTests(unittest.TestCase):
         self.workflows = {"main.yml": _read("donner/.github/workflows/main.yml")}
 
     def _turnstile_usages(self, text):
-        """Every `uses: ./.github/actions/re-turnstile` block's `with:` body."""
+        """Every `uses: ./.github/actions/re-turnstile` step's `with:` body, by lane."""
         pattern = re.compile(
-            r"uses:\s*\./\.github/actions/re-turnstile\s*\n"
-            r"(?P<with>(?:[ \t]*\n|[ \t]+\S.*\n)+)"
+            r"uses:\s*\./\.github/actions/re-turnstile\s*\n {8}with:\n"
+            r"(?P<with>(?: {10}.*\n)+)"
         )
-        return [match.group("with") for match in pattern.finditer(text)]
+        usages = [match.group("with") for match in pattern.finditer(text)]
+        return {re.search(r"(?m)^ +lane: (\S+)$", usage).group(1): usage for usage in usages}
 
     def test_the_linux_lane_is_gated_by_a_fleet_sized_pool(self):
         usages = self._turnstile_usages(self.workflows["main.yml"])
-        self.assertEqual(len(usages), 1, "expected one turnstile for the self-hosted lane")
-        (usage,) = usages
-        self.assertRegex(usage, r"(?m)^\s+lane: " + _LINUX_LANE + r"$")
+        self.assertEqual({_LINUX_LANE, _SHADOW_LANE}, set(usages))
+        usage = usages[_LINUX_LANE]
         self.assertRegex(usage, r"(?m)^\s+pool: " + _LINUX_LANE + r"$")
         self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
         self.assertRegex(usage, r"capacity:\s*\"?" + _EXPECTED_CAPACITY)
+        # The gating lane keeps the default fail-open timeout and the original absence rule.
+        self.assertNotIn("timeout-result", usage)
+        self.assertNotIn("pool-upstream", usage)
+        self.assertNotIn("upstream-grace", usage)
+
+    def test_the_shadow_lane_has_a_fail_closed_pool_of_one(self):
+        usage = self._turnstile_usages(self.workflows["main.yml"])[_SHADOW_LANE]
+        self.assertRegex(usage, r"(?m)^\s+pool: " + _SHADOW_LANE + r"$")
+        self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
+        self.assertRegex(usage, r'(?m)^\s+capacity: "1"$')
+        self.assertRegex(usage, r"(?m)^\s+timeout-result: skip$")
+        minutes = int(re.search(r'(?m)^\s+timeout-minutes: "(\d+)"$', usage).group(1))
+        self.assertLessEqual(minutes, 30)
+        shadow = self._job_body(self.workflows["main.yml"], _SHADOW_LANE)
+        self.assertIn("needs.macos-remote-shadow-turnstile.outputs.admitted == 'true'", shadow)
+        # The upstream it supplies is what the shadow jobs need, the Linux lane first, and the
+        # grace is short: the turnstile job is listed seconds after the Linux lane ends.
+        self.assertRegex(usage, r"(?m)^\s+pool-upstream: %s$" % " ".join(_SHADOW_UPSTREAM))
+        grace = int(re.search(r'(?m)^\s+upstream-grace-minutes: "(\d+)"$', usage).group(1))
+        self.assertLessEqual(grace, 10)
+        for job in (_SHADOW_LANE, _SHADOW_LANE + "-turnstile"):
+            self.assertIn("(needs.linux-self-hosted.result == 'success' || "
+                          "needs.linux-self-hosted.result == 'failure')",
+                          self._job_body(self.workflows["main.yml"], job))
+        self.assertIn("TURNSTILE_POOL_UPSTREAM: ${{ inputs.pool-upstream }}", self.action)
+        self.assertRegex(self.action, r'pool-upstream:\n(?:.*\n)*?\s+default: ""')
+
+    def test_action_fails_closed_only_when_asked(self):
+        self.assertRegex(self.action, r'timeout-result:\n(?:.*\n)*?\s+default: "proceed"')
+        self.assertIn("value: ${{ steps.wait.outputs.admitted }}", self.action)
+        self.assertIn('self.fail_closed = environ.get("TURNSTILE_TIMEOUT_RESULT") == "skip"',
+                      self.loop)
 
     def test_every_workflow_that_calls_ci_shares_the_pool(self):
         directory = Path(_runfile("donner/.github/workflows/main.yml")).parent
@@ -275,11 +560,11 @@ class TurnstileWiringTests(unittest.TestCase):
             if re.search(r"(?m)^    uses: \./\.github/workflows/main\.yml\s*$",
                          path.read_text(encoding="utf-8")))
         self.assertEqual(callers, ["pr_base_change.yml"])
-        (usage,) = self._turnstile_usages(self.workflows["main.yml"])
-        listed = re.search(r"(?m)^\s+pool-workflows: (.+)$", usage).group(1).split()
-        self.assertEqual(sorted(set(listed) - {"main.yml"}), callers,
-                         "a workflow that calls main.yml can run its self-hosted job, so "
-                         "its runs must be counted by the turnstile")
+        for lane, usage in self._turnstile_usages(self.workflows["main.yml"]).items():
+            listed = re.search(r"(?m)^\s+pool-workflows: (.+)$", usage).group(1).split()
+            self.assertEqual(sorted(set(listed) - {"main.yml"}), callers,
+                             "a workflow that calls main.yml can run %s, so its runs must be "
+                             "counted by the turnstile" % lane)
 
     def _job_body(self, text, job):
         match = re.search(

@@ -8,6 +8,8 @@ requests per poll and the spacing between polls are part of its contract.
 
 import importlib.util
 import re
+import tempfile
+import time
 import unittest
 
 from python.runfiles import runfiles
@@ -262,6 +264,186 @@ class WaitLoopTests(unittest.TestCase):
         self.assertIn("Actions API metadata is unavailable; proceeding (fail-open)",
                       "".join(self.logged))
         self.assertLessEqual(self.clock.now, 1_000_000 + 300)
+
+
+class FailClosedTests(unittest.TestCase):
+    """timeout-result "skip": an advisory lane does not run after the safety timeout."""
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.logged = []
+
+    def _turnstile(self, api, **environ):
+        return turnstile.Turnstile(_environ(**environ), api, sleep=self.clock.sleep,
+                                   clock=self.clock, jitter=lambda: 0, log=self.logged.append)
+
+    def _run_with_output(self, api, **environ):
+        with tempfile.TemporaryDirectory() as directory:
+            output = directory + "/output"
+            status = self._turnstile(api, GITHUB_OUTPUT=output, **environ).run()
+            try:
+                written = open(output, encoding="utf-8").read()
+            except FileNotFoundError:
+                written = None
+        return status, written
+
+    def test_timeout_reports_not_admitted(self):
+        api = FakeActions(self.clock, {100: (1, "in_progress"), _ME: (1, "queued")})
+        status, written = self._run_with_output(
+            api, TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="5",
+            TURNSTILE_TIMEOUT_RESULT="skip")
+        self.assertEqual((0, "admitted=false\n"), (status, written))
+        self.assertIn("not admitted (fail-closed)", "".join(self.logged))
+        self.assertNotIn("fail-open", "".join(self.logged))
+
+    def test_unresolvable_workflows_report_not_admitted(self):
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        api.refuse_until = self.clock.now + 10_000
+        status, written = self._run_with_output(api, TURNSTILE_TIMEOUT_MINUTES="5",
+                                                TURNSTILE_TIMEOUT_RESULT="skip")
+        self.assertEqual((0, "admitted=false\n"), (status, written))
+
+    def test_admission_reports_admitted(self):
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        status, written = self._run_with_output(api, TURNSTILE_TIMEOUT_RESULT="skip")
+        self.assertEqual((0, "admitted=true\n"), (status, written))
+
+    def test_default_writes_no_output_and_still_fails_open(self):
+        api = FakeActions(self.clock, {100: (1, "in_progress"), _ME: (1, "queued")})
+        status, written = self._run_with_output(api, TURNSTILE_CAPACITY="1",
+                                                TURNSTILE_TIMEOUT_MINUTES="5")
+        self.assertEqual((0, None), (status, written))
+        self.assertIn("proceeding (fail-open)", self.logged[-2])
+
+
+def _stamp(seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+
+
+class ShadowUpstreamWaitTests(unittest.TestCase):
+    """The shadow pool supplies its upstream jobs, so runs that never create one stop holding."""
+
+    _SHADOW = "macos-remote-shadow"
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.logged = []
+
+    def _api(self, ago=600):
+        api = FakeActions(self.clock, {100: (1, None), 200: (1, None), _ME: (1, None)})
+        finished = _stamp(self.clock.now - ago)
+        payloads = {
+            # A push to main: its Linux lane is skipped.
+            100: [{"name": _LANE, "status": "completed", "conclusion": "skipped",
+                   "completed_at": finished}],
+            # A pull request whose workflow has no shadow job, its Linux lane passed.
+            200: [{"name": _LANE, "status": "completed", "conclusion": "success",
+                   "completed_at": finished}],
+            _ME: [{"name": self._SHADOW + "-turnstile", "status": "in_progress"}]}
+        original = api.get_json
+
+        def get_json(url):
+            jobs = re.search(r"actions/runs/(\d+)/jobs\?per_page=100$", url)
+            if jobs:
+                original(url)
+                return {"jobs": payloads[int(jobs.group(1))]}
+            return original(url)
+        api.get_json = get_json
+        return api
+
+    def _run(self, ago=600, **environ):
+        with tempfile.TemporaryDirectory() as directory:
+            output = directory + "/output"
+            values = dict(TURNSTILE_LANE=self._SHADOW, TURNSTILE_POOL=self._SHADOW,
+                          TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="30",
+                          TURNSTILE_TIMEOUT_RESULT="skip", GITHUB_OUTPUT=output)
+            values.update(environ)
+            status = turnstile.Turnstile(_environ(**values), self._api(ago), sleep=self.clock.sleep,
+                                         clock=self.clock, jitter=lambda: 0,
+                                         log=self.logged.append).run()
+            return status, open(output, encoding="utf-8").read()
+
+    def test_runs_that_never_create_the_shadow_job_do_not_hold_its_slot(self):
+        status, written = self._run(
+            TURNSTILE_POOL_UPSTREAM=_LANE + " " + self._SHADOW + "-turnstile",
+            TURNSTILE_UPSTREAM_GRACE_MINUTES="5")
+        self.assertEqual((0, "admitted=true\n"), (status, written))
+        self.assertLess(sum(self.clock.slept), 5 * 60)
+
+    def test_a_run_whose_linux_lane_just_ended_holds_it_for_the_grace(self):
+        status, written = self._run(
+            ago=60, TURNSTILE_POOL_UPSTREAM=_LANE + " " + self._SHADOW + "-turnstile",
+            TURNSTILE_UPSTREAM_GRACE_MINUTES="5")
+        self.assertEqual((0, "admitted=true\n"), (status, written))
+        self.assertGreaterEqual(sum(self.clock.slept), 4 * 60)
+        self.assertIn("200 (absent)", "".join(self.logged))
+
+    def _shadow_turnstile(self, api, **environ):
+        values = dict(TURNSTILE_LANE=self._SHADOW, TURNSTILE_POOL=self._SHADOW,
+                      TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="10",
+                      TURNSTILE_TIMEOUT_RESULT="skip",
+                      TURNSTILE_POOL_UPSTREAM=_LANE + " " + self._SHADOW + "-turnstile",
+                      TURNSTILE_UPSTREAM_GRACE_MINUTES="5")
+        values.update(environ)
+        with tempfile.TemporaryDirectory() as directory:
+            output = directory + "/output"
+            status = turnstile.Turnstile(_environ(GITHUB_OUTPUT=output, **values), api,
+                                         sleep=self.clock.sleep, clock=self.clock,
+                                         jitter=lambda: 0, log=self.logged.append).run()
+            return status, open(output, encoding="utf-8").read()
+
+    def _jobs_api(self, payload_for):
+        """A fake API whose jobs payload for a run comes from payload_for(run, poll)."""
+        api = FakeActions(self.clock, {200: (1, None), _ME: (1, None)})
+        original, polls = api.get_json, {}
+
+        def get_json(url):
+            jobs = re.search(r"actions/runs/(\d+)/jobs\?per_page=100$", url)
+            if jobs:
+                original(url)
+                run = int(jobs.group(1))
+                polls[run] = polls.get(run, 0) + 1
+                if run == _ME:
+                    return {"jobs": [{"name": self._SHADOW + "-turnstile",
+                                      "status": "in_progress"}]}
+                return {"jobs": payload_for(run, polls[run])}
+            return original(url)
+        api.get_json = get_json
+        return api, polls
+
+    def test_a_run_released_by_the_grace_is_read_again_and_can_take_the_slot_back(self):
+        linux = {"name": _LANE, "status": "completed", "conclusion": "success",
+                 "completed_at": _stamp(self.clock.now - 600)}
+
+        def payload(run, poll):
+            # Clear by the grace on the first poll; its shadow job is running from the second.
+            return [linux] + ([] if poll == 1 else
+                              [{"name": self._SHADOW, "status": "in_progress"}])
+        api, polls = self._jobs_api(payload)
+        self.assertEqual((0, "admitted=false\n"), self._shadow_turnstile(api))
+        self.assertGreater(polls[200], 2)
+        self.assertIn("200 (active)", "".join(self.logged))
+
+    def test_the_grace_is_measured_on_githubs_clock(self):
+        # The runner's clock is ten minutes fast: by GitHub's clock the Linux lane ended two
+        # minutes ago, well inside the grace.
+        github_now = self.clock.now - 600
+        linux = {"name": _LANE, "status": "completed", "conclusion": "success",
+                 "completed_at": _stamp(github_now - 120)}
+        api, _ = self._jobs_api(lambda run, poll: [linux])
+        api.server_time = github_now
+        self.assertEqual((0, "admitted=false\n"),
+                         self._shadow_turnstile(api, TURNSTILE_TIMEOUT_MINUTES="2"))
+        self.assertIn("200 (absent)", "".join(self.logged))
+        # By the runner's own clock the same run would have been released at once.
+        self.logged.clear()
+        api, _ = self._jobs_api(lambda run, poll: [linux])
+        self.assertEqual((0, "admitted=true\n"),
+                         self._shadow_turnstile(api, TURNSTILE_TIMEOUT_MINUTES="2"))
+
+    def test_without_upstream_they_hold_it_until_the_safety_timeout(self):
+        self.assertEqual((0, "admitted=false\n"), self._run())
+        self.assertIn("100 (absent), 200 (absent)", "".join(self.logged))
 
 
 class WiringTests(unittest.TestCase):

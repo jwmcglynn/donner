@@ -89,10 +89,18 @@ class Turnstile:
         names = (environ.get("TURNSTILE_POOL") or "").split() or [self.lane]
         self.pool = names
         self.pool_workflows = (environ.get("TURNSTILE_POOL_WORKFLOWS") or "").split()
+        # Jobs a pool job needs, for a pool whose runs may never create their pool job (see
+        # admission.upstream_state). Empty keeps every run without a pool job holding a slot.
+        self.upstream = (environ.get("TURNSTILE_POOL_UPSTREAM") or "").split()
+        self.grace = float(environ.get("TURNSTILE_UPSTREAM_GRACE_MINUTES") or "5") * 60
         self.capacity = int(environ.get("TURNSTILE_CAPACITY") or "1")
         self.base = float(environ.get("TURNSTILE_POLL_SECONDS") or "60")
         self.maximum = max(self.base, float(environ.get("TURNSTILE_MAX_POLL_SECONDS") or "300"))
         self.deadline = clock() + float(environ.get("TURNSTILE_TIMEOUT_MINUTES") or "150") * 60
+        # "skip" fails closed for an advisory lane: a timeout reports admitted=false, which its
+        # dependent job reads. The default keeps the gating lanes' fail-open behavior.
+        self.fail_closed = environ.get("TURNSTILE_TIMEOUT_RESULT") == "skip"
+        self.output = environ.get("GITHUB_OUTPUT") if self.fail_closed else None
         self.client = client
         self.sleep = sleep
         self.clock = clock
@@ -177,11 +185,21 @@ class Turnstile:
                 jobs = None
             if not isinstance(jobs, dict):
                 jobs = None
-            if jobs is not None and admission.pool_state(jobs, self.pool) == admission.CLEAR:
+            # Only a final clear is remembered: a run released by the upstream grace is read
+            # again on every poll, since its pool job may still be listed.
+            if jobs is not None and admission.pool_state(
+                    jobs, self.pool, self.upstream, self.now(), self.grace) == admission.CLEAR:
                 self.finished[run_id] = attempt
                 continue
             entries.append({"id": run_id, "jobs": jobs})
-        return {"capacity": self.capacity, "me": self.me, "pool": self.pool, "runs": entries}
+        return {"capacity": self.capacity, "me": self.me, "pool": self.pool, "runs": entries,
+                "upstream": self.upstream, "grace_seconds": self.grace, "now": self.now()}
+
+    def now(self) -> float:
+        """GitHub's time, from the last response's Date header, which the upstream grace compares
+        with GitHub's job timestamps; the local clock when no response carried one."""
+        server = getattr(self.client, "server_time", None)
+        return server if isinstance(server, (int, float)) else self.clock()
 
     def run(self) -> int:
         workflow_ids = self._resolve()
@@ -274,19 +292,38 @@ class Turnstile:
                          f"in {int(delay)}s")
                 self._wait(delay + self.jitter())
             if self._expired():
+                if self.fail_closed:
+                    self.log("turnstile: safety timeout reached while Actions API metadata is "
+                             "unavailable; not admitted (fail-closed)")
+                    self._admitted(False)
+                    self._report()
+                    return None
                 self.log("turnstile: safety timeout reached while Actions API metadata is "
                          "unavailable; proceeding (fail-open)")
                 self._report()
                 return None
 
     def _fail_open(self, blockers: str) -> int:
+        if self.fail_closed:
+            self.log(f"turnstile: safety timeout reached while waiting behind {blockers}; "
+                     f"not admitted (fail-closed)")
+            self._admitted(False)
+            self._report()
+            return 0
         self.log(f"turnstile: safety timeout reached while waiting behind {blockers}; "
                  f"proceeding (fail-open)")
         return self._done()
 
     def _done(self) -> int:
+        self._admitted(True)
         self._report()
         return 0
+
+    def _admitted(self, admitted: bool) -> None:
+        """Writes the `admitted` output in fail-closed mode only."""
+        if self.output:
+            with open(self.output, "a", encoding="utf-8") as handle:
+                handle.write("admitted=%s\n" % ("true" if admitted else "false"))
 
     def _report(self) -> None:
         self.log(f"turnstile: {self.client.requests} API requests "
