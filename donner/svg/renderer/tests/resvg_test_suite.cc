@@ -1607,7 +1607,9 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-path.png")
                      .withReason("Reference disagreement: SVG 2 textPath path attribute, which "
                                  "resvg v0.49.0 ignores; the vendored PNG is opaque (#1175)")},
-                {"closed-path.svg", Params::WithThreshold(0.1f, 400, "Minor AA diffs")},
+                {"closed-path.svg",
+                 WithMaxPixels(400,
+                               "Reference coverage along the glyph boundaries and gray guide")},
                 {"complex.svg",
                  Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "
                                            "on a circular path")},
@@ -1640,8 +1642,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"path-with-ClosePath.svg", ResvgV049Reference()},
                 {"side=right.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                       "Half-turned glyph edges: 3427 of 3430 raw differences are "
-                                       "boundary texels, centroid within 0.1px, ink within 0.03%")},
+                                       "Gray guide and half-turned glyph boundary coverage")},
                 {"simple-case.svg", ResvgV049Reference()},
                 {"spacing=auto.svg", ResvgV049Reference()},
                 {"startOffset=-100.svg", ResvgV049Reference()},
@@ -1651,7 +1652,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"tspan-with-absolute-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-absolute-position.png")
-                     .withReason("Minor char")},
+                     .withReason("Regression golden for absolute distance along the text path")},
                 {"tspan-with-relative-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png")
@@ -1686,7 +1687,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
-                     .withReason("Minor char")},
+                     .withReason("Regression golden for the on-path underline")},
                 // Upright glyphs take the font's vmtx vertical origin, 860 units below the cell
                 // top; the reference centers the hhea ascent/descent box instead (877.5 units).
                 // Both text backends differ by 215-219 px. With the reference's origin the diff

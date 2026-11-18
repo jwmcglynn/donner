@@ -102,12 +102,13 @@ Any golden or tolerance change requires explicit human approval after visual ret
 
 | Test | Setting | Reason |
 |------|---------|--------|
-| closed-path | threshold 0.1, 400 px | AA diffs |
+| closed-path | 400 px at the default threshold | Glyph-boundary and gray guide coverage |
 | dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
 | method=stretch | golden | The snapshot depicts align placement. The Donner golden guards glyph warping. |
 | mixed-children-1, mixed-children-2, very-long-text | golden | SVG 2 continues text at the path end point. |
 | side=right | threshold 0.05 | Half-turned glyph edges |
-| tspan-with-absolute-position, with-underline | golden | Minor char advance diffs |
+| tspan-with-absolute-position | golden | Absolute distance along the text path |
+| with-underline | golden | Underline paint along the text path |
 | tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
 | writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
 
