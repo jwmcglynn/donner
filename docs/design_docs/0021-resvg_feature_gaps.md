@@ -577,7 +577,7 @@ and the reference encodes resvg's own model (`writing-mode/japanese-with-tb.svg`
 `writing-mode/mixed-languages-with-tb.svg`, `writing-mode/tb-and-punctuation.svg`,
 `alignment-baseline/hanging-on-vertical.svg`), the row compares against a Donner rendering
 ([0009](0009-resvg_test_suite_bugs.md)). The Japanese control quotes the family name so Chromium selects the same face. `writing-mode/mixed-languages-with-tb-and-underline.svg`
-is skipped under #1172: its vertical underline has the reference thickness and sits about 3 px to its right.
+compares against an independent outline with the primary Amiri face's underline geometry.
 
 ### F11: BiDi / RTL text shaping
 
@@ -639,7 +639,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case is skipped: the underline sits about 3 px to the right of the reference at the same thickness. `tb-and-punctuation` compares against a Donner rendering. |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case compares against the font-derived full-scene outline reference. `tb-and-punctuation` compares against a Donner rendering. |
 
 ---
 

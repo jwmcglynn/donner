@@ -1856,11 +1856,11 @@ INSTANTIATE_TEST_SUITE_P(
                                  "below the font's vmtx origin; Chromium matches with the "
                                  "quoted family name (golden README)")},
                 {"mixed-languages-with-tb-and-underline.svg",
-                 Params::Skip("Bug #1172: 1331 px differ, 929 of them at the vertical "
-                              "underline, which has the reference thickness but is 3 px to "
-                              "its right, close to the Firefox rendering; the rest are at the "
-                              "upright glyph, the sideways Latin and the Arabic")
-                     .onlyTextFull()},
+                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                            "donner-mixed-vertical-underline-outline.png")
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: primary-face underline metrics and "
+                                 "mixed vertical glyph geometry (golden README)")},
                 {"mixed-languages-with-tb.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")

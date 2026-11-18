@@ -442,6 +442,47 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 | `text/writing-mode/tb-and-punctuation` | Mplus 1p kana, ideographs and vertical punctuation forms at 16 user units. Blink (OpenTypeVerticalData::GetVerticalTranslationsForGlyphs) and Gecko (gfxHarfBuzzShaper::GetGlyphVOrigin) take the upright vertical origin from VORG, then from the vmtx top side bearing over the glyph top, and only then synthesize one, and CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics. Mplus 1p has vhea and vmtx, with a vertical origin of 860 units for every glyph here; resvg ignores vmtx and centers the glyph on the hhea ascent and descent, as the vendored PNG does. Donner and Chrome 156 both place the vertical comma and full stop forms (U+3001, U+3002) about 14 device px right of the vendored PNG, in the upper right of their cells, and agree within 0.4 px on all 12 ink clusters, which sit up to 1.65 px above the PNG; the punctuation forms clearly favor Donner. 228 px differ. The corpus results mark Chrome and Firefox as passing and Safari and resvg as failing this row. | `100f4e24b2fd7013e554303f71b9b63199789863e81e86f8b046f340c6e34028` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` |
 | `text/alignment-baseline/hanging-on-vertical` | alignment-baseline: hanging in vertical text. resvg does not apply alignment-baseline in vertical layout, so the vendored PNG shows the default central baseline and wider spacing. Donner and Chrome 156 both apply the hanging baseline and agree within 1.1 device px on all 7 ink clusters, which sit 1.1 to 46 px from the PNG along the column when matched in reading order (1.1 and 21.9 px for the two upright glyphs, 44 to 46 px for the five sideways letters), so the browser measurement clearly favors Donner. The upright U+65E5 and U+672C sit at Mplus 1p's vmtx origin; the sideways "Japan" is rotated onto the hanging baseline and has no vertical origin of its own. The corpus results mark Chrome and Safari as passing and Firefox and resvg as failing. The simple text tier differs from this full-tier rendering by 10 px. | `cb9c38a6b0542998f1be4ff2efbc14cd39eb656f4e29547542d65bebca6378d6` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
 
+## Mixed vertical underline outline reference
+
+`text/writing-mode/mixed-languages-with-tb-and-underline.svg` uses Amiri for Latin and joined
+Arabic, and Mplus 1p for the upright ideograph. The historical PNG differs by 1,331 pixels,
+including 929 at the underline. CSS Text Decoration leaves the underline position and
+thickness to the user agent under `auto`. Firefox 157 covers columns 210–211 on the 500 × 500
+canvas. Google Chrome 158.0.8127.37 covers 219–223 with either its fallback or the corpus Mplus
+face. The historical mask covers 204–207.
+
+The control derives the column from design-unit advances. At a font size of 20, HarfBuzz shapes
+the sideways Latin segment with its two spaces to 35.87890625 units, and the joined Arabic segment
+to 37.197265625. The CJK cell advances 20 units and takes the Mplus `vmtx` origin of 860/1,000 em.
+Centering the total 93.076171875-unit advance at y=100 puts the column start at 53.4619140625.
+The sideways runs use the alphabetic baseline at x=95.1171875 from Amiri's `hhea` ascent and
+descent (2,300 and -1,300 at 2,048 units per em). The Latin outlines start after the 600-design-unit
+leading space. The Arabic is shaped as one horizontal right-to-left word and rotated clockwise
+onto the same baseline.
+
+Amiri's `post` offset is -1,151 units and its thickness is 102 units. These give the underline
+rectangle x=83.37890625 and width 0.99609375 in the reference SVG. Its three device-pixel
+columns have alpha 141, 255, and 239. Both the underline and the outlines are vector geometry.
+usvg 0.49.0 supplies the glyph outlines from the isolated horizontal text runs, and the
+crosshairs and frame use the original SVG vectors. The full-text tier matches the entire
+control with zero differences at the default threshold and limit.
+
+| Input or output | SHA-256 |
+| --- | --- |
+| Corpus SVG | `81570913183763bb689de8434401842ededea3b6506d6ee6d11b181cb77b91f5` |
+| Corpus PNG | `2fa7d4e007f88ff94e8c7319559032b3c3d5f0a163c0a8dfee3fbc270491c01e` |
+| Amiri Regular | `f3615b08cc3d78409474c28ed7c9e0fb5cc42435e12080a385e1a4163ab46708` |
+| Mplus 1p Regular | `c6a5f15dcbce870497c580de7fa578a75eb8846d2b5603a65eb8fb69ab949892` |
+| `donner-mixed-vertical-underline-outline.svg` | `6f5a23b713f46bd9f2f3829cc21c63b5c225b0d281035dbca84bee514e0c3596` |
+| `donner-mixed-vertical-underline-outline.png` | `129d7b96a7fcf32aef0a41ff74fd5dd8c62033fe9650bd4423bf96fc328db238` |
+
+```sh
+bazel run //donner/svg/tool:donner-cli -- \
+  donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.svg \
+  --width 500 --height 500 \
+  --output donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.png
+```
+
 ## Color-adjust filter references
 
 The seven `filters/filter-functions/color-adjust-functions-*` inputs keep their live text and

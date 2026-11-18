@@ -141,6 +141,13 @@ and it does not apply `alignment-baseline` in vertical layout. CSS Writing Modes
 requires the font's vertical metrics; Blink and Gecko take the upright origin from `VORG`, then
 from the `vmtx` top side bearing, as Donner does. Measurements are in the golden README.
 
+### Mixed vertical underline
+
+The full-text `text/writing-mode/mixed-languages-with-tb-and-underline` comparison uses an
+independently positioned outline reference and Amiri's primary-face underline metrics. It
+compares the full 500 × 500 scene at default parameters. The golden README records the layout,
+browser controls, and reproduction command.
+
 ### Reference does not depict the feature
 
 | Category      | Test           | Reason (`withReason`)                                       |
