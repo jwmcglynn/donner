@@ -88,20 +88,20 @@ _compile_inputs_test = unittest.make(
     },
 )
 
-def svg_core_text_tests(name, core):
+def svg_core_audit_text_dependencies_test(name, core):
     """Checks the element compile actions and implementation dependency boundary in each tier.
 
     Args:
-      name: Prefix for the generated tests.
+      name: Name of the cross-tier test. Dependency audits prefix it with their tier.
       core: The C++ target that compiles the common SVG element sources.
     """
-    _compile_inputs_test(name = name + "_compile_inputs_test", core = core, size = "small")
+    _compile_inputs_test(name = name, core = core, size = "small")
 
     # Stable declaration targets are allowed. The linked system implementations
     # belong to the public facade, even if they happen to expose identical flags.
     for tier in ["none", "basic", "full"]:
         configured_dependency_audit_test(
-            name = name + "_" + tier + "_text_dependencies_test",
+            name = tier + "_" + name,
             target = core,
             text_configuration = tier,
             forbidden = [
