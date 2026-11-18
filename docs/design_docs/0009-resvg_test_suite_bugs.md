@@ -73,6 +73,8 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
 | text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
+| text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
+| text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
 rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
@@ -86,6 +88,13 @@ is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`textPath/mixed-children-1` and `textPath/very-long-text` run against committed Donner
+renders. SVG 2 continues the text after a `textPath` from the end point of the path, and
+CSS Text 3 keeps the textPath's trailing space on the path, so the green `Text` starts at
+the end point; the vendored PNGs continue from the end of the glyphs on the path. Both
+renders match Chrome's ink. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `font-size-adjust/simple-case` runs against a committed Donner render
 (`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
@@ -120,6 +129,21 @@ resvg centers upright glyphs on the hhea ascent and descent instead of using the
 CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics; Blink and Gecko take the
 upright origin from `VORG`, then from the `vmtx` top side bearing, as Donner does. Measurements are
 in the golden README.
+
+### Reference does not depict the feature
+
+| Category      | Test           | Reason (`withReason`)                                       |
+| ------------- | -------------- | ----------------------------------------------------------- |
+| text/textPath | method=stretch | Reference disagreement: the vendored PNG is align placement |
+
+`textPath/method=stretch` runs against a committed Donner render
+(`resvg-method=stretch.png`). The vendored PNG is byte-identical to the original snapshot’s `simple-case.png`,
+which is align placement, so it cannot assert the stretch warp. The golden is a
+regression guard for the warp rather than an independent oracle;
+`RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`, which
+requires stretch on a straight path to equal ordinary rotated text, is the independent
+check. The evidence and the regeneration command are in the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 ### Allowed nearest-neighbor reference differences
 
@@ -167,7 +191,6 @@ noted.
 | -------------------- | ---------------------------------------- | ------------------------------------------------- |
 | text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
 | text/textPath        | m-L-Z-path                               | Minor char                                        |
-| text/textPath        | mixed-children-1                         | AA diffs                                          |
 | text/textPath        | nested                                   | Minor char                                        |
 | text/textPath        | path-with-ClosePath                      | Minor char                                        |
 | text/textPath        | simple-case                              | Minor char                                        |
@@ -178,7 +201,6 @@ noted.
 | text/textPath        | tspan-with-absolute-position             | Minor char                                        |
 | text/textPath        | tspan-with-relative-position             | Minor char                                        |
 | text/textPath        | two-paths                                | Minor char                                        |
-| text/textPath        | very-long-text                           | AA diffs                                          |
 | text/textPath        | with-baseline-shift                      | Minor char                                        |
 | text/textPath        | with-coordinates-on-text                 | Minor char                                        |
 | text/textPath        | with-coordinates-on-textPath             | Minor char                                        |

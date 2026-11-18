@@ -1641,15 +1641,18 @@ INSTANTIATE_TEST_SUITE_P(
                 {"m-L-Z-path.svg", Params::WithGoldenOverride(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
+                // The vendored PNG is byte-identical to simple-case.png (align placement), so it
+                // does not depict method="stretch". The golden is Donner's own rendering, a
+                // regression guard; testdata/golden/README.md records its evidence and
+                // regeneration.
                 {"method=stretch.svg",
-                 Params::Skip("Implemented by warping outline endpoints and control points along "
-                              "path normals; the vendored reference is byte-identical to "
-                              "simple-case.png and therefore pins align placement. Independent "
-                              "geometry and renderer regressions cover the stretch contract")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-method=stretch.png")
+                     .withReason("Reference disagreement: the vendored PNG is align placement")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
-                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"mixed-children-2.svg",
                  Params::Skip("SVG 2 positions text after textPath at the geometric path endpoint; "
                               "the reference continues from the occupied text extent")},
@@ -1704,7 +1707,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
-                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
                 {"with-baseline-shift.svg",
