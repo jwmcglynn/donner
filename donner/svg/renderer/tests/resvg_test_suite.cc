@@ -1668,9 +1668,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
+                // SVG 2 continues the text after a textPath from the path's end point; the
+                // vendored PNG continues from the end of the glyphs on the path, so the golden is
+                // Donner's own rendering; testdata/golden/README.md records its evidence.
                 {"mixed-children-2.svg",
-                 Params::Skip("SVG 2 positions text after textPath at the geometric path endpoint; "
-                              "the reference continues from the occupied text extent")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png")
+                     .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"nested.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-nested.png")
                      .withReason("Minor char")},
