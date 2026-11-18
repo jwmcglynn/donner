@@ -66,8 +66,6 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
-| painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
-| painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
 | painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
@@ -117,21 +115,6 @@ it on the unkerned advance, 4.03 device px left of the kerned center, while SVG 
 anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
 `font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
 command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
-
-`with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
-(`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
-(TinyGolden and GeodeGolden pass at the default budget). Evidence that resvg's
-golden is the artifact: resvg rasterizes pattern tiles at a rounded integer pixel
-size, and this test's context bounding box yields a fractional 56.57px on-screen
-tile that resvg draws as 57px, stretching the tile period by ~0.8%. Donner repeats
-the tile at the exact period. A numeric grid fit confirms it: Donner's render fits
-an ideal diamond grid anchored at the computed context box
-`(31.82, -116.67), 226.27²` with score 1.0, while resvg's golden fits _no_ ideal
-grid (best score 0.899 — its grid drifts, consistent with per-tile rounding). The
-integer-tile pattern goldens in the same category (`with-pattern-in-use`,
-`with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
-exact pixel sizes) match Donner exactly, isolating the discrepancy to the
-fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 ### Vertical text: resvg's own model
 

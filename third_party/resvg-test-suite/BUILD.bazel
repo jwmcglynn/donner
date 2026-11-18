@@ -97,6 +97,15 @@ draws. Their SVG inputs are byte-identical at both revisions.
   tests/text/lengthAdjust/with-underline.png
   tests/text/text-decoration/with-textLength-on-a-single-character.png
 
+From the same revision and license, these PNGs were replaced with their 300x300 versions, which
+Donner matches within the default allowance on both CPU text tiers and on Geode with Metal or
+software Vulkan. The snapshot's with-pattern-objectBoundingBox-in-use reference
+rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
+revisions.
+
+  tests/painting/context/with-pattern-objectBoundingBox-in-use.png
+  tests/painting/marker/orient=auto-on-M-C-C-4.png
+
 From the same revision and license, these raster-image PNGs were replaced with their 300x300
 versions. The snapshot's references mixed several historical upscalers: a browser's bilinear
 filter with 4-bit subpixel weights, an older resvg that resampled each image to its user-space
