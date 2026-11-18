@@ -186,6 +186,8 @@ draw: exact coverage on pixel-aligned seams and a resampled tile on fractional o
 | Category | Test | Reason |
 | --- | --- | --- |
 | paint-servers/pattern | recursive-on-child | Exact tile-edge stroke, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
+| paint-servers/pattern | out-of-order-referencing | Independent tile rectangles preserve the two fractional periods and clipped green strips |
+| paint-servers/pattern | text-child | Independent clipped text cells preserve glyph placement under skew |
 | paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
 | paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
 

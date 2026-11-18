@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 200">
+  <title>Text tiles clipped before skewing their user-space grid</title>
+  <defs>
+    <clipPath id="region"><rect x="20" y="20" width="160" height="160" rx="20" ry="20"/></clipPath>
+    <clipPath id="tile"><rect width="40" height="25"/></clipPath>
+    <g id="cell" clip-path="url(#tile)">
+      <rect width="100" height="40" fill="none" stroke="green"/>
+      <text x="2" y="20" font-family="Noto Sans" font-size="20">Text</text>
+    </g>
+    <g id="row">
+      <use xlink:href="#cell" x="-40" y="0"/>
+      <use xlink:href="#cell" x="0" y="0"/>
+      <use xlink:href="#cell" x="40" y="0"/>
+      <use xlink:href="#cell" x="80" y="0"/>
+      <use xlink:href="#cell" x="120" y="0"/>
+      <use xlink:href="#cell" x="160" y="0"/>
+      <use xlink:href="#cell" x="200" y="0"/>
+    </g>
+  </defs>
+  <g clip-path="url(#region)">
+    <g transform="skewX(10)">
+      <use xlink:href="#row" x="0" y="0"/>
+      <use xlink:href="#row" x="0" y="25"/>
+      <use xlink:href="#row" x="0" y="50"/>
+      <use xlink:href="#row" x="0" y="75"/>
+      <use xlink:href="#row" x="0" y="100"/>
+      <use xlink:href="#row" x="0" y="125"/>
+      <use xlink:href="#row" x="0" y="150"/>
+      <use xlink:href="#row" x="0" y="175"/>
+      <use xlink:href="#row" x="0" y="200"/>
+    </g>
+  </g>
+  <rect x="20" y="20" width="160" height="160" rx="20" ry="20" fill="none" stroke="darkblue"/>
+  <rect x="1" y="1" width="198" height="198" fill="none" stroke="black"/>
+</svg>
