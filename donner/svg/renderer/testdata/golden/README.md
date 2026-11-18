@@ -190,8 +190,10 @@ sample grid, changing only the subdivision scale to match the internal scan remo
 alpha differences larger than one code. A one-code accumulation rounding difference remains.
 
 Firefox 153.0 independently rendered both fixtures at 500 x 500, device pixel ratio 1, using the
-suite's Noto Sans Regular font. The harness compares with these images at its default 0.02
-threshold and 100-pixel allowance. The Geode corpus lane has a separate feature gate for text.
+suite's Noto Sans Regular font. Firefox 157.0 regenerated both PNGs byte for byte. Its text box was
+41.60..158.40 by 45.60..127.60 user units, consistent with glyph cells. The harness compares with
+these images at its default 0.02 threshold and 100-pixel allowance. The Geode corpus lane has a
+separate feature gate for text.
 
 | Gradient | Simple text | Full text |
 | --- | ---: | ---: |
