@@ -597,8 +597,8 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 **Current status:** normal horizontal BiDi, `direction`, and a `bidi-override` on the `<text>`
 element itself are implemented ([0069](0069-bidi_text_layout.md)). `text/unicode-bidi/bidi-override`
 compares on the full text tier at default parameters, with 100 differing pixels at the default
-limit of 100. `text/direction/rtl` orders and anchors correctly but stays skipped: its
-reference shapes Arabic with Noto Sans Arabic, which the test fonts lack.
+limit of 100. `text/direction/rtl` compares on the full text tier at default parameters against
+the vendored Noto Sans Arabic face its reference uses.
 `text/direction/rtl-with-vertical-writing-mode` is undefined behavior (svgwg#618).
 
 ### F12: `transform-origin` on paint-servers / `<image>` / text
