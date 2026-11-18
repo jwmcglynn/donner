@@ -37,7 +37,7 @@ _SKIPPED = {"outcome": "skipped"}
 # The receipts of a trusted pull request whose lanes ran every phase the manifest names.
 _COMPLETE = {
     "linux-self-hosted": _receipt("linux-self-hosted", {
-        "build": _ran(), "test": _ran(), "local_xvfb": _ran(),
+        "build": _ran(), "test": _ran(),
         "deterministic_soak_probe": _ran(1), "cmake_consumer": _ran()}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
         "test": _ran(), "geode_test": _ran(6),
@@ -101,7 +101,7 @@ class CoverageContractTest(unittest.TestCase):
         # nothing: the change-based steps run and find no tests, and the browser and native
         # Metal lanes it gates skip. The fixed-suite steps still run their tests.
         receipts = copy.deepcopy(_COMPLETE)
-        for job, steps in (("linux-self-hosted", ("build", "test", "local_xvfb")),
+        for job, steps in (("linux-self-hosted", ("build", "test")),
                            ("macos-self-hosted", ("test", "browser_preflight",
                                                   "browser_test"))):
             for step in steps:
@@ -159,7 +159,7 @@ class CoverageContractTest(unittest.TestCase):
                                     and "2026-10-31" in line for line in excepted), excepted)
 
     def test_portable_linux_phases_require_self_hosted_receipts(self):
-        for step in ("local_xvfb", "cmake_consumer", "deterministic_soak_probe"):
+        for step in ("cmake_consumer", "deterministic_soak_probe"):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
                 receipts["linux-self-hosted"]["steps"][step] = _SKIPPED
@@ -240,9 +240,9 @@ class CoverageContractTest(unittest.TestCase):
         self.assertEqual([], problems)
         self.assertFalse(any(line.startswith("macos /") for line in excepted))
         receipts["linux-self-hosted"]["steps"]["test"] = _SKIPPED
-        self.assertEqual(1, len(self._check(receipts, selection)[0]))
+        self.assertEqual(2, len(self._check(receipts, selection)[0]))
         # A fallback does not change routing.
-        self.assertEqual(1, len(self._check(receipts, dict(selection, fallback=True))[0]))
+        self.assertEqual(2, len(self._check(receipts, dict(selection, fallback=True))[0]))
 
     def test_bep_counts_separate_executed_from_cached_results(self):
         events = [

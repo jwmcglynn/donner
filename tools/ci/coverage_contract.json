@@ -51,11 +51,11 @@
         },
         "local-display": {
           "when": "always",
-          "description": "Tests that need the self-hosted runner's Xvfb display.",
+          "description": "Selected display tests execute locally and uncached within the native test graph.",
           "counterparts": [
             {
               "job": "linux-self-hosted",
-              "step": "local_xvfb"
+              "step": "test"
             }
           ]
         },

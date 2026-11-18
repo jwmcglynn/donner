@@ -307,12 +307,16 @@ COUNTERPART_ALLOWLIST = {
        "hosted Linux runs its compiles on the cloud executor while the self-hosted lane has its "
        "own executor. Tests remain on the hosted runner for its display dependencies."),
     **_counterpart_entries("linux", "linux-self-hosted", [
-        ("*", "flag-pr-only", "--strategy=TestRunner=remote"),
+        ("Build", "flag-pr-only", lanes.REMOTE_ONLY),
+        ("*", "flag-pr-only", lanes.VENUE_METADATA),
         ("*", "flag-pr-only", "--remote_local_fallback=false"),
         ("*", "flag-pr-only", "--incompatible_remote_local_fallback_for_remote_cache=false"),
         ("*", "flag-pr-only", "--remote_timeout=60s"),
         ("*", "flag-pr-only", "--remote_download_outputs=minimal"),
         ("Test", "flag-pr-only", lanes.DIAG_TEST[-1]),
+        ("Test", "startup-pr-only", lanes.REQUIRE_EXECUTOR),
+        ("Test", "flag-pr-only", lanes.REMOTE_OR_DISPLAY),
+        *[("Test", "flag-pr-only", flag) for flag in lanes.VENUE_ANALYSIS],
     ], "Runner-specific remote execution settings; they choose where actions run and which "
        "outputs come back, not what is built or tested."),
     **_counterpart_entries("linux", "linux-self-hosted", [
@@ -332,7 +336,7 @@ COUNTERPART_ALLOWLIST = {
     ], "The self-hosted lane swaps each locally isolated GPU suite for its remote wrapper "
        "(tools/ci_remote_gpu_targets.py), which runs the same implementation and shards, so it "
        "keeps the remote wrappers and drops the local-only targets; hosted Linux does the "
-       "reverse. The local-display targets this drops run in the self-hosted job's Xvfb step."),
+       "reverse. The two Xvfb rules select local execution in the shared test graph."),
 }
 
 _cloud_tree = _counterpart_entries("linux", "linux-self-hosted", [
@@ -346,7 +350,7 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
     *[(step, "flag-main-only", flag) for step in ("Build", "Test")
       for flag in _config_flags("buildbuddy-re", step.lower())],
     *[("*", "flag-pr-only", flag) for flag in (
-        "--strategy=TestRunner=remote", "--remote_local_fallback=false",
+        "--remote_local_fallback=false",
         "--incompatible_remote_local_fallback_for_remote_cache=false", "--remote_timeout=60s")],
     *[(step, "flag-pr-only", "--remote_download_outputs=minimal")
       for step in ("Build", "Test")],
@@ -356,12 +360,18 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
                              ("execution_log_compact_file", "exec.log.zst"),
                              ("profile", "profile.gz"))],
     ("Test", "flag-pr-only", lanes.DIAG_TEST[-1]),
+    ("Test", "startup-pr-only", lanes.REQUIRE_EXECUTOR),
+    ("Test", "flag-pr-only", lanes.REMOTE_OR_DISPLAY),
+    ("Build", "flag-pr-only", lanes.REMOTE_ONLY),
+    ("*", "flag-pr-only", lanes.VENUE_METADATA),
+    *[("Test", "flag-pr-only", flag) for flag in lanes.VENUE_ANALYSIS],
+    ("Test deterministic fuzzer soak wrapper", "flag-pr-only", lanes.REMOTE_ONLY),
     ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
     ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
     ("Test", "target-main-only", SELECTED_TARGETS),
     ("Test", "target-pr-only", "$(python3 tools/ci_remote_gpu_targets.py %s)" % SELECTED_TARGETS),
 ], "The ARM64 runner uses its own remote backend, strict fallback policy and diagnostics. "
-   "Remote GPU wrappers retain the same implementation; native display checks run separately. "
+   "Remote GPU wrappers retain the same implementation; native display checks run locally in the shared graph. "
    "The maintainer accepts the x86_64 toolchain/runtime gap before merge."))
 INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
     (step, "step-main-only", "") for step in (

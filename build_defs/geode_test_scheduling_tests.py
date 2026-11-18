@@ -358,12 +358,13 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn("run: python3 tools/ci/lane.py phase linux-self-hosted test",
                       self.main_workflow)
         phase = lanes.LANES["linux-self-hosted"].phases["test"]
-        self.assertEqual([lanes.RequireSelection, lanes.MapRemoteGpu, lanes.Bazel],
+        self.assertEqual([lanes.RequireSelection, lanes.MapRemoteGpu, lanes.Bazel, lanes.Command],
                          [type(action) for action in phase.actions])
         [command] = [action["argv"] for action in
                      lane.dry_run("linux-self-hosted", "test", {})["actions"]
                      if action["action"] == "bazel"]
-        self.assertIn("--strategy=TestRunner=remote", command)
+        self.assertIn("--strategy=TestRunner=remote,local", command)
+        self.assertIn(lanes.REQUIRE_EXECUTOR, command)
         self.assertIn("--remote_local_fallback=false", command)
         self.assertIn("--test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak", command)
         self.assertEqual("$(python3 tools/ci_remote_gpu_targets.py @selected_targets)",

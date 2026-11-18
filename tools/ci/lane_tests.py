@@ -168,8 +168,7 @@ class LaneTest(unittest.TestCase):
 
     def test_empty_selection_fails_a_guarded_phase_before_bazel(self):
         for lane, phase, where in (("linux", "test", "the test step"),
-                                   ("linux-self-hosted", "local_xvfb",
-                                    "the local Xvfb test step"),
+                                   ("linux-self-hosted", "test", "the test step"),
                                    ("macos-self-hosted", "browser_test",
                                     "the browser test step"),
                                    ("macos", "browser_preflight", "the browser preflight")):
@@ -200,24 +199,6 @@ class LaneTest(unittest.TestCase):
                                            TARGETS_AFFECTED=value)
                 self.assertEqual(result.returncode == 1 and "Empty target selection" in
                                  result.stdout, expected == "empty", result.stdout)
-                self.reset()
-
-    def test_local_xvfb_tolerates_a_selection_without_display_tests(self):
-        native = "//donner/editor/tests:editor_window_vulkan_surface_tests"
-        for fallback, affected, target, status in (
-                ("false", native, native, 0),
-                ("false", "//donner/base:base_tests", "//donner/base:base_tests", 4),
-                ("true", "", "//...", 0)):
-            with self.subTest(fallback=fallback, affected=affected):
-                result, calls = self.run_phase("linux-self-hosted", "local_xvfb",
-                                               {"bazelisk test": [["", status]]},
-                                               TARGETS_FALLBACK=fallback,
-                                               TARGETS_AFFECTED=affected)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                [call] = self.bazel_calls(calls)
-                self.assertIn("--test_tag_filters=requires_xvfb,-fuzz_soak", call)
-                self.assertEqual(call[-1], target)
-                self.assertEqual("No test targets" in result.stdout, status == 4)
                 self.reset()
 
     def test_an_unguarded_build_runs_with_an_empty_selection(self):
@@ -322,6 +303,8 @@ class LaneTest(unittest.TestCase):
         self.assertEqual(calls[0], ["remote_gpu", "//a:a", "//b:b"])
         self.assertEqual(calls[1], ["watchdog", "/diag/test/console.log"])
         self.assertEqual(calls[2][-2:], ["//a:a_remote", "//b:b"])
+        self.assertEqual(calls[3], ["remote_gpu", "--check-results", "/diag/test/bep.json",
+                                    "//a:a", "//b:b"])
         for answer, message in ((["//a:a", 1], "Failed to select remote GPU test targets."),
                                 ([" \n", 0], "Remote GPU target selection became empty.")):
             with self.subTest(message=message):
@@ -406,7 +389,7 @@ class LaneTest(unittest.TestCase):
     def test_dry_run_without_a_selection_prints_its_symbol(self):
         result, _ = self.run_phase("linux-self-hosted", "test", dry_run=True)
         actions = json.loads(result.stdout)["actions"]
-        self.assertEqual(actions[-1]["argv"][-1],
+        self.assertEqual(actions[-2]["argv"][-1],
                          "$(python3 tools/ci_remote_gpu_targets.py @selected_targets)")
 
     def test_unknown_phase_is_a_usage_error(self):

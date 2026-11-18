@@ -32,7 +32,7 @@ Split = collections.namedtuple("Split", "name")
 
 # Actions, run in order; the first failure ends the phase with its status unless `defer` is set,
 # in which case the phase continues and ends with the first deferred failure.
-Bazel = collections.namedtuple("Bazel", "args wrappers defer")
+Bazel = collections.namedtuple("Bazel", "args wrappers defer startup")
 Command = collections.namedtuple("Command", "argv defer")
 Notice = collections.namedtuple("Notice", "text")
 # Fails when the selection is empty: that is a defect in the target derivation, not a change with
@@ -55,8 +55,8 @@ Phase = collections.namedtuple("Phase", "step actions")
 Lane = collections.namedtuple("Lane", "startup phases")
 
 
-def bazel(*args, wrappers=(), defer=False):
-    return Bazel(tuple(args), tuple(wrappers), defer)
+def bazel(*args, wrappers=(), defer=False, startup=()):
+    return Bazel(tuple(args), tuple(wrappers), defer, tuple(startup))
 
 
 def command(*argv, defer=False):
@@ -104,9 +104,27 @@ BUILDBUDDY = Split("BUILDBUDDY_FLAGS")
 # still fails a dead endpoint fast. These stay on the command line: a fallback flag anywhere in
 # .bazelrc could outrank the BuildBuddy fragment's on every lane, so //tools:security_workflow_
 # policy_tests (test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment) bans them there.
-SELF_HOSTED_REMOTE = ("--strategy=TestRunner=remote", "--remote_local_fallback=false",
-                      "--incompatible_remote_local_fallback_for_remote_cache=false",
-                      "--remote_timeout=60s")
+REMOTE_ONLY = "--strategy=TestRunner=remote"
+REMOTE_OR_DISPLAY = "--strategy=TestRunner=remote,local"
+# Reject a missing executor before Bazel can select a local strategy for ordinary tests.
+REQUIRE_EXECUTOR = (
+    '--invocation_policy=flag_policies {flag_name:"remote_executor" '
+    'commands:"test" disallow_values {disallowed_values:""}} '
+    'flag_policies {flag_name:"experimental_remote_scrubbing_config" commands:"test" use_default {}}'
+)
+REMOTE_TRANSPORT = ("--remote_local_fallback=false",
+                    "--incompatible_remote_local_fallback_for_remote_cache=false",
+                    "--remote_timeout=60s")
+# Keep this Starlark semantics flag identical through fetch, build and test so the venue
+# aspect can inspect the configured actions without reloading the repository at the Test step.
+VENUE_METADATA = "--experimental_google_legacy_api"
+SELF_HOSTED_REMOTE = (REMOTE_ONLY, VENUE_METADATA, *REMOTE_TRANSPORT)
+VENUE_ANALYSIS = (
+    "--aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue",
+    "--noexperimental_merged_skyframe_analysis_execution",
+    "--nokeep_going",
+    "--build_tests_only",
+)
 # Build without the Bytes: the self-hosted runner is a thin remote-execution client, and tests run
 # remotely, so only test logs and XML come back. These stay on the command line: an rc file would
 # read the regular expression's backslashes as escapes.
@@ -166,10 +184,13 @@ LINUX_LANES = {
         "test": Phase("Test", (
             RequireSelection("the test step"),
             MapRemoteGpu(),
-            bazel("test", *LINUX, "--test_output=errors", *SELF_HOSTED_REMOTE, *DIAG_TEST,
+            bazel("test", *LINUX, "--test_output=errors", REMOTE_OR_DISPLAY,
+                  VENUE_METADATA, *REMOTE_TRANSPORT, *VENUE_ANALYSIS, *DIAG_TEST,
                   tags("-manual", "-perf", "-local-gpu-isolated", "-fuzz_soak"),
                   *diagnostics("test"), REMOTE_GPU_SELECTED,
-                  wrappers=TEST_WRAPPER + watchdog("test")),
+                  wrappers=TEST_WRAPPER + watchdog("test"), startup=(REQUIRE_EXECUTOR,)),
+            command("python3", "tools/ci_remote_gpu_targets.py", "--check-results",
+                    "$DIAG_DIR/test/bep.json", SELECTED),
         )),
         "wgpu_resvg_reference": Phase("Test Linux WebGPU resvg reference", (
             bazel("test", *LINUX, "--test_output=errors", *SELF_HOSTED_REMOTE, *DIAG_TEST,
@@ -178,12 +199,6 @@ LINUX_LANES = {
         )),
         "deterministic_soak_probe": Phase("Test deterministic fuzzer soak wrapper",
                                           (_SELF_HOSTED_SOAK,)),
-        "local_xvfb": Phase("Test local Xvfb targets", (
-            RequireSelection("the local Xvfb test step"),
-            bazel("test", *LINUX, "--nocache_test_results", "--test_output=errors",
-                  tags("requires_xvfb", "-fuzz_soak"), *SELF_HOSTED_REMOTE,
-                  "--strategy=TestRunner=local", SELECTED, wrappers=TEST_WRAPPER),
-        )),
     }),
 }
 
