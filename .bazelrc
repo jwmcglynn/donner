@@ -828,3 +828,4 @@ build:ci-platforms --spawn_strategy=remote
 build:ci-platforms --strategy=TestRunner=remote
 build:ci-platforms --noremote_local_fallback
 build:ci-platforms --incompatible_repo_env_ignores_action_env
+test:ci-platforms --test_tag_filters=

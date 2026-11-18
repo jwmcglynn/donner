@@ -400,6 +400,7 @@ donner_cc_test(
     name = "ci_" + os + "_ndebug_test",
     binary = ":base_tests_ndebug",
     target_platform = "//tools/ci:" + os + "_ci",
+    visibility = ["//tools/ci:__pkg__"],
     tags = ["manual"],
     exec_compatible_with = ["@platforms//os:" + os],
 ) for os in ["linux", "macos"]]

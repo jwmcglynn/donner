@@ -1,3 +1,4 @@
+load("@bazel_lib//lib:transitions.bzl", "platform_transition_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -826,4 +827,30 @@ platform(
         "--macos_minimum_os=13.3",
     ],
     visibility = ["//visibility:public"],
+)
+
+
+sh_binary(
+    name = "check_worker_kernel",
+    srcs = ["check_worker_kernel.sh"],
+)
+
+[platform_transition_test(
+    name = "ci_" + os + "_kernel_test",
+    binary = ":check_worker_kernel",
+    args = kernel,
+    exec_compatible_with = ["@platforms//os:" + os],
+    tags = ["manual", "external"],
+    target_platform = ":" + os + "_ci",
+) for os, kernel in [("linux", ["Linux", "aarch64"]), ("macos", ["Darwin", "arm64"])]]
+
+test_suite(
+    name = "dual_platform_canary",
+    tags = ["manual"],
+    tests = [
+        ":ci_linux_kernel_test",
+        ":ci_macos_kernel_test",
+        "//donner/base:ci_linux_ndebug_test",
+        "//donner/base:ci_macos_ndebug_test",
+    ],
 )
