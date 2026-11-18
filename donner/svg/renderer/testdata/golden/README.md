@@ -23,6 +23,27 @@ Both compare at the ordinary 100-pixel budget. `dy-with-tiny-coordinates` sets a
 under `scale(100)`; its former 1100-pixel allowance covered full-tier advances rounded to 1/64
 pixel of that tiny face, which the full tier no longer does.
 
+## Nearest-neighbor sampling for `on-feImage`
+
+The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
+`image-rendering="optimizeSpeed"`. Its 500 × 500 vendored reference uses a different sampling
+grid. The reference introduced in [#1767](https://github.com/jwmcglynn/donner/pull/1767)
+samples the embedded PNG independently at destination pixel centers.
+
+To reconstruct `resvg-on-feImage.png`, start with the vendored `on-feImage.png` and decode the
+PNG in the SVG's data URL. The default filter region expands the 120-unit square by 10% on
+each side. At 2.5 device pixels per unit it occupies the 360 × 360 square starting at (70, 70).
+For each integer destination coordinate `70 <= x, y < 430`, copy the embedded RGBA texel at
+`floor((x - 70 + 0.5) * 64 / 360)`, `floor((y - 70 + 0.5) * 64 / 360)`. Keep the vendored
+pixels outside that square, including the frame.
+
+| SHA-256 input or result | Digest |
+| --- | --- |
+| Vendored SVG | `2f08caa2e27c3f5911bc14328e63cd9564d79e7e9840b765c36110c403e3d773` |
+| Vendored PNG | `94be9637ef48a9996c6d223fdc0187e6df98a0bff125d0f9709601067bb5f5b4` |
+| Reconstructed pixels, row-major RGBA8 | `c7dadd180384db409d6ad349be742cd02a7eef087d7be74e48ae9998d167ca9e` |
+| Committed golden PNG | `e94b02b863268c3579d36929691e9a8cfb5c389976fe459f00d2f3aa122a4154` |
+
 ## Emoji positioning reference
 
 `resvg-compound-emojis-and-coordinates-list.png` is generated independently with
