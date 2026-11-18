@@ -175,16 +175,6 @@ outside the label bands. Both backends compare the live filtered squares against
 pixels and the live labels against rasterized outlines from usvg. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-adjust-filter-references)
 records the reference construction and qualification.
 
-### Upright Latin and crosshair coverage
-
-| Category | Test | Reference |
-| --- | --- | --- |
-| text/glyph-orientation-vertical | simple-case | Font-derived letter outlines plus the original vector crosshairs and frame |
-
-The historical crosshair coverage accounts for 731 of 733 differing pixels. Both CPU text
-tiers compare the complete scene against an outlined control with default parameters. The
-golden README records the font metrics, browser controls, and regeneration command.
-
 ### Backend-difference goldens (text)
 
 These render correctly but differ from resvg because Donner's text stack (and the
@@ -197,6 +187,16 @@ Donner backend the test runs under.
 | text/text | compound-emojis-and-coordinates-list         | Emoji bitmap scaling differs from the golden        |
 | text/text | rotate-on-Arabic                             | Arabic shaping requires text-full                   |
 | text/text | x-and-y-with-multiple-values-and-arabic-text | Arabic shaping; vertical-axis AA diff not the focus |
+
+### Upright Latin and crosshair coverage
+
+| Category | Test | Reference |
+| --- | --- | --- |
+| text/glyph-orientation-vertical | simple-case | Font-derived letter outlines plus the original vector crosshairs and frame |
+
+The historical crosshair coverage accounts for 731 of 733 differing pixels. Both CPU text
+tiers compare the complete scene against an outlined control with default parameters. The
+golden README records the font metrics, browser controls, and regeneration command.
 
 ### Blessed minor diffs (textPath / text-decoration)
 
