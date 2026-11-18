@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_platform_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -806,4 +807,44 @@ py_test(
     srcs = ["cmake_cache_tests.py"],
     data = ["cmake_cache.py"],
     deps = ["@rules_python//python/runfiles"],
+)
+
+platform(
+    name = "linux_ci",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
+    exec_properties = {"OSFamily": "linux", "ISA": "aarch64", "container-image": "none"},
+    visibility = ["//visibility:public"],
+)
+
+platform(
+    name = "macos_ci",
+    parents = [":remote_macos_aarch64"],
+    visibility = ["//visibility:public"],
+)
+
+
+sh_binary(
+    name = "check_worker_kernel",
+    srcs = ["check_worker_kernel.sh"],
+)
+
+[ci_platform_test(
+    name = "ci_" + os + "_kernel_test",
+    dep = ":check_worker_kernel",
+    darwin = os == "macos",
+    args = kernel,
+    exec_compatible_with = ["@platforms//os:" + os],
+    tags = ["manual", "external"],
+    target_platform = ":" + os + "_ci",
+) for os, kernel in [("linux", ["Linux", "aarch64"]), ("macos", ["Darwin", "arm64"])]]
+
+test_suite(
+    name = "dual_platform_canary",
+    tags = ["manual"],
+    tests = [
+        ":ci_linux_kernel_test",
+        ":ci_macos_kernel_test",
+        "//donner/base:ci_linux_ndebug_test",
+        "//donner/base:ci_macos_ndebug_test",
+    ],
 )

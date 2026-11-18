@@ -1276,3 +1276,37 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
         srcs = kwargs.get("srcs", []),
         hdrs = kwargs.get("hdrs", []),
     )
+
+# An incoming transition applies to the real executable *and* Bazel's TestRunner.
+# Keep Linux's configured host tools. Darwin uses Apple tools on Darwin workers.
+_CI_PLATFORM_OPTIONS = [
+    "//command_line_option:platforms",
+    "//command_line_option:host_platform",
+    "//build_defs:llvm_latest",
+]
+
+def _ci_test_platform(settings, attr):
+    options = dict(settings)
+    options["//command_line_option:platforms"] = [str(attr.target_platform)]
+    if attr.darwin:
+        options["//command_line_option:host_platform"] = str(Label("//tools/ci:remote_macos_aarch64"))
+        options["//build_defs:llvm_latest"] = "0"
+    return options
+
+_ci_test_transition = transition(
+    implementation = _ci_test_platform,
+    inputs = _CI_PLATFORM_OPTIONS,
+    outputs = _CI_PLATFORM_OPTIONS,
+)
+
+ci_platform_test = rule(
+    implementation = _donner_transitioned_executable_impl,
+    test = True,
+    cfg = _ci_test_transition,
+    attrs = {
+        "darwin": attr.bool(),
+        "dep": attr.label(mandatory = True, executable = True, cfg = "target"),
+        "target_platform": attr.label(mandatory = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
+    } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
+)
