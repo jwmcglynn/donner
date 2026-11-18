@@ -434,10 +434,12 @@ text for the font's color bitmap strikes.
 
 ## Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent`
 
-`donner-named-value.png` and `donner-named-value-without-a-parent.png` are 500x500 renderings by
-the software renderer with simple text at commit `21c59c75`, at default settings. Full text
-differs from `donner-named-value.png` by 13 pixels and from the other by 0, on macOS and on
-Linux aarch64; Geode does not render these text rows.
+The 500x500 named-size goldens preserve content from the software renderer with simple text at
+commit `21c59c75`. For `donner-named-value.png`, the black frame uses independent pixel area
+from `third_party/resvg-test-suite/reference-sources/named-value-frame.svg`. The source specifies
+an explicit outer rectangle and hole at eight times the final resolution. Averaging each 8x8
+block gives the frame coverage. Every pixel outside the frame preserves its original RGBA.
+Geode does not render these text rows.
 
 Each row sizes rects of `10em` under the named `font-size` keywords. The em sizes in pixels,
 measured from the rect coverage (the SVG sets `font-size="12"` on the group):
@@ -459,15 +461,127 @@ vendored PNGs; that is a visual verdict. Following CSS Fonts 4 here is a maintai
 
 | Golden | PNG SHA-256 |
 | --- | --- |
-| `donner-named-value.png` | `7e65b966683f6daad8a6b931d67bc8a61be0de4a29f606071b3967cfa22fd3cf` |
+| `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` |
 | `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` |
 
-To regenerate, delete a file and run from the repository root:
+### Reproduce the named-value frame hybrid
+
+1. Export the original font-policy PNG. Its Git blob is
+   `59d801f5a33b0eaac75c16e1167245d848c2c0a3` and its PNG SHA-256 is
+   `7e65b966683f6daad8a6b931d67bc8a61be0de4a29f606071b3967cfa22fd3cf`.
+
+   ```sh
+   git cat-file blob 59d801f5a33b0eaac75c16e1167245d848c2c0a3 > font-policy.png
+   ```
+
+2. Render the independent frame source with resvg 0.49.0 from the repository root.
+   The resulting 4000x4000 image has fully transparent or fully opaque pixels.
+
+   ```sh
+   resvg --width 4000 --height 4000 \
+     third_party/resvg-test-suite/reference-sources/named-value-frame.svg frame-8x.png
+   ```
+
+3. Decode `font-policy.png` as straight RGBA and `frame-8x.png` as 8-bit alpha.
+   For output pixel `(x,y)`, sum the 64 alpha bytes in columns `8*x` through
+   `8*x+7` and rows `8*y` through `8*y+7` of the frame image. Set
+   `coverage = (sum + 32) // 64`. Replace the output pixel with
+   `(0, 0, 0, coverage)` when coverage is positive. Preserve all four original
+   bytes everywhere else. This changes 2,988 output samples exclusively in the
+   frame. Encode the resulting 500x500 bytes as straight 8-bit RGBA. The checked-in
+   PNG uses filter 0 on every row and one IDAT deflated at level 6 with zlib 1.2.12,
+   between IHDR and IEND.
+
+### Reproduce the without-a-parent golden
+
+Remove only `donner-named-value-without-a-parent.png` and run from the repository root.
 
 ```sh
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
-  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*TextFontSize*named_value*'
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- \
+  '--gtest_filter=*TextFontSize*named_value_without_a_parent'
 ```
+
+## Inline text decoration and malformed lists
+
+The inline cases compare at 800×800. The half-unit crosshair covers two whole pixels at
+this size. The original SVGs exercise a valid space-separated decoration list and reject
+comma-separated and concatenated forms. The malformed inputs render identical undecorated
+text in resvg v0.49.0 and share one reference.
+
+The literal multiline scene uses Noto Sans Regular's 2.4-unit underline and strike
+thickness at 48 units. HarfBuzz gives the run an advance of 92.16 units. The underline
+starts at y=103.6, the adjusted overline at y=51.088, and the adjusted strike at y=80.944.
+The overline and strike positions exercise Donner's multiline spacing policy. The scene
+draws black fill with green stroke, with the underline and overline below the glyphs and
+strike above. A control using unadjusted positions differs by more than 13,800 pixels at
+default settings.
+
+Run from the repository root with the resvg v0.49.0 release CLI:
+
+```sh
+corpus=third_party/resvg-test-suite
+golden=donner/svg/renderer/testdata/golden
+resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" --width 800 --height 800 \
+  "$golden/all-types-inline-bands.svg" "$golden/resvg-all-types-inline-bands.png"
+resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" --width 800 --height 800 \
+  "$corpus/tests/text/text-decoration/all-types-inline-comma-separated.svg" \
+  "$golden/resvg-all-types-inline-no-decoration.png"
+```
+
+| Reference | SHA-256 |
+| --- | --- |
+| resvg-all-types-inline-bands.png | 4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911 |
+| resvg-all-types-inline-no-decoration.png | 2550df9e39e1e949b633b924c98995203e5bc5c134bfb9537cf8a9868e2082f7 |
+
+The nested-span test compares its 500×500 archived reference at a 0.09 color threshold.
+The underline takes its yellow fill and green stroke from the declaring child span.
+A literal 800×800 scene preserves both paints. Its supersampled reference rounds 20%
+coverage to roughly 25%, producing a full-row difference against analytic rectangle coverage.
+
+The rotated underline uses its 500×500 archived reference at a 0.03 color threshold.
+Over 4,000 common opaque gradient samples measure a wider horizontal gradient across the
+rotated glyphs in the archive. The effective widths are 246.5 device pixels in the archive
+and 230.8 in Donner. Both tests keep the ordinary 100-pixel limit.
+
+## Cyrillic combining mark position
+
+`complex-graphemes-and-coordinates-list.svg` positions the decomposed Cyrillic
+short i at `x="87" y="100 120"`. HarfBuzz forms one glyph from the two codepoints.
+The independent scene `cyrillic-first-y.svg` uses the equivalent precomposed glyph
+at `x="87" y="100"`, with the same frame and crosshair. With the bundled Noto Sans
+Regular face, the precomposed scene and the original decomposed scene with only
+the first y value produce byte-identical PNGs in resvg v0.49.0.
+
+At 800 × 800, the half-unit crosshair covers two whole pixels. The unchanged
+corpus fixture compares against the independent scene in full CPU text at the
+ordinary 0.02 threshold and 100-pixel allowance. Rendering the unchanged list
+directly with the release CLI provides a negative control that misplaces the
+interior mark. Placing the precomposed glyph at y=120 provides a second control.
+
+On macOS and Linux full CPU text, the independent reference differs by one
+pixel. The negative interior-y reference differs by 1,625 and the y=120
+cluster reference differs by 8,846 at the same settings.
+
+Run from the repository root with resvg v0.49.0:
+
+```sh
+corpus=third_party/resvg-test-suite
+golden=donner/svg/renderer/testdata/golden
+resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" --width 800 --height 800 \
+  "$golden/cyrillic-first-y.svg" "$golden/resvg-complex-graphemes-and-coordinates-list.png"
+resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" --width 800 --height 800 \
+  "$corpus/tests/text/text/complex-graphemes-and-coordinates-list.svg" cyrillic-bad-interior-y.png
+```
+
+| Reference input or output | SHA-256 |
+| --- | --- |
+| Corpus SVG | `95fe1532a1e6fc1fb3dc78d9771effb6da9d788e3a5c644aef57984c09d9e8e6` |
+| Noto Sans Regular | `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9` |
+| `cyrillic-first-y.svg` | `5bc36b1f85524d5bd9620fff0b9ccc162c237f51c60b9884efd70042786ca5aa` |
+| Independent reference PNG | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` |
+| Negative interior-y PNG | `8e853b11b3046cdba0497242e513bd0f641f27b09a33f4e2058666e66e8f2c39` |
+
 
 ## Donner-rendered font-size-adjust reference
 
@@ -612,6 +726,52 @@ those are manual visual grades of the vendored reference by browser and renderer
 whether an engine draws the case's intended picture but cannot resolve differences of a level or
 a pixel along an edge.
 
+### Filter input clipping and a narrower primitive subregion
+
+The three unchanged corpus fixtures use the ordinary 0.02 threshold and
+100-pixel allowance. Their adjacent archival PNGs remain available. In flat
+regions the archives give (0, 113, 49, 209) for the authored opaque seagreen.
+Compositing that color over white nearly reproduces the authored color. On a
+transparent background it does not preserve the alpha of a constant blur input.
+
+The [SVG 1.1 filter template rule](https://www.w3.org/TR/SVG11/filters.html#FilterElementHrefAttribute)
+inherits absent attributes from the referenced filter. It inherits filter
+primitives only when the referring filter defines none. Both `xlink:href`
+fixtures therefore resolve to the same sigma-4 blur and region
+`[36,164) × [52,212)`. The first inherits all bounds and the primitive. The
+second inherits its missing bounds and supplies its own sigma-4 primitive.
+The witness draws the original brush's intersection with the filter region,
+`[36,164) × [52,180)`, applies a padded blur, then clips the result to the region.
+Both rows use that image.
+
+For `with-region-and-subregion`, the filter's left edge is 49.6 in user units.
+The witness clips the input at that edge before blurring. The 100-unit primitive
+width clips the result at 149.6, equivalent to device x=374 at 500px. Alpha at x=373
+remains opaque on the midline. Treating the primitive's right edge as an input
+clip would create a blur ramp there and fails by more than 6,000 pixels.
+
+The reference images use the resvg 0.49.0 release CLI at 500x500, with the upstream
+MIT notice retained. Direct renders of the original SVGs by the same release
+produce too little alpha at the input clip. On a straight edge, the first
+interior pixel has alpha 72 rather than the approximately half-covered blurred
+edge at 132. A control that applies the clip only after the blur produces 255
+there. The explicit clipped-input witness follows the Gaussian profile within one
+alpha code on the measured left-edge cross section. Firefox 157 matches the
+witness under the ordinary comparator. On these SVG 1.1 `xlink:href` fixtures,
+Chrome 158 returns an empty filter result for the all-inherited case and uses
+different bounds for the filter with one local primitive.
+
+```sh
+cd donner/svg/renderer/testdata/golden
+resvg --width 500 --height 500 xlink-filter-bounds.svg resvg-xlink-filter-bounds.png
+resvg --width 500 --height 500 filter-input-and-subregion.svg resvg-filter-input-and-subregion.png
+```
+
+| Golden | PNG SHA-256 |
+| --- | --- |
+| `resvg-xlink-filter-bounds.png` | `9ebb7922a3da396ec9a892db7850c929acf2f1af071c7a0db672e38be1ad18e9` |
+| `resvg-filter-input-and-subregion.png` | `f999add4a549c79697a68a2995f7d59b3cc2f09b69f4dfba8ae44058b7f3296f` |
+
 ### `filters/filter/complex-order-and-xlink-href`
 
 Disposition: reference disagreement. `donner-complex-order-and-xlink-href.png` is a Donner CPU
@@ -641,6 +801,26 @@ To regenerate, delete the file and run from the repository root:
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*complex_order_and_xlink_href*'
 ```
+
+### `filters/feSpotLight/complex-transform`
+
+The 500x500 shared reference `resvg-complex-transform.png` uses the documented
+renderer convention for this skewed light. The independent model computes the
+radial source height and Sobel normals, the device-space light vector, the
+user-space soft cone, and the outer frame. Its only inputs are the fixture's
+geometry and the documented convention for cone attenuation.
+
+```sh
+python3 tools/resvg_parity/spotlight_reference.py /tmp/spotlight-reference.png
+python3 tools/resvg_parity/spotlight_reference.py --hard-cone /tmp/spotlight-hard-cone.png
+```
+
+At the ordinary 0.02 color threshold and 100-pixel allowance, the soft model
+counts zero differences against the shared PNG and 42,914 against the adjacent
+archive. All 250,000 pixels agree with the shared PNG within one visible RGBA
+code. Removing the cone fade counts 5,859 differences against the shared PNG.
+This control qualifies the selected renderer convention for this fixture under
+skew.
 
 ### `filters/feColorMatrix` identity rows
 

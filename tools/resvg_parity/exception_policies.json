@@ -287,13 +287,14 @@
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Keep the project regression image and the cone-edge evidence.",
+      "disposition": "Keep the existing spotlight image qualified by the independent full-scene model and hard-cone control.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
+        "tools/resvg_parity/spotlight_reference.py",
         "https://github.com/jwmcglynn/donner/pull/2406"
       ],
-      "removal_criteria": "Replace it when an independently shaded full scene establishes the transformed normals and cone attenuation.",
-      "reference_provenance": "Project replacement for the skew and cone-edge difference.",
+      "removal_criteria": "Use the adjacent reference when it agrees with the independent 500-pixel scene and the documented transformed lighting and soft cone at ordinary settings.",
+      "reference_provenance": "Existing project image independently reproduced from the fixture geometry and the documented renderer convention, with at most one visible RGBA code of error.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
@@ -456,26 +457,51 @@
       }
     },
     {
-      "id": "checkerboard-subregion",
+      "id": "checkerboard-xlink-input-clip",
       "paths": [
         "filters/filter/everything-via-xlink-href.svg",
-        "filters/filter/some-attributes-via-xlink-href.svg",
+        "filters/filter/some-attributes-via-xlink-href.svg"
+      ],
+      "kinds": [
+        "shared_golden"
+      ],
+      "classification": "reference-disagreement",
+      "disposition": "Keep the shared independently clipped-input blur reference at ordinary settings.",
+      "evidence": [
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/testdata/golden/xlink-filter-bounds.svg",
+        "https://www.w3.org/TR/SVG11/filters.html#FilterElementHrefAttribute"
+      ],
+      "removal_criteria": "Use adjacent references when they preserve opaque blur input and the correctly inherited hard filter bounds at ordinary settings.",
+      "reference_provenance": "resvg 0.49 rendering of the expanded and independently clipped input with a padded blur and post-clip.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-xlink-filter-bounds.png"
+      }
+    },
+    {
+      "id": "checkerboard-primitive-output-clip",
+      "paths": [
         "filters/filter/with-region-and-subregion.svg"
       ],
       "kinds": [
-        "threshold"
+        "shared_golden"
       ],
-      "classification": "reference-difference-under-audit",
-      "disposition": "Retain the measured checkerboard-exposed alpha allowance.",
+      "classification": "reference-disagreement",
+      "disposition": "Keep the independent filter-input clip and narrower primitive-output clip at ordinary settings.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "third_party/resvg-test-suite/BUILD.bazel",
-        "https://github.com/jwmcglynn/donner/pull/2406"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/testdata/golden/filter-input-and-subregion.svg",
+        "https://www.w3.org/TR/filter-effects-1/#FilterPrimitiveSubRegion"
       ],
-      "removal_criteria": "Remove after independently qualifying the mask, region, and blur-stage coverage with ordinary settings.",
-      "reference_provenance": "Archived image whose alpha difference is amplified by the checkerboard.",
-      "max_threshold": 0.18,
-      "max_pixels": 100
+      "removal_criteria": "Use the adjacent reference when it retains opaque source alpha and clips the narrower primitive result after blurring.",
+      "reference_provenance": "resvg 0.49 rendering of the explicitly clipped input, padded blur, and separate 100-unit output clip.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-filter-input-and-subregion.png"
+      }
     },
     {
       "id": "background-alpha",
@@ -619,25 +645,6 @@
       }
     },
     {
-      "id": "oklab-stop",
-      "paths": [
-        "paint-servers/stop/no-stop-color.svg"
-      ],
-      "kinds": [
-        "threshold"
-      ],
-      "classification": "reference-precision",
-      "disposition": "Retain the measured allowance for one-code opacity differences in the archive.",
-      "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
-      ],
-      "removal_criteria": "Use default settings with an independent reference that preserves the black default stop and its opacity ramp.",
-      "reference_provenance": "The archived gradient is black throughout. Its first interior column alternates alpha 254 and 255, and the comparison exposes that one-code opacity difference.",
-      "max_threshold": 0.03,
-      "max_pixels": 100
-    },
-    {
       "id": "nearest-feimage",
       "paths": [
         "painting/image-rendering/on-feImage.svg"
@@ -748,57 +755,6 @@
       }
     },
     {
-      "id": "viewport-stroke",
-      "paths": [
-        "structure/svg/preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-        "structure/svg/preserveAspectRatio=none.svg",
-        "structure/svg/preserveAspectRatio=xMaxYMax.svg",
-        "structure/svg/preserveAspectRatio=xMidYMid.svg",
-        "structure/svg/preserveAspectRatio=xMinYMin.svg",
-        "structure/svg/proportional-viewBox.svg"
-      ],
-      "kinds": [
-        "threshold"
-      ],
-      "classification": "renderer-gap",
-      "disposition": "Retain the existing bounds pending a qualified CPU frame-coverage fix.",
-      "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/2347"
-      ],
-      "removal_criteria": "Remove the allowance after bounded frame coverage passes the exact-area checks and the original viewport PNGs at default settings.",
-      "reference_provenance": "Archived references agree with independent viewport bounds and centered rectangular stroke area.",
-      "owning_issue": "https://github.com/jwmcglynn/donner/issues/2347",
-      "max_threshold": 0.14,
-      "max_pixels": 1000,
-      "bounds_by_fixture": {
-        "structure/svg/preserveAspectRatio-with-viewBox-not-at-zero-pos.svg": [
-          0.13,
-          500
-        ],
-        "structure/svg/preserveAspectRatio=none.svg": [
-          0.13,
-          1000
-        ],
-        "structure/svg/preserveAspectRatio=xMaxYMax.svg": [
-          0.13,
-          300
-        ],
-        "structure/svg/preserveAspectRatio=xMidYMid.svg": [
-          0.13,
-          300
-        ],
-        "structure/svg/preserveAspectRatio=xMinYMin.svg": [
-          0.14,
-          100
-        ],
-        "structure/svg/proportional-viewBox.svg": [
-          0.14,
-          100
-        ]
-      }
-    },
-    {
       "id": "vertical-hanging",
       "paths": [
         "text/alignment-baseline/hanging-on-vertical.svg"
@@ -862,26 +818,6 @@
       "max_pixels": 350
     },
     {
-      "id": "text/text-decoration-coverage",
-      "paths": [
-        "text/text-decoration/indirect-with-multiple-colors.svg"
-      ],
-      "kinds": [
-        "threshold"
-      ],
-      "classification": "reference-rasterization",
-      "disposition": "Keep the measured supersampling allowance with placement controls.",
-      "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
-      ],
-      "removal_criteria": "Remove when the archived crosshair is independently rebased to the same coverage or a default-limits reference is qualified.",
-      "reference_provenance": "Archived supersampled crosshair isolated with a matched-coverage control.",
-      "max_threshold": 0.02,
-      "max_pixels": 395
-    },
-    {
       "id": "font-size-adjust",
       "paths": [
         "text/font-size-adjust/simple-case.svg"
@@ -916,10 +852,11 @@
       "disposition": "Keep the chosen CSS Fonts 4 absolute-size table.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/pull/2349"
+        "https://github.com/jwmcglynn/donner/pull/2349",
+        "third_party/resvg-test-suite/reference-sources/named-value-frame.svg"
       ],
       "removal_criteria": "Use an upstream image rendered with the same accepted table and fixed font at default settings.",
-      "reference_provenance": "Project references and independent browser and font-size controls.",
+      "reference_provenance": "Project font-size references supported by independent browser and metric controls. The named-value frame uses the independently rendered exact-area witness.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references_by_fixture": {
@@ -941,13 +878,15 @@
         "simple_text_threshold"
       ],
       "classification": "backend-capability",
-      "disposition": "Retain the simple-tier allowance for synthetic small caps.",
+      "disposition": "Retain the measured simple-tier coverage allowance for synthetic small caps. The exact corpus face selects different native small-cap glyphs in full text.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
+        "https://github.com/jwmcglynn/donner/issues/1185",
+        "donner/svg/renderer/tests/TextBackend_tests.cc",
+        "third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf"
       ],
       "removal_criteria": "Remove after the simple engine supports native smcp and both explicit and inherited fixtures pass at default settings.",
-      "reference_provenance": "Adjacent native-small-cap references with the bundled Noto Sans font.",
+      "reference_provenance": "Adjacent native-small-cap references with the bundled Noto Sans face. Independent HarfBuzz selection with smcp produces e.sc, x.sc and t.sc for Text, while the simple tier scales uppercase outlines.",
       "max_threshold": 0.02,
       "max_pixels": 1200
     },
@@ -996,39 +935,91 @@
       }
     },
     {
-      "id": "decoration-aa",
+      "id": "decoration-invalid-inline-syntax",
       "paths": [
         "text/text-decoration/all-types-inline-comma-separated.svg",
-        "text/text-decoration/all-types-inline-no-spaces.svg",
-        "text/text-decoration/all-types-inline.svg",
-        "text/text-decoration/tspan-decoration.svg",
+        "text/text-decoration/all-types-inline-no-spaces.svg"
+      ],
+      "kinds": [
+        "shared_golden"
+      ],
+      "classification": "reference-rasterization",
+      "disposition": "Check malformed lists against identical undecorated glyphs with an integral crosshair.",
+      "evidence": [
+        "donner/svg/renderer/testdata/golden/README.md",
+        "https://www.w3.org/TR/SVG2/text.html#TextDecoration",
+        "https://github.com/jwmcglynn/donner/issues/1185"
+      ],
+      "removal_criteria": "Use the adjacent reference when it preserves undecorated text and passes both CPU tiers at default settings.",
+      "reference_provenance": "Official resvg v0.49.0 render at 800px with the corpus font; both malformed spellings produce identical bytes.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-all-types-inline-no-decoration.png"
+      }
+    },
+    {
+      "id": "decoration-multiline-inline",
+      "paths": [
+        "text/text-decoration/all-types-inline.svg"
+      ],
+      "kinds": [
+        "shared_golden"
+      ],
+      "classification": "reference-disagreement",
+      "disposition": "Compare three explicit bands with the renderer's multiline spacing policy and original paint order.",
+      "evidence": [
+        "donner/svg/renderer/testdata/golden/README.md",
+        "https://www.w3.org/TR/SVG2/text.html#TextDecoration",
+        "https://github.com/jwmcglynn/donner/issues/1185"
+      ],
+      "removal_criteria": "Use an independently reproduced adjacent reference that preserves the same multiline placement and paint order.",
+      "reference_provenance": "resvg v0.49.0 render of literal bands derived from Noto Sans metrics and HarfBuzz advance at 800px.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-all-types-inline-bands.png"
+      }
+    },
+    {
+      "id": "decoration-tspan-coverage",
+      "paths": [
+        "text/text-decoration/tspan-decoration.svg"
+      ],
+      "kinds": [
+        "threshold"
+      ],
+      "classification": "reference-rasterization",
+      "disposition": "Keep the archived 500px scene with a 0.09 color threshold and the ordinary pixel limit.",
+      "evidence": [
+        "donner/svg/renderer/testdata/golden/README.md",
+        "https://www.w3.org/TR/SVG2/text.html#TextDecoration",
+        "https://github.com/jwmcglynn/donner/issues/1185"
+      ],
+      "removal_criteria": "Remove the allowance when a pixel reference preserves declaring-span fill and stroke and matches the chosen raster coverage at default settings.",
+      "reference_provenance": "The origin-paint control preserves the child colors. At 800px its supersampled edge rounds 20% to 25%, unlike analytic rectangle coverage.",
+      "max_threshold": 0.09,
+      "max_pixels": 100
+    },
+    {
+      "id": "decoration-rotated-gradient",
+      "paths": [
         "text/text-decoration/underline-with-rotate-list-4.svg"
       ],
       "kinds": [
         "threshold"
       ],
-      "classification": "reference-difference-under-audit",
-      "disposition": "Retain the documented coverage allowance.",
+      "classification": "reference-disagreement",
+      "disposition": "Keep the archived 500px scene with a 0.03 color threshold and the ordinary pixel limit.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/1177",
+        "donner/svg/renderer/testdata/golden/README.md",
+        "https://www.w3.org/TR/SVG2/text.html#TextDecoration",
         "https://github.com/jwmcglynn/donner/issues/1185"
       ],
-      "removal_criteria": "Qualify independent decoration metrics and placement plus a default-settings pixel reference before removal.",
-      "reference_provenance": "Adjacent images with source-reported edge or shading residuals.",
-      "max_threshold": 0.12,
-      "max_pixels": 100,
-      "bounds_by_fixture": {
-        "text/text-decoration/tspan-decoration.svg": [
-          0.1,
-          100
-        ],
-        "text/text-decoration/underline-with-rotate-list-4.svg": [
-          0.05,
-          100
-        ]
-      }
+      "removal_criteria": "Remove once an independent rotated-glyph gradient mapping and decoration reference agree at default settings.",
+      "reference_provenance": "The archive maps its horizontal gradient across approximately 246.5 device pixels; the current rendering spans 230.8.",
+      "max_threshold": 0.03,
+      "max_pixels": 100
     },
     {
       "id": "decoration-artifact",
@@ -1064,11 +1055,12 @@
       "classification": "reference-disagreement",
       "disposition": "Keep the composed cluster at the first y value.",
       "evidence": [
-        "docs/design_docs/0009-resvg_test_suite_bugs.md",
-        "https://github.com/jwmcglynn/donner/pull/460"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/testdata/golden/cyrillic-first-y.svg",
+        "https://github.com/jwmcglynn/donner/issues/1176"
       ],
       "removal_criteria": "Replace after an independent unchanged-input reference skips the interior y and passes at the default settings.",
-      "reference_provenance": "Project full-text rendering introduced in #460 for the composed glyph outline difference.",
+      "reference_provenance": "Independent resvg v0.49.0 scene at 800px with the bundled Noto Sans face and the precomposed Cyrillic glyph at the first y.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {

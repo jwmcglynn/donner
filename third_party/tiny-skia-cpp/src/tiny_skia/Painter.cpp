@@ -1,5 +1,7 @@
 #include "tiny_skia/Painter.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -24,6 +26,153 @@ constexpr float kScalarMax = std::numeric_limits<float>::max();
 Blitter& selectBlitter(BlitterWrapper* wrapper, pipeline::RasterPipelineBlitter& blitter,
                        const Paint& paint) {
   return wrapper != nullptr ? wrapper->wrap(blitter, paint) : static_cast<Blitter&>(blitter);
+}
+
+/// A single closed rectangular contour, in either traversal direction.
+std::optional<Rect> closedRectangle(const Path& path) {
+  constexpr std::array kRectangleVerbs{PathVerb::Move, PathVerb::Line, PathVerb::Line,
+                                       PathVerb::Line, PathVerb::Close};
+  const auto verbs = path.verbs();
+  const auto points = path.points();
+  if (points.size() != 4 ||
+      !std::equal(verbs.begin(), verbs.end(), kRectangleVerbs.begin(), kRectangleVerbs.end())) {
+    return std::nullopt;
+  }
+
+  const Point a = points[0];
+  const Point b = points[1];
+  const Point c = points[2];
+  const Point d = points[3];
+  const bool horizontalFirst = a.y == b.y && b.x == c.x && c.y == d.y && d.x == a.x;
+  const bool verticalFirst = a.x == b.x && b.y == c.y && c.x == d.x && d.y == a.y;
+  if (!(horizontalFirst || verticalFirst)) {
+    return std::nullopt;
+  }
+  return Rect::fromLTRB(std::min(a.x, c.x), std::min(a.y, c.y), std::max(a.x, c.x),
+                        std::max(a.y, c.y));
+}
+
+std::optional<Rect> mapRectangle(float left, float top, float right, float bottom,
+                                 Transform transform) {
+  if (!(right > left && bottom > top)) {
+    return std::nullopt;
+  }
+  std::array points{Point::fromXY(left, top), Point::fromXY(right, bottom)};
+  transform.mapPoints(points);
+  return Rect::fromLTRB(points[0].x, points[0].y, points[1].x, points[1].y);
+}
+
+/// Length of a one-dimensional pixel intersected with an axis-aligned interval.
+double pixelOverlap(std::uint32_t pixel, double first, double last) {
+  const double edge = static_cast<double>(pixel);
+  return std::max(0.0, std::min(edge + 1.0, last) - std::max(edge, first));
+}
+
+std::array<std::uint32_t, 8> axisCoverageEdges(float outerFirst, float outerLast, float innerFirst,
+                                               float innerLast, std::uint32_t extent) {
+  const auto clip = [extent](double edge) {
+    return static_cast<std::uint32_t>(std::clamp(edge, 0.0, static_cast<double>(extent)));
+  };
+  std::array<std::uint32_t, 8> edges{};
+  std::size_t count = 0;
+  for (float edge : {outerFirst, outerLast, innerFirst, innerLast}) {
+    edges[count++] = clip(std::floor(edge));
+    edges[count++] = clip(std::ceil(edge));
+  }
+  std::sort(edges.begin(), edges.end());
+  return edges;
+}
+
+void blitRectangleRing(const Rect& outer, const Rect& inner, std::uint32_t width,
+                       std::uint32_t height, Blitter& blitter) {
+  const auto xEdges =
+      axisCoverageEdges(outer.left(), outer.right(), inner.left(), inner.right(), width);
+  const auto yEdges =
+      axisCoverageEdges(outer.top(), outer.bottom(), inner.top(), inner.bottom(), height);
+  if (xEdges.front() == xEdges.back() || yEdges.front() == yEdges.back()) {
+    return;
+  }
+
+  // The area is constant inside a block because the fractional edge cells make their own bands.
+  // Blit each nonempty block once. This avoids scanning either the filled interior or the hole.
+  std::optional<AlphaRuns> row;
+  for (std::size_t iy = 1; iy < yEdges.size(); ++iy) {
+    const auto y = yEdges[iy - 1];
+    const auto rows = yEdges[iy] - y;
+    if (rows == 0) {
+      continue;
+    }
+    const double outerY = pixelOverlap(y, outer.top(), outer.bottom());
+    const double innerY = pixelOverlap(y, inner.top(), inner.bottom());
+    for (std::size_t ix = 1; ix < xEdges.size(); ++ix) {
+      const auto x = xEdges[ix - 1];
+      const auto cols = xEdges[ix] - x;
+      if (cols == 0) {
+        continue;
+      }
+      const double outsideArea = outerY * pixelOverlap(x, outer.left(), outer.right());
+      const double insideArea = innerY * pixelOverlap(x, inner.left(), inner.right());
+      const auto coverage =
+          static_cast<AlphaU8>(std::lround(255.0 * std::clamp(outsideArea - insideArea, 0.0, 1.0)));
+      if (coverage == 0) {
+        continue;
+      }
+      if (coverage == 255) {
+        blitter.blitRect(ScreenIntRect::fromXYWHSafe(x, y, cols, rows));
+      } else if (cols == 1) {
+        blitter.blitV(x, y, rows, coverage);
+      } else {
+        if (row) {
+          row->reset(cols);
+        } else {
+          row.emplace(cols);
+        }
+        row->alpha[0] = coverage;
+        for (std::uint32_t dy = 0; dy < rows; ++dy) {
+          blitter.blitAntiH(x, y + dy, row->alpha, row->runs);
+        }
+      }
+    }
+  }
+}
+
+bool tryStrokeRectangleRing(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
+                            const Stroke& stroke, Transform transform, const Mask* mask,
+                            BlitterWrapper* wrapper) {
+  constexpr float kRightAngleMiterRatio = 1.4142135623730951f;
+  if (!paint.antiAlias || stroke.dash || stroke.lineJoin != LineJoin::Miter ||
+      !std::isfinite(stroke.miterLimit) || stroke.miterLimit < kRightAngleMiterRatio ||
+      !transform.isFinite() || transform.kx != 0.0f || transform.ky != 0.0f ||
+      transform.sx <= 0.0f || transform.sy <= 0.0f ||
+      detail::DrawTiler::required(pixmap.width(), pixmap.height())) {
+    return false;
+  }
+
+  const auto rect = closedRectangle(path);
+  if (!rect) {
+    return false;
+  }
+  const float half = stroke.width * 0.5f;
+  const auto outer = mapRectangle(rect->left() - half, rect->top() - half, rect->right() + half,
+                                  rect->bottom() + half, transform);
+  const auto inner = mapRectangle(rect->left() + half, rect->top() + half, rect->right() - half,
+                                  rect->bottom() - half, transform);
+  if (!outer || !inner) {
+    return false;
+  }
+
+  auto paintCopy = paint;
+  if (!transform.isIdentity()) {
+    transformShader(paintCopy.shader, transform);
+  }
+  auto subpix = pixmap.subpixmap();
+  auto submask = mask ? std::optional<SubMaskView>(mask->submask()) : std::nullopt;
+  auto blitter = pipeline::RasterPipelineBlitter::create(paintCopy, submask, &subpix);
+  if (blitter) {
+    blitRectangleRing(*outer, *inner, pixmap.width(), pixmap.height(),
+                      selectBlitter(wrapper, *blitter, paintCopy));
+  }
+  return true;
 }
 
 }  // namespace
@@ -324,6 +473,9 @@ void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Pain
     // Thick stroke: stroke the path into a filled outline, then fill it.
     auto strokedPath = pathPtr->stroke(stroke, resScale, limit);
     if (!strokedPath.has_value()) {
+      return;
+    }
+    if (tryStrokeRectangleRing(pixmap, path, paint, stroke, transform, mask, wrapper)) {
       return;
     }
     Painter::fillPath(pixmap, *strokedPath, paint, FillRule::Winding, transform, mask, wrapper);

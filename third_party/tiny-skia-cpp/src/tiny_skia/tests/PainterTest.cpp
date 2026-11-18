@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Mask.h"
@@ -509,6 +511,161 @@ TEST(ApplyMaskTest, MismatchedSizeIsNoOp) {
   ASSERT_TRUE(pixel.has_value());
   EXPECT_EQ(pixel->red(), 255u);
   EXPECT_EQ(pixel->alpha(), 255u);
+}
+
+TEST(StrokePathTest, AxisAlignedMiterRectangleUsesExactRingCoverage) {
+  auto pixmap = Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(pixmap);
+  auto dst = pixmap->mutableView();
+  const auto rect = Rect::fromXYWH(1.0f, 1.0f, 18.0f, 10.0f);
+  ASSERT_TRUE(rect);
+  const auto path = Path::fromRect(*rect);
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 255);
+
+  // In device space the outer top and left edges are at 0.625. The inner top is at 1.875.
+  tiny_skia::Painter::strokePath(dst, path, paint, Stroke{}, Transform::fromScale(1.25f, 1.25f));
+  EXPECT_NEAR(pixmap->pixel(8, 0)->alpha(), 96, 1);
+  EXPECT_NEAR(pixmap->pixel(8, 1)->alpha(), 223, 1);
+  EXPECT_NEAR(pixmap->pixel(0, 0)->alpha(), 36, 1);
+  EXPECT_EQ(pixmap->pixel(8, 3)->alpha(), 0u);
+}
+
+TEST(StrokePathTest, AxisAlignedRectangleAppliesClipAndBlendOnce) {
+  auto pixmap = Pixmap::fromSize(32, 32);
+  auto mask = Mask::fromSize(32, 32);
+  ASSERT_TRUE(pixmap);
+  ASSERT_TRUE(mask);
+  auto dst = pixmap->mutableView();
+  std::fill(mask->data().begin(), mask->data().end(), 128u);
+  mask->data()[32 + 8] = 0;
+  const auto rect = Rect::fromXYWH(1.0f, 1.0f, 18.0f, 10.0f);
+  ASSERT_TRUE(rect);
+  const auto path = Path::fromRect(*rect);
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 128);
+  paint.blendMode = BlendMode::Source;
+
+  tiny_skia::Painter::strokePath(dst, path, paint, Stroke{}, Transform::fromScale(1.25f, 1.25f),
+                                 &*mask);
+  EXPECT_NEAR(pixmap->pixel(8, 0)->alpha(), 24, 1);
+  EXPECT_NEAR(pixmap->pixel(0, 0)->alpha(), 9, 1);
+  EXPECT_EQ(pixmap->pixel(8, 1)->alpha(), 0u);
+  EXPECT_EQ(pixmap->pixel(8, 3)->alpha(), 0u);
+}
+
+TEST(StrokePathTest, AxisAlignedRectangleRecognizesReverseTraversalAndClipsOffscreen) {
+  auto pixmap = Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(pixmap);
+  PathBuilder builder;
+  builder.moveTo(19.0f, 11.0f);
+  builder.lineTo(19.0f, 1.0f);
+  builder.lineTo(1.0f, 1.0f);
+  builder.lineTo(1.0f, 11.0f);
+  builder.close();
+  const auto rect = builder.finish();
+  ASSERT_TRUE(rect);
+
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 255);
+  const auto transform = Transform::fromRow(1.25f, 0.0f, 0.0f, 1.25f, -1.0f, -1.0f);
+  auto dst = pixmap->mutableView();
+  tiny_skia::Painter::strokePath(dst, *rect, paint, Stroke{}, transform);
+  // The clipped pixel at the corner contains the full outer rectangle and 1/64 of its hole.
+  EXPECT_NEAR(pixmap->pixel(0, 0)->alpha(), 251, 1);
+  EXPECT_NEAR(pixmap->pixel(8, 0)->alpha(), 223, 1);
+  EXPECT_EQ(pixmap->pixel(8, 2)->alpha(), 0u);
+}
+
+TEST(StrokePathTest, AxisAlignedRectangleCompositesOverAnExistingDestination) {
+  auto pixmap = Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(pixmap);
+  pixmap->fill(Color::fromRgba8(0, 0, 255, 255));
+  const auto rect = Rect::fromXYWH(1.0f, 1.0f, 18.0f, 10.0f);
+  ASSERT_TRUE(rect);
+  const auto path = Path::fromRect(*rect);
+  const auto transform = Transform::fromScale(1.25f, 1.25f);
+  auto dst = pixmap->mutableView();
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 128);
+
+  tiny_skia::Painter::strokePath(dst, path, paint, Stroke{}, transform);
+  const auto blended = pixmap->pixel(8, 0);
+  ASSERT_TRUE(blended);
+  EXPECT_NEAR(blended->red(), 48, 1);
+  EXPECT_NEAR(blended->blue(), 207, 1);
+  EXPECT_EQ(blended->alpha(), 255u);
+
+  paint.setColorRgba8(0, 0, 0, 0);
+  paint.blendMode = BlendMode::Source;
+  tiny_skia::Painter::strokePath(dst, path, paint, Stroke{}, transform);
+  EXPECT_NEAR(pixmap->pixel(8, 0)->alpha(), 159, 1);
+  EXPECT_EQ(pixmap->pixel(8, 3)->alpha(), 255u);
+}
+
+TEST(StrokePathTest, AxisAlignedRectangleSupportsSubpixelWidthOnOneAxis) {
+  auto pixmap = Pixmap::fromSize(64, 24);
+  ASSERT_TRUE(pixmap);
+  const auto rect = Rect::fromXYWH(1.0f, 4.5f, 2.0f, 12.0f);
+  ASSERT_TRUE(rect);
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 255);
+  Stroke stroke;
+  stroke.width = 0.125f;
+  auto dst = pixmap->mutableView();
+
+  // The other axis has a two-pixel stroke, so the existing hairline rule does not apply.
+  tiny_skia::Painter::strokePath(dst, Path::fromRect(*rect), paint, stroke,
+                                 Transform::fromScale(16.0f, 1.0f));
+  EXPECT_NEAR(pixmap->pixel(26, 4)->alpha(), 32, 1);
+  EXPECT_EQ(pixmap->pixel(15, 8)->alpha(), 255u);
+  EXPECT_EQ(pixmap->pixel(26, 8)->alpha(), 0u);
+}
+
+TEST(StrokePathTest, AxisAlignedRectanglePreservesHairlineAndReflectedFallbacks) {
+  auto pixmap = Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(pixmap);
+  const auto rect = Rect::fromXYWH(1.0f, 1.0f, 18.0f, 10.0f);
+  ASSERT_TRUE(rect);
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 255);
+  const auto path = Path::fromRect(*rect);
+  auto dst = pixmap->mutableView();
+  const auto reflected = Transform::fromRow(-1.25f, 0.0f, 0.0f, 1.25f, 25.0f, 0.0f);
+  tiny_skia::Painter::strokePath(dst, path, paint, Stroke{}, reflected);
+  EXPECT_EQ(pixmap->pixel(8, 0)->alpha(), 64u);
+  EXPECT_EQ(pixmap->pixel(8, 1)->alpha(), 255u);
+
+  auto hairline = Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(hairline);
+  auto hairlineDst = hairline->mutableView();
+  Stroke stroke;
+  stroke.width = 0.125f;
+  tiny_skia::Painter::strokePath(hairlineDst, path, paint, stroke);
+  EXPECT_EQ(hairline->pixel(8, 3)->alpha(), 0u);
+  EXPECT_LT(hairline->pixel(8, 0)->alpha(), 32u);
+  EXPECT_GT(hairline->pixel(8, 1)->alpha(), 0u);
+}
+
+TEST(StrokePathTest, AxisAlignedRectangleHonorsBudgetAndSkipsOffscreenRing) {
+  auto pixmap = Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(pixmap);
+  const auto huge = Rect::fromXYWH(-1000000.0f, -1000000.0f, 2000000.0f, 2000000.0f);
+  const auto visible = Rect::fromXYWH(1.0f, 1.0f, 18.0f, 10.0f);
+  ASSERT_TRUE(huge);
+  ASSERT_TRUE(visible);
+  Paint paint;
+  paint.setColorRgba8(255, 0, 0, 255);
+  Stroke stroke;
+  stroke.width = 2.0f;
+  auto dst = pixmap->mutableView();
+  tiny_skia::Painter::strokePath(dst, Path::fromRect(*huge), paint, stroke);
+  tiny_skia::StrokeOutputLimit limit{.maxPoints = 1};
+  tiny_skia::Painter::strokePath(dst, Path::fromRect(*visible), paint, stroke,
+                                 Transform::identity(), nullptr, nullptr, &limit);
+  EXPECT_TRUE(limit.exceeded);
+  EXPECT_TRUE(std::all_of(pixmap->data().begin(), pixmap->data().end(),
+                          [](std::uint8_t value) { return value == 0; }));
 }
 
 // ---- strokeHairline test ----

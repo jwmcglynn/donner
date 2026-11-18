@@ -69,6 +69,8 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
+| text/text-decoration | all-types-inline | Literal bands preserve multiline decoration offsets and paint order |
+| text/text-decoration | all-types-inline-comma-separated, all-types-inline-no-spaces | Malformed lists preserve undecorated glyphs |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
@@ -218,7 +220,7 @@ emoji cluster placement.
 
 | Category  | Test                                         | Reference                                           |
 | --------- | -------------------------------------------- | --------------------------------------------------- |
-| text/text | complex-graphemes-and-coordinates-list       | Donner full-text rendering of the combining mark    |
+| text/text | complex-graphemes-and-coordinates-list       | Independent resvg v0.49.0 render of the equivalent precomposed glyph    |
 | text/text | compound-emojis-and-coordinates-list         | resvg v0.47.0 rendering of explicitly placed emoji clusters |
 
 The separate `text/text/compound-emojis` and `text/text/emojis` fixtures use

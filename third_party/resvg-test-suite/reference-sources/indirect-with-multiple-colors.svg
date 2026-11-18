@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" font-family="Noto Sans" font-size="48">
+<path id="crosshair" d="M 20 100 L 180 100 M 100 20 L 100 180" stroke="gray" stroke-width="0.5"/>
+<rect x="50" y="103.6" width="50.4" height="2.4" fill="green"/><path d="M49.5 103.1H100.9V106.5H49.5Z M50.5 104.1H99.9V105.5H50.5Z" fill="yellow" fill-rule="evenodd"/>
+<text x="50" y="100" fill="pink" stroke="brown">Te</text>
+<rect x="50" y="83.344" width="50.4" height="2.4" fill="blue"/><path d="M49.5 82.844H100.9V86.244H49.5Z M50.5 83.844H99.9V85.244H50.5Z" fill="yellow" fill-rule="evenodd"/>
+<rect x="100.4" y="103.6" width="12.48" height="2.4" fill="green"/><path d="M99.9 103.1H113.38V106.5H99.9Z M100.9 104.1H112.38V105.5H100.9Z" fill="yellow" fill-rule="evenodd"/>
+<rect x="100.4" y="83.344" width="12.48" height="2.4" fill="blue"/><path d="M99.9 82.844H113.38V86.244H99.9Z M100.9 83.844H112.38V85.244H100.9Z" fill="yellow" fill-rule="evenodd"/>
+<rect x="112.88" y="103.6" width="42.72" height="2.4" fill="green"/><path d="M112.38 103.1H156.1V106.5H112.38Z M113.38 104.1H155.1V105.5H113.38Z" fill="yellow" fill-rule="evenodd"/>
+<rect x="112.88" y="103.6" width="42.72" height="2.4" fill="pink"/><path d="M112.38 103.1H156.1V106.5H112.38Z M113.38 104.1H155.1V105.5H113.38Z" fill="brown" fill-rule="evenodd"/>
+<text x="112.88" y="100" fill="pink" stroke="brown">xt</text>
+<rect x="112.88" y="83.344" width="42.72" height="2.4" fill="blue"/><path d="M112.38 82.844H156.1V86.244H112.38Z M113.38 83.844H155.1V85.244H113.38Z" fill="yellow" fill-rule="evenodd"/>
+<rect id="frame" x="1" y="1" width="198" height="198" fill="none" stroke="black"/>
+</svg>

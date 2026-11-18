@@ -81,7 +81,7 @@ the `text/` category. Focused tests exercise Geode text directly.
 | --- | ---: |
 | Total | 1,679 |
 | Pixel comparisons | 1,571 |
-| Comparisons with a numeric setting or custom golden | 91 |
+| Comparisons with a numeric setting or custom golden | 83 |
 | Render-only, undefined-behavior registration | 53 |
 | Render-only, legacy feature | 43 |
 | Explicit skips | 12 |
@@ -911,8 +911,9 @@ Painting Order of Text Decorations in CSS Text Decoration 3, which SVG 2 section
 Each decoration's own fill and stroke follow the `paint-order` of the element whose paint it uses.
 Both renderers make two decoration passes per run around the glyph paint, and
 `text_decoration_paint_order_tests` compares overlapping glyph and decoration colors exactly. With
-per-origin paint and this order, `text/text-decoration/indirect-with-multiple-colors` compares; its
-remaining residual is the reference rasterizer generation's coverage on the x=100 crosshair.
+per-origin paint and this order, `text/text-decoration/indirect-with-multiple-colors` compares
+against the independent full decoration scene at the ordinary threshold. At 800 pixels, its
+diagnostic crosshair spans two whole pixels.
 
 ## Text decoration line, style and color
 
