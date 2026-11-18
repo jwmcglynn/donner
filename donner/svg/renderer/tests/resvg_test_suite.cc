@@ -277,16 +277,14 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feGaussianBlur",
                 {
                     {"complex-transform.svg",
-                     Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor AA differences")
-                         .withGeodeGoldenOverride(
-                             "donner/svg/renderer/testdata/golden/geode/"
-                             "filters_feGaussianBlur_complex-transform.png",
-                             "Geode's analytic coverage on this rotated rect is geometrically "
-                             "exact (area matches a 16x scan-conversion to <0.3px, no missed "
-                             "content); resvg's finite-sample scan-converter differs at the edge, "
-                             "and the directional stdDeviation=\"12 0\" blur widens that into a "
-                             "thin ~1px band (259px). Not a coverage bug; TinyGolden still checks "
-                             "tiny-skia vs resvg.")},
+                     Params().withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/"
+                         "filters_feGaussianBlur_complex-transform.png",
+                         "The covered area of the rotated rect agrees with a 16x scan "
+                         "control to <0.3 px in total. Coverage along its edges differs, "
+                         "and the directional stdDeviation=\"12 0\" blur widens that into a "
+                         "thin band (263 px on Metal, 248 on software Vulkan at the default "
+                         "threshold). TinySkia differs by 99 px from the vendored reference.")},
                     {"huge-stdDeviation.svg",
                      Params::UndefinedBehavior(
                          "implementation-defined resource limit; blur sigma is "
@@ -296,23 +294,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeImage, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "filters/feImage",
-            {
-                {"svg.svg",
-                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
-                     .withReason("We render higher quality")
-                     .withGeodeGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/geode/filters_feImage_svg.png",
-                         "Each backend rasterizes the nested SVG at its device size and copies "
-                         "it texel for texel; Geode's golden holds Geode's own rasterization of "
-                         "that content and of the frame.")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeImage, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feImage")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory(
@@ -345,12 +330,14 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeOffset, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFePointLight, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/fePointLight",
-                                        {
-                                            {"complex-transform.svg",
-                                             Params::WithThreshold(0.11f, 120,
-                                                                   "Minor shading differences")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/fePointLight",
+                {
+                    {"complex-transform.svg",
+                     Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
+                                           "Point-light shading differs even on the flat part of "
+                                           "the transformed surface; cause tracked in #1185")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -643,7 +630,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-patternTransform.svg",
                      Params::UndefinedBehavior("Invalid patternTransform")},
                     {"out-of-order-referencing.svg",
-                     Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
+                     Params::WithThreshold(0.6f, kDefaultMismatchedPixels,
+                                           "Nested tile coverage: the reference disagrees on fully "
+                                           "covered and empty interior pixels")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
                     {"recursive-on-child.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
@@ -657,7 +646,7 @@ INSTANTIATE_TEST_SUITE_P(
                     // The reference resamples a rasterized pattern tile, so only the tile's thin
                     // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
-                     Params::WithThreshold(0.5f, 1150,
+                     Params::WithThreshold(0.5f, kDefaultMismatchedPixels,
                                            "Larger threshold due to pattern tile resampling at "
                                            "fractional tile edges")},
                 })),
@@ -810,8 +799,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
-                 Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")
-                     .requireFeature(RendererBackendFeature::Text, "text rendering")},
+                 Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                 // The image draws the nested SVG at 0.8x, so its 0.5035-unit black letter strokes
                 // are about 0.4 device pixels wide. Geode's analytic coverage of those strokes and
                 // of the small shape boundaries differs from the reference only on pixels adjacent

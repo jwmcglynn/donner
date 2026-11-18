@@ -14,6 +14,16 @@ The upstream `tools/` (the multi-backend `vdiff` runner), `check.py`, and
 `stats.py` are vendored alongside the data but are not wired into any Bazel
 target here — they are standalone scripts run directly.
 
+For filters/feImage/svg the reference is rendered at the original 500x500 canvas size with
+resvg v0.49.0. The embedded resource has intrinsic viewBox 0 0 100 100. Placing it directly
+in the filter region (x=28, y=28, width=144, height=144) gives the same decoded image.
+From the suite root:
+
+  resvg --skip-system-fonts --width 500 --height 500 tests/filters/feImage/svg.svg tests/filters/feImage/svg.png
+
+  tests/filters/feImage/svg.png
+  SHA256: 62fd05f566585e73a3537a729f0b7fc874e397e70310f7e4f7d44d6aee268614
+
 The zero-text-length reference was regenerated at its original 500x500 size with the
 resvg 0.49.0 release CLI and the bundled NotoSans-Regular.ttf. SVG2 applies anchoring
 from compressed pen extents after textLength adjustment, which moves this fixture's

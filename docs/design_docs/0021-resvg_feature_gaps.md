@@ -482,8 +482,8 @@ Geode (a 16-tap cubic image-blit sampling mode), matching the kernel `feImage` a
 mapping on both backends: `smooth` is bilinear there too, and a pure translation samples the
 containing texel, as tiny-skia does for `<image>`. That also removed a cubic filtering pass that
 rotated `feImage` placement and nested-SVG `feImage` rasters received at one-to-one scale, which
-re-enabled `filters/feImage/with-subregion-5` and refreshed the Donner-generated
-`filters/feImage/svg` goldens. The raster-image
+re-enabled `filters/feImage/with-subregion-5` and lets `filters/feImage/svg` compare directly
+against a 500x500 resvg v0.49.0 reference. The raster-image
 references were replaced by their v0.49.0 renderings, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
@@ -810,9 +810,10 @@ goldens, all now fixed/closed:
 - `painting/marker/orient=auto-on-M-L-Z` — degenerate zero-area closed stroke
   decomposed into overlapping triangles; fixed by de-closing collinear closed subpaths
   before `strokeToFill` → 0 px.
-- `filters/feColorMatrix/type=matrix-with-non-normalized-values` + `filters/feImage/svg`
-  — Geode verified-correct, differs from resvg's finite-sample reference; **per-backend
-  Geode goldens** (`withGeodeGoldenOverride`).
+- `filters/feColorMatrix/type=matrix-with-non-normalized-values` uses a Geode-specific golden.
+- `filters/feImage/svg` compares on both backends at default settings against a 500x500 resvg
+  v0.49.0 rendering. Explicitly positioning the nested SVG in the filter region produces the
+  same reference.
 
 **Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
 problem — inspect whether a coverage change actually moves it before attributing it.
