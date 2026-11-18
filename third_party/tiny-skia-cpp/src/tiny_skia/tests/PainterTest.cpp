@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -664,8 +665,7 @@ TEST(StrokePathTest, AxisAlignedRectangleHonorsBudgetAndSkipsOffscreenRing) {
   tiny_skia::Painter::strokePath(dst, Path::fromRect(*visible), paint, stroke,
                                  Transform::identity(), nullptr, nullptr, &limit);
   EXPECT_TRUE(limit.exceeded);
-  EXPECT_TRUE(std::all_of(pixmap->data().begin(), pixmap->data().end(),
-                          [](std::uint8_t value) { return value == 0; }));
+  EXPECT_THAT(pixmap->data(), testing::Each(0u));
 }
 
 // ---- strokeHairline test ----
