@@ -5442,6 +5442,8 @@ TEST_F(RendererGeodeTest, GradientStopBudgetInMultiPassConstructsMatchesTinySkia
     SCOPED_TRACE(limit);
     const RendererResourceStats cpu = stats(/*geode=*/false, limit);
     const RendererResourceStats gpu = stats(/*geode=*/true, limit);
+    EXPECT_EQ(cpu.drawBudgetRejected, limit < reference.gradientStops)
+        << "The lowered cap must reject the frame on the CPU renderer";
     EXPECT_EQ(gpu.gradientStops, cpu.gradientStops);
     EXPECT_EQ(gpu.drawBudgetRejected, cpu.drawBudgetRejected);
   }

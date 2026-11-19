@@ -1073,6 +1073,41 @@ TEST_F(GeodePerfTest, ManyStopGradient_SlotReleasesItsRampBelowSeventeenStops) {
   EXPECT_EQ(back.textureWriteBytes, 48u * 2u * 16u);
 }
 
+/// A shape whose fill or stroke turns from a many-stop gradient to a solid color lets go of the
+/// ramp its gradient slot held: returning to the gradient uploads the ramp again, where a slot
+/// that kept it would not.
+TEST_F(GeodePerfTest, ManyStopGradient_SolidPaintReleasesTheRamp) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  for (const char* property : {"fill", "stroke"}) {
+    SCOPED_TRACE(property);
+    const std::string paint =
+        std::string_view(property) == "fill"
+            ? std::string(R"svg(fill="url(#g)")svg")
+            : std::string(R"svg(fill="none" stroke="url(#g)" stroke-width="8")svg");
+    SVGDocument document = ParsePerfDocument(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
+        ManyStopGradientDefs("g", 40) +
+        R"svg(</defs><rect id="r" x="10" y="10" width="60" height="60" )svg" + paint + "/></svg>");
+    RendererGeode renderer(device);
+    renderer.draw(document);
+    renderer.draw(document);
+    ASSERT_EQ(renderer.lastFrameTimings().counters.textureWriteBytes, 0u)
+        << "Premise: an unchanged frame keeps the ramp";
+
+    std::optional<SVGElement> rect = document.querySelector("#r");
+    ASSERT_TRUE(rect.has_value());
+    rect->setAttribute(property, "#2050c0");
+    renderer.draw(document);
+    rect->setAttribute(property, "url(#g)");
+    renderer.draw(document);
+    const geode::GeodeCounters back = renderer.lastFrameTimings().counters;
+    printCounters("ManyStopGradient back from solid", back);
+    EXPECT_EQ(back.textureCreates, 1u) << "The released ramp is uploaded again";
+    EXPECT_EQ(back.textureWriteBytes, 48u * 2u * 16u);
+  }
+}
+
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

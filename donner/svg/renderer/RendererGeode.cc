@@ -5026,12 +5026,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// source (editor/overlay draws stay on the arena path). The slot lives on a
   /// `GeodeResidentPathComponent` beside the CPU encode cache and is invalidated by the same
   /// listener.
-  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source, std::size_t variant) {
+  geode::GeodeResidentSlot* residentFillSlot(EntityHandle source, std::size_t variant,
+                                             bool solidPaint = false) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentSlot& slot = residentPathSlots(source).fillSlots[variant];
+    geode::GeodeResidentPathSlots& slots = residentPathSlots(source);
+    if (solidPaint) {
+      // A solid fill binds no stop ramp, so the gradient slot of the same fill lets go of any it
+      // kept from an earlier gradient paint.
+      releaseGradientRamp(&slots.gradientFillSlots[variant]);
+    }
+    geode::GeodeResidentSlot& slot = slots.fillSlots[variant];
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       // The slot's residence lives in another slab, so it must re-upload into this one. reset()
@@ -5048,7 +5055,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentSlot& slot = residentPathSlots(source).strokeSlot;
+    geode::GeodeResidentPathSlots& slots = residentPathSlots(source);
+    // Only a solid stroke takes this slot, and it binds no stop ramp, so the gradient stroke slot
+    // lets go of any it kept from an earlier gradient paint.
+    releaseGradientRamp(&slots.gradientStrokeSlot);
+    geode::GeodeResidentSlot& slot = slots.strokeSlot;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -5794,6 +5805,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Lets \p slot go of the stop ramp and ramp bind group it holds, if any; null is a no-op.
+  ///
+  /// A shape whose fill or stroke turns solid, or draws through the fill batch, releases its ramp
+  /// here. One that turns to a pattern or to no paint does not reach its gradient slot, so the slot
+  /// keeps its ramp until the shape's geometry changes or its residence is removed. Slots of one
+  /// gradient share one ramp, so what is retained is at most one ramp per such gradient: up to
+  /// 262,144 stops, a 1024 by 512 RGBA32Float texture of 8 MiB.
   static void releaseGradientRamp(geode::GeodeResidentGradientSlot* slot) {
     if (slot != nullptr && slot->ramp != nullptr) {
       slot->replaceRamp(nullptr, gpu::BindGroup());
@@ -7810,7 +7827,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // ends up being drawn.
   geode::GeodeResidentSlot* residentFill =
       (fillAdmission.persistent && (solidFill || gradientFillBatchable))
-          ? impl_->residentFillSlot(path.sourceEntity, fillAdmission.variant)
+          ? impl_->residentFillSlot(path.sourceEntity, fillAdmission.variant, solidFill)
           : nullptr;
 
   // Gradient residence: a persistent per-entity gradient slot for
