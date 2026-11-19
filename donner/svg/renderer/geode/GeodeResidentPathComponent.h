@@ -436,6 +436,17 @@ private:
 class GeodeDevice;
 
 /**
+ * A gradient's stops laid out in a stop ramp texture (see `stopRamp` in
+ * `donner/gpu/shader/programs/SlugGradientSource.h`). Draws and resident slots of gradients with
+ * the same stops share one.
+ */
+struct GeodeGradientRamp {
+  std::vector<float> stops;  ///< The stops it holds: per stop, the offset then straight-alpha RGBA.
+  gpu::Texture texture;      ///< RGBA32Float ramp.
+  gpu::TextureView view;     ///< View the gradient bind groups bind.
+};
+
+/**
  * Document-scoped suballocation slab for GPU residence.
  *
  * Per-slot residence previously gave every cached path its own combined GPU
@@ -561,6 +572,7 @@ public:
     }
     lastMergedFrame_ = frameIndex;
     retiredBindGroups_.clear();
+    retiredRamps_.clear();
     for (const FreeRange& range : pendingFrees_) {
       auto it = freeRanges_.begin();
       while (it != freeRanges_.end() &&
@@ -706,9 +718,20 @@ public:
     }
   }
 
+  /// Park a stop ramp a slot is dropping until the next frame boundary, for the same reason as
+  /// \ref retireBindGroup: draws recorded earlier in the frame may still bind it.
+  /// @param ramp Ramp to release at the next frame boundary.
+  void retireRamp(std::shared_ptr<const GeodeGradientRamp> ramp) {
+    if (ramp != nullptr) {
+      retiredRamps_.push_back(std::move(ramp));
+    }
+  }
+
 private:
   /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
   std::vector<gpu::BindGroup> retiredBindGroups_;
+  /// Stop ramps dropped by slots this frame, released at the next \ref beginFrame.
+  std::vector<std::shared_ptr<const GeodeGradientRamp>> retiredRamps_;
 
   static constexpr uint64_t kInitialChunkBytes = 1u << 20;  // 1 MiB.
 
@@ -1088,9 +1111,27 @@ struct GeodeResidentGradientSlot {
   /// Cached gradient bind group. All bindings reference stable objects (this
   /// slot's buffer sub-ranges + device-owned placeholder clip-mask and
   /// stop-ramp textures), so it survives frames and encoders. A gradient with
-  /// more stops than the uniform carries inline draws with a per-draw group
-  /// that binds its own stop ramp instead.
+  /// more stops than the uniform carries inline binds `rampBindGroup` instead.
   gpu::BindGroup bindGroup;
+
+  /// Stop ramp of the last draw whose gradient had more stops than the
+  /// uniform carries inline, and the cached group that binds it with this
+  /// slot's regions. Both are replaced only when the stops or the geometry
+  /// change.
+  std::shared_ptr<const GeodeGradientRamp> ramp;
+  gpu::BindGroup rampBindGroup;  ///< Gradient bind group binding `ramp`.
+
+  /// Replace `ramp` and `rampBindGroup`, parking the old ones in the slab until the next frame
+  /// boundary.
+  /// @param newRamp Ramp to keep. @param newBindGroup Group binding it with this slot's regions.
+  void replaceRamp(std::shared_ptr<const GeodeGradientRamp> newRamp, gpu::BindGroup newBindGroup) {
+    if (slab) {
+      slab->retireRamp(std::move(ramp));
+      slab->retireBindGroup(std::move(rampBindGroup));
+    }
+    ramp = std::move(newRamp);
+    rampBindGroup = std::move(newBindGroup);
+  }
 
   /// A byte sub-range of `buffer` (same semantics as GeodeResidentSlot::Region).
   struct Region {
@@ -1169,6 +1210,8 @@ struct GeodeResidentGradientSlot {
       other.allocationOffset = 0;
       other.allocationSize = 0;
       bindGroup = std::move(other.bindGroup);
+      ramp = std::move(other.ramp);
+      rampBindGroup = std::move(other.rampBindGroup);
       bands = other.bands;
       curves = other.curves;
       hRefs = other.hRefs;
@@ -1214,6 +1257,7 @@ struct GeodeResidentGradientSlot {
       slab->retireBindGroup(std::move(bindGroup));
     }
     bindGroup = gpu::BindGroup();
+    replaceRamp(nullptr, gpu::BindGroup());
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;

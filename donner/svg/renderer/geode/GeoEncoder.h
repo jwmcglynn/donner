@@ -121,8 +121,9 @@ struct LinearGradientParams {
   /// Gradient stops, in order of non-decreasing offset. Colors are in straight alpha, 0..1 per
   /// channel - the shader interpolates in straight alpha and premultiplies at output. Offsets are
   /// in [0, 1]. Up to 16 stops travel inline in the draw's parameters; a gradient with more reads
-  /// them from a stop ramp texture uploaded with the draw. A ramp holds up to 4,194,304 stops; a
-  /// gradient with even more keeps that many, evenly spaced and including its first and last.
+  /// them from a stop ramp texture, which the draws of one encoder share by stop content and a
+  /// resident draw keeps until its stops change. A draw with more than
+  /// `GeoEncoder::kMaxGradientRampStops` stops is refused.
   std::span<const Stop> stops;
 };
 
@@ -181,6 +182,10 @@ struct RadialGradientParams {
  */
 class GeoEncoder {
 public:
+  /// Most stops a gradient draw may have: one stop ramp's capacity. The renderer's per-frame
+  /// gradient-stop budget is no larger, so every draw it admits fits.
+  static constexpr std::size_t kMaxGradientRampStops = 256u * 1024u;
+
   /**
    * Create an encoder targeting the given texture.
    *

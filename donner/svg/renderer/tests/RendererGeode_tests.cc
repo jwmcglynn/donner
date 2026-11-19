@@ -5211,14 +5211,16 @@ std::string ManyStopGradientDocument(int stopCount, bool radial) {
   return source;
 }
 
-/// How a Geode rendering of the 2500-stop gradients is held to tiny-skia's. There are about 20 to
-/// 30 stops per pixel and neighboring stops differ by up to 105 levels in a channel, so the color
-/// changes by thousands of levels per pixel. The two renderers compute the gradient position in
-/// different float arithmetic, and a difference far below a pixel moves a channel by one level:
-/// on the software Vulkan lane about 2 percent of the radial gradient's pixels differ by exactly
-/// one level. The renderer suite's default threshold admits those one-level differences, and no
-/// pixel, anti-aliased or not, may exceed it.
-constexpr editor::tests::BitmapGoldenCompareParams kDenseStopParams =
+/// How a Geode rendering of a steep gradient is held to tiny-skia's. In the 2500-stop gradients
+/// there are about 20 to 30 stops per pixel and neighboring stops differ by up to 105 levels in a
+/// channel, so the color changes by thousands of levels per pixel; in the radial spread cases, 19
+/// such steps span 20 pixels. The two renderers compute the gradient position in different float
+/// arithmetic, and a difference far below a pixel moves a channel by one level: on the software
+/// Vulkan lane about 2 percent of the 2500-stop radial gradient's pixels, and 10 pixels of each
+/// radial spread case, including pixels inside the gradient's first period, differ by exactly one
+/// level. The renderer suite's default threshold admits those one-level differences, and no pixel,
+/// anti-aliased or not, may exceed it.
+constexpr editor::tests::BitmapGoldenCompareParams kSteepGradientParams =
     editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true);
 
 /// A gradient renders every one of its stops, however many it has, in each of the ways Geode
@@ -5234,8 +5236,141 @@ TEST_F(RendererGeodeTest, GradientsWithManyStopsMatchTinySkia) {
       const std::string source = ManyStopGradientDocument(stopCount, radial);
       ExpectGeodeMatchesTinySkia(
           source, source, label,
-          stopCount > 32 ? kDenseStopParams : editor::tests::PixelmatchIdentityParams());
+          stopCount > 32 ? kSteepGradientParams : editor::tests::PixelmatchIdentityParams());
     }
+  }
+}
+
+/// Wraps \p body in a 128 by 48 document whose defs hold \p defs.
+std::string GradientTestDocument(std::string_view defs, std::string_view body) {
+  return std::string(
+             R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="48"><defs>)svg") +
+         std::string(defs) + "</defs>" + std::string(body) + "</svg>";
+}
+
+/// Ten stripes from 20 stops: each stripe's two stops share a color, and each stripe ends at the
+/// offset where the next begins, so every boundary is a hard edge between two stops at one
+/// offset. The edges fall on whole pixels, between pixel centers.
+TEST_F(RendererGeodeTest, ManyStopHardEdgesMatchTinySkia) {
+  std::string stops;
+  for (int stripe = 0; stripe < 10; ++stripe) {
+    char color[8];
+    std::snprintf(color, sizeof(color), "#%02x%02x%02x", (stripe * 97 + 20) % 256,
+                  (stripe * 53 + 90) % 256, (stripe * 31 + 160) % 256);
+    for (const int edge : {stripe, stripe + 1}) {
+      stops +=
+          "<stop offset=\"" + std::to_string(edge / 10.0) + "\" stop-color=\"" + color + "\"/>";
+    }
+  }
+  for (const bool radial : {false, true}) {
+    const std::string label = std::string(radial ? "radial" : "linear") + "_hard_edges";
+    SCOPED_TRACE(label);
+    const std::string gradient =
+        radial
+            ? R"svg(<radialGradient id="g" gradientUnits="userSpaceOnUse" cx="4" cy="24" r="120">)svg" +
+                  stops + "</radialGradient>"
+            : R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="4" y1="0" x2="124" y2="0">)svg" +
+                  stops + "</linearGradient>";
+    const std::string source =
+        GradientTestDocument(gradient, R"svg(<rect width="128" height="48" fill="url(#g)"/>)svg");
+    ExpectGeodeMatchesTinySkia(source, source, label, editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// Reflect and repeat spread with a stop ramp: the 20-stop gradient covers a quarter of the rect,
+/// so the rest of it is the ramp mirrored or repeated.
+TEST_F(RendererGeodeTest, ManyStopSpreadMethodsMatchTinySkia) {
+  std::string stops;
+  for (int i = 0; i < 20; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    stops += stop;
+  }
+  for (const std::string_view spread : {"reflect", "repeat"}) {
+    for (const bool radial : {false, true}) {
+      const std::string label =
+          std::string(radial ? "radial_" : "linear_") + std::string(spread) + "_spread";
+      SCOPED_TRACE(label);
+      const std::string open =
+          radial
+              ? R"svg(<radialGradient id="g" gradientUnits="userSpaceOnUse" cx="40" cy="24" r="20" spreadMethod=")svg"
+              : R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="72" y2="0" spreadMethod=")svg";
+      const std::string gradient = open + std::string(spread) + "\">" + stops +
+                                   (radial ? "</radialGradient>" : "</linearGradient>");
+      const std::string source =
+          GradientTestDocument(gradient, R"svg(<rect width="128" height="48" fill="url(#g)"/>)svg");
+      ExpectGeodeMatchesTinySkia(
+          source, source, label,
+          radial ? kSteepGradientParams : editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+/// A gradient with too many stops to batch, drawn between two overlapping solid fills that can,
+/// keeps its place in painter order: it covers the first fill and the second covers it.
+TEST_F(RendererGeodeTest, ManyStopGradientBetweenBatchedFillsKeepsPaintOrder) {
+  std::string stops;
+  for (int i = 0; i < 20; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    stops += stop;
+  }
+  const std::string source = GradientTestDocument(
+      R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="32" y1="0" x2="96" y2="0">)svg" +
+          stops + "</linearGradient>",
+      R"svg(<rect width="64" height="48" fill="#d02020"/>)svg"
+      R"svg(<rect x="32" width="64" height="48" fill="url(#g)"/>)svg"
+      R"svg(<rect x="80" width="48" height="48" fill="#2020d0"/>)svg");
+  ExpectGeodeMatchesTinySkia(source, source, "many_stop_gradient_paint_order",
+                             editor::tests::PixelmatchIdentityParams());
+}
+
+/// The frame's gradient stops are charged under the CPU renderer's per-frame cap. Past it the draw
+/// is refused and so is the rest of the frame, on Geode as on tiny-skia: the same document under
+/// the same lowered cap renders the same pixels and the same verdict on both. The 3-stop gradient
+/// draws through the fill batch and the 20-stop ones through the gradient pipeline, so both
+/// charge.
+TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
+  std::string twentyStops;
+  for (int i = 0; i < 20; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    twentyStops += stop;
+  }
+  const std::string source = GradientTestDocument(
+      R"svg(<linearGradient id="small"><stop stop-color="red"/><stop offset="0.5" stop-color="lime"/><stop offset="1" stop-color="blue"/></linearGradient>)svg"
+      R"svg(<linearGradient id="a">)svg" +
+          twentyStops + R"svg(</linearGradient><linearGradient id="b" x1="1" x2="0">)svg" +
+          twentyStops + "</linearGradient>",
+      R"svg(<rect width="32" height="48" fill="url(#small)"/>)svg"
+      R"svg(<rect x="32" width="32" height="48" fill="url(#a)"/>)svg"
+      R"svg(<rect x="64" width="32" height="48" fill="url(#b)"/>)svg"
+      R"svg(<rect x="96" width="32" height="48" fill="#2020d0"/>)svg");
+  // 43 admits every gradient; 42 refuses the second 20-stop one, 22 the first.
+  for (const std::size_t limit : {43u, 42u, 22u}) {
+    SCOPED_TRACE(limit);
+    std::optional<SVGDocument> document;
+    std::optional<SVGDocument> referenceDocument;
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, referenceDocument));
+    RendererTinySkia reference;
+    reference.setGradientStopBudgetForTesting(limit);
+    reference.draw(*referenceDocument);
+    RendererGeode renderer;
+    renderer.setGradientStopBudgetForTesting(limit);
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+    const RendererResourceStats stats = renderer.resourceStats();
+    const RendererResourceStats referenceStats = reference.resourceStats();
+    EXPECT_EQ(referenceStats.drawBudgetRejected, limit < 43u);
+    EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
+    EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                         "gradient_stop_budget_" + std::to_string(limit),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 

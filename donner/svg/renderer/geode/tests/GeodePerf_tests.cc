@@ -899,6 +899,61 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
       << "The cached gradient-stroke bind group must be reused on an unchanged frame.";
 }
 
+/// Six rects filled with one 40-stop gradient, more stops than a draw carries inline, so each
+/// draws through the gradient pipeline with the gradient's stop ramp.
+std::string SharedManyStopGradientSvg() {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg"
+      R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="120" y2="0">)svg";
+  for (int i = 0; i < 40; ++i) {
+    source += "<stop offset=\"" + std::to_string(i / 39.0) + "\" stop-color=\"" +
+              (i % 2 == 0 ? "#2050c0" : "#c05020") + "\"/>";
+  }
+  source += "</linearGradient></defs>";
+  for (int i = 0; i < 6; ++i) {
+    source += "<rect x=\"" + std::to_string(i * 20) +
+              R"svg(" y="10" width="18" height="60" fill="url(#g)"/>)svg";
+  }
+  return source + "</svg>";
+}
+
+/// The six draws of one many-stop gradient upload its ramp once, and an unchanged second frame
+/// uploads nothing and creates no texture or bind group: each entity keeps the ramp and the bind
+/// group that binds it.
+TEST_F(GeodePerfTest, ManyStopGradient_OneRampThenZeroWrites) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto warmUp = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="10" height="10" fill="red"/></svg>)svg",
+      sink);
+  auto parsed = parser::SVGParser::ParseSVG(SharedManyStopGradientSvg(), sink);
+  ASSERT_FALSE(warmUp.hasError());
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument warmUpDocument = std::move(warmUp.result());
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  // The first frame of a renderer also creates its target; a frame of another document of the
+  // same size takes that out of the counts below.
+  renderer.draw(warmUpDocument);
+
+  renderer.draw(document);
+  const geode::GeodeCounters first = renderer.lastFrameTimings().counters;
+  printCounters("ManyStopGradient (frame1)", first);
+  EXPECT_EQ(first.textureCreates, 1u) << "Six draws of one gradient upload one ramp";
+  // 40 stops lay out as one pair of 48-texel rows of 16 bytes each.
+  EXPECT_EQ(first.textureWriteBytes, 48u * 2u * 16u);
+
+  renderer.draw(document);
+  const geode::GeodeCounters second = renderer.lastFrameTimings().counters;
+  printCounters("ManyStopGradient (frame2)", second);
+  EXPECT_EQ(second.textureCreates, 0u);
+  EXPECT_EQ(second.textureWriteBytes, 0u) << "An unchanged frame uploads no ramp";
+  EXPECT_EQ(second.bindgroupCreates, 0u) << "An unchanged frame reuses each ramp bind group";
+  EXPECT_EQ(second.bufferWriteBytes, 0u) << "Resident gradient draws rewrite nothing";
+}
+
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
