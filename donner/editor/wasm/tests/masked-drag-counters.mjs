@@ -42,7 +42,9 @@ export function unpatchedTileCount(result) {
 }
 
 /**
- * How many held results took the masked-child fast path.
+ * How many held results took the masked-child fast path. A drag slower than its hold renders only
+ * its drag-start result, which finds nothing dirty, so this counts how far the held drag got, not
+ * whether its results have the fast-path shape.
  * @param {{ held: Array<{ fastPathFrames: number }> }} summary Summary from
  *   `summarizeMaskedDragResults`.
  * @returns {number}
@@ -62,7 +64,12 @@ const kShapeCounters = [
 ];
 
 /**
- * What breaks the held masked-child result shape, one line per failure; empty when it holds.
+ * What breaks the shape of the held masked-child results, one line per failure; empty when it
+ * holds. As in the native compositor, every result rendered while the masked child is held takes
+ * the fast path or finds nothing dirty, never renders a slow-path frame, and rasterizes at most one
+ * tile, by patching only the damaged part of its owner. The drag-start result finds nothing dirty
+ * and rasterizes no tile, so a drag that completes only that result while held has this shape:
+ * how many results a drag completes is a separate check.
  * @param {{ countersPublished: boolean, held: object[] }} summary Summary from
  *   `summarizeMaskedDragResults`.
  * @returns {string[]}
@@ -70,9 +77,6 @@ const kShapeCounters = [
 export function heldMaskedDragShapeFailures(summary) {
   if (!summary.countersPublished) return ["the candidate bundle must publish per-result counters"];
   const failures = [];
-  if (heldFastPathResultCount(summary) === 0) {
-    failures.push("the held drag must produce fast-path results");
-  }
   summary.held.forEach((result, index) => {
     const label = `held result ${index} (completed result ${result.completedResults})`;
     // A counter the editor renamed or stopped publishing reads as NaN or null: name it instead of

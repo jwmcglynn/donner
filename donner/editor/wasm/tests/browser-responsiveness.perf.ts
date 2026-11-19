@@ -1,11 +1,5 @@
 import { kCarouselSamples, kCarouselViewport } from "./carousel-samples.mjs";
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
-import {
-  completedDragFrames,
-  dragInputLatencies,
-  heldDragPositionCount,
-  streamDragInputs,
-} from "./drag-input-stream.mjs";
 import { packageHashes } from "./package-identity.mjs";
 import { sumPipelineCompilesPending } from "./pipeline-compile-readiness.mjs";
 import { dispatchCanvasPointer } from "./canvas-pointer";
@@ -24,6 +18,13 @@ import {
   startCompositedProbe,
 } from "./composited-probe";
 import { stopCompositedProbe } from "./composited-probe-evidence.mjs";
+import {
+  completedDragFrames,
+  dragInputLatencies,
+  heldDragPositionCount,
+  kReleaseFrameTimeoutMs,
+  streamDragInputs,
+} from "./drag-input-stream.mjs";
 import { firstClickBreakdown } from "./first-click-breakdown.mjs";
 import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
 import { echoGpuSessionConsole } from "./gpu-session-console";
@@ -36,6 +37,7 @@ import {
   runCompletionCheck,
 } from "./latency-gates.mjs";
 import {
+  heldFastPathResultCount,
   heldMaskedDragShapeFailures,
   summarizeMaskedDragResults,
   unpatchedTileCount,
@@ -447,7 +449,11 @@ async function continuousDrag(
   phase: string,
 ) {
   const before = await snapshot(page);
-  const stream = await page.evaluate(streamDragInputs, { start, direction });
+  const stream = await page.evaluate(streamDragInputs, {
+    start,
+    direction,
+    releaseFrameTimeoutMs: kReleaseFrameTimeoutMs,
+  });
   await expect.poll(async () => (await snapshot(page)).interaction, {
     timeout: 15000,
     message: "the final pointer move and mouse release must reach the editor",
@@ -464,16 +470,20 @@ async function continuousDrag(
     expect(after.presentation, "candidate completion telemetry is required").toBeTruthy();
   }
   if (!baselineOnly && after.presentation) {
-    await expect.poll(async () => {
-      const state = await snapshot(page);
-      const completed = state.presentation;
-      return completed?.inputRepresented && !completed.mouseDown
-        && completed.pointerX === stream.end.x && completed.pointerY === stream.end.y
-        && Math.abs(completed.viewportZoom - state.viewport!.zoom) < 0.001;
-    }, {
-      timeout: 5000,
-      message: "release must reach a current paired frame at the requested camera",
-    }).toBe(true);
+    // The release has one stall guard, measured from the mouse up, and the sampler observed the
+    // drag until it. A release frame later than that fails here, before the checks below read
+    // which inputs the stream completed.
+    expect(stream.releaseFrame, "release must reach a current paired frame at the requested camera")
+      .toBeTruthy();
+    // Once idle, the presented frame must still be that release at the current camera: a later
+    // frame must not have reverted the pointer or the camera.
+    const settled = after.presentation;
+    expect(
+      settled.inputRepresented && !settled.mouseDown && settled.pointerX === stream.end.x
+        && settled.pointerY === stream.end.y
+        && Math.abs(settled.viewportZoom - after.viewport!.zoom) < 0.001,
+      "the presented frame after idle must still be the release at the requested camera",
+    ).toBe(true);
   }
   expect(after.interaction?.selectedCount, "the D drag must leave one shape selected").toBe(1);
   expect(stream.frames.some((frame) => frame.dragging), "the stream must enter drag mode").toBe(
@@ -485,8 +495,9 @@ async function continuousDrag(
   const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
     const heldPositions = heldDragPositionCount(completedFrames);
-    // Reported, not enforced, only for the masked crown drag in Chromium on the hosted macOS Perf
-    // runner (#2106); every other run and phase enforces it. Re-enforce once #2106 is fixed.
+    // The hosted macOS Perf job reports, rather than fails, a miss in the masked crown drag, in the
+    // report scope it shares with that drag's other progress checks (#2106). It enforces every
+    // other phase, as does every run that does not set report mode.
     await completionCheck(
       "heldDragPositions",
       phase,
@@ -1766,7 +1777,8 @@ async function stopWorkerResultCounters(page: Page) {
  * As in the native compositor, every result rendered while the masked child is held takes the
  * fast path (or finds nothing dirty) without a slow-path frame, and rasterizes at most one tile,
  * by patching only the damaged part of its owner. A drag-start result finds nothing dirty and
- * rasterizes no tile, so it needs no exception.
+ * rasterizes no tile, so it needs no exception, and a drag that completes only that result while
+ * held passes: how far the held drag gets is `heldDragFastPathResults`.
  */
 function expectHeldMaskedDragDamagePatch(summary: MaskedDragSummary) {
   expect(
@@ -1815,19 +1827,31 @@ async function maskedCrownDragWithCounters(
   console.log(`masked-drag-counters ${JSON.stringify(baseline)}`);
   const unpatched = results.held.filter((result) => unpatchedTileCount(result) > 0).length;
   const slowPath = results.held.filter((result) => result.slowPathFramesWithDirty > 0).length;
-  let checkFailure: unknown;
+  const fastPath = heldFastPathResultCount(results);
+  const checkFailures: unknown[] = [];
   if (results.checkHeldResults) {
     await completionCheck(
       "heldMaskedDragDamagePatch",
       phase,
       `${results.held.length} held results, ${slowPath} slow path, ${unpatched} rasterized unpatched`,
       () => expectHeldMaskedDragDamagePatch(results),
-    ).catch((error) => {
-      checkFailure = error;
-    });
+    ).catch((error) => checkFailures.push(error));
+    // The hosted macOS Perf job reports, rather than fails, a miss, in the report scope it shares
+    // with this drag's other progress checks (#2106); a run without report mode enforces it.
+    await completionCheck(
+      "heldDragFastPathResults",
+      phase,
+      `${results.held.length} held results, ${fastPath} fast path`,
+      () =>
+        expect(
+          fastPath,
+          "the held drag must render a fast-path result for a move before release, not only "
+            + "its drag-start result",
+        ).toBeGreaterThan(0),
+    ).catch((error) => checkFailures.push(error));
   }
   if (dragFailure !== undefined) throw dragFailure;
-  if (checkFailure !== undefined) throw checkFailure;
+  if (checkFailures.length > 0) throw checkFailures[0];
   return { drag, workerResults: results };
 }
 
