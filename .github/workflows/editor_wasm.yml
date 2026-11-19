@@ -121,7 +121,7 @@ jobs:
         run: tools/ci/free_hosted_macos_disk.sh
 
       - name: Setup Bazel for native browser comparison and Wasm build
-        uses: bazel-contrib/setup-bazel@0.19.1
+        uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
           repository-cache: true

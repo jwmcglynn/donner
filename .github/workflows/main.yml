@@ -176,7 +176,7 @@ jobs:
 
       - name: Setup Bazel
         if: steps.pr-meta.outputs.identical_tree != 'true'
-        uses: bazel-contrib/setup-bazel@0.19.1
+        uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
           repository-cache: true
@@ -254,7 +254,7 @@ jobs:
             libgl1-mesa-dev libosmesa6 clang-tidy-19 xvfb xauth
 
       - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.1
+        uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
           repository-cache: true
@@ -668,7 +668,7 @@ jobs:
             echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
 
       - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.1
+        uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
           repository-cache: true
