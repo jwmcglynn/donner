@@ -142,11 +142,34 @@ bool IsFiniteVector(const Vector2d& value) {
   return std::isfinite(value.x) && std::isfinite(value.y);
 }
 
-constexpr int kMaximumRoundStrokeSubdivisionSteps = 4096;
+/// Largest width-based step count for one round stroke piece.
+constexpr int kMaximumWidthRoundStrokeSubdivisionSteps = 4096;
+/// Bounds the work of one round stroke piece. At a 0.25 tolerance it admits the chords that a
+/// half-turn cap or reversal join needs up to a radius of about 5.4e7, and that a full-turn dot
+/// needs up to a radius of about 1.4e7.
+constexpr int kMaximumRoundStrokeSubdivisionSteps = 16384;
 constexpr std::size_t kMaximumStrokeOutputPoints = Path::kMaximumStrokeOutputPoints;
 
+/// Returns the number of equal chords that keep an arc of @p radius sweeping @p sweep radians
+/// within @p flattenTolerance of the true arc, as a real number to be rounded up.
+///
+/// A chord spanning angle a deviates from its arc by radius * (1 - cos(a / 2)), which equals
+/// 2 * radius * sin^2(a / 4), so the widest admissible chord spans
+/// 4 * asin(sqrt(flattenTolerance / (2 * radius))). This form stays accurate when the tolerance
+/// is many orders of magnitude below the radius, where 1 - flattenTolerance / radius rounds to 1.
+double RoundStrokeStepsForTolerance(double radius, double sweep, double flattenTolerance) {
+  const double ratio = flattenTolerance / (2.0 * radius);
+  if (!(ratio < 1.0)) {
+    return 0.0;
+  }
+  return Abs(sweep) / (4.0 * std::asin(std::sqrt(ratio)));
+}
+
 /// Returns the subdivision steps for a round stroke piece: an arc of @p radius sweeping
-/// @p sweep radians around @p center, tessellated with @p requestedSteps chords and clamped to
+/// @p sweep radians around @p center. The piece gets the larger of @p widthSteps, the
+/// width-based density capped at kMaximumWidthRoundStrokeSubdivisionSteps, and the chords that
+/// keep it within @p flattenTolerance of the arc, the same bound curve flattening uses. The
+/// tolerance therefore only ever refines the width-based density. The result is clamped to
 /// [@p minimumSteps, kMaximumRoundStrokeSubdivisionSteps].
 ///
 /// The steps are also limited to the arc length divided by the spacing between adjacent doubles
@@ -159,12 +182,15 @@ constexpr std::size_t kMaximumStrokeOutputPoints = Path::kMaximumStrokeOutputPoi
 /// quarter spacing rounds every corner back onto the center's coordinate in the coarse axis, so
 /// the piece is discarded as degenerate and any steps beyond the minimum are wasted work.
 ///
-/// Every caller requests about one step per pi / 2 units of arc length or fewer, so this limit
-/// only binds when the spacing exceeds about pi / 2. Spacings are powers of two, so that needs a
-/// center coordinate of at least 2^53, and strokes of geometry below that magnitude tessellate
-/// exactly as before. A caller requesting denser subdivision would lower that threshold.
+/// The width-based density asks for chords about pi / 2 units long and the tolerance for chords
+/// about sqrt(8 * flattenTolerance * radius) long, so this limit binds only once the spacing
+/// exceeds the shorter of the two.
 int BoundedRoundStrokeSubdivisionSteps(const Vector2d& center, double radius, double sweep,
-                                       double requestedSteps, int minimumSteps) {
+                                       double widthSteps, double flattenTolerance,
+                                       int minimumSteps) {
+  double requestedSteps =
+      std::max(std::min(widthSteps, static_cast<double>(kMaximumWidthRoundStrokeSubdivisionSteps)),
+               RoundStrokeStepsForTolerance(radius, sweep, flattenTolerance));
   const double magnitude = std::max(Abs(center.x), Abs(center.y));
   const double spacing =
       std::nextafter(magnitude, std::numeric_limits<double>::infinity()) - magnitude;
@@ -2263,10 +2289,10 @@ void EmitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder,
 }
 
 void EmitRoundCapPiece(const Vector2d& point, const Vector2d& outwardDirection, double halfWidth,
-                       PathBuilder& builder) {
+                       double flattenTolerance, PathBuilder& builder) {
   const Vector2d normal(-outwardDirection.y, outwardDirection.x);
   const int numSteps = BoundedRoundStrokeSubdivisionSteps(
-      point, halfWidth, MathConstants<double>::kPi, halfWidth * 2.0, 8);
+      point, halfWidth, MathConstants<double>::kPi, halfWidth * 2.0, flattenTolerance, 8);
   std::vector<Vector2d> points;
   points.reserve(static_cast<size_t>(numSteps) + 2);
   points.push_back(point);
@@ -2286,12 +2312,12 @@ void EmitRoundCapPiece(const Vector2d& point, const Vector2d& outwardDirection, 
 }
 
 void EmitCapPiece(const Vector2d& point, const Vector2d& outwardDirection, double halfWidth,
-                  LineCap cap, PathBuilder& builder) {
+                  LineCap cap, double flattenTolerance, PathBuilder& builder) {
   if (cap == LineCap::Butt) {
     return;
   }
   if (cap == LineCap::Round) {
-    EmitRoundCapPiece(point, outwardDirection, halfWidth, builder);
+    EmitRoundCapPiece(point, outwardDirection, halfWidth, flattenTolerance, builder);
     return;
   }
 
@@ -2307,15 +2333,16 @@ void EmitCapPiece(const Vector2d& point, const Vector2d& outwardDirection, doubl
 void EmitRoundJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNormal,
                         const Vector2d& currentOuterNormal, const Vector2d& previousOuter,
                         const Vector2d& currentOuter, double halfWidth, double turn,
-                        PathBuilder& builder) {
+                        double flattenTolerance, PathBuilder& builder) {
   const double alignment = previousOuterNormal.dot(currentOuterNormal);
   const double sweep = std::atan2(turn, alignment);
   // Near-reversal sectors use the same subdivision density as round caps.
   const int numSteps =
       NearZero(turn, 1e-10) && alignment < 0.0
-          ? BoundedRoundStrokeSubdivisionSteps(vertex, halfWidth, sweep, halfWidth * 2.0, 8)
+          ? BoundedRoundStrokeSubdivisionSteps(vertex, halfWidth, sweep, halfWidth * 2.0,
+                                               flattenTolerance, 8)
           : BoundedRoundStrokeSubdivisionSteps(vertex, halfWidth, sweep,
-                                               Abs(sweep) * halfWidth / 2.0, 4);
+                                               Abs(sweep) * halfWidth / 2.0, flattenTolerance, 4);
   std::vector<Vector2d> points;
   points.reserve(static_cast<size_t>(numSteps) + 3);
   points.push_back(vertex);
@@ -2378,13 +2405,13 @@ void EmitMiterJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNor
 
 void EmitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal,
                           const Vector2d& currentNormal, double halfWidth, const StrokeStyle& style,
-                          PathBuilder& builder) {
+                          double flattenTolerance, PathBuilder& builder) {
   const double turn = previousNormal.x * currentNormal.y - previousNormal.y * currentNormal.x;
   if (turn == 0.0) {
     if (previousNormal.dot(currentNormal) < 0.0) {
       if (style.join == LineJoin::Round) {
         EmitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth,
-                          builder);
+                          flattenTolerance, builder);
       } else if (style.join == LineJoin::MiterClip) {
         (void)EmitClippedMiterPiece(vertex, previousNormal, currentNormal, halfWidth,
                                     style.miterLimit, builder);
@@ -2410,7 +2437,7 @@ void EmitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal
   }
 
   EmitRoundJoinPiece(vertex, previousOuterNormal, currentOuterNormal, previousOuter, currentOuter,
-                     halfWidth, turn, builder);
+                     halfWidth, turn, flattenTolerance, builder);
 }
 
 /// Extract subpaths from a flattened path without exceeding @p maximumPoints.
@@ -2679,7 +2706,7 @@ bool AllStrokePointsCoincident(std::span<const Vector2d> pts) {
 
 /// A coincident subpath emits only its cap-shaped region.
 void EmitZeroLengthStroke(const FlatSubpath& subpath, double halfWidth, const StrokeStyle& style,
-                          PathBuilder& builder) {
+                          double flattenTolerance, PathBuilder& builder) {
   const auto& pts = subpath.points;
   if (style.cap == LineCap::Butt) {
     return;
@@ -2700,7 +2727,7 @@ void EmitZeroLengthStroke(const FlatSubpath& subpath, double halfWidth, const St
   }
   // Approximate the round point cap with the existing bounded circle subdivision.
   const int numSteps = BoundedRoundStrokeSubdivisionSteps(
-      p, halfWidth, 2.0 * MathConstants<double>::kPi, halfWidth * 4.0, 16);
+      p, halfWidth, 2.0 * MathConstants<double>::kPi, halfWidth * 4.0, flattenTolerance, 16);
   std::vector<Vector2d> points;
   points.reserve(static_cast<size_t>(numSteps));
   for (int s = 0; s < numSteps; ++s) {
@@ -2751,14 +2778,14 @@ bool EmitStrokeSegmentPieces(const FlatSubpath& subpath, std::span<const Vector2
 /// Emit the joins between active strips, stopping on the same aggregate point limit.
 bool EmitStrokeJoinPieces(const FlatSubpath& subpath, std::span<const Vector2d> normals,
                           std::span<const size_t> activeSegments, double halfWidth,
-                          const StrokeStyle& style, PathBuilder& builder) {
+                          const StrokeStyle& style, double flattenTolerance, PathBuilder& builder) {
   const auto& pts = subpath.points;
   const size_t joinCount = subpath.closed ? activeSegments.size() : activeSegments.size() - 1;
   for (size_t i = 0; i < joinCount; ++i) {
     const size_t previousSegment = activeSegments[i];
     const size_t currentSegment = activeSegments[(i + 1) % activeSegments.size()];
     EmitOutsideJoinPiece(pts[currentSegment], normals[previousSegment], normals[currentSegment],
-                         halfWidth, style, builder);
+                         halfWidth, style, flattenTolerance, builder);
     if (builder.exceededMaximumPoints()) {
       return false;
     }
@@ -2766,8 +2793,10 @@ bool EmitStrokeJoinPieces(const FlatSubpath& subpath, std::span<const Vector2d> 
   return true;
 }
 
-/// Build the stroke outline for a single subpath.
-void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBuilder& builder) {
+/// Build the stroke outline for a single subpath, subdividing round pieces to
+/// @p flattenTolerance.
+void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, double flattenTolerance,
+                   PathBuilder& builder) {
   if (builder.exceededMaximumPoints()) {
     return;
   }
@@ -2780,7 +2809,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   const double halfWidth = style.width * 0.5;
 
   if (AllStrokePointsCoincident(pts)) {
-    EmitZeroLengthStroke(subpath, halfWidth, style, builder);
+    EmitZeroLengthStroke(subpath, halfWidth, style, flattenTolerance, builder);
     return;
   }
 
@@ -2806,7 +2835,8 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   if (activeSegments.empty()) {
     return;
   }
-  if (!EmitStrokeJoinPieces(subpath, normals, activeSegments, halfWidth, style, builder)) {
+  if (!EmitStrokeJoinPieces(subpath, normals, activeSegments, halfWidth, style, flattenTolerance,
+                            builder)) {
     return;
   }
 
@@ -2815,8 +2845,9 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     const size_t lastSegment = activeSegments.back();
     const Vector2d firstOutward(-normals[firstSegment].y, normals[firstSegment].x);
     const Vector2d lastOutward(normals[lastSegment].y, -normals[lastSegment].x);
-    EmitCapPiece(pts[firstSegment], firstOutward, halfWidth, style.cap, builder);
-    EmitCapPiece(pts[lastSegment + 1], lastOutward, halfWidth, style.cap, builder);
+    EmitCapPiece(pts[firstSegment], firstOutward, halfWidth, style.cap, flattenTolerance, builder);
+    EmitCapPiece(pts[lastSegment + 1], lastOutward, halfWidth, style.cap, flattenTolerance,
+                 builder);
   }
 }
 
@@ -3048,7 +3079,7 @@ private:
 
 /// Dash a single subpath and emit its stroked dashes to the builder.
 DashedStrokeResult strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
-                                       const FlatSubpathArcIndex& arcIndex,
+                                       double flattenTolerance, const FlatSubpathArcIndex& arcIndex,
                                        const ResolvedDashPattern& pattern,
                                        DashPatternWorkBudget& workBudget, PathBuilder& builder) {
   const double totalArc = arcIndex.totalLength();
@@ -3130,7 +3161,7 @@ DashedStrokeResult strokeDashedSubpath(const FlatSubpath& subpath, const StrokeS
           FlatSubpath dash;
           dash.points = {point, point};
           dash.zeroLengthTangent = arcIndex.tangentAt(cursor);
-          strokeSubpath(dash, style, builder);
+          strokeSubpath(dash, style, flattenTolerance, builder);
         }
         if (++iterationsWithoutProgress >= kMaxStalledIters) {
           return DashedStrokeResult::Rejected;
@@ -3166,7 +3197,7 @@ DashedStrokeResult strokeDashedSubpath(const FlatSubpath& subpath, const StrokeS
         const double dashEnd = std::min(next, totalArc);
         FlatSubpath dash = arcIndex.extractRange(cursor, dashEnd);
         if (dash.points.size() >= 2) {
-          strokeSubpath(dash, style, builder);
+          strokeSubpath(dash, style, flattenTolerance, builder);
         }
       }
 
@@ -3209,12 +3240,12 @@ std::optional<std::vector<FlatSubpathArcIndex>> BuildDashArcIndexes(
 }
 
 bool StrokePreparedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
-                           const FlatSubpathArcIndex* arcIndex,
+                           double flattenTolerance, const FlatSubpathArcIndex* arcIndex,
                            const std::optional<ResolvedDashPattern>& dashPattern,
                            DashPatternWorkBudget& workBudget, PathBuilder& builder) {
   if (dashPattern.has_value()) {
-    const DashedStrokeResult result =
-        strokeDashedSubpath(subpath, style, *arcIndex, *dashPattern, workBudget, builder);
+    const DashedStrokeResult result = strokeDashedSubpath(
+        subpath, style, flattenTolerance, *arcIndex, *dashPattern, workBudget, builder);
     if (result == DashedStrokeResult::Emitted) {
       return !builder.exceededMaximumPoints();
     }
@@ -3222,12 +3253,13 @@ bool StrokePreparedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
       return false;
     }
   }
-  strokeSubpath(subpath, style, builder);
+  strokeSubpath(subpath, style, flattenTolerance, builder);
   return !builder.exceededMaximumPoints();
 }
 
 Path BuildStrokeOutline(const Path& originalPath, std::vector<FlatSubpath>& subpaths,
-                        std::size_t maximumOutputPoints, const StrokeStyle& style) {
+                        std::size_t maximumOutputPoints, const StrokeStyle& style,
+                        double flattenTolerance) {
   computeCurveBoundaryOverrides(originalPath, subpaths);
 
   PathBuilder builder(maximumOutputPoints);
@@ -3244,8 +3276,8 @@ Path BuildStrokeOutline(const Path& originalPath, std::vector<FlatSubpath>& subp
                 : std::nullopt;
   for (std::size_t i = 0; i < subpaths.size(); ++i) {
     const FlatSubpathArcIndex* arcIndex = hasDashes ? &(*dashArcIndexes)[i] : nullptr;
-    if (!StrokePreparedSubpath(subpaths[i], style, arcIndex, dashPattern, dashWorkBudget,
-                               builder)) {
+    if (!StrokePreparedSubpath(subpaths[i], style, flattenTolerance, arcIndex, dashPattern,
+                               dashWorkBudget, builder)) {
       return Path();
     }
   }
@@ -3495,7 +3527,8 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
   if (extractedPoints >= extractionBudget) {
     return Path();
   }
-  return BuildStrokeOutline(*this, subpaths, extractionBudget - extractedPoints, style);
+  return BuildStrokeOutline(*this, subpaths, extractionBudget - extractedPoints, style,
+                            flattenTolerance);
 }
 
 // ============================================================================

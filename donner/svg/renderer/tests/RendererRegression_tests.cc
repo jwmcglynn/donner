@@ -2861,6 +2861,108 @@ TEST_F(RendererRegressionTests, ThickCrossbarStrokeMatchesItsUnionAtFractionalOf
   }
 }
 
+/// Default pixelmatch threshold with no differing pixels allowed and anti-aliased edge pixels
+/// excluded. Identity is impossible here: the stroke and its reference are different
+/// polygonizations of the same arc, which always differ on anti-aliased edge pixels. A sub-pixel
+/// chord error therefore passes while a chord that misses whole pixels fails. The sub-pixel
+/// guarantee comes from the Path-level sagitta test; these renderer tests catch chords that miss
+/// whole pixels.
+constexpr editor::tests::BitmapGoldenCompareParams kNoMismatchedPixelsParams =
+    editor::tests::ApprovedPixelToleranceParams(0.02f, 0);
+
+TEST_F(RendererRegressionTests, MagnifiedRoundStrokePiecesMatchTheirDeviceSizedGeometry) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  // Each magnified stroke is drawn through a 128x viewBox scale; its reference authors the same
+  // geometry at device size, where the width-based subdivision keeps its chords far below a
+  // pixel. Round pieces subdivided from the device-derived tolerance stay within a quarter pixel
+  // of the reference, while pieces subdivided by their local width alone miss whole pixels.
+  struct Case {
+    const char* name;
+    std::string_view magnified;
+    std::string_view deviceSized;
+  };
+  const Case cases[] = {
+      {"cap", R"(d="M1 2H2" stroke-width="2" stroke-linecap="round")",
+       R"(d="M128 256H256" stroke-width="256" stroke-linecap="round")"},
+      {"join", R"(d="M1 1H3V3" stroke-width="2" stroke-linejoin="round")",
+       R"(d="M128 128H384V384" stroke-width="256" stroke-linejoin="round")"},
+      {"dot", R"(d="M2 2h0" stroke-width="3" stroke-linecap="round")",
+       R"(d="M256 256h0" stroke-width="384" stroke-linecap="round")"},
+  };
+  const auto source = [](std::string_view viewBox, std::string_view attributes) {
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"" + std::string(viewBox) +
+           "\"><path fill=\"none\" stroke=\"#ff00ff\" " + std::string(attributes) + "/></svg>";
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.name);
+    SVGDocument magnifiedDocument =
+        instantiateSubtree(source("0 0 4 4", c.magnified), {}, {512, 512});
+    SVGDocument deviceSizedDocument =
+        instantiateSubtree(source("0 0 512 512", c.deviceSized), {}, {512, 512});
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(deviceSizedDocument, RendererBackend::Geode);
+    AssertVisibleFixture(expected, "magnified_round_" + std::string(c.name) + "_reference");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithBackend(magnifiedDocument, RendererBackend::Geode), expected,
+        "magnified_round_" + std::string(c.name), kNoMismatchedPixelsParams);
+  }
+}
+
+TEST_F(RendererRegressionTests, HugeRoundCapMatchesItsTrueArc) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  // A round cap of radius 4e7 seen through a 256 px window centered on its edge. The reference
+  // fills the true circle sampled about once per pixel along the window, so its edge is exact to
+  // far below a pixel. The window sits pi / 8192 radians from the cap's apex, midway between two
+  // vertices of a 4096-chord cap, where such a cap misses the arc by about 3 pixels.
+  constexpr double kRadius = 4.0e7;
+  const double windowAngle = -MathConstants<double>::kPi / 8192.0;
+  const Vector2d windowCenter(128.5, 128.25);
+  const Vector2d center =
+      windowCenter - Vector2d(std::cos(windowAngle), std::sin(windowAngle)) * kRadius;
+  const auto number = [](double value) {
+    std::ostringstream stream;
+    stream << std::setprecision(17) << value;
+    return stream.str();
+  };
+  const auto point = [&](const Vector2d& p) { return number(p.x) + " " + number(p.y); };
+  const auto document = [](const std::string& element) {
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\">" + element +
+           "</svg>";
+  };
+
+  const std::string stroke = "<path fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"" +
+                             number(2.0 * kRadius) + "\" stroke-linecap=\"round\" d=\"M" +
+                             point(center - Vector2d(10.0, 0.0)) + "L" + point(center) + "\"/>";
+
+  // Sample the arc 1 px apart for 400 px on either side of the window center, then close the
+  // polygon 1000 px inside the circle.
+  constexpr int kHalfSamples = 400;
+  std::string arc = "M";
+  for (int i = -kHalfSamples; i <= kHalfSamples; ++i) {
+    const double angle = windowAngle + static_cast<double>(i) / kRadius;
+    arc += (i == -kHalfSamples ? "" : "L") +
+           point(center + Vector2d(std::cos(angle), std::sin(angle)) * kRadius);
+  }
+  for (const int i : {kHalfSamples, -kHalfSamples}) {
+    const double angle = windowAngle + static_cast<double>(i) / kRadius;
+    arc += "L" + point(center + Vector2d(std::cos(angle), std::sin(angle)) * (kRadius - 1000.0));
+  }
+  const std::string reference = "<path fill=\"#ff00ff\" d=\"" + arc + "Z\"/>";
+
+  SVGDocument strokeDocument = instantiateSubtree(document(stroke), {}, {256, 256});
+  SVGDocument referenceDocument = instantiateSubtree(document(reference), {}, {256, 256});
+  const RendererBitmap expected =
+      RenderDocumentWithBackend(referenceDocument, RendererBackend::Geode);
+  AssertVisibleFixture(expected, "huge_round_cap_reference");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithBackend(strokeDocument, RendererBackend::Geode), expected, "huge_round_cap",
+      kNoMismatchedPixelsParams);
+}
+
 TEST_F(RendererRegressionTests, FractionalStrokeUnionPreservesGradientCoverage) {
   if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
     GTEST_SKIP() << "Requires the Geode backend";
