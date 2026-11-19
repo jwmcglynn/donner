@@ -425,24 +425,36 @@ RendererBitmap RenderUserSpaceRadial(double fx, double fr, double cx, double r,
 
 // HTML canvas `createRadialGradient` (which SVG 2 `fr` follows) paints the circle at every
 // interpolation parameter with a positive radius, so a start circle that contains the end circle
-// covers the whole plane: t = (fr - distance) / (fr - r) for concentric circles. Sampled against
-// that formula, independently of either rasterizer.
+// covers the whole plane: t = (fr - distance) / (fr - r) for concentric circles. The expected image
+// evaluates that formula at every pixel center, independently of either rasterizer.
 TEST_F(RendererRegressionTests, RadialContainingStartCirclePaintsCanvasTwoPointGradient) {
+  constexpr int kSize = 64;
+  constexpr double kCenter = 32.0;
+  constexpr double kStartRadius = 24.0;
+  constexpr double kEndRadius = 8.0;
   const auto actual = RenderUserSpaceRadial(
-      32, 24, 32, 8, "pad",
+      kCenter, kStartRadius, kCenter, kEndRadius, "pad",
       R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg");
-  // The oracle is a formula, not a bitmap, so pixelmatch has nothing to compare against; the
-  // swapped-circles test below is the exact bitmap comparison. Interpolated channels get a small
-  // rounding allowance.
-  const auto about = [](int expected) { return IsWithin(expected, 3); };
-  // Inside the end circle (distance 0.7): t > 1 pads to the last stop.
-  EXPECT_THAT(PixelAt(actual, 32, 32), testing::ElementsAre(0, 0, 255, 255));
-  // Outside the start circle (distance 44.5): t < 0 pads to the first stop.
-  EXPECT_THAT(PixelAt(actual, 0, 0), testing::ElementsAre(255, 0, 0, 255));
-  // Distance 12.51: t = 0.718.
-  EXPECT_THAT(PixelAt(actual, 44, 32), testing::ElementsAre(about(72), 0, about(183), 255));
-  // Distance 20.51: t = 0.218.
-  EXPECT_THAT(PixelAt(actual, 52, 32), testing::ElementsAre(about(199), 0, about(56), 255));
+
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(kSize, kSize);
+  expected.rowBytes = static_cast<std::size_t>(kSize) * 4u;
+  expected.alphaType = AlphaType::Unpremultiplied;
+  expected.pixels.reserve(expected.rowBytes * kSize);
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      const double distance = std::hypot(x + 0.5 - kCenter, y + 0.5 - kCenter);
+      // Pad: the last stop inside the end circle, the first stop outside the start circle.
+      const double t =
+          std::clamp((kStartRadius - distance) / (kStartRadius - kEndRadius), 0.0, 1.0);
+      expected.pixels.push_back(static_cast<uint8_t>(std::lround(255.0 * (1.0 - t))));
+      expected.pixels.push_back(0);
+      expected.pixels.push_back(static_cast<uint8_t>(std::lround(255.0 * t)));
+      expected.pixels.push_back(255);
+    }
+  }
+  editor::tests::CompareBitmapToBitmap(actual, expected, "radial_containing_start_circle_formula",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 // The circles that cover a point are nested when the start circle contains the end circle, so each
