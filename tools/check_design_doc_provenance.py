@@ -106,10 +106,16 @@ def validate_document(path: Path, root: Path) -> Violation | None:
 
 def collect_violations(root: Path, paths=None) -> dict[str, Violation]:
     design_root = root / "docs" / "design_docs"
+    # Bazel's full inventory consists of declared runfiles, which can all be symlinks.
+    if paths is None:
+        candidates = design_root.rglob("*.md")
+    else:
+        selected = (root / name for name in paths)
+        candidates = (path for path in selected if not path.is_symlink())
     return {
         violation.path: violation
-        for path in (sorted(design_root.rglob("*.md")) if paths is None else [root / name for name in paths])
-        if path.suffix == ".md" and path.is_file() and not path.is_symlink() and is_design_doc(path)
+        for path in sorted(candidates)
+        if path.suffix == ".md" and path.is_file() and is_design_doc(path)
         if (violation := validate_document(path, root)) is not None
     }
 

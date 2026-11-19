@@ -39,6 +39,15 @@ class DesignDocProvenanceTests(unittest.TestCase):
 
         self.assertEqual(provenance.check(self.root, self.allowlist), [])
 
+    def test_full_inventory_reads_declared_runfile_symlinks(self):
+        target = self.root / "source.md"
+        target.write_text("**Status:** Draft\n", encoding="utf-8")
+        document = self.design_root / "0001-linked.md"
+        document.symlink_to(target)
+        self.assertIn("missing **Author:** metadata", provenance.check(self.root, self.allowlist)[0])
+        self.assertEqual(provenance.check(self.root, self.allowlist,
+                                          [document.relative_to(self.root).as_posix()]), [])
+
     def test_missing_author_fails(self):
         self.write_design("0001-test.md", "**Status:** Draft")
 
