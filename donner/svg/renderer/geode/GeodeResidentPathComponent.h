@@ -441,9 +441,34 @@ class GeodeDevice;
  * the same stops share one.
  */
 struct GeodeGradientRamp {
-  std::vector<float> stops;  ///< The stops it holds: per stop, the offset then straight-alpha RGBA.
-  gpu::Texture texture;      ///< RGBA32Float ramp.
-  gpu::TextureView view;     ///< View the gradient bind groups bind.
+  /// The stops it holds: per stop, the offset then straight-alpha RGBA. Draws compare their own
+  /// stops with it byte for byte before they bind the ramp, so two gradients never share one
+  /// unless their stops are identical.
+  std::vector<float> stops;
+  gpu::Texture texture;            ///< RGBA32Float ramp.
+  gpu::TextureView view;           ///< View the gradient bind groups bind.
+  std::uint64_t textureBytes = 0;  ///< Bytes of `texture`.
+
+  /// The document budget a resident slot charged when it first kept this ramp across frames, and
+  /// the bytes charged: the texture and the stop key, once for every slot that shares the ramp.
+  /// Null while only this frame's draws hold it. Released when the last holder lets go, which for
+  /// a slot is at the frame boundary after it drops the ramp.
+  mutable std::shared_ptr<GeodeDocumentGeometryBudget> chargedBudget;
+  mutable std::uint64_t chargedBytes = 0;  ///< Bytes charged to `chargedBudget`.
+
+  GeodeGradientRamp() = default;
+  ~GeodeGradientRamp() {
+    if (chargedBudget) {
+      chargedBudget->releaseRampBytes(chargedBytes);
+    }
+  }
+  GeodeGradientRamp(const GeodeGradientRamp&) = delete;
+  GeodeGradientRamp& operator=(const GeodeGradientRamp&) = delete;
+
+  /// Bytes keeping this ramp across frames costs: the texture and the stop key's storage.
+  [[nodiscard]] std::uint64_t retainedBytes() const {
+    return textureBytes + static_cast<std::uint64_t>(stops.capacity()) * sizeof(float);
+  }
 };
 
 /**

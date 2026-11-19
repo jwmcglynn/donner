@@ -783,6 +783,9 @@ struct RendererResourceStats {
   std::size_t geometryDraws = 0;
   std::size_t geometryItems = 0;
   std::size_t geometryRetainedBytes = 0;
+  /// Bytes of gradient stop ramps kept across frames (their textures and stop keys), charged to
+  /// the documents' resident limits and included in \ref geometryRetainedBytes.
+  std::uint64_t gradientRampRetainedBytes = 0;
   bool geometryBudgetRejected = false;
   bool surfaceBudgetSupported = false;
   std::size_t surfaceCount = 0;

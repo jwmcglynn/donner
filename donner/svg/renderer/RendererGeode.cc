@@ -1741,6 +1741,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       std::weak_ptr<Budget> budget;
       std::uint64_t retainedBytes = 0;  //!< Cache plus resident bytes.
       bool rejected = false;            //!< Whether it had refused a request.
+      std::uint64_t rampBytes = 0;      //!< Resident bytes of kept gradient stop ramps.
     };
     std::vector<Settled> settled;
 
@@ -1748,6 +1749,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     struct Figures {
       std::uint64_t retainedBytes = 0;  //!< Summed, saturating.
       bool rejected = false;            //!< Whether any budget had refused a request.
+      std::uint64_t rampBytes = 0;      //!< Kept gradient stop ramp bytes, summed.
     };
 
     void reset() { settled.clear(); }
@@ -1760,7 +1762,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// @param touched The ending frame's budgets; empty on return.
     void settle(Touched& touched) {
       for (const std::shared_ptr<Budget>& budget : touched) {
-        Settled figures{budget, budget->cacheBytes() + budget->residentBytes(), budget->rejected()};
+        Settled figures{budget, budget->cacheBytes() + budget->residentBytes(), budget->rejected(),
+                        budget->rampBytes()};
         const auto existing =
             std::find_if(settled.begin(), settled.end(),
                          [&](const Settled& value) { return SameBudget(value.budget, budget); });
@@ -1777,23 +1780,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// @param touched Budgets the asking renderer's open frame is drawing.
     Figures figures(const Touched& touched) const {
       Figures result;
-      const auto add = [&result](std::uint64_t bytes, bool rejected) {
+      const auto add = [&result](std::uint64_t bytes, bool rejected, std::uint64_t rampBytes) {
         result.retainedBytes =
             bytes > std::numeric_limits<std::uint64_t>::max() - result.retainedBytes
                 ? std::numeric_limits<std::uint64_t>::max()
                 : result.retainedBytes + bytes;
         result.rejected = result.rejected || rejected;
+        // Ramp bytes are a part of the retained bytes, so they cannot overflow before those do.
+        result.rampBytes += std::min(rampBytes, bytes);
       };
       for (const Settled& document : settled) {
         const bool drawing = std::any_of(touched.begin(), touched.end(), [&](const auto& budget) {
           return SameBudget(document.budget, budget);
         });
         if (!drawing) {
-          add(document.retainedBytes, document.rejected);
+          add(document.retainedBytes, document.rejected, document.rampBytes);
         }
       }
       for (const std::shared_ptr<Budget>& budget : touched) {
-        add(budget->cacheBytes() + budget->residentBytes(), budget->rejected());
+        add(budget->cacheBytes() + budget->residentBytes(), budget->rejected(),
+            budget->rampBytes());
       }
       return result;
     }
@@ -5806,11 +5812,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Lets \p slot go of the stop ramp and ramp bind group it holds, if any; null is a no-op.
   ///
-  /// A shape whose fill or stroke turns solid, or draws through the fill batch, releases its ramp
-  /// here. One that turns to a pattern or to no paint does not reach its gradient slot, so the slot
-  /// keeps its ramp until the shape's geometry changes or its residence is removed. Slots of one
-  /// gradient share one ramp, so what is retained is at most one ramp per such gradient: up to
-  /// 262,144 stops, a 1024 by 512 RGBA32Float texture of 8 MiB.
+  /// A shape whose fill or stroke turns solid, or whose fill turns to a pattern or draws through
+  /// the fill batch, releases its ramp here. One whose paint turns to none does not reach its
+  /// gradient slot, so the slot keeps its ramp until the shape's geometry changes or its residence
+  /// is removed. Every kept ramp is charged once, texture and stop key, to its document's resident
+  /// limit (`GeodeDocumentGeometryBudget::kMaximumResidentBytes`), and a slot whose ramp would pass
+  /// it draws from a ramp uploaded for each frame instead of keeping one.
   static void releaseGradientRamp(geode::GeodeResidentGradientSlot* slot) {
     if (slot != nullptr && slot->ramp != nullptr) {
       slot->replaceRamp(nullptr, gpu::BindGroup());
@@ -5872,6 +5879,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity),
                                precomputedEncoded);
       releasePatternPaintSlot(patternFillPaint);
+      releaseGradientRamp(gradientResidentSlot);
       return;
     }
     const double effectiveOpacity = paint.fillOpacity;
@@ -6737,6 +6745,7 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .geometryDraws = impl_->geometryBudget->draws(),
       .geometryItems = impl_->geometryBudget->items(),
       .geometryRetainedBytes = reportedGeometryBytes,
+      .gradientRampRetainedBytes = documents.rampBytes,
       .geometryBudgetRejected = impl_->geometryBudget->rejected() || documentRejected,
       .surfaceBudgetSupported = true,
       .surfaceCount = impl_->surfaceBudget->surfaces(),

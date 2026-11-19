@@ -904,6 +904,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   const gpu::BindGroup* residentGradientBindGroup(GeodeResidentGradientSlot& slot,
                                                   const GradientUniforms& u);
 
+  /// Charges keeping \p ramp across frames to \p slot's document resident limit, unless a slot
+  /// already did. @return Whether the slot may keep it.
+  bool chargeRetainedRamp(GeodeResidentGradientSlot& slot, const GeodeGradientRamp& ramp);
+
   /// Resident gradient draw: ensure geometry residence, rewrite only the
   /// gradient uniform when it changed, reuse the cached bind group (for a
   /// gradient with more stops than the uniform carries, the cached group that
@@ -971,6 +975,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       return nullptr;
     }
     ramp->view = std::move(view).result();
+    ramp->textureBytes = static_cast<uint64_t>(extent.width) * extent.height * kStopRampTexelBytes;
     ramp->stops.resize(stops.size() * kStopKeyFloats);
     std::memcpy(ramp->stops.data(), stops.data(), stops.size_bytes());
     return ramp;
@@ -3272,14 +3277,43 @@ const gpu::BindGroup* GeoEncoder::Impl::residentGradientBindGroup(GeodeResidentG
   if (ramp == nullptr) {
     return nullptr;
   }
-  if (ramp != slot.ramp || !slot.rampBindGroup.isValid()) {
-    gpu::Result<gpu::BindGroup> created = createResidentGradientBindGroup(slot, ramp->view);
-    if (created.hasError()) {
-      return nullptr;
-    }
-    slot.replaceRamp(std::move(ramp), std::move(created).result());
+  if (ramp == slot.ramp && slot.rampBindGroup.isValid()) {
+    return &slot.rampBindGroup;
   }
+  // Keeping the ramp is charged to the document's resident limit. Past it the slot keeps no ramp
+  // and this draw binds this frame's, so the gradient still draws, uploading its ramp every frame.
+  const bool retained = chargeRetainedRamp(slot, *ramp);
+  if (!retained) {
+    slot.replaceRamp(nullptr, gpu::BindGroup());
+  }
+  gpu::Result<gpu::BindGroup> created = createResidentGradientBindGroup(slot, ramp->view);
+  if (created.hasError()) {
+    return nullptr;
+  }
+  if (!retained) {
+    return &transientResources.retain(std::move(created).result());
+  }
+  slot.replaceRamp(std::move(ramp), std::move(created).result());
   return &slot.rampBindGroup;
+}
+
+bool GeoEncoder::Impl::chargeRetainedRamp(GeodeResidentGradientSlot& slot,
+                                          const GeodeGradientRamp& ramp) {
+  if (ramp.chargedBudget != nullptr) {
+    return true;  // Another slot already keeps it; one charge covers every holder.
+  }
+  std::shared_ptr<GeodeDocumentGeometryBudget> budget =
+      slot.slab != nullptr ? slot.slab->documentBudget() : nullptr;
+  if (budget == nullptr) {
+    return true;  // A slab without a document budget keeps its residence unaccounted.
+  }
+  const uint64_t bytes = ramp.retainedBytes();
+  if (!budget->reserveRampBytes(bytes)) {
+    return false;
+  }
+  ramp.chargedBudget = std::move(budget);
+  ramp.chargedBytes = bytes;
+  return true;
 }
 
 void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {

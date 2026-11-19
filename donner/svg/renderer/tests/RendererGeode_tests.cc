@@ -55,6 +55,7 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -5447,6 +5448,74 @@ TEST_F(RendererGeodeTest, GradientStopBudgetInMultiPassConstructsMatchesTinySkia
     EXPECT_EQ(gpu.gradientStops, cpu.gradientStops);
     EXPECT_EQ(gpu.drawBudgetRejected, cpu.drawBudgetRejected);
   }
+}
+
+/// Stop ramps kept across frames are charged, texture and stop key, to the document's resident
+/// limit. Six shapes switch one per frame from a solid fill to their own 1300-stop gradient under
+/// a limit with room for two ramps: two are kept, the rest draw from a ramp uploaded each frame,
+/// and every frame matches tiny-skia.
+TEST_F(RendererGeodeTest, KeptStopRampsStayWithinTheDocumentResidentLimit) {
+  constexpr int kShapes = 6;
+  constexpr int kStops = 1300;
+  std::string defs;
+  std::string body;
+  for (int shape = 0; shape < kShapes; ++shape) {
+    defs += "<linearGradient id=\"g" + std::to_string(shape) + "\">";
+    for (int i = 0; i < kStops; ++i) {
+      char stop[64];
+      std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                    i / (kStops - 1.0), i * 200 / (kStops - 1), 200 - i * 200 / (kStops - 1),
+                    40 * shape);
+      defs += stop;
+    }
+    defs += "</linearGradient>";
+    body += "<rect id=\"r" + std::to_string(shape) + "\" x=\"" + std::to_string(shape * 21) +
+            R"svg(" width="20" height="48" fill="#808080"/>)svg";
+  }
+  const std::string source = GradientTestDocument(defs, body);
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  auto* budgetSlot =
+      document->registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+  ASSERT_THAT(budgetSlot, testing::NotNull());
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = *budgetSlot;
+  ASSERT_EQ(budget->rampBytes(), 0u);
+
+  // One ramp: 1300 stops lay out as two pairs of 1024-texel rows of 16 bytes, and the stop key
+  // holds five floats per stop.
+  constexpr std::uint64_t kRampTextureBytes = 1024u * 4u * 16u;
+  constexpr std::uint64_t kRampBytes = kRampTextureBytes + kStops * 5u * sizeof(float);
+  // Room for the slots' geometry now resident, a margin for the gradient slots' own regions smaller
+  // than one ramp, and two ramps.
+  const std::uint64_t limit = budget->residentBytes() + 32u * 1024u + 2u * kRampBytes;
+  budget->setLimitsForTesting({.cacheBytes = geode::GeodeDocumentGeometryBudget::kMaximumCacheBytes,
+                               .residentBytes = limit});
+
+  for (int shape = 0; shape < kShapes; ++shape) {
+    SCOPED_TRACE(shape);
+    std::optional<SVGElement> rect = document->querySelector("#r" + std::to_string(shape));
+    ASSERT_TRUE(rect.has_value());
+    rect->setAttribute("fill", "url(#g" + std::to_string(shape) + ")");
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+    EXPECT_LE(budget->residentBytes(), limit);
+    EXPECT_EQ(budget->rampBytes(), static_cast<std::uint64_t>(std::min(shape + 1, 2)) * kRampBytes);
+    EXPECT_EQ(renderer.resourceStats().gradientRampRetainedBytes, budget->rampBytes());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderWithTinySkia(*document),
+                                         "kept_ramps_frame_" + std::to_string(shape),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  // An unchanged frame keeps the two kept ramps and uploads the other four again, and still
+  // matches tiny-skia.
+  renderer.draw(*document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 4u);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureWriteBytes, 4u * kRampTextureBytes);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderWithTinySkia(*document),
+                                       "kept_ramps_unchanged_frame",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Every surface the renderer opens while an expanded filter layer is active has the layer's

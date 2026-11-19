@@ -1073,22 +1073,30 @@ TEST_F(GeodePerfTest, ManyStopGradient_SlotReleasesItsRampBelowSeventeenStops) {
   EXPECT_EQ(back.textureWriteBytes, 48u * 2u * 16u);
 }
 
-/// A shape whose fill or stroke turns from a many-stop gradient to a solid color lets go of the
-/// ramp its gradient slot held: returning to the gradient uploads the ramp again, where a slot
-/// that kept it would not.
-TEST_F(GeodePerfTest, ManyStopGradient_SolidPaintReleasesTheRamp) {
+/// A shape whose fill or stroke turns from a many-stop gradient to a solid color, or whose fill
+/// turns to a pattern, lets go of the ramp its gradient slot held: returning to the gradient
+/// uploads the ramp again, where a slot that kept it would not.
+TEST_F(GeodePerfTest, ManyStopGradient_SolidOrPatternPaintReleasesTheRamp) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
-  for (const char* property : {"fill", "stroke"}) {
-    SCOPED_TRACE(property);
+  struct PaintSwitch {
+    const char* property;
+    const char* otherPaint;
+  };
+  for (const PaintSwitch& paintSwitch :
+       {PaintSwitch{"fill", "#2050c0"}, PaintSwitch{"stroke", "#2050c0"},
+        PaintSwitch{"fill", "url(#p)"}}) {
+    SCOPED_TRACE(std::string(paintSwitch.property) + " " + paintSwitch.otherPaint);
     const std::string paint =
-        std::string_view(property) == "fill"
+        std::string_view(paintSwitch.property) == "fill"
             ? std::string(R"svg(fill="url(#g)")svg")
             : std::string(R"svg(fill="none" stroke="url(#g)" stroke-width="8")svg");
     SVGDocument document = ParsePerfDocument(
         R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
         ManyStopGradientDefs("g", 40) +
-        R"svg(</defs><rect id="r" x="10" y="10" width="60" height="60" )svg" + paint + "/></svg>");
+        R"svg(<pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="red"/></pattern>)svg"
+        R"svg(</defs><rect id="r" x="10" y="10" width="60" height="60" )svg" +
+        paint + "/></svg>");
     RendererGeode renderer(device);
     renderer.draw(document);
     renderer.draw(document);
@@ -1097,12 +1105,12 @@ TEST_F(GeodePerfTest, ManyStopGradient_SolidPaintReleasesTheRamp) {
 
     std::optional<SVGElement> rect = document.querySelector("#r");
     ASSERT_TRUE(rect.has_value());
-    rect->setAttribute(property, "#2050c0");
+    rect->setAttribute(paintSwitch.property, paintSwitch.otherPaint);
     renderer.draw(document);
-    rect->setAttribute(property, "url(#g)");
+    rect->setAttribute(paintSwitch.property, "url(#g)");
     renderer.draw(document);
     const geode::GeodeCounters back = renderer.lastFrameTimings().counters;
-    printCounters("ManyStopGradient back from solid", back);
+    printCounters("ManyStopGradient back from another paint", back);
     EXPECT_EQ(back.textureCreates, 1u) << "The released ramp is uploaded again";
     EXPECT_EQ(back.textureWriteBytes, 48u * 2u * 16u);
   }
