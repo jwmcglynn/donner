@@ -8019,6 +8019,35 @@ GlyphGeometryModes ResolveGlyphGeometryModes(bool solidFill, bool gradientFill, 
           gradientFill || patternFill || strokePaint || (solidFill && warped)};
 }
 
+#ifdef DONNER_TEXT_ENABLED
+/// The solid color the glyphs of run \p runIndex of \p text fill with. A run whose span does not
+/// own its fill takes \p textFill, the text element's solid fill (already scaled by its fill
+/// opacity); a span whose own fill is none is not filled. A span's own fill is resolved at the
+/// product of its `fill-opacity` and `opacity`: a solid to its color, and a paint server reference
+/// to its fallback color, or to \p textFill when it has none, since the server itself is drawn
+/// separately.
+css::RGBA SpanFillColor(const components::ComputedTextComponent& text, std::size_t runIndex,
+                        const css::RGBA& textFill, const css::RGBA& currentColor) {
+  if (runIndex >= text.spans.size() || !text.spans[runIndex].ownsFill()) {
+    return textFill;
+  }
+  const auto& span = text.spans[runIndex];
+  if (std::holds_alternative<PaintServer::None>(span.resolvedFill)) {
+    return css::RGBA(0, 0, 0, 0);
+  }
+  const float opacityScale = static_cast<float>(span.fillOpacity * span.opacity);
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+    return solid->color.resolve(currentColor, opacityScale);
+  }
+  if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
+    if (ref->fallback.has_value()) {
+      return ref->fallback->resolve(currentColor, opacityScale);
+    }
+  }
+  return textFill;
+}
+#endif  // DONNER_TEXT_ENABLED
+
 }  // namespace
 
 void RendererGeode::drawText(Registry& registry, const components::ComputedTextComponent& text,
@@ -8067,28 +8096,6 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     defaultFill = css::RGBA(0, 0, 0, 0);
   }
 
-  const css::RGBA currentColor = impl_->paint.currentColor;
-
-  // The element-level fill is already scaled by the top-level
-  // `setPaint` call, but per-span fill overrides need their own
-  // `span.fillOpacity * span.opacity` applied.
-  const auto resolveSpanFill = [&](size_t runIndex) -> css::RGBA {
-    if (runIndex >= text.spans.size()) {
-      return *defaultFill;
-    }
-    const auto& span = text.spans[runIndex];
-    const float opacityScale = static_cast<float>(span.fillOpacity * span.opacity);
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
-      return solid->color.resolve(currentColor, opacityScale);
-    }
-    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
-      if (ref->fallback.has_value()) {
-        return ref->fallback->resolve(currentColor, opacityScale);
-      }
-    }
-    return *defaultFill;
-  };
-
   // Snapshot the encoder's current transform so we can restore it if
   // per-glyph rotations mess with it. `fillPath` honours
   // `impl_->deviceFromLocalTransform` via `setTransform`, and the glyph
@@ -8124,26 +8131,25 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       continue;
     }
 
-    const css::RGBA spanFill = resolveSpanFill(runIndex);
+    const css::RGBA spanFill =
+        SpanFillColor(text, runIndex, *defaultFill, impl_->paint.currentColor);
     const bool hasFill = spanFill.a != 0;
 
-    // Effective per-run fill paint *server*: a span's own non-None fill overrides
+    // Effective per-run fill paint *server*: a span's own computed fill overrides
     // the element-level fill. This carries gradient refs that the solid
-    // `resolveSpanFill` collapses (it returns the inherited default for a ref) -
+    // `SpanFillColor` collapses (it returns the inherited default for a ref) -
     // `drawPaintedPathAgainst` resolves them against the text bbox below (mirrors
     // `RendererTinySkia::drawText`). Patterns are NOT routed here: the driver
     // stages a `patternFillPaint` slot for a pattern fill, so `hasPatternFill`
     // distinguishes pattern from gradient (both are `PaintResolvedReference`).
-    // A span's own non-None fill overrides the element-level fill. Track whether
+    // A span's own computed fill overrides the element-level fill. Track whether
     // the chosen server came from the span (an override) vs. was inherited from
     // the element: a span-level gradient override must beat the element pattern,
     // which the driver only staged for the element. Mirrors
     // `RendererTinySkia::drawText`, where a span ref that instantiates as a
     // gradient wins unconditionally and only falls to `patternFillPaint_` when
     // it is not a gradient.
-    const bool spanOverridesFill =
-        runIndex < text.spans.size() &&
-        !std::holds_alternative<PaintServer::None>(text.spans[runIndex].resolvedFill);
+    const bool spanOverridesFill = runIndex < text.spans.size() && text.spans[runIndex].ownsFill();
     const components::ResolvedPaintServer& fillServer =
         spanOverridesFill ? text.spans[runIndex].resolvedFill : impl_->paint.fill;
     // The fill is a gradient when (a) the span overrode with its own gradient

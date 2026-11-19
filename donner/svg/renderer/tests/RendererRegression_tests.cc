@@ -2541,6 +2541,34 @@ TEST_F(RendererRegressionTests, TextSpanWithTransparentFillIsNotPaintedWithTheTe
   }
 }
 
+TEST_F(RendererRegressionTests, TextSpanWithNoFillIsNotFilledWithTheTextPaint) {
+  // A tspan whose fill computes to none paints no fill inside text filled with a solid, a gradient
+  // or a pattern, as does a tspan whose fill references a missing paint server with no fallback. A
+  // tspan with no fill of its own shares the text's fill.
+  constexpr std::string_view kNoFill = R"svg(fill="none")svg";
+  for (const TextStrokePaintCase& paint : kTextStrokePaints) {
+    SCOPED_TRACE(paint.label);
+    const std::string fill = R"svg(fill=")svg" + std::string(paint.paint) + "\"";
+    const std::array<SpanStrokeCase, 3> cases = {{
+        {"span_fill_none", fill, kNoFill, "", fill, kNoFill, false, paint.defs,
+         /*pathPerGlyph=*/true},
+        {"span_fill_missing_reference", fill, R"svg(fill="url(#missing)")svg", "", fill, kNoFill,
+         false, paint.defs, /*pathPerGlyph=*/true},
+        {"span_shares_fill", fill, "", "", fill, fill, false, paint.defs, /*pathPerGlyph=*/true},
+    }};
+    for (const SpanStrokeCase& testCase : cases) {
+      ExpectSpanStrokesMatchOutlinePaths(testCase);
+    }
+  }
+  // An unfilled span still draws its own stroke. The stroke is thin enough that the strokes of
+  // neighboring glyphs do not meet, so stroking each glyph outline on its own draws the same
+  // pixels as stroking the run.
+  ExpectSpanStrokesMatchOutlinePaths(
+      {"span_fill_none_stroked", R"svg(fill="blue")svg",
+       R"svg(fill="none" stroke="red" stroke-width="1")svg", "", R"svg(fill="blue")svg",
+       R"svg(fill="none" stroke="red" stroke-width="1")svg", false, "", /*pathPerGlyph=*/true});
+}
+
 TEST_F(RendererRegressionTests, DashedTextStrokeIsChargedToTheFrameDashBudget) {
   // A dashed text stroke spends the frame's dash work budget as a dashed path does. Each "l"
   // here (an 88 x 760 font-unit rectangle, 1696 units round at font-size 1000) dashes into about

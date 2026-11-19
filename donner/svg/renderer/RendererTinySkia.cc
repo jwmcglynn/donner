@@ -3353,6 +3353,56 @@ bool RendererTinySkia::admitPlacedGlyph(bool hasPredecodeComplexity, const Path&
                                               .bytes = *retainedBytes * 2u});
 }
 
+std::optional<tiny_skia::Paint> RendererTinySkia::resolveSpanFillPaint(
+    const components::ComputedTextComponent::TextSpan& span,
+    const std::optional<tiny_skia::Paint>& textFillPaint, const Box2d& textBounds,
+    const css::Color& textFillColor) {
+  const css::RGBA currentColor = paint_.currentColor;
+  // The span's `opacity` and `fill-opacity` reach the alpha as one product, quantized once.
+  const float opacity = NarrowToFloat(span.fillOpacity * span.opacity);
+  const auto solidPaint = [&](const css::RGBA& rgba) {
+    tiny_skia::Paint paint = makeBasePaint(antialias_);
+    paint.shader = toTinyColor(rgba);
+    return paint;
+  };
+
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+    return solidPaint(solid->color.resolve(currentColor, opacity));
+  }
+  if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
+    // A span's gradient maps objectBoundingBox units against the text element's bbox: a tspan has
+    // no bbox of its own.
+    if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
+                                                currentColor, opacity)) {
+      tiny_skia::Paint paint = makeBasePaint(antialias_);
+      paint.shader = std::move(*shader);
+      return paint;
+    }
+    if (patternFillPaint_.has_value()) {
+      tiny_skia::Paint paint = makeBasePaint(antialias_);
+      paint.shader =
+          tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
+                             tiny_skia::FilterQuality::Bilinear, opacity,
+                             toTinyTransform(patternFillPaint_->targetFromPattern));
+      return paint;
+    }
+    if (ref->fallback.has_value()) {
+      return solidPaint(ref->fallback->resolve(currentColor, opacity));
+    }
+    // Keep the inherited paint for non-gradient refs such as patterns.
+    return textFillPaint;
+  }
+  if (span.ownsFill()) {
+    // The span's computed fill is none.
+    return std::nullopt;
+  }
+  if (span.opacity < 1.0 && textFillPaint.has_value()) {
+    // No resolved span fill but a per-span opacity: re-apply the text's fill with it.
+    return solidPaint(ReappliedTextFill(paint_, textFillColor, span.opacity));
+  }
+  return textFillPaint;
+}
+
 #endif  // DONNER_TEXT_ENABLED
 
 void RendererTinySkia::drawText(Registry& registry, const components::ComputedTextComponent& text,
@@ -3442,37 +3492,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       spanPaintOrder = span.paintOrder;
       spanOpacity = span.opacity;
       const css::RGBA spanCurrentColor = paint_.currentColor;
-      const float spanFillOpacity = spanPaintOpacity(span.fillOpacity, span.opacity);
       const float spanStrokeOpacity = spanPaintOpacity(span.strokeOpacity, span.opacity);
 
-      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
-        // Per-span solid fill color.
-        spanFillPaint = makeSolidPaint(solid->color.resolve(spanCurrentColor, spanFillOpacity));
-      } else if (const auto* ref =
-                     std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
-        // Per-span gradient/pattern fill. Uses the text element's bbox (textBounds)
-        // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
-        if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                                    spanCurrentColor, spanFillOpacity)) {
-          tiny_skia::Paint paint = makeBasePaint(antialias_);
-          paint.shader = std::move(*shader);
-          spanFillPaint = paint;
-        } else if (patternFillPaint_.has_value()) {
-          tiny_skia::Paint paint = makeBasePaint(antialias_);
-          paint.shader =
-              tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                                 tiny_skia::FilterQuality::Bilinear, spanFillOpacity,
-                                 toTinyTransform(patternFillPaint_->targetFromPattern));
-          spanFillPaint = paint;
-        } else if (ref->fallback.has_value()) {
-          spanFillPaint = makeSolidPaint(ref->fallback->resolve(spanCurrentColor, spanFillOpacity));
-        } else {
-          // Keep the inherited paint for non-gradient refs such as patterns.
-        }
-      } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
-        // No resolved span fill but a per-span opacity: re-apply the text's fill with it.
-        spanFillPaint = makeSolidPaint(ReappliedTextFill(paint_, params.fillColor, span.opacity));
-      }
+      spanFillPaint = resolveSpanFillPaint(span, fillPaint, textBounds, params.fillColor);
 
       spanTinyStroke.width = NarrowToFloat(span.strokeWidth);
       spanTinyStroke.miterLimit = NarrowToFloat(span.strokeMiterLimit);
