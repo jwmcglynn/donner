@@ -135,6 +135,41 @@ test_suite(
 )
 
 test_suite(
+    name = "hosted_editor_wasm_graph",
+    tags = ["manual"],
+    tests = [
+        ":editor_wasm_audits",
+        "//donner/editor/wasm:hosted_wasm_shipped_browser_dependency_audit_test",
+        "//donner/editor/wasm/tests:composited_drag_controls_tests",
+        "//donner/editor/wasm/tests:hosted_chromium_composited_invariants_test",
+        "//donner/editor/wasm/tests:hosted_chromium_editor_presentation_test",
+        "//donner/editor/wasm/tests:hosted_chromium_editor_smoke_test",
+        "//donner/editor/wasm/tests:hosted_chromium_editor_startup_test",
+        "//donner/editor/wasm/tests:hosted_firefox_composited_invariants_test",
+        "//donner/editor/wasm/tests:hosted_firefox_editor_compatibility_test",
+        "//donner/editor/wasm/tests:hosted_webkit_editor_carousel_test",
+        "//donner/editor/wasm/tests:selector_tests",
+        "//donner/svg/renderer/wasm:geode_browser_test_transition_test",
+        "//donner/svg/renderer/wasm:hosted_geode_browser_default_audit_test",
+        "//donner/svg/renderer/wasm:hosted_render_test",
+        "//donner/svg/renderer/wasm:hosted_render_text_test",
+        "//donner/svg/renderer/wasm:renderer_resource_bootstrap_test",
+    ],
+)
+
+[
+    test_suite(
+        name = "hosted_wasm_budgets" + suffix,
+        tags = ["manual"],
+        tests = [
+            "//donner/editor/wasm:hosted_wasm_geode_package_size_tests" + suffix,
+            "//donner/svg/renderer/wasm:hosted_wasm_size_tests" + suffix,
+        ],
+    )
+    for suffix in ["", "_report"]
+]
+
+test_suite(
     name = "editor_wasm_audits",
     tags = ["manual"],
     tests = [

@@ -14,37 +14,41 @@ def editor_browser_test(name, project, specs, sources):
     archive = _ARCHIVES[engine]
     package = "//donner/editor/wasm:_wasm_web_package_for_serve"
     comparator = "//donner/editor/tests:standalone_geode_browser_png_compare"
-    playwright_bin.playwright_test(
-        name = name,
-        size = "large",
-        timeout = "long",
-        args = ["test"] + ["$(rootpath :%s)" % spec for spec in specs] + [
-            "--config=$(rootpath :playwright.editor-ci.config.js)",
-        ],
-        copy_data_to_bin = False,
-        data = specs + sources + [
-            "package.json",
-            "playwright.editor-ci.config.js",
-            "remote-webserver.mjs",
-            ":editor_browser_config_sources",
-            ":node_modules/@playwright/test",
-            ":node_modules/pngjs",
-            archive,
-            comparator,
-            package,
-        ],
-        env = {
-            "CI": "1",
-            "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath %s)" % comparator,
-            "DONNER_EDITOR_BROWSER_PROJECT": project,
-            "DONNER_WASM_BACKEND": "geode",
-            "DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser",
-            "DONNER_WASM_PACKAGE_DIR": "$(rootpath %s)" % package,
-            "DONNER_WASM_REQUIRE_WEBGPU": "1",
-            "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-            "DONNER_%s_ARCHIVE" % engine.upper(): "$(rootpath %s)" % archive,
-            "NODE_OPTIONS": "",
-        },
-        tags = ["editor-wasm-browser", "launches-browser", "no-local", "no-sandbox", "requires_desktop_session"],
-        target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:macos"],
-    )
+    # The hosted producer runs manually selected tests on its own image.
+    for hosted in [False, True]:
+        playwright_bin.playwright_test(
+            name = ("hosted_" if hosted else "") + name,
+            size = "large",
+            timeout = "long",
+            args = ["test"] + ["$(rootpath :%s)" % spec for spec in specs] + [
+                "--config=$(rootpath :playwright.editor-ci.config.js)",
+            ],
+            copy_data_to_bin = False,
+            data = specs + sources + [
+                "package.json",
+                "playwright.editor-ci.config.js",
+                "remote-webserver.mjs",
+                ":editor_browser_config_sources",
+                ":node_modules/@playwright/test",
+                ":node_modules/pngjs",
+                archive,
+                comparator,
+                package,
+            ],
+            env = {
+                "CI": "1",
+                "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath %s)" % comparator,
+                "DONNER_EDITOR_BROWSER_PROJECT": project,
+                "DONNER_WASM_BACKEND": "geode",
+                "DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser",
+                "DONNER_WASM_PACKAGE_DIR": "$(rootpath %s)" % package,
+                "DONNER_WASM_REQUIRE_WEBGPU": "1",
+                "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+                "DONNER_%s_ARCHIVE" % engine.upper(): "$(rootpath %s)" % archive,
+                "NODE_OPTIONS": "",
+            },
+            tags = ["manual", "no-sandbox", "resources:local_gpu:1"] if hosted else [
+                "editor-wasm-browser", "launches-browser", "no-local", "no-sandbox", "requires_desktop_session",
+            ],
+            target_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:macos"],
+        )
