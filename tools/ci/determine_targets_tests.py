@@ -534,7 +534,8 @@ class DetermineTest(_ScriptTest):
                                 outputs)
 
     def test_metal_job_inputs_outside_bazel_select_the_metal_job(self):
-        for changed in ("tools/ci_metal_toolchain.py\n", "third_party/BUILD.wgpu_native\n",
+        for changed in ("tools/ci/verify_unified_tests.py\n", "tools/ci_metal_toolchain.py\n",
+                        "third_party/BUILD.wgpu_native\n",
                         "MODULE.bazel.lock\n"):
             with self.subTest(changed=changed):
                 result, calls, outputs = self.determine(changed=changed)

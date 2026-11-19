@@ -1,3 +1,4 @@
+load("//build_defs:ci_metal.bzl", "metal_ci_variants")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -672,3 +673,23 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+metal_ci_variants([
+    "metal_buffer_bounds_tests",
+    "metal_buffer_mapping_tests",
+    "metal_color_matrix_tests",
+    "metal_device_gate_tests",
+    "metal_device_loss_tests",
+    "metal_full_validation_required",
+    "metal_queue_writes_tests",
+    "metal_serial_wait_tests",
+    "metal_shader_memory_validation_tests",
+    "metal_solid_fill_tests_geode",
+    "metal_sub_rectangle_copy_tests",
+    "metal_sub_rectangle_upload_tests",
+    "metal_submission_backstop_tests",
+    "metal_surface_tests",
+    "metal_texture_registration_tests",
+    "metal_ui_renderer_tests",
+    "metal_working_set_tests",
+])

@@ -318,7 +318,19 @@ exec "$impl" {fixed_args} "$@"
     # Without this, the variant targets silently drop the impl's `env` (e.g.
     # the resvg suite's per-case watchdog override) - the symlinked binary
     # would run with a bare environment.
-    if RunEnvironmentInfo in dep_target:
+    if getattr(ctx.attr, "metal_validation", False):
+        environment = dep_target[RunEnvironmentInfo] if RunEnvironmentInfo in dep_target else None
+        fixed = {
+            "DONNER_AUTOMATED_LANE": "1",
+            "DONNER_CI_MACOS_LANE": "native-metal",
+            "HOME": "",
+            "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
+        }
+        providers.append(RunEnvironmentInfo(
+            environment = (environment.environment if environment else {}) | fixed,
+            inherited_environment = [k for k in environment.inherited_environment if k not in fixed] if environment else [],
+        ))
+    elif RunEnvironmentInfo in dep_target:
         providers.append(dep_target[RunEnvironmentInfo])
 
     return providers
@@ -1288,11 +1300,14 @@ _CI_PLATFORM_OPTIONS = [
     "//command_line_option:platforms",
     "//command_line_option:host_platform",
     "//build_defs:llvm_latest",
+    "//build_defs:metal_shader_validation",
 ] + _CI_ACTION_ENVS
 
 def _ci_test_platform(settings, attr):
     options = dict(settings)
     options["//command_line_option:platforms"] = [str(attr.target_platform)]
+    if attr.metal_validation:
+        options["//build_defs:metal_shader_validation"] = "on"
     if attr.darwin:
         options["//command_line_option:host_platform"] = str(Label("//tools/ci:remote_macos_aarch64"))
         options["//build_defs:llvm_latest"] = "0"
@@ -1312,6 +1327,7 @@ ci_platform_test = rule(
     cfg = _ci_test_transition,
     attrs = {
         "darwin": attr.bool(),
+        "metal_validation": attr.bool(),
         "dep": attr.label(mandatory = True, executable = True, cfg = "target"),
         "target_platform": attr.label(mandatory = True),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),

@@ -297,7 +297,7 @@ determine() {
           return 0
           ;;
         # The native Metal job's inputs that it runs outside Bazel.
-        tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|\
+        tools/ci/verify_unified_tests.py|tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|\
         tools/ci_bazel_test.sh)
           return 0
           ;;
@@ -422,7 +422,7 @@ determine() {
   while IFS= read -r path; do
     case "$path" in
       third_party/bazel/non_bcr_deps.bzl|MODULE.bazel.lock|third_party/BUILD.*|third_party/*.BUILD|\
-      tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|tools/ci_bazel_test.sh)
+      tools/ci/verify_unified_tests.py|tools/ci_metal_toolchain.py|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|tools/ci_bazel_test.sh)
         echo "Metal job input changed: $path"
         metal_affected=true
         break
