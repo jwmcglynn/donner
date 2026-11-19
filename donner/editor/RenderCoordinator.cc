@@ -300,14 +300,10 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
           'upTo50Us', 'upTo100Us', 'upTo250Us', 'upTo1Ms', 'upTo4Ms', 'upTo16Ms', 'upTo64Ms',
           'over64Ms'
         ]);
-        const byKind = ({});
-        for (let index = 0; index < kindNames.length; ++index) {
-          byKind[kindNames[index]] = heap[b + 60 + index];
-        }
-        const startLatency = ({});
-        for (let index = 0; index < latencyNames.length; ++index) {
-          startLatency[latencyNames[index]] = heap[b + 77 + index];
-        }
+        const slotsFrom = (start, names) =>
+            Object.fromEntries(names.map((name, index) => [name, heap[b + start + index]]));
+        const byKind = slotsFrom(60, kindNames);
+        const startLatency = slotsFrom(77, latencyNames);
         stats['gpuOwnerDispatch'] = ({
           'requestedByWorker' : heap[b + 59],
           'byKind' : byKind,
