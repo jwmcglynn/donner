@@ -286,7 +286,9 @@ belongs to a later milestone (1b, 1c, or 2).
   - [ ] Analyze `inline-size` text as one paragraph and reorder each wrapped line.
   - [ ] Verify textPath chunks and anchoring with direction.
   - [x] Compare `text/writing-mode/mixed-languages-with-tb-and-underline` against the
-        independent mixed-script and primary-font underline reference.
+        independent mixed-script and primary-font underline reference. That outline reference was
+        later retired: CSS Text Decoration 3 leaves underline position and thickness to the user
+        agent, so the row now renders without a comparison as undefined behavior.
 - [ ] Milestone 6: Documentation (small)
   - [ ] Apply the [Amendments to 0062](#amendments-to-0062) to
         [0062-svg_parity_completion](0062-svg_parity_completion.md) Milestone 12.
@@ -825,7 +827,8 @@ Milestone 2.
 
 - In vertical modes, right-to-left level runs are set sideways by the existing orientation rules and
   ordered against the inline axis, so they read correctly when the page is turned, as the
-  `text/writing-mode/mixed-languages-with-tb-and-underline` reference shows.
+  `text/writing-mode/mixed-languages-with-tb-and-underline` fixture shows (it now renders without a
+  comparison, because its underline placement is user-agent defined).
 - `text-orientation: upright` boxes are treated as strong left-to-right, per box, following CSS
   rather than current browsers.
 - `direction: rtl` in a vertical mode follows CSS: inline base direction bottom to top, which only
@@ -918,7 +921,7 @@ covered by layout-level tests.
 | `text/unicode-bidi/bidi-override`                         | Compare, full text | pass, pass, pass | fail    | Compare, full text (Milestone 3)                            |
 | `text/tspan/bidi-reordering`                              | Compare, full text | pass, fail, fail | pass    | Compare, full text (Milestone 3)                            |
 | `text/writing-mode/mixed-languages-with-tb`               | Golden, full text  | pass, pass, fail | pass    | Unchanged by bidi; remains the vertical origin gap (#1172)  |
-| `text/writing-mode/mixed-languages-with-tb-and-underline` | Outline, full text | pass, pass, fail | pass    | Font-derived mixed-script layout and primary-font underline |
+| `text/writing-mode/mixed-languages-with-tb-and-underline` | Render only (UB)   | pass, pass, fail | pass    | Render only: underline placement is user-agent defined      |
 | `text/direction/rtl-with-vertical-writing-mode`           | Render only (UB)   | unknown          | unknown | `UndefinedBehavior` (SVG WG issue 618)                      |
 
 `text/direction/rtl` asks for "Noto Sans Arabic" first. The test fonts include that face from

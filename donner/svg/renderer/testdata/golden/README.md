@@ -949,7 +949,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*drop_shadow_function*'
 ```
 
-## Donner renderings of rows the specification decides
+## Donner renderings of disputed rows
 
 Each golden below is a Donner rendering of the unchanged corpus file, at the size of its vendored
 reference, written by the resvg suite harness with the software (TinySkia) backend and simple text
@@ -1040,9 +1040,10 @@ the frame from about device px 1, the square from px 50 to 450). Both follow the
 they differ in the initial viewport the host supplies. The suite's results.csv records Chrome,
 Firefox, Safari and resvg as passing the PNG. Geode differs from the golden by 7 pixels.
 
-Independent evidence:
-`RendererRegressionTests.ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit` asserts Donner's API contract: an unsized root rendered on a caller canvas matches the same rect
-drawn at its user-unit position, with transparent pixels outside it.
+Independent evidence, which asserts Donner's API contract:
+`RendererRegressionTests.ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit` requires
+an unsized root rendered on a caller canvas to match the same rect drawn at its user-unit
+position, with transparent pixels outside it.
 
 ### `structure/use/xlink-to-an-external-file`
 
@@ -1059,9 +1060,9 @@ heavier, consistent with stems about 0.6 device px wider. That residual is the r
 rasterization, not glyph placement. Geode differs from the golden by 0 pixels.
 
 Independent evidence:
-`RendererPublicApiTest.ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas` requires a `use` of an external `text` fragment to take the host's fill and font size, ignore
-the external document's root styles, keep the canvas transparent, and match the same text written
-inline.
+`RendererPublicApiTest.ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas` requires a
+`use` of an external `text` fragment to take the host's fill and font size, ignore the external
+document's root styles, keep the canvas transparent, and match the same text written inline.
 
 ### `text/font/simple-case`
 
@@ -1360,8 +1361,8 @@ regenerates or adds a golden.
 
 | Golden | SHA-256 | Provenance |
 | --- | --- | --- |
-| `donner-circle-shorthand-with-stroke-box.png` | `5bddc6ef292d0970c3571dead6e4d6a7b9588329d86183c633a7632f9915c3a3` | Donner renderings of rows the specification decides |
-| `donner-circle-shorthand-with-view-box.png` | `bc60330d7e98ea0a01d40667ba2802d78b9a89e297d555431cffb11ac2fef1c3` | Donner renderings of rows the specification decides |
+| `donner-circle-shorthand-with-stroke-box.png` | `5bddc6ef292d0970c3571dead6e4d6a7b9588329d86183c633a7632f9915c3a3` | Donner renderings of disputed rows |
+| `donner-circle-shorthand-with-view-box.png` | `bc60330d7e98ea0a01d40667ba2802d78b9a89e297d555431cffb11ac2fef1c3` | Donner renderings of disputed rows |
 | `donner-color-adjust-functions-0percent.png` | `19d961480ad25de50d2e253e7a63651161165ccb34c85dc8094e1eef6e1829b3` | Color-adjust filter references |
 | `donner-color-adjust-functions-100percent.png` | `f8a411299bd564da61e553a8d64b5f6fec46e80b807211b9ba526e42220823b6` | Color-adjust filter references |
 | `donner-color-adjust-functions-200percent.png` | `e2a347ec867dba320fff3ec1b5eb375c2a83fcf9e38a0be6357533ec2a95fdef` | Color-adjust filter references |
@@ -1373,18 +1374,18 @@ regenerates or adds a golden.
 | `donner-drop-shadow-function-mm-values.png` | `044fe3cb0fe0176ab7dcbe86831dd49998e68e55d0b77143c2a4ce5a4b04aa3f` | `filters/filter-functions/drop-shadow-function*` |
 | `donner-drop-shadow-function.png` | `b5f628d66da78e36f887fedd444eeb9bcd0111b0d62a01ba79ceed9f53405c3c` | `filters/filter-functions/drop-shadow-function*` |
 | `donner-feColorMatrix-identity.png` | `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916` | `filters/feColorMatrix` identity rows |
-| `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` | Donner renderings of rows the specification decides |
-| `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` | Donner renderings of rows the specification decides |
+| `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` | Donner renderings of disputed rows |
+| `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` | Donner renderings of disputed rows |
 | `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
 | `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
-| `donner-no-size.png` | `d999792b03ca8bb92b6bf440e030ea9f2b1ff803c0bd1567e34ebf45844c9d2a` | Donner renderings of rows the specification decides |
-| `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` | Donner renderings of rows the specification decides |
+| `donner-no-size.png` | `d999792b03ca8bb92b6bf440e030ea9f2b1ff803c0bd1567e34ebf45844c9d2a` | Donner renderings of disputed rows |
+| `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` | Donner renderings of disputed rows |
 | `donner-pattern-recursive-on-child.png` | `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65` | Donner renderings of recursive pattern references |
 | `donner-pattern-self-recursive.png` | `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17` | Donner renderings of recursive pattern references |
 | `donner-textPath-with-path.png` | `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7` | `text/textPath/with-path` and `with-path-and-xlink-href` |
-| `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` | Donner renderings of rows the specification decides |
-| `donner-url-and-grayscale.png` | `934860bcb56d1f714c9aa5137ff13c52280258c9b9c5bf91ced54ed974db60b6` | Donner renderings of rows the specification decides |
-| `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` | Donner renderings of rows the specification decides |
+| `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` | Donner renderings of disputed rows |
+| `donner-url-and-grayscale.png` | `934860bcb56d1f714c9aa5137ff13c52280258c9b9c5bf91ced54ed974db60b6` | Donner renderings of disputed rows |
+| `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` | Donner renderings of disputed rows |
 | `firefox-double-subregion-blur.png` | `49abff60095a6ebdddfb20edb4a7d842dd7a8efba295c6cf0a625a8764d451d9` | Gaussian blur primitive subregions |
 | `firefox-stroke-linear-gradient-on-text.png` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` | Gradient strokes on text |
 | `firefox-stroke-radial-gradient-on-text.png` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` | Gradient strokes on text |
