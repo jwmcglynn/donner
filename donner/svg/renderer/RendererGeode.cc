@@ -551,17 +551,25 @@ inline double resolveGradientCoord(Lengthd value, const Box2d& bounds, bool numb
   return coerceGradientLength(value, numbersArePercent).toPixels(bounds, FontMetrics());
 }
 
-/// Whether a radial gradient's start and end circles are identical, the one case in which a canvas
-/// two-point gradient (which SVG 2 `fr` follows) paints nothing. The tolerances are the ones at
-/// which the software renderer's tiny-skia two-point gradient treats circles as coincident: centers
-/// within 1/32768, and, for concentric circles, radii within 1/4096. Keep this identical to the
-/// software renderer's copy so both backends drop the same draws.
+/// Whether a radial gradient's start and end circles count as identical, the one case in which a
+/// canvas two-point gradient (which SVG 2 `fr` follows) paints nothing, using the tolerances of the
+/// tiny-skia radial gradient the software renderer draws with.
+/// For concentric circles (centers within 2^-15), tiny-skia treats radii within 2^-15 of each other
+/// as identical circles; otherwise it draws a start radius of at most 2^-15 as an ordinary radial
+/// gradient, and paints nothing when the radii are within 2^-12 of each other (its rejection of two
+/// radii both at most 2^-12 falls inside that case).
+/// Keep this identical in meaning to the software renderer's copy so both backends drop the same
+/// draws.
 bool radialCirclesCoincide(const Vector2d& center, double radius, const Vector2d& focalCenter,
                            double focalRadius) {
-  constexpr double kCoincidentCenterTolerance = 1.0 / (1 << 15);
-  constexpr double kCoincidentRadiusTolerance = 1.0 / (1 << 12);
-  return NearZero((center - focalCenter).length(), kCoincidentCenterTolerance) &&
-         NearEquals(radius, focalRadius, kCoincidentRadiusTolerance);
+  constexpr double kDegenerateTolerance = 1.0 / (1 << 15);
+  constexpr double kConcentricRadiusTolerance = 1.0 / (1 << 12);
+  if (!NearZero((center - focalCenter).length(), kDegenerateTolerance)) {
+    return false;
+  }
+  return NearEquals(radius, focalRadius, kDegenerateTolerance) ||
+         (focalRadius > kDegenerateTolerance &&
+          NearEquals(radius, focalRadius, kConcentricRadiusTolerance));
 }
 
 /// Resolve the `gradientTransform` attribute of a gradient into a concrete
