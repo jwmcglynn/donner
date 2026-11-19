@@ -172,6 +172,13 @@ def _qualification_runs(evidence):
             raise ValueError(f"Expected four uncached remote runs for {label}")
 
 
+def _expected_tests(mandatory, built, test_rules, full_graph):
+    editor = EDITOR_BROWSER | WASM_CHECKS
+    if full_graph and editor - built:
+        raise ValueError(f"Full graph omitted editor Wasm targets: {sorted(editor - built)}")
+    return mandatory | (built & (test_rules | editor))
+
+
 def verify(events, suites, ordinary=(), output_root=None, linux=(), full_graph=False):
     evidence = Evidence()
     for event in events:
@@ -184,11 +191,7 @@ def verify(events, suites, ordinary=(), output_root=None, linux=(), full_graph=F
     fresh.update(selected & {ARCHIVE})
     _qualification_runs(evidence)
     linux_built = _ordinary_built(evidence, set(linux))
-    editor = EDITOR_BROWSER | WASM_CHECKS
-    built = compatible | linux_built
-    if full_graph and editor - built:
-        raise ValueError(f"Full graph omitted editor Wasm targets: {sorted(editor - built)}")
-    expected = mandatory | (built & (evidence.test_rules | editor))
+    expected = _expected_tests(mandatory, compatible | linux_built, evidence.test_rules, full_graph)
     summary_labels = {label for label, _ in evidence.summaries}
     # The Linux venue verifier and its analysis aspect restrict local actions to the Xvfb roots.
     local = evidence.passed["local"]
