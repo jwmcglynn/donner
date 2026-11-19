@@ -23,8 +23,8 @@ permissions:
   pull-requests: read
 
 # Fast lint jobs covering the whole-tree checks that don't live inside `bazel test //...`, in
-# tools/ci/lint_lane.sh. The gen_cmakelists.py --check validator runs once per event in the CI
-# Linux jobs' CMake consumer step (main.yml), not here.
+# tools/ci/lint_lane.sh. The CMake Build workflow owns the separate static generator check
+# and exercises compiled consumers in its nightly Linux and macOS jobs.
 
 jobs:
   gatekeeper:

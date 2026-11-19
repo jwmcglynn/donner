@@ -57,6 +57,8 @@ SELECTED_TARGETS = lane_entry.SELECTION_SYMBOL
 # Workflows that run on a push to main without running on pull requests at all, or with a
 # narrower pull request trigger. Keyed by (workflow, difference).
 TRIGGER_ALLOWLIST = {
+    ("cmake.yml", "pull-request-paths"):
+        "Static generator validation runs on main and matching PR inputs; compiled consumers run nightly.",
     ("badges.yaml", "push-only"):
         "Publishes line-count badges for main; it runs no build or test.",
     ("codeql.yml", "push-only"):
@@ -64,9 +66,6 @@ TRIGGER_ALLOWLIST = {
     ("build_docs.yaml", "push-only"):
         "Builds the documentation site from main for verified publication. Doxygen warnings "
         "are not errors, so a pull request cannot make it fail through source changes alone.",
-    ("cmake.yml", "pull-request-paths"):
-        "PRs that change CMake inputs can qualify the Linux compiler cache. The Linux "
-        "consumer runs in main CI on PRs. Hosted macOS CMake runs only on main pushes.",
 }
 
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
@@ -85,10 +84,8 @@ JOB_REPLACEMENTS = {
 # them leaves main's result for them unchanged, apart from flakes main's //... run can still hit.
 HOSTED_SUBSETS = {}
 
-# Main's hosted lanes whose phases tools/ci/coverage_contract.json declares, and the phases there
-# that run no Bazel command.
+# Main's hosted lanes whose phases tools/ci/coverage_contract.json declares.
 COVERAGE_LANES = ("linux", "macos")
-COVERAGE_NON_BAZEL_PHASES = {"linux": ("Build and test CMake consumer",)}
 
 # Main's hosted image cannot run Metal shader validation (docs/metal_validation.md).
 HOSTED_NO_SHADER_VALIDATION = (
@@ -124,9 +121,7 @@ SUBSET_EXTRA_STEPS = {
 }
 
 # Jobs that run on a main push and on no kind of pull request, without a replacement.
-MAIN_ONLY_JOBS = {
-    ("cmake.yml", "macos"): "Hosted macOS CMake runs only on main pushes. PRs use the Linux consumer.",
-}
+MAIN_ONLY_JOBS = {}
 
 # Differences between a main job and its replacement. Keyed by (workflow, main job, replacement,
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
@@ -440,7 +435,7 @@ _CACHE_HIT = ("", "A cache restore result only gates that cache's save step; a m
 STEP_OUTPUTS = {
     "steps.pr-meta.outputs.identical_tree": ("", "Changed trees use the full target planner setup."),
     **{"steps.%s.outputs.cache-hit" % step_id: _CACHE_HIT
-       for step_id in ("base-hashes", "bazel-cache", "ccache", "cmake-deps", "npm-cache")},
+       for step_id in ("base-hashes", "bazel-cache", "npm-cache")},
     "steps.browser_gpu_failure.outputs.run_probe": (
         "", "Gates the advisory browser GPU comparisons, which run only after a failure and "
             "cannot fail the job."),
@@ -1287,7 +1282,7 @@ def _coverage_phases(workflow, lane):
     phases = {_step_name(step) for step in _gating_steps(job, "main-push")
               if runs(step.get("if"), "main-push") and step_invocations(
                   step, _step_environment(workflow, job, step))}
-    return phases | set(COVERAGE_NON_BAZEL_PHASES.get(lane, ()))
+    return phases
 
 
 def _setup_view(step):
@@ -2684,42 +2679,25 @@ class CiLaneParityTest(unittest.TestCase):
                 self.assertIn(output, jobs[job]["outputs"])
                 self.assertIn(job, _needs(jobs["coverage-contract"]))
 
-    def test_cmake_generator_check_runs_once_per_event(self):
-        # gen_cmakelists.py --check runs once per event, in the CMake consumer step of the Linux
-        # job that the event runs: main.yml's hosted or self-hosted Linux job for main pushes and
-        # pull requests, and the CMake workflow's Linux consumer for a branch push before its pull
-        # request exists. A documentation-only pull request runs none, since no path it can change
-        # is a generator input (tools/ci/gatekeeper_tests.py). The label-gated CMake cache
-        # qualification jobs repeat the main lane's command on purpose and never run without
-        # their label, which no scenario carries.
-        expected = {
-            "main-push": ("main.yml", "linux"),
-            "branch-push": ("cmake.yml", "linux"),
-            "trusted-pr": ("main.yml", "linux-self-hosted"),
-            "trusted-pr-native-only": ("main.yml", "linux-self-hosted"),
-            "trusted-pr-fallback": ("main.yml", "linux-self-hosted"),
-            "untrusted-pr": ("main.yml", "linux"),
-            "renovate-pr": ("main.yml", "linux"),
-        }
-        branch_push = dict(SCENARIOS["main-push"], **{"github.ref": "refs/heads/topic"})
-        with mock.patch.dict(SCENARIOS, {"branch-push": branch_push}):
-            self.assertEqual(set(SCENARIOS), set(expected))
-            for scenario, owner in expected.items():
-                with self.subTest(scenario=scenario):
-                    self.assertEqual({owner}, generator_check_jobs(self.workflows, scenario))
-        # Only main pushes run the hosted macOS consumer.
+    def test_cmake_consumers_only_run_on_nightly_or_manual_main(self):
         cmake = self.workflows["cmake.yml"]
-        self.assertTrue(_event_starts(cmake, "main-push"))
-        self.assertTrue(job_gates(cmake, "macos", "main-push"))
-        for scenario in PULL_REQUEST_SCENARIOS:
-            self.assertFalse(job_gates(cmake, "macos", scenario), scenario)
-        with mock.patch.dict(SCENARIOS, {"branch-push": branch_push}):
-            self.assertFalse(job_gates(cmake, "macos", "branch-push"))
-        # The pattern sees both ways of running the check.
-        for line in ("python3 tools/cmake/gen_cmakelists.py --check",
-                     "tools/ci/cmake_consumer.sh build --check --ccache"):
-            self.assertRegex(line, _GENERATOR_CHECK)
-        self.assertNotRegex("tools/ci/cmake_consumer.sh build --ccache", _GENERATOR_CHECK)
+        self.assertIn("schedule", cmake["on"])
+        self.assertIn("workflow_dispatch", cmake["on"])
+        self.assertEqual(cmake["on"]["push"]["branches"], ["main"])
+        for scenario in SCENARIOS:
+            with self.subTest(scenario=scenario):
+                self.assertEqual({("cmake.yml", "generator-check")},
+                                 generator_check_jobs(self.workflows, scenario))
+        for event, ref, expected in (("schedule", "refs/heads/main", True),
+                                     ("workflow_dispatch", "refs/heads/main", True),
+                                     ("workflow_dispatch", "refs/heads/topic", False),
+                                     ("push", "refs/heads/main", False),
+                                     ("pull_request", "refs/pull/1/merge", False)):
+            with self.subTest(event=event, ref=ref):
+                context = {"github.event_name": event, "github.ref": ref}
+                for name in ("linux", "macos"):
+                    condition = _jobs(cmake)[name]["if"]
+                    self.assertEqual(_Expression(condition, context.__getitem__).evaluate(), expected)
 
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():
