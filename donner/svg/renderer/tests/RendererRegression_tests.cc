@@ -787,6 +787,119 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
       "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
+/// Group layers drawn inside an feOffset filter whose region starts above and left of the canvas:
+/// an opacity group, a mix-blend-mode group and an isolation group over a backdrop, a mask, a clip
+/// path, a nested filter, and a nested filter whose own region starts further out. The filter
+/// captures into a raster that reaches past the canvas by the region's overhang, and each layer
+/// must keep that raster's placement. Over a region that holds all of the content, an feOffset
+/// renders the same image as translating the content by its shift, so each case is held to that
+/// translation. The region's origin is whole, fractional, and scaled with a translation, and the
+/// content reaches past every edge of the canvas, with small squares in the overhang and at the
+/// far corner.
+TEST_F(RendererRegressionTests, GroupLayersInsideNegativeOriginFilterRegionKeepTheirPlacement) {
+  struct LayerCase {
+    std::string_view label;
+    std::string_view defs;
+    /// Drawn inside the filtered group, before the group the case is about.
+    std::string_view backdrop;
+    std::string_view groupAttributes;
+    /// The group's attributes in the translated form when they differ from `groupAttributes`: a
+    /// nested offset filter renders there as the translation it amounts to.
+    std::string_view translatedGroupAttributes;
+    /// Attributes of the rect that covers the whole filter region.
+    std::string_view coverAttributes;
+  };
+  constexpr std::string_view kBackdrop =
+      R"svg(<rect x="-8" y="-8" width="80" height="40" fill="#e0c020"/>)svg";
+  constexpr std::string_view kMask =
+      R"svg(<mask id="m" maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><rect x="-8" y="-8" width="80" height="80" fill="white"/><rect x="20" y="-8" width="8" height="80" fill="black"/></mask>)svg";
+  constexpr std::string_view kClip =
+      R"svg(<clipPath id="c"><rect x="-4" y="10" width="62" height="40"/></clipPath>)svg";
+  constexpr std::array<LayerCase, 9> kCases = {{
+      {.label = "opacity", .groupAttributes = R"svg(opacity="0.5")svg"},
+      {.label = "blend",
+       .backdrop = kBackdrop,
+       .groupAttributes = R"svg(style="mix-blend-mode:multiply")svg"},
+      {.label = "isolation",
+       .backdrop = kBackdrop,
+       .groupAttributes = R"svg(style="isolation:isolate" opacity="0.75")svg"},
+      {.label = "mask", .defs = kMask, .groupAttributes = R"svg(mask="url(#m)")svg"},
+      {.label = "clip_path", .defs = kClip, .groupAttributes = R"svg(clip-path="url(#c)")svg"},
+      {.label = "clip_path_in_opacity_layer",
+       .defs = kClip,
+       .groupAttributes = R"svg(opacity="0.5" clip-path="url(#c)")svg"},
+      {.label = "clip_path_in_mask",
+       .defs =
+           R"svg(<mask id="m" maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><rect x="-8" y="-8" width="80" height="80" fill="white"/><rect x="20" y="-8" width="8" height="80" fill="black"/></mask><clipPath id="c"><rect x="-4" y="10" width="62" height="40"/></clipPath>)svg",
+       .groupAttributes = R"svg(mask="url(#m)")svg",
+       .coverAttributes = R"svg(clip-path="url(#c)")svg"},
+      {.label = "nested_filter",
+       .defs =
+           R"svg(<filter id="fade" filterUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer></filter>)svg",
+       .groupAttributes = R"svg(filter="url(#fade)")svg"},
+      {.label = "nested_expanded_filter",
+       .defs =
+           R"svg(<filter id="drift" filterUnits="userSpaceOnUse" x="-16" y="-16" width="96" height="96"><feOffset dx="2" dy="2"/></filter>)svg",
+       .groupAttributes = R"svg(filter="url(#drift)")svg",
+       .translatedGroupAttributes = R"svg(transform="translate(2 2)")svg"},
+  }};
+  struct RegionCase {
+    std::string_view label;
+    /// Origin of the outer filter region, in user units.
+    std::string_view x;
+    std::string_view y;
+    /// Transform of a group around the filtered content; empty for none.
+    std::string_view transform;
+  };
+  constexpr std::array<RegionCase, 3> kRegions = {{
+      {.label = "whole_origin", .x = "-8", .y = "-8"},
+      {.label = "fractional_origin", .x = "-7.5", .y = "-7.25"},
+      {.label = "scaled", .x = "-8", .y = "-8", .transform = "translate(-3 -5) scale(1.5)"},
+  }};
+  const auto render = [](const LayerCase& layerCase, const RegionCase& region,
+                         std::string_view shiftedGroup, std::string_view groupAttributes) {
+    std::string source = R"svg(<defs><filter id="shift" filterUnits="userSpaceOnUse" x=")svg";
+    source += region.x;
+    source += R"svg(" y=")svg";
+    source += region.y;
+    source += R"svg(" width="80" height="80"><feOffset dx="4" dy="4"/></filter>)svg";
+    source += layerCase.defs;
+    source += "</defs><g";
+    if (!region.transform.empty()) {
+      source += R"svg( transform=")svg";
+      source += region.transform;
+      source += R"svg(")svg";
+    }
+    source += ">";
+    source += shiftedGroup;
+    source += layerCase.backdrop;
+    source += "<g ";
+    source += groupAttributes;
+    source += R"svg(><rect x="-8" y="-8" width="80" height="80" fill="#2050c0" )svg";
+    source += layerCase.coverAttributes;
+    source +=
+        R"svg(/><rect x="-6" y="-6" width="10" height="10" fill="#20c040"/><rect x="54" y="54" width="10" height="10" fill="#c02020"/></g></g></g>)svg";
+    SVGDocument document = instantiateSubtree(source, {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  for (const RegionCase& region : kRegions) {
+    for (const LayerCase& layerCase : kCases) {
+      SCOPED_TRACE(testing::Message() << region.label << " " << layerCase.label);
+      const std::string label = std::string("negative_origin_filter_") + std::string(region.label) +
+                                "_" + std::string(layerCase.label);
+      const std::string_view translatedGroupAttributes = layerCase.translatedGroupAttributes.empty()
+                                                             ? layerCase.groupAttributes
+                                                             : layerCase.translatedGroupAttributes;
+      const RendererBitmap expected = render(
+          layerCase, region, R"svg(<g transform="translate(4 4)">)svg", translatedGroupAttributes);
+      ExpectVisibleBitmap(expected, label + "_visible");
+      editor::tests::CompareBitmapToBitmap(
+          render(layerCase, region, R"svg(<g filter="url(#shift)">)svg", layerCase.groupAttributes),
+          expected, label, editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
 /// A drop shadow whose offset carries its source toward or past the edge of the filter raster.
 /// Shapes are pixel-aligned rectangles, which both backends rasterize to identical coverage.
 struct EdgeDropShadowCase {

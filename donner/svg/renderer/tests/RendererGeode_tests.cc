@@ -5138,11 +5138,6 @@ TEST_F(RendererGeodeTest, ClipPathInsideAnExpandedFilterLayerMatchesTinySkia) {
 /// the expanded layer's offset, and under a nested filter that expands too it keeps the sum of
 /// both offsets, so it lands where the rest does. The content reaches past every edge of the
 /// surface, with a small square in the overhang and another at the far corner of the layer.
-///
-/// Over a region that holds all of the content, an feOffset renders the same image as translating
-/// the content by its shift, so the reference renders those translations. tiny-skia's rendering of
-/// the filtered form cannot be the reference: it places group layers and nested filters inside a
-/// filter region that starts at negative coordinates by the region's origin (issue #1644).
 TEST_F(RendererGeodeTest, SurfacesInsideAnExpandedFilterLayerMatchTinySkia) {
   struct SurfaceCase {
     std::string_view label;
@@ -5150,9 +5145,6 @@ TEST_F(RendererGeodeTest, SurfacesInsideAnExpandedFilterLayerMatchTinySkia) {
     /// Drawn inside the filtered group, before the group the case is about.
     std::string_view backdrop;
     std::string_view groupAttributes;
-    /// The group's attributes in the reference when they differ from `groupAttributes`: a nested
-    /// offset filter renders there as the translation it amounts to.
-    std::string_view referenceGroupAttributes;
     /// Attributes of the rect that covers the whole filter region.
     std::string_view coverAttributes;
     editor::tests::BitmapGoldenCompareParams params = editor::tests::PixelmatchIdentityParams();
@@ -5175,8 +5167,7 @@ TEST_F(RendererGeodeTest, SurfacesInsideAnExpandedFilterLayerMatchTinySkia) {
       {.label = "expanded_filter_nested_expanded_filter",
        .defs =
            R"svg(<filter id="drift" filterUnits="userSpaceOnUse" x="-16" y="-16" width="96" height="96"><feOffset dx="2" dy="2"/></filter>)svg",
-       .groupAttributes = R"svg(filter="url(#drift)")svg",
-       .referenceGroupAttributes = R"svg(transform="translate(2 2)")svg"},
+       .groupAttributes = R"svg(filter="url(#drift)")svg"},
       {.label = "expanded_filter_clip_path",
        .defs = R"svg(<clipPath id="c"><circle cx="32" cy="32" r="34"/></clipPath>)svg",
        .groupAttributes = R"svg(clip-path="url(#c)")svg",
@@ -5192,16 +5183,15 @@ TEST_F(RendererGeodeTest, SurfacesInsideAnExpandedFilterLayerMatchTinySkia) {
        .coverAttributes = R"svg(clip-path="url(#c)")svg",
        .params = kCircleEdgeParams},
   }};
-  const auto document = [](const SurfaceCase& surfaceCase, std::string_view shiftedGroup,
-                           std::string_view groupAttributes) {
+  const auto document = [](const SurfaceCase& surfaceCase) {
     std::string source =
         R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><defs><filter id="shift" filterUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><feOffset dx="4" dy="4"/></filter>)svg";
     source += surfaceCase.defs;
     source += "</defs>";
-    source += shiftedGroup;
+    source += R"svg(<g filter="url(#shift)">)svg";
     source += surfaceCase.backdrop;
     source += "<g ";
-    source += groupAttributes;
+    source += surfaceCase.groupAttributes;
     source += R"svg(><rect x="-8" y="-8" width="80" height="80" fill="#2050c0" )svg";
     source += surfaceCase.coverAttributes;
     source +=
@@ -5210,13 +5200,8 @@ TEST_F(RendererGeodeTest, SurfacesInsideAnExpandedFilterLayerMatchTinySkia) {
   };
   for (const SurfaceCase& surfaceCase : kCases) {
     SCOPED_TRACE(surfaceCase.label);
-    const std::string_view referenceGroupAttributes = surfaceCase.referenceGroupAttributes.empty()
-                                                          ? surfaceCase.groupAttributes
-                                                          : surfaceCase.referenceGroupAttributes;
-    ExpectGeodeMatchesTinySkia(
-        document(surfaceCase, R"svg(<g filter="url(#shift)">)svg", surfaceCase.groupAttributes),
-        document(surfaceCase, R"svg(<g transform="translate(4 4)">)svg", referenceGroupAttributes),
-        surfaceCase.label, surfaceCase.params);
+    const std::string source = document(surfaceCase);
+    ExpectGeodeMatchesTinySkia(source, source, surfaceCase.label, surfaceCase.params);
   }
 }
 
