@@ -639,6 +639,24 @@ donner_cc_library(
     ],
 )
 
+# Test support: a context over fake browser bridges, for counting the browser calls Geode work
+# makes from a client thread.
+donner_cc_library(
+    name = "fake_browser_geode_context",
+    testonly = 1,
+    srcs = ["tests/FakeBrowserGeodeContext.cc"],
+    hdrs = ["tests/FakeBrowserGeodeContext.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//donner/editor/tests:__pkg__"],
+    deps = [
+        ":geode_device",
+        ":geode_runtime_device_source",
+        "//donner/gpu",
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:fake_browser_bridge",
+    ] + wgsl_alternate_projections_for_tests(),
+)
+
 donner_cc_test(
     name = "geode_device_tests_impl",
     srcs = ["tests/GeodeDevice_tests.cc"],

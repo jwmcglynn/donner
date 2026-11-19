@@ -9,10 +9,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <span>
 #include <utility>
 
 #include "donner/base/MemoryAttribution.h"
+#include "donner/base/Utils.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -100,9 +102,12 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
   const auto& timing = result.workerTiming;
   const auto& compositorStats = result.compositorFrameStats;
   const auto& fastPath = result.compositorFastPathDelta;
-  constexpr std::size_t kValueCount = 59;
+  const auto& ownerDispatch = timing.gpuOwnerDispatch;
+  // The fixed values below, then the owner dispatch detail appended after them.
+  constexpr std::size_t kCoreValueCount = 59;
+  constexpr std::size_t kValueCount = 88;
   const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
-  const double values[kValueCount] = {
+  const double coreValues[kCoreValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
       timing.dequeueToStartMs,
@@ -162,6 +167,25 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       timing.gpuOwnerDispatchWaitMs,
       static_cast<double>(result.compositorRenderCount),
       static_cast<double>(RepresentsActiveDrag(result))};
+  double values[kValueCount] = {};
+  std::copy(std::begin(coreValues), std::end(coreValues), std::begin(values));
+  std::size_t next = kCoreValueCount;
+  const auto append = [&](double value) { values[next++] = value; };
+  append(static_cast<double>(ownerDispatch.requestedByWorker));
+  for (const int count : ownerDispatch.requestedByKind) {
+    append(static_cast<double>(count));
+  }
+  append(ownerDispatch.deliveryMs);
+  append(ownerDispatch.ownerQueueMs);
+  append(ownerDispatch.executeMs);
+  append(ownerDispatch.completionWakeMs);
+  for (const int count : ownerDispatch.startLatencyBuckets) {
+    append(static_cast<double>(count));
+  }
+  append(ownerDispatch.canvasFrameActiveMs);
+  append(static_cast<double>(ownerDispatch.canvasFrames));
+  append(static_cast<double>(ownerDispatch.receivedDuringCanvasFrame));
+  UTILS_RELEASE_ASSERT(next == kValueCount);
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -257,6 +281,36 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
           stats[resultCounterNames[index]] = heap[b + 45 + index];
         }
         stats['activeDragResult'] = heap[b + 58] > 0;
+        // Where this result's owner dispatches came from and where their blocked time went.
+        const kindNames = ([
+          'other', 'ownershipQuery', 'deviceLossQuery', 'completionQuery', 'resourceCreation',
+          'resourceDestruction', 'bufferWrite', 'textureWrite', 'resourceSharing', 'commandBatch',
+          'queueSubmit', 'bindGroupConstruction', 'pipelineConstruction'
+        ]);
+        const latencyNames = ([
+          'upTo50Us', 'upTo100Us', 'upTo250Us', 'upTo1Ms', 'upTo4Ms', 'upTo16Ms', 'upTo64Ms',
+          'over64Ms'
+        ]);
+        const byKind = ({});
+        for (let index = 0; index < kindNames.length; ++index) {
+          byKind[kindNames[index]] = heap[b + 60 + index];
+        }
+        const startLatency = ({});
+        for (let index = 0; index < latencyNames.length; ++index) {
+          startLatency[latencyNames[index]] = heap[b + 77 + index];
+        }
+        stats['gpuOwnerDispatch'] = ({
+          'requestedByWorker' : heap[b + 59],
+          'byKind' : byKind,
+          'deliveryMs' : heap[b + 73],
+          'ownerQueueMs' : heap[b + 74],
+          'executeMs' : heap[b + 75],
+          'completionWakeMs' : heap[b + 76],
+          'startLatency' : startLatency,
+          'canvasFrameActiveMs' : heap[b + 85],
+          'canvasFrames' : heap[b + 86],
+          'receivedDuringCanvasFrame' : heap[b + 87],
+        });
         const totals = ([
           [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
           [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
