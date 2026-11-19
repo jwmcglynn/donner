@@ -76,6 +76,8 @@ struct RuntimeComputeProgram {
   std::array<uint32_t, 3> inputOutputParameterBindings = {0, 1, 2};
   //!< Reflected input texture, output texture, and parameter resource bindings.
   std::optional<uint32_t> transferTableBinding;  //!< Optional reflected lookup-table binding.
+  /// Optional reflected binding of a runtime-sized `coefficients` array uploaded per dispatch.
+  std::optional<uint32_t> coefficientsBinding;
   std::array<uint32_t, 4> twoInputBindings = {0, 1, 2, 3};
   //!< Reflected source, backdrop, output and parameter bindings of a two-input program.
 };

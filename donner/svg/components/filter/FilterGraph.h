@@ -780,6 +780,15 @@ inline std::uint64_t GpuFilterParameterAllocationBound(std::uint64_t requested) 
   return requested * 2 + kGpuFilterParameterBlockBytes;
 }
 
+/// Bytes of the separate kernel upload a Geode convolution makes beside its parameter block; zero
+/// for other primitives and for a kernel over the limit, which is refused without an upload.
+/// @param primitive Primitive whose upload is measured.
+inline std::uint64_t GpuConvolveKernelBytes(const FilterPrimitive& primitive) {
+  const auto* convolve = std::get_if<filter_primitive::ConvolveMatrix>(&primitive);
+  const std::size_t values = convolve ? convolve->kernelMatrix.size() : 0;
+  return values <= kMaximumFilterKernelValues ? values * sizeof(float) : 0;
+}
+
 /// Float textures the backdrop inputs of \p graph may hold: BackgroundImage and the
 /// BackgroundAlpha derived from it, each possibly in both color representations.
 inline std::uint64_t GpuBackdropFloatTextures(const FilterGraph& graph) {
@@ -856,7 +865,7 @@ inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkin
     result.floatTextures =
         std::max(result.floatTextures, 1 + (sourceAlpha ? 2u : 0u) + backdropTextures +
                                            namedValues * 2 + (index ? 2u : 0u) + scratch);
-    result.runtimeUniformBytes += 8192;
+    result.runtimeUniformBytes += 8192 + GpuConvolveKernelBytes(node.primitive);
     const bool rawUniform = std::holds_alternative<fp::GaussianBlur>(node.primitive) ||
                             std::holds_alternative<fp::Blend>(node.primitive) ||
                             std::holds_alternative<fp::Morphology>(node.primitive) ||

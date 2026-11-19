@@ -66,9 +66,11 @@ interface. An incompatible shader member edit therefore fails compilation instea
 changing the bytes the shader reads. Gaussian dispatch requires a two-dimensional workgroup and
 derives its x/y sizes from reflected metadata.
 
-`ConvolveMatrixParams` is a read-only storage block. Its fixed coefficient array has 25 f32 elements,
-stride 4 and offset 32; the complete block is 132 bytes. Array length, stride, member types and host
-field offsets are checked against reflection independently for each retained projection.
+`ConvolveMatrixParams` is a read-only storage block of twelve scalar members, 48 bytes in all;
+member offsets and types are checked against reflection independently for each retained
+projection. The kernel is a separate runtime-sized `array<f32>` binding named `coefficients`,
+checked for its element type and 4-byte stride. Each dispatch binds exactly `orderX * orderY`
+values, so the kernel size is limited by the host's filter admission limits, not by the shader.
 
 ## v1 language boundary {#WgslV1Boundary}
 

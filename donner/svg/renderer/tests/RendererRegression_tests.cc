@@ -1232,14 +1232,10 @@ TEST_F(RendererRegressionTests, FilterConvolveKernelLimit) {
     return ShiftedPrimitiveFilter(R"svg(<feConvolveMatrix order=")svg" + std::string(order) +
                                   R"svg(" kernelMatrix=")svg" + kernel + R"svg("/>)svg");
   };
-  // Geode executes kernels of at most 25 values and outputs transparent black for larger ones
-  // (bug #2101), so only the CPU backend can show a full-size kernel applying.
-  if (ActiveRendererBackend() != RendererBackend::Geode) {
-    const RendererBitmap shifted = RenderPrimitiveLimitOracle({"36"});
-    editor::tests::CompareBitmapToBitmap(
-        RenderPrimitiveLimitCase(convolve("64", 64, 4096), "url(#f)"), shifted,
-        "convolve_limit_order_64", editor::tests::PixelmatchIdentityParams());
-  }
+  const RendererBitmap shifted = RenderPrimitiveLimitOracle({"36"});
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitCase(convolve("64", 64, 4096), "url(#f)"), shifted,
+      "convolve_limit_order_64", editor::tests::PixelmatchIdentityParams());
   const RendererBitmap refused = RenderPrimitiveLimitOracle({});
   editor::tests::CompareBitmapToBitmap(
       RenderPrimitiveLimitCase(convolve("65", 65, 4225), "url(#f)"), refused,
@@ -1247,6 +1243,122 @@ TEST_F(RendererRegressionTests, FilterConvolveKernelLimit) {
   editor::tests::CompareBitmapToBitmap(
       RenderPrimitiveLimitCase(convolve("64", 64, 4097), "url(#f)"), refused,
       "convolve_limit_4097_values", editor::tests::PixelmatchIdentityParams());
+}
+
+/// One nonzero value of a sparse convolution kernel.
+struct KernelTap {
+  std::size_t index;  //!< Row-major position in the kernel.
+  int value;          //!< Small integer weight.
+};
+
+/// One feConvolveMatrix kernel larger than 5x5 and its remaining attributes.
+struct LargeConvolveCase {
+  std::string_view name;          //!< Trace and diff label.
+  std::string_view order;         //!< `order` attribute value.
+  std::size_t values;             //!< Kernel value count, orderX * orderY.
+  std::array<KernelTap, 5> taps;  //!< Nonzero weights; unused entries have value 0.
+  std::string_view attributes;    //!< Further feConvolveMatrix attributes.
+};
+
+/// The row-major kernel of \p testCase: zero except at its taps.
+std::string SparseConvolveKernel(const LargeConvolveCase& testCase) {
+  std::vector<int> kernel(testCase.values, 0);
+  for (const KernelTap& tap : testCase.taps) {
+    kernel.at(tap.index) += tap.value;
+  }
+  std::string text;
+  for (std::size_t i = 0; i < kernel.size(); ++i) {
+    text += (i == 0 ? "" : " ") + std::to_string(kernel[i]);
+  }
+  return text;
+}
+
+/// Renders opaque pixel-aligned squares over an opaque backdrop through \p testCase on
+/// \p backend. The filter region is the canvas, so every edge mode reaches the raster edge.
+RendererBitmap RenderLargeConvolve(const LargeConvolveCase& testCase, RendererBackend backend) {
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64"
+          height="64" color-interpolation-filters="sRGB"><feConvolveMatrix order=")svg") +
+          std::string(testCase.order) + R"svg(" kernelMatrix=")svg" +
+          SparseConvolveKernel(testCase) + "\" " + std::string(testCase.attributes) +
+          R"svg(/></filter>
+      <g filter="url(#f)">
+        <rect width="64" height="64" fill="rgb(40 60 80)"/>
+        <rect x="6" y="10" width="20" height="30" fill="seagreen"/>
+        <rect x="18" y="4" width="30" height="16" fill="crimson"/>
+        <rect x="34" y="28" width="24" height="30" fill="royalblue"/>
+        <rect x="0" y="50" width="12" height="14" fill="gold"/>
+      </g>)svg",
+      {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, backend);
+}
+
+// Kernels with more than 25 values, square and not, under every edge mode and with offset and
+// corner targets, divisors, bias and preserveAlpha, render identically on Geode and on the CPU
+// backend. The GPU accumulates in f32 and the CPU in f64, so the cases are built to keep every
+// exact result away from an 8-bit rounding boundary: the input is opaque with 8-bit channels,
+// the kernels are sparse small integers, every divisor is odd and divides 255, and bias is a
+// multiple of 1/255. Each exact output channel is then a multiple of 1/15 of an 8-bit step, never
+// half way, and both accumulations round to the same byte. The kernels are asymmetric, so a
+// transposed or unrotated kernel moves the result.
+TEST_F(RendererRegressionTests, LargeConvolveKernelsMatchAcrossBackends) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  constexpr std::array<LargeConvolveCase, 8> kCases{{
+      // Default divisor: the kernel sum, 5.
+      {"order_6_defaults", "6", 36, {{{0, 1}, {7, 2}, {20, -1}, {29, 2}, {35, 1}}}, ""},
+      {"row_of_26_none", "26 1", 26, {{{0, 1}, {3, 1}, {25, 1}}}, R"svg(edgeMode="none")svg"},
+      {"order_7_offset_target_divisor_bias",
+       "7",
+       49,
+       {{{2, 1}, {10, 2}, {40, -1}, {48, 1}}},
+       R"svg(edgeMode="none" targetX="1" targetY="5" divisor="5" bias="0.2")svg"},
+      {"order_9_wrap", "9", 81, {{{1, 2}, {13, -1}, {44, 1}, {70, 1}}}, R"svg(edgeMode="wrap")svg"},
+      {"tall_3_by_9_preserve_alpha",
+       "3 9",
+       27,
+       {{{0, 1}, {5, 1}, {14, 2}, {26, 1}}},
+       R"svg(preserveAlpha="true" divisor="15")svg"},
+      {"wide_9_by_3_corner_target_negative_bias",
+       "9 3",
+       27,
+       {{{0, 1}, {4, 1}, {17, 1}, {26, 2}}},
+       R"svg(edgeMode="none" targetX="8" targetY="0" bias="-0.2")svg"},
+      {"wide_12_by_5_preserve_alpha_wrap_divisor",
+       "12 5",
+       60,
+       {{{3, 2}, {11, 1}, {30, 4}, {47, -1}, {59, 2}}},
+       R"svg(edgeMode="wrap" preserveAlpha="true" divisor="15")svg"},
+      {"order_16_duplicate_bias",
+       "16",
+       256,
+       {{{0, 1}, {37, 2}, {100, -2}, {200, 1}, {255, 1}}},
+       R"svg(edgeMode="duplicate" bias="0.2")svg"},
+  }};
+  constexpr std::string_view kPreserveAlpha = R"svg(preserveAlpha="true")svg";
+  for (const LargeConvolveCase& testCase : kCases) {
+    SCOPED_TRACE(testCase.name);
+    if (const std::size_t at = testCase.attributes.find(kPreserveAlpha);
+        at != std::string_view::npos) {
+      // Premise: the divisor differs from the kernel sum, so convolved alpha is not 1 and
+      // preserveAlpha changes the result.
+      std::string withoutFlag(testCase.attributes);
+      withoutFlag.replace(at, kPreserveAlpha.size(), R"svg(preserveAlpha="false")svg");
+      LargeConvolveCase convolvedAlpha = testCase;
+      convolvedAlpha.attributes = withoutFlag;
+      ExpectBitmapsDiffer(RenderLargeConvolve(testCase, RendererBackend::TinySkia),
+                          RenderLargeConvolve(convolvedAlpha, RendererBackend::TinySkia),
+                          "large_convolve_preserve_alpha_matters_" + std::string(testCase.name));
+    }
+    const RendererBitmap geode = RenderLargeConvolve(testCase, RendererBackend::Geode);
+    // The defect rendered these kernels as transparent black on Geode only.
+    AssertVisibleFixture(geode, "large_convolve_geode_" + std::string(testCase.name));
+    editor::tests::CompareBitmapToBitmap(
+        geode, RenderLargeConvolve(testCase, RendererBackend::TinySkia),
+        "large_convolve_cpu_vs_geode_" + std::string(testCase.name),
+        editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 // Removing an over-limit `order` restores the default 3x3 order, so the filter renders again.

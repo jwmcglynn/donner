@@ -13,10 +13,10 @@ const CompiledShaderView& ConvolveMatrixAllProjections();
 /// tests.
 const CompiledShaderView& ConvolveMatrixMutatedAllProjections();
 
-/// Returns projections whose runtime coefficient index is biased above the array range.
+/// Returns projections whose coefficient index is biased above the bound array, without the clamp.
 const CompiledShaderView& ConvolveMatrixHighIndexAllProjections();
 
-/// Returns projections whose runtime coefficient index is biased below the array range.
+/// Returns projections whose coefficient index is biased below the bound array, without the clamp.
 const CompiledShaderView& ConvolveMatrixLowIndexAllProjections();
 
 }  // namespace donner::gpu::shader::tests

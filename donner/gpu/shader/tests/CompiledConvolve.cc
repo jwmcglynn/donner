@@ -39,12 +39,14 @@ constexpr auto kMutatedSource =
 constexpr auto kMutatedArtifact = wgsl::Compile<kMutatedSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kMutatedView = kMutatedArtifact.view();
 constexpr auto kHighIndexSource =
-    ReplaceExact(kMutatedSource, "clamp(kernelIndex, 0i, 24i)", "(kernelIndex + 1000i      )");
+    ReplaceExact(kMutatedSource, "clamp(kernelIndex, 0i, lastCoefficient)",
+                 "(kernelIndex + 1000i                  )");
 static_assert(kHighIndexSource.view().find("kernelIndex + 1000i") != std::string_view::npos);
 constexpr auto kHighIndexArtifact = wgsl::Compile<kHighIndexSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kHighIndexView = kHighIndexArtifact.view();
 constexpr auto kLowIndexSource =
-    ReplaceExact(kMutatedSource, "clamp(kernelIndex, 0i, 24i)", "(kernelIndex - 1000i      )");
+    ReplaceExact(kMutatedSource, "clamp(kernelIndex, 0i, lastCoefficient)",
+                 "(kernelIndex - 1000i                  )");
 static_assert(kLowIndexSource.view().find("kernelIndex - 1000i") != std::string_view::npos);
 constexpr auto kLowIndexArtifact = wgsl::Compile<kLowIndexSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kLowIndexView = kLowIndexArtifact.view();

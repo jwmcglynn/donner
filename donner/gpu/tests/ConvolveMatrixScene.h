@@ -56,6 +56,12 @@ inline constexpr std::array<BiasCase, 8> kBiasCases{{
 /// Dynamic coefficient-array index selected by a test artifact.
 enum class ArrayIndexMode { Authored, High, Low };
 
+/// Parameter block and the row-major coefficients bound beside it.
+struct Dispatch {
+  Params params;                    //!< Fixed parameter block.
+  std::vector<float> coefficients;  //!< Exactly orderX * orderY values.
+};
+
 /// Varied premultiplied source whose position, channels, and fractional alpha are independent.
 inline std::array<float, kWidth * kHeight * 4> InputTexels(const BiasCase* biasCase = nullptr) {
   std::array<float, kWidth * kHeight * 4> result{};
@@ -79,21 +85,20 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels(const BiasCase* biasC
 }
 
 /// Asymmetric kernel and off-center target expose transposition, reversal, and offset errors.
-inline Params Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode,
-                         const BiasCase* biasCase = nullptr) {
+/// The out-of-range index modes give the bound array distinct first and last values.
+inline Dispatch Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode,
+                           const BiasCase* biasCase = nullptr) {
   if (biasCase != nullptr) {
-    return Params{1, 1, 0, 0, 1.0f, biasCase->bias, 0u, biasCase->preserveAlpha ? 1u : 0u, {1.0f}};
+    return {Params{1, 1, 0, 0, 1.0f, biasCase->bias, 0u, biasCase->preserveAlpha ? 1u : 0u},
+            {1.0f}};
   }
-  Params result{2, 3, 0, 1, 2.0f, 0.04f, edgeMode, preserveAlpha ? 1u : 0u, {}};
+  Dispatch result{Params{2, 3, 0, 1, 2.0f, 0.04f, edgeMode, preserveAlpha ? 1u : 0u},
+                  {0.25f, -0.5f, 1.25f, 0.75f, -0.25f, 0.5f}};
   if (indexMode != ArrayIndexMode::Authored) {
-    std::fill(result.kernel, result.kernel + shader::programs::kConvolveMatrixKernelCapacity,
-              0.25f);
-    result.kernel[0] = 0.125f;
-    result.kernel[shader::programs::kConvolveMatrixKernelCapacity - 1] = 0.5f;
-    return result;
+    std::fill(result.coefficients.begin(), result.coefficients.end(), 0.25f);
+    result.coefficients.front() = 0.125f;
+    result.coefficients.back() = 0.5f;
   }
-  const std::array<float, 6> coefficients{0.25f, -0.5f, 1.25f, 0.75f, -0.25f, 0.5f};
-  std::copy(coefficients.begin(), coefficients.end(), result.kernel);
   return result;
 }
 
@@ -101,29 +106,41 @@ inline int32_t Wrap(int32_t value, int32_t extent) {
   return (value % extent + extent) % extent;
 }
 
+/// Float offset of the input texel that kernel tap (\p kernelX, \p kernelY) reads for output
+/// texel (\p x, \p y), or nullopt when the edge mode supplies transparent black.
+inline std::optional<size_t> SourceTexelOffset(const Params& params, int32_t x, int32_t y,
+                                               int32_t kernelX, int32_t kernelY) {
+  int32_t sourceX = x + kernelX - params.targetX;
+  int32_t sourceY = y + kernelY - params.targetY;
+  if (params.edgeMode == 0) {
+    sourceX = std::clamp(sourceX, 0, static_cast<int32_t>(kWidth) - 1);
+    sourceY = std::clamp(sourceY, 0, static_cast<int32_t>(kHeight) - 1);
+  } else if (params.edgeMode == 1) {
+    sourceX = Wrap(sourceX, kWidth);
+    sourceY = Wrap(sourceY, kHeight);
+  } else if (sourceX < 0 || sourceY < 0 || sourceX >= static_cast<int32_t>(kWidth) ||
+             sourceY >= static_cast<int32_t>(kHeight)) {
+    return std::nullopt;
+  }
+  return size_t{sourceY * kWidth + sourceX} * 4;
+}
+
 /// Independently evaluates one convolution output texel from the input and host parameters.
 inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeight * 4>& input,
-                                          const Params& params, int32_t x, int32_t y) {
+                                          const Dispatch& dispatch, int32_t x, int32_t y) {
+  const Params& params = dispatch.params;
   std::array<float, 3> rgb{};
   float alpha = 0.0f;
   for (int32_t kernelY = 0; kernelY < params.orderY; ++kernelY) {
     for (int32_t kernelX = 0; kernelX < params.orderX; ++kernelX) {
-      int32_t sourceX = x + kernelX - params.targetX;
-      int32_t sourceY = y + kernelY - params.targetY;
-      if (params.edgeMode == 0) {
-        sourceX = std::clamp(sourceX, 0, static_cast<int32_t>(kWidth) - 1);
-        sourceY = std::clamp(sourceY, 0, static_cast<int32_t>(kHeight) - 1);
-      } else if (params.edgeMode == 1) {
-        sourceX = Wrap(sourceX, kWidth);
-        sourceY = Wrap(sourceY, kHeight);
-      } else if (sourceX < 0 || sourceY < 0 || sourceX >= static_cast<int32_t>(kWidth) ||
-                 sourceY >= static_cast<int32_t>(kHeight)) {
+      const std::optional<size_t> offset = SourceTexelOffset(params, x, y, kernelX, kernelY);
+      if (!offset.has_value()) {
         continue;
       }
-      const size_t sourceOffset = size_t{sourceY * kWidth + sourceX} * 4;
+      const size_t sourceOffset = *offset;
       const int32_t coefficientIndex =
           (params.orderY - 1 - kernelY) * params.orderX + params.orderX - 1 - kernelX;
-      const float coefficient = params.kernel[coefficientIndex];
+      const float coefficient = dispatch.coefficients[coefficientIndex];
       const float sourceAlpha = input[sourceOffset + 3];
       for (size_t channel = 0; channel < 3; ++channel) {
         const float color = params.preserveAlpha != 0 && sourceAlpha > 0.0f
@@ -177,6 +194,7 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
   uint32_t inputBinding = 0;
   uint32_t outputBinding = 1;
   uint32_t paramsBinding = 2;
+  uint32_t coefficientsBinding = 3;
   WorkgroupSize workgroupSize{8, 8, 1};
   if (shaderMetadata != nullptr) {
     ASSERT_THAT(shaderMetadata->entryPoints, testing::SizeIs(1));
@@ -184,12 +202,15 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
     const shader::ShaderResource* input = shaderMetadata->resource("inputTexture");
     const shader::ShaderResource* output = shaderMetadata->resource("outputTexture");
     const shader::ShaderResource* params = shaderMetadata->resource("params");
+    const shader::ShaderResource* coefficients = shaderMetadata->resource("coefficients");
     ASSERT_NE(input, nullptr);
     ASSERT_NE(output, nullptr);
     ASSERT_NE(params, nullptr);
+    ASSERT_NE(coefficients, nullptr);
     inputBinding = input->binding;
     outputBinding = output->binding;
     paramsBinding = params->binding;
+    coefficientsBinding = coefficients->binding;
     workgroupSize = {shaderMetadata->entryPoints.front().workgroupSize[0],
                      shaderMetadata->entryPoints.front().workgroupSize[1],
                      shaderMetadata->entryPoints.front().workgroupSize[2]};
@@ -202,7 +223,8 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
       {{inputBinding, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
        {outputBinding, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
         TextureFormat::RGBA32Float},
-       {paramsBinding, ShaderStage::Compute, BindingType::ReadOnlyStorageBuffer}}});
+       {paramsBinding, ShaderStage::Compute, BindingType::ReadOnlyStorageBuffer},
+       {coefficientsBinding, ShaderStage::Compute, BindingType::ReadOnlyStorageBuffer}}});
   ASSERT_THAT(layout, HasResult());
   Result<PipelineLayout> pipelineLayout =
       device.createPipelineLayout(PipelineLayoutDescriptor{"convolve matrix", {layout.result()}});
@@ -239,26 +261,38 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
       device.writeTexture(input.result(), upload, {0, kBytesPerRow, kHeight}, {kWidth, kHeight}),
       IsOk());
 
-  const Params params = Parameters(edgeMode, preserveAlpha, indexMode, biasCase);
-  Params expectedParams = params;
+  const Dispatch dispatch = Parameters(edgeMode, preserveAlpha, indexMode, biasCase);
+  const Params& params = dispatch.params;
+  // An out-of-range index reads the nearest end of the bound array.
+  Dispatch expectedDispatch = dispatch;
   if (indexMode != ArrayIndexMode::Authored) {
-    const float endpoint = indexMode == ArrayIndexMode::High ? params.kernel[24] : params.kernel[0];
-    std::fill(expectedParams.kernel,
-              expectedParams.kernel + shader::programs::kConvolveMatrixKernelCapacity, endpoint);
+    const float endpoint = indexMode == ArrayIndexMode::High ? dispatch.coefficients.back()
+                                                             : dispatch.coefficients.front();
+    std::fill(expectedDispatch.coefficients.begin(), expectedDispatch.coefficients.end(), endpoint);
   }
+  const uint64_t coefficientBytes = dispatch.coefficients.size() * sizeof(float);
   Result<Buffer> paramsBuffer = device.createBuffer(BufferDescriptor{
       "convolve parameters", sizeof(params), BufferUsage::Storage | BufferUsage::CopyDst});
+  Result<Buffer> coefficientsBuffer = device.createBuffer(BufferDescriptor{
+      "convolve coefficients", coefficientBytes, BufferUsage::Storage | BufferUsage::CopyDst});
   ASSERT_THAT(paramsBuffer, HasResult());
+  ASSERT_THAT(coefficientsBuffer, HasResult());
   ASSERT_THAT(device.writeBuffer(paramsBuffer.result(), 0,
                                  std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&params),
                                                           sizeof(params))),
+              IsOk());
+  ASSERT_THAT(device.writeBuffer(coefficientsBuffer.result(), 0,
+                                 std::span<const uint8_t>(
+                                     reinterpret_cast<const uint8_t*>(dispatch.coefficients.data()),
+                                     coefficientBytes)),
               IsOk());
   Result<BindGroup> bindGroup = device.createBindGroup(BindGroupDescriptor{
       "convolve matrix",
       layout.result(),
       {{inputBinding, TextureViewBinding{inputView.result()}},
        {outputBinding, TextureViewBinding{outputView.result()}},
-       {paramsBinding, BufferBinding{paramsBuffer.result(), 0, sizeof(params)}}}});
+       {paramsBinding, BufferBinding{paramsBuffer.result(), 0, sizeof(params)}},
+       {coefficientsBinding, BufferBinding{coefficientsBuffer.result(), 0, coefficientBytes}}}});
   ASSERT_THAT(bindGroup, HasResult());
 
   Result<Buffer> readback =
@@ -300,9 +334,9 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
     std::memcpy(actual->data().data() + size_t{y} * kWidth * 4,
                 bytes.result().data() + size_t{y} * kBytesPerRow, kWidth * 4 * sizeof(float));
     for (uint32_t x = 0; x < kWidth; ++x) {
-      const std::array<float, 4> reference = biasCase != nullptr
-                                                 ? biasCase->expected
-                                                 : ExpectedTexel(inputTexels, expectedParams, x, y);
+      const std::array<float, 4> reference =
+          biasCase != nullptr ? biasCase->expected
+                              : ExpectedTexel(inputTexels, expectedDispatch, x, y);
       if (biasCase != nullptr) {
         const auto actualTexel = actual->data().subspan(size_t{y * kWidth + x} * 4, 4);
         EXPECT_THAT(actualTexel, testing::Pointwise(testing::FloatNear(1e-6f), reference));

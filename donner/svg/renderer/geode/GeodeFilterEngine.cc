@@ -933,6 +933,13 @@ RuntimeComputeProgram CreateReflectedFilterProgram(gpu::Device& runtime,
     }
     result.transferTableBinding = table->binding;
   }
+  if (const auto* coefficients = shader.resource("coefficients")) {
+    if (coefficients->type != gpu::BindingType::ReadOnlyStorageBuffer ||
+        coefficients->runtimeArrayStrideBytes == 0) {
+      return {};
+    }
+    result.coefficientsBinding = coefficients->binding;
+  }
   return result;
 }
 
@@ -982,16 +989,20 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
 /// @param uniforms Parameter block to upload. @param label Debug label stem for the pass.
 /// @param transferTable Optional read-only storage table bound at its reflected slot.
 /// @param destinationExtent Optional dispatch extent; defaults to the source dimensions.
+/// @param coefficients Runtime-sized array payload, uploaded beside the parameter block and bound
+/// at the program's reflected `coefficients` slot; required exactly when the program has one.
 [[nodiscard]] bool dispatchRuntimeInputOutputParameters(
     FilterResourceArena& arena, const RuntimeComputeProgram& program, FilterTexture input,
     FilterTexture output, std::span<const uint8_t> uniforms, const char* label,
     const gpu::Buffer* transferTable = nullptr,
-    std::optional<gpu::Extent2d> destinationExtent = std::nullopt) {
+    std::optional<gpu::Extent2d> destinationExtent = std::nullopt,
+    std::span<const uint8_t> coefficients = {}) {
   if (!program.pipeline.isValid()) {
     return false;
   }
 
-  if ((transferTable != nullptr) != program.transferTableBinding.has_value()) {
+  if ((transferTable != nullptr) != program.transferTableBinding.has_value() ||
+      coefficients.empty() == program.coefficientsBinding.has_value()) {
     return false;
   }
 
@@ -1009,15 +1020,26 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   }
 
   const auto bindings = program.inputOutputParameterBindings;
-  std::vector<gpu::BindGroupEntry> entries(transferTable == nullptr ? 3 : 4);
-  entries[0] = {bindings[0], gpu::TextureViewBinding{*sourceView}};
-  entries[1] = {bindings[1], gpu::TextureViewBinding{*destinationView}};
-  entries[2] = {bindings[2],
-                gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}};
+  std::vector<gpu::BindGroupEntry> entries;
+  entries.reserve(5);
+  entries.push_back({bindings[0], gpu::TextureViewBinding{*sourceView}});
+  entries.push_back({bindings[1], gpu::TextureViewBinding{*destinationView}});
+  entries.push_back(
+      {bindings[2], gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}});
   if (transferTable != nullptr) {
-    entries[3] = {*program.transferTableBinding,
-                  gpu::BufferBinding{*transferTable, 0,
-                                     sizeof(gpu::shader::programs::ColorTransferSamples())}};
+    entries.push_back({*program.transferTableBinding,
+                       gpu::BufferBinding{*transferTable, 0,
+                                          sizeof(gpu::shader::programs::ColorTransferSamples())}});
+  }
+  if (!coefficients.empty()) {
+    const FilterResourceCache::RuntimeParameterSlot coefficientSlot =
+        arena.writeRuntimeParameterSlot(coefficients);
+    if (coefficientSlot.buffer == nullptr) {
+      return false;
+    }
+    entries.push_back(
+        {*program.coefficientsBinding,
+         gpu::BufferBinding{*coefficientSlot.buffer, coefficientSlot.offset, coefficients.size()}});
   }
   const gpu::BindGroup* bindGroup =
       arena.createRuntimeBindGroup(program.bindGroupLayout, std::move(entries), RcString(label));
@@ -1637,7 +1659,8 @@ struct FilterSamplingHalo {
 
   bool add(const fp::ConvolveMatrix& value) {
     if (value.edgeMode == fp::ConvolveMatrix::EdgeMode::Wrap || value.orderX <= 0 ||
-        value.orderY <= 0 || value.orderX > 25 || value.orderY > 25) {
+        value.orderY <= 0 || value.orderX > svg::components::kMaximumFilterConvolveOrder ||
+        value.orderY > svg::components::kMaximumFilterConvolveOrder) {
       return false;
     }
     halo += Vector2d(value.orderX, value.orderY);
@@ -2817,55 +2840,82 @@ FilterTexture GeodeFilterEngine::applyComponentTransfer(
 
 namespace {
 
-std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixParams(
-    const svg::components::filter_primitive::ConvolveMatrix& primitive) {
-  using gpu::shader::programs::ConvolveMatrixParams;
-  using gpu::shader::programs::kConvolveMatrixKernelCapacity;
-  if (primitive.orderX <= 0 || primitive.orderY <= 0 ||
-      primitive.orderX > static_cast<int>(kConvolveMatrixKernelCapacity) ||
-      primitive.orderY > static_cast<int>(kConvolveMatrixKernelCapacity)) {
-    return std::nullopt;
-  }
-  const size_t requiredSize = static_cast<size_t>(primitive.orderX) * primitive.orderY;
-  if (requiredSize > kConvolveMatrixKernelCapacity ||
-      primitive.kernelMatrix.size() != requiredSize) {
-    return std::nullopt;
-  }
+// The largest admitted kernel must fit one runtime parameter slot, which the slot allocator
+// release-asserts holds at most half a parameter block.
+static_assert(svg::components::kMaximumFilterKernelValues * sizeof(float) <=
+                  svg::components::kGpuFilterParameterBlockBytes / 2,
+              "the largest convolution kernel must fit one runtime parameter slot");
 
+/// Parameter block and row-major coefficients of one admitted convolution dispatch.
+struct ConvolveMatrixDispatch {
+  gpu::shader::programs::ConvolveMatrixParams params{};  //!< Fixed parameter block.
+  std::vector<float> coefficients;                       //!< Exactly orderX * orderY kernel values.
+};
+
+/// Whether the orders and value count of \p primitive fit the filter graph's limits, which bound
+/// every kernel the CPU backend renders, so both backends accept the same kernels.
+bool ConvolveKernelAdmitted(const svg::components::filter_primitive::ConvolveMatrix& primitive) {
+  using svg::components::kMaximumFilterConvolveOrder;
+  return primitive.orderX > 0 && primitive.orderY > 0 &&
+         primitive.orderX <= kMaximumFilterConvolveOrder &&
+         primitive.orderY <= kMaximumFilterConvolveOrder &&
+         primitive.kernelMatrix.size() == static_cast<size_t>(primitive.orderX) * primitive.orderY;
+}
+
+/// Whether \p target names a tap inside a kernel axis of \p order taps.
+bool ConvolveTargetInside(int target, int order) {
+  return target >= 0 && target < order;
+}
+
+/// The kernel at shader precision, or nullopt when a value is not finite there.
+/// @param kernel Row-major kernel values.
+std::optional<std::vector<float>> ConvolveCoefficients(const std::vector<double>& kernel) {
+  std::vector<float> result;
+  result.reserve(kernel.size());
+  for (const double value : kernel) {
+    const auto coefficient = static_cast<float>(value);
+    if (!std::isfinite(coefficient)) {
+      return std::nullopt;
+    }
+    result.push_back(coefficient);
+  }
+  return result;
+}
+
+/// Builds the dispatch of \p primitive, or nullopt when it is not admitted.
+std::optional<ConvolveMatrixDispatch> BuildConvolveMatrixDispatch(
+    const svg::components::filter_primitive::ConvolveMatrix& primitive) {
   const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
   const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
-  if (targetX < 0 || targetX >= primitive.orderX || targetY < 0 || targetY >= primitive.orderY) {
+  if (!ConvolveKernelAdmitted(primitive) || !ConvolveTargetInside(targetX, primitive.orderX) ||
+      !ConvolveTargetInside(targetY, primitive.orderY)) {
     return std::nullopt;
   }
 
-  double divisor = 0.0;
-  if (primitive.divisor.has_value()) {
-    divisor = *primitive.divisor;
-  } else {
-    divisor =
-        svg::components::filter_primitive::ConvolveKernelDefaultDivisor(primitive.kernelMatrix);
-  }
+  const double divisor =
+      primitive.divisor.has_value()
+          ? *primitive.divisor
+          : svg::components::filter_primitive::ConvolveKernelDefaultDivisor(primitive.kernelMatrix);
   const float divisorF32 = static_cast<float>(divisor);
   const float biasF32 = static_cast<float>(primitive.bias);
   if (!std::isfinite(divisorF32) || divisorF32 == 0.0f || !std::isfinite(biasF32)) {
     return std::nullopt;
   }
-
-  ConvolveMatrixParams result{};
-  result.orderX = primitive.orderX;
-  result.orderY = primitive.orderY;
-  result.targetX = targetX;
-  result.targetY = targetY;
-  result.divisor = divisorF32;
-  result.bias = biasF32;
-  result.edgeMode = toConvolveEdgeMode(primitive.edgeMode);
-  result.preserveAlpha = primitive.preserveAlpha ? 1u : 0u;
-  for (size_t index = 0; index < requiredSize; ++index) {
-    result.kernel[index] = static_cast<float>(primitive.kernelMatrix[index]);
-    if (!std::isfinite(result.kernel[index])) {
-      return std::nullopt;
-    }
+  std::optional<std::vector<float>> coefficients = ConvolveCoefficients(primitive.kernelMatrix);
+  if (!coefficients.has_value()) {
+    return std::nullopt;
   }
+
+  ConvolveMatrixDispatch result;
+  result.params.orderX = primitive.orderX;
+  result.params.orderY = primitive.orderY;
+  result.params.targetX = targetX;
+  result.params.targetY = targetY;
+  result.params.divisor = divisorF32;
+  result.params.bias = biasF32;
+  result.params.edgeMode = toConvolveEdgeMode(primitive.edgeMode);
+  result.params.preserveAlpha = static_cast<uint32_t>(primitive.preserveAlpha);
+  result.coefficients = std::move(*coefficients);
   return result;
 }
 
@@ -2902,9 +2952,8 @@ FilterTexture GeodeFilterEngine::applyConvolveMatrix(
 
   const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
   const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
-  std::optional<gpu::shader::programs::ConvolveMatrixParams> params =
-      BuildConvolveMatrixParams(primitive);
-  if (!params.has_value()) {
+  std::optional<ConvolveMatrixDispatch> dispatch = BuildConvolveMatrixDispatch(primitive);
+  if (!dispatch.has_value()) {
     if (verbose_) {
       std::cerr << "GeodeFilterEngine: feConvolveMatrix invalid params (" << primitive.orderX << "×"
                 << primitive.orderY << ", targetX=" << targetX << ", targetY=" << targetY
@@ -2916,7 +2965,7 @@ FilterTexture GeodeFilterEngine::applyConvolveMatrix(
   }
 
   if (wrapRegion) {
-    setConvolveWrapRegion(*params, *wrapRegion, width, height);
+    setConvolveWrapRegion(dispatch->params, *wrapRegion, width, height);
   }
 
   const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
@@ -2925,8 +2974,12 @@ FilterTexture GeodeFilterEngine::applyConvolveMatrix(
   if (!output) {
     return {};
   }
-  if (!dispatchRuntimeInputOutputParameters(arena, convolveMatrixProgram_, input, output,
-                                            UniformBytes(*params), "FilterConvolveMatrixPass")) {
+  const std::span<const uint8_t> coefficients(
+      reinterpret_cast<const uint8_t*>(dispatch->coefficients.data()),
+      dispatch->coefficients.size() * sizeof(float));
+  if (!dispatchRuntimeInputOutputParameters(
+          arena, convolveMatrixProgram_, input, output, UniformBytes(dispatch->params),
+          "FilterConvolveMatrixPass", nullptr, std::nullopt, coefficients)) {
     return {};
   }
   return output;
