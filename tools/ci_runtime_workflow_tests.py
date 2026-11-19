@@ -471,7 +471,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         self.assertIn("--local_test_jobs=1", self._test_options(browser, hosted))
         self.assertEqual(
-            "launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak",
+            "launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-editor-wasm-browser,-fuzz_soak",
             self._tag_filters(browser, hosted),
         )
         [command] = self._phase_commands("macos", "browser_test")

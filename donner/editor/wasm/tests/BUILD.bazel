@@ -5,6 +5,8 @@ load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwri
 load("@npm//donner/editor/wasm/tests:esbuild/package_json.bzl", esbuild_bin = "bin")
 load("@npm//donner/editor/wasm/tests:eslint/package_json.bzl", eslint_bin = "bin")
 
+load(":editor_browser_test.bzl", "editor_browser_test")
+
 package(default_visibility = ["//visibility:public"])
 
 npm_link_all_packages(name = "node_modules")
@@ -50,13 +52,7 @@ eslint_bin.eslint_test(
     tags = ["lint"],
 )
 
-# The Chromium cases of smoke.spec.ts, browser-presentation-regression.spec.ts,
-# browser-surface-recovery.spec.ts, boot-presentation.spec.ts and
-# browser-backend-selection.spec.ts run in the Editor WASM workflow's chromium-default lane
-# (tools/run-browser-ci.sh) on every pull request and main push that can change them. The Bazel
-# lanes below cover what that lane does not: other browsers, archive-pinned browsers, headed
-# composited sampling and separately served packages.
-#
+# The editor CI browser targets serve the same transitioned Geode package on each engine.
 # Every editor browser lane here is macOS-only: they assert on presented WebGPU canvas pixels,
 # and headless Chromium on Linux cannot present a WebGPU OffscreenCanvas swapchain with the
 # SwiftShader WebGPU adapter. The GPU service finds no SharedImageBackingFactory for the
@@ -219,111 +215,192 @@ js_test(
     node_options = ["--test"],
 )
 
-playwright_bin.playwright_test(
-    name = "firefox_composited_invariants_test",
-    size = "large",
-    timeout = "long",
-    args = [
-        "test",
-        "$(rootpath :composited-invariants.spec.ts)",
-        "$(rootpath :composited-drag-invariants.spec.ts)",
-        "--config=$(rootpath :playwright.composited-firefox.bazel.config.js)",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "browser-launch-probe.js",
+filegroup(
+    name = "editor_browser_shared_sources",
+    srcs = [
+        "basic-shapes-capture-gate.ts",
+        "browser-runtime-diagnostics.ts",
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
+        "canvas-capture-fault.ts",
         "canvas-color-stats.ts",
-        "chromium-launch-env.cjs",
+        "canvas-quiescent-capture.mjs",
+        "failure-canvas-evidence.ts",
+        "flat-capture-retake.mjs",
+        "gesture-streams.ts",
+        "gpu-session-console.ts",
+        "quarantine-report.mjs",
+        "sample-thumbnail-quiescence.mjs",
+        "sample-thumbnail-settle.ts",
+        "startup-phases.mjs",
+        "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
+        "test-timing.ts",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "editor_browser_smoke_sources",
+    srcs = [
+        ":editor_browser_shared_sources",
+        "animation-pulse-observation.mjs",
+        "browser-diagnostic-policy.js",
+        "carousel-samples.mjs",
+        "completed-result-handoff.mjs",
+        "event-presentation-delay.mjs",
+        "package-identity.mjs",
+        "pipeline-compile-readiness.mjs",
+        "smoke.spec.ts",
+        "test-timing.cjs",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "editor_browser_presentation_sources",
+    srcs = [
+        ":editor_browser_shared_sources",
+        "browser-bitmap-comparator.ts",
+        "browser-presentation-regression.spec.ts",
+        "overlay-bitmap-compare.ts",
+        "png-crop-core.mjs",
+        "png-crop.ts",
+        "presentation-evidence.ts",
+        "test-timing.cjs",
+        "browser-presentation-regression.spec.ts-snapshots/basic-shapes-compositor-tile-overlay-darwin.png",
+        "browser-presentation-regression.spec.ts-snapshots/basic-shapes-compositor-tile-overlay-firefox-geode-resize-darwin.png",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "editor_browser_startup_sources",
+    srcs = [
+        "boot-presentation.spec.ts",
+        "browser-backend-selection.spec.ts",
+        "browser-gpu-residency.ts",
+        "canvas-color-stats.ts",
+        "canvas-pointer.ts",
+        "flat-capture-retake.mjs",
+        "sample-thumbnail-settle.ts",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "editor_browser_firefox_surface_sources",
+    srcs = [
+        "browser-surface-recovery.spec.ts",
+        "canvas-color-stats.ts",
+        "canvas-quiescent-capture.mjs",
+        "flat-capture-retake.mjs",
+        "sample-thumbnail-settle.ts",
+        "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
+        "test-timing.cjs",
+        "test-timing.ts",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "editor_browser_composited_sources",
+    srcs = [
+        "canvas-color-stats.ts",
         "composited-drag-invariants.spec.ts",
         "composited-invariants.spec.ts",
         "composited-pixel-classifier.mjs",
-        "composited-probe.ts",
         "composited-probe-evidence.mjs",
-        "firefox-launch-env.cjs",
+        "composited-probe.ts",
         "flat-capture-retake.mjs",
         "gesture-streams.ts",
-        "package.json",
+        "sample-thumbnail-settle.ts",
+        "test-timing.cjs",
+        "test-timing.ts",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "editor_browser_config_sources",
+    srcs = [
+        "browser-launch-probe.js",
+        "chromium-launch-env.cjs",
+        "editor-browser-coverage.cjs",
+        "firefox-launch-env.cjs",
         "playwright.bazel.config.js",
+        "playwright.compatibility.config.js",
+        "playwright.composited-chromium.bazel.config.js",
+        "playwright.composited-chromium.config.js",
         "playwright.composited-firefox.bazel.config.js",
         "playwright.composited-firefox.config.js",
         "playwright.config.js",
+        "playwright.editor-ci.config.js",
+        "prepare-browser-archives.js",
         "remote-webserver.mjs",
-        "sample-thumbnail-settle.ts",
         "test-timing.cjs",
-        "test-timing.ts",
-        ":node_modules/@playwright/test",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:firefox",
     ],
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:firefox)/../",
-    },
-    tags = [
-        "manual",
-        "no-local",
+    tags = ["manual"],
+)
+
+editor_browser_test(
+    name = "chromium_editor_smoke_test",
+    project = "chromium-default",
+    sources = [":editor_browser_smoke_sources"],
+    specs = ["smoke.spec.ts"],
+)
+
+editor_browser_test(
+    name = "chromium_editor_presentation_test",
+    project = "chromium-default",
+    sources = [":editor_browser_presentation_sources"],
+    specs = ["browser-presentation-regression.spec.ts"],
+)
+
+editor_browser_test(
+    name = "chromium_editor_startup_test",
+    project = "chromium-default",
+    sources = [":editor_browser_startup_sources"],
+    specs = ["boot-presentation.spec.ts", "browser-backend-selection.spec.ts"],
+)
+
+editor_browser_test(
+    name = "firefox_editor_compatibility_test",
+    project = "firefox-geode-resize",
+    sources = [
+        ":editor_browser_firefox_surface_sources",
+        ":editor_browser_presentation_sources",
+        ":editor_browser_smoke_sources",
+        ":editor_browser_startup_sources",
     ],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
+    specs = [
+        "browser-backend-selection.spec.ts",
+        "browser-presentation-regression.spec.ts",
+        "browser-surface-recovery.spec.ts",
+        "smoke.spec.ts",
     ],
 )
 
-playwright_bin.playwright_test(
+editor_browser_test(
+    name = "webkit_editor_carousel_test",
+    project = "webkit-geode-carousel",
+    sources = [":editor_browser_presentation_sources", ":editor_browser_smoke_sources"],
+    specs = ["browser-presentation-regression.spec.ts", "smoke.spec.ts"],
+)
+
+editor_browser_test(
     name = "chromium_composited_invariants_test",
-    size = "large",
-    timeout = "long",
-    args = [
-        "test",
-        "$(rootpath :composited-invariants.spec.ts)",
-        "$(rootpath :composited-drag-invariants.spec.ts)",
-        "--config=$(rootpath :playwright.composited-chromium.bazel.config.js)",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "browser-launch-probe.js",
-        "canvas-color-stats.ts",
-        "chromium-launch-env.cjs",
-        "composited-drag-invariants.spec.ts",
-        "composited-invariants.spec.ts",
-        "composited-pixel-classifier.mjs",
-        "composited-probe.ts",
-        "composited-probe-evidence.mjs",
-        "flat-capture-retake.mjs",
-        "gesture-streams.ts",
-        "package.json",
-        "playwright.bazel.config.js",
-        "playwright.composited-chromium.bazel.config.js",
-        "playwright.composited-chromium.config.js",
-        "playwright.config.js",
-        "remote-webserver.mjs",
-        "sample-thumbnail-settle.ts",
-        "test-timing.cjs",
-        "test-timing.ts",
-        ":node_modules/@playwright/test",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:chromium",
-    ],
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
-    },
-    tags = [
-        "manual",
-        "no-local",
-    ],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
+    project = "composited-chromium",
+    sources = [":editor_browser_composited_sources"],
+    specs = ["composited-drag-invariants.spec.ts", "composited-invariants.spec.ts"],
+)
+
+editor_browser_test(
+    name = "firefox_composited_invariants_test",
+    project = "firefox-composited-invariants",
+    sources = [":editor_browser_composited_sources"],
+    specs = ["composited-drag-invariants.spec.ts", "composited-invariants.spec.ts"],
 )
 
 js_test(
@@ -678,7 +755,8 @@ js_test(
         "*.js",
         "*.mjs",
         "*.ts",
-    ]) + [":node_modules/@playwright/test"],
+    ]) + ["BUILD.bazel",
+        ":node_modules/@playwright/test"],
     entry_point = "test-timing.spec.mjs",
     # Loading Playwright config initializes its llhttp WebAssembly module.
     env = {"NODE_OPTIONS": ""},
@@ -707,6 +785,7 @@ js_test(
         "*.yaml",
     ]) + [
         "BUILD.bazel",
+        "editor_browser_test.bzl",
         ":node_modules/@playwright/test",
         "//:.github/workflows/editor_wasm.yml",
         "//:.github/workflows/perf.yml",
@@ -735,6 +814,7 @@ js_test(
         "*.yaml",
     ]) + [
         "BUILD.bazel",
+        "editor_browser_test.bzl",
         ":node_modules/@playwright/test",
         "//:.github/workflows/editor_wasm.yml",
         "//:.github/workflows/perf.yml",

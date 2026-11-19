@@ -349,7 +349,7 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn('"local-gpu-isolated"', self.rules)
         self.assertIn('if tag not in [LOCAL_GPU_TEST_TAG, "local-gpu-isolated"]', self.rules)
         self.assertIn(
-            "test --test_tag_filters=-ci-remote-gpu",
+            "test --test_tag_filters=-ci-remote-gpu,-editor-wasm-browser",
             self.bazelrc,
         )
         # The self-hosted Linux lane's test phase (tools/ci/lanes.py): it rejects an empty

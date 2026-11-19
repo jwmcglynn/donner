@@ -290,7 +290,7 @@ MACOS_LANES = {
             bazel("test", "--config=ci", "--test_output=errors", "--local_test_jobs=1",
                   bep("browser_test"),
                   tags("launches-browser", "-manual", "-perf", "-requires_metal_toolchain",
-                       "-ci-remote-gpu", "-fuzz_soak"),
+                       "-ci-remote-gpu", "-editor-wasm-browser", "-fuzz_soak"),
                   "--config=hosted-macos-quarantine", *_macos("macos"), *BROWSER_STALL,
                   SELECTED, wrappers=TEST_WRAPPER),
         )),

@@ -227,6 +227,69 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   );
 });
 
+test("graph browser targets declare each project and all imports used by its specs", () => {
+  const build = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const groups = new Map([...build.matchAll(/filegroup\(\n {4}name = "(editor_browser_[^"]+)",([\s\S]*?)\n\)/g)]
+    .map(([, name, body]) => [name, body]));
+  const targets = [...build.matchAll(/editor_browser_test\(\n([\s\S]*?)\n\)/g)].map(([, body]) => body);
+  const projects = new Map();
+  for (const body of targets) {
+    const name = /name = "([^"]+)"/.exec(body)[1];
+    const project = /project = "([^"]+)"/.exec(body)[1];
+    const specs = [.../specs = \[([^\]]+)\]/.exec(body)[1].matchAll(/"([^"]+)"/g)].map(([, file]) => file);
+    projects.set(project, [...(projects.get(project) || []), ...specs]);
+    const reach = new Set(["editor_browser_config_sources"]);
+    for (const [, group] of body.matchAll(/":(editor_browser_[^"]+)"/g)) reach.add(group);
+    const inputs = [];
+    for (const group of reach) {
+      const source = groups.get(group);
+      assert.ok(source, `unknown source group ${group}`);
+      inputs.push(source);
+      for (const [, dep] of source.matchAll(/":(editor_browser_[^"]+)"/g)) reach.add(dep);
+    }
+    assertListsLoadedFiles(name, body, { entryPoints: ["playwright.editor-ci.config.js", ...specs], runfilesFrom: inputs });
+  }
+  assert.deepEqual([...projects.keys()].sort(), [
+    "chromium-default", "composited-chromium", "firefox-composited-invariants", "firefox-geode-resize", "webkit-geode-carousel",
+  ]);
+  for (const browser of ["composited-chromium", "firefox-composited-invariants"]) {
+    assert.deepEqual(projects.get(browser).sort(), ["composited-drag-invariants.spec.ts", "composited-invariants.spec.ts"]);
+  }
+  assert.deepEqual(projects.get("webkit-geode-carousel").sort(),
+    ["browser-presentation-regression.spec.ts", "smoke.spec.ts"]);
+  assert.deepEqual(projects.get("firefox-geode-resize").sort(), [
+    "browser-backend-selection.spec.ts", "browser-presentation-regression.spec.ts",
+    "browser-surface-recovery.spec.ts", "smoke.spec.ts",
+  ]);
+  const regular = readdirSync(testDirectory).filter((file) => file.endsWith(".spec.ts")
+    && !require("./playwright.config.js").testIgnore.includes(file)
+    && !["browser-surface-recovery.spec.ts", "static-host-isolation.spec.ts"].includes(file));
+  assert.deepEqual(projects.get("chromium-default").sort(), regular.sort());
+});
+
+test("editor graph browser projects retain the committed overlay snapshot names", () => {
+  const build = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const inputs = /name = "editor_browser_presentation_sources",([\s\S]*?)\n\)/.exec(build)[1];
+  for (const [lane, expected] of [["chromium-default", ""], ["firefox-geode-resize", "firefox-geode-resize"]]) {
+    const project = execFileSync(process.execPath, ["-p", 'require("./playwright.editor-ci.config.js").projects[0].name'], {
+      cwd: testDirectory,
+      env: {
+        ...process.env,
+        DONNER_EDITOR_BROWSER_PROJECT: lane,
+        DONNER_WASM_TEST_SERVER: path.join(testDirectory, "remote-webserver.mjs"),
+        DONNER_WASM_PACKAGE_DIR: testDirectory,
+        TEST_TMPDIR: process.env.TEST_TMPDIR || tmpdir(),
+      },
+      encoding: "utf8",
+    }).trim();
+    assert.equal(project, expected);
+    const suffix = project ? "-" + project : "";
+    const golden = "browser-presentation-regression.spec.ts-snapshots/basic-shapes-compositor-tile-overlay"
+      + suffix + "-darwin.png";
+    assert.ok(inputs.includes('"' + golden + '"'), golden);
+  }
+});
+
 function assertCommonBrowserLane({ lane, laneName, specFiles }) {
   assert.ok(laneName, "every browser lane must be named");
   assert.ok(specFiles.length > 0, `${laneName} must run a named spec`);
@@ -260,32 +323,6 @@ function assertPerformanceLane({ lane, tags, specFiles }) {
   assert.match(lane, /"DONNER_FIREFOX_ARCHIVE":/);
   assert.ok(lane.includes("\"prepare-browser-archives.js\""));
   assert.deepEqual(specFiles, ["browser-responsiveness.perf.ts"]);
-}
-
-function assertCompositedLane({ lane, tags, specFiles }, browser) {
-  assert.deepEqual(
-    tags.sort(),
-    ["manual", "no-local"],
-    "extended composited browser diagnostics are opt-in and remote-only",
-  );
-  assert.deepEqual(specFiles, [
-    "composited-invariants.spec.ts",
-    "composited-drag-invariants.spec.ts",
-  ]);
-  assert.match(
-    lane,
-    browser === "firefox"
-      ? /--config=\$\(rootpath :playwright\.composited-firefox\.bazel\.config\.js\)/
-      : /--config=\$\(rootpath :playwright\.composited-chromium\.bazel\.config\.js\)/,
-  );
-  assert.ok(lane.includes(`"@playwright//:${browser}"`));
-  assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
-  assert.ok(tags.includes("no-local"), "the composited browser gate must use remote execution");
-  assert.doesNotMatch(
-    lane,
-    /--grep/,
-    "the composited lane must include the classifier controls",
-  );
 }
 
 function assertFontReferenceLane({ lane, tags, specFiles }) {
@@ -388,10 +425,6 @@ function assertBrowserLane(lane) {
   const { laneName, performanceLane, tags } = contract;
   if (performanceLane) {
     assertPerformanceLane(contract);
-  } else if (laneName === "firefox_composited_invariants_test") {
-    assertCompositedLane(contract, "firefox");
-  } else if (laneName === "chromium_composited_invariants_test") {
-    assertCompositedLane(contract, "chromium");
   } else if (laneName === "animation_preview_browser_test") {
     assertAnimationLane(contract, /--grep=animation\.preview\.plays/);
   } else if (laneName === "canvas_snapshot_browser_test") {
@@ -469,9 +502,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "_browser_responsiveness_perf_driver",
       "animation_preview_browser_test",
       "canvas_snapshot_browser_test",
-      "chromium_composited_invariants_test",
       "docs_selector_browser_tests",
-      "firefox_composited_invariants_test",
       "font_reference_probe",
       "standalone_geode_browser_renderer_test",
     ],
@@ -707,8 +738,9 @@ test("every Bazel Playwright config is loaded by a Bazel lane", () => {
   const bazelConfigs = readdirSync(testDirectory)
     .filter((name) => /^playwright\..*bazel\.config\.js$/.test(name));
   assert.ok(bazelConfigs.includes("playwright.bazel.config.js"));
+  const editorRule = readFileSync(path.join(testDirectory, "editor_browser_test.bzl"), "utf8");
   const loaded = new Set(
-    [...buildFile.matchAll(/--config=\$\(rootpath :([^)]+)\)/g)].map(([, config]) => config),
+    [...(buildFile + editorRule).matchAll(/--config=\$\(rootpath :([^)]+)\)/g)].map(([, config]) => config),
   );
   for (const config of [...loaded]) {
     for (const specifier of localFileReferences(readFileSync(path.join(testDirectory, config), "utf8"))) {
