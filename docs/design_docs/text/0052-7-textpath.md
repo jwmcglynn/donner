@@ -110,7 +110,7 @@ Any golden or tolerance change requires explicit human approval after visual ret
 | tspan-with-absolute-position | golden | Absolute distance along the text path |
 | with-underline | golden | Underline paint along the text path |
 | tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
-| writing-mode=tb | 250 px at 300x300 | Upright vmtx origin versus the reference's hhea-centered cell |
+| writing-mode=tb | golden, default settings, 300x300 | The reference moves upright glyphs off the font's vmtx origin |
 
 For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
 [fixture coverage matrix](../../spec_audit/test_coverage.md#text).
@@ -161,5 +161,5 @@ For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
   midpoint. `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and
   `_text_full` variants compare flat and on-path upright CJK against horizontal text placed at
   the vmtx-derived origins. The refreshed `writing-mode=tb.svg` reference (upstream quoted its
-  `'Mplus 1p'` family) centers the hhea ascent/descent box instead, 0.0175em from the vmtx
-  origin; that residual is the row's registered allowance.
+  `'Mplus 1p'` family) places upright glyphs off the vmtx origin, so the row compares against a
+  Donner golden at default settings (see the golden README).
