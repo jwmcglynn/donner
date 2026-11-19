@@ -15,6 +15,7 @@ function browserRoot(environment) {
 function browserExecutablePaths(environment) {
   const root = browserRoot(environment);
   return {
+    webkit: path.join(root, "webkit/pw_run.sh"),
     chromium: path.join(
       root,
       "chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
@@ -25,6 +26,7 @@ function browserExecutablePaths(environment) {
 
 // Each pinned browser and the variable its Bazel target names its archive with.
 const kArchiveVariables = {
+  webkit: "DONNER_WEBKIT_ARCHIVE",
   chromium: "DONNER_CHROMIUM_ARCHIVE",
   firefox: "DONNER_FIREFOX_ARCHIVE",
 };
@@ -35,7 +37,7 @@ const kArchiveVariables = {
  * @param {Record<string, string | undefined>} environment The test environment.
  * @param {string[]} browsers The pinned browsers the caller launches; every one by default.
  */
-function prepareBrowserArchives(environment, browsers = Object.keys(kArchiveVariables)) {
+function prepareBrowserArchives(environment, browsers = ["chromium", "firefox"]) {
   const root = browserRoot(environment);
   const archives = browsers.map((name) => {
     if (!(name in kArchiveVariables)) throw new Error(`no pinned browser archive named ${name}`);

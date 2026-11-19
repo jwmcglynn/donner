@@ -121,7 +121,7 @@ class Evidence:
             result = event["testResult"]
             shard = _shard(identity["testResult"])
             self.passed[_passed_remotely(result)].add(shard)
-            if shard[0] in KERNELS or shard[0] in HEADED:
+            if shard[0] in KERNELS or shard[0] in HEADED or shard[0] in EDITOR_BROWSER:
                 self.test_logs[shard[0]] = next((f.get("uri", "") for f in result.get("testActionOutput", [])
                                                    if f.get("name") == "test.log"), "")
 
@@ -129,7 +129,22 @@ class Evidence:
 BROWSER_PACKAGE = "//donner/editor/wasm/tests:ci_darwin_"
 ARCHIVE = BROWSER_PACKAGE + "mac_browser_archive_tests"
 HEADED = {BROWSER_PACKAGE + "animation_preview_browser_test", BROWSER_PACKAGE + "canvas_snapshot_browser_test"}
-NATIVE_BROWSER = {ARCHIVE} | HEADED
+EDITOR_BROWSER = {BROWSER_PACKAGE + name for name in (
+    "chromium_editor_smoke_test", "chromium_editor_presentation_test", "chromium_editor_startup_test",
+    "firefox_editor_compatibility_test", "webkit_editor_carousel_test",
+    "chromium_composited_invariants_test", "firefox_composited_invariants_test",
+)}
+NATIVE_BROWSER = {ARCHIVE} | HEADED | EDITOR_BROWSER
+
+
+def editor_browser_cases(log):
+    with log.open("rb") as stream:
+        stream.seek(max(0, stream.seek(0, 2) - 65536))
+        counts = re.findall(rb"(?m)^Editor browser cases passed: ([1-9][0-9]*)\r?$", stream.read(65536))
+    if len(counts) != 1:
+        raise ValueError("Missing editor browser case count")
+    return int(counts[0])
+
 QUALIFY = "//tools/ci:unified_worker_qualification"
 
 
@@ -174,6 +189,9 @@ def verify(events, suites, ordinary=(), output_root=None, linux=()):
                          f"incomplete remote shards {sorted(cached_required | evidence.passed[None])}")
     if output_root is not None:
         report_kernels(evidence.test_logs, output_root)
+        for label in sorted(compatible & EDITOR_BROWSER):
+            cases = editor_browser_cases(_declared_log(label, evidence.test_logs, output_root))
+            print(f"{label}: {cases} editor browser cases passed")
         for label in sorted(compatible & HEADED):
             cases = firefox_cases(_declared_log(label, evidence.test_logs, output_root))
             print(f"{label}: {cases} headed Firefox cases passed")

@@ -632,10 +632,9 @@ common --//tools/format:check
 
 # Outputs test failures from failing tests instead just linking to test.log.
 test --test_output=errors
-# CI-only remote wrappers have a `no-local` execution requirement and mirror
-# an ordinary locally isolated target. Exclude them unless a remote lane
-# explicitly selects them in place of that target.
-test --test_tag_filters=-ci-remote-gpu
+# Remote-only GPU and editor browser roots need a capable executor. The mixed CI
+# invocation explicitly selects them after affected-target analysis.
+test --test_tag_filters=-ci-remote-gpu,-editor-wasm-browser
 
 # CI-specific optimizations — use `--config=ci` in GitHub Actions workflows.
 # NOTE: do NOT set --jobs / --local_test_jobs here. Trusted self-hosted Linux

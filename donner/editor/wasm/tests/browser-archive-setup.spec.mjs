@@ -41,7 +41,7 @@ test("a config's pinned browsers limit which archives are required", () => {
   // Firefox alone needs no Chromium archive; it fails on its own missing archive instead.
   assert.throws(() => prepareBrowserArchives(env, ["firefox"]), { code: "ENOENT" });
   assert.throws(() => prepareBrowserArchives(env), /DONNER_CHROMIUM_ARCHIVE must be supplied/);
-  assert.throws(() => prepareBrowserArchives(env, ["webkit"]), /no pinned browser archive named webkit/);
+  assert.throws(() => prepareBrowserArchives(env, ["unknown"]), /no pinned browser archive named unknown/);
   assert.equal(existsSync(path.join(env.TEST_TMPDIR, "perf-browsers")), false);
 });
 
@@ -49,7 +49,7 @@ test("pinned macOS archives preserve runnable executables and native framework s
   const env = environment();
   prepareBrowserArchives(env);
   const executables = browserExecutablePaths(env);
-  for (const executable of Object.values(executables)) {
+  for (const executable of [executables.chromium, executables.firefox]) {
     assert.ok(statSync(executable).isFile());
     accessSync(executable, constants.X_OK);
   }

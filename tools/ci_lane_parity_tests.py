@@ -1193,7 +1193,7 @@ _HOSTED_MAC_PHASES = {
     "Build and test": ("d4017700856c1bb1", {"darwin-build", "darwin-test", "metal-profile", "metal-preflight",
                                          "metal-native", "metal-compiler"}),
     "Qualify pinned Chromium archive": ("a7a5cf340d65c8e3", {"browser-archive"}),
-    "Test (browser targets)": ("e6950511284f051b", {"headless-browser", "desktop-browser"}),
+    "Test (browser targets)": ("01a0ca25cb6974e6", {"headless-browser", "desktop-browser"}),
     "Test (Geode editor lane)": ("546956e0e36a8e27", {"geode"}),
 }
 

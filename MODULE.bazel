@@ -240,6 +240,13 @@ playwright.repo(
 # archive path. Playwright 1.64.0 uses Chrome for Testing for supported macOS
 # releases, so provide that exact pinned archive to the generated repositories.
 http_file(
+    name = "playwright_webkit_mac_arm64",
+    dev_dependency = True,
+    integrity = "sha256-ZTOLeCNR9+Kv9SK9yr6BNaYAQYOGIyvMgIHRI6f5oZM=",
+    urls = ["https://cdn.playwright.dev/builds/webkit/2370/webkit-mac-26-arm64.zip"],
+)
+
+http_file(
     name = "playwright_chromium_mac_arm64",
     dev_dependency = True,
     integrity = "sha256-mH0vhJnIfSFnb3gXhVDPy/sbtTeGgh4s/0bFp+mbWL4=",

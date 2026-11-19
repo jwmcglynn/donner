@@ -7,7 +7,7 @@ import unittest
 
 from python.runfiles import runfiles
 
-from verify_unified_tests import ARCHIVE, Evidence, KERNELS, darwin_classes, firefox_cases, report_kernels, verify
+from verify_unified_tests import ARCHIVE, Evidence, KERNELS, darwin_classes, editor_browser_cases, firefox_cases, report_kernels, verify
 
 
 SUITE = "//tools/ci:dual_platform_canary"
@@ -132,6 +132,17 @@ class UnifiedTest(unittest.TestCase):
         self.assertEqual(counts, {"darwin-build": 4, "darwin-test": 3, "geode": 2,
                                   "browser-archive": 1, "headless-browser": 1, "desktop-browser": 1})
         self.assertNotIn("metal-profile", counts)
+
+    def test_editor_browser_receipt_requires_one_positive_execution_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "test.log"
+            log.write_text("Running 12 tests\nEditor browser cases passed: 10\n")
+            self.assertEqual(editor_browser_cases(log), 10)
+            for body in ("12 skipped", "Editor browser cases passed: 0",
+                         "Editor browser cases passed: 10\nEditor browser cases passed: 10"):
+                with self.subTest(body=body), self.assertRaisesRegex(ValueError, "case count"):
+                    log.write_text(body)
+                    editor_browser_cases(log)
 
     def test_headed_firefox_requires_executed_cases(self):
         with tempfile.TemporaryDirectory() as directory:
