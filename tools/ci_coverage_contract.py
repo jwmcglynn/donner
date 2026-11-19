@@ -51,8 +51,10 @@ def _counterpart_problems(where, counterparts):
     problems = []
     for counterpart in counterparts:
         keys = set(counterpart)
-        if not {"job", "step"} <= keys or keys - {"job", "step", "min_tests"}:
+        if not {"job", "step"} <= keys or keys - {"job", "step", "min_tests", "requires_soak"}:
             problems.append("%s has a malformed counterpart %r" % (where, counterpart))
+        elif not isinstance(counterpart.get("requires_soak", False), bool):
+            problems.append("%s counterpart requires_soak must be a boolean" % where)
         elif not isinstance(counterpart.get("min_tests", 0), int):
             problems.append("%s counterpart min_tests must be an integer" % where)
     return problems
@@ -134,6 +136,8 @@ def make_receipt(job, steps_context, bep_directory):
         bep = Path(bep_directory) / ("coverage-%s.bep.json" % step)
         if entry["outcome"] in EXECUTED and bep.is_file():
             entry.update(bep_counts(bep))
+        if context.get("outputs", {}).get("deterministic_soak_executed") == "true":
+            entry["deterministic_soak_executed"] = True
         steps[step] = entry
     return {"version": RECEIPT_VERSION, "job": job, "steps": steps}
 
@@ -159,6 +163,8 @@ def _counterpart_ran(counterpart, receipts):
     receipt = receipts.get(counterpart["job"], {})
     step = receipt.get("steps", {}).get(counterpart["step"])
     if step is None or step.get("outcome") not in EXECUTED:
+        return False
+    if counterpart.get("requires_soak") and step.get("deterministic_soak_executed") is not True:
         return False
     return step.get("tests", 0) >= counterpart.get("min_tests", 0)
 

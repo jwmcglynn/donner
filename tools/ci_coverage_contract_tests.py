@@ -37,8 +37,7 @@ _SKIPPED = {"outcome": "skipped"}
 # The receipts of a trusted pull request whose lanes ran every phase the manifest names.
 _COMPLETE = {
     "linux-self-hosted": _receipt("linux-self-hosted", {
-        "build": _ran(), "test": _ran(),
-        "deterministic_soak_probe": _ran(1)}),
+        "build": _ran(), "test": dict(_ran(), deterministic_soak_executed=True)}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
         "test": _ran(), "geode_test": _ran(6),
         "browser_preflight": _ran(), "browser_test": _ran(2)}),
@@ -66,10 +65,10 @@ class CoverageContractTest(unittest.TestCase):
         for step in (_SKIPPED, _ran(0)):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
-                receipts["linux-self-hosted"]["steps"]["deterministic_soak_probe"] = step
+                receipts["linux-self-hosted"]["steps"]["test"] = step
                 problems, _ = self._check(receipts)
                 self.assertIn(
-                    "linux / Test deterministic fuzzer soak wrapper / deterministic-wrapper",
+                    "linux / Test / deterministic-wrapper",
                     "\n".join(problems))
 
     def test_checked_in_manifest_is_well_formed(self):
@@ -106,6 +105,7 @@ class CoverageContractTest(unittest.TestCase):
                                                   "browser_test"))):
             for step in steps:
                 receipts[job]["steps"][step] = _ran(0)
+        receipts["linux-self-hosted"]["steps"]["test"]["deterministic_soak_executed"] = True
         del receipts["macos-browser"], receipts["macos-metal"]
         nothing = {"always": True, "fallback": False, "browser_affected": False,
                    "metal_affected": False, "self_hosted_macos": True}
@@ -158,14 +158,6 @@ class CoverageContractTest(unittest.TestCase):
                 self.assertTrue(any(line.startswith("linux / " + phase + ": ")
                                     and "2026-10-31" in line for line in excepted), excepted)
 
-    def test_portable_linux_phases_require_self_hosted_receipts(self):
-        for step in ("deterministic_soak_probe",):
-            with self.subTest(step=step):
-                receipts = copy.deepcopy(_COMPLETE)
-                receipts["linux-self-hosted"]["steps"][step] = _SKIPPED
-                problems, _ = self._check(receipts)
-                self.assertEqual(1, len(problems), problems)
-                self.assertIn("linux-self-hosted / " + step, problems[0])
 
     def test_each_browser_partition_requires_its_own_receipt(self):
         for job in ("macos-self-hosted", "macos-browser"):
@@ -218,7 +210,7 @@ class CoverageContractTest(unittest.TestCase):
     def test_a_failed_counterpart_still_counts_as_executed(self):
         # The failing job already fails the run; the contract asks only whether it ran.
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux-self-hosted"]["steps"]["test"] = {"outcome": "failure"}
+        receipts["linux-self-hosted"]["steps"]["test"]["outcome"] = "failure"
         self.assertEqual([], self._check(receipts)[0])
 
     def test_unselected_classes_need_no_counterpart(self):
@@ -240,9 +232,9 @@ class CoverageContractTest(unittest.TestCase):
         self.assertEqual([], problems)
         self.assertFalse(any(line.startswith("macos /") for line in excepted))
         receipts["linux-self-hosted"]["steps"]["test"] = _SKIPPED
-        self.assertEqual(2, len(self._check(receipts, selection)[0]))
+        self.assertEqual(3, len(self._check(receipts, selection)[0]))
         # A fallback does not change routing.
-        self.assertEqual(2, len(self._check(receipts, dict(selection, fallback=True))[0]))
+        self.assertEqual(3, len(self._check(receipts, dict(selection, fallback=True))[0]))
 
     def test_bep_counts_separate_executed_from_cached_results(self):
         events = [

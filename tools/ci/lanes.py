@@ -11,8 +11,8 @@ A command's arguments are words, with these run-time values:
     labels, which may be the //tools/ci:no_affected_targets placeholder), from the
     TARGETS_FALLBACK and TARGETS_AFFECTED environment the job passes.
   - HOSTED_BUILD_SELECTED: the same roots plus the full tree when verifying hosted cloud builds.
-  - REMOTE_GPU_SELECTED: that selection with each locally isolated GPU suite swapped for its
-    remote wrapper, from a MapRemoteGpu action earlier in the phase.
+  - LINUX_TESTS: ordinary test labels from the filtered loading query.
+  - LINUX_FIXED: the deterministic probe and, when the planner requests it, the reference suite.
   - Split(name): an environment variable split into words, empty when unset. It carries flags
     that only exist at run time (the remote cache flags of the BuildBuddy action, and the
     `--xcode_version` the Xcode selection appends).
@@ -26,7 +26,6 @@ import collections
 
 Selected = collections.namedtuple("Selected", "kind")
 SELECTED = Selected("affected")
-REMOTE_GPU_SELECTED = Selected("remote-gpu")
 HOSTED_BUILD_SELECTED = Selected("hosted-build")
 Split = collections.namedtuple("Split", "name")
 
@@ -41,6 +40,10 @@ Notice = collections.namedtuple("Notice", "text")
 # report the empty test set as success. Unreachable while the planner selects
 # //tools/ci:no_affected_targets for a proven empty change, or else //....
 RequireSelection = collections.namedtuple("RequireSelection", "where")
+LinuxTestSelection = collections.namedtuple("LinuxTestSelection", "excluded")
+LINUX_TESTS = Selected("linux-tests")
+LINUX_FIXED = Selected("linux-fixed")
+
 MapRemoteGpu = collections.namedtuple("MapRemoteGpu", "")
 # Ends the phase successfully when no selected test carries `tag`.
 QueryTag = collections.namedtuple("QueryTag", "tag")
@@ -128,13 +131,6 @@ VENUE_ANALYSIS = (
 DIAG_BUILD = ("--remote_download_outputs=minimal",)
 DIAG_TEST = DIAG_BUILD + (r"--remote_download_regex=.*(test\.log|test\.xml|outputs\.zip)$",)
 
-_SOAK = bazel("test", *LINUX, "--test_output=all", NO_TAG_FILTER, *FIXED_SUITE,
-              bep("deterministic_soak_probe"), "//tools/ci:deterministic_fuzzer_soak")
-_SELF_HOSTED_SOAK = bazel("test", *LINUX, "--test_output=all", *SELF_HOSTED_REMOTE,
-                          NO_TAG_FILTER, *FIXED_SUITE, bep("deterministic_soak_probe"),
-                          "//tools/ci:deterministic_fuzzer_soak")
-WGPU_REFERENCE = ("--test_tag_filters=", "--test_env=XDG_RUNTIME_DIR=/tmp")
-
 LINUX_LANES = {
     "linux": Lane(startup=(), phases={
         # Salt only the probe source so normal base-library compiles retain their action keys.
@@ -152,14 +148,11 @@ LINUX_LANES = {
         "build": Phase("Build", (bazel("build", *LINUX, BUILDBUDDY, HOSTED_BUILD_SELECTED),)),
         "test": Phase("Test", (
             RequireSelection("the test step"),
-            bazel("test", *LINUX, BUILDBUDDY, "--test_output=errors",
-                  tags("-manual", "-perf", "-ci-remote-gpu", "-fuzz_soak"), SELECTED,
-                  wrappers=TEST_WRAPPER),
-        )),
-        "deterministic_soak_probe": Phase("Test deterministic fuzzer soak wrapper", (_SOAK,)),
-        "wgpu_resvg_reference": Phase("Test Linux WebGPU resvg reference", (
-            bazel("test", *LINUX, "--test_output=errors", *WGPU_REFERENCE,
-                  "//tools/ci:linux_wgpu_resvg_reference"),
+            LinuxTestSelection(("manual", "perf", "ci-remote-gpu", "fuzz_soak")),
+            bazel("test", *LINUX, BUILDBUDDY, "--test_output=errors", NO_TAG_FILTER, bep("test"),
+                  LINUX_TESTS, LINUX_FIXED, wrappers=TEST_WRAPPER),
+            command("python3", "tools/ci_remote_gpu_targets.py", "--check-hosted-results",
+                    "${RUNNER_TEMP}/coverage-test.bep.json", SELECTED),
         )),
         "linker_canary": Phase("Linker canary (non-lld linker support)", (
             bazel("build", "--config=ci", "--linkopt=-fuse-ld=gold", "//tools/ci:linker_canary"),
@@ -181,21 +174,14 @@ LINUX_LANES = {
         "test": Phase("Test", (
             RequireSelection("the test step"),
             MapRemoteGpu(),
+            LinuxTestSelection(("manual", "perf", "local-gpu-isolated", "fuzz_soak")),
             bazel("test", *LINUX, "--test_output=errors", REMOTE_OR_DISPLAY,
-                  *REMOTE_TRANSPORT, *VENUE_ANALYSIS, *DIAG_TEST,
-                  tags("-manual", "-perf", "-local-gpu-isolated", "-fuzz_soak"),
-                  *diagnostics("test"), REMOTE_GPU_SELECTED,
+                  *REMOTE_TRANSPORT, *VENUE_ANALYSIS, *DIAG_TEST, NO_TAG_FILTER,
+                  *diagnostics("test"), LINUX_TESTS, LINUX_FIXED,
                   wrappers=TEST_WRAPPER + watchdog("test"), startup=(REQUIRE_EXECUTOR,)),
             command("python3", "tools/ci_remote_gpu_targets.py", "--check-results",
                     "$DIAG_DIR/test/bep.json", SELECTED),
         )),
-        "wgpu_resvg_reference": Phase("Test Linux WebGPU resvg reference", (
-            bazel("test", *LINUX, "--test_output=errors", *SELF_HOSTED_REMOTE, *DIAG_TEST,
-                  *WGPU_REFERENCE, *diagnostics("test-wgpu"),
-                  "//tools/ci:linux_wgpu_resvg_reference", wrappers=watchdog("test-wgpu")),
-        )),
-        "deterministic_soak_probe": Phase("Test deterministic fuzzer soak wrapper",
-                                          (_SELF_HOSTED_SOAK,)),
     }),
 }
 

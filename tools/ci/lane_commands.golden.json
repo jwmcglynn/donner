@@ -81,33 +81,6 @@
   ],
   "step": "Verify BuildBuddy remote execution"
  },
- "linux deterministic_soak_probe": {
-  "actions": [
-   {
-    "actions": [
-     {
-      "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=all --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak",
-      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=all --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak"
-     }
-    ],
-    "scenarios": [
-     "main-push",
-     "trusted-pr",
-     "trusted-pr-native-only",
-     "trusted-pr-fallback",
-     "untrusted-pr",
-     "renovate-pr"
-    ]
-   }
-  ],
-  "runs_in": [
-   "main-push",
-   "untrusted-pr",
-   "renovate-pr"
-  ],
-  "step": "Test deterministic fuzzer soak wrapper"
- },
  "linux linker_canary": {
   "actions": [
    {
@@ -144,9 +117,25 @@
       "error": "::error::Empty target selection reached the test step."
      },
      {
+      "action": "select_linux_tests",
+      "exclude": [
+       "manual",
+       "perf",
+       "ci-remote-gpu",
+       "fuzz_soak"
+      ],
+      "roots": [
+       "@selected_targets"
+      ]
+     },
+     {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --config=buildbuddy-re --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets",
-      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64 --platforms=//tools/ci:buildbuddy_linux_x86_64 --spawn_strategy=remote '--strategy_regexp=^Executing genrule //donner/editor:editor_build_info_txt$=local' --strategy=TestRunner=local --noremote_local_fallback --remote_timeout=600s --jobs=50 --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --config=buildbuddy-re --test_output=errors --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/coverage-test.bep.json' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64 --platforms=//tools/ci:buildbuddy_linux_x86_64 --spawn_strategy=remote '--strategy_regexp=^Executing genrule //donner/editor:editor_build_info_txt$=local' --strategy=TestRunner=local --noremote_local_fallback --remote_timeout=600s --jobs=50 --test_output=errors --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/coverage-test.bep.json' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak"
+     },
+     {
+      "action": "run",
+      "argv": "python3 tools/ci_remote_gpu_targets.py --check-hosted-results '${RUNNER_TEMP}/coverage-test.bep.json' @selected_targets"
      }
     ],
     "scenarios": [
@@ -163,9 +152,25 @@
       "error": "::error::Empty target selection reached the test step."
      },
      {
+      "action": "select_linux_tests",
+      "exclude": [
+       "manual",
+       "perf",
+       "ci-remote-gpu",
+       "fuzz_soak"
+      ],
+      "roots": [
+       "@selected_targets"
+      ]
+     },
+     {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets",
-      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak @selected_targets"
+      "argv": "tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/coverage-test.bep.json' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak",
+      "expanded": "tools/ci_bazel_test.sh bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --test_tag_filters= '--build_event_json_file=$RUNNER_TEMP/coverage-test.bep.json' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak"
+     },
+     {
+      "action": "run",
+      "argv": "python3 tools/ci_remote_gpu_targets.py --check-hosted-results '${RUNNER_TEMP}/coverage-test.bep.json' @selected_targets"
      }
     ],
     "scenarios": [
@@ -180,29 +185,6 @@
    "renovate-pr"
   ],
   "step": "Test"
- },
- "linux wgpu_resvg_reference": {
-  "actions": [
-   {
-    "actions": [
-     {
-      "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=errors --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp //tools/ci:linux_wgpu_resvg_reference",
-      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp //tools/ci:linux_wgpu_resvg_reference"
-     }
-    ],
-    "scenarios": [
-     "main-push",
-     "trusted-pr",
-     "trusted-pr-native-only",
-     "trusted-pr-fallback",
-     "untrusted-pr",
-     "renovate-pr"
-    ]
-   }
-  ],
-  "runs_in": [],
-  "step": "Test Linux WebGPU resvg reference"
  },
  "linux-self-hosted build": {
   "actions": [
@@ -230,33 +212,6 @@
    "trusted-pr-fallback"
   ],
   "step": "Build"
- },
- "linux-self-hosted deterministic_soak_probe": {
-  "actions": [
-   {
-    "actions": [
-     {
-      "action": "bazel",
-      "argv": "bazelisk test --config=ci --config=latest_llvm --test_output=all --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak",
-      "expanded": "bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=all --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters= --nocache_test_results --noskip_incompatible_explicit_targets '--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json' //tools/ci:deterministic_fuzzer_soak"
-     }
-    ],
-    "scenarios": [
-     "main-push",
-     "trusted-pr",
-     "trusted-pr-native-only",
-     "trusted-pr-fallback",
-     "untrusted-pr",
-     "renovate-pr"
-    ]
-   }
-  ],
-  "runs_in": [
-   "trusted-pr",
-   "trusted-pr-native-only",
-   "trusted-pr-fallback"
-  ],
-  "step": "Test deterministic fuzzer soak wrapper"
  },
  "linux-self-hosted fetch": {
   "actions": [
@@ -299,9 +254,21 @@
       "argv": "python3 tools/ci_remote_gpu_targets.py @selected_targets"
      },
      {
+      "action": "select_linux_tests",
+      "exclude": [
+       "manual",
+       "perf",
+       "local-gpu-isolated",
+       "fuzz_soak"
+      ],
+      "roots": [
+       "@selected_targets"
+      ]
+     },
+     {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' '$(python3 tools/ci_remote_gpu_targets.py @selected_targets)'",
-      "expanded": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' '$(python3 tools/ci_remote_gpu_targets.py @selected_targets)'"
+      "argv": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak",
+      "expanded": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak"
      },
      {
       "action": "run",
@@ -324,29 +291,6 @@
    "trusted-pr-fallback"
   ],
   "step": "Test"
- },
- "linux-self-hosted wgpu_resvg_reference": {
-  "actions": [
-   {
-    "actions": [
-     {
-      "action": "bazel",
-      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/test-wgpu/console.log' bazelisk test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp '--profile=$DIAG_DIR/test-wgpu/profile.gz' '--build_event_json_file=$DIAG_DIR/test-wgpu/bep.json' '--execution_log_compact_file=$DIAG_DIR/test-wgpu/exec.log.zst' //tools/ci:linux_wgpu_resvg_reference",
-      "expanded": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/test-wgpu/console.log' bazelisk test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp '--profile=$DIAG_DIR/test-wgpu/profile.gz' '--build_event_json_file=$DIAG_DIR/test-wgpu/bep.json' '--execution_log_compact_file=$DIAG_DIR/test-wgpu/exec.log.zst' //tools/ci:linux_wgpu_resvg_reference"
-     }
-    ],
-    "scenarios": [
-     "main-push",
-     "trusted-pr",
-     "trusted-pr-native-only",
-     "trusted-pr-fallback",
-     "untrusted-pr",
-     "renovate-pr"
-    ]
-   }
-  ],
-  "runs_in": [],
-  "step": "Test Linux WebGPU resvg reference"
  },
  "macos browser_gpu_parallel": {
   "actions": [

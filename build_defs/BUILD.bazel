@@ -340,6 +340,7 @@ config_setting(
 
 donner_cc_fuzzer(
     name = "soak_probe_fuzzer",
+    extra_soak_tags = ["external", "no-cache"],
     srcs = ["SoakProbe.cc"],
     corpus = "soak_probe_corpus",
 )

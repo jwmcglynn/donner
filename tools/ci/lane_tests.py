@@ -295,15 +295,49 @@ class LaneTest(unittest.TestCase):
         self.assertEqual(result.returncode, 7)
         self.assertEqual(len(self.bazel_calls(calls)), 1)
 
+    def test_reference_recovery_preserves_original_query_failure(self):
+        for recorded, expected_calls in ((0, 0), (1, 1)):
+            with self.subTest(recorded=recorded):
+                self.reset()
+                result, calls = self.run_phase("linux", "test", {
+                    "bazelisk query": [["", 7]], "remote_gpu": [["", recorded]]},
+                    TARGETS_FALLBACK="false", TARGETS_AFFECTED="//a:test", WGPU_REFERENCE="true")
+                self.assertEqual(result.returncode, 7)
+                tests = [call for call in self.bazel_calls(calls) if "test" in call]
+                self.assertEqual(len(tests), expected_calls)
+                if tests:
+                    self.assertEqual(tests[0][-1], "//tools/ci:linux_wgpu_resvg_reference")
+
+    def test_fixed_linux_roots_share_the_only_test_invocation(self):
+        soak = "//tools/ci:deterministic_fuzzer_soak"
+        reference = "//tools/ci:linux_wgpu_resvg_reference"
+        for selected, reference_only, expected in (("false", "false", [soak]),
+                                                   ("true", "false", [soak, reference]),
+                                                   ("true", "true", [reference])):
+            for lane in ("linux", "linux-self-hosted"):
+                with self.subTest(lane=lane, expected=expected):
+                    self.reset()
+                    placeholder = "//tools/ci:no_affected_targets"
+                    result, calls = self.run_phase(
+                        lane, "test", {"remote_gpu": [[placeholder + "\n", 0]]},
+                        TARGETS_FALLBACK="false", TARGETS_AFFECTED=placeholder,
+                        WGPU_REFERENCE=selected, LINUX_REFERENCE_ONLY=reference_only)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    [call] = self.bazel_calls(calls)
+                    self.assertIn("test", call)
+                    self.assertEqual(call[-len(expected):], expected)
+
     def test_self_hosted_linux_tests_the_remote_gpu_mapping(self):
         result, calls = self.run_phase("linux-self-hosted", "test",
-                                       {"remote_gpu": [["//a:a_remote\n//b:b\n", 0]]},
+                                       {"remote_gpu": [["//a:a_remote\n//b:b\n", 0]],
+                                        "bazelisk query": [["//a:a_remote\n//b:b\n", 0]]},
                                        TARGETS_FALLBACK="false", TARGETS_AFFECTED="//a:a //b:b")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls[0], ["remote_gpu", "//a:a", "//b:b"])
-        self.assertEqual(calls[1], ["watchdog", "/diag/test/console.log"])
-        self.assertEqual(calls[2][-2:], ["//a:a_remote", "//b:b"])
-        self.assertEqual(calls[3], ["remote_gpu", "--check-results", "/diag/test/bep.json",
+        self.assertEqual(calls[1][:2], ["bazelisk", "query"])
+        self.assertEqual(calls[2], ["watchdog", "/diag/test/console.log"])
+        self.assertEqual(calls[3][-3:], ["//a:a_remote", "//b:b", "//tools/ci:deterministic_fuzzer_soak"])
+        self.assertEqual(calls[4], ["remote_gpu", "--check-results", "/diag/test/bep.json",
                                     "//a:a", "//b:b"])
         for answer, message in ((["//a:a", 1], "Failed to select remote GPU test targets."),
                                 ([" \n", 0], "Remote GPU target selection became empty.")):
@@ -389,8 +423,8 @@ class LaneTest(unittest.TestCase):
     def test_dry_run_without_a_selection_prints_its_symbol(self):
         result, _ = self.run_phase("linux-self-hosted", "test", dry_run=True)
         actions = json.loads(result.stdout)["actions"]
-        self.assertEqual(actions[-2]["argv"][-1],
-                         "$(python3 tools/ci_remote_gpu_targets.py @selected_targets)")
+        self.assertEqual(actions[-2]["argv"][-2:],
+                         ["@selected_linux_tests", "//tools/ci:deterministic_fuzzer_soak"])
 
     def test_unknown_phase_is_a_usage_error(self):
         result, calls = self.run_phase("linux", "nonexistent")

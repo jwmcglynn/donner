@@ -1674,6 +1674,7 @@ donner_cc_test(
     ],
     env = {
         "DONNER_REQUIRE_WGPU_REFERENCE": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
         "DONNER_TEST_TIMEOUT_SECONDS": "300",
         "WGPU_BACKEND": "vulkan",
     },

@@ -307,23 +307,14 @@ jobs:
         run: python3 tools/ci/lane.py phase linux build
 
       - name: Test
-        if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
         id: test
+        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' && (success() || needs.determine-targets.outputs.wgpu_reference == 'true') }}
         env:
+          LINUX_REFERENCE_ONLY: ${{ steps.build.outcome != 'success' }}
+          WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
           BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
         shell: bash
         run: python3 tools/ci/lane.py phase linux test
-
-      - name: Test deterministic fuzzer soak wrapper
-        id: deterministic_soak_probe
-        shell: bash
-        run: python3 tools/ci/lane.py phase linux deterministic_soak_probe
-
-      - name: Test Linux WebGPU resvg reference
-        id: wgpu_resvg_reference
-        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' && needs.determine-targets.outputs.wgpu_reference == 'true' }}
-        shell: bash
-        run: python3 tools/ci/lane.py phase linux wgpu_resvg_reference
 
       - name: Probe runner resources after tests
         if: ${{ !cancelled() }}
@@ -333,7 +324,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -437,7 +428,7 @@ jobs:
           set -euo pipefail
           DIAG_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DIAG_DIR=$DIAG_DIR" >> "$GITHUB_ENV"
-          mkdir -p "$DIAG_DIR"/{fetch,build,test,test-wgpu}
+          mkdir -p "$DIAG_DIR"/{fetch,build,test}
           {
             echo "run_id=${{ github.run_id }} attempt=${{ github.run_attempt }} sha=${{ github.sha }}"
             echo "fallback=${{ needs.determine-targets.outputs.fallback }}"
@@ -508,19 +499,12 @@ jobs:
 
       - name: Test
         id: test
+        if: ${{ !cancelled() && (success() || needs.determine-targets.outputs.wgpu_reference == 'true') }}
+        env:
+          LINUX_REFERENCE_ONLY: ${{ steps.build.outcome != 'success' }}
+          WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted test
-
-      - name: Test Linux WebGPU resvg reference
-        id: wgpu_resvg_reference
-        if: ${{ !cancelled() && needs.determine-targets.outputs.wgpu_reference == 'true' }}
-        shell: bash
-        run: python3 tools/ci/lane.py phase linux-self-hosted wgpu_resvg_reference
-
-      - name: Test deterministic fuzzer soak wrapper
-        id: deterministic_soak_probe
-        shell: bash
-        run: python3 tools/ci/lane.py phase linux-self-hosted deterministic_soak_probe
 
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt
@@ -569,7 +553,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure')
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

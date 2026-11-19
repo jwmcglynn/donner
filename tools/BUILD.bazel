@@ -409,6 +409,7 @@ py_test(
     data = [
         "//:.bazelrc",
         "//:github_action_definitions",
+        "//build_defs:BUILD.bazel",
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
         "//tools/ci:BUILD.bazel",

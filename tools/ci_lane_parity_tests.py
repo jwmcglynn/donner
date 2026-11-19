@@ -322,11 +322,9 @@ COUNTERPART_ALLOWLIST = {
         ("Test", "flag-pr-only", "--profile=$DIAG_DIR/test/profile.gz"),
     ], "Diagnostics only: the self-hosted lane records profiles and logs for slow-run triage."),
     **_counterpart_entries("linux", "linux-self-hosted", [
-        ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
-        ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
-        ("Test", "target-main-only", SELECTED_TARGETS),
-        ("Test", "target-pr-only",
-         "$(python3 tools/ci_remote_gpu_targets.py %s)" % SELECTED_TARGETS),
+
+
+        ("Test", "flag-main-only", "--build_event_json_file=$RUNNER_TEMP/coverage-test.bep.json"),
     ], "The self-hosted lane swaps each locally isolated GPU suite for its remote wrapper "
        "(tools/ci_remote_gpu_targets.py), which runs the same implementation and shards, so it "
        "keeps the remote wrappers and drops the local-only targets; hosted Linux does the "
@@ -341,13 +339,11 @@ INVOCATION_ALLOWLIST.update(_cloud_tree)
 
 # The replacement still compares portable phases; x86_64 execution stays on main.
 INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
-    *[(step, "flag-main-only", flag) for step in ("Build", "Test")
-      for flag in _config_flags("buildbuddy-re", step.lower())],
+    *[("*", "flag-main-only", flag) for flag in _config_flags("buildbuddy-re", "test")],
     *[("*", "flag-pr-only", flag) for flag in (
         "--remote_local_fallback=false",
         "--incompatible_remote_local_fallback_for_remote_cache=false", "--remote_timeout=60s")],
-    *[(step, "flag-pr-only", "--remote_download_outputs=minimal")
-      for step in ("Build", "Test")],
+    ("*", "flag-pr-only", "--remote_download_outputs=minimal"),
     *[(step, "flag-pr-only", "--%s=$DIAG_DIR/%s/%s" % (flag, step.lower(), filename))
       for step in ("Build", "Test")
       for flag, filename in (("build_event_json_file", "bep.json"),
@@ -358,11 +354,9 @@ INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
     ("Test", "flag-pr-only", lanes.REMOTE_OR_DISPLAY),
     ("Build", "flag-pr-only", lanes.REMOTE_ONLY),
     *[("Test", "flag-pr-only", flag) for flag in lanes.VENUE_ANALYSIS],
-    ("Test deterministic fuzzer soak wrapper", "flag-pr-only", lanes.REMOTE_ONLY),
-    ("Test", "tag-filter-main-only", "-ci-remote-gpu"),
-    ("Test", "tag-filter-pr-only", "-local-gpu-isolated"),
-    ("Test", "target-main-only", SELECTED_TARGETS),
-    ("Test", "target-pr-only", "$(python3 tools/ci_remote_gpu_targets.py %s)" % SELECTED_TARGETS),
+
+
+    ("Test", "flag-main-only", "--build_event_json_file=$RUNNER_TEMP/coverage-test.bep.json"),
 ], "The ARM64 runner uses its own remote backend, strict fallback policy and diagnostics. "
    "Remote GPU wrappers retain the same implementation; native display checks run locally in the shared graph. "
    "The maintainer accepts the x86_64 toolchain/runtime gap before merge."))

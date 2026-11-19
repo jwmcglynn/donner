@@ -28,6 +28,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 
 try:
     from tools.ci import lanes
@@ -64,6 +65,7 @@ class _Context:
         self.environ = environ
         self.dry_run = dry_run
         self.mapped = None
+        self.linux_tests = None
 
     def variable(self, name, spelling=None):
         if name in self.environ:
@@ -87,15 +89,19 @@ class _Context:
         raw = "//..." if fallback == "true" else (affected or "").rstrip("\n")
         return raw, _fields(raw)
 
-    def remote_gpu_selection(self):
-        if self.mapped is not None:
-            return self.mapped
-        return ["$(%s)" % " ".join(REMOTE_GPU_MAPPER + tuple(self.selection()[1]))]
+    def fixed_linux_tests(self):
+        fixed = [] if self.environ.get("LINUX_REFERENCE_ONLY") == "true" else [
+            "//tools/ci:deterministic_fuzzer_soak"]
+        if self.environ.get("WGPU_REFERENCE") == "true":
+            fixed.append("//tools/ci:linux_wgpu_resvg_reference")
+        return fixed
 
     def words(self, item):
+        if item == lanes.LINUX_TESTS:
+            return self.linux_tests if self.linux_tests is not None else ["@selected_linux_tests"]
+        if item == lanes.LINUX_FIXED:
+            return self.fixed_linux_tests()
         if isinstance(item, lanes.Selected):
-            if item == lanes.REMOTE_GPU_SELECTED:
-                return self.remote_gpu_selection()
             selection = self.selection()[1]
             if (item == lanes.HOSTED_BUILD_SELECTED and "//..." not in selection
                     and _fields(self.environ.get("BUILDBUDDY_FLAGS", ""))):
@@ -214,6 +220,8 @@ def _run_require_selection(context, action, deferred):
 
 
 def _run_map_remote_gpu(context, action, deferred):
+    if context.environ.get("LINUX_REFERENCE_ONLY") == "true":
+        return
     status, output = _run(list(REMOTE_GPU_MAPPER) + context.selection()[1],
                           stdout=subprocess.PIPE, universal_newlines=True)
     if status:
@@ -224,6 +232,33 @@ def _run_map_remote_gpu(context, action, deferred):
 
 
 _NO_BROWSER_TARGETS = "No browser targets selected."
+
+
+def _linux_query(roots, excluded):
+    # Wildcard builds omit manual roots before expanding suites; CLI tag filters apply to the
+    # resulting test rules. Keep both stages when adding the fixed suites to the same graph.
+    root_set = "set(%s)" % " ".join(json.dumps(label) for label in roots)
+    pattern = r"(\[|, )(%s)(, |\])"
+    if roots == ["//..."]:
+        root_set = "let all = %s in ($all except attr(tags, '%s', $all))" % (root_set, pattern % "manual")
+    return "let eligible = tests(%s) in $eligible except attr(tags, '%s', $eligible)" % (
+        root_set, pattern % "|".join(excluded))
+
+
+def _run_linux_selection(context, action, deferred):
+    roots = context.mapped if context.mapped is not None else context.selection()[1]
+    if context.environ.get("LINUX_REFERENCE_ONLY") == "true" and context.environ.get("WGPU_REFERENCE") != "true":
+        raise PhaseFailed(1, "Reference-only recovery requires a selected WebGPU reference suite")
+    if context.environ.get("LINUX_REFERENCE_ONLY") == "true" or roots == ["//tools/ci:no_affected_targets"]:
+        context.linux_tests = []
+        return
+    # A query file avoids the per-argument size limit on large affected target lists.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as query:
+        query.write(_linux_query(roots, action.excluded))
+        query.flush()
+        output = _check(["bazelisk", *context.lane.startup, "query", "--nokeep_going", "--output=label",
+                         "--query_file=" + query.name], stdout=subprocess.PIPE, universal_newlines=True)
+    context.linux_tests = output.splitlines()
 
 
 def _run_query_tag(context, action, deferred):
@@ -269,6 +304,8 @@ _ACTIONS = {
         "action": "require_selection", "error": _selection_error(action)}),
     lanes.MapRemoteGpu: (_run_map_remote_gpu, lambda context, action: {
         "action": "map_remote_gpu", "argv": list(REMOTE_GPU_MAPPER) + context.selection()[1]}),
+    lanes.LinuxTestSelection: (_run_linux_selection, lambda context, action: {
+        "action": "select_linux_tests", "exclude": list(action.excluded), "roots": context.selection()[1]}),
     lanes.QueryTag: (_run_query_tag, lambda context, action: {
         "action": "query", "argv": context.query(action.tag), "when_empty": _NO_BROWSER_TARGETS}),
     lanes.RetryAfterReset: (_run_retry_after_reset, lambda context, action: {
@@ -288,6 +325,26 @@ def _report(failure):
         print(failure.message, file=stream, flush=True)
 
 
+def _finish_selected_reference(context, lane_name):
+    """After a failed main graph, finish the reference only if its full evidence is missing."""
+    if context.environ.get("WGPU_REFERENCE") != "true" or context.environ.get("LINUX_REFERENCE_ONLY") == "true":
+        return
+    remote = lane_name == "linux-self-hosted"
+    source = "$DIAG_DIR/test/bep.json" if remote else "$RUNNER_TEMP/coverage-test.bep.json"
+    helper = ["python3", "tools/ci_remote_gpu_targets.py"]
+    if _run(helper + ["--reference-reported", context.word(source)])[0] == 0:
+        return
+    print("The failed graph omitted selected reference results; running only the reference suite.", flush=True)
+    flags = lanes.SELF_HOSTED_REMOTE + lanes.DIAG_TEST if remote else ()
+    result_file = context.word("$RUNNER_TEMP/reference-recovery.bep.json")
+    wrappers = ("tools/ci/bazel_watchdog.sh", "$RUNNER_TEMP/reference-recovery.log") if remote else ()
+    command = lanes.bazel("test", *lanes.LINUX, *flags, "--test_output=errors", lanes.NO_TAG_FILTER,
+                          "--noskip_incompatible_explicit_targets", "--build_event_json_file=" + result_file,
+                          "//tools/ci:linux_wgpu_resvg_reference", wrappers=wrappers)
+    if _run(context.bazel(command))[0] == 0:
+        _run(helper + ["--check-reference-results", result_file])
+
+
 def run_phase(lane_name, phase_name, environ=None):
     """Runs a phase and returns its exit status."""
     lane = lanes.LANES[lane_name]
@@ -300,6 +357,8 @@ def run_phase(lane_name, phase_name, environ=None):
         pass
     except PhaseFailed as failure:
         _report(failure)
+        if phase_name == "test" and lane_name in lanes.LINUX_LANES and failure.status not in (8, 130, 143):
+            _finish_selected_reference(context, lane_name)
         return failure.status
     return deferred[0] if deferred else 0
 
