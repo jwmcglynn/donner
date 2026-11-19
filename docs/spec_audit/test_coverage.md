@@ -57,18 +57,18 @@ the other ledgers in this directory.
   `PolygonClipPath_tests.cc`, `PathClipPath_tests.cc`), `fr` (`radial-fr-1/2` goldens). Promoting
   these to SVG/PNG pairs with independently reasoned references is the cheapest coverage win.
 - Where resvg does cover an SVG 2 feature, Donner usually runs it, but some SVG 2 rows rest on
-  skipped or render-only cases: radialGradient `fr=0.7` (skipped, reference disagreement),
-  `fr=0.5`/`fr=-1` (render-only UB) and `text/glyph-orientation-vertical/simple-case`
-  (render-only UB). Others compare only against Donner goldens rather than the vendored PNG:
-  clip-path `circle()` with `stroke-box`/`view-box` and
-  `structure/use/xlink-to-an-external-file` (harness background mismatch), the filter-function
-  rows `one-invalid-url-in-list` and `url-and-grayscale`, and `text/font-size-adjust`.
+  render-only cases: radialGradient `fr=0.5`/`fr=-1` (render-only UB) and
+  `text/glyph-orientation-vertical/simple-case` (render-only UB). Others compare only against Donner
+  goldens rather than the vendored PNG: clip-path `circle()` with `stroke-box`/`view-box` and
+  `structure/use/xlink-to-an-external-file` (harness background mismatch), the filter-function rows
+  `one-invalid-url-in-list` and `url-and-grayscale`, and `text/font-size-adjust`.
   `with-invalid-path-and-xlink-href` compares against its refreshed resvg v0.49.0 reference.
 - Reference conflicts with the CR: `painting/stroke-linejoin/miter-clip.svg` encodes the
   `miter-clip` join that the CR removed (Issue 1065, March 2026) and Donner currently passes it by
   implementing `miter-clip`; the two `non-presentational-attribute.svg` cases encode SVG 1.1
   (geometry in `style` ignored); `rgb-int-int-int.svg` uses the resvg UB marker for valid CSS Color
-  4 syntax; `fr=0.7` paints a reversed gradient where the CR requires transparent output (RC1 to RC4, RC6).
+  4 syntax (RC1 to RC3, RC6). `fr=0.7` (RC4) agrees with the canvas two-point rule that `fr`
+  adopts and compares at default settings.
 - The Donner extension corpus is still a seed (22 pairs) concentrated on geometry `auto`/CSS
   lengths and a few painting defaults; its READMEs and SVG `<desc>` links cite the svgwg.org
   Editor's Draft, not the CR anchors. New cases should cite CR anchors.
@@ -77,8 +77,8 @@ the other ledgers in this directory.
   `icc-color`, `dominant-baseline: reset-size/use-script`, `requiredFeatures`) are correctly
   render-only or ignored in Donner and need no new cases.
 
-Counts (148 matrix rows): covered 59 (of which 6 are covered only by the Donner extension corpus or
-Donner native scenarios), resvg-only-skipped 4, needs-new-suite-case 71 (several of which have
+Counts (148 matrix rows): covered 60 (of which 6 are covered only by the Donner extension corpus or
+Donner native scenarios), resvg-only-skipped 3, needs-new-suite-case 71 (several of which have
 Donner unit or renderer-golden coverage but no portable SVG/PNG pair; see column 6),
 removed-from-CR 14.
 
@@ -225,7 +225,7 @@ relative to the checkout.
 | TC106 | `isolation`                                                                                                            | CR/styling.html#RequiredProperties (compositing-1)                             | 2: painting/isolation/isolate.svg, painting/isolation/as-property.svg                                                                                                                                               | default                                                                                                                                                                                           | none needed                                                                   | covered                                                             |
 | TC107 | Stacking-context triggers (nested svg with non-visible overflow, use as non-isolated group, markers/patterns isolated) | CR/render.html#EstablishingStackingContex ; CR/render.html#ReusedGraphics      | indirect only (mix-blend-mode opacity cases)                                                                                                                                                                        | default                                                                                                                                                                                           | none                                                                          | needs-new-suite-case (blend inside `use` vs inside `marker`)        |
 | TC108 | CSS Color: `hsl()`, `rgba()`, `#RGBA`, `transparent`, percentages                                                      | CR/types.html (CSS Color reference)                                            | 20+: painting/fill/hsl-with-alpha.svg, painting/fill/#RRGGBBAA.svg, painting/fill/transparent.svg                                                                                                                   | default; rgb-int-int-int render-only (RC3)                                                                                                                                                        | none needed                                                                   | covered                                                             |
-| TC109 | `fr` focal radius on `radialGradient`                                                                                  | CR/pservers.html#RadialGradientElementFRAttribute                              | 4: paint-servers/radialGradient/fr=0.2.svg, fr=0.5.svg, fr=0.7.svg                                                                                                                                                  | 0.2 default; 0.5 and -1 render-only (UB marker); 0.7 skipped (RC4)                                                                                                                                | `Renderer_tests.cc:230-236` goldens `radial-fr-1/2`                           | resvg-only-skipped (for the degenerate and containing-circle rules) |
+| TC109 | `fr` focal radius on `radialGradient`                                                                                  | CR/pservers.html#RadialGradientElementFRAttribute                              | 4: paint-servers/radialGradient/fr=0.2.svg, fr=0.5.svg, fr=0.7.svg                                                                                                                                                  | 0.2 and 0.7 default; 0.5 and -1 render-only (UB marker)                                                                                                                                           | `Renderer_tests.cc:230-236` goldens `radial-fr-1/2`; `RendererRegression_tests.cc` `Radial*` tests | covered (coincident circles by Donner renderer tests only)          |
 | TC110 | Focal point outside the end circle (cone, no SVG 1.1 correction)                                                       | CR/pservers.html#RadialGradientNotes                                           | 1: paint-servers/radialGradient/focal-point-correction.svg (comment cites SVG 1.1, image shows the SVG 2 cone)                                                                                                      | default                                                                                                                                                                                           | `Renderer_tests.cc:240-246` radial-conical goldens                            | covered                                                             |
 | TC111 | Gradient/pattern templates via `href` across gradient types, any depth                                                 | CR/pservers.html#PaintServerTemplates                                          | 11+: paint-servers/radialGradient/attributes-via-xlink-href-from-linearGradient.svg, paint-servers/linearGradient/stops-via-xlink-href-from-radialGradient.svg, paint-servers/pattern/everything-via-xlink-href.svg | default                                                                                                                                                                                           | none needed                                                                   | covered (all use `xlink:href`; see TC1)                             |
 | TC112 | Paint-server templates referencing an external file                                                                    | CR/pservers.html#PaintServerTemplates                                          | none                                                                                                                                                                                                                | n-a                                                                                                                                                                                               | none                                                                          | needs-new-suite-case (low)                                          |
@@ -380,10 +380,11 @@ CR anchor (not the Editor's Draft).
 
 ### paint-servers
 
-- P2 `paint-servers/radialGradient/fr-containing-start-circle.svg` and `fr-equals-r.svg` (TC109,
-  RC4). CR/pservers.html#RadialGradientElementFRAttribute. Replace the UB/skip status with cited
-  Donner references: start circle containing the end circle, and coincident circles, both
-  transparent. Static.
+- P2 `paint-servers/radialGradient/fr-equals-r.svg` (TC109).
+  CR/pservers.html#RadialGradientElementFRAttribute. Replace the `fr=0.5` UB status with a cited
+  Donner reference for coincident circles once their behavior is decided: the CR note and canvas
+  paint nothing, while svgwg issue 648 and the WPT test `radialgradient-fully-overlapping.svg` draw
+  the gradient. Static.
 - P2 `paint-servers/stop/transparent-stop.svg` (TC113). CR/pservers.html#StopColorProperty.
   Red-to-`transparent` gradient: midpoint is half-opacity red, not a gray fringe. Static.
 - P3 `paint-servers/href/external-template.svg` (TC112). Template in a resource SVG file. Static
@@ -505,11 +506,12 @@ rationale.
   CSS Color 4 while the styling chapter lists css-color-3 for `color`. Donner runs it render-only.
   spec-ambiguity: which CSS Color level governs SVG 2 paint parsing; a Donner case should pin the
   chosen level.
-- RC4 `paint-servers/radialGradient/fr=0.7.svg` (skipped) and `fr=0.5.svg` (UB marker): the CR
-  says coincident circles paint nothing, and Donner's skip records that a start circle containing
-  the end circle should be transparent while the reference paints a reversed gradient
-  (CR/pservers.html#RadialGradientElementFRAttribute). The CR excerpt read for this audit states
-  the cone and coincident-circle rules but not the `fr > r` case explicitly (see Unverified).
+- RC4 `paint-servers/radialGradient/fr=0.7.svg`: resolved. `fr` aligns radial gradients with HTML
+  canvas `createRadialGradient`, which paints every circle with a positive radius, so a start circle
+  containing the end circle paints the whole plane, as the reference shows. Donner compares the
+  case at default settings, with independent renderer regression tests. `fr=0.5.svg` (UB marker,
+  identical circles) stays render-only: the CR note and canvas paint nothing, while svgwg issue 648
+  and the WPT test `radialgradient-fully-overlapping.svg` draw the gradient.
 - RC5 Text bounding box for paint servers: the vendored references of
   `painting/stroke/radial-gradient-on-text.svg` and `linear-gradient-on-text.svg` use glyph ink
   extents; Donner uses glyph cells, and both rows compare against Firefox-rendered goldens.
@@ -567,8 +569,8 @@ rationale.
   rules do not match shadow elements) while changes.html#structure says style sheets are cloned
   into the shadow scope. Existing resvg cases (`cSS-rules.svg`) pass in Donner; a new case should
   pin a selector that distinguishes the two readings.
-- The `fr > r` (start circle containing end circle) rule was not stated in the pservers.html text
-  read; RC4 relies on Donner's recorded rationale.
+- The `fr > r` (start circle containing end circle) rule is not stated in the pservers.html text
+  read; RC4 follows the HTML canvas `createRadialGradient` algorithm that `fr` was added to match.
 - changes.html#geometry says `width`/`height` "can be constrained by min and max properties"; no
   `min-width`/`max-width` support requirement was found in styling.html#RequiredProperties, so no
   test is proposed.

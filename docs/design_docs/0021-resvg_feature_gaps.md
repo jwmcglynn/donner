@@ -54,21 +54,20 @@ comparison hides every regression in its output, so it needs one of two factorie
 `//tools/resvg_parity:parity_report_tests` enforces both rules, and the parity report counts the
 two buckets separately. Both still render, so they keep no-crash and sanitizer coverage.
 
-**Reference disagreements get a golden, not a skip.** Where Donner follows the specification
-and the vendored reference does not, where the harness and the reference disagree (for example
-an opaque reference background), and where an API policy differs, the case compares against a
-Donner-rendered golden with a recorded justification: a `Params::WithGoldenOverride` reason, an
-entry in `tools/resvg_parity/exception_policies.json`, and a golden README row with the file's
-SHA-256. A skip is only for an unimplemented feature with an issue number
-(`Not impl: <feature> (#<issue>)`); skipped cases do not render at all. `SKIP_ALLOWLIST` in
-`parity_report.py` lists every active skip and may only shrink, so a new skip needs maintainer
-approval. The four skips it lists are a reference disagreement (`radialGradient/fr=0.7`), an
-unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets in the
-hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
-`PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels
-and color thresholds above 0.05 at their current values and may only shrink. A UB marker
-reference does not by itself make a case undefined behavior: an unimplemented feature on a marker
-reference stays a skip. A case that passes the default comparison compares.
+**Reference disagreements get a golden, not a skip.** Where Donner follows the specification and the
+vendored reference does not, where the harness and the reference disagree (for example an opaque
+reference background), and where an API policy differs, the case compares against a Donner-rendered
+golden with a recorded justification: a `Params::WithGoldenOverride` reason, an entry in
+`tools/resvg_parity/exception_policies.json`, and a golden README row with the file's SHA-256. A
+skip is only for an unimplemented feature with an issue number (`Not impl: <feature> (#<issue>)`);
+skipped cases do not render at all. `SKIP_ALLOWLIST` in `parity_report.py` lists every active skip
+and may only shrink, so a new skip needs maintainer approval. The three skips it lists today predate
+this rule: an unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets
+in the hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
+`PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels and
+color thresholds above 0.05 at their current values and may only shrink. A UB marker reference does
+not by itself make a case undefined behavior: an unimplemented feature on a marker reference stays a
+skip. A case that passes the default comparison compares.
 
 ## Current totals
 
@@ -92,18 +91,18 @@ the `text/` category. Focused tests exercise Geode text directly.
 | Registered SVG fixtures | Count |
 | --- | ---: |
 | Total | 1,679 |
-| Pixel comparisons | 1,577 |
+| Pixel comparisons | 1,578 |
 | Comparisons with a numeric setting or custom golden | 89 |
 | Render-only, undefined-behavior registration | 55 |
 | Render-only, legacy feature | 43 |
-| Explicit skips | 4 |
+| Explicit skips | 3 |
 | Fixtures in disabled categories | 0 |
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,551 | 98 | 26 | 4 |
-| `max` | 1,577 | 98 | 0 | 4 |
-| `geode` | 1,245 | 69 | 361 | 4 |
+| `default_text` | 1,552 | 98 | 26 | 3 |
+| `max` | 1,578 | 98 | 0 | 3 |
+| `geode` | 1,246 | 69 | 361 | 3 |
 
 <!-- END RESVG INVENTORY -->
 
@@ -761,14 +760,15 @@ Historical `(UB)` titles are not a specification oracle. Seven assigned PNGs are
 copies of `third_party/resvg-test-suite/resources/ub.png`, whose SVG source draws a `UB` label.
 They remain `Params::UndefinedBehavior` corpus cases, with independent `ReferenceContract*`
 comparisons in `RendererRegression_tests.cc`. The other assigned fixtures do not use the UB
-marker. `radialGradient/fr=0.7` is a skip with its reason, and `svg/no-size` and
-`font/simple-case` compare against Donner goldens; no comparison tolerance is widened.
+marker. `radialGradient/fr=0.7` compares against its vendored reference at default settings,
+and `svg/no-size` and `font/simple-case` compare against Donner goldens; no comparison tolerance is
+widened.
 
 | Assigned fixture                               | Supported behavior and reference disposition                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `radialGradient/fr=-1`                         | Negative focal radius is invalid and applies no paint. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `radialGradient/fr=0.5`                        | Coincident start/end circles apply no paint. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `radialGradient/fr=0.7`                        | A start circle containing the end circle applies no paint; the reference instead paints a reversed gradient. Reference-disagreement skip, with an independent transparent-paint oracle.                                                                                                                                                                                                                                                                                                                                   |
+| `radialGradient/fr=0.5`                        | Coincident start/end circles apply no paint today; whether they should is an open question (see below). UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `radialGradient/fr=0.7`                        | A start circle containing the end circle paints the whole plane, by the canvas two-point rule that SVG 2 `fr` follows. Compares against the vendored reference at default settings.                                                                                                                                                                                                                                                                                                                                       |
 | `radialGradient/invalid-gradientTransform`     | The authored all-zero matrix is singular, rather than malformed syntax. No paint; UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `radialGradient/invalid-gradientUnits`         | The invalid enumeration is diagnosed and the initial `objectBoundingBox` value is retained. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `radialGradient/negative-r`                    | Negative outer radius is invalid and applies no paint. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -779,15 +779,22 @@ marker. `radialGradient/fr=0.7` is a skip with its reason, and `svg/no-size` and
 | `svg/no-size`                                  | An unsized root has no intrinsic size, and SVG 2 leaves its initial viewport to the host; Donner's API gives it the caller canvas (512x512 by default) at one user unit per px. The reference shows the 200-unit artwork in a 200-unit viewport at 2.5x. API policy: compares against a Donner golden; the caller-canvas contract has an independent assertion.                                                                                                                                                                                                                                                                                          |
 | `font/simple-case`                             | The PNG is 400x400, so the harness preserves that explicit canvas. SVG 2 lists no `font` presentation attribute, so the `font` attribute is ignored and the case draws the initial 12px serif text. The vendored PNG applies the attribute as SVG 1.1 did and synthesizes bold over Noto Sans Italic. Compares against a Donner golden (#1167).                                                                                                                                                                                |
 
-[SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and
-[error processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial
-error and containing-circle expectations. The independent tests preserve visible sibling artwork
-and a valid zero-radius last-stop control. Both backends reject negative radii before solid-color
-shortcuts, including single-stop gradients and an outer radius within the CPU near-zero tolerance.
-[CSS Color 4](https://www.w3.org/TR/css-color-4/#rgb-functions) defines the RGB syntax;
-[SVG 2 paint grammar](https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint) does not include the
-old `icc-color()` suffix. The `arcs`, unitless font shorthand, caller canvas and zero-radius controls
-are explicitly project compatibility contracts, not claims of broader SVG 2 conformance.
+[SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and [error
+processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial error
+expectations. The [canvas two-point
+rule](https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-createradialgradient) that
+`fr` follows paints a start circle that contains the end circle. Identical circles are an open
+question: the SVG 2 note and the canvas rule paint nothing, which Donner does today, while [svgwg
+issue 648](https://github.com/w3c/svgwg/issues/648) and the WPT test
+`svg/pservers/reftests/radialgradient-fully-overlapping.svg` expect the gradient drawn, so `fr=0.5`
+stays render-only and a regression test pins the current behavior. The independent tests preserve
+visible sibling artwork and a valid zero-radius last-stop control. Both backends reject negative
+radii before solid-color shortcuts, including single-stop gradients and an outer radius within the
+CPU near-zero tolerance. [CSS Color 4](https://www.w3.org/TR/css-color-4/#rgb-functions) defines the
+RGB syntax; [SVG 2 paint grammar](https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint) does not
+include the old `icc-color()` suffix. The `arcs`, unitless font shorthand, caller canvas and
+zero-radius controls are explicitly project compatibility contracts, not claims of broader SVG 2
+conformance.
 
 The focused regression targets are `renderer_regression_tests`, `renderer_regression_tests_geode`
 and `renderer_regression_tests_text_full`. The corpus targets are `resvg_test_suite_default_text`,
@@ -809,7 +816,6 @@ historical reference.
 | structure/style-attribute, structure/style `non-presentational-attribute` |     2 | `Params::DeprecatedInSVG2`: `<svg version="1.1">` semantics; SVG 2 removed the `version` attribute.                                                                                                                                                                               |
 | masking/clip                                                              |     1 | `Params::DeprecatedInSVG2`: the CSS `clip` property is deprecated by CSS Masking in favor of `clip-path`.                                                                                                                                                                         |
 | text/dominant-baseline `reset-size`, `use-script`                         |     2 | `Params::DeprecatedInSVG2`: SVG 1.1 values removed in SVG 2; UB marker references.                                                                                                                                                                                                |
-| paint-servers/radialGradient                                              |     1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                                                                                                    |
 | Other `Params::UndefinedBehavior` cases                                   |    55 | Undefined or implementation-defined behavior: 52 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`, `glyph-orientation-vertical/simple-case` and `writing-mode/mixed-languages-with-tb-and-underline`; we verify no-crash only.                                                                                                                               |
 
 ---
