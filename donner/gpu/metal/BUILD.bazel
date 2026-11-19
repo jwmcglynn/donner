@@ -1,4 +1,4 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # donner::gpu::metal - the Metal backend of the Donner GPU runtime.

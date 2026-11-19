@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 #
@@ -337,5 +336,3 @@ donner_cc_fuzzer(
         "//donner/svg/components/animation:animation_system",
     ],
 )
-
-ci_darwin_targets()

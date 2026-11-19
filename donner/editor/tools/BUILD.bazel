@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("//build_defs:rules.bzl", "donner_cc_library")
@@ -59,5 +58,3 @@ py_test(
         "//:donner_splash.svg",
     ],
 )
-
-ci_darwin_targets()

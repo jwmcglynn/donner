@@ -1,6 +1,5 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("//build_defs:rules.bzl", "libc_compat_deps")
+load("//build_defs:rules.bzl", "ci_darwin_targets", "libc_compat_deps")
 
 package(default_visibility = ["//visibility:public"])
 

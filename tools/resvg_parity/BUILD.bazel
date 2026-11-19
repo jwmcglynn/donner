@@ -1,4 +1,4 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 
 py_binary(

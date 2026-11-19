@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//build_defs:rules.bzl", "donner_cc_test")
 
@@ -139,5 +138,3 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
-
-ci_darwin_targets()

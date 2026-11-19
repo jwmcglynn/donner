@@ -1,4 +1,4 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 py_binary(
     name = "simple_webserver",
     srcs = ["simple_webserver.py"],

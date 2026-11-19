@@ -577,6 +577,11 @@ and native suites. Those tests and the archive preflight require fresh remote re
 Darwin tests can reuse their cached results. A broad run has a 90-minute timeout and a probe-only
 run has ten minutes. Failed remote tests retain their logs, XML and undeclared outputs.
 
+Donner's shared C++ declarations register a Bazel package finalizer for native CI. It preserves
+private test visibility and emits variants after all rules in that package have loaded. First-party
+packages using only native or external rule definitions register it once with `ci_darwin_targets()`.
+Vendor targets under `//third_party` enter Darwin builds through the first-party targets that use them.
+
 The PR base controls the default. Add `ci:native-platform-canary` for a trusted PR against an
 older base. `UNIFIED_RE_CANARY=false` suspends the mixed invocation. The macOS Actions jobs still
 run alongside it during qualification. The existing `ci:browser-context-probe` label selects the

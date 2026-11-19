@@ -1,6 +1,5 @@
 """Donner-level benchmarks comparing performance across backends."""
 
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
@@ -142,5 +141,3 @@ sh_test(
         "perf_benchmark",
     ],
 )
-
-ci_darwin_targets()

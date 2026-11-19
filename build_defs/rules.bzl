@@ -2,6 +2,8 @@
 Helper rules, such as for building fuzzers.
 """
 
+load("@bazel_features//:features.bzl", "bazel_features")
+load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
@@ -658,6 +660,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
       tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
+    ci_darwin_targets()
     cc_binary(
         name = name,
         srcs = srcs,
@@ -747,6 +750,7 @@ def donner_cc_test(
         opted-in Geode variants.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
+    ci_darwin_targets()
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
 
@@ -854,6 +858,7 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       visibility: Visibility.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
+    ci_darwin_targets()
 
     package_path = native.package_name().split("/")
     if len(package_path) == 0:
@@ -1005,6 +1010,7 @@ def donner_cc_fuzzer(
                       exclude it. Time budget is controlled by
                       `--//build_defs:fuzz_soak` (see build_defs/BUILD.bazel).
     """
+    ci_darwin_targets()
     if per_input_timeout_seconds <= 0:
         fail("per_input_timeout_seconds must be positive")
 
@@ -1249,6 +1255,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
       optimization_level: Native speed level, O2 by default or O3 for measured kernels.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
+    ci_darwin_targets()
     compat = {}
     if target_compatible_with != None:
         compat["target_compatible_with"] = target_compatible_with
@@ -1368,3 +1375,32 @@ ci_platform_build = rule(
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     },
 )
+
+def _finalize_ci_package(name, visibility):
+    declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))
+
+# Consumer builds also support Bazel 7. Only the root CI workspace needs finalizers.
+_ci_package_finalizer = bazel_features.globals.macro(
+    implementation = _finalize_ci_package,
+    finalizer = True,
+) if bazel_features.globals.macro else None
+
+def ci_darwin_targets():
+    """Register native CI variants once, including raw rules declared later in the package."""
+    if not _ci_package_finalizer or Label("//:BUILD.bazel").workspace_name:
+        return
+    package = native.package_name()
+    if native.repository_name() not in ["@", "@@"] or package == "third_party" or package.startswith("third_party/"):
+        return
+    marker = "_donner_ci_package_registered"
+    registered = native.existing_rule(marker)
+    if registered != None:
+        if registered["kind"] != "filegroup" or "ci-package-registration" not in registered["tags"]:
+            fail("Reserved CI registration name collides with //%s:%s" % (package, marker))
+        return
+    native.filegroup(
+        name = marker,
+        tags = ["ci-package-registration", "manual"],
+        visibility = ["//visibility:private"],
+    )
+    _ci_package_finalizer(name = "ci")

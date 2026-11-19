@@ -1,4 +1,4 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load(":native_delivery_fixture.bzl", "native_delivery_fixture")
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")

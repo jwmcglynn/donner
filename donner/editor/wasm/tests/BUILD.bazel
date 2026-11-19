@@ -1,4 +1,4 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
@@ -1266,7 +1266,4 @@ js_test(
     node_options = ["--test"],
 )
 
-ci_darwin_targets(
-    diagnostics = ["chromium_context_lifecycle_diagnostic"],
-    fresh = ["mac_browser_archive_tests"],
-)
+ci_darwin_targets()
