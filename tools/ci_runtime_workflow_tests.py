@@ -1920,7 +1920,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_cmake_schedule_preserves_opt_in_qualification_paths(self):
         trigger = self.cmake.split("\non:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn("  push:\n    branches: [main]", trigger)
-        self.assertIn('    - cron: "15 8 * * *"', trigger)
+        self.assertIn('    - cron: "10 9 * * *"', trigger)
         self.assertIn("  workflow_dispatch:", trigger)
         paths = re.findall(r"(?m)^      - (.+)$", trigger.split("  pull_request:\n", 1)[1]
                            .split("  workflow_dispatch:", 1)[0])

@@ -546,7 +546,7 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 ### Nightly CMake consumers
 
 The **CMake Build** workflow builds and tests the external consumer on hosted Linux and macOS
-at 08:15 UTC each night. Linux also validates generated CMake files, and macOS uses the pinned
+at 09:10 UTC each night. Linux also validates generated CMake files, and macOS uses the pinned
 Xcode. Main pushes and PRs changing generator inputs validate the generated files without
 compiling either consumer. Use **Run workflow** on `main` to run both jobs on demand. The trusted
 `ci:cmake-cache-qualification` experiment remains available on matching pull requests.
