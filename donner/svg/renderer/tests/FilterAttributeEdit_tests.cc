@@ -87,11 +87,12 @@ void PrintTo(const EditCase& value, std::ostream* os) {
 }
 
 /// The attribute name \p attribute, split at its namespace prefix such as `xlink:` when present.
-xml::XMLQualifiedNameRef AttributeName(std::string_view attribute) {
+xml::XMLQualifiedName AttributeName(std::string_view attribute) {
   const std::size_t colon = attribute.find(':');
   return colon == std::string_view::npos
-             ? xml::XMLQualifiedNameRef(attribute)
-             : xml::XMLQualifiedNameRef(attribute.substr(0, colon), attribute.substr(colon + 1));
+             ? xml::XMLQualifiedName(RcString(attribute))
+             : xml::XMLQualifiedName(RcString(attribute.substr(0, colon)),
+                                     RcString(attribute.substr(colon + 1)));
 }
 
 class FilterAttributeEditTest : public testing::TestWithParam<EditCase> {};
