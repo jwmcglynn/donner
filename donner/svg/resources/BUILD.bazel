@@ -104,9 +104,23 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "font_manager_headers",
+    hdrs = ["FontManager.h"],
+    visibility = [
+        "//donner/svg:__pkg__",
+        "//donner/svg/text:__pkg__",
+    ],
+    deps = [
+        ":font_catalog_types",
+        "//donner/base",
+        "//donner/base/fonts:sfnt_utils",
+        "//donner/css:core",
+    ],
+)
+
+donner_cc_library(
     name = "font_manager",
     srcs = ["FontManager.cc"],
-    hdrs = ["FontManager.h"],
     defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
@@ -118,6 +132,7 @@ donner_cc_library(
     ],
     deps = [
         ":font_catalog_types",
+        ":font_manager_headers",
         ":font_metadata",
         "//donner/base",
         "//donner/base/fonts",

@@ -17,12 +17,22 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "layout_system_headers",
+    hdrs = ["LayoutSystem.h"],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/svg/components/shadow:components",
+        "//donner/svg/components/style:components",
+        "//donner/svg/properties:property_parsing",
+    ],
+)
+
+donner_cc_library(
     name = "layout_system",
     srcs = [
         "LayoutSystem.cc",
-    ],
-    hdrs = [
-        "LayoutSystem.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
@@ -31,6 +41,7 @@ donner_cc_library(
     ],
     deps = [
         ":components",
+        ":layout_system_headers",
         "//donner/base",
         "//donner/svg/components:components_core",
         "//donner/svg/components/paint:components",

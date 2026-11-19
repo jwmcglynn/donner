@@ -47,6 +47,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "animation_system_headers",
+    hdrs = [
+        "AnimationSystem.h",
+        "AnimationTimeline.h",
+    ],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/svg/core",
+    ],
+)
+
+donner_cc_library(
     name = "animation_system",
     srcs = [
         "AnimationBaseValue.cc",
@@ -60,13 +74,12 @@ donner_cc_library(
         "AnimationMotion.h",
         "AnimationNumericAttributes.h",
         "AnimationReference.h",
-        "AnimationSystem.h",
-        "AnimationTimeline.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":animation_system_headers",
         ":components",
         ":value_sampler",
         "//donner/base",

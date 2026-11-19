@@ -2,19 +2,37 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//build_defs:rules.bzl", "donner_cc_test")
 
 cc_library(
-    name = "components",
+    name = "text_element_headers",
     hdrs = [
         "ComputedTextComponent.h",
         "ComputedTextGeometryComponent.h",
         "TextComponent.h",
+        "TextInvalidation.h",
         "TextPathComponent.h",
         "TextPositioningComponent.h",
         "TextRootComponent.h",
     ],
     visibility = [
+        "//donner/svg:__pkg__",
+        "//donner/svg/text:__pkg__",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/svg/components:components_core",
+        "//donner/svg/core",
+        "//donner/svg/properties:property_parsing",
+        "//donner/svg/resources:font_catalog_types",
+        "//donner/svg/text:text_types_headers",
+    ],
+)
+
+cc_library(
+    name = "components",
+    visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":text_element_headers",
         "//donner/svg/core",
         "//donner/svg/properties:property_parsing",
         "//donner/svg/resources:font_catalog_types",
@@ -27,14 +45,12 @@ cc_library(
     srcs = [
         "TextInvalidation.cc",
     ],
-    hdrs = [
-        "TextInvalidation.h",
-    ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",
+        ":text_element_headers",
         "//donner/base",
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
@@ -76,7 +92,6 @@ cc_library(
     ],
     deps = [
         ":components",
-        "//donner/svg/text:bidi_control",
         "//donner/base",
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
@@ -87,6 +102,7 @@ cc_library(
         "//donner/svg/components/style:components",
         "//donner/svg/graph",
         "//donner/svg/parser:parser_core",
+        "//donner/svg/text:bidi_control",
     ],
 )
 

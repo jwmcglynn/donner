@@ -667,7 +667,6 @@ private:
                  bool* validationWorkLimitExceeded = nullptr,
                  bool* retainedBudgetExceeded = nullptr);
 
-#ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
    * Internal: load a WOFF 2.0 font by decompressing via Brotli and table transforms.
    *
@@ -681,7 +680,6 @@ private:
                  bool* validationWorkLimitExceeded = nullptr,
                  const FontFaceAvailability* catalog = nullptr,
                  bool* retainedBudgetExceeded = nullptr);
-#endif
 
   /**
    * Internal: load font bytes into an existing entity.

@@ -25,10 +25,28 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_types_headers",
+    hdrs = [
+        "TextBackend.h",
+        "TextTypes.h",
+    ],
+    visibility = [
+        "//donner/svg:__pkg__",
+        "//donner/svg/components/text:__pkg__",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/svg/components:components_core",
+        "//donner/svg/core",
+        "//donner/svg/resources:font_manager_headers",
+    ],
+)
+
+donner_cc_library(
     name = "text_types",
-    hdrs = ["TextTypes.h"],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
+        ":text_types_headers",
         "//donner/svg/core",
         "//donner/svg/resources:font_manager",
     ],
@@ -36,13 +54,11 @@ donner_cc_library(
 
 donner_cc_library(
     name = "text_backend",
-    hdrs = [
-        "FontDataUtils.h",
-        "TextBackend.h",
-    ],
+    hdrs = ["FontDataUtils.h"],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":text_types",
+        ":text_types_headers",
         "//donner/base/fonts:sfnt_utils",
         "//donner/svg/core",
         "//donner/svg/resources:font_manager",
@@ -81,6 +97,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_engine_headers",
+    hdrs = ["TextEngine.h"],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        ":text_layout_params",
+        ":text_types_headers",
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg/components/text:text_element_headers",
+        "//donner/svg/resources:font_manager_headers",
+    ],
+)
+
+donner_cc_library(
     name = "text_engine",
     srcs = [
         "GraphemeBreak.cc",
@@ -91,7 +121,6 @@ donner_cc_library(
         "FullWidthMapping.h",
         "GraphemeBreak.h",
         "GraphemeProperties.h",
-        "TextEngine.h",
         "TextEngineHelpers.h",
         "TextPathWarp.h",
         "TextTransform.h",
@@ -111,6 +140,7 @@ donner_cc_library(
         ":bidi_types",
         ":text_backend",
         ":text_backend_simple",
+        ":text_engine_headers",
         ":text_layout_params",
         ":text_types",
         "//donner/base",

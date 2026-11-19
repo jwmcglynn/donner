@@ -120,12 +120,23 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "font_resource_graph_headers",
+    hdrs = ["FontResourceGraph.h"],
+    visibility = ["//donner/svg:__pkg__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg:svg_document_handle",
+        "//donner/svg/resources:font_catalog_types",
+    ],
+)
+
+donner_cc_library(
     name = "font_resource_graph",
     srcs = ["FontResourceGraph.cc"],
-    hdrs = ["FontResourceGraph.h"],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":components_core",
+        ":font_resource_graph_headers",
         "//donner/base",
         "//donner/base/xml/components",
         "//donner/svg/components/filter:components",
