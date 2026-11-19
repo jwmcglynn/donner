@@ -1,7 +1,7 @@
 {
   "tree": {
-    "lines": 5757,
-    "comment_lines": 633,
+    "lines": 5761,
+    "comment_lines": 629,
     "multiline_runs": 71,
     "longest_run": 194,
     "run_expressions": 12,
@@ -33,8 +33,8 @@
       "longest_if": 27
     },
     ".github/workflows/cmake.yml": {
-      "lines": 309,
-      "comment_lines": 28,
+      "lines": 323,
+      "comment_lines": 24,
       "multiline_runs": 3,
       "longest_run": 30,
       "run_expressions": 0,
@@ -97,7 +97,7 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1376,
+      "lines": 1366,
       "comment_lines": 203,
       "multiline_runs": 11,
       "longest_run": 31,

@@ -5,11 +5,13 @@ env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
 
-# Main pushes run the macOS consumer on hosted Xcode. The main CI workflow covers the
-# Linux consumer on PRs. The PR trigger here supports opt-in Linux cache qualification.
+# The regular Linux and macOS CMake consumers run nightly. A qualifying PR can also
+# request the dedicated cache producer/consumer experiment.
 on:
   push:
-    branches: ["*"]
+    branches: [main]
+  schedule:
+    - cron: "10 9 * * *"
   pull_request:
     paths:
       - .github/workflows/cmake.yml
@@ -19,10 +21,16 @@ on:
       - "**/*.cmake.in"
       - examples/cmake_consumer/**
       - tools/cmake/**
+      - tools/rust_boundary/rust_scopes.py
       - tools/ci/cmake_cache.py
       - tools/ci/cmake_consumer.sh
       - MODULE.bazel
-      - third_party/bazel/non_bcr_deps.bzl
+      - MODULE.bazel.lock
+      - .bazelrc
+      - .bazelversion
+      - "**/BUILD"
+      - "**/BUILD.bazel"
+      - "**/*.bzl"
       - tools/ci_macos_xcode.txt
       - tools/ci_select_macos_xcode.sh
   workflow_dispatch:
@@ -133,13 +141,22 @@ jobs:
           echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
           echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
+  generator-check:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate generated CMake files
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    needs: gatekeeper
-    # PRs and main build and test this consumer, and validate the generator output, in the
-    # consolidated CI Linux job. Keep standalone branch-push coverage before a PR exists.
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'push' && github.ref != 'refs/heads/main' }}
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 750M
@@ -156,14 +173,11 @@ jobs:
         with:
           packages: ccache ninja-build
 
-      # Only main writes the Actions cache, and this job never runs on main, so
-      # it builds without restoring CMake dependency or compiler caches.
-
       - name: Build with CMake (tiny_skia)
         run: tools/ci/cmake_consumer.sh build --check --ccache
 
   macos:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: xcode-27
     timeout-minutes: 60
     env:

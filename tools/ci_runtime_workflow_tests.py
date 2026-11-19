@@ -54,7 +54,6 @@ WORKFLOW_LOGIC_MARKER = "          # Workflow logic kept in scripts"
 # a script no target lists yet; the reason says why that is accepted.
 TRACKED_CI_SCRIPTS = {
     "tools/browser_gpu_test_summary.py": "//tools:browser_gpu_test_summary_tests",
-    "tools/ci/cmake_consumer.sh": "//tools/ci:cmake_consumer_tests",
     "tools/ci/free_hosted_macos_disk.sh": "//tools/ci:free_hosted_macos_disk_tests",
     "tools/ci/gatekeeper.py": "//tools/ci:gatekeeper_tests",
     # The advisory macOS shadow lane: its library's only user is
@@ -295,9 +294,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertNotIn("actions/cache", job)
         self.assertIn("fetch-depth: 0", job)
         self.assertIn("run: tools/ci/lint_lane.sh", job)
-        # The CMake generator check runs once per event, in CI's Linux CMake consumer step
-        # (//tools:ci_lane_parity_tests). A documentation-only pull request skips those jobs and
-        # needs no check: no path it may change is a generator input (//tools/ci:gatekeeper_tests).
+        # The CMake Build workflow owns generator validation.
         self.assertIsNone(re.search(r"(?m)^ +run: .*gen_cmakelists\.py", self.lint))
 
     @staticmethod
@@ -1037,23 +1034,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.editor_wasm.index("- name: Serve Geode package and run browser suites"),
         )
 
-    def test_linux_cmake_consumer_has_one_pr_and_main_owner(self):
-        linux = self.cmake.split("\n  linux:\n", 1)[1].split("\n  macos:\n", 1)[0]
-        admission = linux.split("    env:\n", 1)[0]
-        self.assertIn("github.event_name == 'push'", admission)
-        self.assertIn("github.ref != 'refs/heads/main'", admission)
-        consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
-        self.assertEqual(consumer.split("\n\n", 1)[0],
-                         self._step_body(self._job_body("linux-self-hosted"),
-                                         "Build and test CMake consumer").split("\n\n", 1)[0])
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --check "
-                      "--cache --release-bazel-server --parallel 4", consumer)
-        # The CMake workflow runs the same consumer through its lane script, whose commands
-        # //tools/ci:cmake_consumer_tests pins. Its branch-push Linux job also validates the
-        # generator output, since main.yml's Linux jobs do not run for a branch push.
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --check --ccache\n", linux)
-        self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh build --ccache\n"))
-        self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh install-tools\n"))
+    def test_nightly_consumers_compile_and_test_on_both_hosted_platforms(self):
+        self.assertNotIn("cmake_consumer.sh build", self.main)
+        linux = self._job_body("linux", self.cmake)
+        macos = self._job_body("macos", self.cmake)
+        self.assertIn("runs-on: ubuntu-24.04", linux)
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --check --ccache", linux)
+        self.assertIn("runs-on: xcode-27", macos)
+        self.assertIn("run: tools/ci_select_macos_xcode.sh", macos)
+        self.assertIn("run: tools/ci/cmake_consumer.sh install-tools", macos)
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache", macos)
 
     def test_geode_asan_pr_lane_restores_the_main_linux_external_cache(self):
         # The lane only runs for pull requests, so it never saves an external repository manifest
@@ -1131,7 +1121,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for target in ("editor_window_vulkan_surface_tests", "editor_window_vulkan_default_tests"):
             self.assertIn('env_inherit = ["PATH"]',
                           _rule_text(_repository_text("donner/editor/tests/BUILD.bazel"), target))
-        self.assertIn("for tool in xvfb-run Xvfb xauth cmake ninja",
+        self.assertIn("for tool in xvfb-run Xvfb xauth",
                       self._step_body(local, "Check native consumer tools"))
     def test_shell_fixture_timeout_reports_only_known_progress_markers(self):
         for stderr, entered, exited in (
@@ -1927,28 +1917,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                             "cmake-cache-consumer-%s" % attempt])
         self.assertNotIn("pattern:", download)
 
-    def test_macos_cmake_runs_only_on_hosted_main_pushes(self):
+    def test_cmake_schedule_preserves_opt_in_qualification_paths(self):
         trigger = self.cmake.split("\non:\n", 1)[1].split("\n\n", 1)[0]
-        self.assertIn('  push:\n    branches: ["*"]\n', trigger)
-        self.assertNotIn("schedule:", trigger)
+        self.assertIn("  push:\n    branches: [main]", trigger)
+        self.assertIn('    - cron: "10 9 * * *"', trigger)
         self.assertIn("  workflow_dispatch:", trigger)
         paths = re.findall(r"(?m)^      - (.+)$", trigger.split("  pull_request:\n", 1)[1]
                            .split("  workflow_dispatch:", 1)[0])
         self.assertEqual(paths, [
             ".github/workflows/cmake.yml", "CMakePresets.json", '"**/CMakeLists.txt"',
             '"**/*.cmake"', '"**/*.cmake.in"', "examples/cmake_consumer/**", "tools/cmake/**",
+            "tools/rust_boundary/rust_scopes.py",
             "tools/ci/cmake_cache.py", "tools/ci/cmake_consumer.sh", "MODULE.bazel",
-            "third_party/bazel/non_bcr_deps.bzl", "tools/ci_macos_xcode.txt",
+            "MODULE.bazel.lock", ".bazelrc", ".bazelversion", '"**/BUILD"', '"**/BUILD.bazel"',
+            '"**/*.bzl"', "tools/ci_macos_xcode.txt",
             "tools/ci_select_macos_xcode.sh"])
-        mac = self._job_body("macos", self.cmake)
-        self.assertIn("\n    runs-on: xcode-27\n", mac)
-        self.assertIn("    if: github.event_name == 'push' && github.ref == 'refs/heads/main'", mac.splitlines())
-        self.assertNotIn("macos-self-hosted:", self.cmake)
-        self.assertNotRegex(self.cmake, r"(?im)^\s*runs-on:.*self-hosted.*macos")
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache", mac)
-        consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
-        self.assertIn("run: tools/ci/cmake_consumer.sh build --check --cache "
-                      "--release-bazel-server --parallel 4", consumer)
 
     def _editor_wasm_step_runs(self, workflow):
         """Each Editor WASM build step's name and its `run:` lines, in workflow order."""

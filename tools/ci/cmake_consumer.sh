@@ -12,7 +12,7 @@
 #       --release-bazel-server  stop this lane's query/build server before native compilation
 #       --cache     use pinned ccache and bounded persistent compiler/source caches
 #       --parallel  build with N jobs; without it CMake's own default applies
-#   Main CI uses --check --release-bazel-server --parallel 4.
+#   Cache qualification uses --check --release-bazel-server --parallel 4.
 #
 # Each phase is a collapsible `::group::` in the GitHub Actions log, and when
 # $GITHUB_STEP_SUMMARY is set the phases and their results are appended to the job summary.
