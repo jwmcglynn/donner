@@ -422,19 +422,27 @@ std::vector<AuthoredValueCase> AuthoredValueCases() {
 }
 
 // An interpolated order above the limit renders like the same authored order, which fails
-// closed, instead of rounding down to a 64x64 kernel.
+// closed, instead of rounding down to the 64x64 kernel the base renders.
 TEST(RendererAnimationFilter, InterpolatedOrderAboveTheLimitMatchesAuthored) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filters are disabled in this configuration";
   }
-  auto authored = FilterDocument("<feConvolveMatrix order='64.4' kernelMatrix='1'/>");
-  auto base = FilterDocument("<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>");
+  const auto convolve = [](std::string_view order, bool target) {
+    return std::string("<feConvolveMatrix") + (target ? " id='p'" : "") + " order='" +
+           std::string(order) + "' kernelMatrix='" + NumberList(64 * 64, 32 * 64 + 32, "1") + "'/>";
+  };
+  auto authored = FilterDocument(convolve("64.4", false));
   const RendererBitmap expected = RenderDocumentWithActiveBackend(authored);
-  ASSERT_NE(RenderDocumentWithActiveBackend(base).pixels, expected.pixels)
-      << "the authored order must render differently from the base order";
+  // Geode renders kernels over 25 values as transparent black (issue #2101), so there the base
+  // renders like the refused filter.
+  if (ActiveRendererBackend() != RendererBackend::Geode) {
+    auto base = FilterDocument(convolve("64", true));
+    ASSERT_NE(RenderDocumentWithActiveBackend(base).pixels, expected.pixels)
+        << "the authored order must render differently from the base order";
+  }
 
   auto document =
-      FilterDocument("<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>",
+      FilterDocument(convolve("64", true),
                      "<animate href='#p' attributeName='order' values='64.4;64.4' dur='1s'/>");
   document.setTime(0.5);
   editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expected,
