@@ -8159,11 +8159,14 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                    ? text.spans[runIndex].fillOpacity * text.spans[runIndex].opacity
                                    : impl_->paint.fillOpacity;
 
-    // A run inherits the element-level pattern fill when it has neither a solid
-    // fill nor a gradient of its own. `resolveSpanFill` returns alpha=0 for a
-    // ref, so `!hasFill` marks "no solid"; `!fillIsGradient` ensures a span's own
-    // gradient is drawn as a gradient (above) rather than the inherited pattern.
-    const bool usePatternFill = hasPatternFill && !hasFill && !fillIsGradient;
+    // A run inherits the element-level pattern fill only when its fill server is a paint server
+    // reference that is not a gradient: the staged pattern is that reference. A span whose own
+    // fill is a solid paints that solid, so a fully transparent one (`fill-opacity="0"`,
+    // `transparent`) paints nothing rather than the element's pattern. `!fillIsGradient` ensures a
+    // span's own gradient is drawn as a gradient (above) rather than the inherited pattern.
+    const bool usePatternFill =
+        hasPatternFill && !hasFill && !fillIsGradient &&
+        std::holds_alternative<components::PaintResolvedReference>(fillServer);
 
     // Resolve per-run stroke. A span's computed stroke decides how its glyphs are stroked: the
     // span's computed style already inherits the text element's stroke properties where the span
@@ -8203,9 +8206,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (color.has_value() && color->a != 0) {
           strokeColor = color;
         }
+        // Only a solid with coverage or a paint server reference strokes the run. The element's
+        // staged pattern stroke is not a stroke of its own: a span whose stroke is a fully
+        // transparent solid (`stroke-opacity="0"`, `transparent`) paints nothing rather than the
+        // element's pattern.
         const bool strokeIsServer =
             std::holds_alternative<components::PaintResolvedReference>(*strokeServer);
-        if (strokeColor.has_value() || strokeIsServer || impl_->patternStrokePaint.has_value()) {
+        if (strokeColor.has_value() || strokeIsServer) {
           strokeStyle = toStrokeStyle(runStrokeParams);
         }
       }
@@ -8222,8 +8229,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
              ? paintReferenceIsGradient(*strokeServer)
              : (std::holds_alternative<components::PaintResolvedReference>(*strokeServer) &&
                 !impl_->patternStrokePaint.has_value()));
-    // Inherit the element-level pattern stroke only when the span did not provide
-    // its own gradient stroke (a span's own gradient is drawn above).
+    // Inherit the element-level pattern stroke only when the run's stroke server is a paint server
+    // reference (`strokeStyle` without `strokeColor` implies one) that is not a gradient: a span's
+    // own gradient is drawn above.
     const bool usePatternStroke = strokeStyle.has_value() && !strokeColor.has_value() &&
                                   !strokeIsGradient && impl_->patternStrokePaint.has_value();
     const bool hasStrokePaint = strokeColor.has_value() || strokeIsGradient || usePatternStroke;
@@ -8362,8 +8370,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           impl_->syncTransform();
           impl_->encoder->fillPathPattern(
               placed, FillRule::NonZero,
-              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity),
-              encoded);
+              impl_->buildPatternPaint(*impl_->patternFillPaint, fillOpacity), encoded);
         } else if (hasFill) {
           const geode::EncodedPath* encoded =
               impl_->encodeTransientGeometry(placed, FillRule::NonZero);
