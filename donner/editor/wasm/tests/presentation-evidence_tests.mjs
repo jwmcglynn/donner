@@ -14,6 +14,9 @@ const require = createRequire(import.meta.url);
 assert.ok(process.env.DONNER_PRESENTATION_EVIDENCE, "Bazel must provide the bundled helpers");
 assert.ok(process.env.DONNER_BROWSER_GOLDEN_COMPARE, "Bazel must provide the native comparator");
 const {
+  basicShapesGateState,
+  hasSuccessfulDiagnosticRequest,
+  wgpuDiagnosticOutcome,
   canvasCaptureImplicatesApplication,
   captureEditorPage,
   captureFailureCanvasEvidence,
@@ -521,4 +524,39 @@ test("zoom camera completion accepts retained scenes but rejects failed presenta
     completedFrameMatchesCamera({ ...state, queue: { ...state.queue, captureId: 0 } }),
     false,
   );
+});
+
+test("pre-capture gate reads only published frame state", () => {
+  const scope = {
+    __donnerActiveSampleStats: { sampleId: "basic-shapes" },
+    __donnerWorkerStats: { completedResults: 2, presentedAtMs: 3 },
+    __donnerMainLoopRenderedFrames: 7,
+    __donnerHostFrameTiming: { frames: 7, lastSurfacePresented: true },
+    __donnerOverlayStats: { frameId: 12, captureId: 4 },
+    __donnerPresentationQueueStats: { frameId: 12, captureId: 4, inputRepresented: true },
+    get document() { throw new Error("DOM observation before capture"); },
+    getComputedStyle() { throw new Error("style observation before capture"); },
+  };
+  assert.deepEqual(basicShapesGateState(scope), {
+    sampleId: "basic-shapes", completedResults: 2, presentedAtMs: 3, renderedFrames: 7,
+    hostFrames: 7, hostPresented: true, frameId: 12, captureId: 4, completedFrameId: 12,
+    completedCaptureId: 4, completedInputRepresented: true,
+  });
+});
+
+test("readback completion distinguishes a failed request from old successful pixels", () => {
+  const scope = {
+    __donnerWgpuReadbackRequested: 2, __donnerWgpuReadbackCompleted: 2,
+    __donnerWgpuReadbackStats: { request: 1 }, __donnerWgpuReadbackLastFailedRequest: 2,
+    __donnerWgpuReadbackCaptureFailures: 1,
+  };
+  const failed = wgpuDiagnosticOutcome(scope);
+  assert.equal(failed.completed, 2);
+  assert.equal(failed.successfulRequest, 1);
+  assert.equal(hasSuccessfulDiagnosticRequest(failed, 2), false);
+  scope.__donnerWgpuReadbackRequested = scope.__donnerWgpuReadbackCompleted = 3;
+  scope.__donnerWgpuReadbackStats = { request: 3 };
+  const recovered = wgpuDiagnosticOutcome(scope);
+  assert.equal(hasSuccessfulDiagnosticRequest(recovered, 3), true);
+  assert.equal(hasSuccessfulDiagnosticRequest(recovered, 4), false);
 });

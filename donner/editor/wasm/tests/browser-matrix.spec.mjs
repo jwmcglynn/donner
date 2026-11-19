@@ -691,7 +691,7 @@ test("browser presentation cases that take no page run under Node", () => {
   ].map(([, title]) => title);
   assert.deepEqual(pageFree, [], "move page-free cases to presentation-evidence_tests.mjs");
   const nodeTitles = [...nodeTests.matchAll(/^test\("([^"]+)"/gm)].map(([, title]) => title);
-  assert.equal(nodeTitles.length, 13, "the page-free presentation cases keep running");
+  assert.ok(nodeTitles.length >= 15, "the page-free presentation cases keep running");
   const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
   const target = buildFile
     .split("js_test(\n")

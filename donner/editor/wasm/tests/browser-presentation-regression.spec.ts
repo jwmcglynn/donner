@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import {
   awaitBefore,
+  basicShapesGateState,
   captureReadyBasicShapesFrame,
   captureSettledCanvas,
   type InitialBlueFrameState,
@@ -1128,24 +1129,6 @@ test("canvas diagnosis brackets host presentation counters around a wake", async
   });
 });
 
-// This pre-capture read is scalar app publication only. No DOM/style/layout
-// observation can flush a browser paint before the scored screenshot.
-async function readBasicShapesGateState(page: Page): Promise<InitialBlueFrameState> {
-  return page.evaluate(() => ({
-    sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
-    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
-    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
-    renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
-    hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
-    hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
-    frameId: window.__donnerOverlayStats?.frameId ?? 0,
-    captureId: window.__donnerOverlayStats?.captureId ?? 0,
-    completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
-    completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
-    completedInputRepresented: window.__donnerPresentationQueueStats?.inputRepresented === true,
-  }));
-}
-
 type BasicShapesProbeState = {
   sampleId: string | null;
   completedResults: number;
@@ -1245,42 +1228,6 @@ async function readBasicShapesProbeState(
   }
   return state;
 }
-
-test("Basic Shapes pre-capture gate reads app scalars without layout observation", async ({ page }) => {
-  await page.setContent("<canvas id='canvas'></canvas>");
-  await page.evaluate(() => {
-    Object.assign(window, {
-      __donnerActiveSampleStats: { sampleId: "basic-shapes", activatedAtMs: 1 },
-      __donnerWorkerStats: { completedResults: 2, presentedAtMs: 3 },
-      __donnerMainLoopRenderedFrames: 7,
-      __donnerHostFrameTiming: { frames: 7, lastSurfacePresented: true },
-      __donnerOverlayStats: { frameId: 12, captureId: 4 },
-      __donnerPresentationQueueStats: { frameId: 12, captureId: 4, inputRepresented: true },
-    });
-    window.getComputedStyle = () => {
-      throw new Error("style read before capture");
-    };
-    Element.prototype.getBoundingClientRect = () => {
-      throw new Error("layout read before capture");
-    };
-    document.elementFromPoint = () => {
-      throw new Error("occlusion read before capture");
-    };
-  });
-  expect(await readBasicShapesGateState(page)).toEqual({
-    sampleId: "basic-shapes",
-    completedResults: 2,
-    presentedAtMs: 3,
-    renderedFrames: 7,
-    hostFrames: 7,
-    hostPresented: true,
-    frameId: 12,
-    captureId: 4,
-    completedFrameId: 12,
-    completedCaptureId: 4,
-    completedInputRepresented: true,
-  });
-});
 
 test("Basic Shapes gated setup reaches visible pixels in the browser journey", async ({ browserName, page }) => {
   test.skip(browserName !== "chromium", "remote Chromium controlled setup journey");
@@ -1441,7 +1388,7 @@ async function takeBasicShapesProbe(
   }
 
   const preGateState = await awaitBefore(
-    readBasicShapesGateState(page),
+    page.evaluate(basicShapesGateState),
     stallGuardEndsAtMs,
     kBasicShapesStateStalled,
   );
