@@ -8,6 +8,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { verifyServedEditor } from "./package-identity.mjs";
+
 const serverPath = fileURLToPath(new URL("./remote-webserver.mjs", import.meta.url));
 const readyPattern = /DONNER_WASM_BASE_URL=(http:\/\/127\.0\.0\.1:\d+)/;
 
@@ -106,6 +108,16 @@ test("two browser servers use distinct ports and packages", async (t) => {
   assert.notEqual(firstUrl, secondUrl);
   assert.equal(await readText(`${firstUrl}/index.html`), "package first");
   assert.equal(await readText(`${secondUrl}/index.html`), "package second");
+});
+
+test("the served Wasm module must match the declared package", async (t) => {
+  const a = packageDirectory(t, "A");
+  const b = packageDirectory(t, "B");
+  writeFileSync(path.join(a, "editor.wasm"), "module A");
+  writeFileSync(path.join(b, "editor.wasm"), "module B");
+  const url = await startServer(t, a).url;
+  await verifyServedEditor(url, a);
+  await assert.rejects(verifyServedEditor(url, b), /differs from the declared package/);
 });
 
 test("SIGKILL of the server owner closes its listening port", async (t) => {

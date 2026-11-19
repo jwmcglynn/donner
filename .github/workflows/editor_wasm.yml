@@ -82,6 +82,7 @@ jobs:
     outputs:
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
       renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+      unified_macos: ${{ steps.pr_trust.outputs.unified_macos }}
     steps:
       - name: Checkout trust action
         uses: actions/checkout@v7
@@ -93,8 +94,13 @@ jobs:
       - id: pr_trust
         name: Classify pull request trust
         uses: ./.github/actions/pr-trust
+        with:
+          selfhosted_linux_runner: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
+          unified_re_canary: ${{ vars.UNIFIED_RE_CANARY }}
 
   build:
+    # Release candidates come from main. Trusted PRs qualify the affected Wasm graph in CI.
+    if: github.event_name != 'pull_request' || needs.trust.outputs.unified_macos != 'true'
     runs-on: xcode-27
     needs: trust
     env:
@@ -236,16 +242,8 @@ jobs:
         working-directory: donner/editor/wasm/tests
         run: npm run test:selector
 
-      # The lane sequence this job runs lives in tools/run-browser-ci.sh, so
-      # that one local command reproduces this job exactly. Change the lanes
-      # there, not here; this step only supplies the package directory. The
-      # script serves a private copy of the package, verifies the served
-      # editor.wasm hash, runs every lane (no fail-fast, so one run reports the
-      # whole matrix), and exits nonzero if any lane failed. Only the scheduled
-      # run adds the report-only lane for the cases quarantined by #1634. The
-      # step timeout is a backstop above the script's per-lane stall guards: a
-      # step that reaches it fails rather than being cancelled, so the evidence
-      # uploads below still run.
+      # Each browser project serves the staged package. The script archives every lane's
+      # result and gives scheduled runs an additional non-gating quarantine report.
       - name: Serve Geode package and run browser suites
         timeout-minutes: 120
         env:

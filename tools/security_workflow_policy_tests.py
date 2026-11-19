@@ -971,13 +971,12 @@ def _bcr_pull_request_trigger(workflow):
 
 def _gatekeeper_source_violations(workflow):
     steps = _steps(_jobs(workflow)["gatekeeper"])
-    if len(steps) != 6:
-        return ["admission must have exactly the reviewed six steps"]
-    source, comparison, duplicate, docs, trust, route = steps
+    if len(steps) != 5:
+        return ["admission must have exactly the reviewed five steps"]
+    source, comparison, duplicate, docs, trust = steps
     return _failed([
         ([_step_key(step, "id", 8) for step in steps] ==
-         ["admission_source", "comparison_source", "dup_push", "docs_only", "pr_trust",
-          "runner_gate"], "admission step order changed"),
+         ["admission_source", "comparison_source", "dup_push", "docs_only", "pr_trust"], "admission step order changed"),
         (_step_key(source, "uses", 8) == "actions/checkout@v7" and
          _with_key(source, "ref", 8) == "${{ github.event.pull_request.base.sha || github.sha }}"
          and _with_key(source, "path", 8) is None and

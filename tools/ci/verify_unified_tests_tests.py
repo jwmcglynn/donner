@@ -112,6 +112,10 @@ class UnifiedTest(unittest.TestCase):
             with self.subTest(label=label), self.assertRaisesRegex(ValueError, "did not finish"):
                 verify(list(events()) + [skip], [SUITE, METAL], **kwargs)
 
+    def test_full_graph_cannot_omit_the_editor_qualification(self):
+        with self.assertRaisesRegex(ValueError, "Full graph omitted editor Wasm targets"):
+            verify(events(), [SUITE, METAL], full_graph=True)
+
     def test_kernel_log_must_match_its_platform_and_declared_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -172,7 +172,7 @@ def _qualification_runs(evidence):
             raise ValueError(f"Expected four uncached remote runs for {label}")
 
 
-def verify(events, suites, ordinary=(), output_root=None, linux=()):
+def verify(events, suites, ordinary=(), output_root=None, linux=(), full_graph=False):
     evidence = Evidence()
     for event in events:
         evidence.read(event)
@@ -184,7 +184,11 @@ def verify(events, suites, ordinary=(), output_root=None, linux=()):
     fresh.update(selected & {ARCHIVE})
     _qualification_runs(evidence)
     linux_built = _ordinary_built(evidence, set(linux))
-    expected = mandatory | ((compatible | linux_built) & evidence.test_rules)
+    editor = EDITOR_BROWSER | WASM_CHECKS
+    built = compatible | linux_built
+    if full_graph and editor - built:
+        raise ValueError(f"Full graph omitted editor Wasm targets: {sorted(editor - built)}")
+    expected = mandatory | (built & (evidence.test_rules | editor))
     summary_labels = {label for label, _ in evidence.summaries}
     # The Linux venue verifier and its analysis aspect restrict local actions to the Xvfb roots.
     local = evidence.passed["local"]
@@ -263,7 +267,9 @@ if __name__ == "__main__":
     ordinary_roots = args.ordinary.read_text().splitlines() if args.ordinary else []
     with args.bep.open(encoding="utf-8") as stream:
         linux_roots = args.linux.read_text().splitlines() if args.linux else []
-        counts = verify((json.loads(line) for line in stream), args.suites, ordinary_roots, Path("bazel-out"), linux_roots)
+        full_graph = os.environ.get("TARGETS_FALLBACK") == "true" or os.environ.get("TARGETS_AFFECTED") == "//..."
+        counts = verify((json.loads(line) for line in stream), args.suites, ordinary_roots,
+                        Path("bazel-out"), linux_roots, full_graph)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             print("darwin_classes=" + json.dumps(counts, sort_keys=True), file=output)

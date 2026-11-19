@@ -188,7 +188,7 @@ SHARED_STEP_ALLOWLIST.update({
         "Only PAYLOAD_BUDGET_MODE differs: main pushes report numeric size metrics, while "
         "every pull request enforces them. The same script and functional checks run on both; "
         "this digest pins the complete rendered step and its environment in each scenario."
-    for scenario in PULL_REQUEST_SCENARIOS
+    for scenario in ("untrusted-pr", "renovate-pr")
 })
 
 # Steps of one job that run on a main push but not on one kind of pull request.
@@ -389,6 +389,7 @@ SHADOW_LANE_CONTEXT = {
 # Job outputs a condition may read, mapped to the scenario key that holds each one's value.
 _MODELLED_OUTPUTS = {
     "needs.gatekeeper.outputs.unified_macos": "use_self_hosted",
+    "needs.trust.outputs.unified_macos": "use_self_hosted",
     "needs.gatekeeper.outputs.unified_re_default": "trusted_pr",
     "needs.gatekeeper.outputs.trusted_pr": "trusted_pr",
     "needs.gatekeeper.outputs.renovate_pr": "renovate_pr",
@@ -727,7 +728,7 @@ def _context(scenario):
 
     if rollback:
         overrides = {"vars.UNIFIED_RE_CANARY": "false", "steps.unified.outcome": "skipped",
-                     "needs.gatekeeper.outputs.unified_macos": "false"}
+                     "needs.gatekeeper.outputs.unified_macos": "false", "needs.trust.outputs.unified_macos": "false"}
         return lambda name: overrides[name] if name in overrides else lookup(name)
     return lookup
 
@@ -1864,7 +1865,7 @@ class CiLaneParityTest(unittest.TestCase):
         self._assert_matches_allowlist(main_only, MAIN_ONLY_JOBS,
                                        "jobs main runs that no pull request runs")
         self._assert_matches_allowlist(
-            skipped, JOB_REPLACEMENTS,
+            skipped, set(JOB_REPLACEMENTS) | {("editor_wasm.yml", "build", "trusted-pr")},
             "jobs main runs that a kind of pull request skips without a replacement")
         for (name, job_name, scenario), replacement in JOB_REPLACEMENTS.items():
             self.assertTrue(job_gates(self.workflows[name], replacement, scenario),
@@ -1874,6 +1875,23 @@ class CiLaneParityTest(unittest.TestCase):
         self._assert_matches_allowlist(
             skipped_main_steps(self.workflows, self.main_push_workflows), STEP_ALLOWLIST,
             "steps main runs that a pull request skips in the same job")
+
+    def test_editor_wasm_uses_one_qualified_route(self):
+        hosted = self.workflows["editor_wasm.yml"]
+        main = self.workflows["main.yml"]
+        graph = next(s for s in _jobs(main)["linux-self-hosted"]["steps"] if s.get("id") == "unified")
+        for scenario in ("main-push", "trusted-pr", "untrusted-pr", "renovate-pr", "trusted-pr-unified-disabled"):
+            mixed = job_gates(main, "linux-self-hosted", scenario) and runs(graph["if"], scenario)
+            self.assertNotEqual(bool(mixed), bool(job_gates(hosted, "build", scenario)), scenario)
+        trust = _jobs(hosted)["trust"]
+        self.assertEqual(trust["outputs"]["unified_macos"], "${{ steps.pr_trust.outputs.unified_macos }}")
+        checkout, decision = trust["steps"]
+        self.assertEqual(checkout["with"]["ref"], "${{ github.event.pull_request.base.sha || github.sha }}")
+        self.assertEqual(decision["uses"], "./.github/actions/pr-trust")
+        policy = next(s for s in _jobs(main)["gatekeeper"]["steps"] if s.get("id") == "pr_trust")
+        self.assertEqual(decision["with"], policy["with"])
+        self.assertEqual(policy["with"], {"selfhosted_linux_runner": "${{ vars.SELFHOSTED_LINUX_RUNNER }}",
+                                          "unified_re_canary": "${{ vars.UNIFIED_RE_CANARY }}"})
 
     def test_replacement_jobs_run_the_same_bazel_invocations(self):
         observed = set()
@@ -2255,14 +2273,14 @@ class CiLaneParityTest(unittest.TestCase):
                     self.assertEqual(runs(steps[name]["if"], scenario), not mixed)
 
     def test_unified_re_canary_default_and_rollback(self):
-        gate = _jobs(self.workflows["main.yml"])["gatekeeper"]
-        router = next(step for step in gate["steps"] if step.get("id") == "runner_gate")
+        action = parse_workflow(_read(".github/actions/pr-trust/action.yml"))
+        router = next(step for step in action["runs"]["steps"] if step.get("id") == "route")
         select = router["env"]["UNIFIED_RE_SELECTED"]
         label = "ci:native-platform-canary"
         for default, labels, switch, expected in (("true", [], "", True), ("", [], "", False),
                 ("", [label], "", True), ("true", [], "false", False), ("", [label], "false", False)):
-            context = {"steps.pr_trust.outputs.unified_re_default": default,
-                       "vars.UNIFIED_RE_CANARY": switch, "github.event.pull_request.labels.*.name": labels}
+            context = {"steps.classify.outputs.trusted_pr": default,
+                       "inputs.unified_re_canary": switch, "github.event.pull_request.labels.*.name": labels}
             self.assertEqual(_Expression(select, context.__getitem__).evaluate(), expected)
 
     def test_pull_request_branch_filters_must_include_main(self):

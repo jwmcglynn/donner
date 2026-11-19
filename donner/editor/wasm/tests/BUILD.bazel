@@ -329,6 +329,8 @@ filegroup(
         "browser-launch-probe.js",
         "chromium-launch-env.cjs",
         "editor-browser-coverage.cjs",
+        "editor-browser-setup.cjs",
+        "package-identity.mjs",
         "firefox-launch-env.cjs",
         "playwright.bazel.config.js",
         "playwright.compatibility.config.js",
@@ -799,7 +801,7 @@ js_test(
     name = "remote_webserver_tests",
     size = "small",
     copy_data_to_bin = False,
-    data = ["remote-webserver.mjs"],
+    data = ["package-identity.mjs", "remote-webserver.mjs"],
     entry_point = "remote-webserver.spec.mjs",
     node_options = ["--test"],
 )

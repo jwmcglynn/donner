@@ -40,9 +40,8 @@ class CiRunnerRoutingTest(unittest.TestCase):
         return rest[: end.start()] if end else rest
 
     def _routing_script(self):
-        section = self.text.split("      - id: runner_gate\n", 1)[1]
-        section = section.split("\n  determine-targets:\n", 1)[0]
-        return textwrap.dedent(section.split("        run: |\n", 1)[1])
+        route = self.trust_action.split("    - id: route\n", 1)[1]
+        return textwrap.dedent(route.split("      run: |\n", 1)[1])
 
     def _trust_script(self):
         self.assertIn('run: bash "$GITHUB_ACTION_PATH/classify.sh"', self.trust_action)
@@ -84,17 +83,10 @@ class CiRunnerRoutingTest(unittest.TestCase):
                                     text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             trust = self._outputs(trust_path)
-            shared = self.trust_action.split("    - id: route\n", 1)[1]
-            shared = textwrap.dedent(shared.split("      run: |\n", 1)[1])
             routing_env = dict(env, TRUSTED_PR=trust["trusted_pr"] if trust_value is None else trust_value)
-            results = []
-            for script in (self._routing_script(), shared):
-                output_path.write_text("")
-                result = subprocess.run(["bash", "-c", script], env=routing_env,
-                                        text=True, capture_output=True, check=False)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                results.append(self._outputs(output_path))
-            self.assertEqual(*results)
+            result = subprocess.run(["bash", "-c", self._routing_script()], env=routing_env,
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
             return {**trust, **self._outputs(output_path)}
 
     def test_operator_pr_uses_self_hosted_lanes_when_enabled(self):
@@ -269,7 +261,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
                       "        uses: ./.github/actions/pr-trust\n", gatekeeper)
         self.assertIn("      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}\n", gatekeeper)
         self.assertIn("      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}\n", gatekeeper)
-        self.assertIn("TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}", gatekeeper)
+        self.assertIn("TRUSTED_PR: ${{ steps.classify.outputs.trusted_pr }}", self.trust_action)
 
     def test_change_size_does_not_override_trusted_runner_routing(self):
         """A trusted run follows the runner gate regardless of changed-file count."""
@@ -296,11 +288,10 @@ class CiRunnerRoutingTest(unittest.TestCase):
             self.assertNotIn("\n  " + retired + ":\n", self.text)
 
     def test_a_label_requires_base_pinned_trust_before_using_the_unified_worker(self):
-        gate = self._job_body("gatekeeper")
-        self.assertIn("UNIFIED_RE_SELECTED: ${{ vars.UNIFIED_RE_CANARY != 'false' && "
-                      "(steps.pr_trust.outputs.unified_re_default == 'true' || "
-                      "contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')) }}", gate)
-        self.assertIn('if [[ "$use_linux" == "true" && "$UNIFIED_RE_SELECTED" == "true"', gate)
+        self.assertIn("UNIFIED_RE_SELECTED: ${{ inputs.unified_re_canary != 'false' && "
+                      "(steps.classify.outputs.trusted_pr == 'true' || "
+                      "contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')) }}", self.trust_action)
+        self.assertIn('if [[ "$use_linux" == "true" && "$UNIFIED_RE_SELECTED" == "true"', self.trust_action)
 
 
 if __name__ == "__main__":

@@ -312,13 +312,20 @@ directory, and Bazel reads it through a small credential helper there that the f
 server log in the output base, and uploads of workspace paths cannot carry it. With no key the
 action writes nothing and the `try-import` is a silent no-op. The trusted mixed runner receives no BuildBuddy credential.
 
-The Editor WASM lane runs the standalone renderer pixel and font-resource tests together under
-`--config=wasm-size`. The font test enables text on its test-page dependency. The pixel test and
-the shipped renderer size gate still use the text-off module.
+Trusted PRs run affected Editor Wasm tests in the main Bazel invocation. The renderer pixel and size
+checks use the size-optimized text-off module. The font-resource test enables text on its test page.
+The bridge check links both bridge probes and the standalone Geode module. The editor payload check
+and browser tests consume the same size-optimized Geode package.
 
-The hosted and VM macOS jobs build and test the planner's selected roots in one Bazel
-invocation. Non-test products are built, and the test-tag filters select which tests run.
-Browser tests still run serially in their own phase; the native Metal job owns shader validation.
+Chromium smoke, startup and presentation are separate test actions. Firefox compatibility, WebKit
+carousel and the two composited projects each run on a Darwin worker with a desktop session. Bazel
+can reuse passing test results. The receipt checks the executed case count for each selected browser
+target. A full selection requires all seven browser targets and six configured package checks.
+Synthetic drag classification and readback bookkeeping run under Node. Gesture policy runs in C++.
+
+The hosted Editor WASM workflow qualifies source-stamped release candidates on main and supplies
+independent coverage for PRs using hosted execution. A trusted PR using the mixed graph skips its
+hosted build job. The lockfile proof and immutable deployment artifacts stay with the hosted producer.
 
 **Linux remote execution.** Every Bazel build and test step of the hosted `linux` job except the
 linker canary selects the declared LLVM 21 toolchain with libc++ and the Linux sysroot
