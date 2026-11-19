@@ -1,5 +1,11 @@
 import { kCarouselSamples, kCarouselViewport } from "./carousel-samples.mjs";
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
+import {
+  completedDragFrames,
+  dragInputLatencies,
+  heldDragPositionCount,
+  streamDragInputs,
+} from "./drag-input-stream.mjs";
 import { packageHashes } from "./package-identity.mjs";
 import { sumPipelineCompilesPending } from "./pipeline-compile-readiness.mjs";
 import { dispatchCanvasPointer } from "./canvas-pointer";
@@ -29,7 +35,11 @@ import {
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
-import { summarizeMaskedDragResults } from "./masked-drag-counters.mjs";
+import {
+  heldMaskedDragShapeFailures,
+  summarizeMaskedDragResults,
+  unpatchedTileCount,
+} from "./masked-drag-counters.mjs";
 import { pickerPresentationSettled } from "./presentation-baseline.mjs";
 import {
   kHeldDragPresentationBounds,
@@ -437,122 +447,7 @@ async function continuousDrag(
   phase: string,
 ) {
   const before = await snapshot(page);
-  const stream = await page.evaluate(async ({ start, direction }) => {
-    const state = window as Diagnostics;
-    const canvas = document.querySelector("canvas#canvas")!;
-    const dispatch = (type: string, x: number, y: number, buttons: number) => {
-      canvas.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: x,
-          clientY: y,
-          button: 0,
-          buttons,
-        }),
-      );
-    };
-    const frames: {
-      frame: number;
-      atMs: number;
-      pointerX?: number;
-      pointerY?: number;
-      selectedCount?: number;
-      dragging?: boolean;
-      workerMs?: number;
-      completedResults?: number;
-      readbackCount?: unknown;
-      readbackPollIterations?: unknown;
-      presentation?: Diagnostics["__donnerPresentationQueueStats"];
-    }[] = [];
-    const dispatchTimes: number[] = [];
-    const dispatchPoints: { x: number; y: number }[] = [];
-    let previousCompletedSerial = 0;
-    let previousFrame = state.__donnerFrameLoopStats?.renderedFrames ?? 0;
-    let observing = true;
-    let sampleId = 0;
-    const observe = () => {
-      const loop = state.__donnerFrameLoopStats;
-      const presentation = state.__donnerPresentationQueueStats;
-      if (
-        loop
-        && (loop.renderedFrames !== previousFrame
-          || (presentation?.completedSerial ?? 0) !== previousCompletedSerial)
-      ) {
-        previousCompletedSerial = presentation?.completedSerial ?? 0;
-        previousFrame = loop.renderedFrames;
-        if (frames.length < 256) {
-          frames.push({
-            frame: loop.renderedFrames,
-            atMs: loop.lastFrameAtMs,
-            pointerX: state.__donnerInteractionStats?.pointerX,
-            pointerY: state.__donnerInteractionStats?.pointerY,
-            selectedCount: state.__donnerInteractionStats?.selectedCount,
-            dragging: state.__donnerInteractionStats?.dragging,
-            workerMs: state.__donnerWorkerStats?.workerMs,
-            completedResults: state.__donnerWorkerStats?.completedResults,
-            presentation,
-            readbackCount: state.__donnerWorkerStats?.readbackCount,
-            readbackPollIterations: state.__donnerWorkerStats?.readbackPollIterations,
-          });
-        }
-      }
-      if (observing) sampleId = requestAnimationFrame(observe);
-    };
-    const startedAtMs = performance.now();
-    observe();
-    dispatch("mousedown", start.x, start.y, 1);
-    let end = start;
-    try {
-      await new Promise<void>((resolve) => {
-        let step = 0;
-        const move = () => {
-          ++step;
-          const fraction = step / 60;
-          end = {
-            x: Math.round(start.x + direction * 120 * fraction),
-            y: Math.round(start.y + direction * 72 * fraction),
-          };
-          dispatchTimes.push(performance.now());
-          dispatchPoints.push(end);
-          dispatch("mousemove", end.x, end.y, 1);
-          if (step < 60) setTimeout(move, 16);
-          else resolve();
-        };
-        setTimeout(move, 16);
-      });
-    } finally {
-      dispatch("mouseup", end.x, end.y, 0);
-      if (state.__donnerPresentationQueueStats) {
-        await new Promise<void>((resolve) => {
-          const deadline = performance.now() + 500;
-          const finish = () => {
-            const frame = state.__donnerPresentationQueueStats;
-            if (
-              (frame?.inputRepresented && !frame.mouseDown && frame.pointerX === end.x
-                && frame.pointerY === end.y) || performance.now() >= deadline
-            ) resolve();
-            else setTimeout(finish, 8);
-          };
-          finish();
-        });
-      }
-      observe();
-      observing = false;
-      cancelAnimationFrame(sampleId);
-    }
-    const stream = {
-      startedAtMs,
-      finishedAtMs: performance.now(),
-      dispatchTimes,
-      dispatchPoints,
-      frames,
-      end,
-    };
-    state.__donnerLastDragStream = stream;
-    return stream;
-  }, { start, direction });
+  const stream = await page.evaluate(streamDragInputs, { start, direction });
   await expect.poll(async () => (await snapshot(page)).interaction, {
     timeout: 15000,
     message: "the final pointer move and mouse release must reach the editor",
@@ -585,49 +480,19 @@ async function continuousDrag(
     true,
   );
   const gaps = (times: number[]) => times.slice(1).map((time, index) => time - times[index]);
-  const latencies = stream.dispatchPoints.flatMap((point, index) => {
-    const frame = stream.frames.find((sample) =>
-      sample.presentation?.inputRepresented
-      && sample.presentation.completedSerial > (before.presentation?.completedSerial ?? 0)
-      && sample.presentation.completedAtMs >= stream.startedAtMs
-      && stream.dispatchPoints.findLastIndex((applied, appliedIndex) =>
-          applied.x === sample.presentation!.pointerX && applied.y === sample.presentation!.pointerY
-          && stream.dispatchTimes[appliedIndex] <= sample.presentation!.completedAtMs
-        ) >= index
-      && sample.presentation.completedAtMs >= stream.dispatchTimes[index]
-    );
-    return frame?.presentation
-      ? [frame.presentation.completedAtMs - stream.dispatchTimes[index]]
-      : [];
-  });
-  const completions = new Map<number, typeof stream.frames[number]>();
-  for (const frame of stream.frames) {
-    if (
-      frame.presentation?.inputRepresented
-      && frame.presentation.completedSerial > (before.presentation?.completedSerial ?? 0)
-      && frame.presentation.completedAtMs >= stream.startedAtMs
-      && stream.dispatchPoints.some((point) =>
-        point.x === frame.presentation!.pointerX
-        && point.y === frame.presentation!.pointerY
-      )
-    ) {
-      completions.set(frame.presentation.completedSerial, frame);
-    }
-  }
-  const completedFrames = [...completions.values()];
+  const baselineSerial = before.presentation?.completedSerial ?? 0;
+  const latencies = dragInputLatencies(stream, baselineSerial);
+  const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
-    const positions = new Set(
-      completedFrames.filter((frame) => frame.presentation!.mouseDown)
-        .map((frame) => `${frame.presentation!.pointerX},${frame.presentation!.pointerY}`),
-    );
+    const heldPositions = heldDragPositionCount(completedFrames);
     // Reported, not enforced, only for the masked crown drag in Chromium on the hosted macOS Perf
     // runner (#2106); every other run and phase enforces it. Re-enforce once #2106 is fixed.
     await completionCheck(
       "heldDragPositions",
       phase,
-      `${positions.size} held positions completed`,
+      `${heldPositions} held positions completed`,
       () =>
-        expect(positions.size, "held drag must complete multiple represented positions")
+        expect(heldPositions, "held drag must complete multiple represented positions")
           .toBeGreaterThan(1),
     );
     await completionCheck(
@@ -1897,11 +1762,6 @@ async function stopWorkerResultCounters(page: Page) {
   });
 }
 
-/** Tiles a result rasterized other than by a damage patch. */
-function unpatchedTileCount(result: WorkerResultCounters) {
-  return result.cachedTileCount + result.immediateTileCount - result.damagePatchTileCount;
-}
-
 /**
  * As in the native compositor, every result rendered while the masked child is held takes the
  * fast path (or finds nothing dirty) without a slow-path frame, and rasterizes at most one tile,
@@ -1909,34 +1769,10 @@ function unpatchedTileCount(result: WorkerResultCounters) {
  * rasterizes no tile, so it needs no exception.
  */
 function expectHeldMaskedDragDamagePatch(summary: MaskedDragSummary) {
-  expect(summary.countersPublished, "the candidate bundle must publish per-result counters").toBe(
-    true,
-  );
-  const held = summary.held;
   expect(
-    held.filter((result) => result.fastPathFrames > 0).length,
-    "the held drag must produce fast-path results",
-  ).toBeGreaterThan(0);
-  const shape = (result: WorkerResultCounters) => ({
-    completedResults: result.completedResults,
-    slowPathFramesWithDirty: result.slowPathFramesWithDirty,
-    fastPathOrClean: result.fastPathFrames + result.noDirtyFrames > 0,
-    damagePatchTileCount: result.damagePatchTileCount,
-    patchesAtMostOneTile: result.damagePatchTileCount <= 1,
-    unpatchedTileCount: unpatchedTileCount(result),
-  });
-  expect(
-    held.map(shape),
+    heldMaskedDragShapeFailures(summary),
     "every held masked-child result must take the fast path and only patch its owning tile",
-  ).toEqual(
-    held.map((result) => ({
-      ...shape(result),
-      slowPathFramesWithDirty: 0,
-      fastPathOrClean: true,
-      patchesAtMostOneTile: true,
-      unpatchedTileCount: 0,
-    })),
-  );
+  ).toEqual([]);
 }
 
 type MaskedDragSummary = {
