@@ -5889,17 +5889,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Draws a resolved radial gradient over \p drawPath, or the single color a
   /// zero radius collapses it to, charging its stops to the frame unless
   /// \p stopsCharged says the caller already did.
-  /// @return False when the radial gradient is unusable and the caller should
+  /// @param resolved The radial resolution; empty when the reference is not a
+  ///   radial gradient.
+  /// @return False when there is no usable radial gradient and the caller should
   ///   paint the reference's fallback instead; true when it was drawn or the
   ///   frame's cap refused it.
-  bool drawRadialGradient(const Path& drawPath, const ResolvedRadialGradient& radial, FillRule rule,
+  bool drawRadialGradient(const Path& drawPath,
+                          const std::optional<ResolvedRadialGradient>& resolved, FillRule rule,
                           const geode::EncodedPath* precomputedEncoded,
                           geode::GeodeResidentSlot* residentSlot,
                           geode::GeodeResidentGradientSlot* gradientResidentSlot,
                           bool stopsCharged) {
-    if (!radial.gradient.has_value() && !radial.solidFallback.has_value()) {
+    if (!resolved.has_value() ||
+        (!resolved->gradient.has_value() && !resolved->solidFallback.has_value())) {
       return false;
     }
+    const ResolvedRadialGradient& radial = *resolved;
     if (!stopsCharged && !reserveGradientStops(radial.stopCount)) {
       return true;
     }
@@ -5963,8 +5968,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
       auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
                                                 opacity, gradientStopScratch);
-      if (radial.has_value() &&
-          drawRadialGradient(drawPath, *radial, rule, precomputedEncoded, residentSlot,
+      if (drawRadialGradient(drawPath, radial, rule, precomputedEncoded, residentSlot,
                              gradientResidentSlot, gradientStopsCharged)) {
         return;
       }
