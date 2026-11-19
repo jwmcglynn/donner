@@ -2326,17 +2326,24 @@ struct SpanStrokeCase {
   std::string_view textStroke;       ///< Attributes of the path of the "Te" outlines.
   std::string_view spanStroke;       ///< Attributes of the path of the "xt" outlines.
   bool onTextPath = false;           ///< Lay the text out along a curved `<textPath>`.
+  std::string_view defs;             ///< Paint server definitions of both documents, or empty.
+  /// Draw each glyph outline as its own `<path>`, as a text fill paints glyph by glyph, instead of
+  /// one path per span, as a text stroke strokes a span's chunk.
+  bool pathPerGlyph = false;
 };
 
 /// Renders \p testCase's text and compares it with a `<path>` of the "Te" glyph outlines and one of
-/// the "xt" outlines, stroked as the case states.
+/// the "xt" outlines (or one per glyph), painted as the case states.
 void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
   SCOPED_TRACE(testCase.label);
   const std::string content = "Te<tspan " + std::string(testCase.spanAttributes) + ">xt</tspan>";
+  const std::string defs =
+      testCase.defs.empty() ? std::string() : "<defs>" + std::string(testCase.defs) + "</defs>";
   SVGDocument textDocument = instantiateSubtree(
-      (testCase.onTextPath
-           ? R"svg(<defs><path id="curve" d="M 20 150 Q 100 40 180 150"/></defs>)svg"
-           : "") +
+      defs +
+          (testCase.onTextPath
+               ? R"svg(<defs><path id="curve" d="M 20 150 Q 100 40 180 150"/></defs>)svg"
+               : "") +
           std::string(
               R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg") +
           std::string(testCase.textAttributes) + ">" +
@@ -2349,13 +2356,25 @@ void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
 
   const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
   ASSERT_THAT(outlines, testing::SizeIs(4));
-  const std::vector<Path> textOutlines(outlines.begin(), outlines.begin() + 2);
-  const std::vector<Path> spanOutlines(outlines.begin() + 2, outlines.end());
-  SVGDocument pathDocument = instantiateSubtree(
-      "<g " + std::string(testCase.groupAttributes) + "><path " + std::string(testCase.textStroke) +
-          " d=\"" + JoinedPathData(textOutlines) + "\"/><path " + std::string(testCase.spanStroke) +
-          " d=\"" + JoinedPathData(spanOutlines) + "\"/></g>",
-      parser::SVGParser::Options(), Vector2i(200, 200));
+  const auto pathElements = [&](std::span<const Path> glyphs, std::string_view attributes) {
+    const auto pathElement = [&](std::span<const Path> paths) {
+      return "<path " + std::string(attributes) + " d=\"" + JoinedPathData(paths) + "\"/>";
+    };
+    if (!testCase.pathPerGlyph) {
+      return pathElement(glyphs);
+    }
+    std::string elements;
+    for (std::size_t i = 0; i < glyphs.size(); ++i) {
+      elements += pathElement(glyphs.subspan(i, 1));
+    }
+    return elements;
+  };
+  const std::span<const Path> allOutlines(outlines);
+  SVGDocument pathDocument =
+      instantiateSubtree(defs + "<g " + std::string(testCase.groupAttributes) + ">" +
+                             pathElements(allOutlines.first(2), testCase.textStroke) +
+                             pathElements(allOutlines.subspan(2), testCase.spanStroke) + "</g>",
+                         parser::SVGParser::Options(), Vector2i(200, 200));
   const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
   AssertVisibleFixture(expected, "span_stroke_visible");
   editor::tests::CompareBitmapToBitmap(actual, expected,
@@ -2467,6 +2486,55 @@ TEST_F(RendererRegressionTests, TextSpanResolvesItsOwnStrokePaint) {
        R"svg(fill="none" stroke="red" stroke-width="8" stroke-opacity="0.5")svg", "", ""},
       {"span_shares_stroke_on_text_path", kTextStroke, "", kNoFill, kRed, kRed,
        /*onTextPath=*/true},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
+TEST_F(RendererRegressionTests, TextSpanWithTransparentStrokeIsNotPaintedWithTheTextPaintServer) {
+  // A tspan whose own stroke is a fully transparent solid paints no stroke inside text stroked with
+  // a gradient or a pattern: the text's paint server applies only where the span's computed stroke
+  // is that paint server. The transparent forms are stroke-opacity 0, the `transparent` color and
+  // span opacity 0. A tspan with no stroke of its own shares the text's paint server.
+  constexpr std::string_view kTextStroke =
+      R"svg(fill="none" stroke="url(#paint)" stroke-width="4")svg";
+  constexpr std::string_view kStroke = R"svg(stroke="url(#paint)" stroke-width="4")svg";
+  for (const TextStrokePaintCase& paint : {kTextStrokePaints[1], kTextStrokePaints[2]}) {
+    SCOPED_TRACE(paint.label);
+    const std::array<SpanStrokeCase, 4> cases = {{
+        {"span_stroke_opacity_zero", kTextStroke, R"svg(stroke="red" stroke-opacity="0")svg",
+         R"svg(fill="none")svg", kStroke, "", false, paint.defs},
+        {"span_stroke_transparent", kTextStroke, R"svg(stroke="transparent")svg",
+         R"svg(fill="none")svg", kStroke, "", false, paint.defs},
+        {"span_opacity_zero", kTextStroke, R"svg(opacity="0")svg", R"svg(fill="none")svg", kStroke,
+         "", false, paint.defs},
+        {"span_shares_paint_server", kTextStroke, "", R"svg(fill="none")svg", kStroke, kStroke,
+         false, paint.defs},
+    }};
+    for (const SpanStrokeCase& testCase : cases) {
+      ExpectSpanStrokesMatchOutlinePaths(testCase);
+    }
+  }
+}
+
+TEST_F(RendererRegressionTests, TextSpanWithTransparentFillIsNotPaintedWithTheTextPaintServer) {
+  // The fill counterpart: a tspan whose own fill is a fully transparent solid paints no fill inside
+  // text filled with a pattern, and a tspan that shares the text's pattern paints it with the
+  // span's own fill opacity.
+  constexpr std::string_view kFill = R"svg(fill="url(#paint)")svg";
+  constexpr std::string_view kPattern = kTextStrokePaints[2].defs;
+  const std::array<SpanStrokeCase, 5> cases = {{
+      {"span_fill_opacity_zero", kFill, R"svg(fill="red" fill-opacity="0")svg", "", kFill,
+       R"svg(fill="none")svg", false, kPattern, /*pathPerGlyph=*/true},
+      {"span_fill_transparent", kFill, R"svg(fill="transparent")svg", "", kFill,
+       R"svg(fill="none")svg", false, kPattern, /*pathPerGlyph=*/true},
+      {"span_opacity_zero", kFill, R"svg(opacity="0")svg", "", kFill, R"svg(fill="none")svg", false,
+       kPattern, /*pathPerGlyph=*/true},
+      {"span_shares_paint_server", kFill, "", "", kFill, kFill, false, kPattern,
+       /*pathPerGlyph=*/true},
+      {"span_shares_translucent_paint_server", kFill, R"svg(fill-opacity="0.5")svg", "", kFill,
+       R"svg(fill="url(#paint)" fill-opacity="0.5")svg", false, kPattern, /*pathPerGlyph=*/true},
   }};
   for (const SpanStrokeCase& testCase : cases) {
     ExpectSpanStrokesMatchOutlinePaths(testCase);
