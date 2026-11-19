@@ -956,8 +956,9 @@ reference, written by the resvg suite harness with the software (TinySkia) backe
 at default settings, from the code of the change that adds it. Every lane that runs a row compares
 it at default settings (0.02 threshold, 100 pixels): the simple and full text tiers, and Geode for
 the rows outside `text/`, whose differences are listed per row. A self-rendered golden cannot prove
-itself correct, so each row states the normative text that decides it, what the vendored PNG gets
-wrong, and an independent contract test that does not read the golden or the corpus file.
+itself correct, so each row states the normative text or harness condition that decides it, what
+the vendored PNG gets wrong or was made under, and an independent contract test that does not
+read the golden or the corpus file.
 
 To regenerate one, delete its PNG and run this from the repository root, with the filter naming
 the row (for example `*FiltersFilter*invalid_FuncIRI*`):
@@ -975,7 +976,9 @@ reference to a non-existent object or to an element that is not a `filter`, "the
 chain is ignored. No filter is applied to the object." The rect therefore draws unfiltered. The
 vendored PNG hides it: the 160x160 square is fully transparent, and only the frame is drawn. The
 corpus paints the rect red, its usual failure color, yet the specification requires it to be
-visible, so the golden shows a red square. Geode differs from the golden by 0 pixels.
+visible, so the golden shows a red square. The suite's results.csv records Chrome, Firefox and
+Safari as passing the hidden-rect PNG; those are visual grades of the vendored image, and the
+Filter Effects text above decides the row. Geode differs from the golden by 0 pixels.
 
 Independent evidence: `FilterReferenceStages.InvalidReferenceDisablesEntireChain` renders a red
 rect under `url(#missing)` and four mixed chains and requires each to match the same rect drawn
@@ -985,9 +988,11 @@ without a filter.
 
 `donner-one-invalid-url-in-list.png` (500x500). The list `grayscale(0.5) url(#missing)
 opacity(0.5)` contains a reference to a missing element, so by the same Filter Effects 1 section 5
-rule no filter function in the list applies, and the square keeps its opaque seagreen (46, 139, 87).
-The vendored PNG applies the functions around the missing reference: its square is
-(80, 126, 100) at alpha 127. Geode differs from the golden by 0 pixels.
+rule ("the whole filter chain is ignored") no filter function in the list applies, and the square
+keeps its opaque seagreen (46, 139, 87). The vendored PNG applies the functions around the missing
+reference: its square is (80, 126, 100) at alpha 127. The suite's results.csv records Chrome as
+passing that PNG and Firefox and Safari as failing it; the specification text decides the row.
+Geode differs from the golden by 0 pixels.
 
 Independent evidence: `FilterReferenceStages.InvalidReferenceDisablesEntireChain` (including
 `opacity(0.25) url(#missing) invert(1)`) and `InvalidReferenceLeavesGroupChildrenVisible`.
@@ -997,8 +1002,10 @@ Independent evidence: `FilterReferenceStages.InvalidReferenceDisablesEntireChain
 `donner-url-and-grayscale.png` (500x500). The chain is a blur from a `filter` element followed by
 `grayscale()`. Filter Effects 1, section 5, says that `color-interpolation-filters` has no effect
 on filter functions, which "must operate in the sRGB color space". grayscale() of seagreen in sRGB
-is 0.2126 x 46 + 0.7152 x 139 + 0.0722 x 87 = 115.47, and the golden's interior is 115. The vendored
-PNG's interior is 122, the result of applying the function to linearRGB values. Geode differs
+is 0.2126 x 46 + 0.7152 x 139 + 0.0722 x 87 = 115.47, and the golden's interior is 115. The
+vendored PNG's interior is 122, the result of applying the function to linearRGB values. The
+suite's results.csv records Chrome and Firefox as passing that PNG and Safari as failing it; a
+visual grade cannot tell 115 from 122, and the specification text decides the row. Geode differs
 from the golden by 0 pixels.
 
 Independent evidence: `RendererRegressionTests.CssFilterContractMixedUrlGrayscaleUsesSrgb`
@@ -1009,8 +1016,9 @@ requires `url(#identity) grayscale()` over seagreen to equal a solid rgb(115 115
 `donner-circle-shorthand-with-stroke-box.png` and `donner-circle-shorthand-with-view-box.png`
 (500x500). Disposition: harness mismatch. Both vendored PNGs are opaque white (no pixel has alpha
 below 255), while the suite renders on a transparent canvas, so the comparisons differ by 147,190
-(`stroke-box`) and 88,392 (`view-box`) pixels, nearly all of them background. The geometry is the same: flattened onto white, no pixel of either
-golden is more than 46 levels from the vendored PNG. With `stroke-box`, `circle()` takes the
+(`stroke-box`) and 88,392 (`view-box`) pixels, nearly all of them background. The geometry is the
+same: flattened onto white, no pixel of either golden is more than 46 levels from the vendored
+PNG. With `stroke-box`, `circle()` takes the
 closest side of the 140-unit stroke box of the 120-unit rect with a 20-unit stroke, a circle of
 radius 70 at (100, 100); with `view-box` it takes the 200-unit viewBox, radius 100. Geode differs
 from each golden by 0 pixels.
@@ -1021,31 +1029,37 @@ path of the expected radius.
 
 ### `structure/svg/no-size`
 
-`donner-no-size.png` (500x500). The root `svg` has no `width`, `height` or `viewBox`. SVG 2
-section 8.12 (intrinsic sizing) gives such an element no intrinsic size and no intrinsic aspect
-ratio, so its `auto` width and height fill the host viewport, the 500x500 canvas, and without a `viewBox` one user unit is
-one CSS pixel (section 8.4): the 160-unit green square sits at device (20, 20) to (180, 180) with
-the 198-unit frame around it. The vendored PNG scales the content to fit its bounds into the
-canvas, which no rule of the specification provides. Geode differs from the golden by 7 pixels.
+`donner-no-size.png` (500x500). Disposition: API policy. The root `svg` has no `width`, `height`
+or `viewBox`, so it has no intrinsic size (SVG 2 section 8.12), and SVG 2 leaves the initial
+viewport of such a document to its host. Donner's API gives it the caller's canvas, here the
+suite's 500x500, at one user unit per px (section 8.4): the 160-unit green square covers device
+(20, 20) to (180, 180) inside the 198-unit frame, and the rest of the canvas is transparent. The
+vendored PNG was made with a different host viewport: it shows the same artwork in a 200-unit
+viewport scaled 2.5 times, the suite's usual scale, with the origin kept (pixel 0 transparent,
+the frame from about device px 1, the square from px 50 to 450). Both follow the specification;
+they differ in the initial viewport the host supplies. The suite's results.csv records Chrome,
+Firefox, Safari and resvg as passing the PNG. Geode differs from the golden by 7 pixels.
 
-Independent evidence: `RendererRegressionTests.ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit`
-renders an unsized root on a caller canvas and requires it to match the same rect drawn at its
-user-unit position, with transparent pixels outside it.
+Independent evidence:
+`RendererRegressionTests.ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit` asserts Donner's API contract: an unsized root rendered on a caller canvas matches the same rect
+drawn at its user-unit position, with transparent pixels outside it.
 
 ### `structure/use/xlink-to-an-external-file`
 
-`donner-xlink-to-an-external-file.png` (500x500). Disposition: harness mismatch. The `use`
-references `#text1` in `resources/simple-text.svg`, a `text` element whose own document sets Arial
-at 64 units on its root. The referenced element is cloned without its ancestors, so it inherits
-`fill="green"`, Noto Sans and 64 units from the `use`. The vendored PNG draws the same text
-but is opaque white (no pixel has alpha below 255), while the suite renders on a transparent
-canvas, so the comparison differs by 232,379 pixels, nearly all of them background. Flattened onto white, the
-centroids of the three glyph clusters (`T`, `ex`, `t`) agree with the PNG within 0.35 device px;
-the PNG's glyph ink is about 5% heavier, consistent with stems about 0.6 device px wider. Geode
-differs from the golden by 0 pixels.
+`donner-xlink-to-an-external-file.png` (500x500). Disposition: harness mismatch plus reference
+glyph rasterization. The `use` references `#text1` in `resources/simple-text.svg`, a `text`
+element whose own document sets Arial at 64 units on its root. The referenced element is cloned
+without its ancestors, so it inherits `fill="green"`, Noto Sans and 64 units from the `use`. The
+vendored PNG draws the same text but is opaque white (no pixel has alpha below 255), while the
+suite renders on a transparent canvas, so the comparison differs by 232,379 pixels, nearly all of
+them background. Flattened onto white, the golden still differs from the PNG by more than 5 levels
+on 2,117 pixels (at most 216 levels), all of them on the glyphs: the centroids of the three glyph
+clusters (`T`, `ex`, `t`) agree within 0.35 device px, but the PNG's glyph ink is about 5.6%
+heavier, consistent with stems about 0.6 device px wider. That residual is the reference's glyph
+rasterization, not glyph placement. Geode differs from the golden by 0 pixels.
 
-Independent evidence: `RendererPublicApiTest.ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas`
-requires a `use` of an external `text` fragment to take the host's fill and font size, ignore
+Independent evidence:
+`RendererPublicApiTest.ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas` requires a `use` of an external `text` fragment to take the host's fill and font size, ignore
 the external document's root styles, keep the canvas transparent, and match the same text written
 inline.
 
@@ -1099,9 +1113,10 @@ A self-rendered golden guards against regressions but does not prove correctness
 names the independent evidence: the font's own tables, the contract test
 `TextPathConvergence.UprightCjkUsesFontVerticalOriginsOnPathsAndInFlatText` (upright Mplus 1p
 glyphs at their vmtx origins and 1000-unit advances, compared with horizontal text placed from
-those numbers alone), and browser measurements where they were taken. Each was rendered by the full text tier with the basic (TinySkia) backend from the code of
-the change that added it, regenerates byte for byte from that code with the command below, and
-compares at default parameters.
+those numbers alone), and browser measurements where they were taken. Each was rendered by the
+full text tier with the basic (TinySkia) backend from the code of the change that added it,
+regenerates byte for byte from that code with the command below, and compares at default
+parameters.
 
 To regenerate one, delete its PNG and run from the repository root (the fixture writes a missing
 golden):
@@ -1115,7 +1130,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 | ---- | -------------------------------------- | ----------- | ----------- |
 | `text/writing-mode/japanese-with-tb` | Upright U+65E5 and U+672C in Mplus 1p at 64 user units (160 device px per em). Mplus 1p has vhea and vmtx: both glyphs advance 1000 units, and each glyph's top side bearing plus its yMax puts the vertical origin 860 units below the top of its cell, so the ink tops belong at device y 88.92 and 241.88; Donner's glyph ink starts on rows 89 and 242. The vendored PNG sets the glyphs 5.55 and 5.70 device px lower (best-fit translation of each glyph's ink), about 35 units. That placement follows neither the font's vertical metrics nor an origin centered on the hhea ascent and descent, which at 877.5 units would put the glyphs only 2.8 px lower. Caveat: the corpus file writes font-family="Mplus 1p" unquoted, which is invalid CSS because of the 1p token, so browsers fall back to a default font, and the corpus results' browser passes for this row reflect that fallback; Chrome 156, given a copy that differs only by quoting the family name, places the glyphs within 0.25 px of Donner. | `a7cc22f6a69b9cf4c4025372bbd0bf167f6d9a31c31e515db0375f30521f020f` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` |
 | `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Donner uses (Blink and Gecko also take the origin from VORG and then from vmtx). The vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
-| `text/writing-mode/tb-and-punctuation` | Mplus 1p kana, ideographs and the punctuation U+3001 and U+3002 at 16 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the vertical font features for upright typesetting, naming the OpenType vert feature, and the vertical metrics. Donner shapes vertical runs with vert enabled and draws the comma and full stop forms right of the column's center (ink centers at device x 157.5 and 156.9, column center x 150); the vendored PNG draws them left of it (x 142.8 and 142.7), where the horizontal forms sit, 14.7 and 14.1 px from Donner's. Its other 10 ink clusters agree with Donner within 0.75 device px. Chrome 156 places the punctuation forms where Donner does and agrees with it within 0.4 px on all 12 ink clusters. 228 px differ. The corpus results mark Chrome and Firefox as passing and Safari and resvg as failing this row. | `100f4e24b2fd7013e554303f71b9b63199789863e81e86f8b046f340c6e34028` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` |
+| `text/writing-mode/tb-and-punctuation` | Mplus 1p kana, ideographs and the punctuation U+3001 and U+3002 at 16 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the vertical font features for upright typesetting, naming the OpenType vert feature, and the vertical metrics. Donner shapes vertical runs with vert enabled and draws the comma and full stop vertical forms upright, right of the column's center (ink centers at device x 157.5 and 156.9, column center x 150). The vendored PNG has no vert forms: it sets the comma sideways, its horizontal form rotated a quarter turn (its stroke runs from lower left to upper right, where the upright form runs from upper left to lower right), and both marks sit left of the center (x 142.8 and 142.7), 14.7 and 14.1 px from Donner's. Its other 10 ink clusters agree with Donner within 0.75 device px. Chrome 156 places the punctuation forms where Donner does and agrees with it within 0.4 px on all 12 ink clusters. 228 px differ. The corpus results mark Chrome and Firefox as passing and Safari and resvg as failing this row. | `100f4e24b2fd7013e554303f71b9b63199789863e81e86f8b046f340c6e34028` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` |
 | `text/alignment-baseline/hanging-on-vertical` | alignment-baseline: hanging in vertical text, upright U+65E5 and U+672C then sideways "Japan" in Mplus 1p at 24 user units (60 device px per em). The vendored PNG applies the same cross-axis hanging shift as Donner: matched in reading order, the horizontal centers of all 7 ink clusters agree within 0.65 device px. The difference is along the column. The PNG advances the upright U+65E5 by about 1.39 em (83.1 device px to U+672C), where the font's vmtx advance is 1000 units, 1 em; Donner advances 59.9 px. So U+672C sits 23.1 px and the sideways letters about 45 px further down in the PNG, while the letters' own advances agree within 0.6 px. CSS Writing Modes 3 section 5.1.1 requires the vertical metrics for upright glyphs, and the contract test above checks the 1000-unit advance. Chrome 156 also applies the hanging baseline and agrees with Donner within 1.1 device px on all 7 ink clusters. The simple text tier differs from this full-tier rendering by 10 px. | `cb9c38a6b0542998f1be4ff2efbc14cd39eb656f4e29547542d65bebca6378d6` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
 
 ## Explicit tile geometry for nested and skewed patterns

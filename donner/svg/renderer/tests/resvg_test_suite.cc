@@ -1102,9 +1102,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {"no-size.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/donner-no-size.png", kDefaultThreshold,
-                     "Reference disagreement: the PNG scales the content to fit its bounds; a root "
-                     "svg without width, height or viewBox has no intrinsic size, so user units "
-                     "map 1:1 onto the canvas "
+                     "API policy: an unsized root gets the caller's canvas at one user unit per "
+                     "px; the PNG shows a 200-unit viewport at 2.5x "
                      "(ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit)")},
                 {"not-UTF-8-encoding.svg",
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
@@ -1158,8 +1157,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "donner/svg/renderer/testdata/golden/donner-xlink-to-an-external-file.png",
                          kDefaultThreshold,
                          "Harness mismatch: the PNG is opaque white where the canvas is "
-                         "transparent, and its glyph stems are 0.6 device px wider "
-                         "(ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas)")},
+                         "transparent; reference glyph rasterization: its glyph ink is 5.6% "
+                         "heavier (ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

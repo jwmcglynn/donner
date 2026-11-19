@@ -122,15 +122,15 @@
       "kinds": [
         "shared_golden"
       ],
-      "classification": "reference-disagreement",
-      "disposition": "User units map 1:1 onto the canvas of a root svg without intrinsic size.",
+      "classification": "api-policy",
+      "disposition": "The caller canvas preserves user units for a root without intrinsic size.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "donner/svg/renderer/tests/RendererRegression_tests.cc",
-        "https://www.w3.org/TR/SVG2/coords.html#SizingSVGInCSS"
+        "docs/spec_audit/transforms_coordinates.md"
       ],
-      "removal_criteria": "Switch to the adjacent image when it draws the content at its authored user units.",
-      "reference_provenance": "Donner rendering; the archived image scales the content to fit its bounds.",
+      "removal_criteria": "Switch to the adjacent image if the harness supplies the 200-unit initial viewport the archived image was made with.",
+      "reference_provenance": "Donner rendering at the caller canvas; the archived image shows a 200-unit viewport scaled 2.5 times.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
@@ -164,13 +164,13 @@
         "shared_golden"
       ],
       "classification": "harness-mismatch",
-      "disposition": "Compare on a transparent canvas, with host style inheritance covered by an independent control.",
+      "disposition": "Compare on a transparent canvas, with host style inheritance covered by an independent control; the archived glyph rasterization is heavier.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "donner/svg/renderer/tests/RendererPublicApi_tests.cc"
       ],
       "removal_criteria": "Switch to an adjacent image with a transparent background that passes at default settings.",
-      "reference_provenance": "Donner rendering; the archived image is opaque white with wider glyph stems.",
+      "reference_provenance": "Donner rendering; the archived image is opaque white and its glyph ink is about 5.6% heavier.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
