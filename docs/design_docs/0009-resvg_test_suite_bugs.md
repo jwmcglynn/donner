@@ -42,11 +42,11 @@ Two historical PNGs encode different behavior:
 - `filters/filter-functions/one-invalid-url-in-list.svg`: the PNG retains the surrounding
   grayscale and opacity functions; its center is RGBA `(80,126,100,127)`.
 
-Both files are reference-disagreement skips against those PNGs. Independently authored pixel
-tests in `FilterReferenceStages_tests.cc` require unchanged visible leaf and group geometry for
-missing and non-filter references, including functions on both sides of a bad URL. No
-replacement golden or enlarged tolerance is used. Empty valid filters are covered separately and
-remain transparent.
+Both rows compare at default settings against Donner goldens that draw the element unfiltered
+(see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)). Independently
+authored pixel tests in `FilterReferenceStages_tests.cc` require unchanged visible leaf and group
+geometry for missing and non-filter references, including functions on both sides of a bad URL.
+No enlarged tolerance is used. Empty valid filters are covered separately and remain transparent.
 
 ## Blur at a clipping filter region
 
@@ -119,27 +119,36 @@ anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
 `font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
 command are in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
-### Vertical text: resvg's own model
+### Vertical text: font vertical metrics
 
 | Category                | Test                    | Reason                                                             |
 | ----------------------- | ----------------------- | ------------------------------------------------------------------ |
-| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin; quoted-family Chromium control agrees |
-| text/writing-mode       | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin; Firefox agrees        |
-| text/writing-mode       | tb-and-punctuation      | Punctuation forms 14 px off; Chrome matches Donner within 0.4 px   |
-| text/alignment-baseline | hanging-on-vertical     | No alignment-baseline in the PNG; Chrome matches Donner to 1.1 px  |
+| text/writing-mode       | japanese-with-tb        | Upright glyphs 5.6 px below the vmtx origin                        |
+| text/writing-mode       | mixed-languages-with-tb | Upright glyphs 0.4 px below the vmtx origin                        |
+| text/writing-mode       | tb-and-punctuation      | No `vert` forms for the comma and full stop, 14 px off             |
+| text/alignment-baseline | hanging-on-vertical     | Upright glyphs advance 1.39 em instead of the 1 em vmtx advance    |
+| text/textPath           | writing-mode=tb         | Upright glyphs off the vmtx origin on a curved path                |
 
-These references encode resvg's vertical model. For the Japanese fixture, Chromium's matching control quotes the font family.
-resvg centers upright glyphs on the hhea ascent and descent instead of using the font's `vmtx`,
-and it does not apply `alignment-baseline` in vertical layout. CSS Writing Modes 3 section 5.1.1
-requires the font's vertical metrics; Blink and Gecko take the upright origin from `VORG`, then
-from the `vmtx` top side bearing, as Donner does. Measurements are in the golden README.
+CSS Writing Modes 3 section 5.1.1 requires upright glyphs to use the font's vertical metrics and
+vertical features (the OpenType `vert` feature must be enabled), and Mplus 1p has `vhea` and
+`vmtx`. These references do not follow them, and their offsets are not one consistent model: the
+Japanese glyphs sit about 35 units below the vmtx origin, where an origin centered on the hhea
+ascent and descent would put them only 17.5 units below, and the hanging row places the cross-axis
+baseline like Donner but advances each upright glyph by about 1.39 em. Independent contract tests
+check the vmtx origins and advances. Measurements are in the golden README.
 
-### Mixed vertical underline
+### Vertical text the specification leaves to the user agent
 
-The full-text `text/writing-mode/mixed-languages-with-tb-and-underline` comparison uses an
-independently positioned outline reference and Amiri's primary-face underline metrics. It
-compares the full 500 × 500 scene at default parameters. The golden README records the layout,
-browser controls, and reproduction command.
+`text/writing-mode/mixed-languages-with-tb-and-underline` and
+`text/glyph-orientation-vertical/simple-case` render without a comparison
+(`Params::UndefinedBehavior`, listed in `SPEC_UB_ALLOWLIST`). CSS Text Decoration 3 makes the
+position and thickness of an `auto` underline user-agent defined, and the underline is most of the
+first row's difference from any reference. In the second, SVG 2 aliases
+`glyph-orientation-vertical="0"` to upright text, but Noto Sans has no vertical metrics and CSS
+Writing Modes 3 does not define how a user agent synthesizes them.
+`RendererRegressionTests.GlyphOrientationVerticalZeroDrawsUprightGlyphs` keeps the alias itself
+covered: it requires the alias to draw exactly like `text-orientation: upright` and unlike the
+default sideways Latin.
 
 ### Opaque vendored references
 
@@ -240,16 +249,6 @@ The separate `text/text/compound-emojis` and `text/text/emojis` fixtures use
 resvg v0.49.0 references and a 0.10 threshold for bitmap resampling. The
 [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-emoji-bitmap-sampling)
 records the comparison.
-
-### Upright Latin and crosshair coverage
-
-| Category | Test | Reference |
-| --- | --- | --- |
-| text/glyph-orientation-vertical | simple-case | Font-derived letter outlines plus the original vector crosshairs and frame |
-
-The historical crosshair coverage accounts for 731 of 733 differing pixels. Both CPU text
-tiers compare the complete scene against an outlined control with default parameters. The
-golden README records the font metrics, browser controls, and regeneration command.
 
 ### textPath and text-decoration overrides
 

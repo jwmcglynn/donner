@@ -331,13 +331,13 @@ INSTANTIATE_TEST_SUITE_P(
 ```
 
 **Skip reason formats**. A new skip uses only the first form. The others are the forms of the
-twelve skips already in `SKIP_ALLOWLIST`, kept until each is converted or fixed; do not add new
+four skips already in `SKIP_ALLOWLIST`, kept until each is converted or fixed; do not add new
 ones:
 
 - `Not impl: <feature> (#<issue>)` - an unimplemented feature with its tracking issue.
-- `Reference disagreement: <what the vendored PNG gets wrong>`, `Harness mismatch: <difference>`
-  and `API policy: <difference>` - a reference disagreement, harness mismatch or API-policy
-  difference registered as a skip; to be converted to a Donner-rendered golden.
+- `Reference disagreement: <what the vendored PNG gets wrong>` - registered before reference
+  disagreements moved to goldens (`paint-servers/radialGradient/fr=0.7`); to be converted to a
+  Donner-rendered golden.
 - `Unsupported input: <input> (#<issue>)` - an input the parser does not accept
   (`structure/svg/not-UTF-8-encoding`).
 - `Accepted difference (<date>): <difference>` - a maintainer-accepted rendering difference

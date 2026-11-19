@@ -6,16 +6,22 @@
         "filters/filter-functions/one-invalid-url-in-list.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Keep the demonstrated independent filter behavior.",
+      "disposition": "Compare with the unfiltered rendering a missing reference requires.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1169"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/FilterReferenceStages_tests.cc",
+        "https://www.w3.org/TR/filter-effects-1/#FilterProperty"
       ],
-      "removal_criteria": "Replace the skip when a deterministic reference depicts the established filter behavior and passes at default settings.",
-      "reference_provenance": "Vendored reference predates the verified behavior: missing URL invalidates the entire chain."
+      "removal_criteria": "Switch to the adjacent image when it draws the element without any filter function applied.",
+      "reference_provenance": "Donner rendering; the archived image applies the functions around the missing reference.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-one-invalid-url-in-list.png"
+      }
     },
     {
       "id": "filters/filter:invalid-FuncIRI",
@@ -23,16 +29,22 @@
         "filters/filter/invalid-FuncIRI.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Keep the demonstrated independent filter behavior.",
+      "disposition": "Compare with the unfiltered rendering a missing reference requires.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1170"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/FilterReferenceStages_tests.cc",
+        "https://www.w3.org/TR/filter-effects-1/#FilterProperty"
       ],
-      "removal_criteria": "Replace the skip when a deterministic reference depicts the established filter behavior and passes at default settings.",
-      "reference_provenance": "Vendored reference predates the verified behavior: invalid filter URLs leave the source visible."
+      "removal_criteria": "Switch to the adjacent image when it draws the element without the filter.",
+      "reference_provenance": "Donner rendering; the archived image hides the element whose filter reference is missing.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-invalid-FuncIRI.png"
+      }
     },
     {
       "id": "filters/filter-functions:url-and-grayscale",
@@ -40,16 +52,22 @@
         "filters/filter-functions/url-and-grayscale.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Keep the demonstrated independent filter behavior.",
+      "disposition": "Compare with the sRGB grayscale() result the specification requires.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1169"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/RendererRegression_tests.cc",
+        "https://www.w3.org/TR/filter-effects-1/#FilterProperty"
       ],
-      "removal_criteria": "Replace the skip when a deterministic reference depicts the established filter behavior and passes at default settings.",
-      "reference_provenance": "Vendored reference predates the verified behavior: the grayscale filter function uses sRGB."
+      "removal_criteria": "Switch to the adjacent image when its grayscale() output is computed in sRGB.",
+      "reference_provenance": "Donner rendering; the archived image computes grayscale() in linearRGB.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-url-and-grayscale.png"
+      }
     },
     {
       "id": "circle-clip-background",
@@ -58,16 +76,26 @@
         "masking/clipPath/circle-shorthand-with-view-box.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
       "classification": "harness-mismatch",
-      "disposition": "Use the existing circle geometry controls.",
+      "disposition": "Compare on a transparent canvas, with the circle geometry covered by independent controls.",
       "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/1179"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/CircleClipPath_tests.cc"
       ],
-      "removal_criteria": "Enable the pixel comparison when a transparent full-scene reference agrees with the independently authored box and circle.",
-      "reference_provenance": "Opaque archival background differs from the harness's transparent canvas."
+      "removal_criteria": "Switch to an adjacent image with a transparent background that passes at default settings.",
+      "reference_provenance": "Donner renderings; the archived images are opaque white where the canvas is transparent.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references_by_fixture": {
+        "masking/clipPath/circle-shorthand-with-stroke-box.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-circle-shorthand-with-stroke-box.png"
+        },
+        "masking/clipPath/circle-shorthand-with-view-box.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-circle-shorthand-with-view-box.png"
+        }
+      }
     },
     {
       "id": "radial-containing-circle",
@@ -92,17 +120,22 @@
         "structure/svg/no-size.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
-      "classification": "api-policy",
-      "disposition": "The caller canvas preserves user units.",
+      "classification": "reference-disagreement",
+      "disposition": "User units map 1:1 onto the canvas of a root svg without intrinsic size.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/1186"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/RendererRegression_tests.cc",
+        "https://www.w3.org/TR/SVG2/coords.html#SizingSVGInCSS"
       ],
-      "removal_criteria": "Replace the reference with the exact caller-canvas geometry rather than fitting the content bounds.",
-      "reference_provenance": "Archival corpus PNG for a different input or viewport policy."
+      "removal_criteria": "Switch to the adjacent image when it draws the content at its authored user units.",
+      "reference_provenance": "Donner rendering; the archived image scales the content to fit its bounds.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-no-size.png"
+      }
     },
     {
       "id": "not-UTF-8-encoding",
@@ -128,17 +161,21 @@
         "structure/use/xlink-to-an-external-file.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
       "classification": "harness-mismatch",
-      "disposition": "Retain the external resource parser and geometry controls.",
+      "disposition": "Compare on a transparent canvas, with host style inheritance covered by an independent control.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/1183"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/RendererPublicApi_tests.cc"
       ],
-      "removal_criteria": "Qualify a transparent replacement with embedded-font equivalence at the default allowance.",
-      "reference_provenance": "Opaque archived reference with wider strokes than the pinned Noto face."
+      "removal_criteria": "Switch to an adjacent image with a transparent background that passes at default settings.",
+      "reference_provenance": "Donner rendering; the archived image is opaque white with wider glyph stems.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-xlink-to-an-external-file.png"
+      }
     },
     {
       "id": "font-attribute",
@@ -146,17 +183,22 @@
         "text/font/simple-case.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
       "classification": "reference-disagreement",
       "disposition": "Preserve the SVG 2 font presentation-attribute contract.",
       "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/1167",
-        "https://github.com/jwmcglynn/donner/issues/1186"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/RendererRegression_tests.cc",
+        "https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes"
       ],
-      "removal_criteria": "Qualify an independent reference that ignores the font attribute and preserves the explicit canvas size.",
-      "reference_provenance": "Archive applies the historical SVG 1.1 font presentation attribute."
+      "removal_criteria": "Switch to the adjacent image when it ignores the font attribute at the explicit canvas size.",
+      "reference_provenance": "Donner rendering; the archived image applies the SVG 1.1 font presentation attribute.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-font-simple-case.png"
+      }
     },
     {
       "id": "text/textPath-filter",
@@ -766,10 +808,11 @@
       "disposition": "Preserve the supported vertical hanging baseline.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/pull/2361"
+        "donner/svg/renderer/tests/TextPathConvergence_tests.cc",
+        "https://www.w3.org/TR/css-writing-modes-3/#vertical-font-features"
       ],
       "removal_criteria": "Use the adjacent image when it demonstrates the independently measured vertical baseline.",
-      "reference_provenance": "Control based on browser and font metrics for a vertical baseline.",
+      "reference_provenance": "Donner rendering checked against the font vertical advances.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
@@ -889,28 +932,6 @@
       "reference_provenance": "Adjacent native-small-cap references with the bundled Noto Sans face. Independent HarfBuzz selection with smcp produces e.sc, x.sc and t.sc for Text, while the simple tier scales uppercase outlines.",
       "max_threshold": 0.02,
       "max_pixels": 1200
-    },
-    {
-      "id": "upright-latin-outline",
-      "paths": [
-        "text/glyph-orientation-vertical/simple-case.svg"
-      ],
-      "kinds": [
-        "shared_golden"
-      ],
-      "classification": "reference-rasterization",
-      "disposition": "Use the independently positioned glyph outlines.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/pull/2402"
-      ],
-      "removal_criteria": "Remove the override when the adjacent image reflects the same upright origin and crosshair coverage at default settings.",
-      "reference_provenance": "Font-derived glyph outlines with the original frame and crosshair geometry.",
-      "max_threshold": 0.02,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/donner-upright-latin-outline.png"
-      }
     },
     {
       "id": "anchor-background",
@@ -1301,24 +1322,28 @@
         "text/textPath/writing-mode=tb.svg"
       ],
       "kinds": [
-        "threshold"
+        "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Retain the declared vmtx-origin difference while preserving vertical layout.",
+      "disposition": "Compare with upright glyphs at the font vmtx origin.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1172"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/VerticalTextPathPrecision_tests.cc",
+        "https://www.w3.org/TR/css-writing-modes-3/#vertical-font-features",
+        "https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules"
       ],
-      "removal_criteria": "Remove the allowance once the independent reference uses the font vertical metrics and matches the expected glyph placement.",
-      "reference_provenance": "Adjacent image centers upright glyphs in hhea cells.",
+      "removal_criteria": "Switch to the adjacent image when it uses the font vertical metrics for upright glyphs on the path.",
+      "reference_provenance": "Donner rendering; the archived image moves upright glyphs off the font vmtx origin.",
       "max_threshold": 0.02,
-      "max_pixels": 250
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-writing-mode-tb.png"
+      }
     },
     {
       "id": "vertical-origin",
       "paths": [
         "text/writing-mode/japanese-with-tb.svg",
-        "text/writing-mode/mixed-languages-with-tb-and-underline.svg",
         "text/writing-mode/mixed-languages-with-tb.svg",
         "text/writing-mode/tb-and-punctuation.svg"
       ],
@@ -1326,21 +1351,19 @@
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Use qualified font- and browser-derived vertical placement controls.",
+      "disposition": "Use the font vertical metrics CSS Writing Modes 3 requires for upright glyphs.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/pull/2361"
+        "donner/svg/renderer/tests/TextPathConvergence_tests.cc",
+        "https://www.w3.org/TR/css-writing-modes-3/#vertical-font-features"
       ],
-      "removal_criteria": "Switch to an adjacent reference when it reproduces the documented upright metrics, punctuation forms and underline placement.",
-      "reference_provenance": "Project references qualified using independent font data and browser controls.",
+      "removal_criteria": "Switch to an adjacent reference when it reproduces the documented vertical metrics and punctuation forms.",
+      "reference_provenance": "Donner renderings checked against the font vertical metrics.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references_by_fixture": {
         "text/writing-mode/japanese-with-tb.svg": {
           "shared_golden": "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png"
-        },
-        "text/writing-mode/mixed-languages-with-tb-and-underline.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.png"
         },
         "text/writing-mode/mixed-languages-with-tb.svg": {
           "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png"
