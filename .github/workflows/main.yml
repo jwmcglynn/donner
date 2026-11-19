@@ -525,7 +525,7 @@ jobs:
             --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --experimental_google_legacy_api --noexperimental_merged_skyframe_analysis_execution \
             --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false \
             --remote_timeout=60s --remote_download_outputs=minimal --remote_download_regex='.*(test[.]log|test[.]xml|outputs[.]zip)$' \
-            --nokeep_going --nobuild_tests_only --skip_incompatible_explicit_targets --profile="$DIAG_DIR/test/profile.gz" \
+            --nokeep_going --test_keep_going --nobuild_tests_only --skip_incompatible_explicit_targets --profile="$DIAG_DIR/test/profile.gz" \
             --execution_log_compact_file="$DIAG_DIR/test/exec.log.zst" --build_event_json_file="$bep" "${options[@]}" --target_pattern_file="$patterns"
           python3 tools/ci_remote_gpu_targets.py --check-results "$bep" "${requested[@]}"
           python3 tools/ci/verify_unified_tests.py --ordinary "$ordinary" --linux "$linux" "$bep" "${suites[@]}"

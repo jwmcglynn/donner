@@ -292,11 +292,7 @@ default tiny-skia configuration.
 
 The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:
 the `linux` and `macos` jobs in `main.yml`, the Editor WASM build, the Geode ASan
-pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. The self-hosted
-macOS lanes share it too: `macos-self-hosted`, `macos-metal` and the desktop-only
-`macos-browser` partition. They run only for trusted maintainer pull requests,
-so the hosted and self-hosted macOS lanes reuse
-each other's build results. Trusted Linux writers also use cloud remote execution for the
+pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. The mixed Linux/Darwin job uses its own execution service and cache. Trusted Linux writers also use cloud remote execution for the
 native build and test-build commands of the `linux` job in `main.yml`. Tests themselves run on
 the GitHub runner, where the display and graphics dependencies are installed. The other lanes,
 including the hosted nightly build that checks the runner's own toolchain, use cache only.
@@ -314,9 +310,7 @@ git-ignored `.buildbuddy.bazelrc`, loaded by a `try-import` in `.bazelrc`, that 
 directory, and Bazel reads it through a small credential helper there that the fragment names with
 `--credential_helper`. The key is never a Bazel flag, because Bazel writes its rc options into its
 server log in the output base, and uploads of workspace paths cannot carry it. With no key the
-action writes nothing and the `try-import` is a silent no-op. The self-hosted runner is persistent,
-so each self-hosted macOS lane deletes the key file and the fragment in a last step that runs
-whatever the job's outcome.
+action writes nothing and the `try-import` is a silent no-op. The trusted mixed runner receives no BuildBuddy credential.
 
 The Editor WASM lane runs the standalone renderer pixel and font-resource tests together under
 `--config=wasm-size`. The font test enables text on its test-page dependency. The pixel test and

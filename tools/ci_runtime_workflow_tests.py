@@ -66,7 +66,6 @@ TRACKED_CI_SCRIPTS = {
     "tools/ci_coverage_contract.py": "//tools:ci_coverage_contract_tests",
     "tools/ci_diagnostics_report.py": "//tools:ci_diagnostics_report_tests",
     "tools/ci_disk_cache.py": "//tools:ci_disk_cache_tests",
-    "tools/ci_metal_toolchain.py": "//tools:ci_metal_toolchain_tests",
     "tools/ci_remote_gpu_targets.py": "//tools:ci_remote_gpu_targets",
     "tools/ci_select_macos_xcode.sh": "//tools:macos_cache_key_parity_tests",
 }
@@ -230,6 +229,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def _mixed_step(self):
+        return self._step_body(self._job_body("linux-self-hosted"), "Test Linux and macOS with native platform transitions")
+
     def _steps(self, workflow):
         """Every (step name, step body) pair in a workflow, in file order."""
         for part in re.split(r"^      - name: ", workflow, flags=re.MULTILINE)[1:]:
@@ -327,35 +329,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 bazelrc_configs.commands(job, self.configs, self._variables(job))
                 if command == "test"]
 
-    def test_context_diagnostic_is_fixed_trusted_pr_opt_in_after_ordinary_tests(self):
-        job = self._job_body("macos-self-hosted")
-        step = self._step_body(job, "Diagnose Chromium context lifecycle")
-        condition = next(line for line in step.splitlines() if "if:" in line)
-        for guard in (
-            "!cancelled()",
-            "github.event_name == 'pull_request'",
-            "needs.gatekeeper.outputs.trusted_pr == 'true'",
-            "contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe')",
-        ):
-            self.assertIn(guard, condition)
-        self.assertNotIn("||", condition)
-        self.assertNotIn("continue-on-error", step)
-        self.assertIn("--nocache_test_results", step)
-        self.assertIn("--nohome_rc --nosystem_rc", step)
-        self.assertIn("--local_test_jobs=1 --test_tag_filters=", step)
-        self.assertIn(
-            "--test_timeout=60 //tools/ci:chromium_context_diagnostic",
-            step,
-        )
-        suite = _rule_text(_repository_text("tools/ci/BUILD.bazel"),
-                           "chromium_context_diagnostic")
+    def test_context_diagnostic_is_a_fixed_trusted_opt_in_in_the_graph(self):
+        mixed = self._mixed_step()
+        self.assertIn("if: needs.gatekeeper.outputs.unified_macos == 'true'", mixed)
+        self.assertIn("contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe')", mixed)
+        diagnostic = mixed.split('if [[ "$BROWSER_DIAGNOSTIC" == true ]]; then', 1)[1].split("\n          fi", 1)[0]
+        self.assertIn("suites+=(//tools/ci:unified_browser_diagnostic)", diagnostic)
+        self.assertNotIn("continue-on-error", mixed)
+        suite = _rule_text(self.ci_target_definitions, "unified_browser_diagnostic")
         self.assertIn('tags = ["manual"]', suite)
-        self.assertIn(
-            'tests = ["//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic"]',
-            suite,
-        )
-        self.assertLess(job.index("name: Test (Geode editor lane)"),
-                        job.index("name: Diagnose Chromium context lifecycle"))
+        self.assertIn("ci_darwin_diagnostic_chromium_context_lifecycle_diagnostic", suite)
+        self.assertIn('timeout = "short"', _rule_text(_repository_text("donner/editor/wasm/tests/BUILD.bazel"), "chromium_context_lifecycle_diagnostic"))
 
     def test_all_arm64_linux_test_phases_retain_failure_artifacts(self):
         job = self._job_body("linux-self-hosted")
@@ -368,23 +352,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", upload)
 
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
-        for lane in ("macos", "macos-browser", "macos-self-hosted", "macos-metal"):
-            with self.subTest(lane=lane):
-                job = self._job_body(lane)
-                archive = self._step_body(job, "Upload Bazel test failure artifacts")
-                gates = [("Qualify pinned Chromium archive", "browser_preflight")]
-                if lane == "macos-metal":
-                    gates = [
-                        ("Require full Metal shader validation", "metal_profile"),
-                        ("Metal validation preflight", "metal_preflight"),
-                        ("Validate offline Metal compiler", "metal_compiler"),
-                    ]
-                for name, step_id in gates:
-                    step = self._step_body(job, name)
-                    self.assertIn("id: " + step_id, step)
-                    self.assertNotIn("continue-on-error", step)
-                    self.assertIn("steps.%s.outcome == 'failure'" % step_id, archive)
-                self.assertIn("./.github/actions/upload-bazel-test-artifacts", archive)
+        hosted = self._job_body("macos")
+        preflight = self._step_body(hosted, "Qualify pinned Chromium archive")
+        self.assertIn("id: browser_preflight", preflight)
+        self.assertNotIn("continue-on-error", preflight)
+        self.assertIn("steps.browser_preflight.outcome == 'failure'",
+                      self._step_body(hosted, "Upload Bazel test failure artifacts"))
+        mixed = self._job_body("linux-self-hosted")
+        for step in ("Stage failed mixed-platform test outputs", "Upload mixed-platform test failure artifacts"):
+            self.assertIn("if: failure() && steps.unified.outcome == 'failure'", self._step_body(mixed, step))
 
     def test_hosted_browser_comparisons_preserve_the_failed_gate(self):
         hosted = self._job_body("macos")
@@ -455,22 +431,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("path: ${{ runner.temp }}/browser-stall-system-log", upload)
         self.assertIn("retention-days: 14", upload)
         # A self-hosted runner's unified log describes a persistent host; it is never published.
-        for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
+        for job in ("linux", "linux-self-hosted"):
             body = self._job_body(job)
             self.assertNotIn(name, body)
             self.assertNotIn("log show", body)
 
     def test_macos_build_and_test_builds_the_complete_selection_once(self):
-        for job in ("macos", "macos-self-hosted"):
-            with self.subTest(job=job):
-                body = self._job_body(job)
-                self.assertNotIn("      - name: Build\n", body)
-                step = self._step_body(body, "Build and test")
-                self.assertIn("id: test", step)
-                [command] = self._expanded_commands(job, "test")
-                self.assertEqual(command[-2:], ["--nobuild_tests_only", "@selected_targets"])
-                self.assertIn("tools/ci_bazel_test.sh", command)
-                self.assertIn("test", command)
+        hosted = self._job_body("macos")
+        self.assertNotIn("      - name: Build\n", hosted)
+        [command] = self._expanded_commands("macos", "test")
+        self.assertEqual(command[-2:], ["--nobuild_tests_only", "@selected_targets"])
+        self.assertIn("tools/ci_bazel_test.sh", command)
+        mixed = self._mixed_step()
+        self.assertIn("--nobuild_tests_only", mixed)
+        self.assertIn('cat "$ordinary" "$linux"', mixed)
+        self.assertIn('--target_pattern_file="$patterns"', mixed)
 
     def test_hosted_browser_tests_run_alone_after_the_suite(self):
         # A browser starved of CPU misses its wall-clock deadlines, so on the three-core
@@ -511,53 +486,34 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for job in ("linux", "linux-self-hosted"):
             self.assertNotIn("launches-browser", self._job_body(job), job)
 
-    def test_self_hosted_browser_tests_run_alone_after_the_suite(self):
-        job = self._job_body("macos-self-hosted")
-        main_test = self._step_body(job, "Build and test")
-        self.assertEqual(
-            "-manual,-perf,-requires_shader_validation,-requires_metal_toolchain,"
-            "-ci-remote-gpu,-launches-browser,-fuzz_soak",
-            self._tag_filters(main_test, job))
-        browser = self._step_body(job, "Test (browser targets)")
-        self.assertLess(job.index("      - name: Build and test\n"),
-                        job.index("      - name: Test (browser targets)\n"))
-        self.assertLess(job.index("      - name: Test (browser targets)\n"),
-                        job.index("      - name: Test (Geode editor lane)\n"))
-        self.assertIn("id: browser_test", browser)
-        self.assertIn(
-            "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
-            "steps.test.outcome == 'failure') }}", browser)
-        self.assertIn("--local_test_jobs=1", self._test_options(browser, job))
-        self.assertEqual(
-            "launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak",
-            self._tag_filters(browser, job))
-        self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
-        for phase in ("test", "browser_test"):
-            [command] = self._phase_commands("macos-self-hosted", phase)
-            selection = (["--nobuild_tests_only"] if phase == "test" else []) + ["@selected_targets"]
-            tail = ["--config=lane-macos", "--config=lane-macos-vm"] + selection
-            self.assertEqual(command[-len(tail):], tail)
-            [command] = self._expanded_commands("macos-self-hosted", phase)
-            lane_flags = bazelrc_configs.expand(
-                "test", ["--config=lane-macos", "--config=lane-macos-vm"], self.configs)
-            tail = lane_flags + selection
-            self.assertEqual(command[-len(tail):], tail)
-            self.assertIn("--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm", lane_flags)
-        archive = self._step_body(job, "Upload Bazel test failure artifacts")
-        self.assertIn("steps.browser_test.outcome == 'failure'", archive)
+    def test_native_browser_roots_join_the_same_iteration_as_the_selected_darwin_build(self):
+        step = self._mixed_step()
+        self.assertEqual(step.count('darwin_selection.py variants < "$linux.jsonl" > "$ordinary"'), 1)
+        self.assertEqual(step.count('--target_pattern_file="$patterns"'), 1)
+        preflight = step.split('if [[ "$RUN_BROWSER" == true ]]; then', 1)[1].split("\n          fi", 1)[0]
+        self.assertIn("suites+=(//tools/ci:unified_mac_browser_archive)", preflight)
+        self.assertIn('--ordinary "$ordinary" --linux "$linux"', step)
+        self.assertNotIn("continue-on-error", step)
 
     def test_geode_phase_runs_after_a_completed_native_phase_even_if_browser_fails(self):
-        for job_name in ("macos", "macos-self-hosted"):
-            with self.subTest(job=job_name):
-                job = self._job_body(job_name)
-                geode = self._step_body(job, "Test (Geode editor lane)")
-                self.assertIn(
-                    "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
-                    "steps.test.outcome == 'failure') }}", geode)
-                self.assertNotIn("steps.browser_test.outcome", geode)
-                self.assertLess(job.index("      - name: Test (browser targets)\n"),
-                                job.index("      - name: Test (Geode editor lane)\n"))
-                self.assertIn(" " + lanes.GEODE_EDITOR + "\n", geode)
+        job_name = "macos"
+        job = self._job_body(job_name)
+        geode = self._step_body(job, "Test (Geode editor lane)")
+        self.assertIn(
+            "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
+            "steps.test.outcome == 'failure') }}", geode)
+        self.assertNotIn("steps.browser_test.outcome", geode)
+        self.assertLess(job.index("      - name: Test (browser targets)\n"),
+                        job.index("      - name: Test (Geode editor lane)\n"))
+        self.assertIn(" " + lanes.GEODE_EDITOR + "\n", geode)
+
+        self.assertIn("suites+=(//tools/ci:unified_editor_geode)", self._mixed_step())
+        self.assertIn("--test_keep_going", self._mixed_step())
+        original = _rule_text(self.ci_target_definitions, "editor_geode")
+        mixed = _rule_text(self.ci_target_definitions, "unified_editor_geode")
+        expected = {label.replace(":", ":ci_darwin_geode_") for label in re.findall(r'"(//[^"]+)"', original)}
+        self.assertEqual(set(re.findall(r'"(//[^"]+)"', mixed)), expected)
+        self.assertEqual(len(expected), 6)
 
     def test_every_test_that_launches_a_browser_is_tagged(self):
         # The hosted browser phase selects by tag, so an untagged browser test would
@@ -650,15 +606,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     self.assertEqual(shown.split(), expected_affected.split())
 
     def test_native_browser_retains_test_artifacts_without_host_diagnostics(self):
-        job = self._job_body("macos-browser")
-        archive = self._step_body(job, "Upload Bazel test failure artifacts")
-        for step in ("browser_preflight", "browser_test"):
-            self.assertIn("steps.%s.outcome == 'failure'" % step, archive)
-        for forbidden in ("Collect browser stall system log", "BROWSER_STALL_TEST_FLAGS",
-                          "Compare browser GPU tests", "Probe runner resources", "Setup Bazel",
-                          "Free hosted macOS disk", "Install clang-tidy"):
+        job = self._job_body("linux-self-hosted")
+        archive = self._step_body(job, "Upload mixed-platform test failure artifacts")
+        self.assertIn("./.github/actions/upload-bazel-test-artifacts", archive)
+        self.assertIn("testlogs: ${{ runner.temp }}/unified/test-artifacts/mixed", archive)
+        for forbidden in ("browser-stall-system-log", "Collect browser stall system log",
+                          "Compare browser GPU tests", "Probe runner resources"):
             self.assertNotIn(forbidden, job)
-        self.assertIn("--nohome_rc --nosystem_rc", job)
 
     def test_browser_stall_recorder_is_enabled_only_in_the_hosted_job(self):
         # The recorder publishes host load, memory and call graphs, so only the ephemeral
@@ -678,7 +632,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn('kEnableVariable = "DONNER_BROWSER_STALL_DIAGNOSTICS"', recorder)
         self.assertEqual(_repository_text("tools/ci/lanes.py").count(switch), 1)
         self.assertNotIn("BROWSER_STALL", self.main_text)
-        for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
+        for job in ("linux", "linux-self-hosted"):
             self.assertNotIn("BROWSER_STALL", self._job_body(job), job)
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
@@ -690,6 +644,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for path in others + actions:
             self.assertNotIn("BROWSER_STALL", path.read_text(encoding="utf-8"), path.name)
         self.assertNotIn("BROWSER_STALL", self.bazelrc)
+        for rule_file in ("build_defs/rules.bzl", "build_defs/ci_darwin.bzl"):
+            self.assertNotIn("DONNER_BROWSER_STALL_DIAGNOSTICS", _repository_text(rule_file))
 
     def test_hosted_macos_quarantine_is_set_only_for_the_hosted_test_environment(self):
         # Main's hosted macOS job skips browser cases quarantined for that runner alone (#1691,
@@ -719,7 +675,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("continue-on-error: true", body, step)
             for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE"):
                 self.assertNotIn(name, body, step)
-        for job in ("macos-self-hosted", "macos-browser", "linux", "linux-self-hosted"):
+        for job in ("linux", "linux-self-hosted"):
             for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE"):
                 self.assertNotIn(name, self._job_body(job), job)
         resolver = runfiles.Create()
@@ -796,18 +752,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn(path, triggers["pull_request"])
 
     def test_headed_browser_tests_have_a_single_native_owner(self):
-        for job_name in ("macos", "macos-browser", "macos-self-hosted"):
-            with self.subTest(job=job_name):
-                job = self._job_body(job_name)
-                body = self._step_body(job, "Test (browser targets)")
-                filters = self._tag_filters(body, job)
-                self.assertTrue(filters)
-                tags = filters.split(",")
-                self.assertIn("requires_desktop_session" if job_name == "macos-browser"
-                              else "launches-browser", tags)
-                self.assertEqual("-requires_desktop_session" in tags,
-                                 job_name == "macos-self-hosted")
-                self.assertNotIn("continue-on-error: true", body)
+        hosted = self._job_body("macos")
+        self.assertIn("unified_macos != 'true'", hosted.split("steps:", 1)[0])
+        body = self._step_body(hosted, "Test (browser targets)")
+        self.assertIn("launches-browser", self._tag_filters(body, hosted).split(","))
+        self.assertNotIn("continue-on-error: true", body)
+        self.assertIn("unified_macos == 'true'", self._mixed_step())
+        self.assertNotIn("runs-on: [self-hosted, macOS", self.main)
 
     def test_browser_stall_system_log_slices_only_well_formed_windows(self):
         collect = self._step_body(self._job_body("macos"), "Collect browser stall system log")
@@ -1180,42 +1131,22 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(sys.executable, result.stdout.strip())
 
     def test_shader_validation_runs_only_on_the_self_hosted_real_gpu(self):
-        # Virtual GPUs use API validation; the dedicated native job keeps shader gates mandatory.
-        for job_name in ("macos", "macos-browser", "macos-self-hosted",
-                         "macos-vm-qualification"):
-            job = self._job_body(job_name)
-            for step in ("Select Metal validation profile", "Metal validation preflight",
-                         "Fetch Metal validation dependencies"):
-                self.assertNotIn("- name: %s\n" % step, job, job_name)
-            self.assertNotIn("metal_profile", job, job_name)
-            tests = self._lane_test_commands(job_name)
-            self.assertTrue(tests, job_name)
-            for command in tests:
-                self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", command)
-                self.assertNotIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
+        for command in self._lane_test_commands("macos"):
+            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", command)
+            self.assertNotIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
         hosted_test = self._step_body(self._job_body("macos"), "Build and test")
         self.assertIn("-requires_shader_validation", hosted_test)
-        trusted = self._job_body("macos-metal")
-        native = self._step_body(trusted, "Test remaining native Metal suite")
-        self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
-        self.assertNotIn("metal_shader_validation=off", trusted)
-        for command in self._lane_test_commands("macos-metal"):
-            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
-            self.assertNotIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", command)
-            self.assertNotIn("--//build_defs:metal_shader_validation=off", command)
-        self.assertNotIn("requires_shader_validation", native)
-        required = self._step_body(trusted, "Require full Metal shader validation")
-        preflight = self._step_body(trusted, "Metal validation preflight")
-        for step, target in ((required, "//tools/ci:metal_full_validation"),
-                             (preflight, "//tools/ci:metal_preflight")):
-            self.assertIn(target, step)
-            self.assertIn("--nocache_test_results", step)
-            # Mandatory: never skipped, never allowed to fail.
-            self.assertNotRegex(step, r"(?m)^ {8}(if|continue-on-error):")
-            self.assertLess(trusted.index(step), trusted.index(native))
-        self.assertIn("--test_tag_filters=", required)
-        self.assertIn("steps.metal_profile.outcome == 'failure'", trusted)
-        self.assertIn("steps.metal_preflight.outcome == 'failure'", trusted)
+        mixed = self._mixed_step()
+        self.assertIn('if [[ "$RUN_METAL" == true ]]; then', mixed)
+        self.assertIn("unified_metal_{full_validation,preflight,offline_compiler,native}", mixed)
+        self.assertNotIn("continue-on-error", mixed)
+        variants = _repository_text("build_defs/ci_metal.bzl").split("def metal_ci_variants(", 1)[1].split("def metal_ci_suites(", 1)[0]
+        self.assertIn("ci_platform_test(", variants)
+        self.assertIn("metal_validation = True", variants)
+        self.assertIn('target_platform = "//tools/ci:remote_macos_aarch64_gpu"', variants)
+        rules = _repository_text("build_defs/rules.bzl")
+        self.assertIn('options["//build_defs:metal_shader_validation"] = "on"', rules)
+        self.assertIn('"MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1"', rules)
         suites = _repository_text("tools/ci/BUILD.bazel")
         preflight_suite = suites.split('name = "metal_preflight"', 1)[1].split(")", 1)[0]
         self.assertIn("//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
@@ -1373,8 +1304,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             actions = lanes.LANES[job].phases["test"].actions
             self.assertTrue(any(isinstance(a, lanes.LinuxTestSelection) and "manual" in a.excluded
                                 for a in actions))
-        for job in ("macos", "macos-self-hosted"):
-            self.assertEqual(1, self._job_body(job).count("--test_tag_filters=-manual,-perf"))
+        job = "macos"
+        self.assertEqual(1, self._job_body(job).count("--test_tag_filters=-manual,-perf"))
 
     def test_run_time_flag_configs_do_not_select_tests(self):
         # BUILDBUDDY_FLAGS is a step output, so the policy tests cannot expand the config it
@@ -1392,7 +1323,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(ci_filter)
         self.assertIn("-fuzz_soak", ci_filter.group(1).split(","))
         selected_suites = set()
-        for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
+        for job_name in ("linux", "linux-self-hosted", "macos"):
             job = self._job_body(job_name)
             filters = self._job_tag_filters(job)
             self.assertTrue(filters, job_name)
@@ -1560,8 +1491,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertIn("--test_tag_filters=", step)
                 self.assertNotIn("Test Linux WebGPU resvg reference", job)
                 self.assertIn("steps.test.outcome == 'failure'", job)
-        for job_name in ("macos", "macos-self-hosted"):
-            self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
+        job_name = "macos"
+        self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
 
     def test_native_metal_job_is_selected_only_for_prs_that_reach_its_suites(self):
         """The macos-metal job runs when the affected set reaches its suites, fails closed."""
@@ -1643,14 +1574,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     if changed.startswith("donner/") and suite and not suite_status:
                         self.assertIn('set("%s") intersect tests(%s)'
                                       % (affected, " + ".join(suites)), queries)
-        # The job runs on a selected or full-fallback pull request only; its steps stay mandatory.
-        native = self._job_body("macos-metal")
-        condition = next(line for line in native.splitlines() if line.startswith("    if:"))
-        self.assertTrue(condition.endswith(
-            "&& needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
-            "(needs.determine-targets.outputs.fallback == 'true' || "
-            "needs.determine-targets.outputs.metal_affected == 'true') }}"), condition)
-        self.assertIn("determine-targets", native.split("    if:", 1)[0])
+        mixed = self._mixed_step()
+        self.assertIn("RUN_METAL: ${{ needs.determine-targets.outputs.metal_affected == 'true' || "
+                      "needs.determine-targets.outputs.fallback == 'true' }}", mixed)
+        self.assertIn('if [[ "$RUN_METAL" == true ]]; then', mixed)
 
     def _coverage_jobs(self):
         """Every (name, body) pair for a top-level key in coverage.yml."""
@@ -1766,8 +1693,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                       "tests the derived target set without rejecting an "
                                       "empty target list")
                 # Each run of the phase's step sees the selection.
-                self.assertIn("TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}",
-                              self._job_body(lane))
+                if lane in lanes.WORKFLOW_LANES:
+                    self.assertIn("TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}",
+                                  self._job_body(lane))
         self.assertGreaterEqual(
             len(covered),
             10,
@@ -1801,12 +1729,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         there means its Bazel membership is broken.
         That must stay red rather than inherit the change-based lanes' notice.
         """
-        for job_name in ("macos", "macos-self-hosted"):
-            with self.subTest(job=job_name):
-                step = self._step_body(
-                    self._job_body(job_name), "Test (Geode editor lane)"
-                )
-                self.assertNotIn("tools/ci_bazel_test.sh", step)
+        job_name = "macos"
+        step = self._step_body(
+            self._job_body(job_name), "Test (Geode editor lane)"
+        )
+        self.assertNotIn("tools/ci_bazel_test.sh", step)
 
     def test_linker_canary_uses_bounded_native_apt_retries(self):
         """The hosted canary must not ask an unprivileged action to kill apt.

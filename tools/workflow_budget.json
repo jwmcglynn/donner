@@ -1,11 +1,11 @@
 {
   "tree": {
-    "lines": 5813,
-    "comment_lines": 629,
-    "multiline_runs": 71,
+    "lines": 5314,
+    "comment_lines": 568,
+    "multiline_runs": 68,
     "longest_run": 194,
     "run_expressions": 12,
-    "longest_if": 625
+    "longest_if": 369
   },
   "files": {
     ".github/workflows/badges.yaml": {
@@ -97,12 +97,12 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1418,
-      "comment_lines": 203,
-      "multiline_runs": 11,
-      "longest_run": 51,
+      "lines": 919,
+      "comment_lines": 142,
+      "multiline_runs": 8,
+      "longest_run": 47,
       "run_expressions": 6,
-      "longest_if": 625
+      "longest_if": 300
     },
     ".github/workflows/perf.yml": {
       "lines": 167,

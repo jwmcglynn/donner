@@ -73,12 +73,6 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
-    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/main.yml", "macos-metal", "Configure BuildBuddy remote cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
      "<run>"): {"BCR_PUBLISH_TOKEN"},
     (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy remote cache",
@@ -106,23 +100,23 @@ SELF_HOSTED_JOBS = {
     (".github/workflows/cmake.yml", "cmake-cache-producer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): "use_self_hosted_linux",
     (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
-    (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
-    # The advisory macOS shadow lane: a remote-execution client on the Linux lane's runners.
-    (".github/workflows/main.yml", "macos-remote-shadow"): "use_self_hosted_linux",
-    (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
-    (".github/workflows/main.yml", "macos-metal"): "use_self_hosted_macos",
-    (".github/workflows/main.yml", "macos-vm-qualification"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "coverage-contract"): "use_self_hosted_linux",
 }
 # Reviewed status functions a self-hosted job puts before its trusted gate, so it runs after a
 # needed job failed or was skipped. Joined with `&&`, it still requires the whole gate.
+_LINUX_ARM = frozenset({"self-hosted", "linux", "arm64"})
+SELF_HOSTED_LABELS = {
+    (".github/workflows/main.yml", "linux-self-hosted"): _LINUX_ARM,
+    (".github/workflows/main.yml", "coverage-contract"): _LINUX_ARM,
+    (".github/workflows/lint.yml", "lint-self-hosted"): _LINUX_ARM,
+    (".github/workflows/cmake.yml", "cmake-cache-producer"): _LINUX_ARM | {"cmake-cache-producer"},
+    (".github/workflows/cmake.yml", "cmake-cache-consumer"): _LINUX_ARM | {"cmake-cache-consumer"},
+}
+
 SELF_HOSTED_STATUS_PREFIX = {
     (".github/workflows/main.yml", "coverage-contract"): "!cancelled() && ",
     # The shadow lane runs after its run's Linux lane has finished, whether it passed or failed.
-    (".github/workflows/main.yml", "macos-remote-shadow"):
-        "!cancelled() && (needs.linux-self-hosted.result == 'success' || "
-        "needs.linux-self-hosted.result == 'failure') && ",
 }
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
@@ -131,21 +125,6 @@ SELF_HOSTED_NARROWING = {
         " && contains(github.event.pull_request.labels.*.name, 'ci:cmake-cache-qualification')",
     (".github/workflows/cmake.yml", "cmake-cache-consumer"):
         " && contains(github.event.pull_request.labels.*.name, 'ci:cmake-cache-qualification')",
-    (".github/workflows/main.yml", "macos-browser"):
-        " && (needs.determine-targets.outputs.fallback == 'true' || "
-        "needs.determine-targets.outputs.browser_affected == 'true')",
-    (".github/workflows/main.yml", "macos-vm-qualification"):
-        " && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
-    # Opt-in while it is compared with the self-hosted macOS lane: a labelled pull request, or
-    # every trusted pull request once the repository variable turns it on. Both only narrow.
-    (".github/workflows/main.yml", "macos-remote-shadow"):
-        " && github.event_name == 'pull_request' && "
-        "(contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || "
-        "vars.MACOS_REMOTE_SHADOW_LANE == 'true') && "
-        "needs.macos-remote-shadow-turnstile.outputs.admitted == 'true'",
-    (".github/workflows/main.yml", "macos-metal"):
-        " && (needs.determine-targets.outputs.fallback == 'true' || "
-        "needs.determine-targets.outputs.metal_affected == 'true')",
 }
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
@@ -321,21 +300,12 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/github_hosted_nightly.yml", "build"),
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
-    # Native desktop browser partition for trusted maintainer PRs.
-    (".github/workflows/main.yml", "macos-browser"),
-    (".github/workflows/main.yml", "macos-self-hosted"),
-    (".github/workflows/main.yml", "macos-metal"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
 }
-# The self-hosted lanes on BuildBuddy: the macOS fast lane, the native Metal job and the desktop
-# browser partition. They run only for trusted maintainer pull requests, so each holds the
-# read-write key and no Renovate reader, and its last step removes the key from the persistent
-# runner whatever the job's outcome.
-SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-browser"),
-                               (".github/workflows/main.yml", "macos-self-hosted"),
-                               (".github/workflows/main.yml", "macos-metal")}
+# Internal execution clients receive no BuildBuddy credential.
+SELF_HOSTED_BUILDBUDDY_JOBS = set()
 BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
                       "        if: always()\n"
                       "        shell: bash\n"
@@ -650,7 +620,7 @@ def _cited_environment_violations(where, job):
 # the runner's effective configuration, so they never leave the runner.
 # shadow-summary.json is the macOS shadow lane's counts, derived from its build event files.
 SELF_HOSTED_UPLOAD_FILES = {"cmake-cache-receipt.json", "coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
-                            "shadow-summary.json", "stall.txt", "target-list.txt"}
+                            "stall.txt", "target-list.txt"}
 
 # Triggers that run with repository credentials on behalf of an event someone else controls.
 PRIVILEGED_TRIGGERS = {"discussion_comment", "issue_comment", "issues", "pull_request_review",
@@ -1498,6 +1468,9 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
+    expected = SELF_HOSTED_LABELS.get((path, name))
+    if expected and any({label.lower() for label in labels} != expected for labels in sets):
+        return "%s:%s uses unapproved self-hosted capability labels" % (path, name)
     prefix = SELF_HOSTED_GATE_OVERRIDES.get((path, name), SELF_HOSTED_GATE_PREFIX).replace(
         "${{ ", "${{ " + SELF_HOSTED_STATUS_PREFIX.get((path, name), ""), 1)
     gate = prefix + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
@@ -2398,19 +2371,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "saves on every event"),
         })
 
-    def test_self_hosted_macos_uses_buildbuddy_and_removes_its_key(self):
-        workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        self_hosted = _jobs(workflow)["macos-self-hosted"]
-        header = self_hosted.split("    steps:\n", 1)[0]
-        self.assertNotIn("--remote_cache=", header)
-        self.assertNotIn("BAZEL_REMOTE_CACHE", workflow)
-        order = [self_hosted.index("      - name: %s\n" % name) for name in (
-            "Select pinned Xcode", "Configure BuildBuddy remote cache",
-            "Prepare self-hosted macOS toolchain")]
-        self.assertEqual(order, sorted(order))
-        cache = _step_body(self_hosted, "Configure BuildBuddy remote cache")
-        self.assertIn("cache-partition: ${{ steps.xcode.outputs.cache_partition }}", cache)
-        self.assertTrue(self_hosted.rstrip("\n").endswith(BUILDBUDDY_CLEANUP.rstrip("\n")))
+    def test_internal_mixed_runner_receives_no_external_cache_key(self):
+        job = _jobs(self.supply_chain_files[".github/workflows/main.yml"])["linux-self-hosted"]
+        self.assertFalse(_secret_reads(job))
+        self.assertNotIn("./.github/actions/buildbuddy-cache", job)
+        self.assertNotIn("buildbuddy-write", job)
 
     def test_cache_keys_never_reach_bazel_as_flags(self):
         # Bazel writes every rc option into its server log in the output base, which outlives
@@ -3631,7 +3596,6 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 1), "its pull_request paths skip the action"),
         }
         self._assert_rejected(lambda files, path: _buildbuddy_violations(files), cases)
-        cleanup = BUILDBUDDY_CLEANUP
         linux_writer = ("      - name: Configure BuildBuddy remote cache\n" + writer_if +
                         "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
                         "          api-key: " + write_key + "\n"
@@ -3648,31 +3612,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     "      - name: Record target selection\n",
                     linux_writer + "      - name: Record target selection\n"), 1),
                 "uses BuildBuddy on a self-hosted runner"),
-            "self-hosted key left on the runner": (main, files[main].replace(
-                "\n" + cleanup, "\n", 1), "does not remove the BuildBuddy key"),
-            "cleanup skipped on failure": (main, files[main].replace(
-                cleanup, cleanup.replace("if: always()", "if: success()"), 1),
-                "does not remove the BuildBuddy key"),
-            "self-hosted Renovate reader": (main, files[main].replace(
-                "          cache-partition: ${{ steps.xcode.outputs.cache_partition }}\n"
-                "          download-outputs: minimal\n\n"
-                "      - name: Prepare self-hosted macOS toolchain\n",
-                "          cache-partition: ${{ steps.xcode.outputs.cache_partition }}\n"
-                "          download-outputs: minimal\n\n"
-                "      - name: Configure BuildBuddy read-only cache\n" + reader_if +
-                "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
-                "          read-only-api-key: " + read_key + "\n"
-                "          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}\n"
-                "          download-outputs: minimal\n\n"
-                "      - name: Prepare self-hosted macOS toolchain\n", 1),
-                "does not pair one writer with no reader"),
-            "Bazel before the self-hosted cache": (main, files[main].replace(
-                "      # an unexpected build fails here rather than selecting another toolchain.\n"
-                "      - name: Select pinned Xcode\n",
-                "      # an unexpected build fails here rather than selecting another toolchain.\n"
-                "      - name: Early build\n        run: bazelisk --nohome_rc build //donner/base\n\n"
-                "      - name: Select pinned Xcode\n", 1),
-                "runs Bazel before configuring BuildBuddy"),
+            "self-hosted read-only cache": (main, files[main].replace(
+                linux_checkout, linux_checkout.replace(
+                    "      - name: Record target selection\n",
+                    linux_writer.replace(write_key, "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}")
+                    + "      - name: Record target selection\n"), 1),
+                "uses BuildBuddy on a self-hosted runner"),
         })
 
     def _run_buildbuddy_action(self, root, *, event, ref="refs/heads/main", write="",
@@ -4505,20 +4450,54 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIsNone(problem)
                 self.assertEqual(expected, sets)
 
-    def test_native_browser_subset_is_trusted_and_removes_credentials(self):
+    def test_persistent_runner_cleanup_is_always_last_even_when_access_is_forbidden(self):
+        path = ".github/workflows/main.yml"
+        writer = ("      - name: Configure BuildBuddy remote cache\n"
+                  "        uses: ./.github/actions/buildbuddy-cache\n"
+                  "        with:\n          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}\n")
+        base = "jobs:\n  legacy-fixture:\n    runs-on: [self-hosted, macOS, ARM64]\n    steps:\n"
+        cases = {"complete": (writer + BUILDBUDDY_CLEANUP, False), "missing": (writer, True),
+                 "early": (BUILDBUDDY_CLEANUP + writer, True),
+                 "success only": (writer + BUILDBUDDY_CLEANUP.replace("always()", "success()"), True)}
+        for location in ('"${RUNNER_TEMP}/buildbuddy"', '"${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"'):
+            cases[location] = (writer + BUILDBUDDY_CLEANUP.replace(location, ""), True)
+        for name, (body, missing) in cases.items():
+            with self.subTest(case=name):
+                workflow = base + body
+                job = _jobs(workflow)["legacy-fixture"]
+                result = _buildbuddy_job_violations(path, "legacy-fixture", workflow, _steps(job))
+                self.assertTrue(any("uses BuildBuddy on a self-hosted runner" in msg for msg in result))
+                self.assertEqual(missing, any("does not remove the BuildBuddy key" in msg for msg in result))
+                if not missing:
+                    self.assertEqual(len(result), 1, result)
+
+    def test_worker_capability_labels_cannot_be_substituted_under_an_admitted_job(self):
+        self.assertEqual(set(SELF_HOSTED_LABELS), set(SELF_HOSTED_JOBS))
+        for (path, name), expected in SELF_HOSTED_LABELS.items():
+            job = _jobs(self.supply_chain_files[path])[name]
+            route = _job_key(job, "runs-on")
+            replacements = ["[self-hosted, macOS, ARM64]", "[self-hosted, linux, arm64, custom]"]
+            if name.startswith("cmake-cache-"):
+                other = "cmake-cache-consumer" if name.endswith("producer") else "cmake-cache-producer"
+                replacements.append("[self-hosted, linux, arm64, %s]" % other)
+            replacements.append("\n      group: custom-runners\n      labels: [self-hosted, Linux, ARM64]")
+            for new in replacements:
+                with self.subTest(job=name, labels=new):
+                    self.assertIn("unapproved self-hosted capability", _runner_violation(
+                        path, name, job.replace("runs-on: " + route, "runs-on: " + new, 1)))
         main = ".github/workflows/main.yml"
-        workflow = _workflows(self.supply_chain_files)[main]
-        job = _jobs(workflow)["macos-browser"]
-        self.assertEqual("[self-hosted, macOS, ARM64]", _job_key(job, "runs-on"))
-        self.assertEqual("use_self_hosted_macos", SELF_HOSTED_JOBS[(main, "macos-browser")])
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", _job_key(job, "if"))
-        for forbidden in ("actions/cache", "cache-save:", "BUILDBUDDY_API_KEY_READONLY"):
-            self.assertNotIn(forbidden, job)
-        readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
-                   if _secret_reads(step)}
-        self.assertEqual(readers, {"Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"}})
-        self.assertTrue(job.rstrip("\n").endswith(BUILDBUDDY_CLEANUP.rstrip("\n")))
-        self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())
+        old = _jobs(self.supply_chain_files[main])["linux-self-hosted"]
+        old = old.replace(_job_key(old, "runs-on"), "[self-hosted, macOS, ARM64]", 1)
+        self.assertIsNotNone(_runner_violation(main, "macos-self-hosted", old))
+
+    def test_native_browser_and_metal_execute_only_inside_the_trusted_job(self):
+        jobs = _jobs(self.supply_chain_files[".github/workflows/main.yml"])
+        self.assertFalse({"macos-browser", "macos-metal", "macos-self-hosted", "macos-vm-qualification"} & jobs.keys())
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'",
+                      _job_key(jobs["linux-self-hosted"], "if"))
+        step = _step_body(jobs["linux-self-hosted"], "Test Linux and macOS with native platform transitions")
+        self.assertIn("if: needs.gatekeeper.outputs.unified_macos == 'true'", step)
+        self.assertFalse(_secret_reads(step))
 
     def test_self_hosted_policy_rejects_ungated_or_mutable_runner_selection(self):
         files = self.supply_chain_files
@@ -4527,31 +4506,22 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         bcr = ".github/workflows/bcr_preflight.yml"
         perf = ".github/workflows/perf.yml"
         codeql = ".github/workflows/codeql.yml"
-        # The full admission expression: the hosted browser subset job reads the same routing
-        # output inside a different condition, and must not be the one this case mutates.
-        # The desktop browser partition extends it with a reviewed narrowing condition.
-        gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
-        narrowing = SELF_HOSTED_NARROWING[(main, "macos-browser")]
-        # The native Metal job narrows the gate to pull requests that reach its suites.
-        metal = SELF_HOSTED_NARROWING[(main, "macos-metal")]
+        gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.use_self_hosted_linux == 'true'"
+        linux = _jobs(files[main])["linux-self-hosted"]
+        self.assertIn(gate + " }}", linux)
+        cmake = ".github/workflows/cmake.yml"
+        narrowing = SELF_HOSTED_NARROWING[(cmake, "cmake-cache-producer")]
+        self.assertIn(gate + narrowing, files[cmake])
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
-        self.assertEqual(1, files[main].count(gate + " }}"))
-        self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
-        self.assertEqual(1, files[main].count(gate + metal + " }}"))
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         bazel = "        bazel: ['7.x', '8.x']\n"
         self.assertEqual(1, files[bcr].count(bazel))
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
-            "ungated": (main, files[main].replace(gate + " }}", "true }}", 1), ungated),
-            "browser narrowing widened": (main, files[main].replace(
-                gate + narrowing, gate + narrowing.replace(" && (", " || (", 1), 1), ungated),
-            "browser narrowing dropped": (main, files[main].replace(
-                gate + narrowing, gate, 1), ungated),
-            "metal narrowing widened": (main, files[main].replace(
-                gate + metal, gate + metal.replace(" && (", " || (", 1), 1), ungated),
-            "metal narrowing dropped": (main, files[main].replace(
-                gate + metal, gate, 1), ungated),
+            "ungated": (main, files[main].replace(linux, linux.replace(gate + " }}", "true }}", 1), 1), ungated),
+            "qualification narrowing widened": (cmake, files[cmake].replace(gate + narrowing,
+                gate + narrowing.replace(" && ", " || ", 1), 1), ungated),
+            "qualification narrowing dropped": (cmake, files[cmake].replace(gate + narrowing, gate, 1), ungated),
             "status prefix widened": (main, files[main].replace(
                 "${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push",
                 "${{ always() || needs.gatekeeper.outputs.is_duplicate_push", 1),
@@ -4607,14 +4577,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cmake = _jobs(files[".github/workflows/cmake.yml"])
         receipts = _upload_paths(cmake["cmake-cache-producer"]) + _upload_paths(cmake["cmake-cache-consumer"])
         self.assertEqual([["${{ runner.temp }}/cmake-cache-receipt.json"]] * 2, receipts)
-        shadow = _upload_paths(main["macos-remote-shadow"])
-        self.assertEqual([[
-            "${{ runner.temp }}/macos-remote-shadow/report.md",
-            "${{ runner.temp }}/macos-remote-shadow/shadow-summary.json",
-            "${{ runner.temp }}/macos-remote-shadow/*/profile.gz"]], shadow)
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
                          {entry.rsplit("/", 1)[-1]
-                          for group in [*uploads, *receipts, *shadow] for entry in group})
+                          for group in [*uploads, *receipts] for entry in group})
         self.assertIn(["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"], uploads)
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):
@@ -4857,15 +4822,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_self_hosted_gate_cannot_be_weakened_by_boolean_context(self):
         files = self.supply_chain_files
         path = ".github/workflows/main.yml"
-        for runner in ("linux", "macos"):
-            gate = "needs.gatekeeper.outputs.use_self_hosted_" + runner + " == 'true'"
+        gate = "needs.gatekeeper.outputs.use_self_hosted_linux == 'true'"
+        for name in ("linux-self-hosted", "coverage-contract"):
             for replacement in ("true || " + gate, gate + " || true"):
-                with self.subTest(runner=runner, replacement=replacement):
-                    job = _jobs(files[path])[runner + "-self-hosted"]
+                with self.subTest(job=name, replacement=replacement):
+                    job = _jobs(files[path])[name]
                     weakened_job = job.replace(gate, replacement, 1)
                     self.assertNotEqual(weakened_job, job)
                     changed = files[path].replace(job, weakened_job, 1)
-                    self.assertNotEqual(changed, files[path])
                     self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
 
     def test_hosted_runner_prefixes_do_not_approve_custom_labels(self):

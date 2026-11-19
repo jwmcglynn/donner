@@ -53,7 +53,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
 
     def _route(self, *, event_name="pull_request", event=None,
                actor="jwmcglynn", triggering_actor="jwmcglynn",
-               linux_enabled="true", unified_enabled="true"):
+               linux_enabled="true", unified_enabled="true", trust_value=None):
         if event is None:
             event = {
                 "sender": {"login": "jwmcglynn"},
@@ -84,7 +84,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             trust = self._outputs(trust_path)
             result = subprocess.run(["bash", "-c", self._routing_script()],
-                                    env=dict(env, TRUSTED_PR=trust["trusted_pr"]),
+                                    env=dict(env, TRUSTED_PR=trust["trusted_pr"] if trust_value is None else trust_value),
                                     text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             return {**trust, **self._outputs(output_path)}
@@ -93,6 +93,22 @@ class CiRunnerRoutingTest(unittest.TestCase):
         route = self._route()
         self.assertEqual(route["use_self_hosted_linux"], "true")
         self.assertEqual(route["unified_macos"], "true")
+
+    def test_opt_in_cannot_replace_the_trusted_actor_or_available_linux_runner(self):
+        def event(author="jwmcglynn", repo="jwmcglynn/donner"):
+            return {"sender": {"login": author}, "pull_request": {
+                "user": {"login": author}, "head": {"repo": {"full_name": repo}},
+                "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
+                "labels": [{"name": "ci:native-platform-canary"}]}}
+        cases = ({"event": event(), "trust_value": ""}, {"event": event(), "trust_value": "false"},
+                 {"event": event(), "actor": "other"}, {"event": event(), "triggering_actor": "other"},
+                 {"event": event("other")}, {"event": event("renovate[bot]")},
+                 {"event": event(repo="other/donner")}, {"event": event(), "event_name": "push"},
+                 {"event": event(), "linux_enabled": ""})
+        for case in cases:
+            with self.subTest(case=case):
+                outputs = self._route(unified_enabled="true", **case)
+                self.assertEqual(("false", "false"), (outputs["use_self_hosted_linux"], outputs["unified_macos"]))
 
     def test_unified_canary_default_comes_from_the_base_trust_action(self):
         gate = self._job_body("gatekeeper")

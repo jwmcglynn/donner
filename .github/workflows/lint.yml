@@ -33,7 +33,7 @@ jobs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
       use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
-      use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
+      unified_macos: ${{ steps.runner_gate.outputs.unified_macos }}
       # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
       unified_re_default: ${{ steps.pr_trust.outputs.unified_re_default }}
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
@@ -86,7 +86,7 @@ jobs:
         env:
           TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
-          SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
+          UNIFIED_RE_SELECTED: ${{ vars.UNIFIED_RE_CANARY != 'false' && (steps.pr_trust.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -111,13 +111,13 @@ jobs:
             use_linux=true
           fi
           # An operator PR can select hosted macOS for this run without changing Linux routing.
-          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
+          if [[ "$use_linux" == "true" && "$UNIFIED_RE_SELECTED" == "true" &&
                 "$hosted_macos_label" != "true" ]]; then
             use_macos=true
           fi
 
           echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
-          echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
+          echo "unified_macos=$use_macos" >> "$GITHUB_OUTPUT"
           echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
   lint:

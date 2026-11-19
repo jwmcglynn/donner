@@ -73,7 +73,7 @@ TRIGGER_ALLOWLIST = {
 JOB_REPLACEMENTS = {
     ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
     ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
-    ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
+    ("main.yml", "macos", "trusted-pr"): "linux-self-hosted",
 }
 
 # Hosted jobs that run some of a replaced job's steps on the replaced job's own runner image, for
@@ -129,76 +129,7 @@ MAIN_ONLY_JOBS = {}
 INVOCATION_ALLOWLIST = {
     ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
         "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
-    ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
-     "-requires_desktop_session"):
-        "The native macos-browser partition runs desktop-session tests separately; "
-        "the service runner cannot launch browsers that require a desktop session.",
-    # The hosted image has no offline Metal compiler, so its lane drops these targets. The
-    # self-hosted runner has one and runs them, so the pull request runs more than main.
-    ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-main-only",
-     "-requires_metal_toolchain"):
-        "Main runs fewer tests: the hosted image cannot compile offline Metal shaders.",
-    # Browser cases quarantined on the hosted runner alone (#1691, #1702). Main skips them; the
-    # pull request runs them, so they cannot turn main red. Remove with the quarantine.
-    ("main.yml", "macos", "macos-self-hosted", "Build and test", "test-env-main-only",
-     "DONNER_HOSTED_MACOS_QUARANTINE=1"):
-        "Main skips the quarantined cases that the pull request runs (#1691, #1702).",
-    ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "test-env-main-only",
-     "DONNER_HOSTED_MACOS_QUARANTINE=1"):
-        "Main skips the quarantined cases that the pull request runs (#1691, #1702).",
-    # Records host load and process call graphs only when a browser test reaches its deadline.
-    # A persistent self-hosted runner never publishes them.
-    ("main.yml", "macos", "macos-self-hosted", "Build and test", "test-env-main-only",
-     "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
-        "Diagnostics only: it changes what a timed-out test records, not whether it passes.",
-    ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "test-env-main-only",
-     "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
-        "Diagnostics only: it changes what a timed-out test records, not whether it passes.",
-    # The self-hosted runner ignores its host's user and system bazelrc files.
-    ("main.yml", "macos", "macos-self-hosted", "*", "startup-pr-only", "--nohome_rc"):
-        "Runner-specific: keeps the host's interactive bazelrc out of CI.",
-    ("main.yml", "macos", "macos-self-hosted", "*", "startup-pr-only", "--nosystem_rc"):
-        "Runner-specific: keeps any host system bazelrc out of CI.",
-    # Each macOS lane names itself in its test environment, so test results, which depend on
-    # the runner's GPU, are never shared between the hosted and self-hosted lanes. Build action
-    # keys stay identical (//tools:macos_cache_key_parity_tests).
-    **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
-       "Lane identity for test results only; it does not change what runs."
-       for step in ("Qualify pinned Chromium archive", "Build and test", "Test (browser targets)",
-                    "Test (Geode editor lane)")
-       for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
-                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted-vm"))},
-    **{("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only", flag):
-       "VM runner scheduling budget (--config=macos-vm); it changes no action key."
-       for flag in _config_flags("macos-vm")},
-    **{("main.yml", "macos", "macos-self-hosted", step, "flag-pr-only",
-        "--//build_defs:metal_shader_validation=off"):
-       "The VM uses API validation. The independent native Metal job retains shader validation; "
-       "this setting changes only Metal device tests' environment."
-       for step in ("Qualify pinned Chromium archive", "Test (browser targets)",
-                    "Test (Geode editor lane)")},
-    # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
-    # what the step runs (its action, inputs, script, shell, its own env and the variables it
-    # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
-    # hooks from job env or earlier steps are rejected by //tools:macos_cache_key_parity_tests.
-    # The refresh passes the self-hosted lane's rc-skipping startup flags.
-    ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
-     "step-changed", "de78e4645a7c25f7"):
-        "Same repositories refreshed; only the runner-specific startup flags differ.",
-    # Setup the hosted runner needs and the self-hosted runner has already: the host provides
-    # Bazelisk, Homebrew LLVM and the Xcode tools ("Prepare self-hosted macOS toolchain"),
-    # and keeps Bazel's repository and action state between runs. The Bazel steps then fetch
-    # what they need.
-    **{("main.yml", "macos", "macos-self-hosted", step, "step-main-only", ""):
-       "Hosted runner setup only; the self-hosted runner is provisioned with it, and it "
-       "changes no test, filter or flag."
-       for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache")},
-    ("main.yml", "macos", "macos-self-hosted", "Free hosted macOS disk", "step-main-only", ""):
-        "Hosted runner setup only: it deletes the image's unused Xcodes and simulator runtimes so "
-        "a cold build fits on its disk, and changes no test, filter or flag.",
-    ("main.yml", "macos", "macos-self-hosted", "Save Bazel action cache", "step-main-only", ""):
-        "Hosted runner teardown only: it bounds and saves the action cache that 'Restore Bazel "
-        "action cache' restored, after every test step, and changes no test, filter or flag.",
+
 }
 
 # Differences in how a job that runs on both main and a pull request runs Bazel in each, keyed
@@ -457,6 +388,7 @@ SHADOW_LANE_CONTEXT = {
 
 # Job outputs a condition may read, mapped to the scenario key that holds each one's value.
 _MODELLED_OUTPUTS = {
+    "needs.gatekeeper.outputs.unified_macos": "use_self_hosted",
     "needs.gatekeeper.outputs.unified_re_default": "trusted_pr",
     "needs.gatekeeper.outputs.trusted_pr": "trusted_pr",
     "needs.gatekeeper.outputs.renovate_pr": "renovate_pr",
@@ -794,7 +726,8 @@ def _context(scenario):
         raise ValueError("unmodelled context %s" % name)
 
     if rollback:
-        overrides = {"vars.UNIFIED_RE_CANARY": "false", "steps.unified.outcome": "skipped"}
+        overrides = {"vars.UNIFIED_RE_CANARY": "false", "steps.unified.outcome": "skipped",
+                     "needs.gatekeeper.outputs.unified_macos": "false"}
         return lambda name: overrides[name] if name in overrides else lookup(name)
     return lookup
 
@@ -1256,12 +1189,69 @@ def _compared_steps(main_steps, pr_steps, only_steps):
     return _fold_shared(differences, shared)
 
 
+_HOSTED_MAC_PHASES = {
+    "Build and test": ("d4017700856c1bb1", {"darwin-build", "darwin-test", "metal-profile", "metal-preflight",
+                                         "metal-native", "metal-compiler"}),
+    "Qualify pinned Chromium archive": ("a7a5cf340d65c8e3", {"browser-archive"}),
+    "Test (browser targets)": ("e6950511284f051b", {"headless-browser", "desktop-browser"}),
+    "Test (Geode editor lane)": ("546956e0e36a8e27", {"geode"}),
+}
+
+
+def _hosted_darwin_differences(workflow, manifest):
+    hosted, writes = _bazel_profile(workflow, _jobs(workflow)["macos"], "main-push")
+    names = set(_HOSTED_MAC_PHASES)
+    missing = names ^ set(hosted)
+    declared = manifest["lanes"]["macos"]
+    differences = {(name, "hosted-phase-set", "") for name in missing | (names ^ set(declared))}
+    differences.update(("*", "hosted-runtime-flag-write", write) for write in writes)
+    for name in names & set(hosted) & set(declared):
+        encoded = json.dumps(hosted[name], default=sorted, sort_keys=True, separators=(",", ":")).encode()
+        stamp, expected = _HOSTED_MAC_PHASES[name]
+        if hashlib.sha256(encoded).hexdigest()[:16] != stamp:
+            differences.add((name, "hosted-command-changed", ""))
+        classes = {c.get("class", "") for entry in declared[name].values() for c in entry.get("counterparts", [])
+                   if (c["job"], c["step"]) == ("linux-self-hosted", "unified")}
+        differences.update((name, "mixed-class-mismatch", cls) for cls in expected ^ classes)
+    return differences
+
+
+def _mixed_darwin_differences(workflow, job, manifest=None):
+    """Compare graph inputs and proof when hosted phases share one trusted invocation."""
+    step = next((s for s in job["steps"] if s.get("id") == "unified"), {})
+    text = step.get("run", "")
+    required = {
+        "planner": "tools/ci/darwin_selection.py query",
+        "selected Darwin variants": 'tools/ci/darwin_selection.py variants < "$linux.jsonl" > "$ordinary"',
+        "all build roots": 'cat "$ordinary" "$linux"',
+        "Geode suite": "suites+=(//tools/ci:unified_editor_geode)",
+        "browser preflight": "suites+=(//tools/ci:unified_mac_browser_archive)",
+        "native Metal": "suites+=(//tools/ci:unified_metal_{full_validation,preflight,offline_compiler,native})",
+        "build non-test products": "--nobuild_tests_only",
+        "single pattern file": '--target_pattern_file="$patterns"',
+        "per-target receipts": 'verify_unified_tests.py --ordinary "$ordinary" --linux "$linux"',
+    }
+    differences = {("Build and test", "missing-mixed-coverage", capability)
+                   for capability, needle in required.items() if needle not in text}
+    if step.get("if") != "needs.gatekeeper.outputs.unified_macos == 'true'":
+        differences.add(("Build and test", "incorrect-mixed-admission", "unified_macos"))
+    hosted = _config_flags("hosted-macos-quarantine")
+    for flag in set(hosted) - {"--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"}:
+        differences.add(("Build and test", "test-env-main-only" if flag.startswith("--test_env=")
+                         else "flag-main-only", flag.removeprefix("--test_env=")))
+    if manifest is None:
+        manifest = json.loads(_read("tools/ci/coverage_contract.json"))
+    return differences | _hosted_darwin_differences(workflow, manifest)
+
+
 def invocation_differences(workflow, main_job_name, replacement_name, only_steps=None):
     """(step, kind, value) differences between a main job and the job that replaces it.
 
     With `only_steps`, compare just those steps, each of which both jobs must run.
     """
     jobs = _jobs(workflow)
+    if main_job_name == "macos" and replacement_name == "linux-self-hosted":
+        return _mixed_darwin_differences(workflow, jobs[replacement_name])
     main_steps, main_writes = _bazel_profile(workflow, jobs[main_job_name], "main-push")
     # On the default route a single mixed invocation covers the hosted Build and Test phases.
     # Compare the separate Linux phases under rollback and check the default route below.
@@ -1814,8 +1804,7 @@ class CiLaneParityTest(unittest.TestCase):
 
     def test_reader_understands_the_main_workflow(self):
         jobs = _jobs(self.workflows["main.yml"])
-        for name in ("gatekeeper", "determine-targets", "linux", "linux-self-hosted", "macos",
-                     "macos-self-hosted"):
+        for name in ("gatekeeper", "determine-targets", "linux", "linux-self-hosted", "macos"):
             self.assertIn(name, jobs)
         steps = [_step_name(step) for step in jobs["macos"]["steps"]]
         self.assertIn("Build and test", steps)
@@ -1831,12 +1820,8 @@ class CiLaneParityTest(unittest.TestCase):
         jobs = _jobs(self.workflows["main.yml"])
         expected = {
             "macos": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
-            "macos-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
-            "macos-metal": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
             "linux": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "linux-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
-            "macos-remote-shadow": {"main-push": False, "trusted-pr": True,
-                                    "untrusted-pr": False},
         }
         for job, scenarios in expected.items():
             for scenario, expected_runs in scenarios.items():
@@ -1858,16 +1843,11 @@ class CiLaneParityTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "unmodelled context runner.os"):
                         runs(condition, scenario)
 
-    def test_advisory_shadow_lane_never_gates(self):
-        workflow = self.workflows["main.yml"]
-        for scenario in SCENARIOS:
-            with self.subTest(scenario=scenario):
-                self.assertFalse(job_gates(workflow, "macos-remote-shadow", scenario))
-        self.assertTrue(job_runs(workflow, "macos-remote-shadow", "trusted-pr"))
-        job = dict(_jobs(workflow)["macos-remote-shadow"])
-        job.pop("continue-on-error")
-        self.assertTrue(job_gates(dict(workflow, jobs=dict(_jobs(workflow), **{
-            "macos-remote-shadow": job})), "macos-remote-shadow", "trusted-pr"))
+    def test_retired_mac_runner_jobs_cannot_receive_work(self):
+        jobs = _jobs(self.workflows["main.yml"])
+        for name in ("macos-remote-shadow", "macos-remote-shadow-turnstile", "macos-self-hosted",
+                     "macos-metal", "macos-browser", "macos-vm-qualification"):
+            self.assertNotIn(name, jobs)
 
     def test_every_main_push_workflow_runs_on_pull_requests(self):
         self._assert_matches_allowlist(
@@ -1925,17 +1905,40 @@ class CiLaneParityTest(unittest.TestCase):
             observed, COUNTERPART_ALLOWLIST,
             "the pull request runs a skipped main step differently in its counterpart job")
 
+    def test_hosted_coverage_changes_and_missing_native_receipts_are_detected(self):
+        original = self.workflows["main.yml"]
+        workflow = copy.deepcopy(original)
+        jobs = _jobs(workflow)
+        hosted = jobs["macos"]
+        hosted["steps"].append({"name": "Additional hosted tests", "run": "bazelisk test //example:extra"})
+        self.assertIn(("Additional hosted tests", "hosted-phase-set", ""),
+                      _hosted_darwin_differences(workflow, self._coverage_manifest()))
+        hosted["steps"].append({"name": "Change compiler flags",
+                                "run": 'echo "BAZEL_MACOS_BUILD_FLAGS=--copt=-O0" >> "$GITHUB_ENV"'})
+        self.assertIn(("*", "hosted-runtime-flag-write", "BAZEL_MACOS_BUILD_FLAGS=--copt=-O0"),
+                      _hosted_darwin_differences(workflow, self._coverage_manifest()))
+        manifest = self._coverage_manifest()
+        del manifest["lanes"]["macos"]["Build and test"]["shader-memory-canary"]
+        self.assertIn(("Build and test", "mixed-class-mismatch", "metal-preflight"),
+                      _hosted_darwin_differences(original, manifest))
+        changed = copy.deepcopy(original)
+        hosted_steps = _jobs(changed)["macos"]["steps"]
+        browser = next(s for s in hosted_steps if _step_name(s) == "Test (browser targets)")
+        geode = next(s for s in hosted_steps if _step_name(s) == "Test (Geode editor lane)")
+        browser["run"], geode["run"] = geode["run"], browser["run"]
+        changes = _hosted_darwin_differences(changed, self._coverage_manifest())
+        for step in (browser, geode):
+            self.assertIn((_step_name(step), "hosted-command-changed", ""), changes)
+
     def test_target_selection_differences_are_reported(self):
         # A lane phase that narrows the planner's selection differs from main's phase.
         workflow = self.workflows["main.yml"]
-        self.assertFalse({difference for difference in
-                          invocation_differences(workflow, "macos", "macos-self-hosted")
-                          if difference[1].startswith("target-")})
-        narrowed = _replacing(lanes.SELECTED, "//donner/base/...")
-        with _with_phase_args("macos-self-hosted", "test", narrowed):
-            differences = invocation_differences(workflow, "macos", "macos-self-hosted")
-        self.assertLessEqual({("Build and test", "target-main-only", SELECTED_TARGETS),
-                              ("Build and test", "target-pr-only", "//donner/base/...")}, differences)
+        job = copy.deepcopy(_jobs(workflow)["linux-self-hosted"])
+        self.assertFalse(_mixed_darwin_differences(workflow, job))
+        step = next(s for s in job["steps"] if s.get("id") == "unified")
+        step["run"] = step["run"].replace('cat "$ordinary" "$linux"', 'cat "$linux"')
+        self.assertIn(("Build and test", "missing-mixed-coverage", "all build roots"),
+                      _mixed_darwin_differences(workflow, job))
         # A step script's targets, through its environment, compare the same way.
         main = textwrap_job('X_TARGETS: "//tools/ci:a"', "bazelisk test --config=ci $X_TARGETS")
         narrowed = textwrap_job('X_TARGETS: "//tools/ci:b"',
@@ -1997,7 +2000,7 @@ class CiLaneParityTest(unittest.TestCase):
                     if step.get("id"):
                         self.assertEqual(step["id"], phase[1])
         self.assertEqual(sorted(called), sorted(
-            (name, phase) for name, lane in lanes.LANES.items() for phase in lane.phases))
+            (name, phase) for name, lane in lanes.WORKFLOW_LANES.items() for phase in lane.phases))
 
     def test_lane_steps_pass_the_planner_selection(self):
         # A phase reads the selection only from its job's environment, set from the planner's
@@ -2068,10 +2071,19 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertEqual([], build_event_file_problems(self.workflows))
 
     def test_ci_lanes_build_one_constant_editor_identity(self):
-        commands = [invocation for _, _, _, invocation
-                    in _bazel_commands({"main.yml": self.workflows["main.yml"]})
-                    if invocation["command"] in ("build", "test", "coverage")]
-        self.assertGreater(len(commands), 20)
+        commands = [(job, step, inv["command"]) for _, job, step, inv in
+                    _bazel_commands({"main.yml": self.workflows["main.yml"]})
+                    if inv["command"] in ("build", "test", "coverage")]
+        expected = {
+            ("linux", "Verify BuildBuddy remote execution", "build"), ("linux", "Build", "build"),
+            ("linux", "Test", "test"), ("linux", "Linker canary (non-lld linker support)", "build"),
+            ("linux-self-hosted", "Build", "build"), ("linux-self-hosted", "Test", "test"),
+            ("linux-self-hosted", "Test Linux and macOS with native platform transitions", "test"),
+            *[("macos", name, "test") for name in _HOSTED_MAC_PHASES],
+            ("macos", "Compare browser GPU tests (serial)", "test"),
+            ("macos", "Compare browser GPU tests (parallel)", "test"),
+        }
+        self.assertCountEqual(commands, expected)
         self.assertEqual([], editor_identity_problems(self.workflows))
         # It comes from the one named config, which only `ci` applies.
         rc = [line for line in _read(".bazelrc").splitlines() if not line.startswith("#")]
@@ -2243,22 +2255,15 @@ class CiLaneParityTest(unittest.TestCase):
                     self.assertEqual(runs(steps[name]["if"], scenario), not mixed)
 
     def test_unified_re_canary_default_and_rollback(self):
-        job = _jobs(self.workflows["main.yml"])["linux-self-hosted"]
-        step = next(step for step in job["steps"]
-                    if step.get("name") == "Test Linux and macOS with native platform transitions")
+        gate = _jobs(self.workflows["main.yml"])["gatekeeper"]
+        router = next(step for step in gate["steps"] if step.get("id") == "runner_gate")
+        select = router["env"]["UNIFIED_RE_SELECTED"]
         label = "ci:native-platform-canary"
-        for event, base_default, labels, switch, expected in (
-                ("pull_request", "true", [], "", True),
-                ("pull_request", "", [], "", False),
-                ("pull_request", "", [label], "", True),
-                ("pull_request", "true", [], "false", False),
-                ("pull_request", "", [label], "false", False),
-                ("push", "true", [label], "", False)):
-            with self.subTest(event=event, base=base_default, labels=labels, switch=switch):
-                context = {"github.event_name": event, "vars.UNIFIED_RE_CANARY": switch,
-                           "needs.gatekeeper.outputs.unified_re_default": base_default,
-                           "github.event.pull_request.labels.*.name": labels}
-                self.assertEqual(_Expression(step["if"], context.__getitem__).evaluate(), expected)
+        for default, labels, switch, expected in (("true", [], "", True), ("", [], "", False),
+                ("", [label], "", True), ("true", [], "false", False), ("", [label], "false", False)):
+            context = {"steps.pr_trust.outputs.unified_re_default": default,
+                       "vars.UNIFIED_RE_CANARY": switch, "github.event.pull_request.labels.*.name": labels}
+            self.assertEqual(_Expression(select, context.__getitem__).evaluate(), expected)
 
     def test_pull_request_branch_filters_must_include_main(self):
         workflows = {
@@ -2539,45 +2544,25 @@ class CiLaneParityTest(unittest.TestCase):
         self._assert_matches_allowlist(observed, SUBSET_ALLOWLIST,
                                        "a hosted subset runs a main step differently")
 
-    def test_browser_partitions_keep_complete_nonoverlapping_selection(self):
-        workflow = self.workflows["main.yml"]
-        for job_name, scenario, positive in (
-                ("macos", "main-push", "launches-browser"),
-                ("macos-self-hosted", "trusted-pr", "launches-browser"),
-                ("macos-browser", "trusted-pr", "requires_desktop_session"),
-                ("macos-browser", "trusted-pr-fallback", "requires_desktop_session")):
-            with self.subTest(job=job_name, scenario=scenario):
-                self.assertTrue(job_gates(workflow, job_name, scenario))
-                job = _jobs(workflow)[job_name]
-                self.assertFalse(job.get("continue-on-error", False))
-                profile, _ = _bazel_profile(workflow, job, scenario)
-                invocations = profile["Test (browser targets)"]
-                self.assertTrue(invocations)
-                for invocation in invocations:
-                    tags = invocation["tag_filters"]
-                    self.assertEqual({positive}, {tag for tag in tags if not tag.startswith("-")})
-                    self.assertEqual(job_name == "macos-self-hosted",
-                                     "-requires_desktop_session" in tags)
-        for other in ("main-push", "untrusted-pr", "renovate-pr", "trusted-pr-native-only"):
-            self.assertFalse(job_gates(workflow, "macos-browser", other), other)
+    def test_browser_classes_share_the_arc_preflight_and_have_distinct_case_receipts(self):
+        mac = self._coverage_manifest()["lanes"]["macos"]
+        archive = mac["Qualify pinned Chromium archive"]
+        for cls in ("browser", "desktop-browser"):
+            self.assertEqual(archive[cls]["counterparts"][0]["class"], "browser-archive")
+        tests = mac["Test (browser targets)"]
+        self.assertEqual(tests["browser"]["counterparts"][0]["class"], "headless-browser")
+        self.assertEqual(tests["desktop-browser"]["counterparts"][0]["class"], "desktop-browser")
 
-    def test_native_metal_job_runs_only_when_the_pull_request_reaches_its_suites(self):
-        # The native Metal job reruns fixed suites uncached. It runs for a trusted pull request
-        # whose affected targets reach those suites, or that falls back to //..., and never for
-        # one that reaches neither; main and untrusted pull requests never route to it.
-        workflow = self.workflows["main.yml"]
-        for scenario, expected in (("trusted-pr", True), ("trusted-pr-fallback", True),
-                                   ("trusted-pr-native-only", False), ("main-push", False),
-                                   ("untrusted-pr", False), ("renovate-pr", False)):
-            with self.subTest(scenario=scenario):
-                self.assertEqual(expected, job_gates(workflow, "macos-metal", scenario))
-        # A skipped run is an expected skip for the coverage contract, not a gap.
-        manifest = self._coverage_manifest()
-        metal = {name for name, entry in manifest["lanes"]["macos"]["Build and test"].items()
-                 if any(c["job"] == "macos-metal" for c in entry.get("counterparts", []))}
-        self.assertEqual({"shader-validation", "shader-memory-canary", "native-metal"}, metal)
-        for name in metal:
-            self.assertEqual("metal_affected", manifest["lanes"]["macos"]["Build and test"][name]["when"])
+    def test_native_metal_suites_run_only_when_selected(self):
+        job = _jobs(self.workflows["main.yml"])["linux-self-hosted"]
+        step = next(s for s in job["steps"] if s.get("id") == "unified")
+        for scenario, required in (("trusted-pr", True), ("trusted-pr-native-only", False),
+                                   ("trusted-pr-fallback", True)):
+            self.assertEqual(runs(step["env"]["RUN_METAL"], scenario), required)
+        classes = self._coverage_manifest()["lanes"]["macos"]["Build and test"]
+        for name in ("shader-validation", "shader-memory-canary", "native-metal", "offline-metal-compiler"):
+            self.assertEqual(classes[name]["when"], "metal_affected")
+            self.assertEqual(classes[name]["counterparts"][0]["step"], "unified")
 
     def test_subset_order_problems_are_found(self):
         main = parse_workflow(
@@ -2636,10 +2621,10 @@ class CiLaneParityTest(unittest.TestCase):
         _CONFIGS[0] = widened
         try:
             observed = invocation_differences(self.workflows["main.yml"], "macos",
-                                              "macos-self-hosted")
+                                              "linux-self-hosted")
         finally:
             _CONFIGS[0] = configs
-        difference = ("main.yml", "macos", "macos-self-hosted", "Build and test", "test-env-main-only",
+        difference = ("main.yml", "macos", "linux-self-hosted", "Build and test", "test-env-main-only",
                       "DONNER_WIDENED=1")
         self.assertIn(difference[3:], observed)
         self.assertNotIn(difference, INVOCATION_ALLOWLIST)
@@ -2680,7 +2665,10 @@ class CiLaneParityTest(unittest.TestCase):
                                  str(receipt["run"]).strip())
                 self.assertEqual({"STEPS_JSON": "${{ toJSON(steps) }}"}, receipt["env"])
                 # A minimum test count is read from the step's own build event file.
-                if counterpart.get("min_tests"):
+                if counterpart.get("class"):
+                    self.assertEqual((job_name, step_id), ("linux-self-hosted", "unified"))
+                    self.assertIn("verify_unified_tests.py", steps[step_id]["run"])
+                elif counterpart.get("min_tests"):
                     self.assertTrue(any(
                         lanes.bep(step_id) in command for command in lane_commands(
                             steps[step_id])), step_id)

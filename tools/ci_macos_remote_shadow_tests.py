@@ -137,212 +137,6 @@ def _root():
     return Path(runfiles.Create().Rlocation("donner/.bazelrc")).parent
 
 
-def _job(text, name):
-    """A job's body in main.yml, without its header line."""
-    match = re.search(r"(?m)^  %s:\n((?:(?:    .*|)\n)*)" % re.escape(name), text)
-    return match.group(1) if match else None
-
-
-def _key(body, key, indent=4):
-    match = re.search(r"(?m)^ {%d}%s: (.*)$" % (indent, re.escape(key)), body or "")
-    return match.group(1).strip() if match else None
-
-
-def _steps(body):
-    """Each step of a job body, from its `- ` line to the next."""
-    return re.split(r"(?m)^(?=      - )", (body or "").split("    steps:\n", 1)[-1])[1:]
-
-
-def _step(body, step_id):
-    return next((step for step in _steps(body) if "        id: %s\n" % step_id in step), None)
-
-
-def _needs(body):
-    return [need.strip() for need in (_key(body, "needs") or "").strip("[]").split(",")]
-
-
-def _with(step, key):
-    match = re.search(r"(?m)^          %s: (.*)$" % re.escape(key), step or "")
-    return match.group(1).strip().strip('"') if match else None
-
-
-def _gate_problems(gate, job, turnstile):
-    """Both shadow jobs' conditions are the Linux lane's gate, narrowed, and nothing else."""
-    if not (gate.startswith("${{ ") and gate.endswith(" }}")):
-        return ["the Linux lane's gate is not one expression"]
-    inner = gate[len("${{ "):-len(" }}")]
-    return ["%s is not the Linux lane's trust gate plus the opt-in" % name
-            for name, body, extra in ((JOB, job, ADMITTED), (TURNSTILE, turnstile, ""))
-            if _key(body, "if") != "${{ %s%s%s%s }}" % (AFTER_LINUX, inner, OPT_IN, extra)]
-
-
-def trust_problems(text):
-    """The shadow jobs run only where the self-hosted Linux lane may run, and only on opt-in."""
-    linux, job, turnstile = (_job(text, name) for name in (LINUX_JOB, JOB, TURNSTILE))
-    if not (linux and job and turnstile):
-        return ["the shadow lane, its turnstile or the self-hosted Linux lane is missing"]
-    problems = _gate_problems(_key(linux, "if") or "", job, turnstile)
-    if _key(job, "runs-on") != _key(linux, "runs-on"):
-        problems.append("%s does not run on the Linux lane's runner class" % JOB)
-    if _key(turnstile, "runs-on") != "ubuntu-24.04":
-        problems.append("%s must wait on a hosted runner" % TURNSTILE)
-    if "gatekeeper" not in _needs(job) or "gatekeeper" not in _needs(turnstile):
-        problems.append("the shadow jobs do not need the gatekeeper")
-    if "secrets." in job or "environment:" in job:
-        problems.append("%s reads a secret or binds an environment" % JOB)
-    return problems
-
-
-def _lane_step_problems(job):
-    """The lane step runs the lane's phase alone, on the planner's selection, and cannot fail the
-    job; the phase runs the script on that selection."""
-    shadow = _step(job, "shadow")
-    if shadow is None or _key(shadow, "continue-on-error", 8) != "true":
-        return ["the shadow step can fail the job"]
-    selection = {name: _key(job, name, 6) for name in SELECTION_ENV}
-    argv = _script_argv()
-    if _key(shadow, "run", 8) != RUN or selection != SELECTION_ENV or "env:" in shadow or \
-            argv[:2] != ["python3", "tools/ci/macos_remote_shadow.py"] or \
-            argv[-2:] != ["--targets", lanes.SELECTED]:
-        return ["the shadow step must run the lane script alone on the planner's selection"]
-    others = [step for step in _steps(job) if step != shadow]
-    if any(re.search(r"(?m)^        run:", step) for step in others):
-        return ["%s runs a script outside its lane step" % JOB]
-    return []
-
-
-def _contract_problems(text, manifest, job):
-    """The coverage contract neither waits for nor reads the lane."""
-    problems = []
-    if any("coverage-receipt" in step or "ci_coverage_contract" in step for step in _steps(job)):
-        problems.append("%s records a coverage receipt" % JOB)
-    contract = _job(text, "coverage-contract") or ""
-    if JOB in _needs(contract) or TURNSTILE in _needs(contract):
-        problems.append("the coverage contract waits for the shadow lane")
-    if JOB in json.dumps(manifest):
-        problems.append("the coverage manifest names the shadow lane")
-    return problems
-
-
-def non_gating_problems(text, manifest):
-    """A shadow failure can fail neither the run, nor the job's check, nor the coverage contract."""
-    job = _job(text, JOB)
-    if job is None:
-        return ["%s is missing" % JOB]
-    problems = []
-    if _key(job, "continue-on-error") != "true":
-        problems.append("%s lacks job-level continue-on-error" % JOB)
-    # It holds a self-hosted Linux runner outside the Linux lane's accounting, so it may not take
-    # longer than it needs.
-    budget = int(_key(job, "timeout-minutes") or 0)
-    if not lane.STARVED_SECONDS // 60 < budget <= 90 or \
-            budget >= int(_key(_job(text, LINUX_JOB), "timeout-minutes") or 0):
-        problems.append("%s needs a budget above the starvation bound and at most 90 minutes"
-                        % JOB)
-    return problems + _lane_step_problems(job) + _contract_problems(text, manifest, job)
-
-
-def admission_problems(text):
-    """One shadow run at a time, in a pool of its own, after this run's Linux lane is admitted."""
-    job, turnstile, linux_turnstile = (_job(text, name) for name in (JOB, TURNSTILE,
-                                                                       LINUX_TURNSTILE))
-    if not (job and turnstile and linux_turnstile):
-        return ["a turnstile or the shadow lane is missing"]
-    wait = next((step for step in _steps(turnstile) if "re-turnstile" in step), None)
-    linux_wait = next((step for step in _steps(linux_turnstile) if "re-turnstile" in step), None)
-    problems = []
-    if TURNSTILE not in _needs(job):
-        problems.append("%s does not wait for its turnstile" % JOB)
-    if LINUX_JOB not in _needs(job) or LINUX_JOB not in _needs(turnstile):
-        problems.append("the shadow lane can start before this run's Linux lane has finished")
-    if (_with(wait, "lane"), _with(wait, "pool"), _with(wait, "capacity")) != (JOB, JOB, "1"):
-        problems.append("the shadow lane needs its own pool of capacity 1")
-    if _with(wait, "pool-workflows") != _with(linux_wait, "pool-workflows"):
-        problems.append("the shadow pool must count the same workflows as the Linux pool")
-    return problems + _wait_problems(wait, linux_wait, turnstile)
-
-
-def _wait_problems(wait, linux_wait, turnstile):
-    """The Linux pool is untouched; the shadow wait is short, fail-closed and advisory."""
-    problems = []
-    if (_with(linux_wait, "pool") or "").split() != [LINUX_JOB]:
-        problems.append("the Linux lane's admission pool changed")
-    if _with(wait, "timeout-result") != "skip" or int(_with(wait, "timeout-minutes") or 999) > 30:
-        problems.append("the shadow admission must fail closed within 30 minutes")
-    if _with(linux_wait, "timeout-result") is not None:
-        problems.append("the Linux lane's admission behavior changed")
-    if _key(turnstile, "continue-on-error") != "true":
-        problems.append("a failed shadow admission can fail the run")
-    return problems
-
-
-def privacy_problems(texts):
-    """No endpoint, credential, priority or private flag in the lane's workflow jobs or script."""
-    return ["%s names private runner configuration" % name for name, text in texts.items()
-            if PRIVATE_FLAG.search(text) or ENDPOINT.search(text)]
-
-
-def upload_problems(text):
-    """The lane uploads derived files only, never a build event file or an execution log."""
-    job = _job(text, JOB) or ""
-    block = job.split("          path: |\n", 1)[1] if "          path: |\n" in job else ""
-    lines = re.match(r"(?:            .*\n)*", block).group(0)
-    paths = [line.strip() for line in lines.splitlines()]
-    if not paths:
-        return ["%s uploads no summary" % JOB]
-    # A stall note can quote a Bazel message; it stays on the runner.
-    allowed = ("report.md", "shadow-summary.json", "profile.gz")
-    return ["%s uploads %s" % (JOB, path) for path in paths
-            if path.rsplit("/", 1)[-1] not in allowed]
-
-
-def _staged_root():
-    """The workflow's spelling of the directory the script stages failed tests' outputs in: its
-    default output directory under the runner's temporary directory."""
-    return "${{ runner.temp }}/%s/%s" % (lane.OUT_NAME, lane.ARTIFACTS)
-
-
-def failure_artifact_problems(text):
-    """A failed test's log and undeclared outputs leave the runner, through the reviewed
-    collector and from the directory the script stages them in, whenever the lane step failed."""
-    steps = _steps(_job(text, JOB))
-    uploads = [step for step in steps if "        uses: %s\n" % COLLECTOR in step]
-    if len(uploads) != 1:
-        return ["%s does not upload its failed tests' outputs through the collector" % JOB]
-    upload, shadow = uploads[0], _step(_job(text, JOB), "shadow")
-    problems = []
-    if shadow is None or steps.index(upload) < steps.index(shadow):
-        problems.append("the failed test outputs are uploaded before the lane step runs")
-    if _key(upload, "if", 8) != FAILURE_UPLOAD_IF:
-        problems.append("the failed test outputs are not uploaded on the lane step's outcome")
-    if _with(upload, "testlogs") != _staged_root():
-        problems.append("the collector does not read the script's staged failed test outputs")
-    return problems
-
-
-def budget_problems(text, argv=None):
-    """The lane's own budget, plus the margin it needs to report and upload, fits inside the
-    job's timeout-minutes, so the lane always stops itself before the runner cancels the job."""
-    job = _job(text, JOB) or ""
-    argv = _script_argv() if argv is None else argv
-    timeout = int(_key(job, "timeout-minutes") or 0)
-    values = [argv[index + 1] for index, word in enumerate(argv[:-1])
-              if word == "--budget-minutes"]
-    if len(values) != 1 or not re.fullmatch(r"\d+(?:\.\d+)?", str(values[0])):
-        return ["the shadow phase passes no single --budget-minutes"]
-    budget = float(values[0])
-    if not 0 < budget or budget + lane.REPORT_MARGIN_MINUTES >= timeout:
-        return ["a %g-minute budget plus the %d-minute report margin does not fit in the job's "
-                "%d minutes" % (budget, lane.REPORT_MARGIN_MINUTES, timeout)]
-    if budget * 60 <= lane.STARVED_SECONDS:
-        return ["the budget does not leave the starvation guard room to fire first"]
-    return []
-
-
-def _flags(command):
-    return [word for word in command if word.startswith("--")]
-
-
 def _preflights(out):
     return [command for command, _ in lane.preflight_commands("bazelisk", [], [], out).values()]
 
@@ -364,170 +158,40 @@ def _tag_filter_sets(value):
 
 
 class WorkflowTest(unittest.TestCase):
-    maxDiff = None
+    def test_standalone_diagnostic_has_no_github_runner_or_admission_pool(self):
+        workflow = _read(".github/workflows/main.yml")
+        self.assertNotIn("\n  macos-remote-shadow:", workflow)
+        self.assertNotIn("\n  macos-remote-shadow-turnstile:", workflow)
+        self.assertNotIn("MACOS_REMOTE_SHADOW_LANE", workflow)
+        self.assertIn("tools/ci/macos_remote_shadow.py", _read("docs/building.md"))
 
-    @classmethod
-    def setUpClass(cls):
-        cls.text = _read(MAIN)
-        cls.manifest = json.loads(_read("tools/ci/coverage_contract.json"))
+    def test_mixed_workflow_and_live_artifact_collector_keep_private_settings_out(self):
+        workflow = _read(".github/workflows/main.yml")
+        step = workflow.split("      - name: Test Linux and macOS with native platform transitions", 1)[1]
+        step = step.split("      - name:", 1)[0]
+        sources = {"mixed invocation": step, "artifact collector": _read("tools/ci/macos_remote_shadow.py"),
+                   "receipt verifier": _read("tools/ci/verify_unified_tests.py")}
+        def exposed(text):
+            return bool(PRIVATE_FLAG.search(text) or ENDPOINT.search(text))
+        for owner, text in sources.items():
+            with self.subTest(source=owner):
+                self.assertFalse(exposed(text))
+                for leak in ("--remote_executor=grpcs://executor.invalid:1", "--tls_client_key=k.pem",
+                             "--remote_execution_priority=0", "grpcs://cache.invalid"):
+                    self.assertTrue(exposed(text + "\n" + leak))
 
-    def _mutated(self, old, new, job=JOB):
-        body = _job(self.text, job)
-        self.assertIn(old, body)
-        return self.text.replace(body, body.replace(old, new, 1), 1)
-
-    def test_shadow_lane_is_the_linux_trust_gate_plus_an_opt_in(self):
-        self.assertEqual([], trust_problems(self.text))
-        linux_gate = _key(_job(self.text, LINUX_JOB), "if")
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'", linux_gate)
-        for old, new in (
-                # Opt-in dropped, so every trusted pull request runs it.
-                (OPT_IN, ""),
-                # The label alone, or the variable alone, admitting an untrusted pull request.
-                ("needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && ", ""),
-                (OPT_IN, OPT_IN.replace(" && github.event_name", " || github.event_name", 1)),
-                (LABEL, "ci:other"),
-                ("runs-on: [self-hosted, linux, arm64]", "runs-on: [self-hosted, macOS, ARM64]"),
-                ("    continue-on-error: true\n",
-                 "    continue-on-error: true\n    environment: buildbuddy-write\n"),
-                # Running while the Linux lane is still going, or without its own admission.
-                (AFTER_LINUX, "!cancelled() && "),
-                (ADMITTED, "")):
-            with self.subTest(old=old, new=new):
-                self.assertTrue(trust_problems(self._mutated(old, new)))
-        self.assertTrue(trust_problems(self._mutated(OPT_IN, "", TURNSTILE)))
-        self.assertTrue(trust_problems(self._mutated(AFTER_LINUX, "", TURNSTILE)))
-
-    def test_shadow_lane_can_never_fail_a_pull_request(self):
-        self.assertEqual([], non_gating_problems(self.text, self.manifest))
-        job = _job(self.text, JOB)
-        upload = next(step for step in _steps(job) if "upload-artifact" in step)
-        receipt = ("      - name: Record coverage receipt\n        env:\n"
-                   "          STEPS_JSON: ${{ toJSON(steps) }}\n"
-                   "        run: python3 tools/ci_coverage_contract.py receipt %s\n\n" % JOB)
-        for old, new in (("    continue-on-error: true\n", ""),
-                         ("        continue-on-error: true\n", ""),
-                         (RUN, RUN + " || true"),
-                         ("TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}",
-                          "TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.fallback }}"),
-                         ("timeout-minutes: 90", "timeout-minutes: 20"),
-                         ("timeout-minutes: 90", "timeout-minutes: 210"),
-                         (upload, receipt + upload)):
-            with self.subTest(old=old[:40], new=new[:40]):
-                self.assertTrue(non_gating_problems(self._mutated(old, new), self.manifest))
-        contract = _key(_job(self.text, "coverage-contract"), "needs")
-        self.assertTrue(non_gating_problems(self._mutated(
-            contract, contract.replace("]", ", %s]" % JOB), "coverage-contract"), self.manifest))
-        named = json.loads(json.dumps(self.manifest).replace(
-            '"linux-self-hosted"', '"%s"' % JOB, 1))
-        self.assertTrue(non_gating_problems(self.text, named))
-
-    def test_shadow_lane_runs_after_its_linux_lane_with_a_pool_of_one(self):
-        self.assertEqual([], admission_problems(self.text))
-        linux_pool = "          pool: linux-self-hosted\n"
-        for old, new, job in (('capacity: "1"', 'capacity: "2"', TURNSTILE),
-                              ("pool: macos-remote-shadow", "pool: linux-self-hosted", TURNSTILE),
-                              ("pool-workflows: main.yml pr_base_change.yml",
-                               "pool-workflows: main.yml", TURNSTILE),
-                              (", linux-self-hosted]", "]", TURNSTILE),
-                              (", linux-self-hosted, macos-remote-shadow-turnstile]",
-                               ", macos-remote-shadow-turnstile]", JOB),
-                              (", macos-remote-shadow-turnstile]", "]", JOB),
-                              (linux_pool, linux_pool.replace("\n", " macos-remote-shadow\n"),
-                               LINUX_TURNSTILE),
-                              ("          timeout-result: skip\n", "", TURNSTILE),
-                              ('timeout-minutes: "30"', 'timeout-minutes: "150"', TURNSTILE),
-                              ("    continue-on-error: true\n", "", TURNSTILE),
-                              (linux_pool, linux_pool + "          timeout-result: skip\n",
-                               LINUX_TURNSTILE)):
-            with self.subTest(old=old, job=job):
-                self.assertTrue(admission_problems(self._mutated(old, new, job)))
-
-    def test_no_private_runner_configuration_in_the_lane(self):
-        texts = {JOB: _job(self.text, JOB), TURNSTILE: _job(self.text, TURNSTILE),
-                 "tools/ci/macos_remote_shadow.py": _read("tools/ci/macos_remote_shadow.py")}
-        self.assertEqual([], privacy_problems(texts))
-        for leak in ("--remote_executor=grpcs://executor.invalid:1", "--tls_client_key=k.pem",
-                     "--remote_execution_priority=0", "grpcs://cache.invalid"):
-            with self.subTest(leak=leak):
-                self.assertTrue(privacy_problems(dict(texts, **{JOB: texts[JOB] + leak})))
-        # Bazel never appears in the workflow: the script owns every flag.
-        self.assertNotRegex(texts[JOB].replace(COLLECTOR, ""), r"\bbazel(?:isk)?\b|--config")
-
-    def test_lane_uploads_derived_files_only(self):
-        self.assertEqual([], upload_problems(self.text))
-        for leak in ("native/bep.json", "native/exec.log.zst", "native/console.log"):
-            with self.subTest(leak=leak):
-                self.assertTrue(upload_problems(self._mutated(
-                    "macos-remote-shadow/report.md\n",
-                    "macos-remote-shadow/report.md\n            ${{ runner.temp }}/"
-                    "macos-remote-shadow/%s\n" % leak)))
-
-    def test_the_lane_runs_through_the_lane_table(self):
-        from tools.ci import lane as lane_entry
-        for environ, targets in (
-                ({"TARGETS_FALLBACK": "false", "TARGETS_AFFECTED": "//a:b //c:d"},
-                 ["//a:b", "//c:d"]),
-                ({"TARGETS_FALLBACK": "true", "TARGETS_AFFECTED": ""}, ["//..."])):
-            with self.subTest(targets=targets):
-                described = lane_entry.dry_run(JOB, "shadow", environ)
-                self.assertEqual("Build and test for macOS on the remote executor",
-                                 described["step"])
-                self.assertEqual(["require_selection", "run"],
-                                 [action["action"] for action in described["actions"]])
-                argv = described["actions"][1]["argv"]
-                self.assertEqual(["python3", "tools/ci/macos_remote_shadow.py",
-                                  "--budget-minutes", "70", "--targets"] + targets, argv)
-                args = lane.parse_args(argv[2:], {})
-                self.assertEqual(targets, lane.selection(args.fallback, args.affected,
-                                                         args.targets))
-        # Run-time paths come from the runner's environment, so the lane table's command line,
-        # which the entry point echoes to the public log, names none.
-        self.assertEqual([], [word for word in _script_argv() if "$" in str(word)])
-
-    def test_the_lane_budget_leaves_room_to_report_inside_the_job_timeout(self):
-        self.assertEqual([], budget_problems(self.text))
-        # The margin covers the worst case after the budget: stopping the command, shutting the
-        # server down twice and the uploads.
-        worst = (sum(lane.STOP_GRACE) + lane.STOP_KILL_SECONDS + 2 * lane.SHUTDOWN_SECONDS +
-                 lane.UPLOAD_MINUTES * 60)
-        self.assertEqual(150, sum(lane.STOP_GRACE) + lane.STOP_KILL_SECONDS)
-        self.assertLessEqual(worst, lane.REPORT_MARGIN_MINUTES * 60)
-        argv = _script_argv()
-        position = argv.index("--budget-minutes")
-        for name, changed in (
-                ("a budget that eats the margin", argv[:position + 1] + ["80"] +
-                 argv[position + 2:]),
-                ("no budget", argv[:position] + argv[position + 2:]),
-                ("a budget under the starvation bound", argv[:position + 1] + ["10"] +
-                 argv[position + 2:])):
-            with self.subTest(case=name):
-                self.assertTrue(budget_problems(self.text, changed))
-        self.assertTrue(budget_problems(self._mutated("timeout-minutes: 90",
-                                                      "timeout-minutes: 80")))
-
-    def test_failed_test_outputs_are_uploaded_on_the_lane_steps_outcome(self):
-        self.assertEqual([], failure_artifact_problems(self.text))
-        upload = next(step for step in _steps(_job(self.text, JOB)) if COLLECTOR in step)
-        for old, new in (
-                # The lane step continues on error, so failure() would never upload anything.
-                (FAILURE_UPLOAD_IF, "failure() && steps.shadow.outcome == 'failure'"),
-                (FAILURE_UPLOAD_IF, "${{ !cancelled() && steps.shadow.conclusion == 'failure' }}"),
-                # The workspace's bazel-testlogs is the last command's configuration and keeps
-                # results of earlier runs in the lane's persistent output root.
-                ("          testlogs: %s\n" % _staged_root(), ""),
-                (_staged_root(), "${{ runner.temp }}/macos-remote-shadow"),
-                (upload, "")):
-            with self.subTest(old=old[:40], new=new[:40]):
-                self.assertTrue(failure_artifact_problems(self._mutated(old, new)))
-
-    def test_identity_comes_from_the_lane_script_not_the_workflow(self):
-        # A workflow never names the toolchain identity (//tools:macos_cache_key_parity_tests).
-        # The script exports the config's pinned Xcode to every Bazel command instead, and
-        # rejects a caller's value that contradicts it.
-        self.assertNotIn(lane.IDENTITY, _job(self.text, JOB))
-        environ = {"FALLBACK": "true", lane.IDENTITY: "27.1-27A9275"}
-        self.assertEqual(2, lane.main(["--dry-run", "--out", "/out"], environ))
+    def test_mixed_failure_archive_accepts_only_staged_test_outputs(self):
+        workflow = _read(".github/workflows/main.yml")
+        owner = workflow.split("      - name: Upload mixed-platform test failure artifacts", 1)[1]
+        owner = owner.split("      - name:", 1)[0]
+        self.assertIn("if: failure() && steps.unified.outcome == 'failure'", owner)
+        self.assertIn("uses: " + COLLECTOR, owner)
+        def approved(block):
+            return re.findall(r"(?m)^ +testlogs: (.+)$", block) == [
+                "${{ runner.temp }}/unified/test-artifacts/mixed"]
+        self.assertTrue(approved(owner))
+        for unsafe in ("", "/test/bep.json", "/test/exec.log.zst", "/.bazelrc"):
+            self.assertFalse(approved(owner.replace("/unified/test-artifacts/mixed", unsafe)))
 
     def test_watchdog_is_the_linux_lane_watchdog(self):
         # The shadow lane runs its Bazel commands under the self-hosted Linux lane's own stall
@@ -537,25 +201,6 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn(lanes.watchdog("test"), [
             tuple(action.wrappers[1:3]) for action in
             lanes.LANES[LINUX_JOB].phases["test"].actions if isinstance(action, lanes.Bazel)])
-
-    def test_docs_describe_the_opt_in_and_the_runner_contract(self):
-        docs = _read("docs/building.md")
-        section = " ".join(docs.split("### Remote macOS shadow lane", 1)[1].split("\n## ", 1)[0]
-                           .split())
-        for needle in (LABEL, VARIABLE, "build:remote-macos-base", "--remote_executor",
-                       "--jobs", "never fails", "remote-macos-gpu", "--jobs=4",
-                       "not configured for the remote macOS lane",
-                       "outside the Linux lane's admission accounting",
-                       "dedicated runner capacity", "a rerun does not read labels",
-                       "RUNNER_TOOL_CACHE", "within 10 minutes", "should prune",
-                       "--max_idle_secs=600",
-                       "checks stay pending", "fails closed", "the workflow run still succeeds",
-                       lane.ROUTING_PROBE, lane.STARVED, "--config=ci-test-lane",
-                       "20 minutes", "90-minute", "--budget-minutes 70",
-                       "%d-minute margin" % lane.REPORT_MARGIN_MINUTES) + lane.EXCLUDED_TAGS + \
-                lane.GPU_TAGS:
-            with self.subTest(needle=needle):
-                self.assertIn(needle, section)
 
 
 class LaneCommandTest(unittest.TestCase):

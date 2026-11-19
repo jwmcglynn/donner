@@ -515,7 +515,7 @@ class TurnstileWiringTests(unittest.TestCase):
 
     def test_the_linux_lane_is_gated_by_a_fleet_sized_pool(self):
         usages = self._turnstile_usages(self.workflows["main.yml"])
-        self.assertEqual({_LINUX_LANE, _SHADOW_LANE}, set(usages))
+        self.assertEqual({_LINUX_LANE}, set(usages))
         usage = usages[_LINUX_LANE]
         self.assertRegex(usage, r"(?m)^\s+pool: " + _LINUX_LANE + r"$")
         self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
@@ -525,25 +525,12 @@ class TurnstileWiringTests(unittest.TestCase):
         self.assertNotIn("pool-upstream", usage)
         self.assertNotIn("upstream-grace", usage)
 
-    def test_the_shadow_lane_has_a_fail_closed_pool_of_one(self):
-        usage = self._turnstile_usages(self.workflows["main.yml"])[_SHADOW_LANE]
-        self.assertRegex(usage, r"(?m)^\s+pool: " + _SHADOW_LANE + r"$")
-        self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
-        self.assertRegex(usage, r'(?m)^\s+capacity: "1"$')
-        self.assertRegex(usage, r"(?m)^\s+timeout-result: skip$")
-        minutes = int(re.search(r'(?m)^\s+timeout-minutes: "(\d+)"$', usage).group(1))
-        self.assertLessEqual(minutes, 30)
-        shadow = self._job_body(self.workflows["main.yml"], _SHADOW_LANE)
-        self.assertIn("needs.macos-remote-shadow-turnstile.outputs.admitted == 'true'", shadow)
-        # The upstream it supplies is what the shadow jobs need, the Linux lane first, and the
-        # grace is short: the turnstile job is listed seconds after the Linux lane ends.
-        self.assertRegex(usage, r"(?m)^\s+pool-upstream: %s$" % " ".join(_SHADOW_UPSTREAM))
-        grace = int(re.search(r'(?m)^\s+upstream-grace-minutes: "(\d+)"$', usage).group(1))
-        self.assertLessEqual(grace, 10)
-        for job in (_SHADOW_LANE, _SHADOW_LANE + "-turnstile"):
-            self.assertIn("(needs.linux-self-hosted.result == 'success' || "
-                          "needs.linux-self-hosted.result == 'failure')",
-                          self._job_body(self.workflows["main.yml"], job))
+    def test_one_turnstile_admits_the_shared_native_graph(self):
+        main = self.workflows["main.yml"]
+        native = self._job_body(main, _LINUX_LANE)
+        self.assertIn("linux-self-hosted-turnstile", native)
+        self.assertIn("Test Linux and macOS with native platform transitions", native)
+        self.assertNotIn("  macos-remote-shadow:", main)
         self.assertIn("TURNSTILE_POOL_UPSTREAM: ${{ inputs.pool-upstream }}", self.action)
         self.assertRegex(self.action, r'pool-upstream:\n(?:.*\n)*?\s+default: ""')
 

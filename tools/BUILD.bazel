@@ -345,6 +345,9 @@ py_test(
         "//:.github/workflows/main.yml",
         "//:github_action_definitions",
         "//build_defs:BUILD.bazel",
+        "//build_defs:ci_darwin.bzl",
+        "//build_defs:ci_metal.bzl",
+        "//build_defs:rules.bzl",
         "//donner/editor/tests:BUILD.bazel",
         "//donner/editor/tests:RunEditorWindowVulkanSurfaceTests.sh",
         "//donner/editor/wasm:wasm_package_size_test_arguments",
@@ -505,6 +508,7 @@ py_test(
         "//tools/ci:BUILD.bazel",
         "//tools/ci:bazel_watchdog.sh",
         "//tools/ci:coverage_contract.json",
+        "//tools/ci:verify_unified_tests.py",
         "testdata/macos_remote_shadow_build_events.json",
     ],
     deps = [

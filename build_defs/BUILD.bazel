@@ -9,6 +9,11 @@ load("//build_defs:performance_tests.bzl", "performance_tests")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
+    ["ci_darwin.bzl", "ci_metal.bzl"],
+    visibility = ["//tools:__pkg__"],
+)
+
+exports_files(
     [
         "fuzzer_soak.sh",
         "check_banned_patterns.py",

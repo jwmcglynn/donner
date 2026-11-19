@@ -150,7 +150,7 @@
         "shader-validation": {
           "when": "metal_affected",
           "pr_only": true,
-          "description": "Full Metal shader validation on a real GPU. The native Metal job is independent of the virtual macOS build and test pool.",
+          "description": "Full Metal shader validation on a real GPU. Its Darwin GPU TestRunner must report fresh remote passes for the entire capability suite.",
           "counterparts": [
             {
               "job": "linux-self-hosted",

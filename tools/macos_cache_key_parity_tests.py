@@ -129,6 +129,22 @@ def _jobs(workflow):
     return jobs
 
 
+def _present_lanes(jobs):
+    return [name for name in LANES if name in jobs]
+
+
+def _comparison_fixture(source, names=(SELF_HOSTED,)):
+    """Exercise the cache checker on persistent-host phase commands without scheduling old jobs."""
+    for name in names:
+        source += f"\n  {name}:\n    runs-on: [self-hosted, macOS, ARM64]\n    env:\n      TEST_FIXTURE: '1'\n    steps:\n"
+        source += ("      - name: Checkout\n        uses: actions/checkout@v7\n"
+                   "      - name: Select pinned Xcode\n        id: xcode\n        shell: bash\n"
+                   "        run: tools/ci_select_macos_xcode.sh\n")
+        for phase, entry in lanes.LANES[name].phases.items():
+            source += f"      - name: {entry.step}\n        run: python3 tools/ci/lane.py phase {name} {phase}\n"
+    return source
+
+
 def _job_env(job, name):
     match = re.search(r'(?m)^      %s: "([^"]*)"$' % re.escape(name), job)
     return match.group(1) if match else None
@@ -358,7 +374,7 @@ def inherited_env_problems(workflow, bazelrc):
                      for flag in shlex.split(line.split(None, 1)[1])]
     configs = _config_flags(bazelrc)
     problems = []
-    for name in LANES:
+    for name in _present_lanes(jobs):
         words = _expand_configs(
             unconditional + [IMPLICIT_MACOS_CONFIG] + _lane_command_words(jobs[name]), configs)
         inherited = sorted({match.group(1) for match in map(INHERITED_ENV_FLAG.match, words)
@@ -398,7 +414,7 @@ def local_gpu_unit_problems(workflow, bazelrc):
     configs = _config_flags(bazelrc)
     expected = MACOS_CI_LOCAL_GPU.rsplit("=", 1)[1]
     problems = []
-    for name in LANES:
+    for name in _present_lanes(jobs):
         for step_name, words in _lane_test_command_words(jobs[name]):
             expanded = _expand_configs(unconditional + [IMPLICIT_MACOS_CONFIG] + words, configs)
             units = [found.group(1) for found in map(_LOCAL_GPU_UNITS.match, expanded) if found]
@@ -455,14 +471,14 @@ def key_parity_problems(workflow, bazelrc):
     jobs = _jobs(workflow)
     problems = _xcode_override_problems(workflow)
     configs = bazelrc_configs.parse(bazelrc)
-    problems += _flag_problems(LANE_FLAGS, [command for name in LANES
+    problems += _flag_problems(LANE_FLAGS, [command for name in _present_lanes(jobs)
                                             for command in _bazel_commands(jobs[name])], configs)
     problems += _flag_list_problems(
         "main.yml", {variable: _workflow_env(workflow, variable)
                      for variable in TEST_ONLY_VARIABLES}, TEST_ONLY_FLAG, "test-only")
     neutral = neutral_configs(bazelrc)
     by_step = {}
-    for name in LANES:
+    for name in _present_lanes(jobs):
         job = jobs[name]
         commands = _bazel_commands(job)
         problems += _record_commands(name, commands, by_step, neutral)
@@ -594,15 +610,17 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         cls.workflow = lane_workflow(_read(".github/workflows/main.yml"))
         cls.bazelrc = _read(".bazelrc")
 
-    def test_reader_understands_both_macos_lanes(self):
+    def test_hosted_macos_and_mixed_linux_runner_have_distinct_cache_policies(self):
         jobs = _jobs(self.workflow)
-        for name in (HOSTED, SELF_HOSTED):
-            steps = [step_name for step_name, _ in _steps(jobs[name])]
-            self.assertIn("Build and test", steps)
-            self.assertIn("Test (Geode editor lane)", steps)
-            self.assertGreaterEqual(len(_bazel_commands(jobs[name])), 5)
+        self.assertEqual(_present_lanes(jobs), [HOSTED])
         self.assertFalse(_runs_self_hosted(jobs[HOSTED]))
-        self.assertTrue(_runs_self_hosted(jobs[SELF_HOSTED]))
+        steps = dict(_steps(jobs[HOSTED]))
+        for phase in ("Build and test", "Test (Geode editor lane)", "Test (browser targets)"):
+            self.assertIn(phase, steps)
+        mixed = jobs["linux-self-hosted"].split("        id: unified", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("env -u DONNER_CI_XCODE_IDENTITY", mixed)
+        self.assertIn("--config=ci --config=ci-platforms", mixed)
+        self.assertNotIn("buildbuddy-cache", mixed)
 
     def test_editor_wasm_cache_uses_the_selected_xcode_partition(self):
         job = _jobs(_read(".github/workflows/editor_wasm.yml"))["build"]
@@ -628,24 +646,25 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertNotIn("ci-test-lane", neutral)
         self.assertNotIn("ci", neutral)
         jobs = _jobs(self.workflow)
-        built = 0
-        for name in LANES:
+        for name in _present_lanes(jobs):
             for step_name, command in _bazel_commands(jobs[name]):
                 if BAZEL_INVOCATION.search(command).group(1) not in ("build", "test", "coverage"):
                     continue
-                built += 1
                 words = command.split()
                 with self.subTest(lane=name, step=step_name):
                     self.assertIn("--config=ci", words)
                     self.assertEqual(
                         [], [word for word in words
                              if word.startswith("--//build_defs:release_source_commit=")])
-        self.assertGreater(built, 10)
-        # An editor identity set in one lane only is a key divergence the parity check reports.
+        hosted_steps = {step for step, command in _bazel_commands(jobs[HOSTED])
+                        if BAZEL_INVOCATION.search(command).group(1) in ("build", "test", "coverage")}
+        self.assertEqual(hosted_steps, {"Build and test", "Qualify pinned Chromium archive", "Test (browser targets)",
+                                       "Test (Geode editor lane)", "Compare browser GPU tests (serial)",
+                                       "Compare browser GPU tests (parallel)"})
+        fixture = lane_workflow(_comparison_fixture(_read(".github/workflows/main.yml")))
         command = "bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm"
-        self.assertIn(command, self.workflow)
-        diverged = self.workflow.replace(
-            command, command + " --//build_defs:release_source_commit=" + "1" * 40)
+        self.assertIn(command, fixture)
+        diverged = fixture.replace(command, command + " --//build_defs:release_source_commit=" + "1" * 40)
         self.assertTrue(key_parity_problems(diverged, self.bazelrc))
 
     def test_metal_shader_validation_setting_selects_only_test_environment(self):
@@ -685,12 +704,14 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                     self.assertIn("runs Bazel without", problems[0])
 
     def test_key_parity_policy_rejects_divergence(self):
-        # Every macOS job declares its env block; split at the self-hosted job's.
-        start = self.workflow.index("\n  %s:\n" % SELF_HOSTED)
-        index = self.workflow.index("    env:\n", start) + len("    env:\n")
-        before, after = self.workflow[:index], self.workflow[index:]
+        # These mutations still exercise real supported phase commands, including a persistent host.
+        source = _comparison_fixture(_read(".github/workflows/main.yml"))
+        fixture = lane_workflow(source)
+        self.assertEqual([], key_parity_problems(fixture, self.bazelrc))
+        start = fixture.index("\n  %s:\n" % SELF_HOSTED)
+        index = fixture.index("    env:\n", start) + len("    env:\n")
+        before, after = fixture[:index], fixture[index:]
         rc_line = "build:ci-macos --host_action_env=PATH="
-        source = _read(".github/workflows/main.yml")
         lane_config = "--config=lane-macos"
 
         def lane(name, edit, *phases):
@@ -790,7 +811,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 None, None, lane(HOSTED, lane_view.replacing(
                     "--config=ci", "--config=ci", "--config=geode"), "test"),
                 "step 'Build and test' differs"),
-            "hosted skips the Xcode pin": (self.workflow.replace(
+            "hosted skips the Xcode pin": (fixture.replace(
                 "run: tools/ci_select_macos_xcode.sh\n",
                 "run: echo skipped\n", 1), None, None, "macos selects Xcode other than"),
             "self-hosted Xcode selection removed": (before + after.replace(
@@ -876,8 +897,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                          {"c-cpp", "javascript-typescript", "python"})
         self.assertEqual({owner for owner, *_ in _macos_jobs(files)}, {
             ".github/workflows/" + job for job in (
-                "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
-                "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos",
+                "main.yml:" + HOSTED, "cmake.yml:macos",
                 "editor_wasm.yml:build",
                 "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
                 "perf.yml:perf", "sign_macos_release.yml:sign", "sign_macos_release.yml:verify")})
@@ -1133,7 +1153,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             self.assertTrue(any("selection override" in problem for problem in problems), problems)
 
     def test_native_and_vm_qualification_cannot_override_xcode_selection(self):
-        jobs = _jobs(self.workflow)
+        fixture = lane_workflow(_comparison_fixture(_read(".github/workflows/main.yml"),
+                                                 ("macos-metal", "macos-vm-qualification")))
+        jobs = _jobs(fixture)
         for job in ("macos-metal", "macos-vm-qualification"):
             for name in ("XCODEBUILD", "XCODE_APPLICATIONS_DIR", "XCODE_LOCATOR", "LSREGISTER",
                          "DEVELOPER_DIR", "DONNER_CI_XCODE_IDENTITY", "CCACHE_NAMESPACE"):
@@ -1141,7 +1163,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                     modified_job = jobs[job].replace(
                         "    env:\n", "    env:\n      " + name + ": unverified\n", 1)
                     self.assertNotEqual(jobs[job], modified_job)
-                    workflow = self.workflow.replace(jobs[job], modified_job, 1)
+                    workflow = fixture.replace(jobs[job], modified_job, 1)
                     self.assertIn(job + " sets an Xcode selection override",
                                   _xcode_override_problems(workflow))
 
@@ -1253,8 +1275,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                                                 bazelrc_configs.parse(self.bazelrc))[-1],
                          "--macos_minimum_os=13.3")
         self.assertNotIn(RUNTIME_FLAGS, self.workflow.split("\njobs:\n", 1)[0])
-        for name in LANES:
-            self.assertNotIn(RUNTIME_FLAGS + ":", _jobs(self.workflow)[name], name)
+        jobs = _jobs(self.workflow)
+        for name in _present_lanes(jobs):
+            self.assertNotIn(RUNTIME_FLAGS + ":", jobs[name], name)
 
     def test_select_script_fails_without_exactly_the_pinned_xcode(self):
         cases = {
