@@ -45,7 +45,8 @@ class CiRunnerRoutingTest(unittest.TestCase):
         return textwrap.dedent(section.split("        run: |\n", 1)[1])
 
     def _trust_script(self):
-        return textwrap.dedent(self.trust_action.split("      run: |\n", 1)[1].split("\n    - id: ", 1)[0])
+        self.assertIn('run: bash "$GITHUB_ACTION_PATH/classify.sh"', self.trust_action)
+        return _workflow_text(".github/actions/pr-trust/classify.sh")
 
     @staticmethod
     def _outputs(path):

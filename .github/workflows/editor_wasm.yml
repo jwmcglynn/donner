@@ -75,8 +75,7 @@ permissions:
   contents: read
 
 jobs:
-  # Classify pull request trust at job level, so the build job can bind the
-  # BuildBuddy write environment only for runs allowed to write.
+  # Only the base revision may admit a PR to the BuildBuddy write environment.
   trust:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -88,6 +87,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           sparse-checkout: .github/actions/pr-trust
 
       - id: pr_trust

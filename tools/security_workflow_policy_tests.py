@@ -4851,6 +4851,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertNotEqual(changed, files[path])
                 self.assertTrue(_artifact_upload_violations({**files, path: changed}))
 
+    def test_standalone_trust_checks_execute_the_base_action(self):
+        for path in (".github/workflows/editor_wasm.yml", ".github/workflows/sanitizers-pr.yml"):
+            with self.subTest(workflow=path):
+                checkout, decision = _steps(_jobs(self.supply_chain_files[path])["trust"])
+                self.assertEqual(_with_key(checkout, "ref", 8),
+                                 "${{ github.event.pull_request.base.sha || github.sha }}")
+                self.assertEqual(_with_key(checkout, "sparse-checkout", 8), ".github/actions/pr-trust")
+                self.assertEqual(_with_key(checkout, "persist-credentials", 8), "false")
+                self.assertEqual(_step_key(decision, "uses", 8), "./.github/actions/pr-trust")
+
     def test_gatekeeper_uses_immutable_admission_code(self):
         for path in (".github/workflows/main.yml", ".github/workflows/lint.yml",
                      ".github/workflows/cmake.yml"):

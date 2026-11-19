@@ -406,6 +406,7 @@ py_test(
         "gatekeeper.py",
         "github_rate_limit.py",
         "//:.github/actions/pr-trust/action.yml",
+        "//:.github/actions/pr-trust/classify.sh",
         "//:.github/workflows/main.yml",
     ],
     deps = [

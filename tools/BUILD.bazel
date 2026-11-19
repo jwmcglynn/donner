@@ -1062,6 +1062,7 @@ py_test(
     ],
     data = [
         "//:.github/actions/pr-trust/action.yml",
+        "//:.github/actions/pr-trust/classify.sh",
         "//:.github/workflows/main.yml",
     ],
     imports = ["."],
