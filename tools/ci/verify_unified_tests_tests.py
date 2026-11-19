@@ -81,6 +81,22 @@ class UnifiedTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
             verify(records[:-1], [SUITE, METAL], [label])
 
+    def test_aspect_cannot_establish_a_target_outcome(self):
+        label = "//pkg:platform_test"
+        target = {"label": label, "configuration": {"id": "linux"}}
+        configured = {"id": {"targetConfigured": {"label": label}}, "configured": {"testSize": "SMALL"}}
+        aspect = {"id": {"targetCompleted": dict(target, aspect="//pkg:venue.bzl%venue")},
+                  "completed": {"success": True}}
+        skipped = {"id": {"targetCompleted": target}, "aborted": {"reason": "SKIPPED"}}
+        built = {"id": {"targetCompleted": target}, "completed": {"success": True}}
+        records = list(events()) + [configured]
+        for pair in ([skipped, aspect], [aspect, skipped]):
+            verify(records + pair, [SUITE, METAL], linux=[label])
+        with self.assertRaisesRegex(ValueError, "did not finish"):
+            verify(records + [aspect], [SUITE, METAL], linux=[label])
+        with self.assertRaisesRegex(ValueError, "Test label mismatch"):
+            verify(records + [built, aspect], [SUITE, METAL], linux=[label])
+
     def test_missing_build_and_incompatible_headed_browser_fail(self):
         label = "//donner/editor/wasm/tests:ci_darwin_animation_preview_browser_test"
         skipped = {"id": {"targetCompleted": {"label": label}}, "aborted": {"reason": "SKIPPED"}}

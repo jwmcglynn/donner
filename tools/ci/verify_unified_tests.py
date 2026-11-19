@@ -110,8 +110,10 @@ class Evidence:
             label = identity["targetConfigured"]["label"]
             self.test_rules.add(label)
             self.tags[label] = set(event["configured"].get("tag", []))
-        if "targetCompleted" in identity:
-            self.targets[identity["targetCompleted"]["label"]] = _target_outcome(event)
+        target = identity.get("targetCompleted")
+        # Bazel also emits targetCompleted for aspects applied to skipped targets.
+        if target and not target.get("aspect"):
+            self.targets[target["label"]] = _target_outcome(event)
         if "testSummary" in event:
             key = identity["testSummary"]
             self.summaries[key["label"], key["configuration"]["id"]] = event["testSummary"]
