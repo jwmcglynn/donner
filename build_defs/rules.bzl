@@ -803,7 +803,7 @@ def donner_cc_test(
                 **forwarded
             )
 
-def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linkopts = [], deps = [], tags = [], wallclock_tags = [], **kwargs):
+def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linkopts = [], deps = [], tags = [], wallclock_tags = [], correctness_shard_count = None, **kwargs):
     """
     Create paired correctness and wall-clock cc_tests with donner defaults.
 
@@ -821,6 +821,8 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
       tags: Shared tags applied to both generated targets (except `manual` / `perf`
         are stripped from the correctness target so it stays on the default path).
       wallclock_tags: Additional tags applied only to the wall-clock target.
+      correctness_shard_count: Optional `shard_count` for the correctness target only, which
+        leaves the wall-clock target in one process so its timings stay comparable.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     if not correctness_srcs:
@@ -834,13 +836,21 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         if tag not in generated_wallclock_tags:
             generated_wallclock_tags.append(tag)
 
+    if correctness_shard_count != None and "shard_count" in kwargs:
+        fail("donner_perf_cc_test {}: pass correctness_shard_count or shard_count, not both".format(
+            name,
+        ))
+    correctness_kwargs = dict(kwargs)
+    if correctness_shard_count != None:
+        correctness_kwargs["shard_count"] = correctness_shard_count
+
     donner_cc_test(
         name = name + "_correctness",
         srcs = srcs + correctness_srcs,
         linkopts = linkopts,
         deps = deps,
         tags = correctness_tags,
-        **kwargs
+        **correctness_kwargs
     )
 
     donner_cc_test(

@@ -519,6 +519,11 @@ donner_cc_test(
 donner_cc_test(
     name = "focus_view_tests",
     srcs = ["FocusView_tests.cc"],
+    # Two traversal-budget cases take about 19 s and 15 s under ASan on the hosted nightly runner,
+    # and the unsharded target reached 48 s of its 60 s `size = "small"` limit. Sharding currently
+    # places them in different shards; gtest assigns shards by registration order, so new cases can
+    # change that.
+    shard_count = 4,
     deps = [
         "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
@@ -1060,6 +1065,11 @@ donner_cc_test(
 donner_cc_test(
     name = "editor_sync_tests",
     srcs = ["EditorSync_tests.cc"],
+    # Two bounded-work cases take about 26 s and 21 s under ASan on the hosted nightly runner, and
+    # the unsharded target reached 48 s of its 60 s `size = "small"` limit. Sharding currently
+    # places them in different shards; gtest assigns shards by registration order, so new cases can
+    # change that. The 26 s case alone bounds the slowest shard.
+    shard_count = 4,
     deps = [
         ":bitmap_golden_compare",
         "//donner/editor:attribute_writeback",
@@ -1125,6 +1135,11 @@ donner_cc_test(
 donner_cc_test(
     name = "overlay_renderer_tests",
     srcs = ["OverlayRenderer_tests.cc"],
+    # Two clip-guide cases take about 24 s and 12 s under ASan on the hosted nightly runner, and the
+    # unsharded target reached 42 s of its 60 s `size = "small"` limit. Sharding currently places
+    # them in different shards; gtest assigns shards by registration order, so new cases can change
+    # that.
+    shard_count = 3,
     data = ["//:geode_splash.svg"],
     deps = [
         ":bitmap_golden_compare",
