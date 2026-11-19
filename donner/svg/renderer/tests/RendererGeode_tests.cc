@@ -5211,6 +5211,16 @@ std::string ManyStopGradientDocument(int stopCount, bool radial) {
   return source;
 }
 
+/// How a Geode rendering of the 2500-stop gradients is held to tiny-skia's. There are about 20 to
+/// 30 stops per pixel and neighboring stops differ by up to 105 levels in a channel, so the color
+/// changes by thousands of levels per pixel. The two renderers compute the gradient position in
+/// different float arithmetic, and a difference far below a pixel moves a channel by one level:
+/// on the software Vulkan lane about 2 percent of the radial gradient's pixels differ by exactly
+/// one level. The renderer suite's default threshold admits those one-level differences, and no
+/// pixel, anti-aliased or not, may exceed it.
+constexpr editor::tests::BitmapGoldenCompareParams kDenseStopParams =
+    editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true);
+
 /// A gradient renders every one of its stops, however many it has, in each of the ways Geode
 /// draws a gradient. 16 is the most stops a gradient's draw parameters carry inline, so the cases
 /// sit on both sides of it, and the largest spans several rows of the texture that holds stops
@@ -5222,7 +5232,9 @@ TEST_F(RendererGeodeTest, GradientsWithManyStopsMatchTinySkia) {
                                 std::to_string(stopCount) + "_stops";
       SCOPED_TRACE(label);
       const std::string source = ManyStopGradientDocument(stopCount, radial);
-      ExpectGeodeMatchesTinySkia(source, source, label, editor::tests::PixelmatchIdentityParams());
+      ExpectGeodeMatchesTinySkia(
+          source, source, label,
+          stopCount > 32 ? kDenseStopParams : editor::tests::PixelmatchIdentityParams());
     }
   }
 }
