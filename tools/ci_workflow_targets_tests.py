@@ -118,7 +118,7 @@ class WorkflowTargetsTest(unittest.TestCase):
         self.assertNotIn("continue-on-error:", native)
         self.assertIn("macos-metal", jobs["coverage-contract"].split("steps:", 1)[0])
         commands = lane_commands("macos-self-hosted", "test", "build", expand=False)
-        self.assertGreaterEqual(len(commands), 6)
+        self.assertGreaterEqual(len(commands), 5)
         for command in commands:
             self.assertIn("--config=macos-vm", command)
             self.assertNotRegex(" ".join(command), r"--jobs|--local_resources")
@@ -134,7 +134,7 @@ class WorkflowTargetsTest(unittest.TestCase):
         manifest = json.loads(Path(resolver.Rlocation(
             "donner/tools/ci/coverage_contract.json")).read_text())
         for kind in ("shader-validation", "shader-memory-canary", "native-metal"):
-            self.assertEqual(manifest["lanes"]["macos"]["Test"][kind]["counterparts"][0]["job"],
+            self.assertEqual(manifest["lanes"]["macos"]["Build and test"][kind]["counterparts"][0]["job"],
                              "macos-metal")
 
     def test_vm_qualification_is_an_explicit_trusted_four_job_matrix(self):

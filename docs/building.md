@@ -318,6 +318,10 @@ action writes nothing and the `try-import` is a silent no-op. The self-hosted ru
 so each self-hosted macOS lane deletes the key file and the fragment in a last step that runs
 whatever the job's outcome.
 
+The hosted and VM macOS jobs build and test the planner's selected roots in one Bazel
+invocation. Non-test products are built, and the test-tag filters select which tests run.
+Browser tests still run serially in their own phase; the native Metal job owns shader validation.
+
 **Linux remote execution.** Every Bazel build and test step of the hosted `linux` job except the
 linker canary selects the declared LLVM 21 toolchain with libc++ and the Linux sysroot
 (`--config=latest_llvm`), on main and on every pull request, so a pull request without the cloud
@@ -330,11 +334,10 @@ runner. The cloud configuration selects a digest-pinned BuildBuddy Ubuntu 22.04 
 image and 50 concurrent actions. Execution failures after setup fail the build with local fallback
 disabled, so a cloud executor outage during a job turns that job red rather than silently building
 another way. The build-information generator alone executes locally because it reads the real Git
-checkout; this does not permit local compilation or linking. A cold base-library compile checks
-the execution log for an actual remote compile rather than a cache hit, then builds `//...` with
-the same cloud configuration on trusted pull requests as well as main. The PR-to-main coverage
-contract counts that step as the pull request's check of main's hosted toolchain, so a trusted
-pull request whose setup produced no cloud flags fails the contract. Linker canaries keep their
+checkout; this does not permit local compilation or linking. A one-source compile probe salts only its own translation unit and checks its
+remote execution log for an uncached compiler action. The ordinary hosted Build includes `//...`
+alongside the selected roots when the writer enabled cloud execution. Tests keep their affected
+selection. Linker canaries keep their
 normal runner toolchain, and Renovate, macOS, and self-hosted lanes do not opt in. macOS cloud
 execution requires a separately configured compatible executor pool; the cache does not provide
 one.

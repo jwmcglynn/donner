@@ -8,7 +8,7 @@
   "lanes": {
     "linux": {
       "Verify BuildBuddy remote execution": {
-        "cloud-build": {
+        "cloud-executor-probe": {
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
@@ -34,7 +34,8 @@
             "owner": "jwmcglynn",
             "decision": "Maintainer decision 2026-10-31",
             "reason": "Trusted pull requests use ARM64 self-hosted execution. The maintainer accepts losing x86_64 hosted-image/toolchain coverage before merge; hosted main and scheduled verification retain it."
-          }
+          },
+          "description": "The hosted writer also builds the complete tree with the cloud toolchain."
         }
       },
       "Test": {
@@ -103,26 +104,25 @@
       }
     },
     "macos": {
-      "Build": {
-        "native": {
+      "Build and test": {
+        "selected-build": {
           "when": "always",
           "counterparts": [
             {
               "job": "macos-self-hosted",
-              "step": "build"
+              "step": "test"
             }
-          ]
+          ],
+          "description": "The ordinary Bazel test invocation also builds every selected non-test product."
         },
         "hosted-toolchain": {
           "when": "always",
           "exception": {
             "owner": "jwmcglynn",
             "decision": "Maintainer decision 2026-10-19, #1911",
-            "reason": "By default, trusted pull requests run the macOS Build step only on the self-hosted lane, with the same pinned Xcode, so a build failure specific to the hosted image's other host tools (Command Line Tools, Homebrew) can first show on main."
+            "reason": "By default, trusted pull requests run the selected macOS build on the self-hosted lane, with the same pinned Xcode, so a build failure specific to the hosted image's other host tools (Command Line Tools, Homebrew) can first show on main."
           }
-        }
-      },
-      "Test": {
+        },
         "native": {
           "when": "always",
           "description": "The selected tests, run by the self-hosted fast lane.",

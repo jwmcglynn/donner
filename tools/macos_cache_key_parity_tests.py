@@ -598,9 +598,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         jobs = _jobs(self.workflow)
         for name in (HOSTED, SELF_HOSTED):
             steps = [step_name for step_name, _ in _steps(jobs[name])]
-            self.assertIn("Build", steps)
+            self.assertIn("Build and test", steps)
             self.assertIn("Test (Geode editor lane)", steps)
-            self.assertGreaterEqual(len(_bazel_commands(jobs[name])), 6)
+            self.assertGreaterEqual(len(_bazel_commands(jobs[name])), 5)
         self.assertFalse(_runs_self_hosted(jobs[HOSTED]))
         self.assertTrue(_runs_self_hosted(jobs[SELF_HOSTED]))
 
@@ -642,7 +642,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                              if word.startswith("--//build_defs:release_source_commit=")])
         self.assertGreater(built, 10)
         # An editor identity set in one lane only is a key divergence the parity check reports.
-        command = "bazelisk --nohome_rc --nosystem_rc build --config=ci --config=macos-vm"
+        command = "bazelisk --nohome_rc --nosystem_rc test --config=ci --config=macos-vm"
         self.assertIn(command, self.workflow)
         diverged = self.workflow.replace(
             command, command + " --//build_defs:release_source_commit=" + "1" * 40)
@@ -707,7 +707,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 None, None, lane(SELF_HOSTED, lane_view.replacing(lane_config)),
                 "runs Bazel without"),
             "hosted adds a key-affecting flag": (
-                None, None, lane(HOSTED, adds("--copt=-O1")), "step 'Build' differs"),
+                None, None, lane(HOSTED, adds("--copt=-O1")), "step 'Build and test' differs"),
             "hosted carries a private cache flag": (
                 None, None, lane(HOSTED, adds("--remote_timeout=5s")),
                 "remote cache flags outside BuildBuddy"),
@@ -715,9 +715,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 None, None, lane(SELF_HOSTED, adds("--remote_executor=grpcs://x")),
                 "remote cache flags outside BuildBuddy"),
             "a step adds an inline build flag on one lane": (
-                None, None, lane(HOSTED, build, "build"), "step 'Build' differs"),
+                None, None, lane(HOSTED, build, "test"), "step 'Build and test' differs"),
             "a plain bazel step drops the lane flags": (
-                None, None, lane(HOSTED, drop_lane_flags, "build"), "runs Bazel without"),
+                None, None, lane(HOSTED, drop_lane_flags, "test"), "runs Bazel without"),
             "a build flag hidden in the test list": (
                 None, None, mock.patch.dict(lanes.MACOS_TEST, {
                     HOSTED: ("--copt=-O0",) + lanes.MACOS_TEST[HOSTED]}), "not test-only"),
@@ -745,7 +745,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "macos-self-hosted copies HOME from the runner"),
             "a step copies a runner variable into action keys": (
                 None, None, lane(SELF_HOSTED, lane_view.replacing(
-                    "--config=macos-vm", "--config=macos-vm", "--action_env=USER"), "build"),
+                    "--config=macos-vm", "--config=macos-vm", "--action_env=USER"), "test"),
                 "macos-self-hosted copies USER from the runner"),
             "a lane's config copies a runner variable": (None, self.bazelrc.replace(
                 "build:macos-vm --jobs=32\n",
@@ -767,7 +767,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 None, "macos-self-hosted sets TMPDIR from a shell or workflow expression"),
             "a macOS lane dropping ci-macos goes back to one GPU test at a time": (
                 None, None, lane(SELF_HOSTED, lane_view.replacing(lanes.MACOS_BUILD[0])),
-                "macos-self-hosted step 'Test' runs GPU tests with local_gpu=1"),
+                "macos-self-hosted step 'Build and test' runs GPU tests with local_gpu=1"),
             "ci-macos stops raising the GPU test count": (None, self.bazelrc.replace(
                 "build:ci-macos %s\n" % MACOS_CI_LOCAL_GPU, "", 1), None,
                 "runs GPU tests with local_gpu=1"),
@@ -775,7 +775,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 None, None, lane(SELF_HOSTED, lane_view.replacing(
                     lanes.MACOS_TEST[SELF_HOSTED][0], lanes.MACOS_TEST[SELF_HOSTED][0],
                     "--local_resources=local_gpu=1"), "test"),
-                "macos-self-hosted step 'Test' runs GPU tests with local_gpu=1"),
+                "macos-self-hosted step 'Build and test' runs GPU tests with local_gpu=1"),
             "ci-macos stops giving tests a fixed HOME": (None, self.bazelrc.replace(
                 "build:ci-macos %s\n" % CI_MACOS_HOME, "", 1), None,
                 "must set %s exactly once" % CI_MACOS_HOME),
@@ -784,12 +784,12 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "build:ci-macos %s/Users/runner\n" % CI_MACOS_HOME, 1), None,
                 "must set %s exactly once" % CI_MACOS_HOME),
             "a step drops the lane flags": (
-                None, None, lane(HOSTED, lane_view.replacing(lanes.MACOS_BUILD[-1]), "build"),
+                None, None, lane(HOSTED, lane_view.replacing(lanes.MACOS_BUILD[-1]), "test"),
                 "runs Bazel without"),
             "a step adds a config on one lane": (
                 None, None, lane(HOSTED, lane_view.replacing(
-                    "--config=ci", "--config=ci", "--config=geode"), "build"),
-                "step 'Build' differs"),
+                    "--config=ci", "--config=ci", "--config=geode"), "test"),
+                "step 'Build and test' differs"),
             "hosted skips the Xcode pin": (self.workflow.replace(
                 "run: tools/ci_select_macos_xcode.sh\n",
                 "run: echo skipped\n", 1), None, None, "macos selects Xcode other than"),
@@ -850,7 +850,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         hosted_step = ("      - name: Install clang-tidy\n"
                        "        env:\n          URL: ${{ secrets.BAZEL_REMOTE_CACHE }}\n")
         with lane_view.edited_lane(HOSTED, lane_view.replacing(
-                "--config=ci", "--config=ci", "--config=re"), ("build",)):
+                "--config=ci", "--config=ci", "--config=re"), ("test",)):
             remote = _workflow_files()[main]
         cases = {
             "hosted secret": files[main].replace(
@@ -1049,7 +1049,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         lines = _read(".bazelrc").splitlines()
         for flag in ["build --action_env=DONNER_CI_XCODE_IDENTITY",
                      "build --host_action_env=DONNER_CI_XCODE_IDENTITY",
-                     "test --test_env=DONNER_CI_XCODE_IDENTITY"]:
+                     "build --test_env=DONNER_CI_XCODE_IDENTITY"]:
             self.assertEqual(1, lines.count(flag), flag)
 
     def test_failed_version_probe_cannot_publish_matching_stdout(self):
@@ -1235,10 +1235,12 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertEqual(0, code, log)
                 written = env.splitlines()[-1]
                 self.assertEqual(written, "BAZEL_MACOS_BUILD_FLAGS=--xcode_version=%s" % version)
-        description = lane.dry_run("macos-self-hosted", "build",
+        description = lane.dry_run("macos-self-hosted", "test",
                                    {RUNTIME_FLAGS: written.split("=", 1)[1]})
-        self.assertEqual(description["actions"][0]["argv"][-3:], [
-            "--config=lane-macos", "--xcode_version=" + version, "@selected_targets"])
+        [cmd] = [a["argv"] for a in description["actions"] if a["action"] == "bazel"]
+        self.assertEqual(cmd[-5:], [
+            "--config=lane-macos", "--xcode_version=%s" % version, "--config=lane-macos-vm",
+            "--nobuild_tests_only", "@selected_targets"])
         self.assertEqual(bazelrc_configs.expand("build", ["--config=lane-macos"],
                                                 bazelrc_configs.parse(self.bazelrc))[-1],
                          "--macos_minimum_os=13.3")

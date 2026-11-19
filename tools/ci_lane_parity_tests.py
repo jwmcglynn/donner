@@ -145,7 +145,7 @@ INVOCATION_ALLOWLIST = {
         "Main runs fewer tests: the hosted image cannot compile offline Metal shaders.",
     # Browser cases quarantined on the hosted runner alone (#1691, #1702). Main skips them; the
     # pull request runs them, so they cannot turn main red. Remove with the quarantine.
-    ("main.yml", "macos", "macos-self-hosted", "Test", "test-env-main-only",
+    ("main.yml", "macos", "macos-self-hosted", "Build and test", "test-env-main-only",
      "DONNER_HOSTED_MACOS_QUARANTINE=1"):
         "Main skips the quarantined cases that the pull request runs (#1691, #1702).",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "test-env-main-only",
@@ -153,7 +153,7 @@ INVOCATION_ALLOWLIST = {
         "Main skips the quarantined cases that the pull request runs (#1691, #1702).",
     # Records host load and process call graphs only when a browser test reaches its deadline.
     # A persistent self-hosted runner never publishes them.
-    ("main.yml", "macos", "macos-self-hosted", "Test", "test-env-main-only",
+    ("main.yml", "macos", "macos-self-hosted", "Build and test", "test-env-main-only",
      "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
         "Diagnostics only: it changes what a timed-out test records, not whether it passes.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "test-env-main-only",
@@ -169,7 +169,7 @@ INVOCATION_ALLOWLIST = {
     # keys stay identical (//tools:macos_cache_key_parity_tests).
     **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
        "Lane identity for test results only; it does not change what runs."
-       for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
+       for step in ("Qualify pinned Chromium archive", "Build and test", "Test (browser targets)",
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted-vm"))},
@@ -216,6 +216,14 @@ SHARED_JOB_ALLOWLIST = {
     for scenario in ("untrusted-pr", "renovate-pr") for step in ("Build", "Test")
     for flag in _config_flags("buildbuddy-re", step.lower())
 }
+
+# The hosted writer previously built the full tree in the executor check; its Build
+# now covers those roots alongside the planner selection. Read-only jobs keep their selection.
+_CLOUD_TREE_REASON = "The trusted hosted Build also owns the existing full-tree cloud build."
+SHARED_JOB_ALLOWLIST.update({
+    ("main.yml", "linux", scenario, "Build", "target-main-only", "//..."): _CLOUD_TREE_REASON
+    for scenario in ("untrusted-pr", "renovate-pr")
+})
 
 # (action, input) pairs whose value differs between main and pull requests by policy, pinned by
 # the security policy tests: Actions cache saves are main-only, and BuildBuddy write access
@@ -326,6 +334,12 @@ COUNTERPART_ALLOWLIST = {
        "keeps the remote wrappers and drops the local-only targets; hosted Linux does the "
        "reverse. The local-display targets this drops run in the self-hosted job's Xvfb step."),
 }
+
+_cloud_tree = _counterpart_entries("linux", "linux-self-hosted", [
+    ("Build", "target-main-only", "//..."),
+], _CLOUD_TREE_REASON)
+COUNTERPART_ALLOWLIST.update(_cloud_tree)
+INVOCATION_ALLOWLIST.update(_cloud_tree)
 
 # The replacement still compares portable phases; x86_64 execution stays on main.
 INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
@@ -1796,9 +1810,9 @@ class CiLaneParityTest(unittest.TestCase):
                      "macos-self-hosted"):
             self.assertIn(name, jobs)
         steps = [_step_name(step) for step in jobs["macos"]["steps"]]
-        self.assertIn("Test", steps)
+        self.assertIn("Build and test", steps)
         self.assertIn("Test (browser targets)", steps)
-        test = next(step for step in jobs["macos"]["steps"] if _step_name(step) == "Test")
+        test = next(step for step in jobs["macos"]["steps"] if _step_name(step) == "Build and test")
         self.assertEqual(lane_phase(test), ("macos", "test"))
         [command] = lane_commands(test)
         self.assertEqual(command[:3], ["tools/ci_bazel_test.sh", "bazelisk", "test"])
@@ -1912,8 +1926,8 @@ class CiLaneParityTest(unittest.TestCase):
         narrowed = _replacing(lanes.SELECTED, "//donner/base/...")
         with _with_phase_args("macos-self-hosted", "test", narrowed):
             differences = invocation_differences(workflow, "macos", "macos-self-hosted")
-        self.assertLessEqual({("Test", "target-main-only", SELECTED_TARGETS),
-                              ("Test", "target-pr-only", "//donner/base/...")}, differences)
+        self.assertLessEqual({("Build and test", "target-main-only", SELECTED_TARGETS),
+                              ("Build and test", "target-pr-only", "//donner/base/...")}, differences)
         # A step script's targets, through its environment, compare the same way.
         main = textwrap_job('X_TARGETS: "//tools/ci:a"', "bazelisk test --config=ci $X_TARGETS")
         narrowed = textwrap_job('X_TARGETS: "//tools/ci:b"',
@@ -2515,11 +2529,11 @@ class CiLaneParityTest(unittest.TestCase):
                 self.assertEqual(expected, job_gates(workflow, "macos-metal", scenario))
         # A skipped run is an expected skip for the coverage contract, not a gap.
         manifest = self._coverage_manifest()
-        metal = {name for name, entry in manifest["lanes"]["macos"]["Test"].items()
+        metal = {name for name, entry in manifest["lanes"]["macos"]["Build and test"].items()
                  if any(c["job"] == "macos-metal" for c in entry.get("counterparts", []))}
         self.assertEqual({"shader-validation", "shader-memory-canary", "native-metal"}, metal)
         for name in metal:
-            self.assertEqual("metal_affected", manifest["lanes"]["macos"]["Test"][name]["when"])
+            self.assertEqual("metal_affected", manifest["lanes"]["macos"]["Build and test"][name]["when"])
 
     def test_subset_order_problems_are_found(self):
         main = parse_workflow(
@@ -2581,7 +2595,7 @@ class CiLaneParityTest(unittest.TestCase):
                                               "macos-self-hosted")
         finally:
             _CONFIGS[0] = configs
-        difference = ("main.yml", "macos", "macos-self-hosted", "Test", "test-env-main-only",
+        difference = ("main.yml", "macos", "macos-self-hosted", "Build and test", "test-env-main-only",
                       "DONNER_WIDENED=1")
         self.assertIn(difference[3:], observed)
         self.assertNotIn(difference, INVOCATION_ALLOWLIST)

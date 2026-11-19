@@ -277,7 +277,9 @@ build:macos --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*
 # and tests inherit it, including disk/Actions caches with no remote cache service.
 build --action_env=DONNER_CI_XCODE_IDENTITY
 build --host_action_env=DONNER_CI_XCODE_IDENTITY
-test --test_env=DONNER_CI_XCODE_IDENTITY
+# Keep the test environment in the build configuration as well: fetch, build and test
+# then analyze the same graph, including on Linux where the variable is normally unset.
+build --test_env=DONNER_CI_XCODE_IDENTITY
 
 # macOS CI lanes selecting the same approved tuple can share a remote cache.
 # The main.yml lanes pass --config=ci-macos through --config=lane-macos

@@ -798,7 +798,7 @@ remote_macos_xcode_config(
 
 alias(
     name = "buildbuddy_compile_probe",
-    actual = "//donner/base:base",
+    actual = "//donner/base:asyncify_suspend_probe",
     visibility = ["//visibility:public"],
 )
 

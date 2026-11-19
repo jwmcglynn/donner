@@ -40,7 +40,7 @@ _COMPLETE = {
         "build": _ran(), "test": _ran(), "local_xvfb": _ran(),
         "deterministic_soak_probe": _ran(1), "cmake_consumer": _ran()}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
-        "build": _ran(), "test": _ran(), "geode_test": _ran(6),
+        "test": _ran(), "geode_test": _ran(6),
         "browser_preflight": _ran(), "browser_test": _ran(2)}),
     "macos-metal": _receipt("macos-metal", {
         "metal_profile": _ran(), "metal_preflight": _ran(), "metal_native": _ran(10)}),
@@ -91,7 +91,7 @@ class CoverageContractTest(unittest.TestCase):
         self.assertEqual(8, len(excepted))
         for line in excepted:
             self.assertIn("owner jwmcglynn", line)
-        for exception in ("Test / hosted-equivalent", "Test / hosted-shader-validation",
+        for exception in ("Build and test / hosted-equivalent", "Build and test / hosted-shader-validation",
                           "Test (Geode editor lane) / hosted-equivalent"):
             self.assertTrue(any(line.startswith("macos / %s: " % exception)
                                 for line in excepted), exception)
@@ -102,7 +102,7 @@ class CoverageContractTest(unittest.TestCase):
         # Metal lanes it gates skip. The fixed-suite steps still run their tests.
         receipts = copy.deepcopy(_COMPLETE)
         for job, steps in (("linux-self-hosted", ("build", "test", "local_xvfb")),
-                           ("macos-self-hosted", ("build", "test", "browser_preflight",
+                           ("macos-self-hosted", ("test", "browser_preflight",
                                                   "browser_test"))):
             for step in steps:
                 receipts[job]["steps"][step] = _ran(0)
@@ -121,7 +121,7 @@ class CoverageContractTest(unittest.TestCase):
                 receipts["macos-metal"]["steps"][step] = _SKIPPED
                 problems, _ = self._check(receipts)
                 self.assertEqual(problems, [
-                    "macos / Test / %s is required on this pull request but did not run; "
+                    "macos / Build and test / %s is required on this pull request but did not run; "
                     "expected an executed macos-metal / %s" % (entry, step)])
 
     def test_unaffected_pull_request_expects_no_native_metal_receipt(self):
@@ -137,7 +137,7 @@ class CoverageContractTest(unittest.TestCase):
                 problems, _ = self._check(receipts, selection)
                 self.assertEqual(3, len(problems), problems)
                 for name in ("shader-validation", "shader-memory-canary", "native-metal"):
-                    self.assertTrue(any("macos / Test / %s is required" % name in problem
+                    self.assertTrue(any("macos / Build and test / %s is required" % name in problem
                                         for problem in problems), problems)
 
     def test_native_metal_suite_cannot_be_skipped_or_empty(self):
@@ -151,7 +151,7 @@ class CoverageContractTest(unittest.TestCase):
     def test_x86_gaps_are_visible_without_a_hosted_receipt(self):
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
-        for phase in ("Verify BuildBuddy remote execution / cloud-build",
+        for phase in ("Verify BuildBuddy remote execution / cloud-executor-probe",
                       "Build / hosted-toolchain", "Test / hosted-toolchain",
                       "Linker canary (non-lld linker support) / linker"):
             with self.subTest(phase=phase):
@@ -183,7 +183,7 @@ class CoverageContractTest(unittest.TestCase):
         # for each phase that runs tests, on every run, instead of expecting a counterpart.
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
-        for phase in ("Test", "Test (Geode editor lane)"):
+        for phase in ("Build and test", "Test (Geode editor lane)"):
             with self.subTest(phase=phase):
                 self.assertEqual(1, sum(line.startswith("macos / %s / hosted-equivalent: " % phase)
                                         and "Maintainer decision 2026-11-14" in line
@@ -204,8 +204,8 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_exceptions_must_name_an_owner(self):
         manifest = copy.deepcopy(self.manifest)
-        manifest["lanes"]["macos"]["Test"]["hosted-equivalent"]["exception"]["owner"] = " "
-        self.assertEqual(["macos / Test / hosted-equivalent exception must name an owner, the "
+        manifest["lanes"]["macos"]["Build and test"]["hosted-equivalent"]["exception"]["owner"] = " "
+        self.assertEqual(["macos / Build and test / hosted-equivalent exception must name an owner, the "
                           "decision and a reason"], contract.manifest_problems(manifest))
 
     def test_a_counterpart_must_report_its_minimum_test_count(self):

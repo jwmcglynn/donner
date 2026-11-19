@@ -94,7 +94,13 @@ class _Context:
 
     def words(self, item):
         if isinstance(item, lanes.Selected):
-            return self.remote_gpu_selection() if item.remote_gpu else self.selection()[1]
+            if item == lanes.REMOTE_GPU_SELECTED:
+                return self.remote_gpu_selection()
+            selection = self.selection()[1]
+            if (item == lanes.HOSTED_BUILD_SELECTED and "//..." not in selection
+                    and _fields(self.environ.get("BUILDBUDDY_FLAGS", ""))):
+                return ["//...", *selection]
+            return selection
         if isinstance(item, lanes.Split):
             return _fields(self.environ.get(item.name, ""))
         return [self.word(item)]

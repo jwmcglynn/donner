@@ -380,6 +380,7 @@ sh_test(
     srcs = ["RunEditorWindowVulkanSurfaceTests.sh"],
     args = ["$(location :editor_window_tests_geode)"],
     data = [":editor_window_tests_geode"],
+    env_inherit = ["PATH"],
     tags = [
         "local-gpu-isolated",
         "requires_xvfb",
@@ -398,6 +399,7 @@ sh_test(
         "default",
     ],
     data = [":editor_window_tests_geode"],
+    env_inherit = ["PATH"],
     tags = [
         "local-gpu-isolated",
         "requires_xvfb",
