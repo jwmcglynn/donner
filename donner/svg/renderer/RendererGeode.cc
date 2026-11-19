@@ -8165,9 +8165,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     // gradient is drawn as a gradient (above) rather than the inherited pattern.
     const bool usePatternFill = hasPatternFill && !hasFill && !fillIsGradient;
 
-    // Resolve per-run stroke. A per-span stroke overrides the element-level
-    // stroke. Solid is taken directly; gradient/pattern strokes route through
-    // the server below. Mirrors `RendererTinySkia::drawText`.
+    // Resolve per-run stroke. A span's computed stroke decides how its glyphs are stroked: the
+    // span's computed style already inherits the text element's stroke properties where the span
+    // sets none of its own, so a span whose stroke computes to `none`, or whose stroke-width
+    // computes to zero, is not stroked even when the text element is. Solid is taken directly;
+    // gradient/pattern strokes route through the server below. Mirrors
+    // `RendererTinySkia::drawText`.
     std::optional<css::RGBA> strokeColor;
     std::optional<StrokeStyle> strokeStyle;
     const components::ResolvedPaintServer* strokeServer = &impl_->paint.stroke;
@@ -8176,22 +8179,25 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     {
       StrokeParams runStrokeParams = params.strokeParams;
       std::optional<css::RGBA> color = impl_->resolveSolidStroke();
+      bool runHasStroke = true;
       if (runIndex < text.spans.size()) {
         const auto& span = text.spans[runIndex];
-        if (span.strokeWidth > 0.0) {
-          runStrokeParams.strokeWidth = span.strokeWidth;
-        }
+        runStrokeParams.strokeWidth = span.strokeWidth;
+        runStrokeParams.lineCap = span.strokeLinecap;
+        runStrokeParams.lineJoin = span.strokeLinejoin;
+        runStrokeParams.miterLimit = span.strokeMiterLimit;
         const std::span<const double> spanDash = span.strokeDashLengths();
         runStrokeParams.dashArray.assign(spanDash.begin(), spanDash.end());
         runStrokeParams.dashOffset = span.strokeDashOffset;
-        if (!std::holds_alternative<PaintServer::None>(span.resolvedStroke)) {
+        runHasStroke = !std::holds_alternative<PaintServer::None>(span.resolvedStroke);
+        if (runHasStroke) {
           spanOverridesStroke = true;
           strokeServer = &span.resolvedStroke;
           strokeOpacity = span.strokeOpacity * span.opacity;
           color = impl_->resolveSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity);
         }
       }
-      if (runStrokeParams.strokeWidth > 0.0) {
+      if (runHasStroke && runStrokeParams.strokeWidth > 0.0) {
         // Solid stroke colour available → draw flat. Otherwise, a gradient/
         // pattern stroke server drives the paint below.
         if (color.has_value() && color->a != 0) {
