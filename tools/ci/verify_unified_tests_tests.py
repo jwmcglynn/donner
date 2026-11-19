@@ -1,8 +1,12 @@
 """Regression tests for mixed-platform execution evidence."""
 
+import json
+from pathlib import Path
 import unittest
 
-from verify_unified_tests import verify
+from python.runfiles import runfiles
+
+from verify_unified_tests import _collect, verify
 
 
 SUITE = "//tools/ci:dual_platform_canary"
@@ -19,7 +23,10 @@ def events():
     for label in [*LABELS, COLOR]:
         shards = [{"label": label, "configuration": {"id": "abc"}, "shard": shard, "run": 1}
                   for shard in range(1, 3 if label == COLOR else 2)]
-        yield {"completed": {"success": True}, "children": [{"testResult": s} for s in shards]}
+        identity = {"label": label, "configuration": {"id": "abc"}}
+        yield {"completed": {"success": True}, "children": [{"testSummary": identity}]}
+        yield {"id": {"testSummary": identity}, "testSummary": {
+            "overallStatus": "PASSED", "runCount": 1, "shardCount": len(shards)}}
         for shard in shards:
             yield {"id": {"testResult": shard}, "testResult": {
                 "status": "PASSED", "executionInfo": {"strategy": "remote"}}}
@@ -34,6 +41,28 @@ class UnifiedTest(unittest.TestCase):
             verify(list(events())[:-1], [SUITE, METAL])
         with self.assertRaisesRegex(ValueError, "No test suite expansion"):
             verify(events(), [SUITE, METAL + "_missing"])
+
+    def test_recorded_summary_only_completion_with_five_shards(self):
+        fixture = runfiles.Create().Rlocation("donner/tools/testdata/macos_remote_shadow_build_events.json")
+        label = "//donner/base/parser:parser_tests"
+        records = []
+        for line in Path(fixture).read_text().splitlines():
+            event = json.loads(line)
+            if next(iter(event["id"].values())).get("label") == label:
+                records.append(event)
+        with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
+            _collect(records)  # The recorded results came from the cache.
+        for event in records:
+            if "testResult" in event:
+                event["testResult"].update(cachedLocally=False, executionInfo={"strategy": "remote"})
+        self.assertEqual(len(_collect(records)[1]), 5)
+        # Repeating shard 2 cannot satisfy a missing shard 5.
+        for event in records:
+            identity = event["id"].get("testResult", {})
+            if identity.get("shard") == 5:
+                identity["shard"] = 2
+        with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
+            _collect(records)
 
     def test_shortened_canary_cannot_pass(self):
         records = list(events())

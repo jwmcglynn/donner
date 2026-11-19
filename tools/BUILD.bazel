@@ -9,6 +9,11 @@ exports_files(
     visibility = ["//build_defs:__pkg__"],
 )
 
+exports_files(
+    ["testdata/macos_remote_shadow_build_events.json"],
+    visibility = ["//tools/ci:__pkg__"],
+)
+
 exports_files([
     "ci_bazel_test.sh",
     "lint.sh",

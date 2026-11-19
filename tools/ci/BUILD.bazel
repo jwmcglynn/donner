@@ -336,7 +336,9 @@ py_test(
     name = "verify_unified_tests_tests",
     size = "small",
     srcs = ["verify_unified_tests.py", "verify_unified_tests_tests.py"],
+    data = ["//tools:testdata/macos_remote_shadow_build_events.json"],
     imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_test(
