@@ -484,6 +484,22 @@ TEST_F(RendererRegressionTests, RadialCoincidentCirclesCurrentlyPaintNothing) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// Concentric circles whose radii differ by 2^-13 are coincident at tiny-skia's 2^-12 tolerance for
+// concentric radii, so both backends must drop the draw alike. A radius difference of 0.5 is the
+// visible control.
+TEST_F(RendererRegressionTests, RadialNearlyCoincidentConcentricCirclesPaintNothingOnEveryBackend) {
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg";
+  AssertVisibleFixture(RenderUserSpaceRadial(32, 8, 32, 8.5, "pad", kStops),
+                       "radial_concentric_control_visible");
+  const auto actual = RenderUserSpaceRadial(32, 8, 32, 8.0 + 1.0 / 8192.0, "pad", kStops);
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  RendererBitmap transparent = actual;
+  std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+  editor::tests::CompareBitmapToBitmap(actual, transparent, "radial_nearly_coincident_no_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // Internal tangency: the start circle (40, 32, 24) touches the end circle (32, 32, 16) at (16, 32).
 // Every canvas circle passes through that point, so they cover only the half-plane x > 16; the
 // canvas rule leaves x < 16 unpainted. Each point is on exactly one circle, so the swapped circles
