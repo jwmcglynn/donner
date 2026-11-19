@@ -360,7 +360,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         upload = self._step_body(job, "Upload Bazel test failure artifacts")
         condition = next(line.strip() for line in upload.splitlines() if line.strip().startswith("if:"))
         self.assertTrue(condition.startswith("if: failure() && "))
-        for step_id in ("test", "wgpu_resvg_reference", "deterministic_soak_probe"):
+        for step_id in ("test",):
             with self.subTest(step=step_id):
                 self.assertIn("steps.%s.outcome == 'failure'" % step_id, condition)
         self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", upload)
@@ -1083,7 +1083,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
         self.assertNotIn("Test local Xvfb targets", hosted)
         self.assertIn("xvfb xauth", hosted)
-        self.assertIn("-local-gpu-isolated", remote)
+        self.assertTrue(any(isinstance(a, lanes.LinuxTestSelection) and "local-gpu-isolated" in a.excluded
+                            for a in lanes.LANES["linux-self-hosted"].phases["test"].actions))
         # Both displayed-Vulkan targets stay on the local Xvfb route and take the local GPU
         # resource, so neither runs alongside another GPU-opening test.
         for name in ("editor_window_vulkan_surface_tests", "editor_window_vulkan_default_tests"):
@@ -1365,18 +1366,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertEqual(expected, output.read_text())
 
-    def test_pr_test_lanes_exclude_manual_targets_at_the_command_line(self):
-        """Runner bazelrcs cannot re-enable opt-in tests during full fallbacks.
-
-        This one reads the literal command line on purpose: a runner's rc can add lines to any
-        config, including `ci` or a lane config, and a later rc file wins within a config. The
-        exclusion is therefore an explicit command-line flag, not only a config's.
-        """
-        self.assertIn("test:ci --test_tag_filters=-manual,-perf", self.bazelrc)
-        for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
-            with self.subTest(job=job_name):
-                job = self._job_body(job_name)
-                self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
+    def test_pr_test_lanes_exclude_manual_targets_from_ordinary_selection(self):
+        for job in ("linux", "linux-self-hosted"):
+            actions = lanes.LANES[job].phases["test"].actions
+            self.assertTrue(any(isinstance(a, lanes.LinuxTestSelection) and "manual" in a.excluded
+                                for a in actions))
+        for job in ("macos", "macos-self-hosted"):
+            self.assertEqual(1, self._job_body(job).count("--test_tag_filters=-manual,-perf"))
 
     def test_run_time_flag_configs_do_not_select_tests(self):
         # BUILDBUDDY_FLAGS is a step output, so the policy tests cannot expand the config it
@@ -1555,14 +1551,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for job_name in ("linux", "linux-self-hosted"):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)
-                step = self._step_body(job, "Test Linux WebGPU resvg reference")
-                self.assertIn(
-                    "needs.determine-targets.outputs.wgpu_reference == 'true'",
-                    step,
-                )
+                step = self._step_body(job, "Test")
+                self.assertIn("WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}", step)
+                self.assertIn("needs.determine-targets.outputs.wgpu_reference == 'true'", step)
                 self.assertIn("--test_tag_filters=", step)
-                self.assertIn(target, step)
-                self.assertIn("steps.wgpu_resvg_reference.outcome == 'failure'", job)
+                self.assertNotIn("Test Linux WebGPU resvg reference", job)
+                self.assertIn("steps.test.outcome == 'failure'", job)
         for job_name in ("macos", "macos-self-hosted"):
             self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
 

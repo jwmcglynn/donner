@@ -358,7 +358,7 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn("run: python3 tools/ci/lane.py phase linux-self-hosted test",
                       self.main_workflow)
         phase = lanes.LANES["linux-self-hosted"].phases["test"]
-        self.assertEqual([lanes.RequireSelection, lanes.MapRemoteGpu, lanes.Bazel, lanes.Command],
+        self.assertEqual([lanes.RequireSelection, lanes.MapRemoteGpu, lanes.LinuxTestSelection, lanes.Bazel, lanes.Command],
                          [type(action) for action in phase.actions])
         [command] = [action["argv"] for action in
                      lane.dry_run("linux-self-hosted", "test", {})["actions"]
@@ -366,9 +366,9 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn("--strategy=TestRunner=remote,local", command)
         self.assertIn(lanes.REQUIRE_EXECUTOR, command)
         self.assertIn("--remote_local_fallback=false", command)
-        self.assertIn("--test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak", command)
-        self.assertEqual("$(python3 tools/ci_remote_gpu_targets.py @selected_targets)",
-                         command[-1])
+        selection = next(a for a in phase.actions if isinstance(a, lanes.LinuxTestSelection))
+        self.assertEqual(selection.excluded, ("manual", "perf", "local-gpu-isolated", "fuzz_soak"))
+        self.assertIn("@selected_linux_tests", command)
 
     def test_variant_specs_cannot_pin_a_remote_execution_platform_property(self):
         """Variant specs must not carry `exec_properties`.

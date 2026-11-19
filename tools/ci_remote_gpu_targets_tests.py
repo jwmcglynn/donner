@@ -8,7 +8,9 @@ import unittest
 from python.runfiles import runfiles
 
 from tools import test_timing
-from tools.ci_remote_gpu_targets import DISPLAY_TESTS, REMOTE_TARGETS, check_results, select_remote_targets
+from tools.ci_remote_gpu_targets import (
+    AUDIT, DISPLAY_TESTS, REFERENCE, REMOTE_TARGETS, SOAK, check_results, select_remote_targets,
+)
 
 
 class CiRemoteGpuTargetsTest(unittest.TestCase):
@@ -55,6 +57,26 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
                 ([], [ordinary])):
             with self.subTest(events=events), self.assertRaises(ValueError):
                 check_results(events, selected)
+
+    def test_merged_graph_requires_the_probe_and_every_selected_reference_shard(self):
+        def event(label, shard=1, cached=False, status="PASSED"):
+            return json.dumps({"id": {"testResult": {"label": label, "shard": shard}},
+                               "testResult": {"status": status, "cachedLocally": cached,
+                                              "executionInfo": {"strategy": "remote"}}})
+
+        end = json.dumps({"finished": {}})
+        probe = event(SOAK)
+        reference = [event(REFERENCE, i, cached=True) for i in range(1, 17)]
+        audit = event(AUDIT)
+        check_results([probe, end], [], fixed=True)
+        check_results([probe, *reference, audit, end], [], fixed=True, reference=True)
+        check_results([*reference, audit, end], [], fixed=True, reference=True, reference_only=True)
+        for requested, rows in ((False, []), (False, [event(SOAK, cached=True)]),
+                                (False, [event(SOAK, status="FAILED")]), (False, [probe, audit]),
+                                (True, [probe, *reference]), (True, [*reference, audit]),
+                                (True, [probe, *reference[:-1], reference[0], audit])):
+            with self.subTest(requested=requested, count=len(rows)), self.assertRaises(ValueError):
+                check_results([*rows, end], [], fixed=True, reference=requested)
 
     def test_empty_selection_stays_empty(self):
         self.assertEqual([], select_remote_targets([]))

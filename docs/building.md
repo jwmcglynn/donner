@@ -543,6 +543,16 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 
+### Linux CI test selection
+
+The Linux Test step runs the affected native tests, the deterministic fuzzer wrapper probe,
+and the selected WebGPU resvg reference in one Bazel invocation. A loading query applies the
+ordinary lane's tag exclusions before the step adds its explicit suites. An unchanged tree
+skips that query. The probe runs uncached; the reference keeps its normal cache behavior.
+The build events must show the probe and, when selected, all 16 reference shards and the
+dependency audit. If the main graph fails before all selected reference results are recorded,
+the step runs the reference alone and retains the original failure status.
+
 ### Nightly CMake consumers
 
 The **CMake Build** workflow builds and tests the external consumer on hosted Linux and macOS

@@ -3369,53 +3369,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        step = _named_step(_jobs(workflow)["linux-self-hosted"], "Test deterministic fuzzer soak wrapper")
-        self.assertNotEqual("", step, "Linux PR gate must execute the deterministic soak probe")
-        self.assertIsNone(_step_key(step, "if", 8))
-        self.assertIsNone(_step_key(step, "continue-on-error", 8))
-        self.assertEqual("bash", _step_key(step, "shell", 8))
-        scripts = _run_bodies(step)
-        self.assertEqual(1, len(scripts), step)
-        # The step runs one lane phase; its command, from the dry run, follows the call.
-        self.assertEqual([
-            "python3 tools/ci/lane.py phase linux-self-hosted deterministic_soak_probe",
-            " ".join([
-                "bazelisk", "test", "--config=ci", "--config=latest_llvm", "--test_output=all",
-                *lanes.SELF_HOSTED_REMOTE, "--test_tag_filters=", "--nocache_test_results",
-                "--noskip_incompatible_explicit_targets",
-                "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
-                "//tools/ci:deterministic_fuzzer_soak"]),
-        ], [line.strip().lstrip("# ") for line in scripts[0].splitlines()])
-        metadata = _read("tools/ci/BUILD.bazel")
-        self.assertIn('test_suite(\n    name = "deterministic_fuzzer_soak",\n'
-                      '    tags = ["manual"],\n'
-                      '    tests = ["//build_defs:soak_probe_fuzzer_soak"],\n)', metadata)
-
-    def test_deterministic_soak_gate_rejects_exclusion_or_skip(self):
-        path = ".github/workflows/main.yml"
-        workflow = self.supply_chain_files[path]
-        step = _named_step(_jobs(workflow)["linux-self-hosted"],
-                           "Test deterministic fuzzer soak wrapper")
-        skipped = workflow.replace(step, step.replace(
-            "        shell: bash", "        if: false\n        shell: bash", 1), 1)
-        self.assertNotEqual(workflow, skipped)
-        cases = {"if: false": (None, skipped)}
-        for old, new in [("--test_tag_filters=", "--test_tag_filters=-fuzz_soak"),
-                         ("--nocache_test_results", "--cache_test_results"),
-                         ("--noskip_incompatible_explicit_targets",
-                          "--skip_incompatible_explicit_targets")]:
-            cases[new] = (lane_view.edited_lane("linux-self-hosted", lane_view.replacing(
-                old, new), ("deterministic_soak_probe",)), None)
-        for change, (edit, text) in cases.items():
-            with self.subTest(change=change):
-                case = type(self)("test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate")
-                if edit:
-                    with edit:
-                        text = _read_supply_chain_files()[path]
-                self.assertNotEqual(workflow, text)
-                case.supply_chain_files = {**self.supply_chain_files, path: text}
-                with self.assertRaises(AssertionError, msg=change):
-                    case.test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate()
+        for lane_name in ("linux", "linux-self-hosted"):
+            with self.subTest(lane=lane_name):
+                step = _named_step(_jobs(workflow)[lane_name], "Test")
+                self.assertIsNone(_step_key(step, "continue-on-error", 8))
+                actions = lanes.LANES[lane_name].phases["test"].actions
+                [test] = [a for a in actions if isinstance(a, lanes.Bazel)]
+                self.assertIn("--test_tag_filters=", test.args)
+                self.assertIn(lanes.LINUX_FIXED, test.args)
+                self.assertIn(lanes.LINUX_TESTS, test.args)
+                self.assertNotIn("--nocache_test_results", test.args)
+                self.assertTrue(any(isinstance(a, lanes.LinuxTestSelection) and "fuzz_soak" in a.excluded
+                                    for a in actions))
+        self.assertIn('tests = ["//build_defs:soak_probe_fuzzer_soak"]',
+                      _read("tools/ci/BUILD.bazel"))
+        self.assertIn('extra_soak_tags = ["external", "no-cache"]', _read("build_defs/BUILD.bazel"))
 
     def test_fuzz_soaks_are_tagged_for_pr_exclusion_with_a_hang_guard_timeout(self):
         rules = _read("build_defs/rules.bzl")

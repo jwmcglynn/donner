@@ -953,6 +953,7 @@ def donner_cc_fuzzer(
         routing_manifest = None,
         routing_manifest_visibility = None,
         full_text_only = False,
+        extra_soak_tags = [],
         data = [],
         **kwargs):
     """
@@ -973,6 +974,7 @@ def donner_cc_fuzzer(
         to this hang guard.
       tags: Additional Bazel tags used to select configuration-specific corpus and soak lanes.
       full_text_only: Keep the corpus, raw binary, and soak on the full-text configuration.
+      extra_soak_tags: Tags applied only to the generated soak test.
       routing_manifest: Optional target name for a dependency-free manifest of the exact tags
         assigned to each generated fuzzer target.
       routing_manifest_visibility: Visibility of the routing manifest; private by default.
@@ -1007,7 +1009,7 @@ def donner_cc_fuzzer(
         ubsan_tags.append("fuzz_ubsan_geode")
     common_target_tags = ["fuzz_target"] + common_tags
     corpus_tags = ["fuzz_target", "fuzz_ubsan"] + common_tags + ubsan_tags
-    soak_tags = common_target_tags + ["fuzz_soak"]
+    soak_tags = common_target_tags + ["fuzz_soak"] + extra_soak_tags
 
     if routing_manifest:
         _fuzzer_routing_manifest(
