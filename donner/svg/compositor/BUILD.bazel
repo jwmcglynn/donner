@@ -28,6 +28,7 @@ _COMPOSITOR_GOLDEN_TEST_DEPS = [
     ":dual_path_verifier",
     "//donner/base:base_test_utils",
     "//donner/editor/tests:bitmap_golden_compare",
+    "//donner/svg/components",
     "//donner/svg/components/style:style_system",
     "//donner/svg/renderer",
     "//donner/svg/renderer:renderer_interface",

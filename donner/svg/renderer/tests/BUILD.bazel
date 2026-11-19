@@ -737,10 +737,10 @@ donner_cc_test(
     ],
     deps = [
         ":renderer_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/components",
         "//donner/svg/components:reference_invalidation",
-        "//donner/svg/components/text:components",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

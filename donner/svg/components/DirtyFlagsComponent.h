@@ -31,6 +31,10 @@ struct DirtyFlagsComponent {
     /// instance rebuilt, but no geometry, paint, filter or shadow-tree input changed. Always set
     /// together with \ref Style.
     Compositing = 1 << 10,
+    /// Content this element draws from another element through a reference (an `feImage`
+    /// fragment) changed. None of this element's own computed inputs changed, so its computed
+    /// components are kept and only its drawing is redone.
+    ReferencedContent = 1 << 11,
 
     /// Compound flag: style change that may affect paint, filter, and render instance.
     StyleCascade = Style | Paint | Filter | RenderInstance,

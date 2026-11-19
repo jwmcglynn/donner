@@ -159,6 +159,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml/components",
         "//donner/svg/components/filter:components",
+        "//donner/svg/components/filter:filter_effect",
         "//donner/svg/components/text:components",
         "//donner/svg/components/text:text_invalidation",
         "//donner/svg/graph",

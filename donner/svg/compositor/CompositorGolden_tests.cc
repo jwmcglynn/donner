@@ -23,6 +23,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -5380,6 +5381,9 @@ struct ReferenceTargetEditCase {
   void (*edit)(SVGDocument& document, int step);
   /// Whether `#target` is held in an active drag while it is edited, and released afterwards.
   bool drag;
+  /// Whether every edit keeps the computed components (the retained render-tree update) rather
+  /// than rebuilding the whole document.
+  bool retained;
 };
 
 void PrintTo(const ReferenceTargetEditCase& value, std::ostream* os) {
@@ -5437,7 +5441,26 @@ constexpr std::string_view kFeImageOfOtherLayer = R"svg(
     <rect x="0" y="56" width="96" height="40" fill="#fc0" filter="url(#copy)"/>
   </svg>)svg";
 
-/// An `feImage` of a group inside a masked group; `#target` is a child of the referenced group.
+/// \ref kFeImageOfOtherLayer with the `url()` reference as one stage of a filter list.
+constexpr std::string_view kFeImageListOfOtherLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="50">
+        <rect width="96" height="50" fill="white"/>
+      </mask>
+      <filter id="copy" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <feImage href="#target"/>
+      </filter>
+    </defs>
+    <g mask="url(#m)">
+      <rect x="4" y="4" width="88" height="40" fill="#ddd"/>
+      <circle id="target" cx="20" cy="22" r="12" fill="#06c"/>
+    </g>
+    <rect x="0" y="56" width="96" height="40" fill="#fc0" filter="url(#copy) saturate(1)"/>
+  </svg>)svg";
+
+/// An `feImage` of a masked group that is drawn as a layer of its own; `#target` is a child of
+/// that group.
 constexpr std::string_view kFeImageOfGroup = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
@@ -5448,12 +5471,10 @@ constexpr std::string_view kFeImageOfGroup = R"svg(
         <rect width="96" height="40" fill="white"/>
       </mask>
     </defs>
-    <g mask="url(#m)">
+    <g id="group" mask="url(#m)">
       <rect x="2" y="2" width="92" height="34" fill="#cec"/>
-      <g id="group">
-        <rect x="6" y="6" width="16" height="16" fill="#b0b"/>
-        <rect id="target" x="30" y="6" width="16" height="16" fill="#0bb"/>
-      </g>
+      <rect x="6" y="6" width="16" height="16" fill="#b0b"/>
+      <rect id="target" x="30" y="6" width="16" height="16" fill="#0bb"/>
     </g>
     <rect x="0" y="48" width="96" height="48" fill="#eee" filter="url(#ofGroup)"/>
   </svg>)svg";
@@ -5500,6 +5521,10 @@ TEST_P(CompositorReferenceTargetTest, NextFrameMatchesFreshRender) {
     (void)compositor.promoteEntity(target, InteractionHint::ActiveDrag);
   }
 
+  const auto counters = [&] {
+    return document.unsafeRegistry().ctx().get<components::RenderTreeState>().counters;
+  };
+  const components::RenderTreeState::Counters warm = counters();
   const auto expectMatchesFreshRender = [&](const std::string& label) {
     svg::Renderer referenceRenderer;
     RendererDriver(referenceRenderer).draw(reference, viewport, Transform2d());
@@ -5511,8 +5536,13 @@ TEST_P(CompositorReferenceTargetTest, NextFrameMatchesFreshRender) {
   for (int step = 1; step <= 2; ++step) {
     item.edit(document, step);
     item.edit(reference, step);
+    const uint64_t retainedBefore = counters().retainedUpdates;
     compositor.renderFrame(viewport);
     expectMatchesFreshRender("step" + std::to_string(step));
+    if (item.retained) {
+      EXPECT_EQ(counters().fullRebuilds, warm.fullRebuilds) << "step " << step;
+      EXPECT_GT(counters().retainedUpdates, retainedBefore) << "step " << step;
+    }
   }
   if (item.drag) {
     (void)compositor.promoteEntity(target, InteractionHint::Selection);
@@ -5526,30 +5556,39 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         ReferenceTargetEditCase{
             "textpath_path_in_other_layer_moved", kTextPathInOtherLayer,
-            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(0, 8.0 * step)); }, false},
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(0, 8.0 * step)); }, false,
+            false},
         ReferenceTargetEditCase{"textpath_path_in_other_layer_reshaped", kTextPathInOtherLayer,
                                 [](SVGDocument& d, int step) {
                                   d.querySelector("#target")->setAttribute(
                                       "d",
                                       step == 1 ? "M 6 40 C 30 20 60 20 90 40" : "M 6 20 L 90 44");
                                 },
-                                false},
+                                false, false},
         ReferenceTargetEditCase{
             "textpath_path_dragged", kTextPathBesidePath,
-            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(0, -14.0 * step)); }, true},
-        ReferenceTargetEditCase{
-            "feimage_target_in_other_layer_moved", kFeImageOfOtherLayer,
-            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(9.0 * step, 0)); }, false},
-        ReferenceTargetEditCase{
-            "feimage_target_in_other_layer_dragged", kFeImageOfOtherLayer,
-            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(7.0 * step, 3.0)); }, true},
-        ReferenceTargetEditCase{
-            "feimage_group_child_moved", kFeImageOfGroup,
-            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(12.0 * step, 4.0)); },
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(0, -14.0 * step)); }, true,
             false},
         ReferenceTargetEditCase{
+            "feimage_target_in_other_layer_moved", kFeImageOfOtherLayer,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(9.0 * step, 0)); }, false,
+            true},
+        ReferenceTargetEditCase{
+            "feimage_target_in_other_layer_dragged", kFeImageOfOtherLayer,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(7.0 * step, 3.0)); }, true,
+            true},
+        ReferenceTargetEditCase{
+            "feimage_list_stage_target_moved", kFeImageListOfOtherLayer,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(9.0 * step, 2.0)); }, false,
+            true},
+        ReferenceTargetEditCase{
+            "feimage_group_child_moved", kFeImageOfGroup,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(12.0 * step, 4.0)); }, false,
+            true},
+        ReferenceTargetEditCase{
             "feimage_target_moved_through_filter_href", kFeImageThroughFilterHref,
-            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false}),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            true}),
     [](const testing::TestParamInfo<ReferenceTargetEditCase>& info) {
       return std::string(info.param.name);
     });
