@@ -196,7 +196,8 @@ class GatekeeperTest(unittest.TestCase):
         self.assertIn("trusted_pr=false\n", output.read_text())
         env.update(TRUSTED_PR="false", SELFHOSTED_LINUX_RUNNER="true",
                    UNIFIED_RE_SELECTED="true")
-        self._run_fixture_shell(self._workflow_body("runner_gate"), env, trusted)
+        route = action.read_text().split("    - id: route\n", 1)[1]
+        self._run_fixture_shell(textwrap.dedent(route.split("      run: |\n", 1)[1]), env, trusted)
         self.assertIn("use_self_hosted_linux=false\n", output.read_text())
         self.assertIn("unified_macos=false\n", output.read_text())
 

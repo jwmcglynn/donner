@@ -1,8 +1,8 @@
 {
   "tree": {
-    "lines": 5293,
-    "comment_lines": 566,
-    "multiline_runs": 68,
+    "lines": 5183,
+    "comment_lines": 559,
+    "multiline_runs": 65,
     "longest_run": 194,
     "run_expressions": 12,
     "longest_if": 369
@@ -33,10 +33,10 @@
       "longest_if": 27
     },
     ".github/workflows/cmake.yml": {
-      "lines": 323,
+      "lines": 287,
       "comment_lines": 24,
-      "multiline_runs": 3,
-      "longest_run": 30,
+      "multiline_runs": 2,
+      "longest_run": 8,
       "run_expressions": 0,
       "longest_if": 369
     },
@@ -65,8 +65,8 @@
       "longest_if": 342
     },
     ".github/workflows/editor_wasm.yml": {
-      "lines": 342,
-      "comment_lines": 50,
+      "lines": 340,
+      "comment_lines": 43,
       "multiline_runs": 2,
       "longest_run": 3,
       "run_expressions": 0,
@@ -89,17 +89,17 @@
       "longest_if": 70
     },
     ".github/workflows/lint.yml": {
-      "lines": 186,
+      "lines": 150,
       "comment_lines": 16,
-      "multiline_runs": 2,
-      "longest_run": 30,
+      "multiline_runs": 1,
+      "longest_run": 8,
       "run_expressions": 0,
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 919,
+      "lines": 883,
       "comment_lines": 142,
-      "multiline_runs": 8,
+      "multiline_runs": 7,
       "longest_run": 47,
       "run_expressions": 6,
       "longest_if": 300

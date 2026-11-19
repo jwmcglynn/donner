@@ -38,7 +38,7 @@ module.exports = {
   testMatch: "**/*.spec.ts",
   testIgnore: [],
   metadata: { pinnedBrowsers: [engine] },
-  globalSetup: require.resolve("./prepare-browser-archives.js"),
+  globalSetup: require.resolve("./editor-browser-setup.cjs"),
   use: {},
   projects: [{
     ...project,
