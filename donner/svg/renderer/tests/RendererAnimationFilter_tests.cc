@@ -9,6 +9,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -336,9 +337,6 @@ struct AuthoredValueCase {
   std::string attribute;  //!< The animated attribute.
   std::string value;      //!< The animated value.
   std::string authored;   //!< Primitives authoring \c value statically.
-  /// Whether the case convolves with more than 25 kernel values, which Geode renders as transparent
-  /// black (issue #2101), so its base and authored renderings match there.
-  bool largeKernel = false;
 };
 
 void PrintTo(const AuthoredValueCase& value, std::ostream* os) {
@@ -358,10 +356,9 @@ TEST_P(RendererAnimationFilterAuthoredValue, MatchesTheAuthoredValue) {
   auto authored = FilterDocument(item.authored);
   auto base = FilterDocument(item.base);
   const RendererBitmap expected = RenderDocumentWithActiveBackend(authored);
-  if (!item.largeKernel || ActiveRendererBackend() != RendererBackend::Geode) {
-    ASSERT_NE(RenderDocumentWithActiveBackend(base).pixels, expected.pixels)
-        << "the authored value must render differently from the base value";
-  }
+  // Premise: the authored value changes the rendering, so a stale base value cannot pass.
+  ExpectBitmapsDiffer(RenderDocumentWithActiveBackend(base), expected,
+                      item.name + "_authored_differs_from_base");
 
   auto document = FilterDocument(item.base, "<set href='#p' attributeName='" + item.attribute +
                                                 "' to='" + item.value + "' dur='1s'/>");
@@ -394,7 +391,7 @@ std::vector<AuthoredValueCase> AuthoredValueCases() {
   const std::string center = NumberList(81, 40, "1");
   const std::string corner = NumberList(81, 0, "1");
   cases.push_back({"Kernel9x9", convolve("9", center, true), "kernelMatrix", corner,
-                   convolve("9", corner, false), /*largeKernel=*/true});
+                   convolve("9", corner, false)});
   for (const std::size_t count : {std::size_t{4097}, std::size_t{100000}}) {
     const std::string kernel = NumberList(count);
     cases.push_back({"KernelOverLimit" + std::to_string(count), convolve("1", "1", true),
@@ -433,13 +430,10 @@ TEST(RendererAnimationFilter, InterpolatedOrderAboveTheLimitMatchesAuthored) {
   };
   auto authored = FilterDocument(convolve("64.4", false));
   const RendererBitmap expected = RenderDocumentWithActiveBackend(authored);
-  // Geode renders kernels over 25 values as transparent black (issue #2101), so there the base
-  // renders like the refused filter.
-  if (ActiveRendererBackend() != RendererBackend::Geode) {
-    auto base = FilterDocument(convolve("64", true));
-    ASSERT_NE(RenderDocumentWithActiveBackend(base).pixels, expected.pixels)
-        << "the authored order must render differently from the base order";
-  }
+  // Premise: the base 64x64 kernel renders, unlike the refused authored order.
+  auto base = FilterDocument(convolve("64", true));
+  ExpectBitmapsDiffer(RenderDocumentWithActiveBackend(base), expected,
+                      "interpolated_order_authored_differs_from_base");
 
   auto document =
       FilterDocument(convolve("64", true),

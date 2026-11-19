@@ -766,6 +766,7 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":image_comparison_test_fixture",
         ":renderer_test_utils",
         ":rgba_test_matchers",
         "//donner/base:base_test_utils",
