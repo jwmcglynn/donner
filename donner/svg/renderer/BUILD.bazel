@@ -406,6 +406,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base/parser",
         "//donner/svg/components",
         "//donner/svg/components:font_resource_graph",
+        "//donner/svg/components:reference_invalidation",
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/filter:filter_system",

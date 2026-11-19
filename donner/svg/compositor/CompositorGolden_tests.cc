@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -5367,5 +5368,190 @@ TEST_F(CompositorGoldenTest, ClickToDragAdvancesAtMostThreeTileGenerations) {
   EXPECT_LE(changedCount, 3)
       << "click-to-drag advanced more than 3 tile generations - compositor is over-invalidating";
 }
+
+namespace {
+
+/// One edit of an element that another element draws through a reference.
+struct ReferenceTargetEditCase {
+  const char* name;  //!< Label for the comparison outputs.
+  /// Document drawn at a 96x96 canvas. `#target` is the referenced element.
+  std::string_view source;
+  /// Applies edit number `step` (1, 2) to the document.
+  void (*edit)(SVGDocument& document, int step);
+  /// Whether `#target` is held in an active drag while it is edited, and released afterwards.
+  bool drag;
+};
+
+void PrintTo(const ReferenceTargetEditCase& value, std::ostream* os) {
+  *os << value.name;
+}
+
+void TranslateTarget(SVGDocument& document, Vector2d offset) {
+  document.querySelector("#target")->cast<SVGGraphicsElement>().setTransform(
+      Transform2d::Translate(offset));
+}
+
+// The text in the text path documents overlaps no other content: antialiased text drawn into a
+// tile of its own and composited over other content can round partially covered pixels
+// differently from one full draw.
+
+/// A `<textPath>` whose unstroked path lies in a group drawn as a layer of its own (the group is
+/// masked), with the text outside that group.
+constexpr std::string_view kTextPathInOtherLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white"/>
+      </mask>
+    </defs>
+    <g mask="url(#m)">
+      <rect x="2" y="84" width="20" height="10" fill="#9c9"/>
+      <path id="target" d="M 6 30 C 30 10 60 50 90 30" fill="none"/>
+    </g>
+    <text font-size="12" fill="#008"><textPath href="#target">Along the curve</textPath></text>
+  </svg>)svg";
+
+/// A `<textPath>` and its unstroked path next to each other at the top level.
+constexpr std::string_view kTextPathBesidePath = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <path id="target" d="M 8 70 L 88 50" fill="none"/>
+    <text font-size="13" fill="#40a"><textPath href="#target">Sloped words</textPath></text>
+  </svg>)svg";
+
+/// An element filtered with an `feImage` of `#target`, outside the masked group that holds the
+/// target.
+constexpr std::string_view kFeImageOfOtherLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="50">
+        <rect width="96" height="50" fill="white"/>
+      </mask>
+      <filter id="copy" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <feImage href="#target"/>
+      </filter>
+    </defs>
+    <g mask="url(#m)">
+      <rect x="4" y="4" width="88" height="40" fill="#ddd"/>
+      <circle id="target" cx="20" cy="22" r="12" fill="#06c"/>
+    </g>
+    <rect x="0" y="56" width="96" height="40" fill="#fc0" filter="url(#copy)"/>
+  </svg>)svg";
+
+/// An `feImage` of a group inside a masked group; `#target` is a child of the referenced group.
+constexpr std::string_view kFeImageOfGroup = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <filter id="ofGroup" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <feImage href="#group"/>
+      </filter>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="40">
+        <rect width="96" height="40" fill="white"/>
+      </mask>
+    </defs>
+    <g mask="url(#m)">
+      <rect x="2" y="2" width="92" height="34" fill="#cec"/>
+      <g id="group">
+        <rect x="6" y="6" width="16" height="16" fill="#b0b"/>
+        <rect id="target" x="30" y="6" width="16" height="16" fill="#0bb"/>
+      </g>
+    </g>
+    <rect x="0" y="48" width="96" height="48" fill="#eee" filter="url(#ofGroup)"/>
+  </svg>)svg";
+
+/// An element filtered through a filter that takes its `feImage` primitive from another filter by
+/// `href`, outside the masked group that holds `#target`.
+constexpr std::string_view kFeImageThroughFilterHref = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <filter id="base" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <feImage href="#target"/>
+      </filter>
+      <filter id="alias" href="#base"/>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="40">
+        <rect width="96" height="40" fill="white"/>
+      </mask>
+    </defs>
+    <g mask="url(#m)">
+      <rect x="2" y="2" width="92" height="34" fill="#eec"/>
+      <rect id="target" x="10" y="8" width="24" height="20" fill="#930"/>
+    </g>
+    <rect x="0" y="48" width="96" height="48" fill="#ccc" filter="url(#alias)"/>
+  </svg>)svg";
+
+}  // namespace
+
+class CompositorReferenceTargetTest : public testing::TestWithParam<ReferenceTargetEditCase> {};
+
+// Each frame after an edit of a referenced element matches a fresh render of the same document
+// state, including the elements that draw it through the reference.
+TEST_P(CompositorReferenceTargetTest, NextFrameMatchesFreshRender) {
+  const ReferenceTargetEditCase& item = GetParam();
+  SVGDocument document = parseDocument(item.source);
+  SVGDocument reference = parseDocument(item.source);
+  document.setCanvasSize(96, 96);
+  reference.setCanvasSize(96, 96);
+  const RenderViewport viewport{Vector2d(96, 96)};
+
+  svg::Renderer renderer;
+  CompositorController compositor(document, renderer);
+  compositor.renderFrame(viewport);
+  const Entity target = document.querySelector("#target")->unsafeEntityHandle().entity();
+  if (item.drag) {
+    (void)compositor.promoteEntity(target, InteractionHint::ActiveDrag);
+  }
+
+  const auto expectMatchesFreshRender = [&](const std::string& label) {
+    svg::Renderer referenceRenderer;
+    RendererDriver(referenceRenderer).draw(reference, viewport, Transform2d());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
+                                         std::string(item.name) + "_" + label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+  expectMatchesFreshRender("unedited");
+  for (int step = 1; step <= 2; ++step) {
+    item.edit(document, step);
+    item.edit(reference, step);
+    compositor.renderFrame(viewport);
+    expectMatchesFreshRender("step" + std::to_string(step));
+  }
+  if (item.drag) {
+    (void)compositor.promoteEntity(target, InteractionHint::Selection);
+    compositor.renderFrame(viewport);
+    expectMatchesFreshRender("released");
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Edits, CompositorReferenceTargetTest,
+    testing::Values(
+        ReferenceTargetEditCase{
+            "textpath_path_in_other_layer_moved", kTextPathInOtherLayer,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(0, 8.0 * step)); }, false},
+        ReferenceTargetEditCase{"textpath_path_in_other_layer_reshaped", kTextPathInOtherLayer,
+                                [](SVGDocument& d, int step) {
+                                  d.querySelector("#target")->setAttribute(
+                                      "d",
+                                      step == 1 ? "M 6 40 C 30 20 60 20 90 40" : "M 6 20 L 90 44");
+                                },
+                                false},
+        ReferenceTargetEditCase{
+            "textpath_path_dragged", kTextPathBesidePath,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(0, -14.0 * step)); }, true},
+        ReferenceTargetEditCase{
+            "feimage_target_in_other_layer_moved", kFeImageOfOtherLayer,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(9.0 * step, 0)); }, false},
+        ReferenceTargetEditCase{
+            "feimage_target_in_other_layer_dragged", kFeImageOfOtherLayer,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(7.0 * step, 3.0)); }, true},
+        ReferenceTargetEditCase{
+            "feimage_group_child_moved", kFeImageOfGroup,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(12.0 * step, 4.0)); },
+            false},
+        ReferenceTargetEditCase{
+            "feimage_target_moved_through_filter_href", kFeImageThroughFilterHref,
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false}),
+    [](const testing::TestParamInfo<ReferenceTargetEditCase>& info) {
+      return std::string(info.param.name);
+    });
 
 }  // namespace donner::svg::compositor
