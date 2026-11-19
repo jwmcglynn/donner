@@ -156,6 +156,7 @@ test_suite(
         "//donner/editor/wasm/tests:hosted_firefox_editor_compatibility_test",
         "//donner/editor/wasm/tests:hosted_webkit_editor_carousel_test",
         "//donner/editor/wasm/tests:selector_tests",
+        "//donner/editor/wasm/tests:static_javascript_package_tests",
         "//donner/svg/renderer/wasm:geode_browser_test_transition_test",
         "//donner/svg/renderer/wasm:hosted_geode_browser_default_audit_test",
         "//donner/svg/renderer/wasm:hosted_render_test",

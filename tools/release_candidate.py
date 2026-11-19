@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -502,11 +503,107 @@ def _verify_editor_wasm(raw: Path, served: Path, identity: bytes) -> None:
         raise ValueError("editor package does not contain the selected build identity")
 
 
-def _verify_editor_dialog_script(root: Path, expected: dict[str, str]) -> None:
-    # The caller binds root to the candidate's clean exact-source checkout, including for rollback.
-    script = root / "donner/editor/wasm/browser-file-dialogs.js"
-    source_digest = _sha256(script) if script.exists() or script.is_symlink() else None
-    required = {} if source_digest is None else dict.fromkeys(EDITOR_DIALOG_FILES, source_digest)
+# This historical recipe predates the source-side digest record. Its output was
+# independently reproduced with the pinned esbuild macOS ARM64 package.
+_HISTORICAL_DIALOG_RECIPES = {
+    "00a8ecdcecaa57aa2a9340e12141118faa37439b018a802cfca3f56a48d5c087",
+    "c7ce20f39cb0820d86f8f4c62b14d1118898c73ea12ab1422b9ab4421d4e081b",
+}
+_HISTORICAL_PACKAGED_DIALOG = "df01aa37090c7ece0eda7162e1b62d24fa03efc8ca4cf4306383dd2810f7ebf9"
+
+
+def _historical_rule(statements, kind, name):
+    matches = []
+    for node in statements:
+        call = getattr(node, "value", None)
+        if not isinstance(call, ast.Call) or ast.unparse(call.func) != kind:
+            continue
+        fields = {kw.arg: kw.value for kw in call.keywords}
+        if getattr(fields.get("name"), "value", None) == name:
+            matches.append((call, fields))
+    if len(matches) != 1:
+        raise ValueError("unknown historical package definition for editor dialog script")
+    return matches[0]
+
+
+def _historical_minified_dialog(read, raw_digest, text, statements):
+    declarations = [node for node in statements if isinstance(node, ast.Assign)
+                    and any(getattr(t, "id", None) == "_STATIC_JAVASCRIPT" for t in node.targets)]
+    if len(declarations) != 1:
+        raise ValueError("unknown source list for historical editor dialog script")
+    rule, _ = _historical_rule(statements, "js_run_binary", "minified_static_javascript")
+    tool_text = read("tests/BUILD.bazel").decode("utf-8")
+    tool, _ = _historical_rule(ast.parse(tool_text).body, "esbuild_bin.esbuild_binary", "esbuild")
+    parts = [raw_digest, ast.get_source_segment(text, declarations[0]), ast.get_source_segment(text, rule),
+             ast.get_source_segment(tool_text, tool), hashlib.sha256(read("tests/pnpm-lock.yaml")).hexdigest()]
+    if hashlib.sha256("\0".join(parts).encode()).hexdigest() not in _HISTORICAL_DIALOG_RECIPES:
+        raise ValueError("unknown source or minifier recipe for historical editor dialog script")
+    return _HISTORICAL_PACKAGED_DIALOG
+
+
+def _historical_dialog_digest(read, raw_digest: str) -> str:
+    text = read("BUILD.bazel").decode("utf-8")
+    statements = ast.parse(text).body
+    _, package = _historical_rule(statements, "web_package", "wasm_web_package")
+    srcs = package.get("srcs")
+    if not isinstance(srcs, ast.List) or not all(isinstance(node, ast.Constant) and isinstance(node.value, str)
+                                                  for node in srcs.elts):
+        raise ValueError("unknown historical sources for editor dialog script")
+    sources = [node.value for node in srcs.elts]
+    relevant = set(sources).intersection({"browser-file-dialogs.js", ":minified_static_javascript"})
+    if relevant == {"browser-file-dialogs.js"}:
+        return raw_digest
+    if relevant == {":minified_static_javascript"}:
+        return _historical_minified_dialog(read, raw_digest, text, statements)
+    raise ValueError("unrecognized historical editor dialog script packaging")
+
+
+def _dialog_source_objects(root, commit):
+    prefix = "donner/editor/wasm/"
+    names = ("browser-file-dialogs.js", "browser-file-dialogs.release.json", "BUILD.bazel",
+             "tests/BUILD.bazel", "tests/pnpm-lock.yaml")
+    git = ["git", "--no-replace-objects", "-C", str(root)]
+    listing = subprocess.check_output([*git, "ls-tree", "-z", "--full-tree", _commit(commit, "editor source"),
+                                       "--", *(prefix + name for name in names)])
+    objects = {}
+    for entry in listing.split(b"\0"):
+        if not entry:
+            continue
+        meta, path = entry.decode("ascii").split("\t")
+        mode, kind, oid = meta.split()
+        if mode not in ("100644", "100755") or kind != "blob":
+            raise ValueError("editor dialog script inputs must be committed regular files")
+        objects[path.removeprefix(prefix)] = oid
+    return objects
+
+
+def _source_bound_dialog_digest(root: Path, commit: str) -> str | None:
+    objects = _dialog_source_objects(root, commit)
+
+    def read(name):
+        if name not in objects:
+            raise ValueError(f"missing selected-source editor dialog script input: {name}")
+        return subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), "cat-file", "blob", objects[name]])
+
+    script = "browser-file-dialogs.js"
+    record = "browser-file-dialogs.release.json"
+    if script not in objects and record not in objects:
+        return None
+    source = hashlib.sha256(read(script)).hexdigest()
+    if record not in objects:
+        return _historical_dialog_digest(read, source)
+    raw = read(record)
+    if len(raw) > 1024:
+        raise ValueError("oversized editor dialog script digest record")
+    data = _load_canonical(raw)
+    if set(data) != {"source_sha256", "packaged_sha256"} or data["source_sha256"] != source:
+        raise ValueError("editor dialog script digest record differs from the selected source")
+    return _digest(data["packaged_sha256"], "editor dialog script packaged digest")
+
+
+def _verify_editor_dialog_script(root: Path, commit: str, expected: dict[str, str]) -> None:
+    digest = _source_bound_dialog_digest(root, commit)
+    required = {} if digest is None else dict.fromkeys(EDITOR_DIALOG_FILES, digest)
     actual = {name: expected[name] for name in EDITOR_DIALOG_FILES if name in expected}
     if actual != required:
         raise ValueError("editor dialog script differs from the selected source")
@@ -549,7 +646,7 @@ def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str,
         checksums[name] = _digest(digest, "editor file digest")
     if checksums != {name: sha for name, sha in expected.items() if name.startswith(("site/", "deploy/"))}:
         raise ValueError("editor package checksum manifest differs from retained files")
-    _verify_editor_dialog_script(root, expected)
+    _verify_editor_dialog_script(root, commit, expected)
     _verify_editor_wasm(directory / "site/editor.wasm", directory / "deploy/editor.wasm.gz",
                         release_macos_editor._expected_build_info(root, commit))
     return generated_lock

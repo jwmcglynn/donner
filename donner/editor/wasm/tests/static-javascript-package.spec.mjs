@@ -1,5 +1,6 @@
 import { parse } from "espree";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -74,4 +75,11 @@ test("program comparison preserves distinct raw spellings with the same cooked t
   const literal = program("tag`\n`;").body[0].expression.quasi.quasis[0].value;
   assert.equal(escaped.cooked, literal.cooked);
   assert.notEqual(escaped.raw, literal.raw);
+});
+
+test("release dialog digests bind the source and the exact shipped minifier output", () => {
+  const filename = "browser-file-dialogs.js";
+  const digest = (paths) => createHash("sha256").update(fs.readFileSync(paths.get(filename))).digest("hex");
+  const expected = JSON.stringify({ packaged_sha256: digest(minified), source_sha256: digest(originals) }) + "\n";
+  assert.equal(fs.readFileSync(process.env.DIALOG_RELEASE_DIGESTS, "utf8"), expected);
 });

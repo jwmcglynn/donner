@@ -558,17 +558,28 @@ class SourceAndEditorTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "stable X.Y.Z"):
                     candidate._verify_source(source, self.root)
 
-    def _editor_package(self):
+    def _commit_dialog_source(self):
+        if not (self.root / ".git").exists():
+            subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "--", "donner"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                        "commit", "-qm", "Fixture source"], check=True)
+        return candidate._git(self.root, "rev-parse", "HEAD")
+
+    def _editor_package(self, dialog_sources=None):
         """Write a minimal editor package whose build retained its generated module lock."""
         directory = self.root / "package"
         directory.mkdir()
         lock = self.root / "donner/editor/wasm/tests/package-lock.json"
         lock.parent.mkdir(parents=True)
         lock.write_bytes(b"lock")
+        for name, body in (dialog_sources or {}).items():
+            (self.root / "donner/editor/wasm" / name).write_bytes(body)
+        self.editor_commit = self._commit_dialog_source()
         module_lock = b'{"registryFileHashes": {"https://bcr.bazel.build/x": "0"}}\n'
         (directory / "MODULE.bazel.lock").write_bytes(module_lock)
         (self.root / "MODULE.bazel").write_text('module(name="donner", version="0.8.0", compatibility_level=0)\n')
-        wasm = b"\0asm\1\0\0\0" + b"0.8.0\n" + COMMIT.encode() + b"\n"
+        wasm = b"\0asm\1\0\0\0" + b"0.8.0\n" + self.editor_commit.encode() + b"\n"
         files = {"site/index.html": b"site", "site/editor.wasm": wasm,
                  "site/catalog-fonts.json": b"{}", "deploy/index.html": b"deploy",
                  "deploy/editor.wasm.gz": gzip.compress(wasm, mtime=0)}
@@ -577,7 +588,7 @@ class SourceAndEditorTest(unittest.TestCase):
             target = directory / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-        provenance = {"source_revision": COMMIT, "renderer": "geode",
+        provenance = {"source_revision": self.editor_commit, "renderer": "geode",
                       "producer_run_id": "12", "producer_attempt": "2",
                       "bazel_configs": ["editor-wasm"], "transport_encoding": "gzip",
                       "targets": ["//tools/ci:editor_wasm_package"], "lockfile_sha256": digest(b"lock"),
@@ -595,19 +606,19 @@ class SourceAndEditorTest(unittest.TestCase):
     def test_editor_manifest_covers_site_deploy_and_lock(self):
         directory, provenance, expected = self._editor_package()
         self._write_editor_provenance(directory, provenance, expected)
-        self.assertEqual(candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2"),
+        self.assertEqual(candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2"),
                          expected["MODULE.bazel.lock"])
         with self.assertRaisesRegex(ValueError, "provenance differs"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "3")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "3")
         provenance["private_host"] = "hidden.example"
         self._write_editor_provenance(directory, provenance, expected)
         with self.assertRaisesRegex(ValueError, "provenance differs"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
         del provenance["private_host"]
         self._write_editor_provenance(directory, provenance, expected)
         del expected["deploy/editor.wasm.gz"]
         with self.assertRaisesRegex(ValueError, "required site or deploy"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_editor_dialog_script_matches_selected_source_and_preserves_legacy(self):
         script = b"globalThis.dialogs = {};\n"
@@ -623,9 +634,11 @@ class SourceAndEditorTest(unittest.TestCase):
         for name, (has_source, copies, accepted) in cases.items():
             with self.subTest(case=name):
                 self.setUp()
-                directory, provenance, expected = self._editor_package()
-                if has_source:
-                    (self.root / "donner/editor/wasm/browser-file-dialogs.js").write_bytes(script)
+                sources = {
+                    "browser-file-dialogs.js": script,
+                    "BUILD.bazel": b'web_package(name="wasm_web_package", srcs=["browser-file-dialogs.js"])',
+                } if has_source else {}
+                directory, provenance, expected = self._editor_package(sources)
                 for prefix, data in copies.items():
                     relative = f"{prefix}/browser-file-dialogs.js"
                     (directory / relative).write_bytes(data)
@@ -637,11 +650,74 @@ class SourceAndEditorTest(unittest.TestCase):
                 self._write_editor_provenance(directory, provenance, expected)
                 if accepted:
                     self.assertEqual(
-                        candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2"),
+                        candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2"),
                         expected["MODULE.bazel.lock"])
                 else:
                     with self.assertRaisesRegex(ValueError, "dialog script"):
-                        candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+                        candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
+
+    def test_packaged_dialog_manifest_requires_exact_source_and_both_shipped_copies(self):
+        directory = self.root / "donner/editor/wasm"
+        directory.mkdir(parents=True, exist_ok=True)
+        script = directory / "browser-file-dialogs.js"
+        script.write_bytes(b"const dialog = 1;")
+        raw, packed = digest(script.read_bytes()), digest(b"const dialog=1;")
+        record = directory / "browser-file-dialogs.release.json"
+        record.write_bytes(candidate._canonical_bytes({"source_sha256": raw, "packaged_sha256": packed}))
+        expected = dict.fromkeys(candidate.EDITOR_DIALOG_FILES, packed)
+        commit = self._commit_dialog_source()
+        candidate._verify_editor_dialog_script(self.root, commit, expected)
+        for bad in ({}, dict.fromkeys(expected, raw), expected | {"deploy/browser-file-dialogs.js": raw}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "editor dialog script"):
+                candidate._verify_editor_dialog_script(self.root, commit, bad)
+        script.write_bytes(b"const dialog = 2;")
+        with self.assertRaisesRegex(ValueError, "record differs"):
+            candidate._verify_editor_dialog_script(self.root, self._commit_dialog_source(), expected)
+
+    def test_ignored_digest_record_cannot_override_a_historical_commit(self):
+        script = b"globalThis.dialogs = {};"
+        self._editor_package({"browser-file-dialogs.js": script,
+                              "BUILD.bazel": b'web_package(name="wasm_web_package", srcs=["browser-file-dialogs.js"])'})
+        record = self.root / "donner/editor/wasm/browser-file-dialogs.release.json"
+        (self.root / ".git/info/exclude").write_text("browser-file-dialogs.release.json\n")
+        record.write_bytes(candidate._canonical_bytes({"source_sha256": digest(script), "packaged_sha256": "a" * 64}))
+        with self.assertRaisesRegex(ValueError, "editor dialog script differs"):
+            candidate._verify_editor_dialog_script(self.root, self.editor_commit,
+                                                  dict.fromkeys(candidate.EDITOR_DIALOG_FILES, "a" * 64))
+        candidate._verify_editor_dialog_script(self.root, self.editor_commit,
+                                              dict.fromkeys(candidate.EDITOR_DIALOG_FILES, digest(script)))
+
+    def test_ignored_script_cannot_add_a_dialog_to_legacy_package(self):
+        self._editor_package()
+        (self.root / ".git/info/exclude").write_text("browser-file-dialogs.js\n")
+        (self.root / "donner/editor/wasm/browser-file-dialogs.js").write_bytes(b"ignored")
+        candidate._verify_editor_dialog_script(self.root, self.editor_commit, {})
+        with self.assertRaisesRegex(ValueError, "dialog script differs"):
+            candidate._verify_editor_dialog_script(self.root, self.editor_commit,
+                                                  dict.fromkeys(candidate.EDITOR_DIALOG_FILES, digest(b"ignored")))
+
+    def test_noncanonical_or_symlinked_digest_record_is_rejected(self):
+        directory = self.root / "donner/editor/wasm"
+        directory.mkdir(parents=True)
+        raw = b"let dialog = 1;"
+        (directory / "browser-file-dialogs.js").write_bytes(raw)
+        record = directory / "browser-file-dialogs.release.json"
+        record.write_text(json.dumps({"source_sha256": digest(raw), "packaged_sha256": "a" * 64}, indent=2))
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            candidate._source_bound_dialog_digest(self.root, self._commit_dialog_source())
+        record.unlink()
+        record.symlink_to("browser-file-dialogs.js")
+        with self.assertRaisesRegex(ValueError, "committed regular"):
+            candidate._source_bound_dialog_digest(self.root, self._commit_dialog_source())
+
+    def test_unknown_historical_dialog_packaging_fails_closed(self):
+        directory = self.root / "donner/editor/wasm"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "browser-file-dialogs.js").write_bytes(b"const dialog = 1;")
+        (directory / "BUILD.bazel").write_text(
+            'web_package(name="wasm_web_package", srcs=[":unexpected_transform"])')
+        with self.assertRaisesRegex(ValueError, "historical editor dialog script packaging"):
+            candidate._source_bound_dialog_digest(self.root, self._commit_dialog_source())
 
     def _rewrite_editor_bytes(self, directory, expected, raw, served):
         for name, data in (("site/editor.wasm", raw), ("deploy/editor.wasm.gz", served)):
@@ -654,20 +730,20 @@ class SourceAndEditorTest(unittest.TestCase):
 
     def test_editor_identity_spans_a_decompressed_chunk_boundary(self):
         directory, provenance, expected = self._editor_package()
-        identity = b"0.8.0\n" + COMMIT.encode() + b"\n"
+        identity = b"0.8.0\n" + self.editor_commit.encode() + b"\n"
         raw = b"\0asm\1\0\0\0" + b"x" * (1024 * 1024 - 8 - 12) + identity + b"y" * (1024 * 1024)
         self._rewrite_editor_bytes(directory, expected, raw, gzip.compress(raw, mtime=0))
         self._write_editor_provenance(directory, provenance, expected)
-        self.assertEqual(candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2"),
+        self.assertEqual(candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2"),
                          expected["MODULE.bazel.lock"])
 
     def test_editor_rejects_wrong_embedded_version_with_the_selected_commit(self):
         directory, provenance, expected = self._editor_package()
-        wrong = b"\0asm\1\0\0\0" + b"0.7.0\n" + COMMIT.encode() + b"\n"
+        wrong = b"\0asm\1\0\0\0" + b"0.7.0\n" + self.editor_commit.encode() + b"\n"
         self._rewrite_editor_bytes(directory, expected, wrong, gzip.compress(wrong, mtime=0))
         self._write_editor_provenance(directory, provenance, expected)
         with self.assertRaisesRegex(ValueError, "build identity"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_editor_rejects_stale_embedded_identity_with_consistent_provenance(self):
         directory, provenance, expected = self._editor_package()
@@ -675,7 +751,7 @@ class SourceAndEditorTest(unittest.TestCase):
         self._rewrite_editor_bytes(directory, expected, stale, gzip.compress(stale, mtime=0))
         self._write_editor_provenance(directory, provenance, expected)
         with self.assertRaisesRegex(ValueError, "build identity"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_editor_rejects_different_deployed_payload_with_matching_manifests(self):
         directory, provenance, expected = self._editor_package()
@@ -683,7 +759,7 @@ class SourceAndEditorTest(unittest.TestCase):
         self._rewrite_editor_bytes(directory, expected, raw, gzip.compress(b"stale served payload", mtime=0))
         self._write_editor_provenance(directory, provenance, expected)
         with self.assertRaisesRegex(ValueError, "deployed|gzip"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_editor_refuses_corrupt_truncated_oversized_or_trailing_gzip(self):
         directory, provenance, expected = self._editor_package()
@@ -697,7 +773,7 @@ class SourceAndEditorTest(unittest.TestCase):
             self._rewrite_editor_bytes(directory, expected, raw, served)
             self._write_editor_provenance(directory, provenance, expected)
             with self.assertRaisesRegex(ValueError, "deployed|gzip"):
-                candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+                candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_editor_compressed_input_uses_the_existing_artifact_size_bound(self):
         directory, provenance, expected = self._editor_package()
@@ -707,25 +783,25 @@ class SourceAndEditorTest(unittest.TestCase):
         self._write_editor_provenance(directory, provenance, expected)
         with mock.patch.object(candidate, "MAX_UNPACKED_BYTES", len(raw)):
             with self.assertRaisesRegex(ValueError, "artifact size limit"):
-                candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+                candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_editor_provenance_binds_its_generated_module_lock(self):
         directory, provenance, expected = self._editor_package()
         legacy = {key: value for key, value in provenance.items() if key != "generated_lock_sha256"}
         self._write_editor_provenance(directory, legacy, expected)
         with self.assertRaisesRegex(ValueError, "provenance differs"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
         self._write_editor_provenance(directory, {**provenance, "generated_lock_sha256": "e" * 64},
                                       expected)
         with self.assertRaisesRegex(ValueError, "provenance differs"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
         self._write_editor_provenance(directory, provenance, expected)
         (directory / "MODULE.bazel.lock").write_text('{"path": "/home/runner/private"}')
         with self.assertRaisesRegex(ValueError, "non-public"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
         (directory / "MODULE.bazel.lock").unlink()
         with self.assertRaisesRegex(ValueError, "lockfile is missing"):
-            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+            candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
 
     def test_registry_entry_payload_is_checked_against_the_record_archive(self):
         record = {"source": {"commit": COMMIT, "version": "0.8.0"},
