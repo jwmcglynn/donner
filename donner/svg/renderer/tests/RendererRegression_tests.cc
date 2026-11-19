@@ -472,6 +472,25 @@ TEST_F(RendererRegressionTests, ReferenceContractFontAttributeIsIgnored) {
       editor::tests::PixelmatchIdentityParams());
 }
 
+// SVG 2 keeps glyph-orientation-vertical="0" as an alias of text-orientation: upright. Latin
+// letters in vertical text are otherwise set sideways, so that control must differ.
+TEST_F(RendererRegressionTests, GlyphOrientationVerticalZeroDrawsUprightGlyphs) {
+  const auto render = [](std::string_view orientation) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<text x="32" y="4" font-family="Noto Sans" font-size="20"
+                                writing-mode="vertical-rl" )svg") +
+            std::string(orientation) + R"svg(>Ab</text>)svg",
+        {}, Vector2i(64, 64));
+    RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const auto alias = render(R"svg(glyph-orientation-vertical="0")svg");
+  ExpectVisibleBitmap(alias, "glyph_orientation_vertical_zero_visible");
+  ExpectBitmapsIdentical(alias, render(R"svg(text-orientation="upright")svg"),
+                         "glyph_orientation_vertical_zero_upright");
+  ExpectBitmapsDiffer(alias, render(""), "glyph_orientation_vertical_zero_not_sideways");
+}
+
 TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"svg(
     <text x="4" y="38" style="font: bold italic 28px Noto Sans">Ab</text>)svg",
