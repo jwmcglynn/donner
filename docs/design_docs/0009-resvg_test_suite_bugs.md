@@ -1,7 +1,9 @@
 # resvg-test-suite: Custom Golden Overrides
 
-**Status:** Reference (current as of 2026-08-18; the override rules and the pattern, textPath
-and text-decoration tables were updated 2026-11-19)
+**Status:** Reference. Catalogs resvg-test-suite cases that compare against a custom golden
+instead of their vendored PNG, the reason for each override, and the rules an override must
+meet. The [golden README](../../donner/svg/renderer/testdata/golden/README.md) records each
+golden's provenance and SHA-256.
 
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is _not_ the right thing to compare against, the test pins
@@ -20,8 +22,7 @@ Every override records what the vendored PNG gets wrong in its reason, has an en
 `tools/resvg_parity/exception_policies.json`, and has a row with its SHA-256 in the golden
 README's digest table. A difference whose root cause is in Donner is fixed in the engine, not
 pinned with a golden, and a pixel budget in the hundreds is not accepted as a substitute. Some
-older rows below are legacy regression goldens whose provenance is not recorded; their reasons
-say so.
+rows below are regression goldens whose provenance is not recorded; their reasons say so.
 
 Custom goldens live in `donner/svg/renderer/testdata/golden/`: `resvg-<test-name>.png`,
 named with the test stem, and `donner-<test-name>.png` for the Donner renderings whose evidence
