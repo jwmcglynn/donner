@@ -1060,8 +1060,8 @@ private:
 /// buffer holds the same eight analytic dual-ray SSBO regions, but the
 /// uniform region holds the 704-byte gradient uniform block (stops inline,
 /// `donner/gpu/shader/programs/SlugGradientSource.h`) and the cached bind group uses the
-/// reflected ten-resource gradient pipeline layout with the device-owned dummy
-/// clip-mask texture. Residence is only taken
+/// reflected gradient pipeline layout with the device-owned placeholder clip-mask
+/// and stop-ramp textures. Residence is only taken
 /// when no clip mask, clip polygon, or mask pass is active (the gradient
 /// shader's clip flags must stay zero for the cached bind group to remain
 /// stable), exactly like the solid-fill residence gate.
@@ -1085,9 +1085,11 @@ struct GeodeResidentGradientSlot {
   /// Number of bytes occupied by this gradient slot's allocation.
   uint64_t allocationSize = 0;
 
-  /// Cached 11-binding gradient bind group. All bindings reference stable
-  /// objects (this slot's buffer sub-ranges + device-owned dummy
-  /// clip-mask texture/sampler), so it survives frames and encoders.
+  /// Cached gradient bind group. All bindings reference stable objects (this
+  /// slot's buffer sub-ranges + device-owned placeholder clip-mask and
+  /// stop-ramp textures), so it survives frames and encoders. A gradient with
+  /// more stops than the uniform carries inline draws with a per-draw group
+  /// that binds its own stop ramp instead.
   gpu::BindGroup bindGroup;
 
   /// A byte sub-range of `buffer` (same semantics as GeodeResidentSlot::Region).

@@ -183,8 +183,11 @@ void affineToMat4(const Transform2d& t, float* out16) {
   out16[15] = 1.0f;
 }
 
-/// Must match `kMaxStops` in `donner/gpu/shader/programs/SlugGradientSource.h` and in
-/// `donner/gpu/shader/programs/SlugFillSource.h`.
+/// Most stops a gradient's draw parameters carry inline: the gradient uniform's stop arrays and a
+/// fill slot's paint block both hold this many. Must match `kMaxStops` in
+/// `donner/gpu/shader/programs/SlugGradientSource.h` and in
+/// `donner/gpu/shader/programs/SlugFillSource.h`. A gradient with more stops draws through the
+/// gradient pipeline, which then reads every stop from a stop ramp texture.
 constexpr uint32_t kMaxGradientStops = gpu::shader::programs::kSlugGradientMaxStops;
 static_assert(kPaintStopColorRow + kMaxGradientStops <= kPaintStopOffsetRow &&
                   kPaintStopOffsetRow + kMaxGradientStops / 4u <= kPaintBlockRows,
@@ -196,6 +199,53 @@ static_assert(offsetof(EncodedPath::Band, curveStart) ==
               offsetof(gpu::shader::programs::SlugGradientBand, curveStart));
 static_assert(offsetof(EncodedPath::Band, curveCount) ==
               offsetof(gpu::shader::programs::SlugGradientBand, curveCount));
+
+/// Widest row of a gradient stop ramp, in texels. A ramp with more stops wraps onto further pairs
+/// of rows (see `stopRamp` in `donner/gpu/shader/programs/SlugGradientSource.h`).
+constexpr uint32_t kStopRampMaxWidth = 1024u;
+/// Bytes per RGBA32Float ramp texel.
+constexpr uint32_t kStopRampTexelBytes = 16u;
+/// Ramp widths are a whole number of 256-byte rows, the row pitch a texture upload requires.
+constexpr uint32_t kStopRampWidthGranule = 256u / kStopRampTexelBytes;
+/// Most stops one ramp holds. Two rows per `kStopRampMaxWidth` stops keeps the ramp's height
+/// within 8192 texels, the smallest maximum texture extent a WebGPU device may report.
+constexpr uint32_t kMaxStopRampStops = kStopRampMaxWidth * 4096u;
+
+/// Texels of a gradient stop ramp, laid out as `stopRamp` in
+/// `donner/gpu/shader/programs/SlugGradientSource.h` reads them: stop i sits in column
+/// `i % width` of row pair `i / width`, its color in the pair's first row and its offset in the
+/// red channel of the second.
+struct GradientStopRamp {
+  uint32_t width = 0;         ///< Texels per row.
+  uint32_t height = 0;        ///< Rows, two per `width` stops.
+  std::vector<float> texels;  ///< RGBA32Float texels, row-major.
+};
+
+/// Lays \p stops out as a stop ramp in \p ramp and returns how many stops it holds: all of them,
+/// unless the gradient has more than `kMaxStopRampStops`. Then it holds that many, evenly spaced
+/// through the list and including the first and last stop.
+/// @param stops At least two gradient stops.
+/// @param ramp Receives the texels; its storage is reused from one call to the next.
+template <typename StopT>
+uint32_t writeStopRamp(std::span<const StopT> stops, GradientStopRamp& ramp) {
+  const uint64_t sourceCount = stops.size();
+  const uint32_t count = static_cast<uint32_t>(std::min<uint64_t>(sourceCount, kMaxStopRampStops));
+  const uint32_t granules = (count + kStopRampWidthGranule - 1u) / kStopRampWidthGranule;
+  ramp.width = std::min(kStopRampMaxWidth, granules * kStopRampWidthGranule);
+  ramp.height = (count + ramp.width - 1u) / ramp.width * 2u;
+  ramp.texels.assign(static_cast<size_t>(ramp.width) * ramp.height * 4u, 0.0f);
+  for (uint32_t i = 0; i < count; ++i) {
+    // The identity when every stop fits; otherwise maps 0 and count - 1 to the first and last.
+    const uint64_t source = static_cast<uint64_t>(i) * (sourceCount - 1u) / (count - 1u);
+    const StopT& s = stops[source];
+    const size_t column = i % ramp.width;
+    const size_t colorRow = static_cast<size_t>(i / ramp.width) * 2u;
+    float* color = ramp.texels.data() + (colorRow * ramp.width + column) * 4u;
+    std::copy(std::begin(s.rgba), std::end(s.rgba), color);
+    ramp.texels[((colorRow + 1u) * ramp.width + column) * 4u] = s.offset;
+  }
+  return count;
+}
 
 /// Returns a binding from the verified process-lifetime gradient interface.
 /// @param name Authored resource name.
@@ -824,10 +874,14 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// bind group.
   void uploadResidentGradientGeometry(GeodeResidentGradientSlot& slot, const EncodedPath& encoded);
 
-  /// Build + cache the eleven-entry gradient bind group for `slot` (all
-  /// bindings reference `slot.buffer` sub-ranges + the device-owned dummy
-  /// clip-mask texture/sampler).
+  /// Build + cache the gradient bind group for `slot` (all bindings
+  /// reference `slot.buffer` sub-ranges + the device-owned placeholder
+  /// textures for the clip mask and the stop ramp).
   void buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot);
+
+  /// Create a gradient bind group over `slot`'s regions that binds `stopRamp` as the stop ramp.
+  gpu::Result<gpu::BindGroup> createResidentGradientBindGroup(GeodeResidentGradientSlot& slot,
+                                                              const gpu::TextureView& stopRamp);
 
   /// Resident gradient draw: ensure geometry residence, rewrite only the
   /// gradient uniform when it changed, reuse the cached bind group, and
@@ -855,6 +909,44 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// is gated off by a clip or a same-frame repeat).
   void submitGradientArenaFallback(GradientUniforms& u, const EncodedPath& encoded);
 
+  /// The view a gradient draw binds as its stop ramp: `gradientStopRamp` uploaded for this draw
+  /// when `u` has more stops than it carries inline, otherwise the device's placeholder texture,
+  /// which the shader never reads. Null when the upload fails.
+  /// @param u Gradient uniform the draw binds.
+  const gpu::TextureView* gradientStopRampView(const GradientUniforms& u) {
+    if (u.stopCount <= kMaxGradientStops) {
+      return gpuContext->dummyClipMaskTextureView;
+    }
+    const gpu::Extent2d extent{gradientStopRamp.width, gradientStopRamp.height};
+    gpu::Result<gpu::Texture> texture = gpuContext->gpuDevice->createTexture(
+        gpu::TextureDescriptor{"GeodeGradientStopRamp", extent, gpu::TextureFormat::RGBA32Float,
+                               gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    if (texture.hasError()) {
+      return nullptr;
+    }
+    const gpu::Texture& rampTexture = transientResources.retain(std::move(texture).result());
+    const auto* bytes = reinterpret_cast<const uint8_t*>(gradientStopRamp.texels.data());
+    if (gpuContext->gpuDevice
+            ->writeTexture(
+                rampTexture,
+                std::span<const uint8_t>(bytes, gradientStopRamp.texels.size() * sizeof(float)),
+                gpu::TexelCopyBufferLayout{0, extent.width * kStopRampTexelBytes, extent.height},
+                extent)
+            .hasError()) {
+      return nullptr;
+    }
+    gpu::Result<gpu::TextureView> view = gpuContext->gpuDevice->createTextureView(
+        rampTexture, gpu::TextureViewDescriptor{"GeodeGradientStopRampView"});
+    if (view.hasError()) {
+      return nullptr;
+    }
+    return &transientResources.retain(std::move(view).result());
+  }
+
+  /// Stop ramp the last `build*GradientUniforms` call laid out, when its gradient had more stops
+  /// than the uniform carries inline. Read by the draw that follows it.
+  GradientStopRamp gradientStopRamp;
+
   /// Cheap size fingerprint of an encode, used alongside the
   /// `EncodedPath*` address to defend a resident slot against a missed
   /// invalidation (e.g. the in-place stroke-slot rebuild).
@@ -876,6 +968,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// by the linear and radial gradient paths. `u` is filled in by the
   /// caller except for the grid params, which this writes from `encoded`.
   void submitGradientDraw(GradientUniforms& u, const EncodedPath& encoded) {
+    const gpu::TextureView* stopRamp = gradientStopRampView(u);
+    if (stopRamp == nullptr) {
+      return;
+    }
     u.gridYBase = encoded.yBase;
     u.gridHStride = encoded.hStride;
     u.gridHBandCount = encoded.hBandCount;
@@ -936,7 +1032,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                  gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
              gpu::BindGroupEntry{
                  GradientBinding("vCurveIndices"),
-                 gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
+                 gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}},
+             gpu::BindGroupEntry{GradientBinding("stopRamp"),
+                                 gpu::TextureViewBinding{*stopRamp}}}});
     if (bindGroupResult.hasError()) {
       return;
     }
@@ -2492,6 +2590,15 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
                                            const GeodeRecordSlab::Slot* recordSlotOverride,
                                            std::vector<uint8_t>* overrideRecordCache,
                                            SceneRecordState* recordState, bool publishPaint) {
+  // A slot's paint block holds `kMaxGradientStops` stops. A gradient with more has no batched
+  // form: the caller draws it through the gradient pipeline, which reads them from a stop ramp.
+  const size_t gradientStops = paint.linearGradient != nullptr ? paint.linearGradient->stops.size()
+                               : paint.radialGradient != nullptr
+                                   ? paint.radialGradient->stops.size()
+                                   : 0u;
+  if (publishPaint && gradientStops > kMaxGradientStops) {
+    return false;
+  }
   if (publishPaint && !impl_->admitResidentInstance(encoded)) {
     return false;
   }
@@ -2872,7 +2979,7 @@ namespace {
 template <typename StopT>
 void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& gradientFromPath,
                                     uint32_t spreadMode, std::span<const StopT> stops,
-                                    FillRule rule) {
+                                    FillRule rule, GradientStopRamp& ramp) {
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
   u.spreadMode = spreadMode;
 
@@ -2895,10 +3002,14 @@ void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& grad
   // blend pipeline composites onto the framebuffer. This matches tiny-skia /
   // Skia gradient behavior - e.g. `a-stop-opacity-001` transitions from
   // white to black@0.2 and expects straight-space interpolation, not
-  // premultiplied-space mix. Clamp the stop count to the shader's hard cap;
-  // overflow was warned about at the caller.
-  const uint32_t stopCount =
-      std::min<uint32_t>(kMaxGradientStops, static_cast<uint32_t>(stops.size()));
+  // premultiplied-space mix. A gradient with more stops than the uniform
+  // carries inline leaves its stop arrays zero, and the shader reads every
+  // stop from the ramp instead.
+  if (stops.size() > kMaxGradientStops) {
+    u.stopCount = writeStopRamp(stops, ramp);
+    return;
+  }
+  const auto stopCount = static_cast<uint32_t>(stops.size());
   u.stopCount = stopCount;
   for (uint32_t i = 0; i < stopCount; ++i) {
     const StopT& s = stops[i];
@@ -2920,8 +3031,8 @@ void GeoEncoder::Impl::buildLinearGradientUniforms(GradientUniforms& u,
   writePixelMapping(u, transform);
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
-  populateSharedGradientUniforms<LinearGradientParams::Stop>(u, params.gradientFromPath,
-                                                             params.spreadMode, params.stops, rule);
+  populateSharedGradientUniforms<LinearGradientParams::Stop>(
+      u, params.gradientFromPath, params.spreadMode, params.stops, rule, gradientStopRamp);
   u.gradientKind = kGradientKindLinear;
   writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = activeClipMaskView != nullptr ? 1u : 0u;
@@ -2939,8 +3050,8 @@ void GeoEncoder::Impl::buildRadialGradientUniforms(GradientUniforms& u,
   writePixelMapping(u, transform);
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
-  populateSharedGradientUniforms<RadialGradientParams::Stop>(u, params.gradientFromPath,
-                                                             params.spreadMode, params.stops, rule);
+  populateSharedGradientUniforms<RadialGradientParams::Stop>(
+      u, params.gradientFromPath, params.spreadMode, params.stops, rule, gradientStopRamp);
   u.gradientKind = kGradientKindRadial;
   writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = activeClipMaskView != nullptr ? 1u : 0u;
@@ -3055,28 +3166,36 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   slot.owningDeviceId = device->deviceId();
 }
 
-void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
+gpu::Result<gpu::BindGroup> GeoEncoder::Impl::createResidentGradientBindGroup(
+    GeodeResidentGradientSlot& slot, const gpu::TextureView& stopRamp) {
   const gpu::BufferRef buf = slot.buffer;
 
-  // Residence is admitted only without clipping, so the cached group uses the dummy mask.
+  // Residence is admitted only without clipping, so the group uses the dummy mask.
   const auto region = [&buf](uint32_t binding, const GeodeResidentGradientSlot::Region& r) {
     return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
   };
+  return gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+      "GeodeResidentGradientBindGroup",
+      gradientPipeline->bindGroupLayout(),
+      {region(GradientBinding("uniforms"), slot.uniform),
+       region(GradientBinding("bands"), slot.bands),
+       region(GradientBinding("curveData"), slot.curves),
+       gpu::BindGroupEntry{GradientBinding("clipMaskTexture"),
+                           gpu::TextureViewBinding{*gpuContext->dummyClipMaskTextureView}},
+       region(GradientBinding("vBands"), slot.vBands),
+       region(GradientBinding("vCurveData"), slot.vCurves),
+       region(GradientBinding("hBandGrid"), slot.hGrid),
+       region(GradientBinding("vBandGrid"), slot.vGrid),
+       region(GradientBinding("hCurveIndices"), slot.hRefs),
+       region(GradientBinding("vCurveIndices"), slot.vRefs),
+       gpu::BindGroupEntry{GradientBinding("stopRamp"), gpu::TextureViewBinding{stopRamp}}}});
+}
+
+void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
+  // The cached group serves gradients whose stops fit the uniform, so it binds the placeholder
+  // ramp.
   gpu::Result<gpu::BindGroup> created =
-      gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
-          "GeodeResidentGradientBindGroup",
-          gradientPipeline->bindGroupLayout(),
-          {region(GradientBinding("uniforms"), slot.uniform),
-           region(GradientBinding("bands"), slot.bands),
-           region(GradientBinding("curveData"), slot.curves),
-           gpu::BindGroupEntry{GradientBinding("clipMaskTexture"),
-                               gpu::TextureViewBinding{*gpuContext->dummyClipMaskTextureView}},
-           region(GradientBinding("vBands"), slot.vBands),
-           region(GradientBinding("vCurveData"), slot.vCurves),
-           region(GradientBinding("hBandGrid"), slot.hGrid),
-           region(GradientBinding("vBandGrid"), slot.vGrid),
-           region(GradientBinding("hCurveIndices"), slot.hRefs),
-           region(GradientBinding("vCurveIndices"), slot.vRefs)}});
+      createResidentGradientBindGroup(slot, *gpuContext->dummyClipMaskTextureView);
   if (created.hasError()) {
     return;
   }
@@ -3123,12 +3242,25 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
 
   publishGradientUniform(slot, u);
 
-  if (!slot.bindGroup.isValid()) {
+  // A gradient with more stops than the uniform carries inline uploads its ramp for this draw, so
+  // it binds a group made for the draw; the cached group binds the placeholder ramp.
+  const gpu::BindGroup* bindGroup = &slot.bindGroup;
+  if (u.stopCount > kMaxGradientStops) {
+    const gpu::TextureView* stopRamp = gradientStopRampView(u);
+    if (stopRamp == nullptr) {
+      return false;
+    }
+    gpu::Result<gpu::BindGroup> created = createResidentGradientBindGroup(slot, *stopRamp);
+    if (created.hasError()) {
+      return false;
+    }
+    bindGroup = &transientResources.retain(std::move(created).result());
+  } else if (!slot.bindGroup.isValid()) {
     buildResidentGradientBindGroup(slot);
   }
 
   recordGeometryDebugDraw(encoded);
-  (void)pass->setBindGroup(0, slot.bindGroup);
+  (void)pass->setBindGroup(0, *bindGroup);
   (void)pass->draw(slot.vertexCount, 1, 0, 0);
   return true;
 }

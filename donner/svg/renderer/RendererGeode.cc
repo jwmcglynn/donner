@@ -329,13 +329,6 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
 }
 #endif
 
-/// Hard cap on gradient stops baked into the uniform buffer. Must be
-/// <= `GeoEncoder`'s internal `kMaxGradientStops` (which mirrors the WGSL
-/// constant in `SlugGradientSource.h`). Values beyond this cap are truncated
-/// with a one-shot warning; the follow-up is a texture-based stop lookup
-/// (a `GeodeGradientCacheComponent` holding a stop texture).
-constexpr size_t kMaxGradientStopsClient = 16;
-
 std::optional<uint32_t> checkedFilterRasterDimension(double value) {
   if (!std::isfinite(value) || value <= 0.0 ||
       value > static_cast<double>(components::kMaximumFilterSurfaceDimension)) {
@@ -657,17 +650,11 @@ inline uint32_t toGeoSpreadMode(GradientSpreadMethod method) {
   return 0u;
 }
 
-/// Translate the gradient's stop list into the encoder wire format. Returns
-/// the populated count and sets `*outStopsTruncated` if the source had more
-/// stops than the encoder's hard cap.
-size_t buildGradientStops(const components::ComputedGradientComponent& computedGradient,
-                          const css::RGBA currentColor, float opacity,
-                          std::vector<geode::LinearGradientParams::Stop>& stopsStorage,
-                          bool* outStopsTruncated) {
-  const size_t stopCount = std::min(computedGradient.stops.size(), kMaxGradientStopsClient);
-  if (outStopsTruncated != nullptr) {
-    *outStopsTruncated = computedGradient.stops.size() > kMaxGradientStopsClient;
-  }
+/// Translate the gradient's stop list into the encoder wire format, every stop included.
+void buildGradientStops(const components::ComputedGradientComponent& computedGradient,
+                        const css::RGBA currentColor, float opacity,
+                        std::vector<geode::LinearGradientParams::Stop>& stopsStorage) {
+  const size_t stopCount = computedGradient.stops.size();
   stopsStorage.clear();
   stopsStorage.reserve(stopCount);
 
@@ -692,7 +679,6 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
     out.rgba[3] = rgba.a / 255.0f;
     stopsStorage.push_back(out);
   }
-  return stopCount;
 }
 
 #ifdef DONNER_TEXT_ENABLED
@@ -726,11 +712,7 @@ bool paintReferenceIsGradient(const components::ResolvedPaintServer& server) {
 std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
     const css::RGBA currentColor, float opacity,
-    std::vector<geode::LinearGradientParams::Stop>& stopsStorage, bool* outStopsTruncated) {
-  if (outStopsTruncated != nullptr) {
-    *outStopsTruncated = false;
-  }
-
+    std::vector<geode::LinearGradientParams::Stop>& stopsStorage) {
   const EntityHandle handle = ref.reference.handle;
   if (!handle) {
     return std::nullopt;
@@ -760,7 +742,7 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
     return std::nullopt;
   }
 
-  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, outStopsTruncated);
+  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage);
 
   geode::LinearGradientParams params;
   params.startGrad = startGrad;
@@ -791,11 +773,7 @@ struct ResolvedRadialGradient {
 std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
     const css::RGBA currentColor, float opacity,
-    std::vector<geode::RadialGradientParams::Stop>& stopsStorage, bool* outStopsTruncated) {
-  if (outStopsTruncated != nullptr) {
-    *outStopsTruncated = false;
-  }
-
+    std::vector<geode::RadialGradientParams::Stop>& stopsStorage) {
   const EntityHandle handle = ref.reference.handle;
   if (!handle) {
     return std::nullopt;
@@ -863,7 +841,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     return ResolvedRadialGradient{};
   }
 
-  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, outStopsTruncated);
+  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage);
 
   geode::RadialGradientParams params;
   params.center = center;
@@ -5801,20 +5779,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
     const Box2d geometryBounds = geometryPath.bounds();
-    bool stopsTruncated = false;
     outLinear = resolveLinearGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                            opacity, gradientStopScratch, &stopsTruncated);
+                                            opacity, gradientStopScratch);
     if (!outLinear.has_value()) {
       auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                                opacity, gradientStopScratch, &stopsTruncated);
+                                                opacity, gradientStopScratch);
       if (radial.has_value() && radial->gradient.has_value()) {
         outRadial = std::move(radial->gradient);
       }
-    }
-    if (stopsTruncated && verbose && !warnedGradient) {
-      std::cerr << "RendererGeode: gradient has more than " << kMaxGradientStopsClient
-                << " stops; truncating (follow-up: texture-based stop lookup)\n";
-      warnedGradient = true;
     }
     return outLinear.has_value() || outRadial.has_value();
   }
@@ -5895,16 +5867,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // neither matches, fall back to the reference's solid fallback color.
     if (const auto* ref = std::get_if<components::PaintResolvedReference>(&server)) {
       const Box2d geometryBounds = geometryPath.bounds();
-      bool stopsTruncated = false;
 
       auto linear = resolveLinearGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                                opacity, gradientStopScratch, &stopsTruncated);
+                                                opacity, gradientStopScratch);
       if (linear.has_value()) {
-        if (stopsTruncated && verbose && !warnedGradient) {
-          std::cerr << "RendererGeode: gradient has more than " << kMaxGradientStopsClient
-                    << " stops; truncating (follow-up: texture-based stop lookup)\n";
-          warnedGradient = true;
-        }
         syncTransform();
         if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
           encoder->fillPathLinearGradientResident(*gradientResidentSlot, *precomputedEncoded,
@@ -5916,13 +5882,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
 
       auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                                opacity, gradientStopScratch, &stopsTruncated);
+                                                opacity, gradientStopScratch);
       if (radial.has_value()) {
-        if (stopsTruncated && verbose && !warnedGradient) {
-          std::cerr << "RendererGeode: gradient has more than " << kMaxGradientStopsClient
-                    << " stops; truncating (follow-up: texture-based stop lookup)\n";
-          warnedGradient = true;
-        }
         if (radial->gradient.has_value()) {
           syncTransform();
           if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {

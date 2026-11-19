@@ -110,13 +110,6 @@ struct LinearGradientParams {
   /// Spread mode at the edges of the gradient range.
   /// 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
-  /// Gradient stops. Colors are in straight alpha, 0..1 per channel - the
-  /// shader interpolates in straight alpha and premultiplies at output. Offsets are in [0, 1].
-  ///
-  /// A hard cap of 16 stops is enforced inside the encoder to match the
-  /// fixed-size uniform buffer layout in `SlugGradientSource.h`. Stops beyond
-  /// the cap are silently truncated - a follow-up will move stop storage to
-  /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
   /// A single gradient stop: normalized offset and STRAIGHT-alpha RGBA.
   /// Not premultiplied: the resolver writes r/g/b/a each divided by 255, and
   /// both gradient shaders interpolate stops in straight alpha and
@@ -125,7 +118,11 @@ struct LinearGradientParams {
     float offset = 0.0f;                       ///< Stop offset in [0, 1].
     float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};  ///< Straight-alpha RGBA color.
   };
-  /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
+  /// Gradient stops, in order of non-decreasing offset. Colors are in straight alpha, 0..1 per
+  /// channel - the shader interpolates in straight alpha and premultiplies at output. Offsets are
+  /// in [0, 1]. Up to 16 stops travel inline in the draw's parameters; a gradient with more reads
+  /// them from a stop ramp texture uploaded with the draw. A ramp holds up to 4,194,304 stops; a
+  /// gradient with even more keeps that many, evenly spaced and including its first and last.
   std::span<const Stop> stops;
 };
 
@@ -155,11 +152,11 @@ struct RadialGradientParams {
   Transform2d gradientFromPath;
   /// Spread mode. 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
-  /// Gradient stops. Same wire format / cap as @ref LinearGradientParams -
+  /// Gradient stops. Same wire format as @ref LinearGradientParams -
   /// kept as a sibling struct so each gradient kind's C++ API reflects its
   /// natural parameter set without `std::variant`-style dispatch.
   using Stop = LinearGradientParams::Stop;
-  /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
+  /// Gradient stops; see @ref LinearGradientParams::stops.
   std::span<const Stop> stops;
 };
 
@@ -655,9 +652,11 @@ public:
 
   /**
    * Paint carried by one cross-entity batch instance: a solid colour, or a
-   * resolved gradient whose parameters and stop ramp the encoder copies into
-   * the slot's persistent paint block. The gradient pointers are borrowed for
-   * the duration of the call only.
+   * resolved gradient whose parameters and stops the encoder copies into
+   * the slot's persistent paint block. The block holds 16 stops, so
+   * `ensureResidentSceneRecord` declines a gradient with more and the caller
+   * draws it through the gradient fill calls. The gradient pointers are
+   * borrowed for the duration of the call only.
    */
   struct ScenePaint {
     css::RGBA color = css::RGBA(
@@ -800,9 +799,7 @@ public:
    *
    * @param path The path to fill.
    * @param params Linear gradient parameters. Colors are straight alpha in
-   *   0..1 per channel; the encoder premultiplies before upload. Up to 16
-   *   stops are honored; excess are silently truncated with a one-shot
-   *   verbose warning at the call site in `RendererGeode`.
+   *   0..1 per channel; the encoder premultiplies before upload.
    * @param rule Fill rule (NonZero or EvenOdd).
    * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
    */
