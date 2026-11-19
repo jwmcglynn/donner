@@ -675,7 +675,7 @@ paint_servers_markers_images	feat:svg2/stop-opacity	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/stop-only-direct-children	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/gradient-linear-interpolation	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/gradient-color-interpolation-property	missing	low	M	no
-paint_servers_markers_images	feat:svg2/gradient-many-stops	partial	medium	M	yes
+paint_servers_markers_images	feat:svg2/gradient-many-stops	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/pattern-tile-rect	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/pattern-attributes-not-css	divergent	low	S	no
 paint_servers_markers_images	feat:svg2/pattern-viewBox	conformant	-	-	yes
