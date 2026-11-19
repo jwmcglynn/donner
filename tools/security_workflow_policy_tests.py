@@ -2464,6 +2464,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('BAZEL_DIFF_SHA256: "%s"' % BAZEL_DIFF_SHA256, workflow)
 
         self.assertEqual(_step_body(workflow, "Download bazel-diff").split("\n\n", 1)[0].strip(),
+                         "if: steps.pr-meta.outputs.identical_tree != 'true'\n        "
                          "shell: bash\n        run: tools/ci/fetch_bazel_diff.sh")
         # //tools/ci:determine_targets_tests runs the script's download, check and retries.
         download = _read("tools/ci/fetch_bazel_diff.sh")

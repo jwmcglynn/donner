@@ -76,6 +76,9 @@ if tool == "git":
         answer(config["merge_base"] + "\n")
     if args[:2] == ["diff", "--name-only"]:
         answer(config.get("changed", ""))
+    if args[:2] == ["rev-parse", "--verify"]:
+        tree = config.get("trees", {}).get(args[2])
+        answer(tree + "\n" if tree else "", 0 if tree else 1)
     if args == ["rev-parse", "HEAD"]:
         answer(config.get("head", "merge0") + "\n")
     if args[:2] == ["worktree", "add"]:
@@ -281,8 +284,27 @@ class DetermineTest(_ScriptTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_outputs(outputs, "full_test=false", "fallback=true", "affected=",
                             "wgpu_reference_unknown=true")
-        self.assertEqual(calls, [["git", "merge-base", "base0", "head0"],
+        self.assertEqual(calls, [["git", "rev-parse", "--verify", "base0^{tree}"],
+                                 ["git", "merge-base", "base0", "head0"],
                                  ["git", "diff", "--name-only", "fork0", "head0"]])
+
+    def test_identical_tree_selection_and_setup(self):
+        trees = {"base0^{tree}": "abc", "head0^{tree}": "abc", "HEAD^{tree}": "abc"}
+        for changed_tree, labels, noop in (
+                ({}, (), True), ({"HEAD^{tree}": "other"}, (), False),
+                ({"head0^{tree}": "other"}, (), False), ({"HEAD^{tree}": None}, (), False),
+                ({}, ("ci:full-test",), False)):
+            with self.subTest(changed_tree=changed_tree, labels=labels):
+                selected = {**trees, **changed_tree}
+                result, _, meta = self.run_script("pr-meta", event=_pull_request(labels),
+                                                  config={"trees": selected})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual("identical_tree=true" in meta, noop)
+                result, calls, outputs = self.determine(changed="", trees=selected, labels=labels)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual("affected=" + _NO_AFFECTED_TARGETS in outputs, noop)
+                self.assertEqual("fallback=true" in outputs, not noop)
+                self.assertFalse(any(row[0] in ("java", "bazelisk") for row in calls))
 
     def test_a_failed_merge_base_diffs_from_the_base_tip(self):
         result, calls, _ = self.determine(changed="", merge_base=None)
@@ -531,7 +553,8 @@ class DetermineTest(_ScriptTest):
                 result, calls, outputs = self.run_script("pr-meta", event=_pull_request(), **env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assert_outputs(outputs, expected)
-                self.assertEqual(calls, [])
+                self.assertEqual(calls, [["git", "rev-parse", "--verify", "base0^{tree}"]]
+                                 if name == "pull request" else [])
 
     def test_the_wgpu_reference_runs_when_any_signal_selects_it(self):
         for affected, changed, unknown, full_test, expected in (
