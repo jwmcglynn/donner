@@ -489,7 +489,7 @@ jobs:
           remote_identity=$(tools/ci_select_macos_xcode.sh --remote-canary-env)
           coordinator_cc=$(command -v "${CC:-clang}")
           env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=all \
-            --noskip_incompatible_explicit_targets --build_event_json_file="$RUNNER_TEMP/platform-canary.bep.json" \
+            --keep_going --noskip_incompatible_explicit_targets --build_event_json_file="$RUNNER_TEMP/platform-canary.bep.json" \
             //tools/ci:dual_platform_canary
           jq -c 'select(.testResult) | {label: .id.testResult.label, result: .testResult}' \
             "$RUNNER_TEMP/platform-canary.bep.json" | jq -se '

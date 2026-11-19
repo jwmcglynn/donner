@@ -170,6 +170,14 @@ def _default_xcode():
 
 
 class XcodePinAgreementTest(unittest.TestCase):
+    def test_transition_path_matches_both_native_darwin_action_environments(self):
+        rules = _read("build_defs/rules.bzl")
+        rc = _read(".bazelrc")
+        path = re.search(r'^_CI_DARWIN_PATH = "(PATH=[^"]+)"$', rules, re.MULTILINE).group(1)
+        for flag in ("action_env", "host_action_env"):
+            self.assertIn("build:ci-macos --%s=%s" % (flag, path), rc.splitlines())
+        self.assertIn("/usr/bin", path.removeprefix("PATH=").split(":"))
+
     def test_static_config_restates_the_pin_file_in_order(self):
         pins = _pins()
         self.assertTrue(pins, "%s names no Xcode" % PIN_FILE)
