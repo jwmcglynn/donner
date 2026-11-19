@@ -1202,8 +1202,8 @@ def render_only_policy_violations(report: dict[str, object]) -> list[str]:
     Rendering without a pixel comparison hides every regression in the case, so it needs one of
     two explicit factories: `Params::UndefinedBehavior` for behavior the specification leaves
     undefined or implementation-defined, or `Params::DeprecatedInSVG2` for features removed from or
-    deprecated in SVG 2. Bugs, missing features, reference disagreements and harness mismatches
-    are skips.
+    deprecated in SVG 2. Reference disagreements, harness mismatches and API-policy differences
+    compare against a Donner-rendered golden; unimplemented features are allowlisted skips.
     """
 
     violations: list[str] = []
@@ -1282,6 +1282,233 @@ def deprecated_in_svg2_violations(
         violations.append(f"{key}: listed in DEPRECATED_IN_SVG2_FEATURES, but no active "
                           "deprecated-in-svg2 case uses it")
     return sorted(violations)
+
+
+def golden_reason_violations(report: dict[str, object]) -> list[str]:
+    """Return active cases that compare against a custom golden without a Params reason."""
+
+    return sorted(
+        f"{case['path']}: golden override has no reason; record why the vendored reference is "
+        "replaced"
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active"
+        and {"shared_golden", "geode_golden"} & set(case["exception_types"])
+        and not str(case["reason"] or "").strip()
+    )
+
+
+# The two ratchets below record every comparison setting looser than its limit, per case and per
+# configured lane, at its current value. They may only shrink: lower or remove an entry when its
+# row improves. A new entry or a larger value needs maintainer approval in the pull request that
+# adds it. Pixel budgets in the hundreds are not accepted for new work: fix the engine, or hold
+# the row back from the change until it is fixed.
+PIXEL_BUDGET_RATCHET_LIMIT = DEFAULT_MAX_PIXELS
+PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
+    "filters/filter/in=BackgroundAlpha.svg": {"default_text": 1200, "max": 1200, "geode": 1200},
+    "painting/marker/with-an-image-child.svg": {"geode": 500},
+    "text/baseline-shift/nested-with-baseline-1.svg": {"default_text": 400, "max": 400},
+    "text/baseline-shift/nested-with-baseline-2.svg": {"default_text": 400, "max": 400},
+    "text/dominant-baseline/hanging.svg": {"default_text": 350, "max": 350},
+    "text/font-variant/inherit.svg": {"default_text": 1200},
+    "text/font-variant/small-caps.svg": {"default_text": 1200},
+    "text/textLength/zero.svg": {"default_text": 410, "max": 410},
+    "text/textPath/closed-path.svg": {"default_text": 400, "max": 400},
+    "text/textPath/writing-mode=tb.svg": {"default_text": 250, "max": 250},
+}
+
+THRESHOLD_RATCHET_LIMIT = 0.05
+THRESHOLD_ALLOWLIST: dict[str, dict[str, float]] = {
+    "filters/feDiffuseLighting/complex-transform.svg": {
+        "default_text": 0.11, "max": 0.11, "geode": 0.11,
+    },
+    "filters/feMerge/complex-transform.svg": {"default_text": 0.14, "max": 0.14, "geode": 0.14},
+    "filters/fePointLight/complex-transform.svg": {
+        "default_text": 0.11, "max": 0.11, "geode": 0.11,
+    },
+    "text/text-decoration/tspan-decoration.svg": {"default_text": 0.09, "max": 0.09},
+    "text/text/compound-emojis-and-coordinates-list.svg": {"max": 0.1},
+    "text/text/compound-emojis.svg": {"max": 0.1},
+    "text/text/emojis.svg": {"max": 0.1},
+}
+
+
+def _compared_lane_settings(
+    report: dict[str, object], setting: str
+) -> Iterable[tuple[str, str, float | None]]:
+    """Yield (path, lane, value) for every lane of an active case that compares pixels."""
+
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] != "active":
+            continue
+        for lane, entry in case["lanes"].items():
+            if entry["configured_state"] == "compare":
+                yield str(case["path"]), lane, entry["settings"][setting]
+
+
+def _ratchet_message(
+    where: str, value: float | None, recorded: float | None, limit: float, allowlist_name: str
+) -> str | None:
+    if value is None:
+        return f"{where} is unresolved"
+    if recorded is None:
+        return (f"{where} is above {limit} and not in {allowlist_name}; new entries need "
+                "maintainer approval, so fix the engine instead")
+    if value > recorded:
+        return (f"{where} is above its recorded {recorded} in {allowlist_name}, which may only "
+                "shrink")
+    if value < recorded:
+        return f"{where} is below its recorded {recorded}; lower the {allowlist_name} entry"
+    return None
+
+
+def _ratchet_violations(
+    report: dict[str, object],
+    allowlist: dict[str, dict[str, float]],
+    setting: str,
+    limit: float,
+    allowlist_name: str,
+) -> list[str]:
+    """Return comparing lanes whose `setting` is above `limit` without a matching entry.
+
+    Each entry must equal its lane's current value, so the list records the live loosening
+    exactly: a larger value fails, a smaller one must lower its entry, and an entry whose lane no
+    longer compares above the limit is stale.
+    """
+
+    violations: list[str] = []
+    live: set[tuple[str, str]] = set()
+    for path, lane, value in _compared_lane_settings(report, setting):
+        if value is not None and value <= limit:
+            continue
+        live.add((path, lane))
+        message = _ratchet_message(f"{path} ({lane}): {setting} {value}", value,
+                                   allowlist.get(path, {}).get(lane), limit, allowlist_name)
+        if message:
+            violations.append(message)
+
+    for path, lanes in sorted(allowlist.items()):
+        violations += [
+            f"{path} ({lane}): stale {allowlist_name} entry; the lane no longer compares with "
+            f"{setting} above {limit}, so remove it"
+            for lane in sorted(lanes) if (path, lane) not in live
+        ]
+    return sorted(violations)
+
+
+def pixel_budget_ratchet_violations(
+    report: dict[str, object], allowlist: dict[str, dict[str, int]] = PIXEL_BUDGET_ALLOWLIST
+) -> list[str]:
+    """Return comparing lanes whose mismatched-pixel budget breaks PIXEL_BUDGET_ALLOWLIST."""
+
+    return _ratchet_violations(report, allowlist, "max_pixels", PIXEL_BUDGET_RATCHET_LIMIT,
+                               "PIXEL_BUDGET_ALLOWLIST")
+
+
+def threshold_ratchet_violations(
+    report: dict[str, object], allowlist: dict[str, dict[str, float]] = THRESHOLD_ALLOWLIST
+) -> list[str]:
+    """Return comparing lanes whose per-pixel color threshold breaks THRESHOLD_ALLOWLIST."""
+
+    return _ratchet_violations(report, allowlist, "threshold", THRESHOLD_RATCHET_LIMIT,
+                               "THRESHOLD_ALLOWLIST")
+
+
+# Every active Params::Skip row. A skipped case does not render, so it loses its regression,
+# no-crash and sanitizer coverage. This list may only shrink; a new entry needs maintainer
+# approval in the pull request that adds it.
+SKIP_ALLOWLIST = frozenset({
+    "filters/filter-functions/one-invalid-url-in-list.svg",
+    "filters/filter-functions/url-and-grayscale.svg",
+    "filters/filter/invalid-FuncIRI.svg",
+    "masking/clipPath/circle-shorthand-with-stroke-box.svg",
+    "masking/clipPath/circle-shorthand-with-view-box.svg",
+    "paint-servers/radialGradient/fr=0.7.svg",
+    "structure/svg/no-size.svg",
+    "structure/svg/not-UTF-8-encoding.svg",
+    "structure/use/xlink-to-an-external-file.svg",
+    "text/font/simple-case.svg",
+    "text/textPath/with-filter.svg",
+    "text/tspan/with-filter.svg",
+})
+
+SKIP_RULE = (
+    "a reference disagreement, harness mismatch or API-policy difference compares against a "
+    "Donner-rendered golden with a recorded justification, not a skip; a skip is only for an "
+    "unimplemented feature, `Not impl: <feature> (#<issue>)`, and needs maintainer approval to "
+    "join SKIP_ALLOWLIST (donner/svg/renderer/tests/README_resvg_test_suite.md)"
+)
+
+
+def skip_ratchet_violations(
+    report: dict[str, object], allowlist: Iterable[str] = SKIP_ALLOWLIST
+) -> list[str]:
+    """Return active skips missing from `allowlist`, and entries that are no longer skips."""
+
+    allowed = set(allowlist)
+    skipped = {
+        str(case["path"])
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active" and case["primary_state"] == "skip"
+    }
+    return [
+        f"{path}: Params::Skip is not in SKIP_ALLOWLIST; {SKIP_RULE}"
+        for path in sorted(skipped - allowed)
+    ] + [
+        f"{path}: stale SKIP_ALLOWLIST entry; the case is no longer an active skip, so remove it"
+        for path in sorted(allowed - skipped)
+    ]
+
+
+GOLDEN_ROOT = Path("donner/svg/renderer/testdata/golden")
+GOLDEN_README = GOLDEN_ROOT / "README.md"
+_SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+def referenced_goldens(report: dict[str, object]) -> list[str]:
+    """Return the repository path of every golden an active registration compares against."""
+
+    paths: set[str] = set()
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] == "active":
+            config = _settings_from_params(str(case["raw_params_expression"]))
+            paths.update(config[key] for key in REFERENCE_KINDS if config[key])
+    return sorted(paths)
+
+
+def _golden_digest_violation(golden: str, repo_root: Path, rows: list[str]) -> str | None:
+    path = Path(golden)
+    if GOLDEN_ROOT not in path.parents:
+        return f"{golden}: golden is outside {GOLDEN_ROOT}"
+    try:
+        digest = hashlib.sha256((repo_root / path).read_bytes()).hexdigest()
+    except OSError:
+        return f"{golden}: referenced golden file is missing"
+    token = f"`{path.relative_to(GOLDEN_ROOT).as_posix()}`"
+    naming = [row for row in rows if token in row]
+    if not naming:
+        return f"{golden}: no {GOLDEN_README} table row names it with its SHA-256 {digest}"
+    if any(digest not in _SHA256.findall(row) for row in naming):
+        return f"{golden}: a {GOLDEN_README} row names it without its current SHA-256 {digest}"
+    return None
+
+
+def golden_documentation_violations(report: dict[str, object], repo_root: Path) -> list[str]:
+    """Return referenced goldens that the golden README does not name with their SHA-256.
+
+    A golden is documented by a Markdown table row in the README that names its path relative to
+    the golden directory in backticks, such as `geode/name.png` in backticks, and gives the
+    committed file's SHA-256. Every table row that names a referenced golden must carry that
+    digest, so a regenerated file cannot keep a stale entry.
+    """
+
+    try:
+        readme = (repo_root / GOLDEN_README).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read golden README: {error}") from error
+    rows = [line for line in readme.splitlines() if line.lstrip().startswith("|")]
+    violations = (_golden_digest_violation(golden, repo_root, rows)
+                  for golden in referenced_goldens(report))
+    return [violation for violation in violations if violation]
 
 
 REFERENCE_GENERATION_PREFIX = "Reference rasterizer generation:"
@@ -1451,8 +1678,7 @@ def _capability_policy(case: dict[str, object]) -> dict[str, object] | None:
                       for lane in case["lanes"].values())
     if not has_explicit_gate and not still_gated:
         return None
-    if (has_explicit_gate and not (case["reason"] or case["backend_requirement_reason"])
-            and case["path"] != "text/text-anchor/on-tspan-with-arabic.svg"):
+    if has_explicit_gate and not (case["reason"] or case["backend_requirement_reason"]):
         raise ParityReportError(f"{case['path']}: explicit capability gate needs a source reason")
     return {
         "classification": "backend-capability",

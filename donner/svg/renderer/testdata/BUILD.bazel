@@ -32,4 +32,15 @@ filegroup(
     visibility = ["//donner/svg/renderer/tests:__pkg__"],
 )
 
+# The goldens and their README, read by the parity report tests to check each registered golden's
+# documented SHA-256.
+filegroup(
+    name = "resvg_golden_documentation",
+    srcs = glob([
+        "golden/*.png",
+        "golden/*/*.png",
+    ]) + ["golden/README.md"],
+    visibility = ["//tools/resvg_parity:__pkg__"],
+)
+
 ci_darwin_targets()
