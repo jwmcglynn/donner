@@ -134,6 +134,13 @@ test_suite(
     tests = ["//donner/gpu/metal/tests:metal_full_validation_required"],
 )
 
+# Request the exact browser-tested package as a top-level output for candidate staging.
+filegroup(
+    name = "hosted_editor_wasm_package",
+    srcs = ["//donner/editor/wasm:_wasm_web_package_for_serve"],
+    tags = ["manual"],
+)
+
 test_suite(
     name = "hosted_editor_wasm_graph",
     tags = ["manual"],
@@ -377,6 +384,15 @@ py_test(
     size = "small",
     srcs = ["darwin_selection.py", "darwin_selection_tests.py"],
     imports = ["."],
+)
+
+py_test(
+    name = "editor_wasm_evidence_tests",
+    size = "small",
+    srcs = ["editor_wasm_evidence.py", "editor_wasm_evidence_tests.py", "verify_unified_tests.py"],
+    imports = ["."],
+    main = "editor_wasm_evidence_tests.py",
+    deps = [":macos_remote_shadow"],
 )
 
 py_test(

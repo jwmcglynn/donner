@@ -2,24 +2,10 @@
 #
 # editor_wasm_lane.sh - the Bazel phases of the Editor WASM workflow's build job.
 #
-# Each subcommand is one workflow step, so CI and a contributor run the same commands:
-#
-#   tools/ci/editor_wasm_lane.sh prefetch
-#       Fetch the repositories every later phase needs. The workflow retries this step once,
-#       so a download failure is retried but a build or test failure never is.
-#   tools/ci/editor_wasm_lane.sh build
-#       Run the audits, renderer pixel check and both Wasm payload inspections.
-#       Numeric payload and module-complexity ceilings enforce by default.
-#       PAYLOAD_BUDGET_MODE=report reports every metric without enforcing numeric ceilings.
-#   tools/ci/editor_wasm_lane.sh prove-lockfile SNAPSHOT
-#       Build the package with the generated MODULE.bazel.lock in update and then error mode,
-#       check that lockfile, and copy it to SNAPSHOT for the deployment candidate.
-#   tools/ci/editor_wasm_lane.sh link-bridge
-#       Link both browser GPU bridge probes and the standalone Geode module, then run its
-#       browser default audit.
-#
-# Each Bazel command is a collapsible `::group::` in the Actions log and a row in the job summary
-# when $GITHUB_STEP_SUMMARY is set; the first failing command ends the lane with its exit status.
+# prefetch resolves the same graph as build, so only repository downloads can be retried.
+# build runs hosted package, pixel, size, link and browser qualification in one Bazel invocation.
+# prove-lockfile SNAPSHOT retains the source-stamped candidate's update/error-mode lockfile proof.
+# quarantine runs the report-only scheduled Firefox cases through their own Bazel target.
 
 set -euo pipefail
 
@@ -27,7 +13,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "${script_dir}/../.."
 
 usage() {
-  sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  echo "Usage: tools/ci/editor_wasm_lane.sh prefetch | build | prove-lockfile SNAPSHOT | quarantine" >&2
+  sed -n '3,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -43,46 +30,41 @@ if [[ "${GITHUB_SHA+x}" == x ]]; then
   source_args=("--//build_defs:release_source_commit=${GITHUB_SHA}")
 fi
 
-# End prefetch in the same configuration that begins the build. Keep repeated
-# Wasm configurations adjacent and finish the build on the editor package's configuration.
+graph_roots=(//tools/ci:hosted_editor_wasm_graph //tools/ci:hosted_editor_wasm_package)
+budget_suite=//tools/ci:hosted_wasm_budgets
+case "${PAYLOAD_BUDGET_MODE:-enforce}" in
+  enforce) ;;
+  report) budget_suite+=_report ;;
+  *) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; exit 2 ;;
+esac
+
 prefetch() {
-  lane_begin "Editor WASM dependency prefetch"
-  lane_phase "Fetch browser GPU bridge (wasm-geode)" \
-    bazelisk fetch --config=wasm-geode \
-    //tools/ci:browser_bridge_link_probes //tools/ci:geode_wasm_browser_module \
-    //tools/ci:geode_wasm_browser_default_audit
-  lane_phase "Fetch editor Wasm size tests (editor-wasm)" \
-    bazelisk fetch --config=editor-wasm ${source_args[@]+"${source_args[@]}"} //tools/ci:editor_wasm_size_tests
-  lane_phase "Fetch renderer Wasm and text resource tests (wasm-size)" \
-    bazelisk fetch --config=wasm-size //tools/ci:wasm_size_tests //tools/ci:wasm_text_resource_tests
-  lane_phase "Fetch editor Wasm audits" \
-    bazelisk fetch //tools/ci:editor_wasm_audits
+  lane_begin "Editor Wasm graph prefetch"
+  lane_phase "Fetch hosted Editor Wasm graph" bazelisk fetch \
+    ${source_args[@]+"${source_args[@]}"} "${graph_roots[@]}" "$budget_suite"
+}
+
+graph_test() {
+  local phase="$1" bep="$2"
+  shift 2
+  lane_phase "$phase" bazelisk test ${source_args[@]+"${source_args[@]}"} \
+    --test_output=errors --keep_going --test_keep_going --nobuild_tests_only \
+    --noskip_incompatible_explicit_targets --test_tag_filters= --flaky_test_attempts=1 \
+    --local_resources=local_gpu=1 --zip_undeclared_test_outputs \
+    --remote_download_outputs=toplevel '--remote_download_regex=.*(test[.]log|test[.]xml|outputs[.]zip)$' \
+    --nobuild_event_json_file_path_conversion --build_event_json_file="$bep" "$@"
 }
 
 build() {
-  local budget_mode="${PAYLOAD_BUDGET_MODE:-enforce}"
-  local budget_test_output="errors"
-  case "${budget_mode}" in
-    enforce) ;;
-    report) budget_test_output=all ;;
-    *) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; return 2 ;;
-  esac
-  local budget_args=("--test_arg=--payload-budget-mode=${budget_mode}")
-  lane_begin "Build and size-check Geode editor Wasm package"
-  lane_phase "Editor Wasm audits" \
-    bazelisk test --test_output=errors //tools/ci:editor_wasm_audits
-  lane_phase "Renderer Wasm pixel and text resource tests (wasm-size)" \
-    bazelisk test --config=wasm-size --test_output=errors \
-    //donner/svg/renderer/wasm:render_test //tools/ci:wasm_text_resource_tests
-  lane_phase "Renderer Wasm size tests (wasm-size)" \
-    bazelisk test --config=wasm-size --test_output="${budget_test_output}" "${budget_args[@]}" \
-    //donner/svg/renderer/wasm:wasm_size_tests
-  lane_phase "Shipped browser dependency audit (editor-wasm)" \
-    bazelisk test --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --test_output=errors \
-    //tools/ci:editor_wasm_shipped_browser_audit
-  lane_phase "Editor Wasm package size tests (editor-wasm)" \
-    bazelisk test --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --test_output="${budget_test_output}" --remote_download_outputs=all \
-    "${budget_args[@]}" //tools/ci:editor_wasm_size_tests
+  lane_begin "Hosted Editor Wasm graph"
+  graph_test "Qualify editor package and browsers" "${RUNNER_TEMP}/editor-wasm-graph.bep.json" \
+    "${graph_roots[@]}" "$budget_suite"
+}
+
+quarantine() {
+  lane_begin "Scheduled Firefox quarantine report"
+  graph_test "Run report-only Firefox project" "${RUNNER_TEMP}/editor-wasm-quarantine.bep.json" \
+    --nocache_test_results //donner/editor/wasm/tests:hosted_firefox_quarantine_report
 }
 
 # The repository ignores MODULE.bazel.lock, so the builds before this resolved one in update mode.
@@ -101,22 +83,11 @@ prove_lockfile() {
   lane_phase "Snapshot proved lockfile" cp MODULE.bazel.lock "${snapshot}"
 }
 
-# Both bridge link probes resolve every JavaScript entry point, with and without threads. The
-# standalone Geode module is incompatible without Browser selection, so requesting it explicitly
-# fails such a configuration; the configured audit then pins its browser bridge.
-link_bridge() {
-  lane_begin "Link the browser GPU bridge"
-  lane_phase "Link bridge probes and Geode module and test its browser default (wasm-geode)" \
-    bazelisk test --config=wasm-geode --nobuild_tests_only --noskip_incompatible_explicit_targets --test_output=errors \
-    //tools/ci:browser_bridge_link_probes //tools/ci:geode_wasm_browser_module \
-    //tools/ci:geode_wasm_browser_default_audit
-}
-
 [[ $# -ge 1 ]] || usage
 command="$1"
 shift
 case "${command}" in
-  prefetch | build | link-bridge)
+  prefetch | build | quarantine)
     [[ $# -eq 0 ]] || usage
     "${command//-/_}"
     ;;

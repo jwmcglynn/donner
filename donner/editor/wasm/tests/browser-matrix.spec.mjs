@@ -250,7 +250,7 @@ test("graph browser targets declare each project and all imports used by its spe
     assertListsLoadedFiles(name, body, { entryPoints: ["playwright.editor-ci.config.js", ...specs], runfilesFrom: inputs });
   }
   assert.deepEqual([...projects.keys()].sort(), [
-    "chromium-default", "composited-chromium", "firefox-composited-invariants", "firefox-geode-resize", "webkit-geode-carousel",
+    "chromium-default", "composited-chromium", "firefox-composited-invariants", "firefox-geode-resize", "firefox-quarantine-report", "webkit-geode-carousel",
   ]);
   for (const browser of ["composited-chromium", "firefox-composited-invariants"]) {
     assert.deepEqual(projects.get(browser).sort(), ["composited-drag-invariants.spec.ts", "composited-invariants.spec.ts"]);
@@ -607,7 +607,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   const editorBuildFile = readFileSync(path.join(testDirectory, "..", "BUILD.bazel"), "utf8");
   assert.match(
     editorBuildFile,
-    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?browser_backend = True[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
+    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?browser_backend = True[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__", "\/\/tools\/ci:__pkg__"\]/,
     "the served production package must select the browser backend",
   );
   assert.doesNotMatch(editorBuildFile, /_wasm_web_package_browser_backend_for_serve/);
@@ -947,18 +947,10 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     ),
     "only a main-branch push may report rather than enforce numeric size ceilings",
   );
-  assert.ok(lane.includes("local budget_mode=\"${PAYLOAD_BUDGET_MODE:-enforce}\""));
-  assert.ok(lane.includes("local budget_test_output=\"errors\""));
-  assert.ok(lane.includes("report) budget_test_output=all ;;"));
-  assert.equal((lane.match(/--test_output="\$\{budget_test_output\}"/g) ?? []).length, 2);
-  assert.match(
-    normalizedLane,
-    /bazelisk test --config=editor-wasm \$\{source_args\[@\]\+"\$\{source_args\[@\]\}"\} --test_output="\$\{budget_test_output\}" --remote_download_outputs=all "\$\{budget_args\[@\]\}" \/\/tools\/ci:editor_wasm_size_tests/,
-  );
-  assert.match(
-    normalizedLane,
-    /bazelisk test --test_output=errors \/\/tools\/ci:editor_wasm_audits/,
-  );
+  assert.ok(lane.includes("budget_suite=//tools/ci:hosted_wasm_budgets"));
+  assert.ok(lane.includes("report) budget_suite+=_report"));
+  assert.match(normalizedLane, /bazelisk test .*--noskip_incompatible_explicit_targets/);
+  assert.ok(lane.includes("//tools/ci:hosted_editor_wasm_graph"));
   for (const text of [workflow, lane]) {
     assert.doesNotMatch(
       text,
@@ -972,7 +964,8 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   // package directory and invokes the script. Both halves of that mirror are
   // checked here: the workflow must still call the script, and the script must
   // still carry every lane, in CI order.
-  assert.match(normalizedWorkflow, /run: bash tools\/run-browser-ci\.sh/);
+  assert.match(normalizedWorkflow, /run: tools\/ci\/editor_wasm_lane\.sh build/);
+  assert.match(lane, /hosted_editor_wasm_graph/);
   assert.match(workflow, /Setup Bazel for native browser comparison/);
 
   const browserCi = readFileSync(
@@ -1021,7 +1014,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     normalizedBrowserCi,
     /kFailureArchiveDir="\$\{kTestsDir\}\/playwright-failures"/,
   );
-  assert.match(normalizedWorkflow, /path: donner\/editor\/wasm\/tests\/playwright-failures/);
+  assert.match(normalizedWorkflow, /path: \$\{\{ runner\.temp \}\}\/editor-wasm-browser-evidence/);
   // A hung lane must end in a recorded failure, not run into the job's own limit: every lane
   // runs under the stall guard, which writes into that lane's archived evidence.
   assert.match(normalizedBrowserCi, /guarded "\$\{name\}" "\$@" \|\| code=\$\?/);
@@ -1031,7 +1024,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   );
   assert.match(
     normalizedWorkflow,
-    /- name: Serve Geode package and run browser suites timeout-minutes: \d+ /,
+    /run: tools\/ci\/editor_wasm_lane\.sh build/,
   );
 });
 
@@ -2438,14 +2431,13 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
   assert.ok(
     workflow.includes(
       "node donner/editor/wasm/tests/quarantine-report-summary.mjs"
-        + " donner/editor/wasm/tests/playwright-failures/firefox-quarantine-report"
-        + "/quarantine-report.json >> \"$GITHUB_STEP_SUMMARY\"",
+        + ' "$RUNNER_TEMP/editor-wasm-browser-evidence/firefox-quarantine-report/quarantine-report.json" >> "$GITHUB_STEP_SUMMARY"',
     ),
     "the scheduled run must summarize the report lane",
   );
   assert.match(
     workflow,
-    /path: donner\/editor\/wasm\/tests\/playwright-failures\/firefox-quarantine-report\n/,
+    /path: \$\{\{ runner\.temp \}\}\/editor-wasm-browser-evidence\/firefox-quarantine-report\n/,
   );
 
   const specs = [["smoke.spec.ts", 1], ["browser-presentation-regression.spec.ts", 2]];
@@ -2595,7 +2587,7 @@ test("Playwright evidence upload retries only transport while retaining terminal
   assert.deepEqual(uploads.map(({ continueOnError }) => continueOnError), [true, true, false]);
   for (const upload of uploads) {
     assert.equal(upload.action, "actions/upload-artifact@v7");
-    assert.equal(upload.path, "donner/editor/wasm/tests/playwright-failures");
+    assert.equal(upload.path, "${{ runner.temp }}/editor-wasm-browser-evidence");
     assert.equal(upload.retention, "14");
     assert.equal(upload.missing, "warn");
     assert.notEqual(upload.overwrite, "true");

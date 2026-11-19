@@ -275,7 +275,7 @@ editor_wasm_geode_transitioned_target(
         "manual",
         "wasm",
     ],
-    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__", "//tools/ci:__pkg__"],
 )
 
 no_rust_dependency_audit_test(

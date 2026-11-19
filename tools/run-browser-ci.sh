@@ -2,13 +2,8 @@
 #
 # run-browser-ci.sh - run the editor Wasm browser suites exactly as CI does.
 #
-# CI-PARITY CONTRACT
-# ==================
-# This script IS the browser CI job. The lane sequence below is the single
-# source of truth for the "Serve Geode package and run browser suites" step of
-# the `test` job in .github/workflows/editor_wasm.yml, and that step invokes
-# this script. If you change the lanes here, you are changing CI; if you want
-# to change CI's lanes, change them here. Do not add a lane to one side only.
+# This standalone reproduction command can serve an existing package supplied by a developer.
+# CI builds the package and runs the same Playwright projects as Bazel test targets.
 #
 # The lanes, in order (each is a separate Playwright invocation, exactly as the
 # workflow ran them before this script existed):

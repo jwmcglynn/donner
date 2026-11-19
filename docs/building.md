@@ -323,9 +323,13 @@ can reuse passing test results. The receipt checks the executed case count for e
 target. A full selection requires all seven browser targets and six configured package checks.
 Synthetic drag classification and readback bookkeeping run under Node. Gesture policy runs in C++.
 
-The hosted Editor WASM workflow qualifies source-stamped release candidates on main and supplies
-independent coverage for PRs using hosted execution. A trusted PR using the mixed graph skips its
-hosted build job. The lockfile proof and immutable deployment artifacts stay with the hosted producer.
+The hosted Editor WASM workflow uses the same browser projects and Wasm build transitions for main,
+scheduled and manual candidate runs and for PRs routed to hosted execution. One Bazel test
+invocation builds the source-stamped package and checks it. The hosted producer re-resolves the
+release target in lockfile error mode, compares the proved package with the browser-tested package,
+then stages the release artifacts. A main push reports numeric payload budgets. Other events enforce
+them. The scheduled quarantine report has its own non-gating target. A trusted PR using the mixed
+graph skips the hosted build job.
 
 **Linux remote execution.** Every Bazel build and test step of the hosted `linux` job except the
 linker canary selects the declared LLVM 21 toolchain with libc++ and the Linux sysroot

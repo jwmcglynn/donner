@@ -1,0 +1,103 @@
+"""Collect declared browser outputs from the hosted Editor Wasm Bazel invocation."""
+
+import argparse
+import json
+from pathlib import Path
+import re
+import shutil
+from urllib.parse import unquote, urlsplit
+from zipfile import ZipFile
+
+from verify_unified_tests import BROWSER_PACKAGE, EDITOR_BROWSER, editor_browser_cases
+
+PACKAGE = "//donner/editor/wasm/tests:"
+HOSTED = {PACKAGE + "hosted_" + label.removeprefix(BROWSER_PACKAGE) for label in EDITOR_BROWSER}
+QUARANTINE = PACKAGE + "hosted_firefox_quarantine_report"
+BUDGETS = {"//donner/svg/renderer/wasm:hosted_wasm_size_tests_report",
+           "//donner/editor/wasm:hosted_wasm_geode_package_size_tests_report"}
+
+
+def declared_file(uri, root, label, suffix):
+    location = urlsplit(uri)
+    if location.scheme != "file" or location.netloc:
+        raise ValueError(f"Missing local Bazel output for {label}")
+    actual = Path(unquote(location.path)).resolve(strict=True)
+    package, name = label[2:].split(":", 1)
+    tail = ("testlogs", *package.split("/"), name, *suffix)
+    if not actual.is_relative_to(root) or actual.parts[-len(tail):] != tail or not actual.is_file():
+        raise ValueError(f"Unexpected Bazel output for {label}")
+    return actual
+
+
+def test_results(stream):
+    for line in stream:
+        event = json.loads(line)
+        result = event.get("testResult")
+        if result is not None:
+            outputs = {item["name"]: item["uri"] for item in result.get("testActionOutput", []) if "uri" in item}
+            yield event["id"]["testResult"]["label"], result.get("status"), outputs
+
+
+def report_budget(outputs, root, label):
+    log = declared_file(outputs["test.log"], root, label, ("test.log",))
+    for row in log.read_text(errors="replace").splitlines():
+        if re.match(r"^(renderer|editor)-payload-budget ", row):
+            print(row)
+
+
+def stage_archive(uri, root, label, directory):
+    archive = declared_file(uri, root, label, ("test.outputs", "outputs.zip"))
+    shutil.copyfile(archive, directory / "outputs.zip")
+    if label == QUARANTINE:
+        with ZipFile(archive) as contents:
+            report = contents.getinfo("quarantine-report.json")
+            if report.file_size > 16 * 1024 * 1024:
+                raise ValueError("Oversized quarantine report")
+            (directory / "quarantine-report.json").write_bytes(contents.read(report))
+
+
+def stage_browser(label, status, outputs, root, destination, complete):
+    name = "firefox-quarantine-report" if label == QUARANTINE else label.split(":")[1].removeprefix("hosted_")
+    directory = destination / name
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = outputs.get("test.outputs/outputs.zip")
+    if archive:
+        stage_archive(archive, root, label, directory)
+    if not complete and status != "PASSED" and "test.log" in outputs:
+        shutil.copyfile(declared_file(outputs["test.log"], root, label, ("test.log",)), directory / "test.log")
+    if complete and label != QUARANTINE:
+        if status != "PASSED":
+            raise ValueError(f"Hosted browser target did not pass: {label}")
+        log = declared_file(outputs["test.log"], root, label, ("test.log",))
+        count = editor_browser_cases(log)
+        print(f"{label}: {count} editor browser cases passed")
+        (directory / "case-count.txt").write_text(f"{count}\n")
+
+
+def stage(stream, root, destination, *, quarantine=False, complete=True):
+    selected = {QUARANTINE} if quarantine else HOSTED
+    seen = set()
+    for label, status, outputs in test_results(stream):
+        if label in BUDGETS:
+            report_budget(outputs, root, label)
+        if label not in selected:
+            continue
+        if label in seen:
+            raise ValueError(f"Repeated hosted browser result: {label}")
+        seen.add(label)
+        stage_browser(label, status, outputs, root, destination, complete)
+    if complete and seen != selected:
+        raise ValueError(f"Missing hosted browser evidence: {sorted(selected - seen)}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("bep", type=Path)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("--quarantine", action="store_true")
+    parser.add_argument("--partial", action="store_true")
+    args = parser.parse_args()
+    if args.bep.exists() or not args.partial:
+        with args.bep.open(encoding="utf-8") as events:
+            stage(events, Path("bazel-out").resolve(strict=True), args.destination,
+                  quarantine=args.quarantine, complete=not args.partial)

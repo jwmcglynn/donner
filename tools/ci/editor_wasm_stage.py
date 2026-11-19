@@ -5,6 +5,8 @@ Each subcommand is one step of the workflow's build job. It runs from the reposi
 the run context from the variables the runner provides and writes step outputs to $GITHUB_OUTPUT,
 so the workflow step is a single invocation. Uploading what it stages stays in the workflow.
 
+  snapshot      Retains every browser-tested release file digest before the lockfile builds.
+
   package        Resolve the package target behind //tools/ci:editor_wasm_package and its one
                  output directory, copy that directory (dereferencing links) to
                  $RUNNER_TEMP/editor-wasm-package-geode, and write `package_target` and
@@ -168,6 +170,22 @@ def _source_arguments(environ: Mapping[str, str]) -> list[str]:
     return ["--//build_defs:release_source_commit=" + commit]
 
 
+def _package_manifest(directory: Path) -> dict[str, str]:
+    return {p.relative_to(directory).as_posix(): _sha256(p)
+            for p in directory.rglob("*") if p.is_file()}
+
+
+def snapshot_tested_package(environ: Mapping[str, str], run: Callable[[list[str]], str] = _run) -> None:
+    graph = run(["bazelisk", "cquery", *_source_arguments(environ), "--output=files",
+                 "//tools/ci:hosted_editor_wasm_package"])
+    if not graph or "\n" in graph or not Path(graph).is_dir():
+        raise StageError("expected one browser-tested package directory")
+    evidence = {"source_revision": environ.get("GITHUB_SHA"), "files": _package_manifest(Path(graph))}
+    if not evidence["files"]:
+        raise StageError("browser-tested package is empty")
+    Path(environ["RUNNER_TEMP"], "editor-wasm-tested-manifest.json").write_text(json.dumps(evidence, sort_keys=True))
+
+
 def stage_package(environ: Mapping[str, str], run: Callable[[list[str]], str] = _run) -> None:
     source_args = _source_arguments(environ)
     package_target = run(["bazelisk", "query", "--output=label",
@@ -188,6 +206,9 @@ def stage_package(environ: Mapping[str, str], run: Callable[[list[str]], str] = 
     handoff_dir = f"{runner_temp}/editor-wasm-package-geode"
     Path(handoff_dir).mkdir(parents=True, exist_ok=True)
     _copy_contents(package_dir, Path(handoff_dir), dereference=True)
+    evidence = json.loads(Path(runner_temp, "editor-wasm-tested-manifest.json").read_text())
+    if evidence != {"source_revision": environ.get("GITHUB_SHA"), "files": _package_manifest(Path(handoff_dir))}:
+        raise StageError("staged release files differ from the browser-tested package")
     _write_output(environ, "handoff_dir", handoff_dir)
 
 
@@ -295,11 +316,13 @@ def record_digest(environ: Mapping[str, str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("package", "candidate", "record-digest"))
+    parser.add_argument("command", choices=("snapshot", "package", "candidate", "record-digest"))
     arguments = parser.parse_args(argv)
     os.chdir(Path(os.path.realpath(os.path.dirname(os.path.abspath(__file__)))).parent.parent)
     try:
-        if arguments.command == "package":
+        if arguments.command == "snapshot":
+            snapshot_tested_package(os.environ)
+        elif arguments.command == "package":
             stage_package(os.environ)
         elif arguments.command == "candidate":
             stage_candidate(os.environ)

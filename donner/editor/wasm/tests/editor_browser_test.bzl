@@ -8,14 +8,14 @@ _ARCHIVES = {
     "webkit": "@playwright_webkit_mac_arm64//file",
 }
 
-def editor_browser_test(name, project, specs, sources):
+def editor_browser_test(name, project, specs, sources, report_only = False):
     """Runs the selected Playwright specs on a Darwin worker with a desktop session."""
     engine = "chromium" if project == "composited-chromium" else project.split("-")[0]
     archive = _ARCHIVES[engine]
     package = "//donner/editor/wasm:_wasm_web_package_for_serve"
     comparator = "//donner/editor/tests:standalone_geode_browser_png_compare"
     # The hosted producer runs manually selected tests on its own image.
-    for hosted in [False, True]:
+    for hosted in ([True] if report_only else [False, True]):
         playwright_bin.playwright_test(
             name = ("hosted_" if hosted else "") + name,
             size = "large",
@@ -35,7 +35,7 @@ def editor_browser_test(name, project, specs, sources):
                 comparator,
                 package,
             ],
-            env = {
+            env = ({"DONNER_BROWSER_QUARANTINE_REPORT": "report"} if report_only else {}) | {
                 "CI": "1",
                 "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath %s)" % comparator,
                 "DONNER_EDITOR_BROWSER_PROJECT": project,
