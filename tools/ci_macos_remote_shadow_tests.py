@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -1201,19 +1202,27 @@ class StarvationGuardTest(unittest.TestCase):
 
     def test_a_stop_ends_what_the_command_leaves_behind(self):
         # A shell background job ignores interrupts, as the stall watchdog's heartbeat does.
-        pid_file = self.directory / "background"
+        # The background sleep inherits stdout. EOF proves it exited even when its PID
+        # is still visible as a zombie awaiting reaping on the worker.
         process = subprocess.Popen(
-            ["bash", "-c", 'sleep 60 & echo $! > "$1"; sleep 60', "bash", str(pid_file)],
-            start_new_session=True)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
-        bound = time.monotonic() + 60
-        while not (pid_file.exists() and pid_file.read_text().strip()) and \
-                time.monotonic() < bound:
-            time.sleep(0.05)
-        background = int(pid_file.read_text())
-        lane._stop(process, grace=(30, 30, 30))
-        self.assertIsNotNone(process.returncode)
-        self.assertFalse(_signallable(background), "the interrupt-immune job was left running")
+            ["bash", "-c", "(trap '' INT; echo ready; exec sleep 300) & exec sleep 300"],
+            stdout=subprocess.PIPE, start_new_session=True)
+        try:
+            self.assertTrue(select.select([process.stdout], [], [], 60)[0], "shell did not start")
+            self.assertEqual(b"ready\n", process.stdout.readline())
+            lane._stop(process, grace=(30, 30, 30))
+            self.assertIsNotNone(process.returncode)
+            self.assertTrue(select.select([process.stdout], [], [], 5)[0], "background job is still running")
+            self.assertEqual(b"", process.stdout.read(1))
+        finally:
+            # A surviving child keeps the pipe open even after the group leader exits.
+            if process.poll() is None or not select.select([process.stdout], [], [], 0)[0]:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.stdout.close()
+            process.wait(timeout=5)
 
     def test_a_group_already_gone_is_reaped_without_a_kill(self):
         from unittest import mock
