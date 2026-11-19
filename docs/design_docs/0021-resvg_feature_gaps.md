@@ -62,10 +62,9 @@ entry in `tools/resvg_parity/exception_policies.json`, and a golden README row w
 SHA-256. A skip is only for an unimplemented feature with an issue number
 (`Not impl: <feature> (#<issue>)`); skipped cases do not render at all. `SKIP_ALLOWLIST` in
 `parity_report.py` lists every active skip and may only shrink, so a new skip needs maintainer
-approval. The four skips it lists today predate this rule: `radialGradient/fr=0.7`, a reference
-disagreement still to be converted to a golden, an unsupported input encoding and two accepted
-filtered-glyph differences. Pixel budgets
-in the hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
+approval. The four skips it lists are a reference disagreement (`radialGradient/fr=0.7`), an
+unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets in the
+hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
 `PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels
 and color thresholds above 0.05 at their current values and may only shrink. A UB marker
 reference does not by itself make a case undefined behavior: an unimplemented feature on a marker

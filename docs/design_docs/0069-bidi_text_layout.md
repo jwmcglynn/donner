@@ -285,10 +285,12 @@ belongs to a later milestone (1b, 1c, or 2).
   - [ ] Order right-to-left runs against the vertical inline axis.
   - [ ] Analyze `inline-size` text as one paragraph and reorder each wrapped line.
   - [ ] Verify textPath chunks and anchoring with direction.
-  - [x] Compare `text/writing-mode/mixed-languages-with-tb-and-underline` against the
-        independent mixed-script and primary-font underline reference. That outline reference was
-        later retired: CSS Text Decoration 3 leaves underline position and thickness to the user
-        agent, so the row now renders without a comparison as undefined behavior.
+  - [x] Render `text/writing-mode/mixed-languages-with-tb-and-underline` without a comparison as
+        undefined behavior: CSS Text Decoration 3 leaves underline position and thickness to the
+        user agent. `MixedVerticalTextConvergence_tests.cc` covers joined mixed-script
+        vertical runs and the font-derived underline band
+        (`MixedVerticalDecoration.DeclaringFontBandUsesTheVerticalPenFrame`,
+        `MixedVerticalDecoration.SidewaysUnderlineMatchesAnExplicitFontDerivedBand`).
 - [ ] Milestone 6: Documentation (small)
   - [ ] Apply the [Amendments to 0062](#amendments-to-0062) to
         [0062-svg_parity_completion](0062-svg_parity_completion.md) Milestone 12.
@@ -827,8 +829,8 @@ Milestone 2.
 
 - In vertical modes, right-to-left level runs are set sideways by the existing orientation rules and
   ordered against the inline axis, so they read correctly when the page is turned, as the
-  `text/writing-mode/mixed-languages-with-tb-and-underline` fixture shows (it now renders without a
-  comparison, because its underline placement is user-agent defined).
+  `text/writing-mode/mixed-languages-with-tb-and-underline` fixture shows. That row renders
+  without a comparison because its underline placement is user-agent defined.
 - `text-orientation: upright` boxes are treated as strong left-to-right, per box, following CSS
   rather than current browsers.
 - `direction: rtl` in a vertical mode follows CSS: inline base direction bottom to top, which only

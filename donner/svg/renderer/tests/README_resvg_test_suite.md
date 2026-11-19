@@ -335,9 +335,8 @@ four skips already in `SKIP_ALLOWLIST`, kept until each is converted or fixed; d
 ones:
 
 - `Not impl: <feature> (#<issue>)` - an unimplemented feature with its tracking issue.
-- `Reference disagreement: <what the vendored PNG gets wrong>` - registered before reference
-  disagreements moved to goldens (`paint-servers/radialGradient/fr=0.7`); to be converted to a
-  Donner-rendered golden.
+- `Reference disagreement: <what the vendored PNG gets wrong>` - a reference disagreement
+  registered as a skip (`paint-servers/radialGradient/fr=0.7`).
 - `Unsupported input: <input> (#<issue>)` - an input the parser does not accept
   (`structure/svg/not-UTF-8-encoding`).
 - `Accepted difference (<date>): <difference>` - a maintainer-accepted rendering difference
