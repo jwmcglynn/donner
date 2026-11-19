@@ -710,6 +710,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "animated_filter_limits_tests",
+    srcs = ["AnimatedFilterLimits_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "filter_attribute_edit_tests",
     srcs = ["FilterAttributeEdit_tests.cc"],
     opens_gpu_device = True,

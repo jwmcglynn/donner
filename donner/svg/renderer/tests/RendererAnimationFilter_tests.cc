@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -315,6 +316,109 @@ std::vector<NumericFilterCase> NumericFilterCases() {
 INSTANTIATE_TEST_SUITE_P(NumericFields, RendererAnimationNumericFilter,
                          testing::ValuesIn(NumericFilterCases()),
                          [](const testing::TestParamInfo<NumericFilterCase>& info) {
+                           return info.param.name;
+                         });
+
+/// \p count space-separated numbers, all zero except \p one at \p index when it is in range.
+std::string NumberList(std::size_t count, std::size_t index = 0, std::string_view one = "0") {
+  std::string result;
+  for (std::size_t i = 0; i < count; ++i) {
+    result += i == 0 ? "" : " ";
+    result += i == index ? std::string(one) : std::string("0");
+  }
+  return result;
+}
+
+/// A value set by an animation, and the same value authored statically.
+struct AuthoredValueCase {
+  std::string name;       //!< Case label.
+  std::string base;       //!< Primitives before the animation, with the target `#p`.
+  std::string attribute;  //!< The animated attribute.
+  std::string value;      //!< The animated value.
+  std::string authored;   //!< Primitives authoring \c value statically.
+};
+
+void PrintTo(const AuthoredValueCase& value, std::ostream* os) {
+  *os << value.name;
+}
+
+class RendererAnimationFilterAuthoredValue : public testing::TestWithParam<AuthoredValueCase> {};
+
+// An animated filter value renders exactly as the same value authored, including a list longer
+// than the general animation number cap, a value over a structural limit, which fails closed, and
+// a value a renderer bounds.
+TEST_P(RendererAnimationFilterAuthoredValue, MatchesTheAuthoredValue) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const AuthoredValueCase& item = GetParam();
+  auto authored = FilterDocument(item.authored);
+  auto base = FilterDocument(item.base);
+  const RendererBitmap expected = RenderDocumentWithActiveBackend(authored);
+  ASSERT_NE(RenderDocumentWithActiveBackend(base).pixels, expected.pixels)
+      << "the authored value must render differently from the base value";
+
+  auto document = FilterDocument(item.base, "<set href='#p' attributeName='" + item.attribute +
+                                                "' to='" + item.value + "' dur='1s'/>");
+  document.setTime(0.5);
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expected,
+                                       item.name, editor::tests::PixelmatchIdentityParams());
+}
+
+std::vector<AuthoredValueCase> AuthoredValueCases() {
+  const auto convolve = [](std::string_view order, std::string_view kernel, bool target) {
+    return std::string("<feConvolveMatrix") + (target ? " id='p'" : "") + " order='" +
+           std::string(order) + "' kernelMatrix='" + std::string(kernel) + "'/>";
+  };
+  const auto table = [](std::string_view values, bool target) {
+    return std::string("<feComponentTransfer><feFuncR") + (target ? " id='p'" : "") +
+           " type='table' tableValues='" + std::string(values) + "'/></feComponentTransfer>";
+  };
+  const auto primitive = [](std::string_view tag, std::string_view attributes,
+                            std::string_view attribute, std::string_view value, bool target) {
+    return "<" + std::string(tag) + (target ? " id='p' " : " ") + std::string(attributes) + " " +
+           std::string(attribute) + "='" + std::string(value) + "'/>";
+  };
+  std::vector<AuthoredValueCase> cases;
+  const auto add = [&](std::string name, std::string tag, std::string attributes,
+                       std::string attribute, std::string baseValue, std::string value) {
+    cases.push_back({std::move(name), primitive(tag, attributes, attribute, baseValue, true),
+                     attribute, value, primitive(tag, attributes, attribute, value, false)});
+  };
+
+  const std::string center = NumberList(81, 40, "1");
+  const std::string corner = NumberList(81, 0, "1");
+  cases.push_back({"Kernel9x9", convolve("9", center, true), "kernelMatrix", corner,
+                   convolve("9", corner, false)});
+  for (const std::size_t count : {std::size_t{4097}, std::size_t{100000}}) {
+    const std::string kernel = NumberList(count);
+    cases.push_back({"KernelOverLimit" + std::to_string(count), convolve("1", "1", true),
+                     "kernelMatrix", kernel, convolve("1", kernel, false)});
+  }
+  cases.push_back({"OrderOverLimit", convolve("1", "1", true), "order", "65",
+                   "<feConvolveMatrix order='65' kernelMatrix='1'/>"});
+  const std::string longTable = NumberList(100, 0, "1");
+  cases.push_back({"Table100", table("0 1", true), "tableValues", longTable,
+                   table(longTable, false)});
+  const std::string overTable = NumberList(1025, 0, "1");
+  cases.push_back({"TableOverLimit", table("0 1", true), "tableValues", overTable,
+                   table(overTable, false)});
+  add("ColorMatrixValuesOverLimit", "feColorMatrix", "type='saturate'", "values", ".25",
+      NumberList(100, 0, "1"));
+  add("TurbulenceOctavesOverLimit", "feTurbulence", "baseFrequency='.2'", "numOctaves", "1",
+      "17");
+  add("TurbulenceFrequencyOverLimit", "feTurbulence", "", "baseFrequency", ".2", "2000");
+  add("TurbulenceSeedOverLimit", "feTurbulence", "baseFrequency='.2'", "seed", "1",
+      "3000000000");
+  add("BlurDeviationOverLimit", "feGaussianBlur", "", "stdDeviation", "1", "300");
+  add("OffsetOverLimit", "feOffset", "", "dx", "1", "5000");
+  add("MorphologyRadiusOverLimit", "feMorphology", "operator='dilate'", "radius", "1", "300");
+  return cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(Values, RendererAnimationFilterAuthoredValue,
+                         testing::ValuesIn(AuthoredValueCases()),
+                         [](const testing::TestParamInfo<AuthoredValueCase>& info) {
                            return info.param.name;
                          });
 
