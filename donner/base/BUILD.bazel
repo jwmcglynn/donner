@@ -403,8 +403,10 @@ donner_cc_test(
     darwin = os == "macos",
     target_platform = "//tools/ci:" + os + "_ci",
     visibility = ["//tools/ci:__pkg__"],
-    tags = ["manual"],
+    tags = ["external", "manual", "no-cache"],
     exec_compatible_with = ["@platforms//os:" + os],
 ) for os in ["linux", "macos"]]
 
-ci_darwin_targets()
+ci_darwin_targets(qualification = [
+    "base_tests",
+])

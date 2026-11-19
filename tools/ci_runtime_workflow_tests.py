@@ -54,6 +54,7 @@ WORKFLOW_LOGIC_MARKER = "          # Workflow logic kept in scripts"
 # a script no target lists yet; the reason says why that is accepted.
 TRACKED_CI_SCRIPTS = {
     "tools/browser_gpu_test_summary.py": "//tools:browser_gpu_test_summary_tests",
+    "tools/ci/darwin_selection.py": "//tools/ci:darwin_selection_tests",
     "tools/ci/free_hosted_macos_disk.sh": "//tools/ci:free_hosted_macos_disk_tests",
     "tools/ci/gatekeeper.py": "//tools/ci:gatekeeper_tests",
     # The advisory macOS shadow lane: its library's only user is

@@ -1266,4 +1266,7 @@ js_test(
     node_options = ["--test"],
 )
 
-ci_darwin_targets(diagnostics = ["chromium_context_lifecycle_diagnostic"])
+ci_darwin_targets(
+    diagnostics = ["chromium_context_lifecycle_diagnostic"],
+    fresh = ["mac_browser_archive_tests"],
+)

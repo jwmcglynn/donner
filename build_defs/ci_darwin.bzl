@@ -39,7 +39,7 @@ def _variant(name, source, profile, run, gpu, prefix, extra_tags):
     else:
         ci_platform_build(**attrs)
 
-def ci_darwin_targets(geode = [], diagnostics = []):
+def ci_darwin_targets(geode = [], diagnostics = [], qualification = [], fresh = []):
     """Declare manual variants at package end, where private dependencies are visible."""
     if native.repository_name() not in ["@", "@@"]:
         return
@@ -47,6 +47,8 @@ def ci_darwin_targets(geode = [], diagnostics = []):
         tags = list(source.get("tags", []))
         if name in geode:
             _variant(name, source, "geode", True, True, "ci_darwin_geode_", [])
+        if name in qualification:
+            _variant(name, source, "ordinary", True, True, "ci_darwin_qualify_", ["external", "no-cache"])
         if name in diagnostics:
             _variant(name, source, "ordinary", True, True, "ci_darwin_diagnostic_", ["external", "no-cache"])
         if "manual" in tags or source["kind"] in ["test_suite", "package_group", "toolchain_type"]:
@@ -55,4 +57,4 @@ def ci_darwin_targets(geode = [], diagnostics = []):
         gpu = "resources:local_gpu:1" in tags or "launches-browser" in tags
         profile = "desktop" if "requires_desktop_session" in tags else "ordinary"
         # Filtered tests still compile under bazel test --nobuild_tests_only.
-        _variant(name, source, profile, run, gpu, "ci_darwin_", [])
+        _variant(name, source, profile, run, gpu, "ci_darwin_", ["external", "no-cache"] if name in fresh else [])

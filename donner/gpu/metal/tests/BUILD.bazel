@@ -695,4 +695,8 @@ metal_ci_variants([
     "metal_working_set_tests",
 ])
 
-ci_darwin_targets()
+ci_darwin_targets(qualification = [
+    "metal_buffer_bounds_tests",
+    "metal_color_matrix_tests",
+    "metal_queue_writes_tests",
+])
