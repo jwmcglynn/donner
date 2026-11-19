@@ -50,15 +50,30 @@ def branch_fork_point(default, head):
     return ensure_commit(sha(json.loads(response.stdout)["merge_base_commit"]["sha"]))
 
 
+def pull_request_base(merge, pr_head):
+    """Returns the first parent of GitHub's test merge of `pr_head`.
+
+    GitHub merges the head into the base branch tip of when the run is created. The payload's
+    `base.sha` is recorded earlier and lags that tip once the base branch advances, so it is never
+    the comparison base. The second parent proves the checkout merges this event's head: a checkout
+    of the head itself or of any other commit would lint the wrong set of files. The first parent
+    is GitHub's choice, not pull request content, and it is not compared with the base branch: the
+    depth-two checkout cannot prove ancestry without fetching history, and the branch can advance
+    again before this step runs.
+    """
+    parents = git("show", "-s", "--format=%P", merge).decode().split()
+    if len(parents) != 2 or parents[1] != pr_head:
+        raise ValueError(f"Checkout {merge} is not a merge of pull request head {pr_head} "
+                         f"(parents: {' '.join(parents) or 'none'})")
+    return sha(parents[0])
+
+
 def base_tree(event_name, event, head):
-    if git("rev-parse", "HEAD").decode().strip() != sha(head):
-        raise ValueError("Checkout differs from event commit")
+    checkout = git("rev-parse", "HEAD").decode().strip()
+    if checkout != sha(head):
+        raise ValueError(f"Checkout {checkout} is not the event commit {head}")
     if event_name == "pull_request":
-        pr = event["pull_request"]
-        parents = git("show", "-s", "--format=%P", head).decode().split()
-        if parents != [sha(pr["base"]["sha"]), sha(pr["head"]["sha"])]:
-            raise ValueError("Checkout is not the event's tested pull request merge")
-        return parents[0]
+        return pull_request_base(head, sha(event["pull_request"]["head"]["sha"]))
     if event_name != "push" or sha(event["after"]) != head:
         raise ValueError("Expected a matching push or pull request event")
     before = sha(event["before"])
