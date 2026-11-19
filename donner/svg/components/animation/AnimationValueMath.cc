@@ -55,6 +55,22 @@ std::optional<std::string> SerializeAnimationUrl(std::string_view href) {
 
 namespace {
 
+/// Consume the separator after a list item: whitespace, a comma, or nothing before a signed number.
+/// @return False when \p input continues without a valid separator or ends after a comma.
+bool ConsumeLengthSeparator(std::string_view& input) {
+  const auto trimmed = StringUtils::TrimWhitespace(input);
+  const bool separated = trimmed.size() != input.size();
+  input = trimmed;
+  if (input.empty()) {
+    return true;
+  }
+  if (input.front() == ',') {
+    input = StringUtils::TrimWhitespace(input.substr(1));
+    return !input.empty();
+  }
+  return separated || input.front() == '-' || input.front() == '+';
+}
+
 /// Parse at most \p maximumCount lengths; a longer list is cut there when \p keepLeading is set,
 /// without reading the rest, and rejected otherwise.
 std::optional<std::vector<Lengthd>> ParseLengthList(std::string_view input,
@@ -76,15 +92,7 @@ std::optional<std::vector<Lengthd>> ParseLengthList(std::string_view input,
     }
     values.push_back(parsed.result().length);
     input.remove_prefix(parsed.result().consumedChars);
-    const auto trimmed = StringUtils::TrimWhitespace(input);
-    const bool separated = trimmed.size() != input.size();
-    input = trimmed;
-    if (!input.empty() && input.front() == ',') {
-      input = StringUtils::TrimWhitespace(input.substr(1));
-      if (input.empty()) {
-        return std::nullopt;
-      }
-    } else if (!input.empty() && !separated && input.front() != '-' && input.front() != '+') {
+    if (!ConsumeLengthSeparator(input)) {
       return std::nullopt;
     }
   }

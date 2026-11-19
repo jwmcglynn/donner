@@ -380,6 +380,24 @@ std::optional<int> AnimationInteger(double value, int minimum, int maximum) {
   return static_cast<int>(value);
 }
 
+/// Apply an animated feConvolveMatrix order of one or two numbers. An order over the limit fails
+/// closed, as the parser does for an authored one; other invalid orders are ignored.
+void ApplyConvolveOrder(Registry& registry, Entity entity, std::string_view name,
+                        const std::vector<double>& numbers) {
+  if (numbers.size() > 2) {
+    return;
+  }
+  const auto x = AnimationInteger(numbers.front(), 1, kMaximumFilterConvolveOrder);
+  const auto y = AnimationInteger(numbers.back(), 1, kMaximumFilterConvolveOrder);
+  if (x && y) {
+    OverrideConvolveOrder(registry, entity, name, ConvolveOrder{Vector2i(*x, *y), false});
+  } else if ((x ? numbers.back() : numbers.front()) > kMaximumFilterConvolveOrder) {
+    const FEConvolveMatrixComponent defaults;
+    OverrideConvolveOrder(registry, entity, name,
+                          ConvolveOrder{Vector2i(defaults.orderX, defaults.orderY), true});
+  }
+}
+
 bool ApplyFilterInteger(Registry& registry, Entity entity, std::string_view name,
                         std::string_view value) {
   if (name != "order" && name != "numOctaves" && name != "targetX" && name != "targetY") {
@@ -390,19 +408,7 @@ bool ApplyFilterInteger(Registry& registry, Entity entity, std::string_view name
     return true;
   }
   if (name == "order") {
-    if (numbers->size() > 2) {
-      return true;
-    }
-    const auto x = AnimationInteger(numbers->front(), 1, kMaximumFilterConvolveOrder);
-    const auto y = AnimationInteger(numbers->back(), 1, kMaximumFilterConvolveOrder);
-    if (x && y) {
-      OverrideConvolveOrder(registry, entity, name, ConvolveOrder{Vector2i(*x, *y), false});
-    } else if ((x ? numbers->back() : numbers->front()) > kMaximumFilterConvolveOrder) {
-      // An order over the limit fails closed, as the parser does for an authored one.
-      const FEConvolveMatrixComponent defaults;
-      OverrideConvolveOrder(registry, entity, name,
-                            ConvolveOrder{Vector2i(defaults.orderX, defaults.orderY), true});
-    }
+    ApplyConvolveOrder(registry, entity, name, *numbers);
     return true;
   }
   if (numbers->size() != 1) {
