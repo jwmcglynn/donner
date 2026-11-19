@@ -267,13 +267,21 @@ bool ApplyDeviation(Registry& registry, Entity entity, std::string_view name, Ve
       });
 }
 
-std::optional<std::vector<double>> AnimationNumbers(std::string_view value) {
+/// Parse an animated number list.
+/// @param value Sampled value.
+/// @param keepLeading When nonzero, keep at most this many numbers of a longer list without
+///   reading the rest; otherwise reject a list over the general animation number cap.
+std::optional<std::vector<double>> AnimationNumbers(std::string_view value,
+                                                    std::size_t keepLeading = 0) {
   std::vector<double> result;
   value = StringUtils::TrimWhitespace(value);
   while (!value.empty()) {
+    if (keepLeading != 0 && result.size() == keepLeading) {
+      break;
+    }
     const auto parsed = donner::parser::NumberParser::Parse(value);
     if (parsed.hasError() || !std::isfinite(parsed.result().number) ||
-        result.size() >= AnimationResourceBudget::kMaximumNumbersPerValue) {
+        (keepLeading == 0 && result.size() >= AnimationResourceBudget::kMaximumNumbersPerValue)) {
       return std::nullopt;
     }
     result.push_back(parsed.result().number);
@@ -291,7 +299,7 @@ bool ApplyFilterList(Registry& registry, Entity entity, std::string_view name,
   if (name != "values" && name != "kernelMatrix" && name != "tableValues") {
     return false;
   }
-  const auto numbers = AnimationNumbers(value);
+  const auto numbers = AnimationNumbers(value, AnimatedFilterListCapacity(name));
   if (!numbers) {
     return true;
   }
@@ -348,6 +356,23 @@ struct ConvolveOrder {
   bool operator==(const ConvolveOrder&) const = default;
 };
 
+/// Override an feConvolveMatrix order with its over-limit flag.
+void OverrideConvolveOrder(Registry& registry, Entity entity, std::string_view name,
+                           const ConvolveOrder& order) {
+  // The over-limit flag belongs to the order, so it is overridden and restored with it.
+  (void)OverrideField<FEConvolveMatrixComponent>(
+      registry, entity, name, order,
+      [](const auto& component) {
+        return ConvolveOrder{Vector2i(component.orderX, component.orderY),
+                             component.orderExceedsLimit};
+      },
+      [](auto& component, const ConvolveOrder& value) {
+        component.orderX = value.order.x;
+        component.orderY = value.order.y;
+        component.orderExceedsLimit = value.exceedsLimit;
+      });
+}
+
 std::optional<int> AnimationInteger(double value, int minimum, int maximum) {
   if (!std::isfinite(value) || value < minimum || value > maximum) {
     return std::nullopt;
@@ -371,18 +396,12 @@ bool ApplyFilterInteger(Registry& registry, Entity entity, std::string_view name
     const auto x = AnimationInteger(numbers->front(), 1, kMaximumFilterConvolveOrder);
     const auto y = AnimationInteger(numbers->back(), 1, kMaximumFilterConvolveOrder);
     if (x && y) {
-      // The over-limit flag belongs to the order, so it is overridden and restored with it.
-      (void)OverrideField<FEConvolveMatrixComponent>(
-          registry, entity, name, ConvolveOrder{Vector2i(*x, *y), false},
-          [](const auto& component) {
-            return ConvolveOrder{Vector2i(component.orderX, component.orderY),
-                                 component.orderExceedsLimit};
-          },
-          [](auto& component, const ConvolveOrder& value) {
-            component.orderX = value.order.x;
-            component.orderY = value.order.y;
-            component.orderExceedsLimit = value.exceedsLimit;
-          });
+      OverrideConvolveOrder(registry, entity, name, ConvolveOrder{Vector2i(*x, *y), false});
+    } else if ((x ? numbers->back() : numbers->front()) > kMaximumFilterConvolveOrder) {
+      // An order over the limit fails closed, as the parser does for an authored one.
+      const FEConvolveMatrixComponent defaults;
+      OverrideConvolveOrder(registry, entity, name,
+                            ConvolveOrder{Vector2i(defaults.orderX, defaults.orderY), true});
     }
     return true;
   }

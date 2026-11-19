@@ -848,7 +848,8 @@ void ConfigureNumericContext(Registry& registry, Entity target, std::string_view
        registry.all_of<FEConvolveMatrixComponent>(target)) ||
       (HasTrait(traits, AttributeTrait::FunctionList) &&
        registry.all_of<FEFuncComponent>(target))) {
-    context.maximumNumbers = AnimationResourceBudget::kMaximumNumbersPerValue;
+    context.maximumNumbers = AnimatedFilterListCapacity(name);
+    context.keepLeadingNumbers = true;
   }
 }
 

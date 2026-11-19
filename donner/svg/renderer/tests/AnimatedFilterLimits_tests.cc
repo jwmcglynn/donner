@@ -94,6 +94,10 @@ const T& TargetComponent(SVGDocument& document) {
 
 constexpr std::size_t kKernel9x9 = 81;
 
+/// The warning a filter `f` over the convolution kernel limit reports.
+constexpr std::string_view kKernelLimitWarning =
+    "Filter convolution kernel limit exceeded in filter \"f\"";
+
 /// A 9x9 kernel convolution whose kernel, authored with its single 1 at \p index, is animated.
 std::string Convolve9x9(std::size_t index) {
   return "<feConvolveMatrix id='p' order='9' kernelMatrix='" + Numbers(kKernel9x9, index, "1") +
@@ -112,10 +116,10 @@ TEST(AnimatedFilterLimits, KernelLegalWhenAuthoredAnimatesPastTheGeneralNumberCa
 }
 
 TEST(AnimatedFilterLimits, KernelLegalWhenAuthoredInterpolates) {
-  SVGDocument document = FilterDocument(
-      Convolve9x9(40), "<animate href='#p' attributeName='kernelMatrix' from='" +
-                           Numbers(kKernel9x9, 40, "1") + "' to='" + Numbers(kKernel9x9, 0, "1") +
-                           "' dur='1s'/>");
+  SVGDocument document =
+      FilterDocument(Convolve9x9(40), "<animate href='#p' attributeName='kernelMatrix' from='" +
+                                          Numbers(kKernel9x9, 40, "1") + "' to='" +
+                                          Numbers(kKernel9x9, 0, "1") + "' dur='1s'/>");
   const PreparedFrame frame = Prepare(document, 0.5);
   const auto* convolve = OnlyPrimitive<filter_primitive::ConvolveMatrix>(frame);
   ASSERT_THAT(convolve, NotNull());
@@ -191,8 +195,8 @@ std::vector<OverLimitCase> OverLimitCases() {
        "<feConvolveMatrix order='3 65' kernelMatrix='1'/>"},
       {"kernel", "<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>", "kernelMatrix", kernel,
        "<feConvolveMatrix order='1' kernelMatrix='" + kernel + "'/>"},
-      {"table", transfer("<feFuncR id='p' type='table' tableValues='0 1'/>"), "tableValues",
-       table, transfer("<feFuncR type='table' tableValues='" + table + "'/>")},
+      {"table", transfer("<feFuncR id='p' type='table' tableValues='0 1'/>"), "tableValues", table,
+       transfer("<feFuncR type='table' tableValues='" + table + "'/>")},
   };
 }
 
@@ -206,8 +210,7 @@ INSTANTIATE_TEST_SUITE_P(Limits, AnimatedFilterOverLimit, testing::ValuesIn(Over
 // A color matrix ignores a values list over its limit, authored or animated, and keeps its type.
 TEST(AnimatedFilterLimits, ColorMatrixValuesOverTheLimitAreIgnoredLikeAuthored) {
   const std::string values = Numbers(100, 0, "1");
-  SVGDocument authored =
-      FilterDocument("<feColorMatrix type='saturate' values='" + values + "'/>");
+  SVGDocument authored = FilterDocument("<feColorMatrix type='saturate' values='" + values + "'/>");
   const auto* authoredMatrix = OnlyPrimitive<filter_primitive::ColorMatrix>(Prepare(authored, 0));
   ASSERT_THAT(authoredMatrix, NotNull());
   EXPECT_THAT(authoredMatrix->values, IsEmpty());
@@ -234,8 +237,7 @@ TEST(AnimatedFilterLimits, ValueFarOverTheLimitRetainsOnlyOnePastTheLimit) {
         FilterDocument("<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>", animation);
     const PreparedFrame frame = Prepare(document, 0.5);
     EXPECT_THAT(frame.filter, IsNull());
-    EXPECT_THAT(frame.warnings,
-                testing::ElementsAre("Filter convolution kernel limit exceeded"));
+    EXPECT_THAT(frame.warnings, testing::ElementsAre(kKernelLimitWarning));
     EXPECT_THAT(TargetComponent<FEConvolveMatrixComponent>(document).kernelMatrix,
                 testing::SizeIs(kMaximumFilterKernelValues + 1));
   }
@@ -272,16 +274,16 @@ TEST(AnimatedFilterLimits, MixedValuesListFailsClosedOnlyOnTheOverLimitEntry) {
   }
   const PreparedFrame overFrame = Prepare(document, 1.5);
   EXPECT_THAT(overFrame.filter, IsNull());
-  EXPECT_THAT(overFrame.warnings, testing::ElementsAre("Filter convolution kernel limit exceeded"));
+  EXPECT_THAT(overFrame.warnings, testing::ElementsAre(kKernelLimitWarning));
 }
 
 // In-limit lists of different lengths cannot interpolate, so they sample discretely and every
 // frame holds one of the authored lists, never a combined or truncated one.
 TEST(AnimatedFilterLimits, MismatchedLengthsSampleDiscretely) {
-  SVGDocument document = FilterDocument(
-      Convolve9x9(40), "<animate href='#p' attributeName='kernelMatrix' from='" +
-                           Numbers(kKernel9x9, 0, "1") + "' to='" + Numbers(9, 4, "1") +
-                           "' dur='1s'/>");
+  SVGDocument document =
+      FilterDocument(Convolve9x9(40), "<animate href='#p' attributeName='kernelMatrix' from='" +
+                                          Numbers(kKernel9x9, 0, "1") + "' to='" +
+                                          Numbers(9, 4, "1") + "' dur='1s'/>");
   const PreparedFrame first = Prepare(document, 0.25);
   const auto* convolve = OnlyPrimitive<filter_primitive::ConvolveMatrix>(first);
   ASSERT_THAT(convolve, NotNull());
