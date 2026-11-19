@@ -78,17 +78,6 @@
           }
         }
       },
-      "Build and test CMake consumer": {
-        "cmake": {
-          "when": "always",
-          "counterparts": [
-            {
-              "job": "linux-self-hosted",
-              "step": "cmake_consumer"
-            }
-          ]
-        }
-      },
       "Test deterministic fuzzer soak wrapper": {
         "deterministic-wrapper": {
           "when": "always",

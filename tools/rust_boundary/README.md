@@ -93,7 +93,7 @@ and two gates, because Donner's production `CMakeLists.txt` files are emitted by
   hand-written) and the tracked generator sources under `tools/cmake/`, which is
   where an emitted Rust command has to be written first. `*_test.py` there is
   excluded: it emits nothing and its fixtures hold these strings on purpose.
-- **`gen_cmakelists.py --check`**, in CI's Linux CMake consumer step, generates the real
+- **`gen_cmakelists.py --check`**, in the CMake Build workflow, generates the real
   output and scans it with the same list. That is the only gate that reads the
   emitted files, because they do not exist in a fresh checkout.
 

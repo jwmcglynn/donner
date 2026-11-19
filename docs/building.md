@@ -543,6 +543,14 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 
+### Nightly CMake consumers
+
+The **CMake Build** workflow builds and tests the external consumer on hosted Linux and macOS
+at 08:15 UTC each night. Linux also validates generated CMake files, and macOS uses the pinned
+Xcode. Main pushes and PRs changing generator inputs validate the generated files without
+compiling either consumer. Use **Run workflow** on `main` to run both jobs on demand. The trusted
+`ci:cmake-cache-qualification` experiment remains available on matching pull requests.
+
 ### Unified native remote-execution canary
 
 On a trusted pull request, the self-hosted Linux job runs

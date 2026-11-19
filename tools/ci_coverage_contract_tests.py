@@ -38,7 +38,7 @@ _SKIPPED = {"outcome": "skipped"}
 _COMPLETE = {
     "linux-self-hosted": _receipt("linux-self-hosted", {
         "build": _ran(), "test": _ran(),
-        "deterministic_soak_probe": _ran(1), "cmake_consumer": _ran()}),
+        "deterministic_soak_probe": _ran(1)}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
         "test": _ran(), "geode_test": _ran(6),
         "browser_preflight": _ran(), "browser_test": _ran(2)}),
@@ -159,7 +159,7 @@ class CoverageContractTest(unittest.TestCase):
                                     and "2026-10-31" in line for line in excepted), excepted)
 
     def test_portable_linux_phases_require_self_hosted_receipts(self):
-        for step in ("cmake_consumer", "deterministic_soak_probe"):
+        for step in ("deterministic_soak_probe",):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
                 receipts["linux-self-hosted"]["steps"][step] = _SKIPPED

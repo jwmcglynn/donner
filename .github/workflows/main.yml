@@ -343,11 +343,6 @@ jobs:
         shell: bash
         run: python3 tools/ci/lane.py phase linux linker_canary
 
-      - name: Build and test CMake consumer
-        id: cmake_consumer
-        shell: bash
-        run: tools/ci/cmake_consumer.sh build --check --cache --release-bazel-server --parallel 4
-
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Save Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
@@ -459,7 +454,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for tool in xvfb-run Xvfb xauth cmake ninja; do
+          for tool in xvfb-run Xvfb xauth; do
             if ! command -v "$tool" >/dev/null; then
               echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
               missing=1
@@ -526,11 +521,6 @@ jobs:
         id: deterministic_soak_probe
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted deterministic_soak_probe
-
-      - name: Build and test CMake consumer
-        id: cmake_consumer
-        shell: bash
-        run: tools/ci/cmake_consumer.sh build --check --cache --release-bazel-server --parallel 4
 
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt
