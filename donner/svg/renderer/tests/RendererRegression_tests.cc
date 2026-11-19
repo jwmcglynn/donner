@@ -500,6 +500,24 @@ TEST_F(RendererRegressionTests, RadialNearlyCoincidentConcentricCirclesPaintNoth
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// A zero focal radius is an ordinary radial gradient however small the end circle is: tiny-skia
+// treats a start radius within 2^-15 as a plain radial gradient, never as coincident circles. With
+// end radii of 2^-13 and 2^-11, every pixel center lies outside the end circle, so pad fills the
+// rect with the last stop.
+TEST_F(RendererRegressionTests, RadialTinyEndCircleWithZeroFocalRadiusPadsToLastStop) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect width="64" height="64" fill="blue"/>)svg");
+  AssertVisibleFixture(expected, "radial_tiny_end_circle_expected_visible");
+  for (double radius : {1.0 / 8192.0, 1.0 / 2048.0}) {
+    SCOPED_TRACE(testing::Message() << "r=" << radius);
+    editor::tests::CompareBitmapToBitmap(
+        RenderUserSpaceRadial(
+            32, 0, 32, radius, "pad",
+            R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg"),
+        expected, "radial_tiny_end_circle_last_stop", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 // Internal tangency: the start circle (40, 32, 24) touches the end circle (32, 32, 16) at (16, 32).
 // Every canvas circle passes through that point, so they cover only the half-plane x > 16; the
 // canvas rule leaves x < 16 unpainted. Each point is on exactly one circle, so the swapped circles
