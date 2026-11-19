@@ -1279,11 +1279,14 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
 
 # An incoming transition applies to the real executable *and* Bazel's TestRunner.
 # Keep Linux's configured host tools. Darwin uses Apple tools on Darwin workers.
+# Match the native macOS lane so Apple genrules and test tools resolve on the worker.
+_CI_DARWIN_PATH = "PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+_CI_ACTION_ENVS = ["//command_line_option:action_env", "//command_line_option:host_action_env"]
 _CI_PLATFORM_OPTIONS = [
     "//command_line_option:platforms",
     "//command_line_option:host_platform",
     "//build_defs:llvm_latest",
-]
+] + _CI_ACTION_ENVS
 
 def _ci_test_platform(settings, attr):
     options = dict(settings)
@@ -1291,6 +1294,8 @@ def _ci_test_platform(settings, attr):
     if attr.darwin:
         options["//command_line_option:host_platform"] = str(Label("//tools/ci:remote_macos_aarch64"))
         options["//build_defs:llvm_latest"] = "0"
+        for key in _CI_ACTION_ENVS:
+            options[key] = [v for v in settings[key] if v.split("=", 1)[0] != "PATH"] + [_CI_DARWIN_PATH]
     return options
 
 _ci_test_transition = transition(
