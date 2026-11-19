@@ -168,7 +168,10 @@ TEST(RenderPaneGestureTest, PinchGainClampsOneEventToASingleOneAndAHalfXStep) {
   EXPECT_NEAR(std::pow(kWheelZoomStep, maxUnits), 1.5, 1e-12);
   EXPECT_NEAR(ApplyPinchScrollUnitGain(100.0), maxUnits, 1e-12);
   EXPECT_NEAR(ApplyPinchScrollUnitGain(-100.0), -maxUnits, 1e-12);
-  EXPECT_NEAR(BrowserPinchZoomFactorForWheelDeltaY(-10000.0), 1.5, 1e-9);
+  for (const double deltaY : {250.0, 10000.0}) {
+    EXPECT_NEAR(BrowserPinchZoomFactorForWheelDeltaY(-deltaY), 1.5, 1e-9);
+    EXPECT_NEAR(BrowserPinchZoomFactorForWheelDeltaY(deltaY), 1.0 / 1.5, 1e-9);
+  }
 }
 
 TEST(RenderPaneGestureTest, DegeneratePinchMagnificationIsIgnored) {

@@ -105,3 +105,22 @@ export async function captureReadyBasicShapesFrame<T>(
     untilMs: options.untilMs,
   });
 }
+
+// This pre-capture read is scalar app publication only. No DOM/style/layout
+// observation can flush a browser paint before the scored screenshot.
+export function basicShapesGateState(input?: Window | void): InitialBlueFrameState {
+  const scope = input ?? window;
+  return {
+    sampleId: scope.__donnerActiveSampleStats?.sampleId ?? null,
+    completedResults: scope.__donnerWorkerStats?.completedResults ?? 0,
+    presentedAtMs: scope.__donnerWorkerStats?.presentedAtMs ?? null,
+    renderedFrames: scope.__donnerMainLoopRenderedFrames ?? 0,
+    hostFrames: scope.__donnerHostFrameTiming?.frames ?? null,
+    hostPresented: scope.__donnerHostFrameTiming?.lastSurfacePresented === true,
+    frameId: scope.__donnerOverlayStats?.frameId ?? 0,
+    captureId: scope.__donnerOverlayStats?.captureId ?? 0,
+    completedFrameId: scope.__donnerPresentationQueueStats?.frameId ?? 0,
+    completedCaptureId: scope.__donnerPresentationQueueStats?.captureId ?? 0,
+    completedInputRepresented: scope.__donnerPresentationQueueStats?.inputRepresented === true,
+  };
+}

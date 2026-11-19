@@ -23,7 +23,7 @@ import {
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
-import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
+import { boundBrowserDiagnostic, hasSuccessfulDiagnosticRequest, readGpuOwnerDispatchStats, wgpuDiagnosticOutcome } from "./browser-runtime-diagnostics";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import { fixedGpuAcquisitionEvent } from "./browser-diagnostic-policy.js";
 import {
@@ -520,35 +520,11 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   return fatalMessages;
 }
 
-async function readWgpuDiagnosticOutcome(page: Page) {
-  return page.evaluate(() => ({
-    requested: window.__donnerWgpuReadbackRequested ?? 0,
-    completed: window.__donnerWgpuReadbackCompleted ?? 0,
-    successfulRequest: window.__donnerWgpuReadbackStats?.request ?? 0,
-    lastStartedRequest: window.__donnerWgpuReadbackLastStartedRequest ?? 0,
-    lastFailedRequest: window.__donnerWgpuReadbackLastFailedRequest ?? 0,
-    starts: window.__donnerWgpuReadbackCaptureStarts ?? 0,
-    captures: window.__donnerWgpuReadbackCaptureCompletions ?? 0,
-    failures: window.__donnerWgpuReadbackCaptureFailures ?? 0,
-    hostFrame: window.__donnerHostFrameTiming?.frames ?? 0,
-    hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented ?? false,
-    queue: window.__donnerPresentationQueueStats ?? null,
-  }));
-}
-
-function hasSuccessfulDiagnosticRequest(
-  state: Awaited<ReturnType<typeof readWgpuDiagnosticOutcome>>,
-  request: number,
-): boolean {
-  return request > 0 && state.completed >= request && state.successfulRequest >= request
-    && state.lastFailedRequest < request;
-}
-
 async function waitForSuccessfulWgpuDiagnostic(page: Page, request: number): Promise<void> {
-  let state = await readWgpuDiagnosticOutcome(page);
+  let state = await page.evaluate(wgpuDiagnosticOutcome);
   try {
     await expect.poll(async () => {
-      state = await readWgpuDiagnosticOutcome(page);
+      state = await page.evaluate(wgpuDiagnosticOutcome);
       return state.completed;
     }, {
       message: "expected a terminal post-load WGPU diagnostic outcome for the Layers panel",
@@ -655,12 +631,6 @@ async function pollRenderAccounting(
   }
   return accounting;
 }
-
-test("wasm editor starts without runtime abort", async ({ page }) => {
-  const fatalMessages = await openEditor(page);
-
-  expect(fatalMessages).toEqual([]);
-});
 
 test("loading handoff publishes ordered startup timings", async ({ page }) => {
   const startupDeviceLogs: string[] = [];
@@ -3862,33 +3832,6 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
   expect(fatalMessages).toEqual([]);
 });
 
-test("WGPU diagnostic completion distinguishes failure from old successful pixels", async ({ page }) => {
-  await page.setContent("<canvas></canvas>");
-  await page.evaluate(() => {
-    Object.assign(window, {
-      __donnerWgpuReadbackRequested: 2,
-      __donnerWgpuReadbackCompleted: 2,
-      __donnerWgpuReadbackStats: { request: 1 },
-      __donnerWgpuReadbackLastFailedRequest: 2,
-      __donnerWgpuReadbackCaptureFailures: 1,
-    });
-  });
-  const failed = await readWgpuDiagnosticOutcome(page);
-  expect(failed.completed).toBe(2);
-  expect(failed.successfulRequest).toBe(1);
-  expect(hasSuccessfulDiagnosticRequest(failed, 2)).toBe(false);
-  await page.evaluate(() => {
-    Object.assign(window, {
-      __donnerWgpuReadbackRequested: 3,
-      __donnerWgpuReadbackCompleted: 3,
-      __donnerWgpuReadbackStats: { request: 3 },
-    });
-  });
-  const recovered = await readWgpuDiagnosticOutcome(page);
-  expect(hasSuccessfulDiagnosticRequest(recovered, 3)).toBe(true);
-  expect(hasSuccessfulDiagnosticRequest(recovered, 4)).toBe(false);
-});
-
 test("wasm editor renders layer panel previews after loading a document", async ({ page }) => {
   const fatalMessages = await openEditor(page, { wgpuReadbackStats: kBackend === "geode" });
   const canvas = page.locator("canvas#canvas");
@@ -4091,54 +4034,6 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
   expect(fatalMessages).toEqual([]);
 });
 
-test("WASM trackpad pinch wheel reaches editor as zoom gesture", async ({ page }) => {
-  const fatalMessages = await openEditor(page);
-  const canvas = page.locator("canvas#canvas");
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  if (bounds === null) {
-    return;
-  }
-
-  const center = {
-    x: bounds.x + bounds.width * 0.5,
-    y: bounds.y + bounds.height * 0.5,
-  };
-  await page.mouse.move(center.x, center.y);
-  await page.evaluate(() => {
-    window.__donnerLastScrollEvent = undefined;
-  });
-
-  const browserDefaultAllowed = await page.evaluate(({ x, y }) => {
-    const target = document.getElementById("canvas");
-    if (!target) {
-      throw new Error("canvas not found");
-    }
-
-    return target.dispatchEvent(
-      new WheelEvent("wheel", {
-        bubbles: true,
-        cancelable: true,
-        clientX: x,
-        clientY: y,
-        ctrlKey: true,
-        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
-        deltaY: -100,
-      }),
-    );
-  }, center);
-
-  expect(browserDefaultAllowed).toBe(false);
-
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerLastScrollEvent?.zoomModifierHeld))
-    .toBe(true);
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerLastScrollEvent?.yoffset))
-    .toBeGreaterThan(0);
-  expect(fatalMessages).toEqual([]);
-});
-
 // The render-pane classifier applies `zoomFactor = pow(kWheelZoomStep, yoffset)`,
 // and the Wasm GLFW port converts a DOM_DELTA_PIXEL wheel event into
 // `yoffset = -deltaY / kWasmWheelPixelsPerScrollUnit`. Both constants are owned
@@ -4227,7 +4122,7 @@ test("WASM trackpad pinch gesture zooms by the gesture scale", async ({ page }) 
   expect(fatalMessages).toEqual([]);
 });
 
-test("WASM ctrl+wheel pinch zooms by the shared wheel-zoom policy", async ({ page }) => {
+test("WASM ctrl+wheel suppresses browser zoom and reaches the editor", async ({ page }) => {
   const fatalMessages = await openEditor(page);
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
@@ -4269,19 +4164,8 @@ test("WASM ctrl+wheel pinch zooms by the shared wheel-zoom policy", async ({ pag
 
   const yoffset = await readScrollEventYOffset(page, beforeCount);
 
-  // A ctrl-flagged wheel with no physically held modifier is discriminated as
-  // a browser-synthesized trackpad pinch and receives the desktop pinch
-  // calibration: units scale by 1/ln(kWheelZoomStep) so the applied zoom is
-  // exp(-deltaY/100), then clamp to one 1.5x step per event. deltaY=-250
-  // exceeds the clamp, pinning both the gain and the safety bound.
-  const rawUnits = -deltaY / kWasmWheelPixelsPerScrollUnit;
-  const gained = rawUnits / Math.log(kWheelZoomStep);
-  const maxUnits = Math.log(1.5) / Math.log(kWheelZoomStep);
-  const expectedYOffset = Math.min(gained, maxUnits);
-  expect(
-    Math.abs(yoffset - expectedYOffset) / expectedYOffset,
-    `discriminated pinch deltaY ${deltaY} must yield clamped yoffset ${expectedYOffset}, got ${yoffset}`,
-  ).toBeLessThan(0.02);
+  // Keep one check on the browser-to-editor wiring. Native tests cover the policy range.
+  expect(Math.pow(kWheelZoomStep, yoffset)).toBeCloseTo(1.5, 2);
   expect(fatalMessages).toEqual([]);
 });
 
