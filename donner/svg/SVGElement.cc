@@ -368,7 +368,8 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
 /**
  * Remove the declarations the presentation attribute \p name contributed to the element's style,
  * so the properties it writes cascade as if it were never authored, with the invalidation a write
- * of that attribute needs. Nothing is created or invalidated when it declared nothing.
+ * of that attribute needs. When it declared nothing, nothing is created, and only a stylesheet that
+ * selects on the attribute is re-matched.
  *
  * @return False when \p name is not stored in the element's style, such as `transform` or an
  *   element-specific attribute like `cx`, whose state the caller resets instead.
@@ -384,6 +385,10 @@ bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAcc
                              : PropertyRegistry().clearPresentationAttribute(name);
   if (result == Clear::Cleared) {
     MarkPresentationAttributeDirty(handle, elementType, name, name);
+  } else if (result == Clear::NotSet) {
+    // The attribute may still be present, overridden by `style` or holding a value that did not
+    // parse, so a stylesheet selecting on it must re-match.
+    markFullStyleRecomputeIfSelected(handle, name);
   }
   return result != Clear::NotStored;
 }

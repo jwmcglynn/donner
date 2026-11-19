@@ -1849,6 +1849,52 @@ TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascad
       &PropertyRegistry::textOrientation);
 }
 
+/// Computes every style of \p document as a frame does, leaving it marked as built so later
+/// mutations take the selective or full restyle a frame would.
+void ComputeFrameStyles(SVGDocument& document) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  components::StyleSystem().computeAllStyles(document.registry(), disabledSink);
+  auto& renderState = document.registry().ctx().contains<components::RenderTreeState>()
+                          ? document.registry().ctx().get<components::RenderTreeState>()
+                          : document.registry().ctx().emplace<components::RenderTreeState>();
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+}
+
+// Removing an attribute re-matches stylesheet selectors that test for it on the next frame, whether
+// its value was the element's declaration, was overridden by `style`, did not parse, or is not a
+// style property.
+TEST_F(SVGElementTests, RemovingAnAttributeRematchesAttributeSelectors) {
+  struct Case {
+    const char* name;
+    const char* attribute;
+    const char* authored;  //!< `#t` with the attribute.
+    const char* fresh;     //!< `#t` without it.
+  };
+  for (const Case& item :
+       {Case{"declared", "fill", "<rect id='t' fill='blue'/>", "<rect id='t'/>"},
+        Case{"style-overrides", "fill", "<rect id='t' fill='blue' style='fill: green'/>",
+             "<rect id='t' style='fill: green'/>"},
+        Case{"unparsable", "fill", "<rect id='t' fill='notacolor'/>", "<rect id='t'/>"},
+        Case{"not-a-property", "transform", "<rect id='t' transform='scale(2)'/>",
+             "<rect id='t'/>"}}) {
+    SCOPED_TRACE(item.name);
+    const std::string rule =
+        std::string("<style>rect[") + item.attribute + "] { stroke: red }</style>";
+    SVGDocument edited = parseSVG(SvgOf(rule + item.authored));
+    ComputeFrameStyles(edited);
+    std::optional<SVGElement> target = edited.querySelector("#t");
+    ASSERT_TRUE(target.has_value());
+    target->removeAttribute(item.attribute);
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    components::StyleSystem().computeAllStyles(edited.registry(), disabledSink);
+    SVGDocument expected = parseSVG(SvgOf(rule + item.fresh));
+    EXPECT_EQ(ComputedTargetValue(edited, &PropertyRegistry::stroke),
+              ComputedTargetValue(expected, &PropertyRegistry::stroke));
+  }
+}
+
 // Removing a presentation attribute the element never had changes nothing, including on a
 // document built without a parser: no style storage is created and nothing is invalidated.
 TEST_F(SVGElementTests, RemovingAnUnsetPresentationAttributeIsANoOp) {
