@@ -1284,6 +1284,58 @@ TEST_F(GeoEncoderTest, GradientPastTheRampCapacityIsRefused) {
   EXPECT_THAT(pixelAt(readback(), 32, 32), testing::Not(RgbaEq(0, 0, 0, 0)));
 }
 
+/// The radial and resident gradient entry points refuse a gradient with more stops than one ramp
+/// holds the same way: no geometry is admitted, nothing is uploaded and nothing is drawn.
+TEST_F(GeoEncoderTest, OtherGradientEntryPointsPastTheRampCapacityAreRefused) {
+  const std::vector<LinearGradientParams::Stop> tooMany =
+      DistinctStops(GeoEncoder::kMaxGradientRampStops + 1u, 13);
+  const Path rect = PathBuilder().addRect(Box2d({0, 0}, {64, 64})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(rect, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  RadialGradientParams radial;
+  radial.center = Vector2d(32.0, 32.0);
+  radial.focalCenter = radial.center;
+  radial.radius = 32.0;
+  radial.stops = tooMany;
+  const LinearGradientParams linear = HorizontalGradient(tooMany);
+
+  enum class EntryPoint { Radial, ResidentLinear, ResidentRadial };
+  for (const EntryPoint entryPoint :
+       {EntryPoint::Radial, EntryPoint::ResidentLinear, EntryPoint::ResidentRadial}) {
+    SCOPED_TRACE(static_cast<int>(entryPoint));
+    GeodeCounters counters;
+    device_->setCounters(&counters);
+    struct CounterScope {
+      GeodeDevice* device;
+      ~CounterScope() { device->setCounters(nullptr); }
+    } counterScope{device_.get()};
+    ProbeGeometryAdmission admission;
+    GeodeResidentGradientSlot slot;
+    {
+      GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                         kTargetSize);
+      encoder.setGeometryAdmission(&admission);
+      encoder.clear(css::RGBA(0, 0, 0, 0));
+      switch (entryPoint) {
+        case EntryPoint::Radial:
+          encoder.fillPathRadialGradient(rect, radial, FillRule::NonZero);
+          break;
+        case EntryPoint::ResidentLinear:
+          encoder.fillPathLinearGradientResident(slot, encoded, linear, FillRule::NonZero, 1u);
+          break;
+        case EntryPoint::ResidentRadial:
+          encoder.fillPathRadialGradientResident(slot, encoded, radial, FillRule::NonZero, 1u);
+          break;
+      }
+      encoder.finish();
+    }
+    EXPECT_EQ(admission.admittedDraws, 0u);
+    EXPECT_EQ(counters.textureCreates, 0u);
+    EXPECT_EQ(counters.drawCalls, 0u);
+    EXPECT_THAT(pixelAt(readback(), 32, 32), RgbaEq(0, 0, 0, 0));
+  }
+}
+
 /// Fill a rectangle with a horizontal red→blue linear gradient in user space.
 /// Left edge should be red, right edge should be blue, midpoint between.
 /// Regression guard for the linear-gradient pipeline plumbing.

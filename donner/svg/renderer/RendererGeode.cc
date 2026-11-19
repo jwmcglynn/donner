@@ -5793,6 +5793,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return false;
   }
 
+  /// Lets \p slot go of the stop ramp and ramp bind group it holds, if any; null is a no-op.
+  static void releaseGradientRamp(geode::GeodeResidentGradientSlot* slot) {
+    if (slot != nullptr && slot->ramp != nullptr) {
+      slot->replaceRamp(nullptr, gpu::BindGroup());
+    }
+  }
+
   bool resolveBatchGradient(const Path& geometryPath, const components::ResolvedPaintServer& server,
                             double effectiveOpacity,
                             std::optional<geode::LinearGradientParams>& outLinear,
@@ -7831,6 +7838,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
         path.fillRule, fillEncoded, residentFill, /*allowInstancedAppend=*/!hasStroke);
   }
   if (fillAbsorbed) {
+    // A batched fill paints from its paint block, so a gradient ramp its entity's gradient slot
+    // still holds from an earlier frame is no longer bound.
+    impl_->releaseGradientRamp(residentGradientFill);
     if (!hasStroke) {
       return;
     }

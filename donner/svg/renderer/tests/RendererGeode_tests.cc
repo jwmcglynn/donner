@@ -5397,6 +5397,56 @@ TEST_F(RendererGeodeTest, ManyStopGradientStopEditReplacesTheResidentRamp) {
   }
 }
 
+/// Gradients drawn inside multi-pass constructs charge the frame's stop budget as the CPU renderer
+/// does: a 20-stop gradient fills a rect in a filtered group, in a masked group, and in a pattern
+/// tile. Under the default cap and under a cap one stop short of the document's total, Geode's
+/// charged stops and rejection verdict equal tiny-skia's.
+TEST_F(RendererGeodeTest, GradientStopBudgetInMultiPassConstructsMatchesTinySkia) {
+  std::string stops;
+  for (int i = 0; i < 20; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    stops += stop;
+  }
+  const std::string source = GradientTestDocument(
+      R"svg(<linearGradient id="g">)svg" + stops +
+          R"svg(</linearGradient>)svg"
+          R"svg(<filter id="f"><feOffset dx="2" dy="0"/></filter>)svg"
+          R"svg(<mask id="m"><rect width="128" height="48" fill="white"/></mask>)svg"
+          R"svg(<pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16"><rect width="16" height="16" fill="url(#g)"/></pattern>)svg",
+      R"svg(<g filter="url(#f)"><rect width="40" height="48" fill="url(#g)"/></g>)svg"
+      R"svg(<g mask="url(#m)"><rect x="44" width="40" height="48" fill="url(#g)"/></g>)svg"
+      R"svg(<rect x="88" width="40" height="48" fill="url(#p)"/>)svg");
+  const auto stats = [&](bool geode, std::size_t limit) {
+    std::optional<SVGDocument> document;
+    EXPECT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+    if (geode) {
+      RendererGeode renderer;
+      renderer.setGradientStopBudgetForTesting(limit);
+      renderer.draw(*document);
+      EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+      return renderer.resourceStats();
+    }
+    RendererTinySkia renderer;
+    renderer.setGradientStopBudgetForTesting(limit);
+    renderer.draw(*document);
+    return renderer.resourceStats();
+  };
+  const RendererResourceStats reference =
+      stats(/*geode=*/false, RendererDrawBudget::kMaximumGradientStops);
+  ASSERT_FALSE(reference.drawBudgetRejected);
+  ASSERT_GT(reference.gradientStops, 0u);
+  for (const std::size_t limit :
+       {RendererDrawBudget::kMaximumGradientStops, reference.gradientStops - 1u}) {
+    SCOPED_TRACE(limit);
+    const RendererResourceStats cpu = stats(/*geode=*/false, limit);
+    const RendererResourceStats gpu = stats(/*geode=*/true, limit);
+    EXPECT_EQ(gpu.gradientStops, cpu.gradientStops);
+    EXPECT_EQ(gpu.drawBudgetRejected, cpu.drawBudgetRejected);
+  }
+}
+
 /// Every surface the renderer opens while an expanded filter layer is active has the layer's
 /// extent: a group opacity layer, a mix-blend-mode layer and its backdrop, a mask and its content,
 /// a nested filter, and a clip mask, including one opened while drawing a mask's content.

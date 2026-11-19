@@ -976,22 +976,28 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return ramp;
   }
 
-  /// The ramp holding `rampStops`: one an earlier draw of this encoder bound, else \p candidate
-  /// when it holds them (a resident slot's ramp from an earlier frame), else a new upload. Every
-  /// draw of one gradient in this encoder therefore shares one ramp. Null when the upload fails.
+  /// The ramp holding `rampStops`: \p candidate when it holds them (a resident slot's ramp from
+  /// an earlier frame), else one an earlier draw of this encoder bound, else a new upload. Every
+  /// draw of one gradient in this encoder therefore shares one ramp, and a resident slot keeps its
+  /// own even when an arena draw of the same stops uploaded another earlier in the frame. Null
+  /// when the upload fails.
   /// @param candidate Ramp to reuse when it holds the same stops; may be null.
   std::shared_ptr<const GeodeGradientRamp> acquireGradientRamp(
       const std::shared_ptr<const GeodeGradientRamp>& candidate) {
     std::vector<std::shared_ptr<const GeodeGradientRamp>>& bucket =
         frameRamps[hashStops(rampStops)];
+    if (candidate != nullptr && rampHolds(*candidate, rampStops)) {
+      if (std::find(bucket.begin(), bucket.end(), candidate) == bucket.end()) {
+        bucket.push_back(candidate);
+      }
+      return candidate;
+    }
     for (const std::shared_ptr<const GeodeGradientRamp>& ramp : bucket) {
       if (rampHolds(*ramp, rampStops)) {
         return ramp;
       }
     }
-    std::shared_ptr<const GeodeGradientRamp> ramp =
-        candidate != nullptr && rampHolds(*candidate, rampStops) ? candidate
-                                                                 : uploadGradientRamp(rampStops);
+    std::shared_ptr<const GeodeGradientRamp> ramp = uploadGradientRamp(rampStops);
     if (ramp != nullptr) {
       bucket.push_back(ramp);
     }
@@ -3251,6 +3257,10 @@ gpu::Result<gpu::BindGroup> GeoEncoder::Impl::createResidentGradientBindGroup(
 const gpu::BindGroup* GeoEncoder::Impl::residentGradientBindGroup(GeodeResidentGradientSlot& slot,
                                                                   const GradientUniforms& u) {
   if (u.stopCount <= kMaxGradientStops) {
+    // A gradient that no longer needs a ramp lets go of the one it held.
+    if (slot.ramp != nullptr) {
+      slot.replaceRamp(nullptr, gpu::BindGroup());
+    }
     if (!slot.bindGroup.isValid()) {
       buildResidentGradientBindGroup(slot);
     }
