@@ -63,6 +63,14 @@ std::string HrefChainOf(std::string_view primitives, std::string_view href) {
          (href.empty() ? std::string() : " href='" + std::string(href) + "'") + "/>";
 }
 
+/// Filter `f`, which takes its region and primitives from \p href through `xlink:href`, or has no
+/// link when it is empty: `b` offsets the source graphic.
+std::string XlinkChainOf(std::string_view href) {
+  return "<filter id='b' filterUnits='userSpaceOnUse' x='0' y='0' width='16' height='16'>"
+         "<feOffset in='SourceGraphic' dx='3'/></filter><filter id='f'" +
+         (href.empty() ? std::string() : " xlink:href='" + std::string(href) + "'") + "/>";
+}
+
 /// One edit: render \c base, apply the edit to \c selector, and expect the next render to match a
 /// document authored as \c expected.
 struct EditCase {
@@ -78,6 +86,14 @@ void PrintTo(const EditCase& value, std::ostream* os) {
   *os << value.name;
 }
 
+/// The attribute name \p attribute, split at its namespace prefix such as `xlink:` when present.
+xml::XMLQualifiedNameRef AttributeName(std::string_view attribute) {
+  const std::size_t colon = attribute.find(':');
+  return colon == std::string_view::npos
+             ? xml::XMLQualifiedNameRef(attribute)
+             : xml::XMLQualifiedNameRef(attribute.substr(0, colon), attribute.substr(colon + 1));
+}
+
 class FilterAttributeEditTest : public testing::TestWithParam<EditCase> {};
 
 TEST_P(FilterAttributeEditTest, StaticEditReachesTheNextFrame) {
@@ -91,9 +107,9 @@ TEST_P(FilterAttributeEditTest, StaticEditReachesTheNextFrame) {
   std::optional<SVGElement> target = document.querySelector(item.selector);
   ASSERT_THAT(target, testing::Optional(testing::_));
   if (item.value != nullptr) {
-    target->setAttribute(xml::XMLQualifiedNameRef(item.attribute), item.value);
+    target->setAttribute(AttributeName(item.attribute), item.value);
   } else {
-    target->removeAttribute(xml::XMLQualifiedNameRef(item.attribute));
+    target->removeAttribute(AttributeName(item.attribute));
   }
 
   SVGDocument expectedDocument = FilteredDocument(item.expected);
@@ -272,11 +288,9 @@ std::vector<EditCase> RemovalCases() {
                                    {"scale", "8"},
                                    {"xChannelSelector", "B"},
                                    {"yChannelSelector", "B"}};
-  const Attributes shadow = {{"in", "SourceGraphic"},
-                             {"dx", "-3"},
-                             {"dy", "-3"},
-                             {"stdDeviation", "0"},
-                             {"flood-color", "blue"}};
+  const Attributes shadow = {
+      {"in", "SourceGraphic"}, {"dx", "-3"},           {"dy", "-3"}, {"stdDeviation", "0"},
+      {"flood-color", "blue"}, {"flood-opacity", ".5"}};
   const Attributes morphology = {{"in", "SourceGraphic"}, {"operator", "dilate"}, {"radius", "1"}};
   const Attributes turbulence = {{"baseFrequency", ".3"},
                                  {"numOctaves", "2"},
@@ -288,11 +302,14 @@ std::vector<EditCase> RemovalCases() {
   const Attributes region = {{"filterUnits", "userSpaceOnUse"},
                              {"primitiveUnits", "objectBoundingBox"},
                              {"x", "4"},
-                             {"y", "0"},
+                             {"y", "4"},
                              {"width", "8"},
-                             {"height", "16"},
+                             {"height", "8"},
                              {"color-interpolation-filters", "sRGB"}};
   const std::string regionChildren = "<feFlood flood-color='blue' x='.5'/>";
+  // An even mix of the red and blue floods, whose color depends on the interpolation color space.
+  constexpr std::string_view kMixedFloods =
+      "<feComposite in='red' in2='blue' operator='arithmetic' k2='.5' k3='.5'/>";
 
   return {
       Removal("remove-blend-input2", filter, "feBlend", blend, "in2"),
@@ -356,6 +373,10 @@ std::vector<EditCase> RemovalCases() {
               "specularConstant", distantLight),
       Removal("remove-specular-exponent", filter, "feSpecularLighting", specularLighting,
               "specularExponent", distantLight),
+      Removal("remove-diffuse-lighting-color", filter, "feDiffuseLighting",
+              {{"in", "SourceGraphic"}, {"lighting-color", "red"}}, "lighting-color", distantLight),
+      Removal("remove-specular-lighting-color", filter, "feSpecularLighting",
+              {{"in", "SourceGraphic"}, {"lighting-color", "red"}}, "lighting-color", distantLight),
       Removal("remove-azimuth", diffuse, "feDistantLight", distant, "azimuth"),
       Removal("remove-elevation", diffuse, "feDistantLight", distant, "elevation"),
       Removal("remove-point-x", diffuse, "fePointLight", point, "x"),
@@ -376,6 +397,8 @@ std::vector<EditCase> RemovalCases() {
       Removal("remove-shadow-dx", filter, "feDropShadow", shadow, "dx"),
       Removal("remove-shadow-dy", filter, "feDropShadow", shadow, "dy"),
       Removal("remove-shadow-deviation", filter, "feDropShadow", shadow, "stdDeviation"),
+      Removal("remove-shadow-color", filter, "feDropShadow", shadow, "flood-color"),
+      Removal("remove-shadow-opacity", filter, "feDropShadow", shadow, "flood-opacity"),
       Removal("remove-blur-deviation", filter, "feGaussianBlur",
               {{"in", "SourceGraphic"}, {"stdDeviation", "5"}}, "stdDeviation"),
       Removal("remove-blur-deviation-pair", filter, "feGaussianBlur",
@@ -383,6 +406,8 @@ std::vector<EditCase> RemovalCases() {
       Removal("remove-blur-edge-mode", corner, "feGaussianBlur",
               {{"stdDeviation", "2"}, {"edgeMode", "wrap"}}, "edgeMode"),
       Removal("remove-image-href", FilterOf, "feImage", {{"href", redImage}}, "href"),
+      Removal("remove-image-xlink-href", FilterOf, "feImage", {{"xlink:href", redImage}},
+              "xlink:href"),
       Removal(
           "remove-image-aspect", FilterOf, "feImage",
           {{"href", redImage}, {"width", "16"}, {"height", "8"}, {"preserveAspectRatio", "none"}},
@@ -416,8 +441,25 @@ std::vector<EditCase> RemovalCases() {
               "#f"),
       Removal("remove-filter-x", self, "filter", region, "x", regionChildren, "#f"),
       Removal("remove-filter-width", self, "filter", region, "width", regionChildren, "#f"),
+      Removal("remove-filter-y", self, "filter", region, "y", regionChildren, "#f"),
+      Removal("remove-filter-height", self, "filter", region, "height", regionChildren, "#f"),
+      Removal("remove-filter-interpolation", self, "filter", region, "color-interpolation-filters",
+              "<feFlood flood-color='red' result='red'/><feFlood flood-color='blue' "
+              "result='blue'/>" +
+                  std::string(kMixedFloods),
+              "#f"),
+      Removal("remove-primitive-interpolation", filter, "feComposite",
+              {{"in", "red"},
+               {"in2", "blue"},
+               {"operator", "arithmetic"},
+               {"k2", ".5"},
+               {"k3", ".5"},
+               {"color-interpolation-filters", "linearRGB"}},
+              "color-interpolation-filters"),
       {"remove-filter-href", HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", "#b"), "href",
        nullptr, HrefChainOf("<feOffset in='SourceGraphic' dx='3'/>", ""), "#f"},
+      {"remove-filter-xlink-href", XlinkChainOf("#b"), "xlink:href", nullptr, XlinkChainOf(""),
+       "#f"},
   };
 }
 
