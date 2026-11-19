@@ -7,7 +7,7 @@
 #   tools/ci/cmake_consumer.sh install-tools
 #       Install ccache and ninja with Homebrew when either is missing (hosted macOS images).
 #   tools/ci/cmake_consumer.sh build [--check] [--ccache | --cache] [--release-bazel-server] [--parallel N]
-#       --check     first validate the checked-in generator output (gen_cmakelists.py --check)
+#       --check     generate and validate the exact CMakeLists.txt files used by this build
 #       --ccache    compile through ccache, capped at $CCACHE_MAXSIZE, and report its statistics
 #       --release-bazel-server  stop this lane's query/build server before native compilation
 #       --cache     use pinned ccache and bounded persistent compiler/source caches
@@ -79,9 +79,10 @@ build() {
     lane_phase "Reset ccache statistics and size cap" ccache_reset
   fi
   if [[ ${check} -eq 1 ]]; then
-    lane_phase "Validate generated CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py --check
+    lane_phase "Generate and validate CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py --check --keep-generated
+  else
+    lane_phase "Generate CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py
   fi
-  lane_phase "Generate CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py
   if [[ ${release_bazel_server} -eq 1 ]]; then
     lane_phase "Release Bazel server memory" bazel shutdown
   fi

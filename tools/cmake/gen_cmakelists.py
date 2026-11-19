@@ -24,6 +24,7 @@ retaining the original dependency graph.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, contextmanager
 import ast
 import json
 import os
@@ -67,7 +68,6 @@ def _set_bazel_startup_args(startup_args: Iterable[str]) -> None:
     BAZEL_PREFIX = ["bazel", *startup_args]
 
 # When running in --check mode, warn about unmapped deps instead of silently dropping them.
-_check_mode = False
 _unmapped_deps: List[str] = []
 
 #
@@ -1040,9 +1040,9 @@ def get_embed_info(target_label: str) -> EmbedInfo:
         raise RuntimeError(f"Failed to parse repro file for //{pkg}:{main_name}: {e}")
 
 
-def generate_root() -> None:
+def generate_root(output_dir: Path = Path(".")) -> None:
     """Create the project-root CMakeLists.txt."""
-    path = Path("CMakeLists.txt")
+    path = output_dir / "CMakeLists.txt"
     with path.open("w") as f:
         f.write("cmake_minimum_required(VERSION 3.20)\n")
         f.write("project(donner LANGUAGES C CXX)\n\n")
@@ -1763,9 +1763,10 @@ def _emit_umbrella_dep(
 def _emit_umbrella_target(
     targets: Dict[str, CMakeTarget],
     targets_by_cmake_name: Dict[str, CMakeTarget],
+    output_dir: Path,
 ) -> None:
     """Append the umbrella INTERFACE target mirroring //:donner."""
-    root = Path("CMakeLists.txt")
+    root = output_dir / "CMakeLists.txt"
     with root.open("a") as f:
         f.write("\n# Umbrella library for external consumers\n")
         f.write("if(NOT TARGET donner)\n")
@@ -1777,7 +1778,7 @@ def _emit_umbrella_target(
         f.write("endif()\n")
 
 
-def generate_all_packages() -> None:
+def generate_all_packages(output_dir: Path = Path(".")) -> None:
     """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
 
     print("Discovering configured cc_library and cc_binary targets...")
@@ -1787,7 +1788,7 @@ def generate_all_packages() -> None:
 
     # Per-package generation
     for pkg, entries in by_pkg.items():
-        cmake = Path(pkg) / "CMakeLists.txt"
+        cmake = output_dir / pkg / "CMakeLists.txt"
         cmake.parent.mkdir(parents=True, exist_ok=True)
         with cmake.open("w") as f:
             _write_package_header(f)
@@ -1797,7 +1798,7 @@ def generate_all_packages() -> None:
                 _emit_package_target(f, pkg, target, targets_by_cmake_name)
 
     # Umbrella INTERFACE target mirroring //:donner
-    _emit_umbrella_target(targets, targets_by_cmake_name)
+    _emit_umbrella_target(targets, targets_by_cmake_name, output_dir)
 
 #
 # Entry point
@@ -1977,7 +1978,7 @@ def _validate_generated_output(gen_root: Path, workspace: Path, generated_files:
     for target, refs in sources.items():
         for src_ref, cmake_file in refs:
             # Source files are relative to the containing CMakeLists.txt's dir
-            # but resolved against the workspace (since the gen temp dir symlinks to workspace)
+            # but resolved against the source workspace, even when the generated files are staged.
             cmake_dir_rel = cmake_file.parent.relative_to(gen_root)
             # For the root CMakeLists.txt, sources are relative to workspace root.
             candidate = workspace / cmake_dir_rel / src_ref
@@ -2090,10 +2091,52 @@ def _run_cmake_build_validation(
     return None
 
 
-def main() -> None:
-    """Main entry point to generate all CMakeLists.txt files."""
-    global _check_mode
+@contextmanager
+def _generation_lock(destination: Path):
+    """Serialize CMakeLists writers for this output tree, including deep-check rollback."""
+    # Keep a stable lock inode. Closing the descriptor releases the OS lock even
+    # if the writer exits unexpectedly; removing the file would split waiters.
+    with (destination / ".donner-cmake.lock").open("a+b") as handle:
+        if os.name == "nt":
+            import errno
+            import msvcrt
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError as error:
+                    # LK_LOCK retries for a bounded interval. A deep check may
+                    # be compiling longer than that interval.
+                    if error.errno not in (errno.EACCES, errno.EDEADLK):
+                        raise
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
 
+
+def _install_checked_files(
+    workspace: Path, staged: Path, generated: Set[Path], backup: Path, restore: ExitStack,
+) -> None:
+    """Install exactly the validated files, keeping rollback state for each completed replacement."""
+    for rel in sorted(generated):
+        dest = workspace / rel
+        original = backup / rel
+        had_original = dest.is_symlink() or dest.is_file()
+        if had_original:
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dest, original, follow_symlinks=False)
+        elif dest.exists():
+            raise ValueError(f"Generated file destination is not a file: {dest}")
+        (staged / rel).replace(dest)
+        if had_original:
+            restore.callback(original.replace, dest)
+        else:
+            restore.callback(dest.unlink, missing_ok=True)
+
+
+def _parse_generation_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate CMakeLists.txt files for Donner from Bazel targets."
     )
@@ -2102,7 +2145,12 @@ def main() -> None:
         action="store_true",
         help=("Generate CMakeLists.txt files and statically validate the output. "
               "Exits 1 if any referenced source is missing, any target is undefined, "
-              "or any external dep is unmapped. Does not modify the workspace."),
+              "or any external dep is unmapped. By default, leaves the workspace unchanged."),
+    )
+    parser.add_argument(
+        "--keep-generated",
+        action="store_true",
+        help="With --check, leave the successfully validated CMakeLists.txt files for a consumer build.",
     )
     parser.add_argument(
         "--build",
@@ -2127,131 +2175,115 @@ def main() -> None:
     args = parser.parse_args()
     if args.build and not args.check:
         parser.error("--build requires --check")
-    _set_bazel_startup_args(args.bazel_startup_arg)
-    _check_mode = args.check
+    if args.keep_generated and (not args.check or args.output_dir):
+        parser.error("--keep-generated requires --check in the workspace")
+    return args
 
-    if args.check:
-        # Generate in-place to the workspace, capturing original contents first.
-        # Since CMakeLists.txt files are gitignored, we snapshot them and restore
-        # after validation so the workspace is unchanged on exit.
-        workspace = Path.cwd()
 
-        # CMakeLists.txt files that are handwritten instead of generated. These
-        # are excluded from both cleanup and generated-output validation.
-        vendored_prefixes = (
-            "bazel-",
-            "third_party/tiny-skia-cpp",
-            "third_party/stb",
-            "third_party/frozen",
-            "third_party/css-parsing-tests",
-            "examples/cmake_consumer",
+def _use_checked_output(workspace, scratch, staged, generated, args):
+    """Keep or temporarily build the validated files under the workspace writer lock."""
+    build_error = None
+    with _generation_lock(workspace), ExitStack() as restore:
+        _install_checked_files(workspace, staged, generated, scratch / "original", restore)
+        if args.build:
+            print("Static validation passed; configuring and building generated tree...")
+            with tempfile.TemporaryDirectory(prefix="donner-cmake-build-") as build_dir:
+                build_error = _run_cmake_build_validation(workspace, Path(build_dir) / "build")
+        if args.keep_generated and not build_error:
+            restore.pop_all()
+
+    return build_error
+
+
+def _generate_checked(args):
+    workspace = Path.cwd()
+    build_error: Optional[str] = None
+    print("Generating and validating CMakeLists.txt files...")
+    install = args.keep_generated or args.build
+    with tempfile.TemporaryDirectory(prefix=".donner-cmake-check-",
+                                     dir=workspace if install else None) as temp:
+        scratch = Path(temp)
+        staged = scratch / "generated"
+        staged.mkdir()
+        generate_root(staged)
+        generate_all_packages(staged)
+        generated = set(_collect_cmake_files(staged))
+        errors = _validate_generated_output(staged, workspace, generated)
+        if not errors and not _unmapped_deps and install:
+            build_error = _use_checked_output(workspace, scratch, staged, generated, args)
+    return errors, build_error
+
+
+def _report_validation(errors, build_error, build):
+    had_errors = bool(errors) or bool(_unmapped_deps) or build_error is not None
+    if errors:
+        print(f"\n{'='*60}")
+        print(f"CMakeLists.txt VALIDATION FAILED ({len(errors)} error(s))")
+        print(f"{'='*60}")
+        for e in errors:
+            print(f"  {e}")
+    if build_error:
+        print(f"\n{'='*60}")
+        print("CMakeLists.txt BUILD VALIDATION FAILED")
+        print(f"{'='*60}")
+        print(build_error)
+    if _unmapped_deps:
+        print(f"\nUnmapped external dependencies ({len(_unmapped_deps)}):")
+        for msg in _unmapped_deps:
+            print(f"  {msg}")
+        print(
+            "\nAdd these to tools/cmake/external_deps.json as a target, "
+            "system dependency, or ignored dependency with a reason."
         )
 
-        def _is_generated_cmake(rel: Path) -> bool:
-            """Return True if this CMakeLists.txt is part of the generated output."""
-            return not any(str(rel).startswith(s) for s in vendored_prefixes)
-
-        # Snapshot existing files so we can restore the workspace after validation
-        existing_files: Dict[Path, bytes] = {}
-        for p in workspace.rglob("CMakeLists.txt"):
-            rel = p.relative_to(workspace)
-            if _is_generated_cmake(rel):
-                existing_files[rel] = p.read_bytes()
-
-        # Delete existing (potentially stale) generated CMakeLists.txt files before
-        # regeneration, so the fresh output isn't contaminated by leftover files
-        # whose corresponding targets no longer exist.
-        for rel in existing_files:
-            (workspace / rel).unlink()
-
-        print("Generating and validating CMakeLists.txt files...")
-        errors: List[str] = []
-        build_error: Optional[str] = None
-        try:
-            generate_root()
-            generate_all_packages()
-
-            # Track which files were actually generated (so the validator only
-            # scans generator output, not vendored third-party files).
-            generated_set: Set[Path] = set()
-            for p in workspace.rglob("CMakeLists.txt"):
-                rel = p.relative_to(workspace)
-                if _is_generated_cmake(rel):
-                    generated_set.add(rel)
-
-            # Statically validate the generated output
-            errors = _validate_generated_output(workspace, workspace, generated_set)
-            if args.build and not errors and not _unmapped_deps:
-                print("Static validation passed; configuring and building generated tree...")
-                with tempfile.TemporaryDirectory(prefix="donner-cmake-check-") as temp_dir:
-                    build_error = _run_cmake_build_validation(
-                        workspace,
-                        Path(temp_dir) / "build",
-                    )
-        finally:
-            # Remove anything newly created then restore originals
-            for p in list(workspace.rglob("CMakeLists.txt")):
-                rel = p.relative_to(workspace)
-                if _is_generated_cmake(rel) and rel not in existing_files:
-                    p.unlink()
-            for rel, content in existing_files.items():
-                p = workspace / rel
-                p.write_bytes(content)
-
-        had_errors = bool(errors) or bool(_unmapped_deps) or build_error is not None
-        if errors:
-            print(f"\n{'='*60}")
-            print(f"CMakeLists.txt VALIDATION FAILED ({len(errors)} error(s))")
-            print(f"{'='*60}")
-            for e in errors:
-                print(f"  {e}")
-        if build_error:
-            print(f"\n{'='*60}")
-            print("CMakeLists.txt BUILD VALIDATION FAILED")
-            print(f"{'='*60}")
-            print(build_error)
-        if _unmapped_deps:
-            print(f"\nUnmapped external dependencies ({len(_unmapped_deps)}):")
-            for msg in _unmapped_deps:
-                print(f"  {msg}")
-            print(
-                "\nAdd these to tools/cmake/external_deps.json as a target, "
-                "system dependency, or ignored dependency with a reason."
-            )
-
-        if had_errors:
-            sys.exit(1)
-        if args.build:
-            print("CMakeLists.txt validation and build passed.")
-        else:
-            print("CMakeLists.txt validation passed.")
-        sys.exit(0)
+    if had_errors:
+        sys.exit(1)
+    if build:
+        print("CMakeLists.txt validation and build passed.")
     else:
-        output_dir = args.output_dir
-        if output_dir:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            os.chdir(output_dir)
+        print("CMakeLists.txt validation passed.")
+    sys.exit(0)
 
-        print("Generating CMakeLists.txt files for Donner libraries...")
-        print("This may take a while, please wait...\n")
 
+def _generate_unchecked(output_dir):
+    if output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        os.chdir(output_dir)
+
+    print("Generating CMakeLists.txt files for Donner libraries...")
+    print("This may take a while, please wait...\n")
+
+    with _generation_lock(Path.cwd()):
         generate_root()
         generate_all_packages()
 
-        if _unmapped_deps:
-            print(f"\nWARNING: Unmapped external dependencies:")
-            for msg in _unmapped_deps:
-                print(f"  {msg}")
+    if _unmapped_deps:
+        print("\nWARNING: Unmapped external dependencies:")
+        for msg in _unmapped_deps:
+            print(f"  {msg}")
 
-        print("\nCMakeLists.txt generation complete.")
-        print("You can now build Donner with CMake as follows:")
-        print("  cmake -S . -B build && cmake --build build -j$(nproc)")
-        print("\nOptions:")
-        print("  -DDONNER_RENDERER_BACKEND=tiny_skia  (default)")
-        print("  -DDONNER_TEXT=OFF                     Disable text rendering")
-        print("  -DDONNER_TEXT_FULL=ON                 Enable FreeType + HarfBuzz shaping")
-        print("  -DDONNER_TEXT_WOFF2=OFF               Disable WOFF2 support")
-        print("  -DDONNER_FILTERS=OFF                  Disable filter effects")
+    print("\nCMakeLists.txt generation complete.")
+    print("You can now build Donner with CMake as follows:")
+    print("  cmake -S . -B build && cmake --build build -j$(nproc)")
+    print("\nOptions:")
+    print("  -DDONNER_RENDERER_BACKEND=tiny_skia  (default)")
+    print("  -DDONNER_TEXT=OFF                     Disable text rendering")
+    print("  -DDONNER_TEXT_FULL=ON                 Enable FreeType + HarfBuzz shaping")
+    print("  -DDONNER_TEXT_WOFF2=OFF               Disable WOFF2 support")
+    print("  -DDONNER_FILTERS=OFF                  Disable filter effects")
+
+
+
+
+def main() -> None:
+    """Generate the CMake build and optionally validate or retain it."""
+    args = _parse_generation_args()
+    _set_bazel_startup_args(args.bazel_startup_arg)
+    if args.check:
+        errors, build_error = _generate_checked(args)
+        _report_validation(errors, build_error, args.build)
+    else:
+        _generate_unchecked(args.output_dir)
 
 
 if __name__ == "__main__":

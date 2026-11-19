@@ -103,8 +103,7 @@ class CMakeConsumerTest(unittest.TestCase):
         result, calls = self._run("build", "--check", "--parallel", "2")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
-            ["python3", "tools/cmake/gen_cmakelists.py", "--check"],
-            ["python3", "tools/cmake/gen_cmakelists.py"],
+            ["python3", "tools/cmake/gen_cmakelists.py", "--check", "--keep-generated"],
             self._configure(),
             ["cmake", "--build", "build", "--target", "donner_cmake_consumer", "--parallel", "2"],
             ["ctest", "--test-dir", "build", "--output-on-failure"],
@@ -114,8 +113,7 @@ class CMakeConsumerTest(unittest.TestCase):
         result, calls = self._run("build", "--check", "--release-bazel-server", "--parallel", "4")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
-            ["python3", "tools/cmake/gen_cmakelists.py", "--check"],
-            ["python3", "tools/cmake/gen_cmakelists.py"],
+            ["python3", "tools/cmake/gen_cmakelists.py", "--check", "--keep-generated"],
             ["bazel", "shutdown"],
             self._configure(),
             ["cmake", "--build", "build", "--target", "donner_cmake_consumer", "--parallel", "4"],

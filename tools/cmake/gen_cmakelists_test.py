@@ -9,6 +9,7 @@ import base64
 import io
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -844,6 +845,125 @@ class CmakeBuildParallelEnvironmentTest(unittest.TestCase):
             self.assertIsNone(g._run_cmake_build_validation(Path("source"), Path("build")))
         self.assertEqual(command.call_args_list[1].args[0],
                          ["cmake", "--build", "build", "--parallel", "2"])
+
+
+class CheckedGenerationTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(tmp.name)
+        self.workspace = Path.cwd()
+        self.root = Path("CMakeLists.txt")
+        self.root.write_text("original root")
+        Path("lib").mkdir()
+        self.package = Path("lib/CMakeLists.txt")
+        Path("consumer").mkdir()
+        self.handwritten = Path("consumer/CMakeLists.txt")
+        self.handwritten.write_text("handwritten consumer")
+        self.checked_root = "add_subdirectory(lib)\n"
+        self.checked_package = "add_library(sample INTERFACE)\n"
+
+    def run_check(self, *args, package_text=None, build_error=None, expected=0, during_build=None):
+        def root(staged):
+            (staged / self.root).write_text(self.checked_root)
+
+        def package(staged):
+            (staged / "lib").mkdir()
+            text = self.checked_package if package_text is None else package_text
+            (staged / self.package).write_text(text)
+
+        def build(workspace, _build_dir):
+            self.assertEqual(workspace, self.workspace)
+            self.assertEqual(self.root.read_text(), self.checked_root)
+            self.assertEqual(self.package.read_text(), self.checked_package)
+            if during_build:
+                during_build()
+            return build_error
+
+        with mock.patch.object(sys, "argv", ["gen_cmakelists.py", "--check", *args]), \
+                mock.patch.object(g, "generate_root", side_effect=root) as gen_root, \
+                mock.patch.object(g, "generate_all_packages", side_effect=package) as gen_packages, \
+                mock.patch.object(g, "_run_cmake_build_validation", side_effect=build), \
+                mock.patch.object(g, "_unmapped_deps", []), self.assertRaises(SystemExit) as exit_:
+            g.main()
+        self.assertEqual(exit_.exception.code, expected)
+        gen_root.assert_called_once()
+        gen_packages.assert_called_once()
+        self.assertEqual(self.handwritten.read_text(), "handwritten consumer")
+
+    def test_plain_check_then_keep_the_exact_checked_files(self):
+        self.run_check()
+        self.assertEqual(self.root.read_text(), "original root")
+        self.assertFalse(self.package.exists())
+        self.run_check("--keep-generated")
+        self.assertEqual(self.root.read_text(), self.checked_root)
+        self.assertEqual(self.package.read_text(), self.checked_package)
+
+    def test_validation_failure_leaves_originals_in_place(self):
+        self.run_check("--keep-generated", package_text="add_library(sample missing.cc)\n", expected=1)
+        self.assertEqual(self.root.read_text(), "original root")
+        self.assertFalse(self.package.exists())
+
+    def test_failed_deep_check_restores_originals_and_removes_new_files(self):
+        self.run_check("--build", "--keep-generated", build_error="failed build", expected=1)
+        self.assertEqual(self.root.read_text(), "original root")
+        self.assertFalse(self.package.exists())
+
+    def test_partial_install_restores_the_preceding_file(self):
+        self.package.mkdir()
+        with self.assertRaisesRegex(ValueError, "destination is not a file"):
+            self.run_check("--keep-generated")
+        self.assertEqual(self.root.read_text(), "original root")
+        self.assertTrue(self.package.is_dir())
+
+    def test_deep_check_rollback_precedes_another_writers_install(self):
+        script = textwrap.dedent("""
+            from pathlib import Path
+            import sys
+            sys.path.insert(0, sys.argv.pop(1))
+            import gen_cmakelists as g
+            def root(out=Path(".")):
+                (out / "CMakeLists.txt").write_text("add_subdirectory(lib)\\n# later writer")
+            def packages(out=Path(".")):
+                (out / "lib").mkdir(exist_ok=True)
+                (out / "lib/CMakeLists.txt").write_text("add_library(later INTERFACE)")
+            g.generate_root = root
+            g.generate_all_packages = packages
+            print("ready", flush=True)
+            g.main()
+        """)
+        for args in ([], ["--check", "--keep-generated"]):
+            with self.subTest(writer=args):
+                writers = []
+
+                def start_writer():
+                    writer = subprocess.Popen([sys.executable, "-c", script, str(_SCRIPT_DIR), *args],
+                                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    writers.append(writer)
+                    self.assertEqual(writer.stdout.readline().strip(), "ready")
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        writer.wait(timeout=0.3)
+                    self.assertEqual(self.root.read_text(), self.checked_root)
+
+                try:
+                    self.run_check("--build", during_build=start_writer)
+                    output, _ = writers[0].communicate(timeout=15)
+                    self.assertEqual(writers[0].returncode, 0, output)
+                    self.assertIn("later writer", self.root.read_text())
+                    self.assertEqual(self.package.read_text(), "add_library(later INTERFACE)")
+                finally:
+                    for writer in writers:
+                        if writer.poll() is None:
+                            writer.kill()
+                        writer.communicate()
+
+    def test_plain_deep_check_restores_an_existing_symlink(self):
+        self.package.symlink_to("../consumer/CMakeLists.txt")
+        self.run_check("--build")
+        self.assertTrue(self.package.is_symlink())
+        self.assertEqual(os.readlink(self.package), "../consumer/CMakeLists.txt")
+        self.assertEqual(self.root.read_text(), "original root")
 
 
 class CmakeBuildValidationTest(unittest.TestCase):
