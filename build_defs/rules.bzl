@@ -1303,6 +1303,7 @@ _CI_ACTION_ENVS = ["//command_line_option:action_env", "//command_line_option:ho
 _CI_PLATFORM_OPTIONS = [
     "//command_line_option:platforms",
     "//command_line_option:host_platform",
+    "//command_line_option:extra_execution_platforms",
     "//build_defs:llvm_latest",
     "//build_defs:metal_shader_validation",
     "//donner/svg/renderer:renderer_backend",
@@ -1320,7 +1321,12 @@ def _ci_test_platform(settings, attr):
     if attr.metal_validation:
         options["//build_defs:metal_shader_validation"] = "on"
     if attr.darwin:
-        options["//command_line_option:host_platform"] = str(Label("//tools/ci:remote_macos_aarch64"))
+        darwin = str(Label("//tools/ci:remote_macos_aarch64"))
+        options["//command_line_option:host_platform"] = darwin
+        # Toolchains such as rules_js package their execution-platform runtime into the test.
+        # Prefer Darwin on this configuration so the packaged Node executable runs on its TestRunner.
+        platforms = "//command_line_option:extra_execution_platforms"
+        options[platforms] = [darwin] + [p for p in settings[platforms] if str(p).lstrip("@") != darwin.lstrip("@")]
         options["//build_defs:llvm_latest"] = "0"
         for key in _CI_ACTION_ENVS:
             options[key] = [v for v in settings[key] if v.split("=", 1)[0] != "PATH"] + [_CI_DARWIN_PATH]

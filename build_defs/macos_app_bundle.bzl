@@ -52,6 +52,7 @@ done
 # Capture the signed producer files before TreeArtifact runfiles introduce transport links.
 COPYFILE_DISABLE=1 /usr/bin/tar --format=ustar --uid 0 --gid 0 --uname root --gname wheel -cf "$test_archive" -C "$app" Contents
 """,
+        exec_group = "codesign",
         mnemonic = "DonnerMacosAppBundle",
         progress_message = "Bundling Donner.app",
         # /usr/bin/codesign comes from the host macOS, not an action input, so its version is
@@ -82,6 +83,7 @@ exec "$bundle/Contents/MacOS/Donner" "$@"
 donner_macos_app_bundle = rule(
     implementation = _macos_app_bundle_impl,
     executable = True,
+    exec_groups = {"codesign": exec_group(exec_compatible_with = ["@platforms//os:macos"])},
     attrs = {
         "binary": attr.label(mandatory = True, providers = [DonnerTransitionedBinaryInfo]),
         "icon": attr.label(mandatory = True, allow_single_file = [".icns"]),

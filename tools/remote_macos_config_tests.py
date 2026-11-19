@@ -178,6 +178,21 @@ class XcodePinAgreementTest(unittest.TestCase):
             self.assertIn("build:ci-macos --%s=%s" % (flag, path), rc.splitlines())
         self.assertIn("/usr/bin", path.removeprefix("PATH=").split(":"))
 
+    def test_darwin_transition_prioritizes_toolchains_used_by_test_launchers(self):
+        transition = _read("build_defs/rules.bzl").split("def _ci_test_platform(", 1)[1].split("    return options", 1)[0]
+        darwin = transition.split("    if attr.darwin:", 1)[1]
+        self.assertIn('platforms = "//command_line_option:extra_execution_platforms"', darwin)
+        self.assertIn('options[platforms] = [darwin] +', darwin)
+        self.assertNotIn('options[platforms]', transition.split("    if attr.darwin:", 1)[0])
+
+    def test_app_bundle_codesign_action_requires_a_mac_executor(self):
+        bundle = _read("build_defs/macos_app_bundle.bzl")
+        self.assertIn('exec_groups = {"codesign": exec_group(exec_compatible_with = ["@platforms//os:macos"])}',
+                      bundle)
+        action = bundle.split("ctx.actions.run_shell(", 1)[1].split("    )", 1)[0]
+        self.assertIn('mnemonic = "DonnerMacosAppBundle"', action)
+        self.assertIn('exec_group = "codesign"', action)
+
     def test_static_config_restates_the_pin_file_in_order(self):
         pins = _pins()
         self.assertTrue(pins, "%s names no Xcode" % PIN_FILE)
