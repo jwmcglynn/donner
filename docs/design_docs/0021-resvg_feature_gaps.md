@@ -7,7 +7,8 @@ of the suite policy.
 
 The triage backlog for [0022](0022-resvg_test_suite_upgrade.md)'s Milestone 2 —
 working through the tests the suite upgrade pulled in and either fixing the
-underlying gap or recording why a `Params::Skip(...)` is the correct state. Each
+underlying gap or recording the registration that fits it (a Donner-rendered golden for a
+reference disagreement, or an allowlisted `Params::Skip(...)` for an unimplemented feature). Each
 entry corresponds to one or more skips/threshold-overrides in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc).
 

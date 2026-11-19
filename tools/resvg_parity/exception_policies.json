@@ -628,7 +628,7 @@
         "docs/design_docs/0021-resvg_feature_gaps.md",
         "https://github.com/jwmcglynn/donner/pull/2348"
       ],
-      "removal_criteria": "Remove the override when the adjacent PNG preserves the sharp pixel-aligned seams and the proven recursion behavior.",
+      "removal_criteria": "Remove the override when the adjacent PNG preserves the sharp seams and the proven recursion behavior.",
       "reference_provenance": "Project goldens after independently measuring tile strokes, clipping and circular references.",
       "max_threshold": 0.02,
       "max_pixels": 100,

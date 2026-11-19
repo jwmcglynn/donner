@@ -246,7 +246,7 @@ mark differing pixels, colored outlines mark positional differences.
 - **Diff image**:
   - Solid red areas = completely different pixels
   - Colored outlines = positional/alignment differences
-  - Minimal differences = may just need threshold adjustment
+  - Minimal differences = still a real cause to find; do not widen the threshold or budget to absorb them
   - Large differences = missing feature or wrong implementation
 
 - **Actual vs Expected**:

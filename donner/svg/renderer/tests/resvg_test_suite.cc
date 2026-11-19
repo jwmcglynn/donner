@@ -635,8 +635,8 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-nested-rectangles.png",
                          kDefaultThreshold,
-                         "Reference disagreement: the vendored PNG differs from the authored "
-                         "nested tile geometry on 832 fully opaque or empty pixels; resvg 0.49.0 "
+                         "Reference disagreement: against the authored nested tile geometry, 832 "
+                         "pixels are opaque in one image and empty in the other; resvg 0.49.0 "
                          "renders the tiles drawn explicitly")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
                     // The references resample a rasterized tile, blurring the tile-edge strokes.

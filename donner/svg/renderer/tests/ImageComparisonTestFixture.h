@@ -74,9 +74,9 @@ static constexpr int kDefaultMismatchedPixels = 100;
  * @brief Default per-pixel color difference threshold for image comparisons.
  *
  * Every comparison uses 0.02 unless its params set another value. A pixel whose color difference
- * exceeds the threshold counts toward \ref kDefaultMismatchedPixels. In the resvg suite, a
- * threshold above 0.05 must be recorded in `THRESHOLD_ALLOWLIST` in
- * `tools/resvg_parity/parity_report.py`, which may only shrink.
+ * exceeds the threshold counts toward the mismatched-pixel budget (default
+ * \ref kDefaultMismatchedPixels). In the resvg suite, a threshold above 0.05 must be recorded in
+ * `THRESHOLD_ALLOWLIST` in `tools/resvg_parity/parity_report.py`, which may only shrink.
  */
 static constexpr float kDefaultThreshold = 0.02f;
 

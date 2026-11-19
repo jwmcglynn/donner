@@ -1,6 +1,7 @@
 # resvg-test-suite: Custom Golden Overrides
 
-**Status:** Reference (current as of 2026-08-18)
+**Status:** Reference (current as of 2026-08-18; the override rules and the pattern, textPath
+and text-decoration tables were updated 2026-11-19)
 
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is _not_ the right thing to compare against, the test pins
@@ -8,14 +9,19 @@ golden is _not_ the right thing to compare against, the test pins
 so it compares against a Donner-blessed golden instead. This doc is the catalog
 of every such override and the reason it exists.
 
-There are two distinct reasons an override is justified:
+An override is justified when the vendored reference is not the right thing to compare against:
 
-1. **resvg's golden is wrong per spec** — Donner renders to the spec, resvg
-   doesn't. These are genuine upstream golden bugs.
-2. **Blessed minor diff** — Donner and resvg both render acceptably, but there's
-   a small, well-understood difference (sub-pixel char advance, anti-aliasing on
-   a curved baseline, a font-backend difference) where pinning a Donner golden is
-   cleaner than carrying a per-test pixel threshold.
+1. **Reference disagreement**: Donner renders to the specification and the vendored PNG does
+   not. These are genuine upstream golden bugs.
+2. **Harness mismatch or API-policy difference**: the vendored PNG was produced under different
+   harness conditions (for example an opaque background) or a different API policy.
+
+Every override records what the vendored PNG gets wrong in its reason, has an entry in
+`tools/resvg_parity/exception_policies.json`, and has a row with its SHA-256 in the golden
+README's digest table. A difference whose root cause is in Donner is fixed in the engine, not
+pinned with a golden, and a pixel budget in the hundreds is not accepted as a substitute. Some
+older rows below are legacy regression goldens whose provenance is not recorded; their reasons
+say so.
 
 Custom goldens live in `donner/svg/renderer/testdata/golden/`: `resvg-<test-name>.png`,
 named with the test stem, and `donner-<test-name>.png` for the Donner renderings whose evidence
@@ -181,17 +187,20 @@ pixel centers through the inverse transform to select the nearest source texel.
 
 The specification does not say how a pattern tile is rasterized, so these are not "wrong per
 spec". Donner does not draw pattern tiles analytically: both backends rasterize each tile at
-twice its device scale and sample it bilinearly. On the recursive rows every tile-edge stroke
-edge falls on a half raster pixel, so that sampling reproduces the exact seam coverage; content
-elsewhere in a tile is not reproduced exactly. The vendored PNGs resample a rasterized tile with
-a softer profile. Keeping the sharp seams is a maintainer decision.
+twice its device scale and sample it bilinearly. On the two self-recursive rows each tile-edge
+stroke edge falls on a half raster pixel, so that sampling reproduces the exact single-layer seam
+coverage (64, 255, 255, 64 on the pixel-aligned vertical seam). `recursive-on-child` draws two
+coincident half-stroke layers composited in the tile raster: its vertical seam reads 96 where
+either layer alone reads 64, and neither value is the true coverage of the two strokes (see the
+golden README). Content elsewhere in a tile is not reproduced exactly. The vendored PNGs resample
+a rasterized tile with a softer profile. Keeping the sharp seams is a maintainer decision.
 `testdata/golden/README.md` has the measurements, including what current Chromium and Firefox
 draw: exact coverage on pixel-aligned seams and a resampled tile on fractional ones.
 
 | Category | Test | Reason |
 | --- | --- | --- |
-| paint-servers/pattern | recursive-on-child | Sharp tile-edge stroke at this alignment, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
-| paint-servers/pattern | out-of-order-referencing | resvg 0.49.0 render of explicit tile rectangles; the PNG differs from the authored nested tile geometry on 832 fully opaque or empty pixels |
+| paint-servers/pattern | recursive-on-child | Sharp two-layer tile-edge stroke (seam 96, see the golden README), recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
+| paint-servers/pattern | out-of-order-referencing | resvg 0.49.0 render of explicit tile rectangles; against the authored nested tile geometry, 832 pixels are opaque in one PNG and empty in the other |
 | paint-servers/pattern | text-child | resvg 0.49.0 render of explicit clipped text cells under skew; the PNG resamples a raster tile, spreading edges into empty cells |
 | paint-servers/pattern | self-recursive-on-child | Sharp tile-edge stroke at this alignment; the PNG resamples a raster tile |
 | paint-servers/pattern | self-recursive | Sharp tile-edge stroke at this alignment; the PNG resamples a raster tile |

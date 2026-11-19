@@ -1261,8 +1261,9 @@ The renderer and the regeneration command of these two goldens are not recorded.
 - `resvg-indirect.png` (`text/text-decoration/indirect`): provenance not recorded. It was first
   committed in `0c5402b1d` under a numbered corpus name, with a source comment saying the vendored
   PNG has a phantom green stroke, and kept its bytes through the rename in `4aef2b23c`. The
-  vendored `indirect.png` outlines the glyphs and the underline in green (3,443 green pixels),
-  while the SVG paints no green; this golden has none.
+  vendored `indirect.png` outlines the glyphs and the underline in green, while the SVG paints
+  no green: 2,269 of its pixels are exactly opaque RGBA (0, 128, 0, 255), and 7,309 have any
+  alpha with a green channel above both red and blue. This golden has none by either count.
 - `geode/filters_feGaussianBlur_complex-transform.png` (`filters/feGaussianBlur/complex-transform`,
   Geode only): provenance not recorded. It was added in `eb1cd0fcb` as a per-backend Geode golden.
   The registration's reason records the measured coverage evidence; the renderer build and the
@@ -1272,8 +1273,9 @@ The renderer and the regeneration command of these two goldens are not recorded.
 
 Every golden that `donner/svg/renderer/tests/resvg_test_suite.cc` compares against is listed here
 with the SHA-256 of the committed file and the section that records its provenance.
-`//tools/resvg_parity:parity_report_tests` fails when a registered golden has no row here, or when
-any table row naming it carries a different digest. Update the row in the same change that
+`//tools/resvg_parity:parity_report_tests` fails when a registered golden has no row in this table
+(a row in another section does not count), or when any table row in this README that names it
+carries a different digest. Update the row in the same change that
 regenerates or adds a golden.
 
 | Golden | SHA-256 | Provenance |
