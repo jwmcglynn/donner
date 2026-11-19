@@ -485,10 +485,29 @@ TEST_F(RendererRegressionTests, GlyphOrientationVerticalZeroDrawsUprightGlyphs) 
     return RenderDocumentWithBackend(document, ActiveRendererBackend());
   };
   const auto alias = render(R"svg(glyph-orientation-vertical="0")svg");
-  ExpectVisibleBitmap(alias, "glyph_orientation_vertical_zero_visible");
-  ExpectBitmapsIdentical(alias, render(R"svg(text-orientation="upright")svg"),
-                         "glyph_orientation_vertical_zero_upright");
-  ExpectBitmapsDiffer(alias, render(""), "glyph_orientation_vertical_zero_not_sideways");
+  AssertVisibleFixture(alias, "glyph_orientation_vertical_zero_visible");
+  editor::tests::CompareBitmapToBitmap(alias, render(R"svg(text-orientation="upright")svg"),
+                                       "glyph_orientation_vertical_zero_upright",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // An empty or unreadable render leaves the count at -1, so it cannot pass as a difference.
+  const auto sideways = render("");
+  int sidewaysMismatchedPixels = -1;
+  testing::TestPartResultArray sidewaysDifferences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD,
+        &sidewaysDifferences);
+    editor::tests::CompareBitmapToBitmap(
+        alias, sideways, "glyph_orientation_vertical_zero_not_sideways",
+        editor::tests::PixelmatchIdentityParams(), &sidewaysMismatchedPixels);
+  }
+  std::ostringstream captured;
+  for (int i = 0; i < sidewaysDifferences.size(); ++i) {
+    captured << "\n" << sidewaysDifferences.GetTestPartResult(i).message();
+  }
+  EXPECT_THAT(sidewaysMismatchedPixels, testing::Gt(0))
+      << "The alias must not draw like the default sideways Latin" << captured.str();
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLonghands) {
