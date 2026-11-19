@@ -91,6 +91,31 @@ EM_JS(int, WorkerResultBoundaryKnown,
       });
 // clang-format on
 
+/// Writes \p detail into \p values in the order the worker stats publisher reads it, filling it.
+/// @param detail Owner dispatch detail of one worker result.
+/// @param values Slots after the publisher's fixed values.
+void AppendOwnerDispatchDetail(
+    const RenderResult::WorkerTimingBreakdown::GpuOwnerDispatchDetail& detail,
+    std::span<double> values) {
+  std::size_t next = 0;
+  const auto append = [&](double value) { values[next++] = value; };
+  append(static_cast<double>(detail.requestedByWorker));
+  for (const int count : detail.requestedByKind) {
+    append(static_cast<double>(count));
+  }
+  append(detail.deliveryMs);
+  append(detail.ownerQueueMs);
+  append(detail.executeMs);
+  append(detail.completionWakeMs);
+  for (const int count : detail.startLatencyBuckets) {
+    append(static_cast<double>(count));
+  }
+  append(detail.canvasFrameActiveMs);
+  append(static_cast<double>(detail.canvasFrames));
+  append(static_cast<double>(detail.receivedDuringCanvasFrame));
+  UTILS_RELEASE_ASSERT(next == values.size());
+}
+
 // Proxied to the browser main thread: the render pthread has no `window`.
 // Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
 // Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
@@ -102,7 +127,6 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
   const auto& timing = result.workerTiming;
   const auto& compositorStats = result.compositorFrameStats;
   const auto& fastPath = result.compositorFastPathDelta;
-  const auto& ownerDispatch = timing.gpuOwnerDispatch;
   // The fixed values below, then the owner dispatch detail appended after them.
   constexpr std::size_t kCoreValueCount = 59;
   constexpr std::size_t kValueCount = 88;
@@ -169,23 +193,8 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       static_cast<double>(RepresentsActiveDrag(result))};
   double values[kValueCount] = {};
   std::copy(std::begin(coreValues), std::end(coreValues), std::begin(values));
-  std::size_t next = kCoreValueCount;
-  const auto append = [&](double value) { values[next++] = value; };
-  append(static_cast<double>(ownerDispatch.requestedByWorker));
-  for (const int count : ownerDispatch.requestedByKind) {
-    append(static_cast<double>(count));
-  }
-  append(ownerDispatch.deliveryMs);
-  append(ownerDispatch.ownerQueueMs);
-  append(ownerDispatch.executeMs);
-  append(ownerDispatch.completionWakeMs);
-  for (const int count : ownerDispatch.startLatencyBuckets) {
-    append(static_cast<double>(count));
-  }
-  append(ownerDispatch.canvasFrameActiveMs);
-  append(static_cast<double>(ownerDispatch.canvasFrames));
-  append(static_cast<double>(ownerDispatch.receivedDuringCanvasFrame));
-  UTILS_RELEASE_ASSERT(next == kValueCount);
+  AppendOwnerDispatchDetail(timing.gpuOwnerDispatch,
+                            std::span<double>(values).subspan(kCoreValueCount));
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;

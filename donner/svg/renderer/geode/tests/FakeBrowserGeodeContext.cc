@@ -46,35 +46,38 @@ private:
   std::shared_ptr<gpu::DeviceLostState> lostState_;
 };
 
+/// The kind of round trip each recorded operation outside command recording makes.
+struct OperationKind {
+  std::string_view operation;               //!< Leading word of the recorded line.
+  uint64_t BrowserOwnerRoundTrips::* kind;  //!< Counter it adds to.
+};
+
+constexpr OperationKind kOperationKinds[] = {
+    {"createBuffer", &BrowserOwnerRoundTrips::resourceCreation},
+    {"createTexture", &BrowserOwnerRoundTrips::resourceCreation},
+    {"createTextureView", &BrowserOwnerRoundTrips::resourceCreation},
+    {"createSampler", &BrowserOwnerRoundTrips::resourceCreation},
+    {"createShaderModule", &BrowserOwnerRoundTrips::resourceCreation},
+    {"createBindGroup", &BrowserOwnerRoundTrips::bindGroupConstruction},
+    {"createBindGroupLayout", &BrowserOwnerRoundTrips::bindGroupConstruction},
+    {"createPipelineLayout", &BrowserOwnerRoundTrips::pipelineConstruction},
+    {"createRenderPipeline", &BrowserOwnerRoundTrips::pipelineConstruction},
+    {"createComputePipeline", &BrowserOwnerRoundTrips::pipelineConstruction},
+    {"destroyObject", &BrowserOwnerRoundTrips::resourceDestruction},
+    {"writeBuffer", &BrowserOwnerRoundTrips::bufferWrite},
+    {"writeTexture", &BrowserOwnerRoundTrips::textureWrite},
+    {"shareTexture", &BrowserOwnerRoundTrips::resourceSharing},
+    {"registerSharedTexture", &BrowserOwnerRoundTrips::resourceSharing},
+    {"submitCommandBuffers", &BrowserOwnerRoundTrips::queueSubmit},
+};
+
 /// The kind of the single round trip that the call recorded as \p line makes, outside recording.
 uint64_t BrowserOwnerRoundTrips::* KindOf(std::string_view line) {
   const std::string_view operation = line.substr(0, line.find(' '));
-  if (operation == "createBuffer" || operation == "createTexture" ||
-      operation == "createTextureView" || operation == "createSampler" ||
-      operation == "createShaderModule") {
-    return &BrowserOwnerRoundTrips::resourceCreation;
-  }
-  if (operation == "createBindGroup" || operation == "createBindGroupLayout") {
-    return &BrowserOwnerRoundTrips::bindGroupConstruction;
-  }
-  if (operation == "createPipelineLayout" || operation == "createRenderPipeline" ||
-      operation == "createComputePipeline") {
-    return &BrowserOwnerRoundTrips::pipelineConstruction;
-  }
-  if (operation == "destroyObject") {
-    return &BrowserOwnerRoundTrips::resourceDestruction;
-  }
-  if (operation == "writeBuffer") {
-    return &BrowserOwnerRoundTrips::bufferWrite;
-  }
-  if (operation == "writeTexture") {
-    return &BrowserOwnerRoundTrips::textureWrite;
-  }
-  if (operation == "shareTexture" || operation == "registerSharedTexture") {
-    return &BrowserOwnerRoundTrips::resourceSharing;
-  }
-  if (operation == "submitCommandBuffers") {
-    return &BrowserOwnerRoundTrips::queueSubmit;
+  for (const OperationKind& entry : kOperationKinds) {
+    if (entry.operation == operation) {
+      return entry.kind;
+    }
   }
   return &BrowserOwnerRoundTrips::other;
 }

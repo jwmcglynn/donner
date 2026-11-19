@@ -1859,9 +1859,14 @@ test("a worker result publishes its owner dispatch detail from the slots after t
     detail.receivedDuringCanvasFrame,
   ];
   assert.deepEqual(slots, Array.from({ length: count - core }, (_, index) => 1000 + core + index));
-  const appended = timingPublisher.match(/std::size_t next = kCoreValueCount;([\s\S]*?)UTILS_RELEASE_ASSERT/)[1];
+  assert.match(
+    timingPublisher,
+    /AppendOwnerDispatchDetail\(timing\.gpuOwnerDispatch,\s*std::span<double>\(values\)\.subspan\(kCoreValueCount\)\);/,
+    "the detail fills the slots after the core values",
+  );
+  const appended = renderCoordinatorSource.match(/void AppendOwnerDispatchDetail\([\s\S]*?\n\}/)[0];
   assert.deepEqual(
-    [...appended.matchAll(/ownerDispatch\.(\w+)/g)].map(([, name]) => name),
+    [...appended.matchAll(/detail\.(\w+)/g)].map(([, name]) => name),
     ["requestedByWorker", "requestedByKind", "deliveryMs", "ownerQueueMs", "executeMs",
       "completionWakeMs", "startLatencyBuckets", "canvasFrameActiveMs", "canvasFrames",
       "receivedDuringCanvasFrame"],
