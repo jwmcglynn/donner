@@ -1,5 +1,6 @@
 """Tests for exact remote GPU wrapper selection."""
 
+import json
 import os
 import subprocess
 import unittest
@@ -7,7 +8,7 @@ import unittest
 from python.runfiles import runfiles
 
 from tools import test_timing
-from tools.ci_remote_gpu_targets import REMOTE_TARGETS, select_remote_targets
+from tools.ci_remote_gpu_targets import DISPLAY_TESTS, REMOTE_TARGETS, check_results, select_remote_targets
 
 
 class CiRemoteGpuTargetsTest(unittest.TestCase):
@@ -32,6 +33,28 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
             },
             REMOTE_TARGETS,
         )
+
+    def test_mixed_execution_receipt(self):
+        display, other_display = sorted(DISPLAY_TESTS)
+        ordinary = "//other:ordinary_test"
+
+        def result(label, strategy, cached=False):
+            return json.dumps({"id": {"testResult": {"label": label}}, "testResult": {
+                "status": "PASSED", "cachedLocally": cached, "executionInfo": {"strategy": strategy}}})
+
+        finished = json.dumps({"finished": {}})
+        check_results([result(display, "local"), result(other_display, "local"),
+                       result(ordinary, "remote"), result(ordinary, None, True), finished], ["//..."])
+        check_results([finished], [ordinary])
+        for events, selected in (
+                ([result(display, "local"), finished], ["//..."]),
+                ([finished], [display]),
+                ([result(display, "remote"), finished], [display]),
+                ([result(display, "local", True), finished], [display]),
+                ([result(ordinary, "local"), finished], [ordinary]),
+                ([], [ordinary])):
+            with self.subTest(events=events), self.assertRaises(ValueError):
+                check_results(events, selected)
 
     def test_empty_selection_stays_empty(self):
         self.assertEqual([], select_remote_targets([]))

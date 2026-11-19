@@ -110,7 +110,7 @@ class _Context:
 
     def bazel(self, action):
         return (self.argv(action.wrappers) + ["bazelisk"] + list(self.lane.startup)
-                + self.argv(action.args))
+                + list(action.startup) + self.argv(action.args))
 
     def query(self, tag):
         expression = "attr('tags', '%s', tests(set(%s)))" % (tag, self.selection()[0])

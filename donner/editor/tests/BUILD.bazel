@@ -374,7 +374,7 @@ donner_cc_test(
 )
 
 # The test starts an X server and presents through that host's lavapipe ICD. It takes the local
-# GPU resource, like other GPU-opening tests, so it never runs alongside another one.
+# GPU resource. Its externally supplied display tools require a fresh local test result.
 sh_test(
     name = "editor_window_vulkan_surface_tests",
     srcs = ["RunEditorWindowVulkanSurfaceTests.sh"],
@@ -382,7 +382,9 @@ sh_test(
     data = [":editor_window_tests_geode"],
     env_inherit = ["PATH"],
     tags = [
-        "local-gpu-isolated",
+        "external",
+        "no-cache",
+        "no-remote-exec",
         "requires_xvfb",
         "resources:local_gpu:1",
     ],
@@ -401,7 +403,9 @@ sh_test(
     data = [":editor_window_tests_geode"],
     env_inherit = ["PATH"],
     tags = [
-        "local-gpu-isolated",
+        "external",
+        "no-cache",
+        "no-remote-exec",
         "requires_xvfb",
         "resources:local_gpu:1",
     ],

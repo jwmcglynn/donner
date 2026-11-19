@@ -363,7 +363,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         upload = self._step_body(job, "Upload Bazel test failure artifacts")
         condition = next(line.strip() for line in upload.splitlines() if line.strip().startswith("if:"))
         self.assertTrue(condition.startswith("if: failure() && "))
-        for step_id in ("test", "wgpu_resvg_reference", "deterministic_soak_probe", "local_xvfb"):
+        for step_id in ("test", "wgpu_resvg_reference", "deterministic_soak_probe"):
             with self.subTest(step=step_id):
                 self.assertIn("steps.%s.outcome == 'failure'" % step_id, condition)
         self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", upload)
@@ -1101,9 +1101,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 target = self.editor_tests_build.split(
                     'name = "%s",' % name, 1
                 )[1].split("\n)\n", 1)[0]
-                for tag in ("local-gpu-isolated", "requires_xvfb", "resources:local_gpu:1"):
+                for tag in ("no-remote-exec", "no-cache", "external", "requires_xvfb", "resources:local_gpu:1"):
                     self.assertIn('"%s"' % tag, target)
                 self.assertNotIn('"exclusive-if-local"', target)
+                self.assertNotIn('"local-gpu-isolated"', target)
                 self.assertIn('data = [":editor_window_tests_geode"]', target)
         self.assertIn("export DONNER_GPU_BACKEND=vulkan", self.xvfb_runner)
         self.assertIn("xvfb-run -a", self.xvfb_runner)
@@ -1115,21 +1116,23 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for line in invocations:
             self.assertIn('xvfb-run -a -s "$xvfb_server_args" ', line)
 
-        step = self._step_body(local, "Test local Xvfb targets")
-        self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
-        self.assertEqual("requires_xvfb,-fuzz_soak", self._tag_filters(step, local))
-        self.assertIn("--strategy=TestRunner=local", self._test_options(step, local))
-        self.assertNotIn("--test_env=PATH", step)
+        self.assertIn("common:linux --experimental_google_legacy_api", self.bazelrc.splitlines())
+        for command in ("build", "query"):
+            self.assertIn(command + " --enable_platform_specific_config", self.bazelrc.splitlines())
+        self.assertNotIn("Test local Xvfb targets", local)
+        test = self._step_body(local, "Test")
+        for flag in ("--strategy=TestRunner=remote,local", "--remote_local_fallback=false",
+                     '--invocation_policy=', 'experimental_remote_scrubbing_config',
+                     '--aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue',
+                     '--noexperimental_merged_skyframe_analysis_execution', '--nokeep_going',
+                     '--build_tests_only', '--check-results'):
+            self.assertIn(flag, test)
+        self.assertNotIn("--test_env=PATH", test)
         for target in ("editor_window_vulkan_surface_tests", "editor_window_vulkan_default_tests"):
             self.assertIn('env_inherit = ["PATH"]',
                           _rule_text(_repository_text("donner/editor/tests/BUILD.bazel"), target))
         self.assertIn("for tool in xvfb-run Xvfb xauth cmake ninja",
                       self._step_body(local, "Check native consumer tools"))
-        # //tools/ci:lane_tests runs the phase with a native target, a selection without one
-        # and a fallback.
-        self.assertEqual("--strategy=TestRunner=local",
-                         self._phase_commands("linux-self-hosted", "local_xvfb")[0][-2])
-
     def test_shell_fixture_timeout_reports_only_known_progress_markers(self):
         for stderr, entered, exited in (
             (b"untrusted-output", False, False),
@@ -1780,7 +1783,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                               self._job_body(lane))
         self.assertGreaterEqual(
             len(covered),
-            11,
+            10,
             "phase discovery matched %r, which is fewer phases than exist; the "
             "match is stale and this test is no longer checking anything"
             % (covered,),

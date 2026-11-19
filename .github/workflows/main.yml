@@ -329,7 +329,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
+        if: failure() && (steps.test.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -521,11 +521,6 @@ jobs:
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted deterministic_soak_probe
 
-      - name: Test local Xvfb targets
-        id: local_xvfb
-        shell: bash
-        run: python3 tools/ci/lane.py phase linux-self-hosted local_xvfb
-
       - name: Build and test CMake consumer
         id: cmake_consumer
         shell: bash
@@ -578,7 +573,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
+        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
