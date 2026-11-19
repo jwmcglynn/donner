@@ -576,7 +576,7 @@
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Compare exact tile periods, clipping and authored transforms.",
+      "disposition": "Compare the authored tile periods, clipping and transforms, drawn as explicit geometry.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
         "https://github.com/jwmcglynn/donner/pull/2410"
@@ -598,7 +598,7 @@
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Compare exact tile periods, clipping and authored transforms.",
+      "disposition": "Compare the authored tile periods, clipping and transforms, drawn as explicit geometry.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
         "https://github.com/jwmcglynn/donner/pull/2410"
@@ -622,13 +622,13 @@
         "shared_golden"
       ],
       "classification": "accepted-rasterization-difference",
-      "disposition": "Keep the documented exact tile seams and circular-layer disposition.",
+      "disposition": "Keep the documented sharp tile seams, which Donner's 2x tile raster with bilinear sampling reproduces at these tiles' alignment, and the circular-layer disposition.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "docs/design_docs/0021-resvg_feature_gaps.md",
         "https://github.com/jwmcglynn/donner/pull/2348"
       ],
-      "removal_criteria": "Remove the override when the adjacent PNG preserves exact seams and the proven recursion behavior.",
+      "removal_criteria": "Remove the override when the adjacent PNG preserves the sharp pixel-aligned seams and the proven recursion behavior.",
       "reference_provenance": "Project goldens after independently measuring tile strokes, clipping and circular references.",
       "max_threshold": 0.02,
       "max_pixels": 100,

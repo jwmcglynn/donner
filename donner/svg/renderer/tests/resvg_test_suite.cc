@@ -635,29 +635,40 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-nested-rectangles.png",
                          kDefaultThreshold,
-                         "Explicit tiles preserve fractional periods and clip nested content")},
+                         "Reference disagreement: the vendored PNG differs from the authored "
+                         "nested tile geometry on 832 fully opaque or empty pixels; resvg 0.49.0 "
+                         "renders the tiles drawn explicitly")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
-                    // The references resample a rasterized tile, blurring the tile-edge strokes;
-                    // testdata/golden/README.md has the exact coverage these goldens hold.
+                    // The references resample a rasterized tile, blurring the tile-edge strokes.
+                    // Donner also rasterizes each tile, at 2x device scale, and samples it
+                    // bilinearly; at these tiles' alignment that keeps the seams sharp.
+                    // testdata/golden/README.md has the measured seam coverage.
                     {"recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-recursive-on-child.png")
-                         .withReason("Reference disagreement: exact tile-edge stroke coverage, and "
-                                     "the mutually recursive fill paints one level deep (#1185)")},
+                         .withReason("Reference disagreement: the vendored PNG blurs the tile-edge "
+                                     "strokes that Donner's 2x tile raster keeps sharp at this "
+                                     "alignment, and the mutually recursive fill paints one level "
+                                     "deep (#1185)")},
                     {"self-recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")
-                         .withReason(
-                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason("Reference disagreement: the vendored PNG blurs the tile-edge "
+                                     "strokes that Donner's 2x tile raster keeps sharp at this "
+                                     "alignment (#1185)")},
                     {"self-recursive.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")
-                         .withReason(
-                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason("Reference disagreement: the vendored PNG blurs the tile-edge "
+                                     "strokes that Donner's 2x tile raster keeps sharp at this "
+                                     "alignment (#1185)")},
                     {"text-child.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-skewed-text-tiles.png",
-                         kDefaultThreshold, "Text and border clipped to each tile before skewing")},
+                         kDefaultThreshold,
+                         "Reference disagreement: the vendored PNG resamples a rasterized skewed "
+                         "tile, spreading text and border edges into empty cells; resvg 0.49.0 "
+                         "renders the clipped tiles drawn explicitly")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -807,7 +818,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // 442 on macOS Metal (Apple Silicon); 449 on Linux Vulkan lavapipe, both arm64 and
                 // x86_64, in the native Geode and wgpu-native reference lanes. The same SVG at 1x
                 // and larger (structure/image/external-svg) matches at default parameters.
-                {"with-an-image-child.svg", Params().withGeodeMaxPixelsDifferent(500)},
+                {"with-an-image-child.svg",
+                 Params().withGeodeMaxPixelsDifferent(500).withReason(
+                     "Geode coverage of the 0.4 device px letter strokes in the 0.8x nested image "
+                     "differs on color-boundary pixels: 442 px on Metal, 449 px on Vulkan")},
                 {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
             })),
         ValuesIn(ActiveComparisonModes())),
@@ -1072,7 +1086,7 @@ INSTANTIATE_TEST_SUITE_P(
                               "fits content bounds without authored dimensions (#1186)")},
                 {"not-UTF-8-encoding.svg",
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
-                              "and update the encoding declaration")},
+                              "and update the encoding declaration (#1182)")},
 
                 {"funcIRI-with-quotes.svg", Params{}},
                 {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
@@ -1477,7 +1491,9 @@ INSTANTIATE_TEST_SUITE_P(
                          .withReason("Harness mismatch: opaque reference background; under 4x4 "
                                      "supersampled coverage the glyphs match it (#1185)")},
                     {"on-tspan-with-arabic.svg",
-                     Params().requireFeature(RendererBackendFeature::TextFull)},
+                     Params()
+                         .requireFeature(RendererBackendFeature::TextFull)
+                         .withReason("Arabic contextual joining requires HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1505,8 +1521,11 @@ INSTANTIATE_TEST_SUITE_P(
                          .withReason("Literal bands preserve multiline decoration "
                                      "offsets and paint order")
                          .setCanvasSize(800, 800)},
-                    {"indirect.svg", Params::WithGoldenOverride(
-                                         "donner/svg/renderer/testdata/golden/resvg-indirect.png")},
+                    {"indirect.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-indirect.png")
+                         .withReason("Reference disagreement: the vendored PNG outlines the glyphs "
+                                     "and underline in green, which the SVG does not paint")},
                     {"tspan-decoration.svg",
                      Params::WithThreshold(0.09f, kDefaultMismatchedPixels,
                                            "Archived nested underline and glyph coverage differ")},
@@ -1577,7 +1596,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
-                     .withReason("resvg 0.47.0 reference (golden README)")},
+                     .withReason("Reference disagreement: the vendored PNG predates resvg's "
+                                 "current dy layout on a path and places the glyphs differently; "
+                                 "independent resvg 0.47.0 reference (golden README)")},
                 // ResvgV049Reference() rows compare against resvg v0.49.0's 300x300 renderings.
                 {"m-A-path.svg", ResvgV049Reference()},
                 // The vendored PNG is byte-identical to simple-case.png (align placement), so it
@@ -1617,7 +1638,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {"tspan-with-relative-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png")
-                     .withReason("Reference generated independently with resvg 0.47.0")},
+                     .withReason("Reference disagreement: the vendored PNG predates resvg's "
+                                 "current dx/dy layout on a path and places the shifted spans "
+                                 "differently; independent resvg 0.47.0 reference (golden "
+                                 "README)")},
                 {"two-paths.svg", ResvgV049Reference()},
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
@@ -1656,7 +1680,7 @@ INSTANTIATE_TEST_SUITE_P(
                 // covers only the origin model.
                 {"writing-mode=tb.svg",
                  Params::WithThreshold(kDefaultThreshold, 250,
-                                       "Larger threshold due to reference disagreement: vmtx "
+                                       "Larger pixel budget due to reference disagreement: vmtx "
                                        "upright origin vs hhea-centered cell, 0.0175em per glyph")
                      .setCanvasSize(300, 300)},
             })),

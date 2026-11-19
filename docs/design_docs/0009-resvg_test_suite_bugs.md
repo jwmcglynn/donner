@@ -177,21 +177,24 @@ records the construction and checksums for `on-feImage`. The separate `optimizeS
 compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
 pixel centers through the inverse transform to select the nearest source texel.
 
-### Exact pattern-tile seams (reference rasterization, not a spec violation)
+### Sharp pattern-tile seams (reference rasterization, not a spec violation)
 
 The specification does not say how a pattern tile is rasterized, so these are not "wrong per
-spec". On these rows Donner draws the exact coverage of each tile's stroke at the seams; the
-vendored PNGs resample a rasterized tile. Keeping the exact seams is a maintainer decision.
+spec". Donner does not draw pattern tiles analytically: both backends rasterize each tile at
+twice its device scale and sample it bilinearly. On the recursive rows every tile-edge stroke
+edge falls on a half raster pixel, so that sampling reproduces the exact seam coverage; content
+elsewhere in a tile is not reproduced exactly. The vendored PNGs resample a rasterized tile with
+a softer profile. Keeping the sharp seams is a maintainer decision.
 `testdata/golden/README.md` has the measurements, including what current Chromium and Firefox
 draw: exact coverage on pixel-aligned seams and a resampled tile on fractional ones.
 
 | Category | Test | Reason |
 | --- | --- | --- |
-| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
-| paint-servers/pattern | out-of-order-referencing | Independent tile rectangles preserve the two fractional periods and clipped green strips |
-| paint-servers/pattern | text-child | Independent clipped text cells preserve glyph placement under skew |
-| paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
-| paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | recursive-on-child | Sharp tile-edge stroke at this alignment, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
+| paint-servers/pattern | out-of-order-referencing | resvg 0.49.0 render of explicit tile rectangles; the PNG differs from the authored nested tile geometry on 832 fully opaque or empty pixels |
+| paint-servers/pattern | text-child | resvg 0.49.0 render of explicit clipped text cells under skew; the PNG resamples a raster tile, spreading edges into empty cells |
+| paint-servers/pattern | self-recursive-on-child | Sharp tile-edge stroke at this alignment; the PNG resamples a raster tile |
+| paint-servers/pattern | self-recursive | Sharp tile-edge stroke at this alignment; the PNG resamples a raster tile |
 
 ### Color-adjust filter labels
 
@@ -238,23 +241,17 @@ The historical crosshair coverage accounts for 731 of 733 differing pixels. Both
 tiers compare the complete scene against an outlined control with default parameters. The
 golden README records the font metrics, browser controls, and regeneration command.
 
-### Blessed minor diffs (textPath / text-decoration)
+### textPath and text-decoration overrides
 
-The `text/textPath` family carries the bulk of the overrides: sub-pixel character
-advance and anti-aliasing differences along curved baselines, which differ between
-the simple and `text-full` backends. All are `.withReason("Minor char")` unless
-noted.
+| Category             | Test                         | Reason |
+| -------------------- | ---------------------------- | ------ |
+| text/textPath        | dy-with-tiny-coordinates     | Reference disagreement: the vendored PNG predates resvg's current dy layout on a path; independent resvg 0.47.0 reference |
+| text/textPath        | tspan-with-absolute-position | Regression golden for absolute distance along the text path (legacy PNG, provenance not recorded) |
+| text/textPath        | tspan-with-relative-position | Reference disagreement: the vendored PNG predates resvg's current dx/dy layout on a path; independent resvg 0.47.0 reference |
+| text/textPath        | with-underline               | Regression golden for the on-path underline (legacy PNG, provenance not recorded) |
+| text/text-decoration | indirect                     | Reference disagreement: the vendored PNG outlines the glyphs and underline in green, which the SVG does not paint (legacy PNG, provenance not recorded) |
 
-| Category             | Test                                     | Reason                                            |
-| -------------------- | ---------------------------------------- | ------------------------------------------------- |
-| text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
-| text/textPath        | tspan-with-absolute-position             | Minor char                                        |
-| text/textPath        | tspan-with-relative-position             | Minor char                                        |
-| text/textPath        | with-underline                           | Minor char                                        |
-| text/text-decoration | indirect                                 | (no reason string)                                |
-
-> `text-decoration/indirect` carries no `withReason`. It should either get one or migrate to a
-> per-test threshold. Tracked in [0021](0021-resvg_feature_gaps.md).
+The golden README records the evidence and, where known, the regeneration command for each.
 
 ## Golden files
 
@@ -265,7 +262,8 @@ references.
 ## Maintenance
 
 - Adding an override: place `resvg-<new-stem>.png` in
-  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…) .withReason("…")` in `resvg_test_suite.cc`, and add a row here. The
+  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…) .withReason("…")` in `resvg_test_suite.cc`,
+  add the golden's SHA-256 row to the golden README's digest table, and add a row here. The
   `golden/*.png` glob in
   [`testdata/BUILD.bazel`](../../donner/svg/renderer/testdata/BUILD.bazel) picks it
   up automatically.
