@@ -44,8 +44,7 @@ jobs:
             # this job records them without failing on a miss. Every other run enforces them.
             latency_gates: report
             # Likewise the tracked completion checks, each only in its report scope in
-            # latency-gates.mjs (the browsers and phases its issue tracks), until their fixes
-            # (#1675, #1676, #2106).
+            # latency-gates.mjs, until their fixes (#1675, #1676, #2106).
             completion_checks: report
           - os: ubuntu-24.04
             target_tag: perf_linux
