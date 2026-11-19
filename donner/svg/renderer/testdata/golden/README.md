@@ -374,6 +374,53 @@ pixels outside that square, including the frame.
 | Reconstructed pixels, row-major RGBA8 | `c7dadd180384db409d6ad349be742cd02a7eef087d7be74e48ae9998d167ca9e` |
 | Committed golden PNG | `e94b02b863268c3579d36929691e9a8cfb5c389976fe459f00d2f3aa122a4154` |
 
+## Large-coordinate curves at 8x
+
+`tiny_skia_large_coordinate_curves_8x.png` is the CPU (tiny-skia) render of
+`../tiny_skia_large_coordinate_curves_8x.svg`: 50 solid and 50 dashed cubic curves around
+(4,000,000, 4,000,000), viewed at 8x on a 500 x 500 canvas. It was rendered at main commit
+`7e8acc4ab`, before the stroke precision floor existed, so it pins that the floor leaves
+this render unchanged.
+
+PNG SHA-256: `045379b1dd1c2f0101bc08df460aba43323f233c41edecfa22300af7bfaae5a6`.
+
+The SVG and the test that renders it are not on that commit, so the recipe copies the SVG out
+of the tree first and adds a minimal test. From the repository root, on a commit that has the
+SVG, with `<outside>` any directory outside the repository:
+
+```sh
+cp donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg <outside>/large.svg
+git checkout 7e8acc4ab
+cp <outside>/large.svg donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg
+cat >> donner/svg/renderer/tests/RendererPublicApi_tests.cc <<'CPP'
+#include <fstream>
+#include <iterator>
+namespace donner::svg {
+namespace {
+TEST(GoldenRecipe, TinySkiaLargeCoordinateCurves8x) {
+  std::ifstream file("donner/svg/renderer/testdata/tiny_skia_large_coordinate_curves_8x.svg");
+  ASSERT_TRUE(file.is_open());
+  const std::string svg((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  SVGDocument document = ParseDocument(svg);
+  RendererTinySkia renderer;
+  renderer.draw(document);
+  editor::tests::CompareBitmapToGolden(
+      renderer.takeSnapshot(),
+      "donner/svg/renderer/testdata/golden/tiny_skia_large_coordinate_curves_8x.png",
+      "large_coordinate_curves_8x", editor::tests::PixelmatchIdentityParams());
+}
+}  // namespace
+}  // namespace donner::svg
+CPP
+sed -i.bak 's|data = \["//third_party/public-sans:public-sans_resource_files"\],|data = ["//donner/svg/renderer/testdata", "//third_party/public-sans:public-sans_resource_files"],|' donner/svg/renderer/tests/BUILD.bazel
+bazel test -c opt //donner/svg/renderer/tests:renderer_public_api_tests \
+  --test_filter='GoldenRecipe.*' --test_env=UPDATE_GOLDEN_IMAGES_DIR=$PWD \
+  --sandbox_writable_path=$PWD --nocache_test_results
+```
+
+The recipe writes the PNG into the tree; its SHA-256 matches the value above. Discard the
+other edits afterwards.
+
 ## Emoji positioning reference
 
 `resvg-compound-emojis-and-coordinates-list.png` is generated independently with

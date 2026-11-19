@@ -799,6 +799,8 @@ struct RendererResourceStats {
   std::size_t imageDraws = 0;
   std::uint64_t imageBytes = 0;
   std::size_t strokeOutputPoints = 0;
+  /// Curve-measurement steps the CPU renderer's dashes took in this frame.
+  std::size_t dashMeasureSteps = 0;
   bool drawBudgetRejected = false;
   bool textMaterializationBudgetSupported = false;
   std::size_t textUniqueOutlines = 0;
