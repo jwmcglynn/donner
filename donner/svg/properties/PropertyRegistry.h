@@ -838,6 +838,10 @@ private:
       const css::Declaration& declaration,
       std::array<Property<css::Color>, kResourceColorCount>& selectedColors);
 
+  /// Clear the resource color at \p index when a presentation attribute declared it, keeping an
+  /// inline `style=""` value in effect.
+  PresentationAttributeClear clearResourceColorPresentation(std::size_t index);
+
   /// Apply a resource-color presentation attribute and preserve its diagnostic.
   ParseResult<bool> parseResourceColorAttribute(std::size_t index,
                                                 const parser::PropertyParseFnParams& params);

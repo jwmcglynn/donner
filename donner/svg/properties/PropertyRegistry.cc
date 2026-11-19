@@ -3607,23 +3607,35 @@ void PropertyRegistry::clearStyleAttributeProperties() {
                 [](const auto& entry) { return entry.second.specificity.isStyleAttribute(); });
 }
 
+namespace {
+
+/// Clears \p property when a presentation attribute declared it. Only presentation attributes
+/// declare at 0,0,0 in an element's local registry. @return Whether it was cleared.
+template <typename PropertyT>
+bool ClearPresentationDeclaration(PropertyT& property) {
+  if (!property.isSpecified() || property.specificity != css::Specificity()) {
+    return false;
+  }
+  property.clear();
+  return true;
+}
+
+}  // namespace
+
+PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearResourceColorPresentation(
+    std::size_t index) {
+  reconcileResourceColorMutation(index);
+  auto& overlay = inlineResourceColors_[index];
+  const bool cleared = ClearPresentationDeclaration(overlay ? overlay->base : resourceColor(index));
+  refreshResourceColor(index);
+  return cleared ? PresentationAttributeClear::Cleared : PresentationAttributeClear::NotSet;
+}
+
 PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentationAttribute(
     std::string_view name) {
-  // Only presentation attributes declare at 0,0,0 in an element's local registry.
-  const auto clearIfDeclared = [](auto& property) {
-    if (!property.isSpecified() || property.specificity != css::Specificity()) {
-      return false;
-    }
-    property.clear();
-    return true;
-  };
   for (std::size_t index = 0; index < kResourceColorCount; ++index) {
     if (name == resourceColor(index).name) {
-      reconcileResourceColorMutation(index);
-      auto& overlay = inlineResourceColors_[index];
-      const bool cleared = clearIfDeclared(overlay ? overlay->base : resourceColor(index));
-      refreshResourceColor(index);
-      return cleared ? PresentationAttributeClear::Cleared : PresentationAttributeClear::NotSet;
+      return clearResourceColorPresentation(index);
     }
   }
 
@@ -3643,7 +3655,7 @@ PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentation
   forEachProperty<0, numProperties()>([&](auto i) {
     if (std::get<i.value>(writtenProperties).isSpecified()) {
       writes = true;
-      cleared |= clearIfDeclared(std::get<i.value>(properties));
+      cleared |= ClearPresentationDeclaration(std::get<i.value>(properties));
     }
   });
   if (!writes) {
