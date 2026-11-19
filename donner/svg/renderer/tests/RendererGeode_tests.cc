@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <future>
 #include <latch>
 #include <limits>
@@ -5178,6 +5179,52 @@ TEST_F(RendererGeodeTest, ClipPathInsideAnExpandedFilterLayerMatchesTinySkia) {
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><clipPath id="c"><circle cx="100" cy="100" r="80"/></clipPath><filter id="f" filterUnits="userSpaceOnUse" x="-20" y="-20" width="240" height="240"><feOffset dx="4" dy="4"/></filter><g filter="url(#f)"><rect width="200" height="200" fill="blue" clip-path="url(#c)"/></g></svg>)svg";
   ExpectGeodeMatchesTinySkia(kSource, kSource, "clip_path_in_expanded_filter_layer",
                              kCircleEdgeParams);
+}
+
+/// Builds a document whose gradient has \p stopCount evenly spaced stops, each a different color,
+/// and paints it three ways: a fill, a stroke, and a fill under a clip path that covers the whole
+/// canvas. The clip path is a triangle rather than a rectangle so it renders through a coverage
+/// mask, which keeps that fill out of the cross-entity batches and the per-entity residence the
+/// other two can use; the mask covers every pixel fully, so it changes no pixel.
+/// @param stopCount Number of `<stop>` elements.
+/// @param radial True for a radialGradient, false for a linearGradient.
+std::string ManyStopGradientDocument(int stopCount, bool radial) {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="48"><defs>)svg"
+      R"svg(<clipPath id="cover"><path d="M-200,-200 L400,-200 L-200,400 Z"/></clipPath>)svg";
+  source +=
+      radial
+          ? R"svg(<radialGradient id="g" gradientUnits="userSpaceOnUse" cx="40" cy="24" r="80">)svg"
+          : R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="4" y1="0" x2="124" y2="0">)svg";
+  for (int i = 0; i < stopCount; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  static_cast<double>(i) / (stopCount - 1), (i * 67 + 13) % 256,
+                  (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    source += stop;
+  }
+  source += radial ? "</radialGradient>" : "</linearGradient>";
+  source +=
+      R"svg(</defs><rect width="128" height="16" fill="url(#g)"/>)svg"
+      R"svg(<path d="M0,24 H128" stroke="url(#g)" stroke-width="16" fill="none"/>)svg"
+      R"svg(<rect y="32" width="128" height="16" fill="url(#g)" clip-path="url(#cover)"/></svg>)svg";
+  return source;
+}
+
+/// A gradient renders every one of its stops, however many it has, in each of the ways Geode
+/// draws a gradient. 16 is the most stops a gradient's draw parameters carry inline, so the cases
+/// sit on both sides of it, and the largest spans several rows of the texture that holds stops
+/// past that.
+TEST_F(RendererGeodeTest, GradientsWithManyStopsMatchTinySkia) {
+  for (const bool radial : {false, true}) {
+    for (const int stopCount : {16, 17, 32, 2500}) {
+      const std::string label = std::string(radial ? "radial" : "linear") + "_gradient_" +
+                                std::to_string(stopCount) + "_stops";
+      SCOPED_TRACE(label);
+      const std::string source = ManyStopGradientDocument(stopCount, radial);
+      ExpectGeodeMatchesTinySkia(source, source, label, editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 /// Every surface the renderer opens while an expanded filter layer is active has the layer's
