@@ -1,6 +1,6 @@
 {
   "tree": {
-    "lines": 5746,
+    "lines": 5752,
     "comment_lines": 633,
     "multiline_runs": 71,
     "longest_run": 194,
@@ -33,7 +33,7 @@
       "longest_if": 27
     },
     ".github/workflows/cmake.yml": {
-      "lines": 308,
+      "lines": 309,
       "comment_lines": 28,
       "multiline_runs": 3,
       "longest_run": 30,
@@ -89,7 +89,7 @@
       "longest_if": 70
     },
     ".github/workflows/lint.yml": {
-      "lines": 185,
+      "lines": 186,
       "comment_lines": 16,
       "multiline_runs": 2,
       "longest_run": 30,
@@ -97,7 +97,7 @@
       "longest_if": 195
     },
     ".github/workflows/main.yml": {
-      "lines": 1370,
+      "lines": 1371,
       "comment_lines": 203,
       "multiline_runs": 11,
       "longest_run": 31,
@@ -209,7 +209,7 @@
       "longest_if": 177
     },
     ".github/actions/pr-trust/action.yml": {
-      "lines": 102,
+      "lines": 105,
       "comment_lines": 0,
       "multiline_runs": 1,
       "longest_run": 74,

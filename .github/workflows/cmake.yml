@@ -48,6 +48,7 @@ jobs:
       use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
       use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
       # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
+      unified_re_default: ${{ steps.pr_trust.outputs.unified_re_default }}
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
       renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
     steps:

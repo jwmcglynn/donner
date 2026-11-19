@@ -94,6 +94,15 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertEqual(route["use_self_hosted_linux"], "true")
         self.assertEqual(route["use_self_hosted_macos"], "true")
 
+    def test_unified_canary_default_comes_from_the_base_trust_action(self):
+        gate = self._job_body("gatekeeper")
+        local = self._job_body("linux-self-hosted")
+        self.assertIn("ref: ${{ github.event.pull_request.base.sha || github.sha }}", gate)
+        self.assertIn("unified_re_default: ${{ steps.pr_trust.outputs.unified_re_default }}", gate)
+        output = self.trust_action.split("  unified_re_default:\n", 1)[1].split("  renovate_pr:", 1)[0]
+        self.assertIn("value: ${{ steps.classify.outputs.trusted_pr }}", output)
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
+
     def test_operator_stacked_pr_uses_self_hosted_lanes(self):
         event = {
             "sender": {"login": "jwmcglynn"},

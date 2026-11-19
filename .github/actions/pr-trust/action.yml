@@ -11,6 +11,9 @@ outputs:
   trusted_pr:
     description: '"true" only for a trusted maintainer pull request.'
     value: ${{ steps.classify.outputs.trusted_pr }}
+  unified_re_default:
+    description: 'Schedule the dual-platform canary by default on trusted PRs based on this policy.'
+    value: ${{ steps.classify.outputs.trusted_pr }}
   renovate_pr:
     description: '"true" only for a same-repository Renovate pull request.'
     value: ${{ steps.classify.outputs.renovate_pr }}
