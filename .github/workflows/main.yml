@@ -484,11 +484,13 @@ jobs:
 
       - name: Test Linux and macOS with native platform transitions
         if: github.event_name == 'pull_request' && vars.UNIFIED_RE_CANARY != 'false' && (needs.gatekeeper.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary'))
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
           remote_identity=$(tools/ci_select_macos_xcode.sh --remote-canary-env)
-          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --test_output=all \
+          coordinator_cc=$(command -v "${CC:-clang}")
+          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=all \
             --noskip_incompatible_explicit_targets --build_event_json_file="$RUNNER_TEMP/platform-canary.bep.json" \
             //tools/ci:dual_platform_canary
           jq -c 'select(.testResult) | {label: .id.testResult.label, result: .testResult}' \
