@@ -167,31 +167,32 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeBlend, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeColorMatrix, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "filters/feColorMatrix",
-            {
-                // Identity forms compare against a Donner golden: the references posterize dark
-                // tones through 8-bit linearRGB.
-                {"type=hueRotate-without-an-angle.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-with-empty-values.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-with-non-normalized-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")},
-                {"type=matrix-with-not-enough-values.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
-                {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
-                {"type=saturate-with-a-large-coefficient.svg",
-                 Params::UndefinedBehavior("saturate 99999")},
-                {"type=saturate-with-negative-coefficient.svg",
-                 Params::UndefinedBehavior("saturate -0.5")},
-                {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
-                {"type=saturate.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                       "Larger threshold due to the reference's 8-bit linearRGB "
-                                       "steps, which one-level gradient rounding crosses")},
-                {"without-attributes.svg", ColorMatrixIdentityGolden()},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feColorMatrix",
+                {
+                    // Identity forms compare against a Donner golden: the references posterize dark
+                    // tones through 8-bit linearRGB.
+                    {"type=hueRotate-without-an-angle.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-with-empty-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-with-non-normalized-values.svg",
+                     Params::WithThreshold(
+                         0.03f, kDefaultMismatchedPixels,
+                         "Archived green varies along a constant-color gradient column")},
+                    {"type=matrix-with-not-enough-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
+                    {"type=saturate-with-a-large-coefficient.svg",
+                     Params::UndefinedBehavior("saturate 99999")},
+                    {"type=saturate-with-negative-coefficient.svg",
+                     Params::UndefinedBehavior("saturate -0.5")},
+                    {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
+                    {"type=saturate.svg",
+                     Params::WithThreshold(
+                         0.03f, kDefaultMismatchedPixels,
+                         "Dark gradients cross an eight-bit linearRGB step in the reference")},
+                    {"without-attributes.svg", ColorMatrixIdentityGolden()},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeComponentTransfer, ImageComparisonTestFixture,
@@ -234,8 +235,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feDiffuseLighting",
                 {
                     {"complex-transform.svg",
-                     Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                           "Shading differences, donner is smoother")},
+                     Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
+                                           "Reference shades the alpha ramp before skew")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -299,16 +300,17 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeImage, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory(
-                                     "filters/feMerge",
-                                     {
-                                         {"complex-transform.svg",
-                                          Params::WithThreshold(0.15f, kDefaultMismatchedPixels,
-                                                                "Minor blur shading differences")},
-                                     })),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFeMerge, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feMerge",
+                {
+                    {"complex-transform.svg",
+                     Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
+                                           "Reference blurs inputs before skew")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeMorphology, ImageComparisonTestFixture,
@@ -335,8 +337,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"complex-transform.svg",
                      Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
-                                           "Point-light shading differs even on the flat part of "
-                                           "the transformed surface; cause tracked in #1185")},
+                                           "Reference evaluates the point light before skew")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -346,14 +347,9 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "filters/feSpecularLighting",
                 {
-                    // Spot-light references refreshed to resvg v0.49.0; see
-                    // third_party/resvg-test-suite/BUILD.bazel.
+                    // These spot-light references use the 300x300 resvg v0.49.0 images.
                     {"with-feSpotLight-and-specular-and-exponent.svg", ResvgV049Reference()},
                     {"with-feSpotLight-and-specularConstant=5.svg", ResvgV049Reference()},
-                    {"with-fePointLight.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-with-fePointLight.png", 0.02f)
-                         .withReason("resvg golden")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -366,7 +362,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"complex-transform.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-complex-transform.png")
-                         .withReason("resvg bug: SpotLight Y")},
+                         .withReason("Reference shades before skew and attenuates the cone "
+                                     "edge differently")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -387,8 +384,6 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feTurbulence",
                 {
                     {"color-interpolation-filters=sRGB.svg", ResvgV049Reference()},
-                    {"complex-transform.svg", Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                                                    "Minor shading differences")},
                     {"stitchTiles=stitch.svg", Params::UndefinedBehavior("stitchTiles=stitch")},
                 })),
             ValuesIn(ActiveComparisonModes())),
@@ -449,11 +444,22 @@ INSTANTIATE_TEST_SUITE_P(
                 {"in=StrokePaint.svg", Params::UndefinedBehavior("in=StrokePaint")},
                 {"on-the-root-svg.svg", Params::UndefinedBehavior("Filter on the root `svg`")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-1.svg",
-                 Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
+                     kDefaultThreshold,
+                     "Explicit half-box clip; opaque interior and exact crosshair")
+                     .setCanvasSize(800, 800)},
                 {"subregion-and-primitiveUnits=objectBoundingBox-2.svg",
-                 Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
-                {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
-                                                               "Minor shading differences")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
+                     kDefaultThreshold,
+                     "Explicit half-box clip; opaque interior and exact crosshair")
+                     .setCanvasSize(800, 800)},
+                {"with-subregion-3.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/firefox-double-subregion-blur.png",
+                     kDefaultThreshold,
+                     "Firefox reference preserves the first blur's clipped edge")},
                 // The backdrop square and the filtered square coincide, so this row's alpha must
                 // equal in=BackgroundImage's, which compares with default parameters. Donner's two
                 // renders do share one alpha; the two references do not. This one reaches full
@@ -801,11 +807,9 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/marker",
             {
-                {"default-clip.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 // The 300x300 resvg v0.49.0 rendering.
                 {"orient=auto-on-M-C-C-4.svg", ResvgV049Reference()},
                 {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
-                {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
                  Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                 // The image draws the nested SVG at 0.8x, so its 0.5035-unit black letter strokes
@@ -816,8 +820,6 @@ INSTANTIATE_TEST_SUITE_P(
                 // x86_64, in the native Geode and wgpu-native reference lanes. The same SVG at 1x
                 // and larger (structure/image/external-svg) matches at default parameters.
                 {"with-an-image-child.svg", Params().withGeodeMaxPixelsDifferent(500)},
-                {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
-                {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
             })),
         ValuesIn(ActiveComparisonModes())),
@@ -838,21 +840,10 @@ INSTANTIATE_TEST_SUITE_P(PaintingOverflow, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintingPaintOrder, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/paint-order",
-            {
-                // The vendored PNG loses e-x kerning at the paint-only tspan boundary. Donner's
-                // custom goldens preserve continuous shaping while still gating paint order.
-                {"on-tspan.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-paint-order-on-tspan.png")
-                     .withReason("Preserve cross-span kerning across a paint-only tspan boundary")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintingPaintOrder, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("painting/paint-order")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingShapeRendering, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("painting/shape-rendering")),
@@ -1457,12 +1448,13 @@ INSTANTIATE_TEST_SUITE_P(
                          .onlyTextFull()
                          .withReason(
                              "Codepoint positioning reference preserves complete emoji clusters")},
-                    {"compound-emojis.svg",
-                     Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                           "Emoji, differences between resvg and our bitmap")
-                         .onlyTextFull()},
-                    {"emojis.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                                         "Emoji, differences between")
+                    // resvg v0.49.0 with the bundled Noto Color Emoji face at 500x500.
+                    // Glyph placement agrees; bitmap resampling requires a higher threshold.
+                    {"compound-emojis.svg", Params::WithThreshold(0.10f, kDefaultMismatchedPixels,
+                                                                  "Color emoji bitmap resampling")
+                                                .onlyTextFull()},
+                    {"emojis.svg", Params::WithThreshold(0.10f, kDefaultMismatchedPixels,
+                                                         "Color emoji bitmap resampling")
                                        .onlyTextFull()},
                     {"fill-rule=evenodd.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},

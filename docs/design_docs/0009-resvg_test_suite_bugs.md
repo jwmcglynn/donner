@@ -60,12 +60,12 @@ requires the clipped render to equal the visible part of the rect blurred with r
 
 | Category                   | Test                                  | Reason (`withReason`)                                          |
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
-| filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
+| filters/feSpotLight        | complex-transform                     | Reference shades before skew and attenuates the cone edge differently |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
+| filters/filter             | subregion-and-primitiveUnits=objectBoundingBox-1/-2 | Explicit half-box clip; opaque interior and exact crosshair ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
+| filters/filter             | with-subregion-3                     | Firefox reference preserves the first blur's clipped edge ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
-| filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
-| painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
@@ -211,14 +211,18 @@ current browsers use.
 
 ### Backend-difference goldens (text)
 
-These render correctly but differ from resvg because Donner's text stack (and the
-simple-vs-`text-full` split) shapes/composes differently. The golden is whichever
-Donner backend the test runs under.
+These cases require full CPU text. Their references cover combining-mark and
+emoji cluster placement.
 
-| Category  | Test                                         | Reason                                              |
+| Category  | Test                                         | Reference                                           |
 | --------- | -------------------------------------------- | --------------------------------------------------- |
-| text/text | complex-graphemes-and-coordinates-list       | Simple text can't compose combining marks           |
-| text/text | compound-emojis-and-coordinates-list         | Emoji bitmap scaling differs from the golden        |
+| text/text | complex-graphemes-and-coordinates-list       | Donner full-text rendering of the combining mark    |
+| text/text | compound-emojis-and-coordinates-list         | resvg v0.47.0 rendering of explicitly placed emoji clusters |
+
+The separate `text/text/compound-emojis` and `text/text/emojis` fixtures use
+resvg v0.49.0 references and a 0.10 threshold for bitmap resampling. The
+[golden README](../../donner/svg/renderer/testdata/golden/README.md#color-emoji-bitmap-sampling)
+records the comparison.
 
 ### Upright Latin and crosshair coverage
 
