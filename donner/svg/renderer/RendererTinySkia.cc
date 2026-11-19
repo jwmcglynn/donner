@@ -1107,6 +1107,16 @@ Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& viewBox, bool 
       toPercent(y, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y));
 }
 
+/// Whether a radial gradient's start and end circles are identical, the one case in which a canvas
+/// two-point gradient (which SVG 2 `fr` follows) paints nothing. The tolerance is tiny-skia's own
+/// threshold for coincident circles.
+bool radialCirclesCoincide(const Vector2d& center, double radius, const Vector2d& focalCenter,
+                           double focalRadius) {
+  constexpr double kCoincidentCircleTolerance = 1.0 / (1 << 15);
+  return NearZero((center - focalCenter).length(), kCoincidentCircleTolerance) &&
+         NearEquals(radius, focalRadius, kCoincidentCircleTolerance);
+}
+
 Transform2d resolveGradientTransform(
     const components::ComputedLocalTransformComponent* maybeTransformComponent,
     const Box2d& viewBox) {
@@ -1231,8 +1241,9 @@ std::optional<tiny_skia::Shader> instantiateGradientShader(
       return tiny_skia::Shader(stops.back().color);
     }
 
-    const double distanceBetweenCenters = (center - focalCenter).length();
-    if (distanceBetweenCenters + radius <= focalRadius) {
+    // A start circle that contains the end circle still paints the whole plane, which tiny-skia's
+    // two-point conical shader evaluates; only identical circles paint nothing.
+    if (radialCirclesCoincide(center, radius, focalCenter, focalRadius)) {
       return std::nullopt;
     }
 

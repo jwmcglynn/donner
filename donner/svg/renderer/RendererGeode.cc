@@ -551,6 +551,16 @@ inline double resolveGradientCoord(Lengthd value, const Box2d& bounds, bool numb
   return coerceGradientLength(value, numbersArePercent).toPixels(bounds, FontMetrics());
 }
 
+/// Whether a radial gradient's start and end circles are identical, the one case in which a canvas
+/// two-point gradient (which SVG 2 `fr` follows) paints nothing. The tolerance matches the software
+/// renderer, which uses tiny-skia's threshold for coincident circles.
+bool radialCirclesCoincide(const Vector2d& center, double radius, const Vector2d& focalCenter,
+                           double focalRadius) {
+  constexpr double kCoincidentCircleTolerance = 1.0 / (1 << 15);
+  return NearZero((center - focalCenter).length(), kCoincidentCircleTolerance) &&
+         NearEquals(radius, focalRadius, kCoincidentCircleTolerance);
+}
+
 /// Resolve the `gradientTransform` attribute of a gradient into a concrete
 /// Transform2d. If the referenced entity has no transform component, returns
 /// identity. Mirrors the logic in the software renderer.
@@ -785,9 +795,8 @@ struct ResolvedRadialGradient {
 /// Returns `nullopt` if the referenced entity isn't a radial gradient. If it
 /// IS a radial gradient but is degenerate (zero outer radius), returns a
 /// populated `solidFallback` with the last stop's color, matching the removed
-/// full-Skia backend. If the focal circle fully
-/// contains the outer circle, returns an empty result (both fields unset)
-/// so the caller drops the draw.
+/// full-Skia backend. If the focal and outer circles are identical, returns
+/// an empty result (both fields unset) so the caller drops the draw.
 std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
     const css::RGBA currentColor, float opacity,
@@ -855,11 +864,10 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
       resolveGradientCoords(radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy),
                             frame->coordBounds, frame->numbersArePercent);
 
-  // Empty annulus: focal circle entirely contains the outer circle, so the
-  // gradient never has a valid `t` anywhere. Match tiny-skia: drop the draw
-  // (no shader can produce meaningful colors).
-  const double centerDistance = (center - focalCenter).length();
-  if (centerDistance + radius <= focalRadius) {
+  // A start circle that contains the end circle still paints the whole plane: the circles are
+  // nested, so the radial `t` solve in the gradient shaders finds exactly one root with a
+  // non-negative radius at every point. Only identical circles paint nothing.
+  if (radialCirclesCoincide(center, radius, focalCenter, focalRadius)) {
     return ResolvedRadialGradient{};
   }
 
