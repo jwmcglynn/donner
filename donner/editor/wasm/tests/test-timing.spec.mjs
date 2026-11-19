@@ -41,17 +41,40 @@ test("every Playwright config bounds web-first assertions inside its test timeou
   const configs = readdirSync(testDirectory).filter((name) => /^playwright\..*config\.js$/.test(name));
   assert.ok(configs.length >= 10, `found only ${configs.join(", ")}`);
   for (const config of configs) {
-    const loaded = require(path.join(testDirectory, config));
-    const guard = loaded.expect?.timeout;
-    assert.ok(Number.isInteger(guard) && guard <= kStallGuardMs, `${config} expect.timeout ${guard}`);
-    const timeouts = [loaded.timeout, ...(loaded.projects ?? []).map((project) => project.timeout)]
-      .filter((timeout) => timeout !== undefined);
-    assert.ok(timeouts.length > 0, `${config} sets no per-test timeout`);
-    for (const timeout of timeouts) {
-      assert.ok(guard < timeout, `${config} expect.timeout ${guard} >= test timeout ${timeout}`);
+    if (config !== "playwright.editor-ci.config.js") {
+      assertTimeouts(config, require(path.join(testDirectory, config)));
+      continue;
+    }
+    const build = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+    const projects = new Set([...build.matchAll(/editor_browser_test\([\s\S]*?\n {4}project = "([^"]+)"/g)]
+      .map((match) => match[1]));
+    assert.ok(projects.size > 0, "the editor graph declares browser projects");
+    const filename = require.resolve(path.join(testDirectory, config));
+    const previous = process.env.DONNER_EDITOR_BROWSER_PROJECT;
+    try {
+      for (const project of projects) {
+        process.env.DONNER_EDITOR_BROWSER_PROJECT = project;
+        delete require.cache[filename];
+        assertTimeouts(project, require(filename));
+      }
+    } finally {
+      delete require.cache[filename];
+      if (previous === undefined) delete process.env.DONNER_EDITOR_BROWSER_PROJECT;
+      else process.env.DONNER_EDITOR_BROWSER_PROJECT = previous;
     }
   }
 });
+
+function assertTimeouts(name, loaded) {
+  const guard = loaded.expect?.timeout;
+  assert.ok(Number.isInteger(guard) && guard <= kStallGuardMs, `${name} expect.timeout ${guard}`);
+  const timeouts = [loaded.timeout, ...(loaded.projects ?? []).map((project) => project.timeout)]
+    .filter((timeout) => timeout !== undefined);
+  assert.ok(timeouts.length > 0, `${name} sets no per-test timeout`);
+  for (const timeout of timeouts) {
+    assert.ok(guard < timeout, `${name} expect.timeout ${guard} >= test timeout ${timeout}`);
+  }
+}
 
 // A wall-clock scale or bound copied into a spec drifts from the shared one and hides how many
 // timing assumptions the suites still make. Every timing constant comes from test-timing.cjs.

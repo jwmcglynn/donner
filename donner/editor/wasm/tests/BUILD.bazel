@@ -755,7 +755,8 @@ js_test(
         "*.js",
         "*.mjs",
         "*.ts",
-    ]) + [":node_modules/@playwright/test"],
+    ]) + ["BUILD.bazel",
+        ":node_modules/@playwright/test"],
     entry_point = "test-timing.spec.mjs",
     # Loading Playwright config initializes its llhttp WebAssembly module.
     env = {"NODE_OPTIONS": ""},
