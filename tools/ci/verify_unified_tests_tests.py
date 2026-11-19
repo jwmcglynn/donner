@@ -7,7 +7,7 @@ import unittest
 
 from python.runfiles import runfiles
 
-from verify_unified_tests import KERNELS, report_kernels, verify
+from verify_unified_tests import ARCHIVE, Evidence, KERNELS, darwin_classes, firefox_cases, report_kernels, verify
 
 
 SUITE = "//tools/ci:dual_platform_canary"
@@ -81,6 +81,22 @@ class UnifiedTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
             verify(records[:-1], [SUITE, METAL], [label])
 
+    def test_aspect_cannot_establish_a_target_outcome(self):
+        label = "//pkg:platform_test"
+        target = {"label": label, "configuration": {"id": "linux"}}
+        configured = {"id": {"targetConfigured": {"label": label}}, "configured": {"testSize": "SMALL"}}
+        aspect = {"id": {"targetCompleted": dict(target, aspect="//pkg:venue.bzl%venue")},
+                  "completed": {"success": True}}
+        skipped = {"id": {"targetCompleted": target}, "aborted": {"reason": "SKIPPED"}}
+        built = {"id": {"targetCompleted": target}, "completed": {"success": True}}
+        records = list(events()) + [configured]
+        for pair in ([skipped, aspect], [aspect, skipped]):
+            verify(records + pair, [SUITE, METAL], linux=[label])
+        with self.assertRaisesRegex(ValueError, "did not finish"):
+            verify(records + [aspect], [SUITE, METAL], linux=[label])
+        with self.assertRaisesRegex(ValueError, "Test label mismatch"):
+            verify(records + [built, aspect], [SUITE, METAL], linux=[label])
+
     def test_missing_build_and_incompatible_headed_browser_fail(self):
         label = "//donner/editor/wasm/tests:ci_darwin_animation_preview_browser_test"
         skipped = {"id": {"targetCompleted": {"label": label}}, "aborted": {"reason": "SKIPPED"}}
@@ -103,6 +119,30 @@ class UnifiedTest(unittest.TestCase):
                 report_kernels(locations, root)
             with self.assertRaisesRegex(ValueError, "log location"):
                 report_kernels(locations, path.parent)
+
+    def test_receipt_counts_only_verified_work_of_each_darwin_class(self):
+        evidence = Evidence()
+        self.assertEqual(darwin_classes(evidence, set()), {})
+        evidence.members = {"//tools/ci:unified_editor_geode": {"g1", "g2"},
+                            "//tools/ci:unified_mac_browser_archive": {ARCHIVE}}
+        evidence.test_rules = {"headless", "headed", ARCHIVE}
+        evidence.tags = {"headless": {"launches-browser"}, "headed": {"launches-browser", "requires_desktop_session"},
+                         ARCHIVE: {"launches-browser"}}
+        counts = darwin_classes(evidence, {"binary", "headless", "headed", ARCHIVE})
+        self.assertEqual(counts, {"darwin-build": 4, "darwin-test": 3, "geode": 2,
+                                  "browser-archive": 1, "headless-browser": 1, "desktop-browser": 1})
+        self.assertNotIn("metal-profile", counts)
+
+    def test_headed_firefox_requires_executed_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "test.log"
+            log.write_bytes(b"Browser output\n  \x1b[32m4 passed\x1b[39m (1.3m)\n")
+            self.assertEqual(firefox_cases(log), 4)
+            for trailer in ("1 skipped", "0 passed", "3 passed (50s)\n1 skipped",
+                            "1 flaky\n4 passed (2m)", "no test output"):
+                with self.subTest(trailer=trailer), self.assertRaisesRegex(ValueError, "complete passing"):
+                    log.write_text(trailer)
+                    firefox_cases(log)
 
     def test_shortened_canary_cannot_pass(self):
         records = list(events())

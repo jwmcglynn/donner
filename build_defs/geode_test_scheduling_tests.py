@@ -239,7 +239,7 @@ class GeodeTestSchedulingTest(unittest.TestCase):
                 (lane_view.replacing("--local_test_jobs=1", "--local_test_jobs=1",
                                      "--local_resources=local_gpu=2"), "overrides")):
             with self.subTest(expected=expected):
-                with lane_view.edited_lane("macos-self-hosted", edit, ("browser_test",)):
+                with lane_view.edited_lane("macos", edit, ("browser_test",)):
                     problems = local_gpu_problems(self.bazelrc, self._workflow_texts(runfiles))
                 self.assertTrue(any(expected in problem for problem in problems), problems)
 

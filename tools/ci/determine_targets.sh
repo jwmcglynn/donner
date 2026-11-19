@@ -355,10 +355,10 @@ determine() {
     -fh "$work_dir/head-hashes.json" \
     -o "$work_dir/affected.txt"
 
-  if grep -q ':ci_darwin_' "$work_dir/affected.txt"; then
+  if grep -Eq ':ci_(darwin_|linux_build_)' "$work_dir/affected.txt"; then
     (
       cd "$head_dir"
-      bazelisk query --nokeep_going 'kind("ci_platform_(test|build) rule", attr(tags, "ci-darwin-(test|build)", //...))'
+      bazelisk query --nokeep_going 'kind("ci_platform_(test|build) rule", attr(tags, "ci-darwin-(test|build)", //...)) union kind("filegroup rule", attr(tags, "ci-linux-build-only", //...))'
     ) > "$work_dir/darwin-variants.txt"
     python3 - "$work_dir/affected.txt" "$work_dir/darwin-variants.txt" <<'PYTHON'
 from pathlib import Path

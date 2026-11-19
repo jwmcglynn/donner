@@ -402,4 +402,6 @@ SHADOW_LANES = {
     }),
 }
 
+# These legacy phase commands are also available for explicit local diagnosis.
+WORKFLOW_LANES = {**LINUX_LANES, "macos": MACOS_LANES["macos"]}
 LANES = {**LINUX_LANES, **MACOS_LANES, **SHADOW_LANES}

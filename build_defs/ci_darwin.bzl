@@ -81,6 +81,15 @@ def declare_darwin_variants(ci):
             _variant(ci, name, source, "ordinary", True, True, "ci_darwin_diagnostic_", ["external", "no-cache"])
         if "manual" in tags or source["kind"] in ["test_suite", "package_group", "toolchain_type"]:
             continue
+        if any([tag in tags for tag in ["perf", "local-gpu-isolated", "fuzz_soak"]]):
+            # A build-only root preserves compilation without starting a filtered Linux test.
+            native.filegroup(
+                name = "ci_linux_build_" + name,
+                srcs = [":" + name],
+                target_compatible_with = source.get("target_compatible_with", []),
+                tags = ["manual", "ci-linux-build-only"],
+                testonly = True,
+            )
         run = "shard_count" in source and _runs_in_native_lane(tags)
         gpu = "resources:local_gpu:1" in tags or "launches-browser" in tags
         profile = "desktop" if "requires_desktop_session" in tags else "ordinary"

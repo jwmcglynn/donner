@@ -190,10 +190,10 @@ class GatekeeperTest(unittest.TestCase):
         self._run_fixture_shell(trust_body, env, trusted)
         self.assertIn("trusted_pr=false\n", output.read_text())
         env.update(TRUSTED_PR="false", SELFHOSTED_LINUX_RUNNER="true",
-                   SELFHOSTED_MACOS_RUNNER="true")
+                   UNIFIED_RE_SELECTED="true")
         self._run_fixture_shell(self._workflow_body("runner_gate"), env, trusted)
         self.assertIn("use_self_hosted_linux=false\n", output.read_text())
-        self.assertIn("use_self_hosted_macos=false\n", output.read_text())
+        self.assertIn("unified_macos=false\n", output.read_text())
 
     def _run_fixture_shell(self, body, env, cwd):
         result = subprocess.run(

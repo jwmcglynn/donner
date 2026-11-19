@@ -9,7 +9,7 @@ from python.runfiles import runfiles
 
 from tools import test_timing
 from tools.ci_remote_gpu_targets import (
-    AUDIT, DISPLAY_TESTS, REFERENCE, REMOTE_TARGETS, SOAK, check_results, select_remote_targets,
+    AUDIT, DISPLAY_TESTS, REFERENCE, REMOTE_TARGETS, SOAK, check_results, linux_native_patterns, select_remote_targets,
 )
 
 
@@ -24,6 +24,18 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
             text=True,
             timeout=test_timing.STALL_GUARD_SECONDS,
         )
+
+    def test_mixed_graph_preserves_build_only_and_remote_test_roots(self):
+
+        def rule(label, *tags):
+            return json.dumps({"rule": {"name": label, "attribute": [
+                {"name": "tags", "stringListValue": tags}]}})
+
+        local = "//donner/editor/tests:rnr_replay_tests_geode"
+        roots = linux_native_patterns([rule(local, "local-gpu-isolated"), rule("//pkg:perf", "perf"),
+                                      rule("//pkg:normal"), rule("//pkg:soak", "fuzz_soak")])
+        self.assertEqual(set(roots), {REMOTE_TARGETS[local], "//donner/editor/tests:ci_linux_build_rnr_replay_tests_geode",
+                                     "//pkg:ci_linux_build_perf", "//pkg:normal", "//pkg:ci_linux_build_soak"})
 
     def test_mapping_is_limited_to_measured_sharded_suites(self):
         self.assertEqual(

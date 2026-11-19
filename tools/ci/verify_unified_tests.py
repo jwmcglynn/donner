@@ -3,6 +3,8 @@
 import argparse
 from collections import defaultdict
 import json
+import os
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -24,7 +26,7 @@ def _passed_remotely(result):
         return None
     if cached:
         return "cached"
-    return "remote" if execution.get("strategy") == "remote" else None
+    return execution.get("strategy") if execution.get("strategy") in ("remote", "local") else None
 
 
 def _target_outcome(event):
@@ -55,22 +57,39 @@ KERNELS = {"//tools/ci:ci_linux_kernel_test": "Linux aarch64",
            "//tools/ci:ci_macos_kernel_test": "Darwin arm64"}
 
 
+def _declared_log(label, locations, output_root):
+    location = urlsplit(locations.get(label, ""))
+    if location.scheme != "file" or location.netloc:
+        raise ValueError(f"Missing local probe log for {label}")
+    path = Path(unquote(location.path)).resolve(strict=True)
+    package, name = label.removeprefix("//").split(":", 1)
+    suffix = ("testlogs", *package.split("/"), name, "test.log")
+    if not path.is_relative_to(output_root.resolve(strict=True)) or path.parts[-len(suffix):] != suffix:
+        raise ValueError(f"Unexpected probe log location for {label}")
+    return path
+
+
 def report_kernels(locations, output_root):
-    root = output_root.resolve(strict=True)
     for label, kernel in KERNELS.items():
-        location = urlsplit(locations.get(label, ""))
-        if location.scheme != "file" or location.netloc:
-            raise ValueError(f"Missing local probe log for {label}")
-        path = Path(unquote(location.path)).resolve(strict=True)
-        suffix = ("testlogs", "tools", "ci", label.split(":")[1], "test.log")
-        if not path.is_relative_to(root) or path.parts[-5:] != suffix:
-            raise ValueError(f"Unexpected probe log location for {label}")
         marker = "test worker: " + kernel
-        with path.open("rb") as stream:
+        with _declared_log(label, locations, output_root).open("rb") as stream:
             body = stream.read(65537)
         if len(body) > 65536 or marker.encode() not in body.splitlines():
             raise ValueError(f"Missing kernel and architecture evidence for {label}")
         print(marker)
+
+
+def firefox_cases(log):
+    # The pinned list reporter writes the outcome totals last, even on a long diagnostic run.
+    with log.open("rb") as stream:
+        end = stream.seek(0, 2)
+        stream.seek(max(0, end - 65536))
+        trailer = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", stream.read(65536))
+    counts = re.findall(rb"(?m)^\s*(\d+) passed(?: \([^\r\n]*\))?\s*$", trailer)
+    skipped = re.search(rb"(?m)^\s*[1-9]\d* (?:skipped|did not run|failed|flaky)\b", trailer)
+    if not counts or not int(counts[-1]) or skipped:
+        raise ValueError("Headed Firefox did not report a complete passing case set")
+    return int(counts[-1])
 
 
 class Evidence:
@@ -80,16 +99,21 @@ class Evidence:
         self.summaries = {}
         self.passed = defaultdict(set)
         self.test_rules = set()
-        self.kernel_logs = {}
+        self.tags = {}
+        self.test_logs = {}
 
     def read(self, event):
         identity = event.get("id", {})
         for item in event.get("expanded", {}).get("testSuiteExpansions", []):
             self.members[item["suiteLabel"]] = set(item["testLabels"])
         if "targetConfigured" in identity and "testSize" in event.get("configured", {}):
-            self.test_rules.add(identity["targetConfigured"]["label"])
-        if "targetCompleted" in identity:
-            self.targets[identity["targetCompleted"]["label"]] = _target_outcome(event)
+            label = identity["targetConfigured"]["label"]
+            self.test_rules.add(label)
+            self.tags[label] = set(event["configured"].get("tag", []))
+        target = identity.get("targetCompleted")
+        # Bazel also emits targetCompleted for aspects applied to skipped targets.
+        if target and not target.get("aspect"):
+            self.targets[target["label"]] = _target_outcome(event)
         if "testSummary" in event:
             key = identity["testSummary"]
             self.summaries[key["label"], key["configuration"]["id"]] = event["testSummary"]
@@ -97,15 +121,15 @@ class Evidence:
             result = event["testResult"]
             shard = _shard(identity["testResult"])
             self.passed[_passed_remotely(result)].add(shard)
-            if shard[0] in KERNELS:
-                self.kernel_logs[shard[0]] = next((f.get("uri", "") for f in result.get("testActionOutput", [])
+            if shard[0] in KERNELS or shard[0] in HEADED:
+                self.test_logs[shard[0]] = next((f.get("uri", "") for f in result.get("testActionOutput", [])
                                                    if f.get("name") == "test.log"), "")
 
 
 BROWSER_PACKAGE = "//donner/editor/wasm/tests:ci_darwin_"
 ARCHIVE = BROWSER_PACKAGE + "mac_browser_archive_tests"
-NATIVE_BROWSER = {ARCHIVE, BROWSER_PACKAGE + "animation_preview_browser_test",
-                  BROWSER_PACKAGE + "canvas_snapshot_browser_test"}
+HEADED = {BROWSER_PACKAGE + "animation_preview_browser_test", BROWSER_PACKAGE + "canvas_snapshot_browser_test"}
+NATIVE_BROWSER = {ARCHIVE} | HEADED
 QUALIFY = "//tools/ci:unified_worker_qualification"
 
 
@@ -124,7 +148,7 @@ def _qualification_runs(evidence):
             raise ValueError(f"Expected four uncached remote runs for {label}")
 
 
-def verify(events, suites, ordinary=(), output_root=None):
+def verify(events, suites, ordinary=(), output_root=None, linux=()):
     evidence = Evidence()
     for event in events:
         evidence.read(event)
@@ -135,19 +159,49 @@ def verify(events, suites, ordinary=(), output_root=None):
     compatible = _ordinary_built(evidence, selected)
     fresh.update(selected & {ARCHIVE})
     _qualification_runs(evidence)
-    expected = mandatory | (compatible & evidence.test_rules)
+    linux_built = _ordinary_built(evidence, set(linux))
+    expected = mandatory | ((compatible | linux_built) & evidence.test_rules)
     summary_labels = {label for label, _ in evidence.summaries}
-    passed = evidence.passed["remote"] | evidence.passed["cached"]
+    # The Linux venue verifier and its analysis aspect restrict local actions to the Xvfb roots.
+    local = evidence.passed["local"]
+    if any(shard[0] not in linux_built for shard in local):
+        raise ValueError("incomplete remote shards: unexpected local execution outside Linux selection")
+    passed = evidence.passed["remote"] | evidence.passed["cached"] | local
     _check_summary_shards(evidence.summaries, passed)
     cached_required = {shard for shard in evidence.passed["cached"] if shard[0] in fresh}
     if summary_labels != expected or cached_required or evidence.passed[None]:
         raise ValueError(f"Test label mismatch {sorted(expected ^ summary_labels)}, "
                          f"incomplete remote shards {sorted(cached_required | evidence.passed[None])}")
     if output_root is not None:
-        report_kernels(evidence.kernel_logs, output_root)
+        report_kernels(evidence.test_logs, output_root)
+        for label in sorted(compatible & HEADED):
+            cases = firefox_cases(_declared_log(label, evidence.test_logs, output_root))
+            print(f"{label}: {cases} headed Firefox cases passed")
     print(f"{len(expected)} native tests passed across {len(evidence.passed['remote'])} uncached "
           f"remote shards and {len(evidence.passed['cached'])} cached shards; "
           f"{len(compatible)} ordinary Darwin roots built, {len(selected - compatible)} incompatible")
+    return darwin_classes(evidence, compatible)
+
+
+def darwin_classes(evidence, compatible):
+    if "//tools/ci:unified_editor_geode" not in evidence.members:
+        return {}
+    tests = compatible & evidence.test_rules
+    counts = {"darwin-build": len(compatible), "darwin-test": len(tests)}
+    suites = {
+        "geode": "editor_geode", "metal-profile": "metal_full_validation", "metal-preflight": "metal_preflight",
+        "metal-compiler": "metal_offline_compiler", "metal-native": "metal_native", "browser-archive": "mac_browser_archive",
+    }
+    for key, name in suites.items():
+        members = evidence.members.get("//tools/ci:unified_" + name)
+        if members:
+            counts[key] = len(members)
+    if "browser-archive" in counts:
+        selected = {t for t in tests if t != ARCHIVE and "launches-browser" in evidence.tags[t]}
+        headed = {t for t in selected if "requires_desktop_session" in evidence.tags[t]}
+        counts["headless-browser"] = len(selected - headed)
+        counts["desktop-browser"] = len(headed)
+    return counts
 
 
 def _suite_requirements(members, suites):
@@ -157,7 +211,7 @@ def _suite_requirements(members, suites):
         if not members.get(suite):
             raise ValueError(f"No test suite expansion for {suite}")
         mandatory.update(members[suite])
-        if suite != "//tools/ci:unified_editor_geode":
+        if suite not in ("//tools/ci:unified_editor_geode", "//tools/ci:linux_wgpu_resvg_reference"):
             fresh.update(members[suite])
     return mandatory, fresh
 
@@ -165,6 +219,7 @@ def _suite_requirements(members, suites):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ordinary", type=Path)
+    parser.add_argument("--linux", type=Path)
     parser.add_argument("bep", type=Path)
     parser.add_argument("--stage-failed", type=Path)
     parser.add_argument("suites", nargs="*")
@@ -180,4 +235,8 @@ if __name__ == "__main__":
         parser.error("at least one test suite is required")
     ordinary_roots = args.ordinary.read_text().splitlines() if args.ordinary else []
     with args.bep.open(encoding="utf-8") as stream:
-        verify((json.loads(line) for line in stream), args.suites, ordinary_roots, Path("bazel-out"))
+        linux_roots = args.linux.read_text().splitlines() if args.linux else []
+        counts = verify((json.loads(line) for line in stream), args.suites, ordinary_roots, Path("bazel-out"), linux_roots)
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            print("darwin_classes=" + json.dumps(counts, sort_keys=True), file=output)

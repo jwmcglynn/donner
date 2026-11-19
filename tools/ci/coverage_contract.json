@@ -3,7 +3,7 @@
   "description": "What each main-hosted lane in .github/workflows/main.yml runs, by phase (step) and test class, and which steps (by step id) cover each class on a trusted pull request. tools/ci_coverage_contract.py checks a trusted pull request's receipts against it; //tools:ci_lane_parity_tests keeps it in step with the workflow. A `pr_only` class is a pull request gate that main lacks. A class with no pull request counterpart carries a reviewed exception that names its owner and the decision behind it. A lane is checked only when its route says self-hosted jobs replaced its hosted job on the pull request.",
   "routes": {
     "linux": "always",
-    "macos": "self_hosted_macos"
+    "macos": "unified_macos"
   },
   "lanes": {
     "linux": {
@@ -25,6 +25,10 @@
             {
               "job": "linux-self-hosted",
               "step": "build"
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified"
             }
           ]
         },
@@ -46,6 +50,10 @@
             {
               "job": "linux-self-hosted",
               "step": "test"
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified"
             }
           ]
         },
@@ -56,6 +64,10 @@
             {
               "job": "linux-self-hosted",
               "step": "test"
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified"
             }
           ]
         },
@@ -74,6 +86,11 @@
             {
               "job": "linux-self-hosted",
               "step": "test",
+              "requires_soak": true
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified",
               "requires_soak": true
             }
           ]
@@ -96,8 +113,9 @@
           "when": "always",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
-              "step": "test"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "darwin-build"
             }
           ],
           "description": "The ordinary Bazel test invocation also builds every selected non-test product."
@@ -115,8 +133,9 @@
           "description": "The selected tests, run by the self-hosted fast lane.",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
-              "step": "test"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "darwin-test"
             }
           ]
         },
@@ -131,11 +150,13 @@
         "shader-validation": {
           "when": "metal_affected",
           "pr_only": true,
-          "description": "Full Metal shader validation on a real GPU. The native Metal job is independent of the virtual macOS build and test pool.",
+          "description": "Full Metal shader validation on a real GPU. Its Darwin GPU TestRunner must report fresh remote passes for the entire capability suite.",
           "counterparts": [
             {
-              "job": "macos-metal",
-              "step": "metal_profile"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "metal-profile",
+              "min_tests": 1
             }
           ]
         },
@@ -145,8 +166,10 @@
           "description": "The Metal preflight, including the deliberate out-of-bounds read that shader validation must abort, on a real GPU.",
           "counterparts": [
             {
-              "job": "macos-metal",
-              "step": "metal_preflight"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "metal-preflight",
+              "min_tests": 1
             }
           ]
         },
@@ -161,11 +184,25 @@
         "native-metal": {
           "when": "metal_affected",
           "pr_only": true,
-          "description": "The complete native Metal device suite keeps shader validation enabled alongside the virtual pool.",
+          "description": "The selected native Metal tests run on Darwin GPU workers with full shader validation.",
           "counterparts": [
             {
-              "job": "macos-metal",
-              "step": "metal_native",
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "metal-native",
+              "min_tests": 1
+            }
+          ]
+        },
+        "offline-metal-compiler": {
+          "when": "metal_affected",
+          "pr_only": true,
+          "description": "Compile the test modules with the installed Metal toolchain.",
+          "counterparts": [
+            {
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "metal-compiler",
               "min_tests": 1
             }
           ]
@@ -176,8 +213,10 @@
           "when": "browser_affected",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
-              "step": "browser_preflight"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "browser-archive",
+              "min_tests": 1
             }
           ]
         },
@@ -186,8 +225,10 @@
           "description": "Desktop-session browser targets run once on the native macOS runner.",
           "counterparts": [
             {
-              "job": "macos-browser",
-              "step": "browser_preflight"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "browser-archive",
+              "min_tests": 1
             }
           ]
         }
@@ -195,21 +236,23 @@
       "Test (browser targets)": {
         "browser": {
           "when": "browser_affected",
-          "description": "Headless browser targets, excluding desktop-session cases, run once in the macOS VM.",
+          "description": "The verified Darwin selection accounts for each compatible browser test of this class.",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
-              "step": "browser_test"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "headless-browser"
             }
           ]
         },
         "desktop-browser": {
           "when": "browser_affected",
-          "description": "Desktop-session browser targets run once on the native macOS runner.",
+          "description": "The verified Darwin selection accounts for each compatible browser test of this class.",
           "counterparts": [
             {
-              "job": "macos-browser",
-              "step": "browser_test"
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "desktop-browser"
             }
           ]
         }
@@ -219,8 +262,9 @@
           "when": "always",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
-              "step": "geode_test",
+              "job": "linux-self-hosted",
+              "step": "unified",
+              "class": "geode",
               "min_tests": 1
             }
           ]

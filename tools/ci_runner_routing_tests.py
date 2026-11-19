@@ -53,7 +53,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
 
     def _route(self, *, event_name="pull_request", event=None,
                actor="jwmcglynn", triggering_actor="jwmcglynn",
-               linux_enabled="true", macos_enabled="true"):
+               linux_enabled="true", unified_enabled="true", trust_value=None):
         if event is None:
             event = {
                 "sender": {"login": "jwmcglynn"},
@@ -72,7 +72,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
                        EVENT_NAME=event_name, REF="refs/heads/main",
                        REPOSITORY="jwmcglynn/donner", SHA="a" * 40,
                        SELFHOSTED_LINUX_RUNNER=linux_enabled,
-                       SELFHOSTED_MACOS_RUNNER=macos_enabled,
+                       UNIFIED_RE_SELECTED=unified_enabled,
                        GITHUB_EVENT_PATH=str(event_path), GITHUB_OUTPUT=str(output_path),
                        RUNNER_TEMP=directory, GH_TOKEN="test",
                        PATH=f"{self.executables.path}:{os.environ['PATH']}")
@@ -84,7 +84,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             trust = self._outputs(trust_path)
             result = subprocess.run(["bash", "-c", self._routing_script()],
-                                    env=dict(env, TRUSTED_PR=trust["trusted_pr"]),
+                                    env=dict(env, TRUSTED_PR=trust["trusted_pr"] if trust_value is None else trust_value),
                                     text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             return {**trust, **self._outputs(output_path)}
@@ -92,7 +92,23 @@ class CiRunnerRoutingTest(unittest.TestCase):
     def test_operator_pr_uses_self_hosted_lanes_when_enabled(self):
         route = self._route()
         self.assertEqual(route["use_self_hosted_linux"], "true")
-        self.assertEqual(route["use_self_hosted_macos"], "true")
+        self.assertEqual(route["unified_macos"], "true")
+
+    def test_opt_in_cannot_replace_the_trusted_actor_or_available_linux_runner(self):
+        def event(author="jwmcglynn", repo="jwmcglynn/donner"):
+            return {"sender": {"login": author}, "pull_request": {
+                "user": {"login": author}, "head": {"repo": {"full_name": repo}},
+                "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
+                "labels": [{"name": "ci:native-platform-canary"}]}}
+        cases = ({"event": event(), "trust_value": ""}, {"event": event(), "trust_value": "false"},
+                 {"event": event(), "actor": "other"}, {"event": event(), "triggering_actor": "other"},
+                 {"event": event("other")}, {"event": event("renovate[bot]")},
+                 {"event": event(repo="other/donner")}, {"event": event(), "event_name": "push"},
+                 {"event": event(), "linux_enabled": ""})
+        for case in cases:
+            with self.subTest(case=case):
+                outputs = self._route(unified_enabled="true", **case)
+                self.assertEqual(("false", "false"), (outputs["use_self_hosted_linux"], outputs["unified_macos"]))
 
     def test_unified_canary_default_comes_from_the_base_trust_action(self):
         gate = self._job_body("gatekeeper")
@@ -110,11 +126,18 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertIn('coordinator_cc=$(command -v "${CC:-clang}")', step)
         self.assertIn('--repo_env=CC="$coordinator_cc"', step)
         self.assertNotIn("--action_env=CC", step)
-        self.assertIn("&& 90 || 10", step)
-        self.assertIn("RUN_METAL: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
-                      "(needs.determine-targets.outputs.metal_affected == 'true' || "
-                      "needs.determine-targets.outputs.fallback == 'true') }}", step)
+        self.assertIn("env -u DONNER_CI_XCODE_IDENTITY", step)
+        self.assertIn("needs.determine-targets.outputs.affected == '//tools/ci:no_affected_targets' && 10", step)
+        self.assertIn("--aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue", step)
+        self.assertIn("--noexperimental_merged_skyframe_analysis_execution", step)
+        self.assertIn("--strategy=TestRunner=remote,local --remote_local_fallback=false", step)
+        self.assertIn("RUN_METAL: ${{ needs.determine-targets.outputs.metal_affected == 'true' || "
+                      "needs.determine-targets.outputs.fallback == 'true' }}", step)
         self.assertIn('--target_pattern_file="$patterns"', step)
+        self.assertIn('--invocation_policy="$policy"', step)
+        self.assertIn('--experimental_google_legacy_api', step)
+        self.assertLess(step.index("ci_remote_gpu_targets.py --check-results"),
+                        step.index("verify_unified_tests.py --ordinary"))
 
     def test_operator_stacked_pr_uses_self_hosted_lanes(self):
         event = {
@@ -128,13 +151,13 @@ class CiRunnerRoutingTest(unittest.TestCase):
         }
         route = self._route(event=event)
         self.assertEqual(route["use_self_hosted_linux"], "true")
-        self.assertEqual(route["use_self_hosted_macos"], "true")
+        self.assertEqual(route["unified_macos"], "true")
 
     def test_operator_main_push_uses_hosted_lanes(self):
         event = {"sender": {"login": "jwmcglynn"}}
         route = self._route(event_name="push", event=event)
         self.assertEqual(route["use_self_hosted_linux"], "false")
-        self.assertEqual(route["use_self_hosted_macos"], "false")
+        self.assertEqual(route["unified_macos"], "false")
 
     def test_operator_fork_pr_stays_hosted(self):
         event = {
@@ -160,10 +183,13 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertEqual(self._route(triggering_actor="collaborator")[
             "use_self_hosted_linux"], "false")
 
-    def test_disabled_linux_switch_only_affects_linux(self):
+    def test_disabled_linux_or_unified_switch_uses_hosted_mac(self):
         route = self._route(linux_enabled="false")
         self.assertEqual(route["use_self_hosted_linux"], "false")
-        self.assertEqual(route["use_self_hosted_macos"], "true")
+        self.assertEqual(route["unified_macos"], "false")
+        route = self._route(unified_enabled="false")
+        self.assertEqual(route["use_self_hosted_linux"], "true")
+        self.assertEqual(route["unified_macos"], "false")
 
     def test_operator_hosted_macos_label_preserves_linux_routing(self):
         event = {
@@ -177,10 +203,10 @@ class CiRunnerRoutingTest(unittest.TestCase):
         }
         route = self._route(event=event)
         self.assertEqual(route["use_self_hosted_linux"], "true")
-        self.assertEqual(route["use_self_hosted_macos"], "false")
+        self.assertEqual(route["unified_macos"], "false")
 
         event["pull_request"]["base"]["ref"] = "feature/dependency"
-        self.assertEqual(self._route(event=event)["use_self_hosted_macos"], "false")
+        self.assertEqual(self._route(event=event)["unified_macos"], "false")
 
     def test_hosted_macos_label_requires_exact_name_and_trusted_operator(self):
         event = {
@@ -192,16 +218,16 @@ class CiRunnerRoutingTest(unittest.TestCase):
                 "labels": [{"name": "ci:hosted-macos-extra"}],
             },
         }
-        self.assertEqual(self._route(event=event)["use_self_hosted_macos"], "true")
+        self.assertEqual(self._route(event=event)["unified_macos"], "true")
         event["pull_request"]["labels"] = [{"name": "ci:hosted-macos"}]
         event["pull_request"]["head"]["repo"]["full_name"] = "jwmcglynn/fork"
         fork = self._route(event=event)
         self.assertEqual(fork["use_self_hosted_linux"], "false")
-        self.assertEqual(fork["use_self_hosted_macos"], "false")
+        self.assertEqual(fork["unified_macos"], "false")
         event["pull_request"]["head"]["repo"]["full_name"] = "jwmcglynn/donner"
         collaborator = self._route(event=event, triggering_actor="collaborator")
         self.assertEqual(collaborator["use_self_hosted_linux"], "false")
-        self.assertEqual(collaborator["use_self_hosted_macos"], "false")
+        self.assertEqual(collaborator["unified_macos"], "false")
 
     def test_trust_rule_separates_maintainer_renovate_and_fork_pull_requests(self):
         """BuildBuddy write access and self-hosted routing share this one classification."""
@@ -253,26 +279,20 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertIn("outputs.use_self_hosted_linux == 'true'", turnstile)
         self.assertIn("outputs.use_self_hosted_linux == 'true'", self_hosted)
 
-    def test_macos_jobs_are_selected_only_by_the_trusted_runner_gate(self):
-        hosted = self._job_body("macos")
-        self_hosted = self._job_body("macos-self-hosted")
+    def test_darwin_work_runs_in_the_trusted_linux_job_or_the_hosted_mac_job(self):
+        self.assertIn("outputs.unified_macos != 'true'", self._job_body("macos").split("steps:", 1)[0])
+        mixed = self._job_body("linux-self-hosted").split("        id: unified", 1)[1].split("        env:", 1)[0]
+        self.assertIn("if: needs.gatekeeper.outputs.unified_macos == 'true'", mixed)
+        self.assertNotIn("runs-on: [self-hosted, macOS", self.text)
+        for retired in ("macos-browser", "macos-self-hosted", "macos-metal", "macos-vm-qualification"):
+            self.assertNotIn("\n  " + retired + ":\n", self.text)
 
-        self.assertIn("outputs.use_self_hosted_macos != 'true'", hosted)
-        self.assertIn("outputs.use_self_hosted_macos == 'true'", self_hosted)
-        # No self-hosted job reruns tests under main's hosted configuration: the hosted `macos`
-        # job on main pushes owns hosted-configuration failures, so the scarce macOS pool serves
-        # only the fast lane, the native Metal job and the desktop browser partition.
-        self.assertNotIn("\n  macos-hosted-parity:\n", self.text)
-
-    def test_native_browser_subset_follows_the_macos_runner_gate(self):
-        subset = self._job_body("macos-browser")
-        condition = subset.split("    if: ", 1)[1].split("\n", 1)[0]
-        self.assertIn("    runs-on: [self-hosted, macOS, ARM64]\n", subset)
-        self.assertIn("github.event_name == 'pull_request'", condition)
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
-        self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "
-                      "needs.determine-targets.outputs.browser_affected == 'true')", condition)
-        self.assertNotIn("labels", condition)
+    def test_a_label_requires_base_pinned_trust_before_using_the_unified_worker(self):
+        gate = self._job_body("gatekeeper")
+        self.assertIn("UNIFIED_RE_SELECTED: ${{ vars.UNIFIED_RE_CANARY != 'false' && "
+                      "(steps.pr_trust.outputs.unified_re_default == 'true' || "
+                      "contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')) }}", gate)
+        self.assertIn('if [[ "$use_linux" == "true" && "$UNIFIED_RE_SELECTED" == "true"', gate)
 
 
 if __name__ == "__main__":

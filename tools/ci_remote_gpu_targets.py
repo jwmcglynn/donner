@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import sys
 
 
 REMOTE_TARGETS = {
@@ -24,6 +25,24 @@ def select_remote_targets(labels):
             result.append(selected)
             seen.add(selected)
     return result
+
+
+def linux_native_patterns(lines):
+    """Build the selected Linux rules, running only the tests selected on the trusted lane."""
+    labels = set()
+    for line in lines:
+        rule = json.loads(line)["rule"]
+        label = rule["name"]
+        tags = next((item.get("stringListValue", []) for item in rule.get("attribute", [])
+                     if item["name"] == "tags"), [])
+        if set(tags).intersection(("perf", "local-gpu-isolated", "fuzz_soak")):
+            package, name = label.split(":", 1)
+            labels.add(f"{package}:ci_linux_build_{name}")
+            if label in REMOTE_TARGETS:
+                labels.add(REMOTE_TARGETS[label])
+        else:
+            labels.add(label)
+    return sorted(labels)
 
 
 # These test rules own the runner's Xvfb server and local GPU resource.
@@ -126,11 +145,16 @@ def main():
     parser.add_argument("labels", nargs="*")
     parser.add_argument("--one-per-line", action="store_true")
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--native-linux-patterns", action="store_true")
     mode.add_argument("--check-results", metavar="BEP")
     mode.add_argument("--check-hosted-results", metavar="BEP")
     mode.add_argument("--reference-reported", metavar="BEP")
     mode.add_argument("--check-reference-results", metavar="BEP")
     args = parser.parse_args()
+    if args.native_linux_patterns:
+        for label in linux_native_patterns(sys.stdin):
+            print(label)
+        return
     if args.reference_reported:
         raise SystemExit(0 if reference_reported(args.reference_reported) else 1)
     if args.check_reference_results:
