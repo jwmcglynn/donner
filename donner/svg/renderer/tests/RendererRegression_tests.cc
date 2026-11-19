@@ -2213,16 +2213,24 @@ struct SpanStrokeCase {
   std::string_view groupAttributes;  ///< Attributes of the `<g>` around both expected paths.
   std::string_view textStroke;       ///< Attributes of the path of the "Te" outlines.
   std::string_view spanStroke;       ///< Attributes of the path of the "xt" outlines.
+  bool onTextPath = false;           ///< Lay the text out along a curved `<textPath>`.
 };
 
 /// Renders \p testCase's text and compares it with a `<path>` of the "Te" glyph outlines and one of
 /// the "xt" outlines, stroked as the case states.
 void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
   SCOPED_TRACE(testCase.label);
+  const std::string content = "Te<tspan " + std::string(testCase.spanAttributes) + ">xt</tspan>";
   SVGDocument textDocument = instantiateSubtree(
-      R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg" +
-          std::string(testCase.textAttributes) + ">Te<tspan " +
-          std::string(testCase.spanAttributes) + ">xt</tspan></text>",
+      (testCase.onTextPath
+           ? R"svg(<defs><path id="curve" d="M 20 150 Q 100 40 180 150"/></defs>)svg"
+           : "") +
+          std::string(
+              R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" )svg") +
+          std::string(testCase.textAttributes) + ">" +
+          (testCase.onTextPath ? R"svg(<textPath href="#curve">)svg" + content + "</textPath>"
+                               : content) +
+          "</text>",
       parser::SVGParser::Options(), Vector2i(200, 200));
   RegisterFontsFromDirectoryForTesting(textDocument, ResvgResourceRoot() / "fonts");
   const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
@@ -2302,6 +2310,51 @@ TEST_F(RendererRegressionTests, NonScalingTextStrokeKeepsEachSpanAtItsAuthoredLe
        R"svg(stroke-width="3" stroke-dasharray="3 2" stroke-dashoffset="1")svg", kGroup,
        R"svg(vector-effect="non-scaling-stroke" stroke-dasharray="6 4" stroke-dashoffset="2")svg",
        R"svg(vector-effect="non-scaling-stroke" stroke-width="3" stroke-dasharray="3 2" stroke-dashoffset="1")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
+TEST_F(RendererRegressionTests, TextSpanResolvesItsOwnStrokePaint) {
+  // Each span strokes with its own computed stroke paint, width, opacity, line join and miter
+  // limit: "Te" takes the text's stroke and "xt" its tspan's. A tspan whose stroke computes to
+  // none, or whose stroke-width computes to zero, is not stroked even when the text is, and a
+  // stroked tspan is stroked inside unstroked text. A tspan with `x` starts its own text chunk;
+  // a tspan with no stroke property of its own shares the text's stroke.
+  constexpr std::string_view kTextStroke = R"svg(fill="none" stroke="red" stroke-width="2")svg";
+  constexpr std::string_view kWideTextStroke = R"svg(fill="none" stroke="red" stroke-width="6")svg";
+  constexpr std::string_view kNoFill = R"svg(fill="none")svg";
+  constexpr std::string_view kRed = R"svg(stroke="red" stroke-width="2")svg";
+  constexpr std::string_view kWideRed = R"svg(stroke="red" stroke-width="6")svg";
+  const std::array<SpanStrokeCase, 14> cases = {{
+      {"span_none", kTextStroke, R"svg(stroke="none")svg", kNoFill, kRed, ""},
+      {"span_none_new_chunk", kTextStroke, R"svg(x="110" stroke="none")svg", kNoFill, kRed, ""},
+      {"span_none_on_text_path", kTextStroke, R"svg(stroke="none")svg", kNoFill, kRed, "",
+       /*onTextPath=*/true},
+      {"span_color", kTextStroke, R"svg(stroke="blue")svg", kNoFill, kRed,
+       R"svg(stroke="blue" stroke-width="2")svg"},
+      {"span_color_new_chunk", kTextStroke, R"svg(x="110" stroke="blue")svg", kNoFill, kRed,
+       R"svg(stroke="blue" stroke-width="2")svg"},
+      {"span_width", kTextStroke, R"svg(stroke-width="5")svg", kNoFill, kRed,
+       R"svg(stroke="red" stroke-width="5")svg"},
+      {"span_zero_width", kTextStroke, R"svg(stroke-width="0")svg", kNoFill, kRed, ""},
+      {"span_opacity", kTextStroke, R"svg(stroke-opacity="0.4")svg", kNoFill, kRed,
+       R"svg(stroke="red" stroke-width="2" stroke-opacity="0.4")svg"},
+      {"span_line_join", kWideTextStroke, R"svg(stroke-linejoin="round")svg", kNoFill, kWideRed,
+       R"svg(stroke="red" stroke-width="6" stroke-linejoin="round")svg"},
+      {"span_miter_limit", kWideTextStroke, R"svg(stroke-miterlimit="1")svg", kNoFill, kWideRed,
+       R"svg(stroke="red" stroke-width="6" stroke-miterlimit="1")svg"},
+      {"stroked_span_in_unstroked_text", kNoFill, R"svg(stroke="blue" stroke-width="2")svg",
+       kNoFill, "", R"svg(stroke="blue" stroke-width="2")svg"},
+      {"stroked_span_on_unstroked_text_path", kNoFill, R"svg(stroke="blue" stroke-width="2")svg",
+       kNoFill, "", R"svg(stroke="blue" stroke-width="2")svg", /*onTextPath=*/true},
+      {"span_shares_translucent_stroke",
+       R"svg(fill="none" stroke="red" stroke-width="8" stroke-opacity="0.5")svg",
+       R"svg(fill="none")svg",
+       R"svg(fill="none" stroke="red" stroke-width="8" stroke-opacity="0.5")svg", "", ""},
+      {"span_shares_stroke_on_text_path", kTextStroke, "", kNoFill, kRed, kRed,
+       /*onTextPath=*/true},
   }};
   for (const SpanStrokeCase& testCase : cases) {
     ExpectSpanStrokesMatchOutlinePaths(testCase);
