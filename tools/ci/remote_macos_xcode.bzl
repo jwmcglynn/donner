@@ -15,11 +15,7 @@ whenever the two differ, including in order.
 load("@build_bazel_apple_support//xcode:xcode_config.bzl", "xcode_config")
 load("@build_bazel_apple_support//xcode:xcode_version.bzl", "xcode_version")
 
-# The approved (version, build) pairs of tools/ci_macos_xcode.txt, in its preference order.
-PINNED_XCODES = [
-    ("27.1", "27A9275"),
-    ("27.2", "27B52"),
-]
+load("//build_defs:ci_xcode.bzl", "PINNED_XCODES")
 
 # SDK versions reported by each pinned Xcode build, recorded only after they were read on a
 # machine with that Xcode installed (`xcodebuild -showsdks`). Apple toolchain actions carry the

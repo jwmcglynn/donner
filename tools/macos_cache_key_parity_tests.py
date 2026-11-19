@@ -1107,6 +1107,14 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         lines = [line.split("#", 1)[0].strip() for line in _read(".bazelrc").splitlines()]
         self.assertEqual(3, sum(identity in line for line in lines))
         for path, text in _workflow_files().items():
+            if path == ".github/workflows/main.yml":
+                command = 'env -u DONNER_CI_XCODE_IDENTITY tools/ci/bazel_watchdog.sh "$DIAG_DIR/test/console.log"'
+                mixed = text.split("  linux-self-hosted:", 1)[1].split("\n  macos:", 1)[0]
+                mixed = mixed.split("      - name: Test Linux and macOS with native platform transitions", 1)[1]
+                self.assertIn(command, mixed.split("      - name:", 1)[0])
+                self.assertEqual(text.count(command), 1)
+                # Darwin's transition sets the selected tuple. The Linux client starts without it.
+                text = text.replace(command, "tools/ci/bazel_watchdog.sh")
             for line in text.splitlines():
                 if identity in line:
                     self.assertIn("${{ env.DONNER_CI_XCODE_IDENTITY }}", line)

@@ -110,6 +110,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertIn('coordinator_cc=$(command -v "${CC:-clang}")', step)
         self.assertIn('--repo_env=CC="$coordinator_cc"', step)
         self.assertNotIn("--action_env=CC", step)
+        self.assertIn("env -u DONNER_CI_XCODE_IDENTITY", step)
         self.assertIn("needs.determine-targets.outputs.affected == '//tools/ci:no_affected_targets' && 10", step)
         self.assertIn("--aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue", step)
         self.assertIn("--noexperimental_merged_skyframe_analysis_execution", step)

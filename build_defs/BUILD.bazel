@@ -15,6 +15,7 @@ exports_files(
         "macos_app_bundle.bzl",
         "editor_build_info.bzl",
         "rules.bzl",
+        "ci_xcode.bzl",
         "performance.bzl",
     ],
     visibility = ["//visibility:public"],

@@ -4,6 +4,7 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_features//:features.bzl", "bazel_features")
 load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
+load("//build_defs:ci_xcode.bzl", "ci_xcode_identity")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
@@ -1313,12 +1314,14 @@ _CI_PLATFORM_OPTIONS = [
     "//command_line_option:extra_execution_platforms",
     "//build_defs:llvm_latest",
     "//build_defs:metal_shader_validation",
+    "//command_line_option:test_env",
     "//donner/svg/renderer:renderer_backend",
     "//donner/svg/renderer/geode:enable_geode",
 ] + _CI_ACTION_ENVS
 
 def _ci_test_platform(settings, attr):
     options = dict(settings)
+    xcode_version = options.pop("//command_line_option:xcode_version")
     options["//command_line_option:platforms"] = [str(attr.target_platform)]
     if attr.darwin_profile == "geode":
         options["//donner/svg/renderer:renderer_backend"] = "geode"
@@ -1337,11 +1340,15 @@ def _ci_test_platform(settings, attr):
         options["//build_defs:llvm_latest"] = "0"
         for key in _CI_ACTION_ENVS:
             options[key] = [v for v in settings[key] if v.split("=", 1)[0] != "PATH"] + [_CI_DARWIN_PATH]
+        if xcode_version:
+            identity = ci_xcode_identity(str(xcode_version))
+            for key in _CI_ACTION_ENVS + ["//command_line_option:test_env"]:
+                options[key] = [v for v in options[key] if v.split("=", 1)[0] != "DONNER_CI_XCODE_IDENTITY"] + [identity]
     return options
 
 _ci_test_transition = transition(
     implementation = _ci_test_platform,
-    inputs = _CI_PLATFORM_OPTIONS,
+    inputs = _CI_PLATFORM_OPTIONS + ["//command_line_option:xcode_version"],
     outputs = _CI_PLATFORM_OPTIONS,
 )
 

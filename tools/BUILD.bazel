@@ -471,6 +471,7 @@ py_test(
         "//:BUILD.bazel",
         "//:docs_files",
         "//:github_action_definitions",
+        "//build_defs:ci_xcode.bzl",
         "//build_defs:macos_app_bundle.bzl",
         "//build_defs:rules.bzl",
         "//tools/ci:BUILD.bazel",

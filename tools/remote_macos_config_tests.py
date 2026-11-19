@@ -59,12 +59,12 @@ def _pins():
             if line.strip() and not line.lstrip().startswith("#")]
 
 
-def _bzl_constant(name):
+def _bzl_constant(name, path=XCODE_BZL):
     """A module-level literal assignment of remote_macos_xcode.bzl (Starlark parses as Python)."""
-    for node in ast.parse(_read(XCODE_BZL)).body:
+    for node in ast.parse(_read(path)).body:
         if isinstance(node, ast.Assign) and [target.id for target in node.targets] == [name]:
             return ast.literal_eval(node.value)
-    raise AssertionError("%s does not define %s" % (XCODE_BZL, name))
+    raise AssertionError("%s does not define %s" % (path, name))
 
 
 def _calls(path, function):
@@ -196,7 +196,7 @@ class XcodePinAgreementTest(unittest.TestCase):
     def test_static_config_restates_the_pin_file_in_order(self):
         pins = _pins()
         self.assertTrue(pins, "%s names no Xcode" % PIN_FILE)
-        self.assertEqual(pins, [tuple(pin) for pin in _bzl_constant("PINNED_XCODES")])
+        self.assertEqual(pins, [tuple(pin) for pin in _bzl_constant("PINNED_XCODES", "build_defs/ci_xcode.bzl")])
 
     def test_confirmed_sdk_versions_belong_to_pinned_builds(self):
         pinned_builds = {build for _, build in _pins()}
