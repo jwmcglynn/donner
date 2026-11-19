@@ -8,7 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { verifyServedEditor } from "./package-identity.mjs";
+import { verifyServedEditor } from "./served-editor-package.cjs";
 
 const serverPath = fileURLToPath(new URL("./remote-webserver.mjs", import.meta.url));
 const readyPattern = /DONNER_WASM_BASE_URL=(http:\/\/127\.0\.0\.1:\d+)/;
