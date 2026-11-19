@@ -103,6 +103,15 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertIn("value: ${{ steps.classify.outputs.trusted_pr }}", output)
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
 
+    def test_unified_canary_supplies_the_coordinator_compiler_to_repository_rules(self):
+        job = self._job_body("linux-self-hosted")
+        step = job.split("      - name: Test Linux and macOS with native platform transitions", 1)[1]
+        step = step.split("      - name:", 1)[0]
+        self.assertIn('coordinator_cc=$(command -v "${CC:-clang}")', step)
+        self.assertIn('--repo_env=CC="$coordinator_cc"', step)
+        self.assertNotIn("--action_env=CC", step)
+        self.assertIn("timeout-minutes: 10", step)
+
     def test_operator_stacked_pr_uses_self_hosted_lanes(self):
         event = {
             "sender": {"login": "jwmcglynn"},
