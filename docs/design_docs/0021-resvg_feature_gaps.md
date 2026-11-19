@@ -61,8 +61,8 @@ golden with a recorded justification: a `Params::WithGoldenOverride` reason, an 
 `tools/resvg_parity/exception_policies.json`, and a golden README row with the file's SHA-256. A
 skip is only for an unimplemented feature with an issue number (`Not impl: <feature> (#<issue>)`);
 skipped cases do not render at all. `SKIP_ALLOWLIST` in `parity_report.py` lists every active skip
-and may only shrink, so a new skip needs maintainer approval. The three skips it lists today predate
-this rule: an unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets
+and may only shrink, so a new skip needs maintainer approval. The three skips it lists are an
+unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets
 in the hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
 `PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels and
 color thresholds above 0.05 at their current values and may only shrink. A UB marker reference does
