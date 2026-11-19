@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:ci_metal.bzl", "metal_ci_variants")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
@@ -693,3 +694,5 @@ metal_ci_variants([
     "metal_ui_renderer_tests",
     "metal_working_set_tests",
 ])
+
+ci_darwin_targets()

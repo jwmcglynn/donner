@@ -1,5 +1,6 @@
 """Shared GLFW + ImGui + OpenGL host for the advanced Donner editor."""
 
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_library")
 load(
@@ -160,3 +161,5 @@ filegroup(
     ]),
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
+
+ci_darwin_targets()

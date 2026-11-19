@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 # Portable Donner SVG2 test suite: schemas, manifest validation, and the
 # compliance-baseline seed. See docs/design_docs/0057-donner_svg2_test_suite.md.
 
@@ -208,3 +209,5 @@ py_library(
     imports = ["."],
     visibility = ["//visibility:public"],
 )
+
+ci_darwin_targets()

@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_perf_sensitive_cc_library")
 
 COMPOSITOR_GOLDEN_PERF_TESTS = [
@@ -323,3 +324,7 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+ci_darwin_targets(geode = [
+    "compositor_geode_splash_tests",
+])

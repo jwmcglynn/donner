@@ -4,6 +4,7 @@ These tests live outside the production packages so that a module depending on D
 none of Donner's `dev_dependency` repositories, can still load the Geode production closure.
 """
 
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_test")
 
 py_test(
@@ -76,3 +77,5 @@ py_test(
     main = "GeodeConsumerLoads_tests.py",
     deps = ["//tools:bcr_dependency_closure"],
 )
+
+ci_darwin_targets()

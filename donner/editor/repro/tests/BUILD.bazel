@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load(
     "//donner/editor:editor_product_config.bzl",
     donner_cc_test = "editor_cc_test",
@@ -20,3 +21,5 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+ci_darwin_targets()

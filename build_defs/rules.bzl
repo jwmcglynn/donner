@@ -318,7 +318,8 @@ exec "$impl" {fixed_args} "$@"
     # Without this, the variant targets silently drop the impl's `env` (e.g.
     # the resvg suite's per-case watchdog override) - the symlinked binary
     # would run with a bare environment.
-    if getattr(ctx.attr, "metal_validation", False):
+    profile = getattr(ctx.attr, "darwin_profile", "")
+    if getattr(ctx.attr, "metal_validation", False) or profile:
         environment = dep_target[RunEnvironmentInfo] if RunEnvironmentInfo in dep_target else None
         fixed = {
             "DONNER_AUTOMATED_LANE": "1",
@@ -326,6 +327,9 @@ exec "$impl" {fixed_args} "$@"
             "HOME": "",
             "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
         }
+        if profile:
+            fixed["DONNER_CI_MACOS_LANE"] = "native-desktop-browser" if profile == "desktop" else "self-hosted-vm"
+            fixed["MTL_SHADER_VALIDATION_TEXTURE_USAGE"] = "0"
         providers.append(RunEnvironmentInfo(
             environment = (environment.environment if environment else {}) | fixed,
             inherited_environment = [k for k in environment.inherited_environment if k not in fixed] if environment else [],
@@ -1301,11 +1305,18 @@ _CI_PLATFORM_OPTIONS = [
     "//command_line_option:host_platform",
     "//build_defs:llvm_latest",
     "//build_defs:metal_shader_validation",
+    "//donner/svg/renderer:renderer_backend",
+    "//donner/svg/renderer/geode:enable_geode",
 ] + _CI_ACTION_ENVS
 
 def _ci_test_platform(settings, attr):
     options = dict(settings)
     options["//command_line_option:platforms"] = [str(attr.target_platform)]
+    if attr.darwin_profile == "geode":
+        options["//donner/svg/renderer:renderer_backend"] = "geode"
+        options["//donner/svg/renderer/geode:enable_geode"] = True
+    if attr.darwin_profile in ["ordinary", "geode"]:
+        options["//build_defs:metal_shader_validation"] = "off"
     if attr.metal_validation:
         options["//build_defs:metal_shader_validation"] = "on"
     if attr.darwin:
@@ -1327,9 +1338,27 @@ ci_platform_test = rule(
     cfg = _ci_test_transition,
     attrs = {
         "darwin": attr.bool(),
+        "darwin_profile": attr.string(values = ["", "ordinary", "desktop", "geode"]),
+        "data": attr.label_list(allow_files = True),
         "metal_validation": attr.bool(),
         "dep": attr.label(mandatory = True, executable = True, cfg = "target"),
         "target_platform": attr.label(mandatory = True),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
+)
+
+def _ci_platform_build_impl(ctx):
+    return [DefaultInfo(files = ctx.attr.dep[DefaultInfo].files)]
+
+ci_platform_build = rule(
+    implementation = _ci_platform_build_impl,
+    cfg = _ci_test_transition,
+    attrs = {
+        "darwin": attr.bool(),
+        "darwin_profile": attr.string(values = ["ordinary", "desktop", "geode"]),
+        "dep": attr.label(mandatory = True, allow_files = True),
+        "metal_validation": attr.bool(),
+        "target_platform": attr.label(mandatory = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
+    },
 )

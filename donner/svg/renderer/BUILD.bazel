@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
@@ -687,3 +688,5 @@ forbidden_transitive_dep_test(
     ],
     target = "//donner/svg/renderer:renderer_geode",
 )
+
+ci_darwin_targets()

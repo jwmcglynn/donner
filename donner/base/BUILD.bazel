@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "ci_platform_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
@@ -405,3 +406,5 @@ donner_cc_test(
     tags = ["manual"],
     exec_compatible_with = ["@platforms//os:" + os],
 ) for os in ["linux", "macos"]]
+
+ci_darwin_targets()

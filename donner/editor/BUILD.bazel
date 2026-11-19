@@ -12,6 +12,7 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle", "packaged_resources")
@@ -1947,3 +1948,5 @@ packaged_resource_bundle(
     ],
     visibility = ["//visibility:public"],
 )
+
+ci_darwin_targets()

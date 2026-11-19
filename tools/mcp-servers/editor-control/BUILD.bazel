@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//donner/editor:editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "editor_cc_binary", donner_cc_test = "editor_cc_test")
@@ -160,3 +161,5 @@ packaged_resource_bundle(
     output_name = "editor_control_mcp_server_impl.assets",
     resources = ["//donner/editor:editor_resource_bundle"],
 )
+
+ci_darwin_targets()

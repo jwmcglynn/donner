@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:rules.bzl", "libc_compat_deps")
 
@@ -196,3 +197,5 @@ cc_test(
         "@com_google_gtest//:gtest_main",
     ] + libc_compat_deps(),
 )
+
+ci_darwin_targets()

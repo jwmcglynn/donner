@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -504,3 +505,5 @@ donner_cc_test(
         "@vulkan_headers",
     ],
 )
+
+ci_darwin_targets()

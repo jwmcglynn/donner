@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:ci_metal.bzl", "metal_ci_suites")
 load("//build_defs:rules.bzl", "ci_platform_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
@@ -865,3 +866,18 @@ metal_ci_suites([
     "metal_offline_compiler",
     "metal_native",
 ])
+
+test_suite(
+    name = "unified_editor_geode",
+    tags = ["manual"],
+    tests = [
+        "//donner/editor/tests:ci_darwin_geode_async_renderer_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_editor_window_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_gl_rnr_replay_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_layer_thumbnail_golden_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_rnr_replay_tests_geode",
+        "//donner/svg/compositor:ci_darwin_geode_compositor_geode_splash_tests",
+    ],
+)
+
+ci_darwin_targets()

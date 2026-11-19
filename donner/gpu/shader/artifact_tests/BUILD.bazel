@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:rules.bzl", "donner_cc_binary")
 load(
@@ -1952,3 +1953,5 @@ py_test(
     main = "inspect_projection_binary.py",
     target_compatible_with = _NATIVE,
 )
+
+ci_darwin_targets()

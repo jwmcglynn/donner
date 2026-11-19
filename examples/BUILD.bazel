@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:native_binary.bzl", "native_test")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
@@ -521,3 +522,5 @@ donner_multi_transitioned_test(
         "basic",
     ]
 ]
+
+ci_darwin_targets()

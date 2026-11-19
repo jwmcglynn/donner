@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
@@ -109,3 +110,5 @@ donner_cc_library(
     # iterative archive resolution; gold does not. Force the object in via whole-archive.
     alwayslink = True,
 )
+
+ci_darwin_targets()

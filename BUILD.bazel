@@ -6,6 +6,7 @@
 ##
 ## Main library
 ##
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_multi_transitioned_test")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
@@ -199,3 +200,5 @@ filegroup(
         "//donner:__subpackages__",
     ],
 )
+
+ci_darwin_targets()

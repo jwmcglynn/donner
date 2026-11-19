@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:rules.bzl", "donner_cc_library")
 load(":svg_core_compile_tests.bzl", "svg_core_audit_text_dependencies_test")
 
@@ -281,3 +282,5 @@ donner_cc_library(
         "//donner/svg/properties:property_parsing",
     ],
 )
+
+ci_darwin_targets()

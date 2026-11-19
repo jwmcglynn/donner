@@ -6,6 +6,7 @@ that depends on Donner sees none of those repositories, so the browser backend's
 not load them.
 """
 
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("//donner/gpu/browser:pthreads_transition.bzl", "pthreads_transitioned_target")
@@ -76,3 +77,5 @@ pthreads_transitioned_target(
     }),
     visibility = ["//tools/ci:__pkg__"],
 )
+
+ci_darwin_targets()

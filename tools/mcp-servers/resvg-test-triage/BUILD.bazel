@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_test")
 
 py_test(
@@ -18,3 +19,5 @@ py_test(
     imports = ["."],
     main = "run_tests.py",
 )
+
+ci_darwin_targets()

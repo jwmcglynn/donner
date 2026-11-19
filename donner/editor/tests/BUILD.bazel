@@ -1,3 +1,4 @@
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
@@ -1913,3 +1914,11 @@ donner_multi_transitioned_test(
     text = "true",
     text_full = "true",
 )
+
+ci_darwin_targets(geode = [
+    "async_renderer_tests_geode",
+    "editor_window_tests_geode",
+    "gl_rnr_replay_tests_geode",
+    "layer_thumbnail_golden_tests_geode",
+    "rnr_replay_tests_geode",
+])

@@ -11,6 +11,7 @@ To enable:
         //donner/svg/renderer/geode/...
 """
 
+load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
@@ -1277,3 +1278,5 @@ donner_multi_transitioned_test(
     opens_gpu_device = True,
     renderer_backend = "geode",
 )
+
+ci_darwin_targets()
