@@ -3077,136 +3077,169 @@ private:
   std::vector<double> cumulativeLengths_;
 };
 
+/// Inputs shared by every dash stroked from one subpath.
+struct DashStrokeTarget {
+  const StrokeStyle& style;             //!< Stroke style applied to each dash.
+  double flattenTolerance;              //!< Chord tolerance for round caps and dots.
+  const FlatSubpathArcIndex& arcIndex;  //!< Arc-length index of the dashed subpath.
+  PathBuilder& builder;                 //!< Destination of the stroked dashes.
+};
+
+/// Pattern entry that covers the start of the subpath, and the length left in that entry.
+struct DashPatternStart {
+  size_t index = 0;               //!< Index into \ref ResolvedDashPattern::lengths.
+  double remainingInEntry = 0.0;  //!< Length of that entry left at arc length zero.
+};
+
+/// Finds the pattern entry covering \ref ResolvedDashPattern::startPhase, the pattern position
+/// at arc length zero, or nullopt when \p workBudget runs out.
+std::optional<DashPatternStart> FindDashPatternStart(const ResolvedDashPattern& pattern,
+                                                     DashPatternWorkBudget& workBudget) {
+  const double patternPos = pattern.startPhase;
+  const double boundaryEpsilon = std::max(1.0, pattern.totalLength) * 1e-12;
+  double acc = 0.0;
+  size_t idx = 0;
+  for (size_t i = 0; i < pattern.lengths.size(); ++i) {
+    if (!workBudget.consume()) {
+      return std::nullopt;
+    }
+    const double entryLength = pattern.lengths[i];
+    if ((entryLength == 0.0 && std::abs(patternPos - acc) <= boundaryEpsilon) ||
+        patternPos < acc + entryLength) {
+      idx = i;
+      break;
+    }
+    acc += entryLength;
+  }
+  return DashPatternStart{idx, pattern.lengths[idx] - (patternPos - acc)};
+}
+
+/// Walks a dash pattern along one subpath, one pattern entry per step, and strokes each ON
+/// interval as its own open subpath with its own pair of caps.
+class DashPatternWalk {
+public:
+  DashPatternWalk(const DashStrokeTarget& target, const ResolvedDashPattern& pattern,
+                  const DashPatternStart& start)
+      : target_(target),
+        pattern_(pattern),
+        index_(start.index),
+        remainingInEntry_(start.remainingInEntry) {}
+
+  /// Arc length where the next pattern entry begins.
+  double cursor() const { return cursor_; }
+
+  /// Consumes one pattern entry, returning a final result when the walk must stop.
+  std::optional<DashedStrokeResult> advance(double totalArc) {
+    const double entryLength =
+        remainingInEntry_ > 0.0 ? remainingInEntry_ : pattern_.lengths[index_];
+    const bool isOn = index_ % 2u == 0u;
+    // Only the first entry resumes partway through.
+    remainingInEntry_ = 0.0;
+    index_ = (index_ + 1u) % pattern_.lengths.size();
+    if (entryLength <= 0.0) {
+      return advanceZeroLength(isOn);
+    }
+    iterationsWithoutProgress_ = 0;
+    const double next = cursor_ + entryLength;
+    if (!std::isfinite(next) || next <= cursor_) {
+      return DashedStrokeResult::Rejected;
+    }
+    if (isOn) {
+      if (!countDash()) {
+        return DashedStrokeResult::Emitted;
+      }
+      // Truncate the dash at `totalArc` for both closed and open
+      // subpaths. For closed subpaths, the first dash emitted by the
+      // loop (at `cursor == 0`) already covers the head-of-path
+      // region, so wrapping the final dash across the seam would
+      // produce two overlapping stroke polygons at arc [0, next -
+      // totalArc]. The resulting dashed path has multiple subpaths
+      // and is rendered with EvenOdd (see
+      // `RendererGeode::drawPath`'s subpath-count heuristic), so the
+      // overlap cancels out to a visible GAP at the seam - the
+      // symptom on resvg's `stroke-dasharray/even-count` where the
+      // wrap dash appears as two disconnected arcs with a butt-cap
+      // notch at angle 0°. Truncating at `totalArc` and letting the
+      // first dash cover the head region matches tiny-skia's
+      // behavior and produces the expected continuous visual.
+      strokeRange(cursor_, std::min(next, totalArc));
+    }
+    cursor_ = next;
+    return std::nullopt;
+  }
+
+private:
+  /// A zero-length ON dash is invisible with butt caps, but round and square caps produce a
+  /// circle or square centered at the current path position. A degenerate two-point subpath gets
+  /// the zero-length-subpath cap handling of strokeSubpath without advancing the cursor.
+  std::optional<DashedStrokeResult> advanceZeroLength(bool isOn) {
+    if (isOn && target_.style.cap != LineCap::Butt) {
+      if (!countDash()) {
+        return DashedStrokeResult::Emitted;
+      }
+      FlatSubpath dash;
+      const Vector2d point = target_.arcIndex.pointAt(cursor_);
+      dash.points = {point, point};
+      dash.zeroLengthTangent = target_.arcIndex.tangentAt(cursor_);
+      strokeSubpath(dash, target_.style, target_.flattenTolerance, target_.builder);
+    }
+    // A full cycle of zero-length entries cannot advance the cursor, so stop rather than loop.
+    // The resolver guarantees a positive pattern length, so a full cycle plus slack suffices.
+    if (++iterationsWithoutProgress_ >= pattern_.lengths.size() + 2) {
+      return DashedStrokeResult::Rejected;
+    }
+    return std::nullopt;
+  }
+
+  /// Strokes the dash covering arc lengths [@p start, @p end].
+  void strokeRange(double start, double end) {
+    FlatSubpath dash = target_.arcIndex.extractRange(start, end);
+    if (dash.points.size() >= 2) {
+      strokeSubpath(dash, target_.style, target_.flattenTolerance, target_.builder);
+    }
+  }
+
+  /// Counts one more dash, returning false once a subpath exceeds the dash limit. More dashes
+  /// than this on one subpath come from a pathological or crafted dash array.
+  bool countDash() {
+    constexpr size_t kMaxDashes = 65536;
+    return ++dashesEmitted_ <= kMaxDashes;
+  }
+
+  const DashStrokeTarget& target_;
+  const ResolvedDashPattern& pattern_;
+  size_t index_;
+  double remainingInEntry_;
+  double cursor_ = 0.0;
+  size_t dashesEmitted_ = 0;
+  size_t iterationsWithoutProgress_ = 0;
+};
+
 /// Dash a single subpath and emit its stroked dashes to the builder.
-DashedStrokeResult strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
-                                       double flattenTolerance, const FlatSubpathArcIndex& arcIndex,
+///
+/// A positive dash offset shifts the pattern forward relative to the path, so arc length zero
+/// sits at pattern position \ref ResolvedDashPattern::startPhase. The walk covers arc lengths
+/// [0, totalArc] and clips dashes that run past the end.
+DashedStrokeResult strokeDashedSubpath(const DashStrokeTarget& target,
                                        const ResolvedDashPattern& pattern,
-                                       DashPatternWorkBudget& workBudget, PathBuilder& builder) {
-  const double totalArc = arcIndex.totalLength();
+                                       DashPatternWorkBudget& workBudget) {
+  const double totalArc = target.arcIndex.totalLength();
   if (totalArc <= 0.0) {
     return DashedStrokeResult::FallbackToSolid;
   }
-
-  // Compute the list of (onStart, onEnd) arc-length ranges covered by the
-  // dashed pattern over the subpath. Each range becomes its own open-subpath
-  // stroke (with its own pair of caps).
-  //
-  // Walk pattern indices starting at the one that covers the startPhase.
-  // For closed subpaths, we start walking at phase=startPhase but cover
-  // distances [0, totalArc]; an "on" dash that straddles the end of a closed
-  // path wraps to the beginning. For open subpaths, dashes that run past
-  // the end are simply clipped.
-
-  // Find the pattern index and offset-within-index at which to begin.
-  // `patternCursor` is the distance along the repeating pattern where
-  // distance=0 on the subpath sits. A positive dashOffset shifts the
-  // pattern forward relative to the path, i.e., the path position 0 sits
-  // at pattern-position `startPhase`.
-  const size_t numEntries = pattern.lengths.size();
-  double patternPos = pattern.startPhase;  // in [0, totalLength)
-  size_t idx = 0;
-  {
-    double acc = 0.0;
-    const double boundaryEpsilon = std::max(1.0, pattern.totalLength) * 1e-12;
-    for (size_t i = 0; i < numEntries; ++i) {
-      if (!workBudget.consume()) {
-        return DashedStrokeResult::Rejected;
-      }
-      const double entryLength = pattern.lengths[i];
-      if ((entryLength == 0.0 && std::abs(patternPos - acc) <= boundaryEpsilon) ||
-          patternPos < acc + entryLength) {
-        idx = i;
-        break;
-      }
-      acc += entryLength;
+  const std::optional<DashPatternStart> start = FindDashPatternStart(pattern, workBudget);
+  if (!start.has_value()) {
+    return DashedStrokeResult::Rejected;
+  }
+  DashPatternWalk walk(target, pattern, *start);
+  while (walk.cursor() < totalArc && !target.builder.exceededMaximumPoints()) {
+    if (!workBudget.consume()) {
+      return DashedStrokeResult::Rejected;
     }
-    // `remainingInEntry` = length left in this entry from the starting path
-    // position. We use this to "resume" mid-entry.
-    double remainingInEntry = pattern.lengths[idx] - (patternPos - acc);
-
-    // Safety cap on dash segment count (pathological dash arrays on very
-    // long paths). A single subpath emitting more than this many dashes is
-    // almost certainly a bug or an attacker-crafted input; bail out rather
-    // than hang.
-    constexpr size_t kMaxDashes = 65536;
-    size_t dashesEmitted = 0;
-
-    // Guard against zero-length entries in the pattern causing an infinite
-    // loop: if a full cycle of the pattern advances cursor by less than this
-    // epsilon, bail. pattern.totalLength > 0 is guaranteed by the resolver,
-    // so a full cycle must advance at least totalLength.
-    size_t iterationsWithoutProgress = 0;
-    const size_t kMaxStalledIters = numEntries + 2;  // Full cycle plus slack.
-
-    // Walk the pattern forward over [0, totalArc]. For closed subpaths, if
-    // the final "on" dash would wrap across the start, we emit it as two
-    // pieces (the tail at end-of-path and the head at start-of-path).
-    double cursor = 0.0;
-    while (cursor < totalArc && !builder.exceededMaximumPoints()) {
-      if (!workBudget.consume()) {
-        return DashedStrokeResult::Rejected;
-      }
-      const double entryLen = (remainingInEntry > 0.0) ? remainingInEntry : pattern.lengths[idx];
-      const bool isOn = (idx % 2u == 0u);
-      if (entryLen <= 0.0) {
-        // A zero-length ON dash is invisible with butt caps, but round and square
-        // caps produce a circle or square centered at the current path position.
-        // Emit a degenerate two-point subpath so strokeSubpath applies its SVG 2
-        // zero-length-subpath cap handling without advancing the dash cursor.
-        if (isOn && style.cap != LineCap::Butt) {
-          if (++dashesEmitted > kMaxDashes) {
-            return DashedStrokeResult::Emitted;
-          }
-          const Vector2d point = arcIndex.pointAt(cursor);
-          FlatSubpath dash;
-          dash.points = {point, point};
-          dash.zeroLengthTangent = arcIndex.tangentAt(cursor);
-          strokeSubpath(dash, style, flattenTolerance, builder);
-        }
-        if (++iterationsWithoutProgress >= kMaxStalledIters) {
-          return DashedStrokeResult::Rejected;
-        }
-        remainingInEntry = 0.0;
-        idx = (idx + 1u) % numEntries;
-        continue;
-      }
-      iterationsWithoutProgress = 0;
-      const double next = cursor + entryLen;
-      if (!std::isfinite(next) || next <= cursor) {
-        return DashedStrokeResult::Rejected;
-      }
-
-      if (isOn && entryLen > 0.0) {
-        if (++dashesEmitted > kMaxDashes) {
-          return DashedStrokeResult::Emitted;
-        }
-        // Truncate the dash at `totalArc` for both closed and open
-        // subpaths. For closed subpaths, the first dash emitted by the
-        // loop (at `cursor == 0`) already covers the head-of-path
-        // region, so wrapping the final dash across the seam would
-        // produce two overlapping stroke polygons at arc [0, next -
-        // totalArc]. The resulting dashed path has multiple subpaths
-        // and is rendered with EvenOdd (see
-        // `RendererGeode::drawPath`'s subpath-count heuristic), so the
-        // overlap cancels out to a visible GAP at the seam - the
-        // symptom on resvg's `stroke-dasharray/even-count` where the
-        // wrap dash appears as two disconnected arcs with a butt-cap
-        // notch at angle 0°. Truncating at `totalArc` and letting the
-        // first dash cover the head region matches tiny-skia's
-        // behavior and produces the expected continuous visual.
-        const double dashEnd = std::min(next, totalArc);
-        FlatSubpath dash = arcIndex.extractRange(cursor, dashEnd);
-        if (dash.points.size() >= 2) {
-          strokeSubpath(dash, style, flattenTolerance, builder);
-        }
-      }
-
-      cursor = next;
-      remainingInEntry = 0.0;  // Next iteration uses full entry length.
-      idx = (idx + 1u) % numEntries;
+    if (const std::optional<DashedStrokeResult> result = walk.advance(totalArc)) {
+      return *result;
     }
   }
-
   return DashedStrokeResult::Emitted;
 }
 
@@ -3245,7 +3278,7 @@ bool StrokePreparedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
                            DashPatternWorkBudget& workBudget, PathBuilder& builder) {
   if (dashPattern.has_value()) {
     const DashedStrokeResult result = strokeDashedSubpath(
-        subpath, style, flattenTolerance, *arcIndex, *dashPattern, workBudget, builder);
+        {style, flattenTolerance, *arcIndex, builder}, *dashPattern, workBudget);
     if (result == DashedStrokeResult::Emitted) {
       return !builder.exceededMaximumPoints();
     }
