@@ -22,129 +22,51 @@ permissions:
   contents: read
   pull-requests: read
 
-# Fast lint jobs covering the whole-tree checks that don't live inside `bazel test //...`, in
-# tools/ci/lint_lane.sh. The CMake Build workflow owns the separate static generator check
-# and exercises compiled consumers in its nightly Linux and macOS jobs.
-
 jobs:
-  gatekeeper:
+  lint:
     runs-on: ubuntu-24.04
-    outputs:
-      docs_only: ${{ steps.docs_only.outputs.docs_only }}
-      is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
-      use_self_hosted_linux: ${{ steps.pr_trust.outputs.use_self_hosted_linux }}
-      unified_macos: ${{ steps.pr_trust.outputs.unified_macos }}
-      # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
-      unified_re_default: ${{ steps.pr_trust.outputs.unified_re_default }}
-      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
-      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+    timeout-minutes: 10
+    if: github.event.deleted != true
     steps:
-      - id: admission_source
-        name: Checkout trusted admission code
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          fetch-depth: 1
+          # On a PR this includes both parents of GitHub's tested merge.
+          fetch-depth: 2
           persist-credentials: false
-          submodules: false
-          lfs: false
-          sparse-checkout: |
-            tools/ci/gatekeeper.py
-            tools/ci/github_rate_limit.py
-            .github/actions/pr-trust
-          sparse-checkout-cone-mode: false
 
-      - id: comparison_source
-        name: Checkout PR files for comparison
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v7
-        with:
-          path: pr-input
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: false
-          lfs: false
-
-      # Admission and trust execute only base-pinned code; PR files are comparison data.
-      - id: dup_push
-        name: Detect duplicate push (PR already open for this branch)
+      - id: duplicate
+        if: github.event_name == 'push' && github.ref != 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/ci/gatekeeper.py duplicate-push
 
-      - id: docs_only
-        name: Detect docs-only PR
-        working-directory: ${{ github.event_name == 'pull_request' && 'pr-input' || '.' }}
-        run: python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only
+      - id: changes
+        name: Find changed paths
+        if: steps.duplicate.outputs.is_duplicate_push != 'true'
+        env:
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+        run: python3 -m tools.ci.lint_changes base
 
-      - id: pr_trust
-        name: Classify pull request trust
-        uses: ./.github/actions/pr-trust
-        with:
-          selfhosted_linux_runner: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
-          unified_re_canary: ${{ vars.UNIFIED_RE_CANARY }}
-
-  lint:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Local complexity lint compares the whole PR diff to its target branch.
-          fetch-depth: 0
-          persist-credentials: false
-
-      # Every run restores; only main pushes save (end of job), so pull
-      # requests and branch pushes read main's entry without writing their own.
       - name: Restore Bazel
+        if: steps.changes.outputs.needs_bazel == 'true'
         id: bazel-cache
         uses: actions/cache/restore@v6
         with:
-          path: |
-            ~/.cache/bazel
+          path: ~/.cache/bazel
           key: ${{ runner.os }}-bazel-lint-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
           restore-keys: |
             ${{ runner.os }}-bazel-lint-
             ${{ runner.os }}-bazel-
 
-      # The whole-tree checks that `bazel test //...` cannot run, in one documented local command;
-      # tools/ci/lint_lane.sh lists them and why.
       - name: Lint
-        run: tools/ci/lint_lane.sh
+        if: steps.duplicate.outputs.is_duplicate_push != 'true'
+        env:
+          LINT_BASE: ${{ steps.changes.outputs.base }}
+        run: tools/ci/lint_lane.sh --changed "$LINT_BASE"
 
       - name: Save main Bazel
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.bazel-cache.outputs.cache-hit != 'true'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.bazel-cache.outputs.cache-hit != 'true' && steps.changes.outputs.needs_bazel == 'true'
         uses: actions/cache/save@v6
         with:
-          path: |
-            ~/.cache/bazel
+          path: ~/.cache/bazel
           key: ${{ steps.bazel-cache.outputs.cache-primary-key }}
-
-  lint-self-hosted:
-    runs-on: [self-hosted, Linux, ARM64]
-    timeout-minutes: 20
-    needs: gatekeeper
-    # Lint and provenance checks also run on documentation-only PRs.
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Isolate nested Bazel invocations
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazel_binary="$(command -v bazelisk)"
-          wrapper_dir="${RUNNER_TEMP}/lint-bazel"
-          mkdir -p "$wrapper_dir"
-          printf '#!/usr/bin/env bash\nexec %q --nohome_rc --nosystem_rc "$@"\n' "$bazel_binary" > "$wrapper_dir/bazel"
-          chmod +x "$wrapper_dir/bazel"
-          ln -s bazel "$wrapper_dir/bazelisk"
-          echo "$wrapper_dir" >> "$GITHUB_PATH"
-
-      - name: Lint
-        run: tools/ci/lint_lane.sh

@@ -72,7 +72,6 @@ TRIGGER_ALLOWLIST = {
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
     ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
-    ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "linux-self-hosted",
 }
 
@@ -127,8 +126,7 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
-    ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
-        "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
+
 
 }
 
@@ -358,6 +356,8 @@ _CACHE_HIT = ("", "A cache restore result only gates that cache's save step; a m
                   "such step.")
 
 STEP_OUTPUTS = {
+    "steps.duplicate.outputs.is_duplicate_push": ("false", "The event is a nonduplicate run."),
+    "steps.changes.outputs.needs_bazel": ("true", "A changed build input needs Bazel."),
     "steps.pr-meta.outputs.identical_tree": ("", "Changed trees use the full target planner setup."),
     **{"steps.%s.outputs.cache-hit" % step_id: _CACHE_HIT
        for step_id in ("base-hashes", "bazel-cache")},
@@ -716,6 +716,8 @@ def _context(scenario):
             return "success"
         if name.endswith(".labels.*.name"):
             return []
+        if name == "github.event.deleted":
+            return False
         if name in STEP_OUTPUTS:
             return STEP_OUTPUTS[name][0]
         if name in REPOSITORY_VARIABLES:

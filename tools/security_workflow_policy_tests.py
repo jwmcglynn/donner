@@ -99,7 +99,6 @@ REVIEWED_WORKFLOW_CALLS = {
 SELF_HOSTED_JOBS = {
     (".github/workflows/cmake.yml", "cmake-cache-producer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): "use_self_hosted_linux",
-    (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "coverage-contract"): "use_self_hosted_linux",
 }
@@ -109,7 +108,6 @@ _LINUX_ARM = frozenset({"self-hosted", "linux", "arm64"})
 SELF_HOSTED_LABELS = {
     (".github/workflows/main.yml", "linux-self-hosted"): _LINUX_ARM,
     (".github/workflows/main.yml", "coverage-contract"): _LINUX_ARM,
-    (".github/workflows/lint.yml", "lint-self-hosted"): _LINUX_ARM,
     (".github/workflows/cmake.yml", "cmake-cache-producer"): _LINUX_ARM | {"cmake-cache-producer"},
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): _LINUX_ARM | {"cmake-cache-consumer"},
 }
@@ -136,12 +134,6 @@ SELF_HOSTED_GATE_PREFIX = (
     "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "
     "(github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && ")
 
-# Lint must keep validating documentation-only pull requests too.
-SELF_HOSTED_GATE_OVERRIDES = {
-    (".github/workflows/lint.yml", "lint-self-hosted"): (
-        "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
-        "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "),
-}
 
 # Reviewed `runs-on` expressions that are neither a literal label nor `${{ matrix.<key> }}`, with
 # every label each can produce.
@@ -1470,7 +1462,7 @@ def _runner_violation(path, name, job):
     expected = SELF_HOSTED_LABELS.get((path, name))
     if expected and any({label.lower() for label in labels} != expected for labels in sets):
         return "%s:%s uses unapproved self-hosted capability labels" % (path, name)
-    prefix = SELF_HOSTED_GATE_OVERRIDES.get((path, name), SELF_HOSTED_GATE_PREFIX).replace(
+    prefix = SELF_HOSTED_GATE_PREFIX.replace(
         "${{ ", "${{ " + SELF_HOSTED_STATUS_PREFIX.get((path, name), ""), 1)
     gate = prefix + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
         SELF_HOSTED_JOBS.get((path, name)), SELF_HOSTED_NARROWING.get((path, name), ""))
@@ -2319,7 +2311,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "uses: actions/cache/restore@v6", "uses: actions/cache@v6", 1),
                 "saves an Actions cache outside main"),
             "ungated save": (lint, files[lint].replace(
-                "        " + save_if + " && steps.bazel-cache.outputs.cache-hit != 'true'\n",
+                "        " + save_if + " && steps.bazel-cache.outputs.cache-hit != 'true' && steps.changes.outputs.needs_bazel == 'true'\n",
                 "", 1), "saves an Actions cache outside main"),
             "widened save": (cmake, files[cmake].replace(
                 save_if + " && steps.ccache", save_if + " || github.event_name == 'pull_request'"
@@ -2337,7 +2329,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "setup-node automatic cache": (wasm, files[wasm].replace(
                 "    steps:\n", "    steps:\n      - uses: actions/setup-node@v7\n", 1), "saves on every event"),
             "split expressions": (lint, files[lint].replace(
-                save_if + " && steps.bazel-cache.outputs.cache-hit != 'true'\n",
+                save_if + " && steps.bazel-cache.outputs.cache-hit != 'true' && steps.changes.outputs.needs_bazel == 'true'\n",
                 "if: ${{ %s }} && ${{ steps.bazel-cache.outputs.cache-hit }}\n"
                 % MAIN_CACHE_WRITE, 1), "saves an Actions cache outside main"),
             "literal cache-save string": (bcr, files[bcr].replace(
@@ -4861,8 +4853,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(_step_key(decision, "uses", 8), "./.github/actions/pr-trust")
 
     def test_gatekeeper_uses_immutable_admission_code(self):
-        for path in (".github/workflows/main.yml", ".github/workflows/lint.yml",
-                     ".github/workflows/cmake.yml"):
+        for path in (".github/workflows/main.yml", ".github/workflows/cmake.yml"):
             workflow = self.supply_chain_files[path]
             self.assertEqual([], _gatekeeper_source_violations(workflow))
             self.assertEqual(_jobs(self.supply_chain_files[".github/workflows/main.yml"])["gatekeeper"],

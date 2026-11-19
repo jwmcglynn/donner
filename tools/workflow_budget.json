@@ -1,8 +1,8 @@
 {
   "tree": {
-    "lines": 5153,
-    "comment_lines": 548,
-    "multiline_runs": 65,
+    "lines": 5075,
+    "comment_lines": 538,
+    "multiline_runs": 64,
     "longest_run": 194,
     "run_expressions": 12,
     "longest_if": 369
@@ -89,12 +89,12 @@
       "longest_if": 70
     },
     ".github/workflows/lint.yml": {
-      "lines": 150,
-      "comment_lines": 16,
-      "multiline_runs": 1,
-      "longest_run": 8,
+      "lines": 72,
+      "comment_lines": 6,
+      "multiline_runs": 0,
+      "longest_run": 0,
       "run_expressions": 0,
-      "longest_if": 195
+      "longest_if": 166
     },
     ".github/workflows/main.yml": {
       "lines": 883,

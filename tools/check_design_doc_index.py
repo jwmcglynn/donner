@@ -135,7 +135,7 @@ def check_row_status(design_root: Path, line: int, target: str, cell: str) -> li
     return [f"README.md:{line}: status cell {cell!r} does not start with {target}'s {keyword!r}"]
 
 
-def check_index(design_root: Path, docs: list[str], readme: str) -> list[str]:
+def check_index(design_root: Path, docs: list[str], readme: str, selected=None) -> list[str]:
     errors = []
     indexed = set()
     for line, target, cell in index_rows(readme):
@@ -145,25 +145,28 @@ def check_index(design_root: Path, docs: list[str], readme: str) -> list[str]:
         if not (design_root / target).is_file():
             errors.append(f"README.md:{line}: index row links to missing file {target}")
             continue
-        errors.extend(check_row_status(design_root, line, target, cell))
+        if selected is None or target in selected:
+            errors.extend(check_row_status(design_root, line, target, cell))
     errors.extend(f"README.md: {doc} is missing from the Document Index" for doc in docs
                   if doc not in indexed)
     return errors
 
 
-def check(root: Path) -> list[str]:
+def check(root: Path, changed=()) -> list[str]:
     design_root = root / DESIGN_DIR
     docs = numbered_docs(design_root)
     readme = (design_root / "README.md").read_text(encoding="utf-8")
     navigation = (design_root / "navigation.dox").read_text(encoding="utf-8")
-    return check_index(design_root, docs, readme) + check_navigation(design_root, docs, navigation)
+    selected = {p.removeprefix(DESIGN_DIR.as_posix() + "/") for p in changed}
+    return check_index(design_root, docs, readme, selected if selected and "README.md" not in selected else None) + check_navigation(design_root, docs, navigation)
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("paths", nargs="*")
     args = parser.parse_args(argv[1:])
-    errors = check(args.root)
+    errors = check(args.root, args.paths)
     for error in errors:
         print(error)
     if errors:

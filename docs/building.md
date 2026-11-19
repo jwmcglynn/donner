@@ -331,6 +331,13 @@ then stages the release artifacts. A main push reports numeric payload budgets. 
 them. The scheduled quarantine report has its own non-gating target. A trusted PR using the mixed
 graph skips the hosted build job.
 
+Lint runs on GitHub-hosted Ubuntu. The depth-two PR checkout contains the tested merge and
+its two parents. Lint compares the tested tree with its base parent, so base-branch drift does
+not add unrelated files. Pushes compare with the event's before SHA, fetching that commit
+shallowly when necessary. The privacy, formatting and complexity checks read changed files.
+Changes to indexes, manifests or build definitions also run the corresponding consistency
+checks. To reproduce the CI selection locally, run `tools/ci/lint_lane.sh --changed <base-sha>`.
+
 **Linux remote execution.** Every Bazel build and test step of the hosted `linux` job except the
 linker canary selects the declared LLVM 21 toolchain with libc++ and the Linux sysroot
 (`--config=latest_llvm`), on main and on every pull request, so a pull request without the cloud

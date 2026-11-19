@@ -108,8 +108,7 @@ class LintLaneTest(unittest.TestCase):
         self.assertEqual(calls, [])
         # The usage text is the script's whole header comment, and nothing past it.
         usage = result.stderr.splitlines()
-        self.assertEqual(usage[0], "lint_lane.sh - the Lint workflow's checks, in the workflow's "
-                         "order, as one command.")
+        self.assertEqual(usage[0], "lint_lane.sh - run changed-file CI checks or a complete local lint audit.")
         self.assertIn("  - tools/check_js_lint_coverage.py: every tracked JavaScript file is in "
                       "the ESLint test", usage)
         self.assertEqual(usage[-1], "check ends the lane with its exit status.")

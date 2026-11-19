@@ -104,12 +104,12 @@ def validate_document(path: Path, root: Path) -> Violation | None:
     )
 
 
-def collect_violations(root: Path) -> dict[str, Violation]:
+def collect_violations(root: Path, paths=None) -> dict[str, Violation]:
     design_root = root / "docs" / "design_docs"
     return {
         violation.path: violation
-        for path in sorted(design_root.rglob("*.md"))
-        if is_design_doc(path)
+        for path in (sorted(design_root.rglob("*.md")) if paths is None else [root / name for name in paths])
+        if path.suffix == ".md" and path.is_file() and not path.is_symlink() and is_design_doc(path)
         if (violation := validate_document(path, root)) is not None
     }
 
@@ -126,8 +126,8 @@ def load_debt_allowlist(path: Path) -> set[str]:
     return entries
 
 
-def check(root: Path, allowlist_path: Path) -> list[str]:
-    violations = collect_violations(root)
+def check(root: Path, allowlist_path: Path, paths=None) -> list[str]:
+    violations = collect_violations(root, paths)
     debt = load_debt_allowlist(allowlist_path)
     errors = [
         f"{path}: unapproved provenance-debt entry; new debt is prohibited"
@@ -140,7 +140,7 @@ def check(root: Path, allowlist_path: Path) -> list[str]:
     )
     errors.extend(
         f"{path}: stale provenance-debt entry; remove it from {allowlist_path.relative_to(root)}"
-        for path in sorted(debt - violations.keys())
+        for path in sorted((debt if paths is None else debt.intersection(paths)) - violations.keys())
     )
     return errors
 
@@ -160,6 +160,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Historical provenance-debt file (defaults under docs/design_docs)",
     )
+    parser.add_argument("paths", nargs="*")
     return parser.parse_args()
 
 
@@ -170,7 +171,7 @@ def main() -> int:
     # outside the root that its error messages are relative to.
     allowlist = args.allowlist or root / "docs" / "design_docs" / "provenance_debt.txt"
     try:
-        errors = check(root, allowlist)
+        errors = check(root, allowlist, None if not args.paths or allowlist in (root / name for name in args.paths) else args.paths)
     except (OSError, ValueError) as error:
         print(f"design provenance check failed: {error}", file=sys.stderr)
         return 1
