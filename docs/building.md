@@ -543,6 +543,19 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 
+### Unified native remote-execution canary
+
+On a trusted pull request, the self-hosted Linux job runs
+`bazel test --config=ci --config=ci-platforms //tools/ci:dual_platform_canary`.
+The same scheduler must serve both Linux and macOS workers. The check runs a kernel probe and a
+C++ test on each platform and requires four uncached remote results.
+
+The PR base revision controls the default. To qualify the change against an older base, add
+`ci:native-platform-canary` before pushing a commit. Verify all four results on the intended
+scheduler before merging the default switch. Set the repository variable `UNIFIED_RE_CANARY` to
+`false` to suspend both automatic and labeled runs. The ordinary native suites retain their
+existing routes.
+
 ### Remote macOS shadow lane {#RemoteMacosShadowLane}
 
 The `macos-remote-shadow` job in `.github/workflows/main.yml` runs this config in CI as an advisory

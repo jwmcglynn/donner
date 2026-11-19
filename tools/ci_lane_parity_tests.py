@@ -450,6 +450,7 @@ STEP_OUTPUTS = {
 # Repository variables a condition may read, with the value used in every scenario and why. A
 # variable not listed here fails the test, so a new switch is reviewed before it can gate a check.
 REPOSITORY_VARIABLES = {
+    "vars.UNIFIED_RE_CANARY": ("", "The default exercises the mixed-platform suite on trusted PRs."),
     "vars.MACOS_REMOTE_SHADOW_LANE": (
         "true", "Turns on the advisory macOS shadow lane for every trusted pull request. On, so "
                 "the evaluation reaches that job; it never gates (continue-on-error)."),
@@ -466,6 +467,7 @@ SHADOW_LANE_CONTEXT = {
 
 # Job outputs a condition may read, mapped to the scenario key that holds each one's value.
 _MODELLED_OUTPUTS = {
+    "needs.gatekeeper.outputs.unified_re_default": "trusted_pr",
     "needs.gatekeeper.outputs.trusted_pr": "trusted_pr",
     "needs.gatekeeper.outputs.renovate_pr": "renovate_pr",
     "needs.trust.outputs.trusted_pr": "trusted_pr",
@@ -2223,6 +2225,24 @@ class CiLaneParityTest(unittest.TestCase):
                               "renovate-pr"), True)
         self.assertEqual(runs("${{ needs.gatekeeper.outputs.trusted_pr == 'true' }}",
                               "main-push"), False)
+
+    def test_unified_re_canary_default_and_rollback(self):
+        job = _jobs(self.workflows["main.yml"])["linux-self-hosted"]
+        step = next(step for step in job["steps"]
+                    if step.get("name") == "Test Linux and macOS with native platform transitions")
+        label = "ci:native-platform-canary"
+        for event, base_default, labels, switch, expected in (
+                ("pull_request", "true", [], "", True),
+                ("pull_request", "", [], "", False),
+                ("pull_request", "", [label], "", True),
+                ("pull_request", "true", [], "false", False),
+                ("pull_request", "", [label], "false", False),
+                ("push", "true", [label], "", False)):
+            with self.subTest(event=event, base=base_default, labels=labels, switch=switch):
+                context = {"github.event_name": event, "vars.UNIFIED_RE_CANARY": switch,
+                           "needs.gatekeeper.outputs.unified_re_default": base_default,
+                           "github.event.pull_request.labels.*.name": labels}
+                self.assertEqual(_Expression(step["if"], context.__getitem__).evaluate(), expected)
 
     def test_pull_request_branch_filters_must_include_main(self):
         workflows = {
