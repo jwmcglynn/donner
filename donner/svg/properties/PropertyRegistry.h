@@ -2,6 +2,7 @@
 /// @file
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <span>
 #include <string_view>
@@ -728,17 +729,23 @@ public:
    */
   void clearStyleAttributeProperties();
 
+  /// Result of \ref clearPresentationAttribute.
+  enum class PresentationAttributeClear : std::uint8_t {
+    Cleared,   //!< A declaration the attribute made was removed.
+    NotSet,    //!< The attribute writes properties here, but declared none of them.
+    NotStored  //!< The attribute's state is not stored here, such as `transform` or `cx`.
+  };
+
   /**
-   * Remove the declaration a presentation attribute contributed to the property \p name, so the
-   * property cascades as if the attribute were never authored: an inherited property inherits
-   * again, and a `style=""` declaration of it stays in effect. A presentation attribute declares at
+   * Remove the declarations a presentation attribute contributed, so the properties it writes
+   * cascade as if it were never authored: an inherited property inherits again, and a `style=""`
+   * declaration stays in effect. This covers every property the attribute writes, including the
+   * longhands of a shorthand and the target of an alias. A presentation attribute declares at
    * specificity `0,0,0`, which only presentation attributes use in an element's local registry.
    *
    * @param name Presentation attribute name, such as "fill".
-   * @return Whether \p name is a property stored in this registry. False for `transform` and the
-   *   element-specific attributes, whose state lives in element components.
    */
-  bool clearPresentationAttribute(std::string_view name);
+  PresentationAttributeClear clearPresentationAttribute(std::string_view name);
 
   /**
    * Parse a common presentation attribute (CSS properties like fill, stroke, etc.) or `transform`.

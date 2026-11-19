@@ -1781,7 +1781,11 @@ std::string SvgOf(std::string_view content) {
 template <typename Member>
 auto ComputedTargetValue(SVGDocument& document, Member member) {
   std::optional<SVGElement> target = document.querySelector("#t");
-  EXPECT_TRUE(target.has_value());
+  using Value = decltype((target->getComputedStyle().*member).get());
+  if (!target.has_value()) {
+    ADD_FAILURE() << "no #t element";
+    return Value();
+  }
   return (target->getComputedStyle().*member).get();
 }
 
@@ -1795,13 +1799,18 @@ TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascad
     std::string fresh;     //!< The same document authored without it.
     const char* attribute;
   };
-  const auto expectRemoval = [&](const Case& item, auto member) {
+  const auto expectRemoval = [&](const Case& item, auto... members) {
     SCOPED_TRACE(item.name);
     SVGDocument edited = parseSVG(SvgOf(item.authored));
-    (void)ComputedTargetValue(edited, member);
-    edited.querySelector("#t")->removeAttribute(item.attribute);
+    (void(ComputedTargetValue(edited, members)), ...);
+    std::optional<SVGElement> target = edited.querySelector("#t");
+    ASSERT_TRUE(target.has_value());
+    target->removeAttribute(item.attribute);
     SVGDocument expected = parseSVG(SvgOf(item.fresh));
-    EXPECT_EQ(ComputedTargetValue(edited, member), ComputedTargetValue(expected, member));
+    const auto expectSame = [&](auto member) {
+      EXPECT_EQ(ComputedTargetValue(edited, member), ComputedTargetValue(expected, member));
+    };
+    (expectSame(members), ...);
   };
   for (const Case& item :
        {Case{"inherited", "<g fill='red'><rect id='t' fill='blue'/></g>",
@@ -1827,12 +1836,43 @@ TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascad
                  "<filter><feFlood id='t' flood-color='blue' style='flood-color: green'/></filter>",
                  "<filter><feFlood id='t' style='flood-color: green'/></filter>", "flood-color"},
                 &PropertyRegistry::floodColor);
+  // A shorthand clears every longhand it wrote, and an alias clears the property it writes.
+  expectRemoval({"shorthand",
+                 "<text id='t' text-decoration='overline wavy red' "
+                 "style='text-decoration-line: underline'/>",
+                 "<text id='t' style='text-decoration-line: underline'/>", "text-decoration"},
+                &PropertyRegistry::textDecoration, &PropertyRegistry::textDecorationStyle,
+                &PropertyRegistry::textDecorationColor, &PropertyRegistry::textDecorationThickness);
+  expectRemoval(
+      {"alias", "<g text-orientation='upright'><text id='t' glyph-orientation-vertical='90'/></g>",
+       "<g text-orientation='upright'><text id='t'/></g>", "glyph-orientation-vertical"},
+      &PropertyRegistry::textOrientation);
+}
+
+// Removing a presentation attribute the element never had changes nothing, including on a
+// document built without a parser: no style storage is created and nothing is invalidated.
+TEST_F(SVGElementTests, RemovingAnUnsetPresentationAttributeIsANoOp) {
+  SVGRectElement rect = createRect();
+  (void)rect.getComputedStyle();
+  const bool hadStyle = rect.entityHandle().all_of<components::StyleComponent>();
+  document_.registry().clear<components::DirtyFlagsComponent>();
+  auto& renderState = document_.registry().ctx().emplace<components::RenderTreeState>();
+  renderState.needsFullStyleRecompute = false;
+
+  rect.removeAttribute("fill");
+  rect.removeAttribute("text-decoration");
+  EXPECT_EQ(rect.entityHandle().all_of<components::StyleComponent>(), hadStyle);
+  EXPECT_EQ(rect.entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+  EXPECT_FALSE(
+      document_.registry().ctx().get<components::RenderTreeState>().needsFullStyleRecompute);
 }
 
 // A presentation attribute set after a removal applies, and removing it again inherits again.
 TEST_F(SVGElementTests, PresentationAttributeSetAndRemoveRoundTrip) {
   SVGDocument document = parseSVG(SvgOf("<g fill='red'><rect id='t' fill='blue'/></g>"));
-  SVGElement target = *document.querySelector("#t");
+  std::optional<SVGElement> maybeTarget = document.querySelector("#t");
+  ASSERT_TRUE(maybeTarget.has_value());
+  SVGElement target = *maybeTarget;
   const auto fill = [&]() { return ComputedTargetValue(document, &PropertyRegistry::fill); };
   const PaintServer red = PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)));
   const PaintServer blue = PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)));

@@ -3607,36 +3607,49 @@ void PropertyRegistry::clearStyleAttributeProperties() {
                 [](const auto& entry) { return entry.second.specificity.isStyleAttribute(); });
 }
 
-bool PropertyRegistry::clearPresentationAttribute(std::string_view name) {
-  const auto clear = [](auto& property) {
-    if (property.specificity == css::Specificity()) {
-      property.clear();
+PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentationAttribute(
+    std::string_view name) {
+  // Only presentation attributes declare at 0,0,0 in an element's local registry.
+  const auto clearIfDeclared = [](auto& property) {
+    if (!property.isSpecified() || property.specificity != css::Specificity()) {
+      return false;
     }
+    property.clear();
+    return true;
   };
   for (std::size_t index = 0; index < kResourceColorCount; ++index) {
     if (name == resourceColor(index).name) {
       reconcileResourceColorMutation(index);
       auto& overlay = inlineResourceColors_[index];
-      clear(overlay ? overlay->base : resourceColor(index));
+      const bool cleared = clearIfDeclared(overlay ? overlay->base : resourceColor(index));
       refreshResourceColor(index);
-      return true;
+      return cleared ? PresentationAttributeClear::Cleared : PresentationAttributeClear::NotSet;
     }
   }
 
-  bool found = false;
+  // An attribute can write properties other than the one it is named after: a shorthand such as
+  // `text-decoration` writes its longhands, and an alias such as `glyph-orientation-vertical`
+  // writes `text-orientation`. Applying it to an empty registry finds every property it writes.
+  // An alias shares its target's slot, so removing either name clears that one slot.
+  PropertyRegistry written;
+  if (name == "transform" || !kProperties.find(name) ||
+      written.parsePresentationAttribute(name, "inherit").hasError()) {
+    return PresentationAttributeClear::NotStored;
+  }
+  bool writes = false;
+  bool cleared = false;
   auto properties = allPropertiesMutable();
+  const auto writtenProperties = written.allProperties();
   forEachProperty<0, numProperties()>([&](auto i) {
-    auto& property = std::get<i.value>(properties);
-    if (property.name == name) {
-      found = true;
-      clear(property);
+    if (std::get<i.value>(writtenProperties).isSpecified()) {
+      writes = true;
+      cleared |= clearIfDeclared(std::get<i.value>(properties));
     }
   });
-  if (const auto it = unparsedProperties.find(RcString(name));
-      it != unparsedProperties.end() && it->second.specificity == css::Specificity()) {
-    unparsedProperties.erase(it);
+  if (!writes) {
+    return PresentationAttributeClear::NotStored;
   }
-  return found;
+  return cleared ? PresentationAttributeClear::Cleared : PresentationAttributeClear::NotSet;
 }
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
