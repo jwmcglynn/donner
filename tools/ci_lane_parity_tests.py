@@ -241,9 +241,9 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "53fff5bd7850431f"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "90a9b1f0949d6af3"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "a4d438f53c182307"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "2048514cc281c966"),
 }
 
 SHARED_STEP_ALLOWLIST = {
@@ -763,7 +763,9 @@ def _truthy(value):
 
 
 def _context(scenario):
-    values = SCENARIOS[scenario]
+    # The legacy Linux phase comparison exercises the supported repository rollback.
+    rollback = scenario == "trusted-pr-unified-disabled"
+    values = SCENARIOS["trusted-pr" if rollback else scenario]
 
     def lookup(name):
         if name == "steps.buildbuddy.outputs.bazel-flags":
@@ -791,6 +793,9 @@ def _context(scenario):
         # test until it is reviewed and listed.
         raise ValueError("unmodelled context %s" % name)
 
+    if rollback:
+        overrides = {"vars.UNIFIED_RE_CANARY": "false", "steps.unified.outcome": "skipped"}
+        return lambda name: overrides[name] if name in overrides else lookup(name)
     return lookup
 
 
@@ -1258,7 +1263,10 @@ def invocation_differences(workflow, main_job_name, replacement_name, only_steps
     """
     jobs = _jobs(workflow)
     main_steps, main_writes = _bazel_profile(workflow, jobs[main_job_name], "main-push")
-    pr_steps, pr_writes = _bazel_profile(workflow, jobs[replacement_name], "trusted-pr")
+    # On the default route a single mixed invocation covers the hosted Build and Test phases.
+    # Compare the separate Linux phases under rollback and check the default route below.
+    scenario = "trusted-pr-unified-disabled" if replacement_name == "linux-self-hosted" else "trusted-pr"
+    pr_steps, pr_writes = _bazel_profile(workflow, jobs[replacement_name], scenario)
     if only_steps is not None:
         return _compared_steps(main_steps, pr_steps, only_steps)
     differences = _set_differences("*", "runtime-env", main_writes, pr_writes)
@@ -1961,6 +1969,14 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertTrue(defined)
         self.assertEqual(defined, named)
 
+    def _assert_nonphase_command(self, step, job_name):
+        command = str(step.get("run") or "")
+        if command == "python3 tools/ci/lane.py finish-reference":
+            self.assertEqual(job_name, "linux-self-hosted")
+            self.assertIn("steps.unified.outcome == 'failure'", step["if"])
+        else:
+            self.assertNotIn("tools/ci/lane.py", command)
+
     def test_every_lane_phase_runs_in_one_step_of_its_job(self):
         # A phase runs in the job of its lane's name, in the step its table entry names; a step
         # with an id runs the phase of that id.
@@ -1970,7 +1986,7 @@ class CiLaneParityTest(unittest.TestCase):
             for step in job.get("steps") or []:
                 phase = lane_phase(step)
                 if not phase:
-                    self.assertNotIn("tools/ci/lane.py", str(step.get("run") or ""))
+                    self._assert_nonphase_command(step, job_name)
                     continue
                 with self.subTest(job=job_name, step=_step_name(step)):
                     self.assertEqual(phase[0], job_name)
@@ -2215,6 +2231,16 @@ class CiLaneParityTest(unittest.TestCase):
                               "renovate-pr"), True)
         self.assertEqual(runs("${{ needs.gatekeeper.outputs.trusted_pr == 'true' }}",
                               "main-push"), False)
+
+    def test_trusted_graph_and_rollback_each_select_one_linux_build_path(self):
+        job = _jobs(self.workflows["main.yml"])["linux-self-hosted"]
+        steps = {_step_name(step): step for step in job["steps"]}
+        for scenario, mixed in (("trusted-pr", True), ("trusted-pr-unified-disabled", False)):
+            with self.subTest(scenario=scenario):
+                self.assertEqual(runs(steps["Test Linux and macOS with native platform transitions"]["if"],
+                                      scenario), mixed)
+                for name in ("Fetch Bazel LLVM toolchain", "Build", "Test"):
+                    self.assertEqual(runs(steps[name]["if"], scenario), not mixed)
 
     def test_unified_re_canary_default_and_rollback(self):
         job = _jobs(self.workflows["main.yml"])["linux-self-hosted"]

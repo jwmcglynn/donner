@@ -25,6 +25,10 @@
             {
               "job": "linux-self-hosted",
               "step": "build"
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified"
             }
           ]
         },
@@ -46,6 +50,10 @@
             {
               "job": "linux-self-hosted",
               "step": "test"
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified"
             }
           ]
         },
@@ -56,6 +64,10 @@
             {
               "job": "linux-self-hosted",
               "step": "test"
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified"
             }
           ]
         },
@@ -74,6 +86,11 @@
             {
               "job": "linux-self-hosted",
               "step": "test",
+              "requires_soak": true
+            },
+            {
+              "job": "linux-self-hosted",
+              "step": "unified",
               "requires_soak": true
             }
           ]

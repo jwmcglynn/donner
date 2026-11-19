@@ -36,7 +36,8 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["query"]:
         print(root_query(os.environ["TARGETS_FALLBACK"] == "true", os.environ["TARGETS_AFFECTED"]))
     elif sys.argv[1:] == ["variants"]:
-        for label in darwin_variants(line.rstrip("\n") for line in sys.stdin):
+        labels = (json.loads(line)["rule"]["name"] for line in sys.stdin)
+        for label in darwin_variants(labels):
             print(label)
     else:
         sys.exit("usage: darwin_selection.py query|variants")

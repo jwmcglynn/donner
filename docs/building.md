@@ -565,17 +565,23 @@ compiling either consumer. Use **Run workflow** on `main` to run both jobs on de
 
 On a trusted pull request, the self-hosted Linux job runs
 `bazel test --config=ci --config=ci-platforms //tools/ci:dual_platform_canary`.
-The same scheduler serves Linux and macOS workers. A kernel probe and a C++ test run uncached on
-each platform. When trusted CI selects the self-hosted macOS lane, the same command builds the
-affected Darwin targets and runs their eligible tests. Fixed Geode editor coverage joins that
-selection. A browser change selects the archive preflight. The two headed Firefox tests exercise
-presented WebGPU pixels and need desktop access from the execution worker. The qualification run
-can schedule browser and Geode tests concurrently on the physical GPU.
+The same scheduler serves Linux and macOS workers. On the default trusted route, one loading
+query selects both platform graphs. One Bazel test invocation builds the selected Linux targets,
+runs the Linux tests, and builds and tests the Darwin selection when enabled. Filtered Linux test
+binaries still compile through build-only targets. The two Vulkan display tests use the
+coordinator's Xvfb. The venue check requires remote execution for other uncached tests.
+The deterministic soak joins every run, and affected WebGPU changes select the reference suite.
 
-When Metal is affected, the graph adds the full validation profile, preflight, offline compiler
-and native suites. Those tests and the archive preflight require fresh remote results. Ordinary
-Darwin tests can reuse their cached results. A broad run has a 90-minute timeout and a probe-only
-run has ten minutes. Failed remote tests retain their logs, XML and undeclared outputs.
+The invocation also runs a kernel probe and C++ test on each platform. Geode editor coverage,
+the pinned archive preflight, and affected headed or headless browser tests run under the Darwin
+transition. The two headed Firefox cases exercise presented WebGPU pixels and require desktop
+access from the execution worker. Browser and Geode tests can overlap on the physical GPU.
+
+Affected Metal changes add full validation, preflight, offline compilation and native device
+tests. Metal, the four platform probes and the archive preflight require fresh remote results.
+Ordinary tests can reuse cached results. The job keeps the combined profile and stages failed
+tests' logs, XML and undeclared outputs. The prior Linux build/test phases remain available
+when the mixed graph is disabled.
 
 Donner's shared C++ declarations register a Bazel package finalizer for native CI. It preserves
 private test visibility and emits variants after all rules in that package have loaded. First-party

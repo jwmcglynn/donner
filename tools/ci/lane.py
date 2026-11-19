@@ -328,12 +328,12 @@ def _report(failure):
 def _finish_selected_reference(context, lane_name):
     """After a failed main graph, finish the reference only if its full evidence is missing."""
     if context.environ.get("WGPU_REFERENCE") != "true" or context.environ.get("LINUX_REFERENCE_ONLY") == "true":
-        return
+        return 0
     remote = lane_name == "linux-self-hosted"
     source = "$DIAG_DIR/test/bep.json" if remote else "$RUNNER_TEMP/coverage-test.bep.json"
     helper = ["python3", "tools/ci_remote_gpu_targets.py"]
     if _run(helper + ["--reference-reported", context.word(source)])[0] == 0:
-        return
+        return 0
     print("The failed graph omitted selected reference results; running only the reference suite.", flush=True)
     flags = lanes.SELF_HOSTED_REMOTE + lanes.DIAG_TEST if remote else ()
     result_file = context.word("$RUNNER_TEMP/reference-recovery.bep.json")
@@ -341,8 +341,8 @@ def _finish_selected_reference(context, lane_name):
     command = lanes.bazel("test", *lanes.LINUX, *flags, "--test_output=errors", lanes.NO_TAG_FILTER,
                           "--noskip_incompatible_explicit_targets", "--build_event_json_file=" + result_file,
                           "//tools/ci:linux_wgpu_resvg_reference", wrappers=wrappers)
-    if _run(context.bazel(command))[0] == 0:
-        _run(helper + ["--check-reference-results", result_file])
+    status, _ = _run(context.bazel(command))
+    return status or _run(helper + ["--check-reference-results", result_file])[0]
 
 
 def run_phase(lane_name, phase_name, environ=None):
@@ -383,8 +383,12 @@ def main(argv=None):
     phase.add_argument("phase")
     phase.add_argument("--dry-run", action="store_true",
                        help="print the phase's commands as JSON and run nothing")
+    commands.add_parser("finish-reference", help="complete missing Linux reference shards after a failed mixed build")
     commands.add_parser("list", help="print every lane and phase")
     arguments = parser.parse_args(argv)
+    if arguments.command == "finish-reference":
+        context = _Context(lanes.LANES["linux-self-hosted"], os.environ, dry_run=False)
+        return _finish_selected_reference(context, "linux-self-hosted")
     if arguments.command == "list":
         for name, lane in lanes.LANES.items():
             for phase_name, entry in lane.phases.items():

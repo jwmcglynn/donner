@@ -474,8 +474,9 @@ jobs:
       - name: Test Linux and macOS with native platform transitions
         id: unified
         if: github.event_name == 'pull_request' && vars.UNIFIED_RE_CANARY != 'false' && (needs.gatekeeper.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary'))
-        timeout-minutes: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && 90 || 10 }}
+        timeout-minutes: ${{ needs.determine-targets.outputs.affected == '//tools/ci:no_affected_targets' && 10 || (needs.determine-targets.outputs.fallback == 'true' && 150 || 90) }}
         env:
+          WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
           RUN_DARWIN: ${{ needs.gatekeeper.outputs.use_self_hosted_macos }}
           RUN_METAL: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true') }}
           RUN_BROWSER: ${{ needs.determine-targets.outputs.browser_affected == 'true' || needs.determine-targets.outputs.fallback == 'true' }}
@@ -492,13 +493,24 @@ jobs:
           fi
           options=()
           ordinary="$RUNNER_TEMP/darwin-targets.txt"
+          linux="$RUNNER_TEMP/linux-targets.txt"
           : > "$ordinary"
+          : > "$linux"
+          requested=(//...)
+          if [[ "$TARGETS_FALLBACK" != true ]]; then read -ra requested <<< "$TARGETS_AFFECTED"; fi
+          if [[ "$TARGETS_AFFECTED" != //tools/ci:no_affected_targets ]]; then
+            python3 tools/ci/darwin_selection.py query > "$ordinary.query"
+            bazelisk query --nokeep_going --output=streamed_jsonproto --proto:rule_inputs_and_outputs=false \
+              --proto:output_rule_attrs=tags --noproto:default_values --query_file="$ordinary.query" > "$linux.jsonl"
+            python3 tools/ci_remote_gpu_targets.py --native-linux-patterns < "$linux.jsonl" > "$linux"
+            if [[ "$RUN_DARWIN" == true ]]; then
+              python3 tools/ci/darwin_selection.py variants < "$linux.jsonl" > "$ordinary"
+            fi
+          fi
+          suites+=(//tools/ci:deterministic_fuzzer_soak)
+          if [[ "$WGPU_REFERENCE" == true ]]; then suites+=(//tools/ci:linux_wgpu_resvg_reference); fi
           if [[ "$RUN_DARWIN" == true ]]; then
             suites+=(//tools/ci:unified_editor_geode)
-            if [[ "$TARGETS_AFFECTED" != //tools/ci:no_affected_targets ]]; then
-              python3 tools/ci/darwin_selection.py query > "$ordinary.query"
-              bazelisk query --nokeep_going --query_file="$ordinary.query" | python3 tools/ci/darwin_selection.py variants > "$ordinary"
-            fi
             if [[ "$RUN_BROWSER" == true ]]; then
               suites+=(//tools/ci:unified_mac_browser_archive)
             fi
@@ -511,17 +523,24 @@ jobs:
             fi
           fi
           patterns="$RUNNER_TEMP/native-target-patterns.txt"
-          { printf '%s\n' "${suites[@]}"; cat "$ordinary"; } > "$patterns"
-          bep="$RUNNER_TEMP/platform-canary.bep.json"
-          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=errors \
-            --remote_download_outputs=minimal --remote_download_regex='.*(test[.]log|test[.]xml|outputs[.]zip)$' \
-            --keep_going --nobuild_tests_only --skip_incompatible_explicit_targets --build_event_json_file="$bep" "${options[@]}" --target_pattern_file="$patterns"
-          python3 tools/ci/verify_unified_tests.py --ordinary "$ordinary" "$bep" "${suites[@]}"
+          { printf '%s\n' "${suites[@]}"; cat "$ordinary" "$linux"; } > "$patterns"
+          bep="$DIAG_DIR/test/bep.json"
+          policy='flag_policies {flag_name:"remote_executor" commands:"test" disallow_values {disallowed_values:""}} flag_policies {flag_name:"experimental_remote_scrubbing_config" commands:"test" use_default {}}'
+          env "$remote_identity" tools/ci/bazel_watchdog.sh "$DIAG_DIR/test/console.log" bazelisk --invocation_policy="$policy" test \
+            --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=errors \
+            --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --experimental_google_legacy_api --noexperimental_merged_skyframe_analysis_execution \
+            --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false \
+            --remote_timeout=60s --remote_download_outputs=minimal --remote_download_regex='.*(test[.]log|test[.]xml|outputs[.]zip)$' \
+            --nokeep_going --nobuild_tests_only --skip_incompatible_explicit_targets --profile="$DIAG_DIR/test/profile.gz" \
+            --execution_log_compact_file="$DIAG_DIR/test/exec.log.zst" --build_event_json_file="$bep" "${options[@]}" --target_pattern_file="$patterns"
+          python3 tools/ci_remote_gpu_targets.py --check-results "$bep" "${requested[@]}"
+          python3 tools/ci/verify_unified_tests.py --ordinary "$ordinary" --linux "$linux" "$bep" "${suites[@]}"
+          cp "$bep" "$RUNNER_TEMP/coverage-unified.bep.json"
 
       - name: Stage failed mixed-platform test outputs
         if: failure() && steps.unified.outcome == 'failure'
         shell: bash
-        run: python3 tools/ci/verify_unified_tests.py --stage-failed "$RUNNER_TEMP/unified" "$RUNNER_TEMP/platform-canary.bep.json"
+        run: python3 tools/ci/verify_unified_tests.py --stage-failed "$RUNNER_TEMP/unified" "$DIAG_DIR/test/bep.json"
 
       - name: Upload mixed-platform test failure artifacts
         if: failure() && steps.unified.outcome == 'failure'
@@ -531,22 +550,30 @@ jobs:
           testlogs: ${{ runner.temp }}/unified/test-artifacts/mixed
 
       - name: Fetch Bazel LLVM toolchain
+        if: steps.unified.outcome == 'skipped'
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted fetch
 
       - name: Build
         id: build
+        if: steps.unified.outcome == 'skipped'
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted build
 
       - name: Test
         id: test
-        if: ${{ !cancelled() && (success() || needs.determine-targets.outputs.wgpu_reference == 'true') }}
+        if: ${{ !cancelled() && steps.unified.outcome == 'skipped' && (success() || needs.determine-targets.outputs.wgpu_reference == 'true') }}
         env:
           LINUX_REFERENCE_ONLY: ${{ steps.build.outcome != 'success' }}
           WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted test
+
+      - name: Finish selected reference after mixed graph failure
+        if: ${{ !cancelled() && steps.unified.outcome == 'failure' && needs.determine-targets.outputs.wgpu_reference == 'true' }}
+        env:
+          WGPU_REFERENCE: "true"
+        run: python3 tools/ci/lane.py finish-reference
 
       # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt
@@ -572,7 +599,7 @@ jobs:
         run: |
           set -euo pipefail
           diag_dir="${DIAG_DIR:-$RUNNER_TEMP/donner-ci-diagnostics}"
-          if [[ -f tools/ci_diagnostics_report.py && -f "$diag_dir/build/profile.gz" ]]; then
+          if [[ -f tools/ci_diagnostics_report.py && ( -f "$diag_dir/build/profile.gz" || -f "$diag_dir/test/profile.gz" ) ]]; then
             python3 tools/ci_diagnostics_report.py "$diag_dir" | tee "$diag_dir/report.md" || true
             if [[ -s "$diag_dir/report.md" ]]; then
               cat "$diag_dir/report.md" >> "$GITHUB_STEP_SUMMARY"

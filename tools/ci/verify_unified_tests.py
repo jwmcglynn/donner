@@ -24,7 +24,7 @@ def _passed_remotely(result):
         return None
     if cached:
         return "cached"
-    return "remote" if execution.get("strategy") == "remote" else None
+    return execution.get("strategy") if execution.get("strategy") in ("remote", "local") else None
 
 
 def _target_outcome(event):
@@ -124,7 +124,7 @@ def _qualification_runs(evidence):
             raise ValueError(f"Expected four uncached remote runs for {label}")
 
 
-def verify(events, suites, ordinary=(), output_root=None):
+def verify(events, suites, ordinary=(), output_root=None, linux=()):
     evidence = Evidence()
     for event in events:
         evidence.read(event)
@@ -135,9 +135,14 @@ def verify(events, suites, ordinary=(), output_root=None):
     compatible = _ordinary_built(evidence, selected)
     fresh.update(selected & {ARCHIVE})
     _qualification_runs(evidence)
-    expected = mandatory | (compatible & evidence.test_rules)
+    linux_built = _ordinary_built(evidence, set(linux))
+    expected = mandatory | ((compatible | linux_built) & evidence.test_rules)
     summary_labels = {label for label, _ in evidence.summaries}
-    passed = evidence.passed["remote"] | evidence.passed["cached"]
+    # The Linux venue verifier and its analysis aspect restrict local actions to the Xvfb roots.
+    local = evidence.passed["local"]
+    if any(shard[0] not in linux_built for shard in local):
+        raise ValueError("incomplete remote shards: unexpected local execution outside Linux selection")
+    passed = evidence.passed["remote"] | evidence.passed["cached"] | local
     _check_summary_shards(evidence.summaries, passed)
     cached_required = {shard for shard in evidence.passed["cached"] if shard[0] in fresh}
     if summary_labels != expected or cached_required or evidence.passed[None]:
@@ -157,7 +162,7 @@ def _suite_requirements(members, suites):
         if not members.get(suite):
             raise ValueError(f"No test suite expansion for {suite}")
         mandatory.update(members[suite])
-        if suite != "//tools/ci:unified_editor_geode":
+        if suite not in ("//tools/ci:unified_editor_geode", "//tools/ci:linux_wgpu_resvg_reference"):
             fresh.update(members[suite])
     return mandatory, fresh
 
@@ -165,6 +170,7 @@ def _suite_requirements(members, suites):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ordinary", type=Path)
+    parser.add_argument("--linux", type=Path)
     parser.add_argument("bep", type=Path)
     parser.add_argument("--stage-failed", type=Path)
     parser.add_argument("suites", nargs="*")
@@ -180,4 +186,5 @@ if __name__ == "__main__":
         parser.error("at least one test suite is required")
     ordinary_roots = args.ordinary.read_text().splitlines() if args.ordinary else []
     with args.bep.open(encoding="utf-8") as stream:
-        verify((json.loads(line) for line in stream), args.suites, ordinary_roots, Path("bazel-out"))
+        linux_roots = args.linux.read_text().splitlines() if args.linux else []
+        verify((json.loads(line) for line in stream), args.suites, ordinary_roots, Path("bazel-out"), linux_roots)

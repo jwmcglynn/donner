@@ -206,11 +206,7 @@
     ]
    }
   ],
-  "runs_in": [
-   "trusted-pr",
-   "trusted-pr-native-only",
-   "trusted-pr-fallback"
-  ],
+  "runs_in": [],
   "step": "Build"
  },
  "linux-self-hosted fetch": {
@@ -234,11 +230,7 @@
     ]
    }
   ],
-  "runs_in": [
-   "trusted-pr",
-   "trusted-pr-native-only",
-   "trusted-pr-fallback"
-  ],
+  "runs_in": [],
   "step": "Fetch Bazel LLVM toolchain"
  },
  "linux-self-hosted test": {
@@ -285,11 +277,7 @@
     ]
    }
   ],
-  "runs_in": [
-   "trusted-pr",
-   "trusted-pr-native-only",
-   "trusted-pr-fallback"
-  ],
+  "runs_in": [],
   "step": "Test"
  },
  "macos browser_gpu_parallel": {
