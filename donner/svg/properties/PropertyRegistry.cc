@@ -3607,6 +3607,38 @@ void PropertyRegistry::clearStyleAttributeProperties() {
                 [](const auto& entry) { return entry.second.specificity.isStyleAttribute(); });
 }
 
+bool PropertyRegistry::clearPresentationAttribute(std::string_view name) {
+  const auto clear = [](auto& property) {
+    if (property.specificity == css::Specificity()) {
+      property.clear();
+    }
+  };
+  for (std::size_t index = 0; index < kResourceColorCount; ++index) {
+    if (name == resourceColor(index).name) {
+      reconcileResourceColorMutation(index);
+      auto& overlay = inlineResourceColors_[index];
+      clear(overlay ? overlay->base : resourceColor(index));
+      refreshResourceColor(index);
+      return true;
+    }
+  }
+
+  bool found = false;
+  auto properties = allPropertiesMutable();
+  forEachProperty<0, numProperties()>([&](auto i) {
+    auto& property = std::get<i.value>(properties);
+    if (property.name == name) {
+      found = true;
+      clear(property);
+    }
+  });
+  if (const auto it = unparsedProperties.find(RcString(name));
+      it != unparsedProperties.end() && it->second.specificity == css::Specificity()) {
+    unparsedProperties.erase(it);
+  }
+  return found;
+}
+
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
                                                                std::string_view value,
                                                                EntityHandle handle,

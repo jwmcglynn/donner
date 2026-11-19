@@ -365,6 +365,25 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
   }
 }
 
+/**
+ * Remove the declaration the presentation attribute \p name contributed to the element's style, so
+ * the property cascades as if the attribute were never authored, with the invalidation a write of
+ * that attribute needs.
+ *
+ * @return False when \p name is not a property in the element's style, such as `transform` or an
+ *   element-specific attribute like `cx`, whose state the caller resets instead.
+ */
+bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAccess& access,
+                                   ElementType elementType, std::string_view name) {
+  if (!PropertyRegistry::isPresentationAttributeName(name) ||
+      !handle.get_or_emplace<components::StyleComponent>(access)
+           .properties.clearPresentationAttribute(name)) {
+    return false;
+  }
+  MarkPresentationAttributeDirty(handle, elementType, name, name);
+  return true;
+}
+
 std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entity) {
   if (entity == entt::null) {
     return std::nullopt;
@@ -926,7 +945,8 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   } else {
     // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.
-    if (name.namespacePrefix.empty()) {
+    if (name.namespacePrefix.empty() &&
+        !RemovePresentationDeclaration(handle_, access, type(), name.name)) {
       [[maybe_unused]] auto trySetResult = trySetPresentationAttribute(name.name, "initial");
     }
     markNeedsFullStyleRecompute(handle_);

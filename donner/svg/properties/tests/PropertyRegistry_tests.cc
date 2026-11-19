@@ -139,6 +139,32 @@ TEST(PropertyRegistry, Set) {
 )"));
 }
 
+// Clearing a presentation attribute removes only the declaration it made: a `style` declaration of
+// the same property stays, a resource color keeps its inline value, and names that are not stored
+// in the registry report false.
+TEST(PropertyRegistry, ClearPresentationAttributeRemovesOnlyItsDeclaration) {
+  PropertyRegistry registry;
+  ASSERT_THAT(registry.parsePresentationAttribute("color", "red"), ParseResultIs(true));
+  EXPECT_TRUE(registry.clearPresentationAttribute("color"));
+  EXPECT_FALSE(registry.color.isSpecified());
+
+  ASSERT_THAT(registry.parsePresentationAttribute("color", "red"), ParseResultIs(true));
+  ASSERT_TRUE(registry.parseStyle("color: lime"));
+  EXPECT_TRUE(registry.clearPresentationAttribute("color"));
+  EXPECT_EQ(registry.color.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
+
+  ASSERT_THAT(registry.parsePresentationAttribute("flood-color", "red"), ParseResultIs(true));
+  EXPECT_TRUE(registry.clearPresentationAttribute("flood-color"));
+  EXPECT_FALSE(registry.floodColor.isSpecified());
+  ASSERT_THAT(registry.parsePresentationAttribute("flood-color", "red"), ParseResultIs(true));
+  ASSERT_TRUE(registry.parseStyle("flood-color: lime"));
+  EXPECT_TRUE(registry.clearPresentationAttribute("flood-color"));
+  EXPECT_EQ(registry.floodColor.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
+
+  EXPECT_FALSE(registry.clearPresentationAttribute("transform"));
+  EXPECT_FALSE(registry.clearPresentationAttribute("cx"));
+}
+
 TEST(PropertyRegistry, PropertyNamesExposeCssRegistryKeys) {
   EXPECT_THAT(PropertyRegistry::propertyNames().subspan(0, 3),
               testing::ElementsAre(std::string_view("color"), std::string_view("flood-color"),

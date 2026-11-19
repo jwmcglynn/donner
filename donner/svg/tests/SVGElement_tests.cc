@@ -1772,6 +1772,84 @@ TEST_F(SVGElementTests, RemoveAttributePresentation) {
   EXPECT_THAT(element.getAttribute("fill"), testing::Eq(std::nullopt));
 }
 
+/// Wraps \p content in an `<svg>` root.
+std::string SvgOf(std::string_view content) {
+  return R"(<svg xmlns="http://www.w3.org/2000/svg">)" + std::string(content) + "</svg>";
+}
+
+/// The computed value of \p member on the element `#t` of \p document.
+template <typename Member>
+auto ComputedTargetValue(SVGDocument& document, Member member) {
+  std::optional<SVGElement> target = document.querySelector("#t");
+  EXPECT_TRUE(target.has_value());
+  return (target->getComputedStyle().*member).get();
+}
+
+// Removing a presentation attribute leaves the computed style of a document authored without it:
+// an inherited property inherits again, a non-inherited one takes its initial value, and a
+// stylesheet rule or `style` declaration of the same property stays in effect.
+TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascade) {
+  struct Case {
+    const char* name;
+    std::string authored;  //!< Document whose `#t` has the attribute.
+    std::string fresh;     //!< The same document authored without it.
+    const char* attribute;
+  };
+  const auto expectRemoval = [&](const Case& item, auto member) {
+    SCOPED_TRACE(item.name);
+    SVGDocument edited = parseSVG(SvgOf(item.authored));
+    (void)ComputedTargetValue(edited, member);
+    edited.querySelector("#t")->removeAttribute(item.attribute);
+    SVGDocument expected = parseSVG(SvgOf(item.fresh));
+    EXPECT_EQ(ComputedTargetValue(edited, member), ComputedTargetValue(expected, member));
+  };
+  for (const Case& item :
+       {Case{"inherited", "<g fill='red'><rect id='t' fill='blue'/></g>",
+             "<g fill='red'><rect id='t'/></g>", "fill"},
+        Case{"stylesheet", "<style>#t { fill: green }</style><rect id='t' fill='blue'/>",
+             "<style>#t { fill: green }</style><rect id='t'/>", "fill"},
+        Case{"style-attribute", "<g fill='red'><rect id='t' fill='blue' style='fill: green'/></g>",
+             "<g fill='red'><rect id='t' style='fill: green'/></g>", "fill"},
+        Case{"never-set", "<g fill='red'><rect id='t'/></g>", "<g fill='red'><rect id='t'/></g>",
+             "fill"}}) {
+    expectRemoval(item, &PropertyRegistry::fill);
+  }
+  expectRemoval(
+      {"inherited-interpolation",
+       "<g color-interpolation-filters='sRGB'><rect id='t' "
+       "color-interpolation-filters='linearRGB'/></g>",
+       "<g color-interpolation-filters='sRGB'><rect id='t'/></g>", "color-interpolation-filters"},
+      &PropertyRegistry::colorInterpolationFilters);
+  expectRemoval({"non-inherited", "<g opacity='.5'><rect id='t' opacity='.25'/></g>",
+                 "<g opacity='.5'><rect id='t'/></g>", "opacity"},
+                &PropertyRegistry::opacity);
+  expectRemoval({"resource-color-style-attribute",
+                 "<filter><feFlood id='t' flood-color='blue' style='flood-color: green'/></filter>",
+                 "<filter><feFlood id='t' style='flood-color: green'/></filter>", "flood-color"},
+                &PropertyRegistry::floodColor);
+}
+
+// A presentation attribute set through the typed setter or after a removal is removed or applied
+// like an authored one.
+TEST_F(SVGElementTests, PresentationAttributeSetAndRemoveRoundTrip) {
+  SVGDocument document = parseSVG(SvgOf("<g fill='red'><rect id='t' fill='blue'/></g>"));
+  SVGElement target = *document.querySelector("#t");
+  const auto fill = [&]() { return ComputedTargetValue(document, &PropertyRegistry::fill); };
+  const PaintServer red = PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)));
+  const PaintServer blue = PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)));
+
+  target.removeAttribute("fill");
+  EXPECT_EQ(fill(), red);
+  target.setAttribute("fill", "blue");
+  EXPECT_EQ(fill(), blue);
+
+  target.removeAttribute("fill");
+  ASSERT_THAT(target.trySetPresentationAttribute("fill", "blue"), ParseResultIs(true));
+  EXPECT_EQ(fill(), blue);
+  target.removeAttribute("fill");
+  EXPECT_EQ(fill(), red);
+}
+
 TEST_F(SVGElementTests, RemoveAttributeId) {
   auto element = create();
   element.setId("myId");
