@@ -473,20 +473,22 @@ jobs:
 
       - name: Test Linux and macOS with native platform transitions
         if: github.event_name == 'pull_request' && vars.UNIFIED_RE_CANARY != 'false' && (needs.gatekeeper.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary'))
-        timeout-minutes: 10
+        timeout-minutes: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true') && 45 || 10 }}
+        env:
+          RUN_METAL: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true') }}
         shell: bash
         run: |
           set -euo pipefail
           remote_identity=$(tools/ci_select_macos_xcode.sh --remote-canary-env)
           coordinator_cc=$(command -v "${CC:-clang}")
+          suites=(//tools/ci:dual_platform_canary)
+          if [[ "$RUN_METAL" == true ]]; then
+            suites+=(//tools/ci:unified_metal_{full_validation,preflight,offline_compiler,native})
+          fi
+          bep="$RUNNER_TEMP/platform-canary.bep.json"
           env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=all \
-            --keep_going --noskip_incompatible_explicit_targets --build_event_json_file="$RUNNER_TEMP/platform-canary.bep.json" \
-            //tools/ci:dual_platform_canary
-          jq -c 'select(.testResult) | {label: .id.testResult.label, result: .testResult}' \
-            "$RUNNER_TEMP/platform-canary.bep.json" | jq -se '
-              (map(select(.result.status == "PASSED" and .result.executionInfo.strategy == "remote"
-                          and (.result.cachedLocally != true) and (.result.executionInfo.cachedRemotely != true))
-               | .label) | unique | length) == 4'
+            --keep_going --noskip_incompatible_explicit_targets --build_event_json_file="$bep" "${suites[@]}"
+          python3 tools/ci/verify_unified_tests.py "$bep" "${suites[@]}"
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash

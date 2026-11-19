@@ -110,7 +110,11 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertIn('coordinator_cc=$(command -v "${CC:-clang}")', step)
         self.assertIn('--repo_env=CC="$coordinator_cc"', step)
         self.assertNotIn("--action_env=CC", step)
-        self.assertIn("timeout-minutes: 10", step)
+        self.assertIn("&& 45 || 10", step)
+        self.assertIn("RUN_METAL: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && "
+                      "(needs.determine-targets.outputs.metal_affected == 'true' || "
+                      "needs.determine-targets.outputs.fallback == 'true') }}", step)
+        self.assertIn('--build_event_json_file="$bep" "${suites[@]}"', step)
 
     def test_operator_stacked_pr_uses_self_hosted_lanes(self):
         event = {

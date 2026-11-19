@@ -566,7 +566,11 @@ compiling either consumer. Use **Run workflow** on `main` to run both jobs on de
 On a trusted pull request, the self-hosted Linux job runs
 `bazel test --config=ci --config=ci-platforms //tools/ci:dual_platform_canary`.
 The same scheduler must serve both Linux and macOS workers. The check runs a kernel probe and a
-C++ test on each platform and requires four uncached remote results.
+C++ test on each platform and requires four uncached remote results. When the PR also selects the
+native Metal lane, the same invocation runs the validation profile, preflight, offline compiler,
+and remaining Metal suites on Darwin GPU workers. Every selected shard must pass remotely and
+uncached. The time limit is 10 minutes for the four probes and 45 minutes when Metal is selected.
+The existing native Metal job continues to verify the same coverage during qualification.
 
 The PR base revision controls the default. To qualify the change against an older base, add
 `ci:native-platform-canary` before pushing a commit. Verify all four results on the intended

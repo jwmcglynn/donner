@@ -1,3 +1,4 @@
+load("//build_defs:ci_metal.bzl", "metal_ci_suites")
 load("//build_defs:rules.bzl", "ci_platform_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
@@ -329,6 +330,13 @@ alias(
     name = "editor_wasm_package",
     actual = "//donner/editor/wasm:wasm_web_package",
     tags = ["manual"],
+)
+
+py_test(
+    name = "verify_unified_tests_tests",
+    size = "small",
+    srcs = ["verify_unified_tests.py", "verify_unified_tests_tests.py"],
+    imports = ["."],
 )
 
 py_test(
@@ -848,3 +856,10 @@ test_suite(
         "//donner/base:ci_macos_ndebug_test",
     ],
 )
+
+metal_ci_suites([
+    "metal_full_validation",
+    "metal_preflight",
+    "metal_offline_compiler",
+    "metal_native",
+])
