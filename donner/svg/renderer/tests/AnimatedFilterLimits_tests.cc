@@ -193,6 +193,8 @@ std::vector<OverLimitCase> OverLimitCases() {
        "<feConvolveMatrix order='65' kernelMatrix='1'/>"},
       {"order-y", "<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>", "order", "3 65",
        "<feConvolveMatrix order='3 65' kernelMatrix='1'/>"},
+      {"order-fraction", "<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>", "order", "64.4",
+       "<feConvolveMatrix order='64.4' kernelMatrix='1'/>"},
       {"kernel", "<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>", "kernelMatrix", kernel,
        "<feConvolveMatrix order='1' kernelMatrix='" + kernel + "'/>"},
       {"table", transfer("<feFuncR id='p' type='table' tableValues='0 1'/>"), "tableValues", table,
@@ -206,6 +208,21 @@ INSTANTIATE_TEST_SUITE_P(Limits, AnimatedFilterOverLimit, testing::ValuesIn(Over
                            std::erase(name, '-');
                            return name;
                          });
+
+// An interpolated order above the limit is not rounded down to it: it fails closed like the
+// same authored order, which the parser rejects before rounding.
+TEST(AnimatedFilterLimits, InterpolatedOrderAboveTheLimitFailsClosed) {
+  SVGDocument authored = FilterDocument("<feConvolveMatrix order='64.4' kernelMatrix='1'/>");
+  const PreparedFrame authoredFrame = Prepare(authored, 0);
+  ASSERT_THAT(authoredFrame.filter, IsNull());
+
+  SVGDocument document =
+      FilterDocument("<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>",
+                     "<animate href='#p' attributeName='order' values='64.4;64.4' dur='1s'/>");
+  const PreparedFrame frame = Prepare(document, 0.5);
+  EXPECT_THAT(frame.filter, IsNull());
+  EXPECT_THAT(frame.warnings, ElementsAreArray(authoredFrame.warnings));
+}
 
 // A color matrix ignores a values list over its limit, authored or animated, and keeps its type.
 TEST(AnimatedFilterLimits, ColorMatrixValuesOverTheLimitAreIgnoredLikeAuthored) {

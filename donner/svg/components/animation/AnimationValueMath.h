@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,7 +41,10 @@ struct AnimationValueContext {
       false;                  ///< Percentages represent fractions of one, not viewport lengths.
   bool numberPair = false;    ///< Repeat one coordinate for number-optional-number values.
   bool integerValue = false;  ///< Round interpolated numeric values to the nearest integer.
-  bool linearRgb = false;     ///< Interpolate colors in linear-light RGB when requested.
+  /// Integer values above this stay unrounded, so a value over an integer limit stays over it
+  /// instead of rounding down to the limit.
+  double maximumInteger = std::numeric_limits<double>::infinity();
+  bool linearRgb = false;  ///< Interpolate colors in linear-light RGB when requested.
   /// Map mixed-unit filter lengths to user-space pixels while keeping additive offsets origin-free.
   bool mappedLengths = false;
   bool lengthValuesAreOffsets = false;  ///< Sample operands are displacements, not positions.

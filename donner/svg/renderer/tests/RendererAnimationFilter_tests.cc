@@ -402,6 +402,8 @@ std::vector<AuthoredValueCase> AuthoredValueCases() {
   }
   cases.push_back({"OrderOverLimit", convolve("1", "1", true), "order", "65",
                    "<feConvolveMatrix order='65' kernelMatrix='1'/>"});
+  cases.push_back({"OrderFractionOverLimit", convolve("1", "1", true), "order", "64.4",
+                   "<feConvolveMatrix order='64.4' kernelMatrix='1'/>"});
   const std::string longTable = NumberList(100, 0, "1");
   cases.push_back(
       {"Table100", table("0 1", true), "tableValues", longTable, table(longTable, false)});
@@ -417,6 +419,27 @@ std::vector<AuthoredValueCase> AuthoredValueCases() {
   add("OffsetOverLimit", "feOffset", "", "dx", "1", "5000");
   add("MorphologyRadiusOverLimit", "feMorphology", "operator='dilate'", "radius", "1", "300");
   return cases;
+}
+
+// An interpolated order above the limit renders like the same authored order, which fails
+// closed, instead of rounding down to a 64x64 kernel.
+TEST(RendererAnimationFilter, InterpolatedOrderAboveTheLimitMatchesAuthored) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  auto authored = FilterDocument("<feConvolveMatrix order='64.4' kernelMatrix='1'/>");
+  auto base = FilterDocument("<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>");
+  const RendererBitmap expected = RenderDocumentWithActiveBackend(authored);
+  ASSERT_NE(RenderDocumentWithActiveBackend(base).pixels, expected.pixels)
+      << "the authored order must render differently from the base order";
+
+  auto document =
+      FilterDocument("<feConvolveMatrix id='p' order='1' kernelMatrix='1'/>",
+                     "<animate href='#p' attributeName='order' values='64.4;64.4' dur='1s'/>");
+  document.setTime(0.5);
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expected,
+                                       "interpolated_order_above_limit",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 INSTANTIATE_TEST_SUITE_P(Values, RendererAnimationFilterAuthoredValue,
