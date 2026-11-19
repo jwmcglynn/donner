@@ -310,7 +310,7 @@ jobs:
         id: test
         if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' && (success() || needs.determine-targets.outputs.wgpu_reference == 'true') }}
         env:
-          LINUX_REFERENCE_ONLY: ${{ failure() }}
+          LINUX_REFERENCE_ONLY: ${{ steps.build.outcome != 'success' }}
           WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
           BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
         shell: bash
@@ -501,7 +501,7 @@ jobs:
         id: test
         if: ${{ !cancelled() && (success() || needs.determine-targets.outputs.wgpu_reference == 'true') }}
         env:
-          LINUX_REFERENCE_ONLY: ${{ failure() }}
+          LINUX_REFERENCE_ONLY: ${{ steps.build.outcome != 'success' }}
           WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
         shell: bash
         run: python3 tools/ci/lane.py phase linux-self-hosted test

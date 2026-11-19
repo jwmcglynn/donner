@@ -1553,6 +1553,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 step = self._step_body(job, "Test")
                 self.assertIn("WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}", step)
+                self.assertIn("LINUX_REFERENCE_ONLY: ${{ steps.build.outcome != 'success' }}", step)
                 self.assertIn("needs.determine-targets.outputs.wgpu_reference == 'true'", step)
                 self.assertIn("--test_tag_filters=", step)
                 self.assertNotIn("Test Linux WebGPU resvg reference", job)
