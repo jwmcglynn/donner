@@ -105,14 +105,12 @@ TEST(ReferenceInvalidationTest, PathRestyleRelaysOutTextAlongIt) {
               Optional(HasDirtyFlags(DirtyFlagsComponent::TextGeometry)));
 }
 
-// Text along a path ignores the transforms of the path's ancestors, and neither inherited style nor
-// compositing changes can move the path, so these edits keep the text's layout.
+// Text along a path ignores the transforms of the path's ancestors, and compositing changes cannot
+// move the path, so these edits keep the text's layout.
 TEST(ReferenceInvalidationTest, EditsThatCannotMoveThePathKeepTheLayout) {
   for (const auto& [label, edit] :
        std::initializer_list<std::pair<const char*, void (*)(SVGDocument&)>>{
            {"ancestor transform", [](SVGDocument& d) { Translate(d, "#group", Vector2d(0, 20)); }},
-           {"ancestor fill",
-            [](SVGDocument& d) { d.querySelector("#group")->setAttribute("fill", "red"); }},
            {"ancestor opacity",
             [](SVGDocument& d) { d.querySelector("#group")->setAttribute("opacity", "0.5"); }},
            {"path opacity",
@@ -124,6 +122,20 @@ TEST(ReferenceInvalidationTest, EditsThatCannotMoveThePathKeepTheLayout) {
     InvalidateReferenceDependents(document.unsafeRegistry());
     EXPECT_THAT(DirtyFlagsOf(document, "#followsFirst"), Eq(std::nullopt));
   }
+}
+
+// A restyle of the path's ancestor can move the path: here it changes the font size that the
+// path's `em` geometry resolves against.
+TEST(ReferenceInvalidationTest, AncestorRestyleRelaysOutTextAlongThePath) {
+  SVGDocument document = DrawnDocument(R"svg(
+    <g id="sized" font-size="10"><rect id="box" x="1em" y="2em" width="5em" height="2em"/></g>
+    <text id="followsBox" font-size="12"><textPath href="#box">Around</textPath></text>)svg");
+
+  document.querySelector("#sized")->setAttribute("font-size", "14");
+  InvalidateReferenceDependents(document.unsafeRegistry());
+
+  EXPECT_THAT(DirtyFlagsOf(document, "#followsBox"),
+              Optional(HasDirtyFlags(DirtyFlagsComponent::TextGeometry)));
 }
 
 constexpr std::string_view kFeImageHosts = R"svg(

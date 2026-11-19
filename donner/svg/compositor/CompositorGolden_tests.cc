@@ -5415,6 +5415,42 @@ constexpr std::string_view kTextPathInOtherLayer = R"svg(
     <text font-size="12" fill="#008"><textPath href="#target">Along the curve</textPath></text>
   </svg>)svg";
 
+/// A `<textPath>` along a rect whose geometry is in `em`, inside a masked group that sets the font
+/// size; the text is outside that group.
+constexpr std::string_view kTextPathOnFontRelativeRect = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white"/>
+      </mask>
+    </defs>
+    <g id="pg" mask="url(#m)" font-size="10">
+      <rect x="2" y="84" width="20" height="10" fill="#9c9"/>
+      <rect id="target" x="1em" y="3em" width="6em" height="2em" fill="none"/>
+    </g>
+    <text font-size="11" fill="#008"><textPath href="#target">Around the box edge</textPath></text>
+  </svg>)svg";
+
+/// A `<textPath>` whose path a stylesheet moves when its masked parent group gains a class; the
+/// text is outside that group.
+constexpr std::string_view kTextPathMovedBySelector = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <style>
+      .shifted > #target { transform: translate(0px, 12px); }
+      .more > #target { transform: translate(0px, 24px); }
+    </style>
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white"/>
+      </mask>
+    </defs>
+    <g id="pg" mask="url(#m)">
+      <rect x="2" y="84" width="20" height="10" fill="#9c9"/>
+      <path id="target" d="M 6 30 C 30 10 60 50 90 30" fill="none"/>
+    </g>
+    <text font-size="12" fill="#008"><textPath href="#target">Along the curve</textPath></text>
+  </svg>)svg";
+
 /// A `<textPath>` and its unstroked path next to each other at the top level.
 constexpr std::string_view kTextPathBesidePath = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
@@ -5563,6 +5599,18 @@ INSTANTIATE_TEST_SUITE_P(
                                   d.querySelector("#target")->setAttribute(
                                       "d",
                                       step == 1 ? "M 6 40 C 30 20 60 20 90 40" : "M 6 20 L 90 44");
+                                },
+                                false, false},
+        ReferenceTargetEditCase{"textpath_path_ancestor_font_size", kTextPathOnFontRelativeRect,
+                                [](SVGDocument& d, int step) {
+                                  d.querySelector("#pg")->setAttribute("font-size",
+                                                                       step == 1 ? "12" : "14");
+                                },
+                                false, false},
+        ReferenceTargetEditCase{"textpath_path_ancestor_class", kTextPathMovedBySelector,
+                                [](SVGDocument& d, int step) {
+                                  d.querySelector("#pg")->setAttribute(
+                                      "class", step == 1 ? "shifted" : "shifted more");
                                 },
                                 false, false},
         ReferenceTargetEditCase{

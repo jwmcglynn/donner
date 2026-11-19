@@ -1,6 +1,7 @@
 #include "donner/svg/components/ReferenceInvalidation.h"
 
-#include <deque>
+#include <cstddef>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -38,15 +39,15 @@ Entity ParentOf(const Registry& registry, Entity entity) {
 
 /**
  * Whether \p flags may change a path's geometry or its own transform: a shape, layout or transform
- * write, or a restyle of the path itself, which marks the whole \ref
- * DirtyFlagsComponent::StyleCascade. Style inherited from a restyled ancestor (Style and Paint
- * only) and compositing changes cannot change geometry.
+ * write, or any restyle other than a compositing one. A restyle of an ancestor also counts: it can
+ * change the font size that `em` geometry resolves against, or make a selector rule set the path's
+ * own `transform` or `d`.
  */
 bool PathGeometryMayHaveChanged(uint16_t flags) {
   constexpr uint16_t kGeometryWrites =
       DirtyFlagsComponent::Shape | DirtyFlagsComponent::Layout | DirtyFlagsComponent::Transform;
-  return (flags & kGeometryWrites) != 0 ||
-         (flags & DirtyFlagsComponent::StyleCascade) == DirtyFlagsComponent::StyleCascade;
+  return (flags & kGeometryWrites) != 0 || ((flags & DirtyFlagsComponent::Style) != 0 &&
+                                            (flags & DirtyFlagsComponent::Compositing) == 0);
 }
 
 /// A text path follows its path's geometry and the path's own transform. Its ancestors'
@@ -101,38 +102,54 @@ std::unordered_map<Entity, std::vector<Entity>> FilterInheritors(Registry& regis
   return inheritors;
 }
 
-/// The filters holding an `feImage` that references an entity in \p subtreeRoots, and the filters
-/// that inherit their primitives, leaving out those already in \p visited (and adding the rest).
-std::vector<Entity> NewFiltersDrawing(
-    Registry& registry, const std::unordered_set<Entity>& subtreeRoots,
-    const std::unordered_map<Entity, std::vector<Entity>>& inheritors,
-    std::unordered_set<Entity>& visited) {
-  std::deque<Entity> pending;
+/// An `feImage` fragment reference: the `<filter>` holding the primitive and the element it draws.
+struct FeImageReference {
+  Entity filter;  //!< The `<filter>` that contains the `feImage`.
+  Entity target;  //!< The element the fragment reference resolves to.
+};
+
+/// Resolve every same-document `feImage` fragment reference once.
+std::vector<FeImageReference> FeImageReferences(Registry& registry) {
+  std::vector<FeImageReference> references;
   for (const auto& [entity, image] : registry.view<const FEImageComponent>().each()) {
     const Entity target = ResolveFragment(registry, image.href);
-    if (target == entt::null || !subtreeRoots.contains(target)) {
-      continue;
-    }
-    if (const Entity filter = OwningFilter(registry, entity);
-        filter != entt::null && visited.insert(filter).second) {
-      pending.push_back(filter);
+    const Entity filter = target != entt::null ? OwningFilter(registry, entity) : entt::null;
+    if (filter != entt::null) {
+      references.push_back({filter, target});
     }
   }
-  // Breadth first over the href inheritors; `visited` stops cycles.
-  std::vector<Entity> result;
-  while (!pending.empty()) {
-    const Entity filter = pending.front();
-    pending.pop_front();
-    result.push_back(filter);
-    if (const auto it = inheritors.find(filter); it != inheritors.end()) {
-      for (const Entity inheritor : it->second) {
-        if (visited.insert(inheritor).second) {
-          pending.push_back(inheritor);
-        }
+  return references;
+}
+
+/// The filters of \p references whose target is in \p subtreeRoots, leaving out those already in
+/// \p visited (and adding the rest).
+std::vector<Entity> FiltersDrawingChanges(const std::vector<FeImageReference>& references,
+                                          const std::unordered_set<Entity>& subtreeRoots,
+                                          std::unordered_set<Entity>& visited) {
+  std::vector<Entity> filters;
+  for (const FeImageReference& reference : references) {
+    if (subtreeRoots.contains(reference.target) && visited.insert(reference.filter).second) {
+      filters.push_back(reference.filter);
+    }
+  }
+  return filters;
+}
+
+/// Add to \p filters the filters that inherit their primitives from one of them through `href`,
+/// breadth first; \p visited stops cycles.
+void AddInheritingFilters(const std::unordered_map<Entity, std::vector<Entity>>& inheritors,
+                          std::unordered_set<Entity>& visited, std::vector<Entity>& filters) {
+  for (std::size_t i = 0; i < filters.size(); ++i) {
+    const auto it = inheritors.find(filters[i]);
+    if (it == inheritors.end()) {
+      continue;
+    }
+    for (const Entity inheritor : it->second) {
+      if (visited.insert(inheritor).second) {
+        filters.push_back(inheritor);
       }
     }
   }
-  return result;
 }
 
 /// Whether the resolved filter of \p instance draws one of \p filters, either as its single
@@ -172,20 +189,26 @@ std::vector<Entity> FilterHosts(Registry& registry, const std::unordered_set<Ent
 /**
  * An element whose filter draws a changed element through `feImage` redraws its filter result.
  * A redrawn host is itself a change that another `feImage` may draw, so this repeats until no new
- * filter is reached; each round reaches at least one new filter, which bounds it.
+ * filter is reached; each round reaches at least one new filter, which bounds it. The `href`
+ * inheritors are only looked up once some filter is reached.
  */
 void InvalidateFeImageHosts(Registry& registry) {
   if (registry.view<const FEImageComponent>().empty()) {
     return;
   }
+  const std::vector<FeImageReference> references = FeImageReferences(registry);
   std::unordered_set<Entity> subtreeRoots;
   for (const Entity entity : registry.view<const DirtyFlagsComponent>()) {
     AddWithAncestors(registry, entity, subtreeRoots);
   }
-  const auto inheritors = FilterInheritors(registry);
+  std::optional<std::unordered_map<Entity, std::vector<Entity>>> inheritors;
   std::unordered_set<Entity> visited;
-  for (std::vector<Entity> reached = NewFiltersDrawing(registry, subtreeRoots, inheritors, visited);
-       !reached.empty(); reached = NewFiltersDrawing(registry, subtreeRoots, inheritors, visited)) {
+  for (std::vector<Entity> reached = FiltersDrawingChanges(references, subtreeRoots, visited);
+       !reached.empty(); reached = FiltersDrawingChanges(references, subtreeRoots, visited)) {
+    if (!inheritors.has_value()) {
+      inheritors = FilterInheritors(registry);
+    }
+    AddInheritingFilters(*inheritors, visited, reached);
     const std::unordered_set<Entity> filters(reached.begin(), reached.end());
     for (const Entity host : FilterHosts(registry, filters)) {
       registry.get_or_emplace<DirtyFlagsComponent>(host).mark(
