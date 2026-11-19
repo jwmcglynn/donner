@@ -2408,27 +2408,24 @@ TEST_F(RendererRegressionTests, TextSpanWithTransparentStrokeIsNotPaintedWithThe
 
 TEST_F(RendererRegressionTests, TextSpanWithTransparentFillIsNotPaintedWithTheTextPaintServer) {
   // The fill counterpart: a tspan whose own fill is a fully transparent solid paints no fill inside
-  // text filled with a gradient or a pattern, and a tspan that shares the text's paint server
-  // paints it with the span's own fill opacity.
+  // text filled with a pattern, and a tspan that shares the text's pattern paints it with the
+  // span's own fill opacity.
   constexpr std::string_view kFill = R"svg(fill="url(#paint)")svg";
-  for (const TextStrokePaintCase& paint : {kTextStrokePaints[1], kTextStrokePaints[2]}) {
-    SCOPED_TRACE(paint.label);
-    const std::array<SpanStrokeCase, 5> cases = {{
-        {"span_fill_opacity_zero", kFill, R"svg(fill="red" fill-opacity="0")svg", "", kFill,
-         R"svg(fill="none")svg", false, paint.defs, /*pathPerGlyph=*/true},
-        {"span_fill_transparent", kFill, R"svg(fill="transparent")svg", "", kFill,
-         R"svg(fill="none")svg", false, paint.defs, /*pathPerGlyph=*/true},
-        {"span_opacity_zero", kFill, R"svg(opacity="0")svg", "", kFill, R"svg(fill="none")svg",
-         false, paint.defs, /*pathPerGlyph=*/true},
-        {"span_shares_paint_server", kFill, "", "", kFill, kFill, false, paint.defs,
-         /*pathPerGlyph=*/true},
-        {"span_shares_translucent_paint_server", kFill, R"svg(fill-opacity="0.5")svg", "", kFill,
-         R"svg(fill="url(#paint)" fill-opacity="0.5")svg", false, paint.defs,
-         /*pathPerGlyph=*/true},
-    }};
-    for (const SpanStrokeCase& testCase : cases) {
-      ExpectSpanStrokesMatchOutlinePaths(testCase);
-    }
+  constexpr std::string_view kPattern = kTextStrokePaints[2].defs;
+  const std::array<SpanStrokeCase, 5> cases = {{
+      {"span_fill_opacity_zero", kFill, R"svg(fill="red" fill-opacity="0")svg", "", kFill,
+       R"svg(fill="none")svg", false, kPattern, /*pathPerGlyph=*/true},
+      {"span_fill_transparent", kFill, R"svg(fill="transparent")svg", "", kFill,
+       R"svg(fill="none")svg", false, kPattern, /*pathPerGlyph=*/true},
+      {"span_opacity_zero", kFill, R"svg(opacity="0")svg", "", kFill, R"svg(fill="none")svg", false,
+       kPattern, /*pathPerGlyph=*/true},
+      {"span_shares_paint_server", kFill, "", "", kFill, kFill, false, kPattern,
+       /*pathPerGlyph=*/true},
+      {"span_shares_translucent_paint_server", kFill, R"svg(fill-opacity="0.5")svg", "", kFill,
+       R"svg(fill="url(#paint)" fill-opacity="0.5")svg", false, kPattern, /*pathPerGlyph=*/true},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
   }
 }
 

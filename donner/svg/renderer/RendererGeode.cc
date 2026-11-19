@@ -8160,10 +8160,11 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                    : impl_->paint.fillOpacity;
 
     // A run inherits the element-level pattern fill only when its fill server is a paint server
-    // reference that is not a gradient: the staged pattern is that reference. A span whose own
-    // fill is a solid paints that solid, so a fully transparent one (`fill-opacity="0"`,
-    // `transparent`) paints nothing rather than the element's pattern. `!fillIsGradient` ensures a
-    // span's own gradient is drawn as a gradient (above) rather than the inherited pattern.
+    // reference that is not a gradient. The staged pattern is the text element's own; a span's own
+    // different pattern is not staged. A span whose own fill is a solid paints that solid, so a
+    // fully transparent one (`fill-opacity="0"`, `transparent`) paints nothing rather than the
+    // element's pattern. `!fillIsGradient` ensures a span's own gradient is drawn as a gradient
+    // (above) rather than the inherited pattern.
     const bool usePatternFill =
         hasPatternFill && !hasFill && !fillIsGradient &&
         std::holds_alternative<components::PaintResolvedReference>(fillServer);
