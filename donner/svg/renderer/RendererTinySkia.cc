@@ -1108,13 +1108,16 @@ Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& viewBox, bool 
 }
 
 /// Whether a radial gradient's start and end circles are identical, the one case in which a canvas
-/// two-point gradient (which SVG 2 `fr` follows) paints nothing. The tolerance is tiny-skia's own
-/// threshold for coincident circles.
+/// two-point gradient (which SVG 2 `fr` follows) paints nothing. The tolerances are the ones at
+/// which tiny-skia's two-point gradient treats circles as coincident: centers within 1/32768, and,
+/// for concentric circles, radii within 1/4096. Keep this identical to the Geode renderer's copy so
+/// both backends drop the same draws.
 bool radialCirclesCoincide(const Vector2d& center, double radius, const Vector2d& focalCenter,
                            double focalRadius) {
-  constexpr double kCoincidentCircleTolerance = 1.0 / (1 << 15);
-  return NearZero((center - focalCenter).length(), kCoincidentCircleTolerance) &&
-         NearEquals(radius, focalRadius, kCoincidentCircleTolerance);
+  constexpr double kCoincidentCenterTolerance = 1.0 / (1 << 15);
+  constexpr double kCoincidentRadiusTolerance = 1.0 / (1 << 12);
+  return NearZero((center - focalCenter).length(), kCoincidentCenterTolerance) &&
+         NearEquals(radius, focalRadius, kCoincidentRadiusTolerance);
 }
 
 Transform2d resolveGradientTransform(
