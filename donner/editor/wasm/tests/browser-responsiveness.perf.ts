@@ -495,9 +495,9 @@ async function continuousDrag(
   const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
     const heldPositions = heldDragPositionCount(completedFrames);
-    // The hosted macOS Perf job reports, rather than fails, a miss in the masked crown drag, in the
-    // report scope it shares with that drag's other progress checks (#2106). It enforces every
-    // other phase, as does every run that does not set report mode.
+    // The hosted macOS Perf job reports, rather than fails, a miss in Chromium in the masked crown
+    // drag (#2106); it enforces Firefox and every other phase, as does every run that does not set
+    // report mode.
     await completionCheck(
       "heldDragPositions",
       phase,
@@ -1836,8 +1836,8 @@ async function maskedCrownDragWithCounters(
       `${results.held.length} held results, ${slowPath} slow path, ${unpatched} rasterized unpatched`,
       () => expectHeldMaskedDragDamagePatch(results),
     ).catch((error) => checkFailures.push(error));
-    // The hosted macOS Perf job reports, rather than fails, a miss, in the report scope it shares
-    // with this drag's other progress checks (#2106); a run without report mode enforces it.
+    // Enforced on every project and run: a drag slower than its hold fails here, as a held drag
+    // that rendered no move result, not as a fast-path defect (#2106).
     await completionCheck(
       "heldDragFastPathResults",
       phase,

@@ -1709,21 +1709,18 @@ test("completion checks enforce by default and report only tracked misses", asyn
       Object.entries(gates.kCompletionChecks).map(([check, { report }]) => [check, report]),
     ),
     {
-      coldZoomPresents: { browsers: ["chromium"], issue: "#1675" },
-      dragInputsComplete: { browsers: ["firefox"], issue: "#1676" },
+      coldZoomPresents: { browsers: ["chromium"], issue: "#1675", restoreWhen: "#1675 is fixed" },
+      dragInputsComplete: { browsers: ["firefox"], issue: "#1676", restoreWhen: "#1676 is fixed" },
       heldDragPositions: {
-        browsers: ["chromium", "firefox"],
+        browsers: ["chromium"],
         phases: ["geode-crown"],
         issue: "#2106",
+        restoreWhen: "#2106 is fixed",
       },
-      heldDragFastPathResults: {
-        browsers: ["chromium", "firefox"],
-        phases: ["geode-crown"],
-        issue: "#2106",
-      },
+      heldDragFastPathResults: undefined,
       heldMaskedDragDamagePatch: undefined,
     },
-    "only the masked crown drag phase may report its progress checks, and never its result shape",
+    "a new or wider report scope is a reviewed change to this table",
   );
   const miss = new Error("every dispatched input must complete\n\nExpected: 60");
   const run = async (mode, browserName, assertion) => {
@@ -1784,11 +1781,10 @@ test("completion checks enforce by default and report only tracked misses", asyn
     },
   ).then((result) => ({ result }), (error) => ({ error }));
   assert.equal(enforcedHeld.error, heldMiss, "an enforcing run rethrows a tracked miss");
-  assert.equal((await runHeld("firefox", "geode-crown")).result?.mode, "report");
   const enforcedPhases = [
     ["chromium", "first-drag-193"],
     ["chromium", "second-drag-193"],
-    ["firefox", "first-drag-193"],
+    ["firefox", "geode-crown"],
   ];
   for (const [browserName, phase] of enforcedPhases) {
     assert.equal(
@@ -1798,15 +1794,16 @@ test("completion checks enforce by default and report only tracked misses", asyn
     );
   }
   assert.equal(gates.completionCheckTracks("dragInputsComplete", "firefox", "any-phase"), true);
+  assert.equal(gates.completionCheckTracks("heldDragPositions", "chromium", "geode-crown"), true);
+  assert.equal(gates.completionCheckTracks("heldDragPositions", "firefox", "geode-crown"), false);
   for (const browserName of ["chromium", "firefox"]) {
-    for (const check of ["heldDragPositions", "heldDragFastPathResults"]) {
-      assert.equal(gates.completionCheckTracks(check, browserName, "geode-crown"), true);
+    for (const check of ["heldDragFastPathResults", "heldMaskedDragDamagePatch"]) {
+      assert.equal(
+        gates.completionCheckTracks(check, browserName, "geode-crown"),
+        false,
+        `${check} stays enforced in ${browserName}`,
+      );
     }
-    assert.equal(
-      gates.completionCheckTracks("heldMaskedDragDamagePatch", browserName, "geode-crown"),
-      false,
-      `the held result shape stays enforced in ${browserName}`,
-    );
   }
   const damagePatchMiss = new Error("every held masked-child result must take the fast path");
   for (const project of responsivenessPerfProjects()) {
@@ -1899,46 +1896,16 @@ test("the masked drag counters are checked in candidate runs and only measured i
   );
 });
 
-// The completion checks that observe the same thing with different report scopes, one line per
-// conflict. Such checks see one slowness through different measurements, so a scope on only some
-// of them reports it through those and fails the run through the rest.
-function completionCheckScopeConflicts(checks) {
-  const scopes = new Map();
-  for (const [check, { observes, report }] of Object.entries(checks)) {
-    const scope = JSON.stringify(report ?? null);
-    if (!scopes.has(observes)) scopes.set(observes, new Map());
-    const checksByScope = scopes.get(observes);
-    checksByScope.set(scope, [...(checksByScope.get(scope) ?? []), check]);
-  }
-  return [...scopes].filter(([, checksByScope]) => checksByScope.size > 1).map(
-    ([observes, checksByScope]) =>
-      `${observes}: ${
-        [...checksByScope].map(([scope, names]) => `${names.join(", ")} report in ${scope}`)
-          .join("; ")
-      }`,
-  );
-}
-
-test("completion checks that observe the same thing share one report scope", async () => {
+test("every completion check report scope names its issue and when it is removed", async () => {
   const gates = await import("./latency-gates.mjs");
-  for (const [check, { observes }] of Object.entries(gates.kCompletionChecks)) {
-    assert.equal(typeof observes, "string", `${check} must name what it observes`);
-  }
-  assert.deepEqual(completionCheckScopeConflicts(gates.kCompletionChecks), []);
-  // Each check of the masked crown drag's progress once reported in one browser only, or in one
-  // project only, so whichever project another such check still enforced failed the run.
-  const { heldDragPositions } = gates.kCompletionChecks;
-  const partialReports = [
-    { browsers: ["chromium"], phases: ["geode-crown"], issue: "#2106" },
-    undefined,
-  ];
-  for (const report of partialReports) {
-    assert.match(
-      completionCheckScopeConflicts({
-        ...gates.kCompletionChecks,
-        heldDragPositions: { ...heldDragPositions, report },
-      }).join("\n"),
-      /^held drag progress: heldDragPositions report in .*; heldDragFastPathResults report in /,
+  for (const [check, { observes, report }] of Object.entries(gates.kCompletionChecks)) {
+    assert.ok(typeof observes === "string" && observes !== "", `${check} names what it observes`);
+    if (report === undefined) continue;
+    assert.ok(report.browsers.length > 0, `${check} must name the browsers it reports in`);
+    assert.match(report.issue, /^#\d+$/, `${check} must name the issue that tracks its misses`);
+    assert.ok(
+      typeof report.restoreWhen === "string" && report.restoreWhen.includes(report.issue),
+      `${check} must say, in terms of its issue, when enforcement returns`,
     );
   }
 });
@@ -1995,9 +1962,9 @@ test("the masked drag result shape and its fast-path progress are separate check
   for (const project of responsivenessPerfProjects()) {
     assert.deepEqual(
       await check([dragStart], project),
-      { shape: "met", fastPath: "reported" },
+      { shape: "met", fastPath: "failed" },
       `${project}: a drag that completes only its drag-start result while held has the shape, and `
-        + "its missing fast-path result is reported",
+        + "fails the enforced fast-path result check",
     );
     assert.deepEqual(
       await check([dragStart, maskedDragResult(9, kFastPathMove), maskedDragResult(10)], project),
@@ -2012,7 +1979,7 @@ test("the masked drag result shape and its fast-path progress are separate check
     const slowPath = maskedDragResult(9, { slowPathFramesWithDirty: 1, cachedTileCount: 4 });
     assert.deepEqual(
       await check([dragStart, slowPath], project),
-      { shape: "failed", fastPath: "reported" },
+      { shape: "failed", fastPath: "failed" },
       `${project}: a slow-path held result fails the enforced shape check`,
     );
     const unpatched = maskedDragResult(9, { ...kFastPathMove, cachedTileCount: 2 });

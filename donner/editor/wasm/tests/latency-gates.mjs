@@ -31,51 +31,45 @@ export const kLatencyGateRecordPrefix = "latency-gate ";
 export const kCompletionChecksEnv = "DONNER_BROWSER_COMPLETION_CHECKS";
 
 /**
- * Report scope of every check of how much of the masked crown drag (the `geode-crown` phase)
- * completes while it is held. On the hosted macOS runner the Chromium drag-start result of that
- * drag alone can take longer than the 1.2 s hold, so the hold often completes no other result
- * (#2106), and Firefox renders held results but presents few of them (#2106, jointly with #1676).
- * The checks share this one scope in all four browser projects, so the job never enforces one view
- * of that slowness while it reports another.
- *
- * The trade-off: on the hosted job a held drag that makes no progress before its release is
- * reported, not failed, and cannot be told apart from this slowness until #2106 is fixed. The
- * hosted job still fails the drag on the held results' shape, a release that stalls past its
- * guard, a GPU tile readback, and, in Chromium, an input the stream never completed.
- *
- * Restore enforcement, by removing this scope from its checks, once the #2106 fix has landed and
- * five consecutive scheduled hosted Perf runs meet these checks in every project.
- */
-const kMaskedCrownHeldDragProgress = Object.freeze({
-  browsers: Object.freeze(["chromium", "firefox"]),
-  phases: Object.freeze(["geode-crown"]),
-  issue: "#2106",
-});
-
-/**
  * Hard checks of this lane: what each observes and, for a check the hosted macOS Perf job only
  * reports, its report scope: the browsers and, when `phases` is set, the phases whose misses the
- * scope's issue tracks. That job enforces the check in every other browser and phase, and every
- * run that does not set report mode enforces it everywhere; no CI job other than the hosted Perf
- * job runs the browser responsiveness targets, so those are manual runs. Checks that observe the
- * same thing share one scope, which browser_matrix_tests verifies, so the same slowness cannot be
- * reported through one check and enforced through another. The fix restores enforcement: remove a
- * scope once its issue is fixed.
+ * scope's issue tracks, and `restoreWhen`, the condition for removing the scope. That job
+ * enforces the check in every other browser and phase, and every run that does not set report
+ * mode enforces it everywhere; no CI job other than the hosted Perf job runs the browser
+ * responsiveness targets, so those are manual runs. browser_matrix_tests pins this table, so a new
+ * or wider scope is a visible, reviewed change.
  */
 export const kCompletionChecks = {
   coldZoomPresents: {
     observes: "cold zoom presentation",
-    report: Object.freeze({ browsers: Object.freeze(["chromium"]), issue: "#1675" }),
+    report: Object.freeze({
+      browsers: Object.freeze(["chromium"]),
+      issue: "#1675",
+      restoreWhen: "#1675 is fixed",
+    }),
   },
   dragInputsComplete: {
     observes: "drag input completion",
-    report: Object.freeze({ browsers: Object.freeze(["firefox"]), issue: "#1676" }),
+    report: Object.freeze({
+      browsers: Object.freeze(["firefox"]),
+      issue: "#1676",
+      restoreWhen: "#1676 is fixed",
+    }),
   },
-  heldDragPositions: { observes: "held drag progress", report: kMaskedCrownHeldDragProgress },
-  heldDragFastPathResults: {
+  // In Chromium the masked crown drag renders too slowly on the hosted runner to complete a second
+  // held position (#2106). Firefox stays enforced.
+  heldDragPositions: {
     observes: "held drag progress",
-    report: kMaskedCrownHeldDragProgress,
+    report: Object.freeze({
+      browsers: Object.freeze(["chromium"]),
+      phases: Object.freeze(["geode-crown"]),
+      issue: "#2106",
+      restoreWhen: "#2106 is fixed",
+    }),
   },
+  // Whether any move rendered a fast-path result while the masked child was held. A drag slower
+  // than its hold fails this, with a message that says so, on every project and run.
+  heldDragFastPathResults: { observes: "held drag progress" },
   // A slow-path or unpatched held result is a fast-path defect, never slowness: always enforced.
   heldMaskedDragDamagePatch: { observes: "held masked-child result shape" },
 };
