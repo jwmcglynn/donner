@@ -565,18 +565,23 @@ compiling either consumer. Use **Run workflow** on `main` to run both jobs on de
 
 On a trusted pull request, the self-hosted Linux job runs
 `bazel test --config=ci --config=ci-platforms //tools/ci:dual_platform_canary`.
-The same scheduler must serve both Linux and macOS workers. The check runs a kernel probe and a
-C++ test on each platform and requires four uncached remote results. When the PR also selects the
-native Metal lane, the same invocation runs the validation profile, preflight, offline compiler,
-and remaining Metal suites on Darwin GPU workers. Every selected shard must pass remotely and
-uncached. The time limit is 10 minutes for the four probes and 45 minutes when Metal is selected.
-The existing native Metal job continues to verify the same coverage during qualification.
+The same scheduler serves Linux and macOS workers. A kernel probe and a C++ test run uncached on
+each platform. When trusted CI selects the self-hosted macOS lane, the same command builds the
+affected Darwin targets and runs their eligible tests. Fixed Geode editor coverage joins that
+selection. A browser change selects the archive preflight. The two headed Firefox tests exercise
+presented WebGPU pixels and need desktop access from the execution worker. The qualification run
+can schedule browser and Geode tests concurrently on the physical GPU.
 
-The PR base revision controls the default. To qualify the change against an older base, add
-`ci:native-platform-canary` before pushing a commit. Verify all four results on the intended
-scheduler before merging the default switch. Set the repository variable `UNIFIED_RE_CANARY` to
-`false` to suspend both automatic and labeled runs. The ordinary native suites retain their
-existing routes.
+When Metal is affected, the graph adds the full validation profile, preflight, offline compiler
+and native suites. Those tests and the archive preflight require fresh remote results. Ordinary
+Darwin tests can reuse their cached results. A broad run has a 90-minute timeout and a probe-only
+run has ten minutes. Failed remote tests retain their logs, XML and undeclared outputs.
+
+The PR base controls the default. Add `ci:native-platform-canary` for a trusted PR against an
+older base. `UNIFIED_RE_CANARY=false` suspends the mixed invocation. The macOS Actions jobs still
+run alongside it during qualification. The existing `ci:browser-context-probe` label selects the
+Chromium diagnostic, and `ci:vm-qualification` requests four uncached runs per worker qualification
+test in the mixed graph.
 
 ### Remote macOS shadow lane {#RemoteMacosShadowLane}
 

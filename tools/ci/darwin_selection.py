@@ -10,12 +10,13 @@ def root_query(fallback, affected):
     if not roots:
         raise ValueError("Empty Darwin target selection")
     root_set = "set(" + " ".join(json.dumps(label) for label in roots) + ")"
-    if fallback:
-        # Wildcard selection drops manual roots before Bazel expands test suites.
-        manual = r"(\[|, )manual(, |\])"
-        root_set = f"let all = {root_set} in ($all except attr(tags, '{manual}', $all))"
-    return (f'let roots = kind(".* rule", {root_set}) in '
-            '($roots except kind("test_suite rule", $roots)) union tests($roots)')
+    manual = r"(\[|, )manual(, |\])"
+    return (f"let input = {root_set} in "
+            f"let roots = $input except attr(tags, '{manual}', $input) in "
+            'let expanded = (kind(".* rule", $roots) except kind("test_suite rule", $roots)) '
+            'union tests($roots) in '
+            f'$expanded except (kind("(package_group|toolchain_type) rule", $expanded) '
+            f"union attr(tags, '{manual}', $expanded))")
 
 
 def variant(label):

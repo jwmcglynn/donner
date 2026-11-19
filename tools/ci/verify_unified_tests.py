@@ -4,6 +4,9 @@ import argparse
 from collections import defaultdict
 import json
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+from macos_remote_shadow import MAX_ARTIFACT_TOTAL_BYTES, stage_failed_test_outputs
 
 
 CANARY = {"//tools/ci:ci_linux_kernel_test", "//tools/ci:ci_macos_kernel_test",
@@ -48,6 +51,28 @@ def _check_summary_shards(summaries, passed):
             raise ValueError(f"incomplete remote shards for {key}: expected {runs} runs of {shards} shards")
 
 
+KERNELS = {"//tools/ci:ci_linux_kernel_test": "Linux aarch64",
+           "//tools/ci:ci_macos_kernel_test": "Darwin arm64"}
+
+
+def report_kernels(locations, output_root):
+    root = output_root.resolve(strict=True)
+    for label, kernel in KERNELS.items():
+        location = urlsplit(locations.get(label, ""))
+        if location.scheme != "file" or location.netloc:
+            raise ValueError(f"Missing local probe log for {label}")
+        path = Path(unquote(location.path)).resolve(strict=True)
+        suffix = ("testlogs", "tools", "ci", label.split(":")[1], "test.log")
+        if not path.is_relative_to(root) or path.parts[-5:] != suffix:
+            raise ValueError(f"Unexpected probe log location for {label}")
+        marker = "test worker: " + kernel
+        with path.open("rb") as stream:
+            body = stream.read(65537)
+        if len(body) > 65536 or marker.encode() not in body.splitlines():
+            raise ValueError(f"Missing kernel and architecture evidence for {label}")
+        print(marker)
+
+
 class Evidence:
     def __init__(self):
         self.members = {}
@@ -55,6 +80,7 @@ class Evidence:
         self.summaries = {}
         self.passed = defaultdict(set)
         self.test_rules = set()
+        self.kernel_logs = {}
 
     def read(self, event):
         identity = event.get("id", {})
@@ -68,7 +94,12 @@ class Evidence:
             key = identity["testSummary"]
             self.summaries[key["label"], key["configuration"]["id"]] = event["testSummary"]
         if "testResult" in event:
-            self.passed[_passed_remotely(event["testResult"])].add(_shard(identity["testResult"]))
+            result = event["testResult"]
+            shard = _shard(identity["testResult"])
+            self.passed[_passed_remotely(result)].add(shard)
+            if shard[0] in KERNELS:
+                self.kernel_logs[shard[0]] = next((f.get("uri", "") for f in result.get("testActionOutput", [])
+                                                   if f.get("name") == "test.log"), "")
 
 
 BROWSER_PACKAGE = "//donner/editor/wasm/tests:ci_darwin_"
@@ -93,7 +124,7 @@ def _qualification_runs(evidence):
             raise ValueError(f"Expected four uncached remote runs for {label}")
 
 
-def verify(events, suites, ordinary=()):
+def verify(events, suites, ordinary=(), output_root=None):
     evidence = Evidence()
     for event in events:
         evidence.read(event)
@@ -112,6 +143,8 @@ def verify(events, suites, ordinary=()):
     if summary_labels != expected or cached_required or evidence.passed[None]:
         raise ValueError(f"Test label mismatch {sorted(expected ^ summary_labels)}, "
                          f"incomplete remote shards {sorted(cached_required | evidence.passed[None])}")
+    if output_root is not None:
+        report_kernels(evidence.kernel_logs, output_root)
     print(f"{len(expected)} native tests passed across {len(evidence.passed['remote'])} uncached "
           f"remote shards and {len(evidence.passed['cached'])} cached shards; "
           f"{len(compatible)} ordinary Darwin roots built, {len(selected - compatible)} incompatible")
@@ -133,8 +166,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ordinary", type=Path)
     parser.add_argument("bep", type=Path)
-    parser.add_argument("suites", nargs="+")
+    parser.add_argument("--stage-failed", type=Path)
+    parser.add_argument("suites", nargs="*")
     args = parser.parse_args()
+    if args.stage_failed:
+        if args.bep.is_file():
+            with args.bep.open(encoding="utf-8") as stream:
+                stage_failed_test_outputs(stream, args.stage_failed, "mixed", Path("bazel-out"), MAX_ARTIFACT_TOTAL_BYTES)
+        else:
+            stage_failed_test_outputs((), args.stage_failed, "mixed", Path("bazel-out"), MAX_ARTIFACT_TOTAL_BYTES)
+        raise SystemExit(0)
+    if not args.suites:
+        parser.error("at least one test suite is required")
     ordinary_roots = args.ordinary.read_text().splitlines() if args.ordinary else []
     with args.bep.open(encoding="utf-8") as stream:
-        verify((json.loads(line) for line in stream), args.suites, ordinary_roots)
+        verify((json.loads(line) for line in stream), args.suites, ordinary_roots, Path("bazel-out"))

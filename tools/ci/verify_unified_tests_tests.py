@@ -2,11 +2,12 @@
 
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 from python.runfiles import runfiles
 
-from verify_unified_tests import verify
+from verify_unified_tests import KERNELS, report_kernels, verify
 
 
 SUITE = "//tools/ci:dual_platform_canary"
@@ -86,6 +87,22 @@ class UnifiedTest(unittest.TestCase):
         for extra in [[], [skipped]]:
             with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "did not finish"):
                 verify(list(events()) + extra, [SUITE, METAL], [label])
+
+    def test_kernel_log_must_match_its_platform_and_declared_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            locations = {}
+            for label, kernel in KERNELS.items():
+                path = root / "config/testlogs/tools/ci" / label.split(":")[1] / "test.log"
+                path.parent.mkdir(parents=True)
+                path.write_text(f"test worker: {kernel}\n")
+                locations[label] = path.as_uri()
+            report_kernels(locations, root)
+            path.write_text("test worker: Linux x86_64\n")
+            with self.assertRaisesRegex(ValueError, "architecture evidence"):
+                report_kernels(locations, root)
+            with self.assertRaisesRegex(ValueError, "log location"):
+                report_kernels(locations, path.parent)
 
     def test_shortened_canary_cannot_pass(self):
         records = list(events())

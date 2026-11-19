@@ -359,6 +359,15 @@ class DetermineTest(_ScriptTest):
             self.assertEqual(call, _hashing(self.runner_temp, call[call.index("-w") + 1],
                                             call[-1]))
 
+    def test_generated_darwin_variants_do_not_inflate_the_affected_selection(self):
+        variant = "//a:ci_darwin_example"
+        ordinary = "//a:ci_darwin_named_product"
+        result, _, outputs = self.determine(
+            affected="\n".join([variant, ordinary, "//a:example", ""]),
+            queries=_queries(**{'kind("ci_platform_(test|build) rule"': (variant + "\n", 0)}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("fallback=false\naffected=" + ordinary + " //a:example", outputs)
+
     def test_graph_tracked_build_defs_and_other_workflows_select_incrementally(self):
         # A lint script under build_defs is an ordinary source of its own tests, and another
         # workflow cannot change what this one runs; bazel-diff attributes both.

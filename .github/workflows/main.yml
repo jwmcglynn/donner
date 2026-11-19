@@ -472,6 +472,7 @@ jobs:
             -print -exec rm -rf {} + 2>/dev/null || true
 
       - name: Test Linux and macOS with native platform transitions
+        id: unified
         if: github.event_name == 'pull_request' && vars.UNIFIED_RE_CANARY != 'false' && (needs.gatekeeper.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary'))
         timeout-minutes: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && 90 || 10 }}
         env:
@@ -513,8 +514,21 @@ jobs:
           { printf '%s\n' "${suites[@]}"; cat "$ordinary"; } > "$patterns"
           bep="$RUNNER_TEMP/platform-canary.bep.json"
           env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=errors \
+            --remote_download_outputs=minimal --remote_download_regex='.*(test[.]log|test[.]xml|outputs[.]zip)$' \
             --keep_going --nobuild_tests_only --skip_incompatible_explicit_targets --build_event_json_file="$bep" "${options[@]}" --target_pattern_file="$patterns"
           python3 tools/ci/verify_unified_tests.py --ordinary "$ordinary" "$bep" "${suites[@]}"
+
+      - name: Stage failed mixed-platform test outputs
+        if: failure() && steps.unified.outcome == 'failure'
+        shell: bash
+        run: python3 tools/ci/verify_unified_tests.py --stage-failed "$RUNNER_TEMP/unified" "$RUNNER_TEMP/platform-canary.bep.json"
+
+      - name: Upload mixed-platform test failure artifacts
+        if: failure() && steps.unified.outcome == 'failure'
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-unified-${{ github.run_attempt }}
+          testlogs: ${{ runner.temp }}/unified/test-artifacts/mixed
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash
