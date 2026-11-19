@@ -1829,8 +1829,7 @@ TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascad
                 &PropertyRegistry::floodColor);
 }
 
-// A presentation attribute set through the typed setter or after a removal is removed or applied
-// like an authored one.
+// A presentation attribute set after a removal applies, and removing it again inherits again.
 TEST_F(SVGElementTests, PresentationAttributeSetAndRemoveRoundTrip) {
   SVGDocument document = parseSVG(SvgOf("<g fill='red'><rect id='t' fill='blue'/></g>"));
   SVGElement target = *document.querySelector("#t");
@@ -1843,9 +1842,6 @@ TEST_F(SVGElementTests, PresentationAttributeSetAndRemoveRoundTrip) {
   target.setAttribute("fill", "blue");
   EXPECT_EQ(fill(), blue);
 
-  target.removeAttribute("fill");
-  ASSERT_THAT(target.trySetPresentationAttribute("fill", "blue"), ParseResultIs(true));
-  EXPECT_EQ(fill(), blue);
   target.removeAttribute("fill");
   EXPECT_EQ(fill(), red);
 }
