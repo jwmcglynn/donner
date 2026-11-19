@@ -2492,6 +2492,34 @@ TEST_F(RendererRegressionTests, TextSpanResolvesItsOwnStrokePaint) {
   }
 }
 
+TEST_F(RendererRegressionTests, TextPaintReferenceWithFallbackPaintsTheReferencedServer) {
+  // A fill or stroke that references a pattern or gradient with a fallback color paints the
+  // referenced server, as it does without the fallback; the fallback color applies only when the
+  // reference does not resolve.
+  constexpr std::string_view kGradient = kTextStrokePaints[1].defs;
+  constexpr std::string_view kPattern = kTextStrokePaints[2].defs;
+  constexpr std::string_view kFill = R"svg(fill="url(#paint)")svg";
+  constexpr std::string_view kStroke = R"svg(fill="none" stroke="url(#paint)" stroke-width="4")svg";
+  const std::array<SpanStrokeCase, 6> cases = {{
+      {"pattern_fill", R"svg(fill="url(#paint) red")svg", "", "", kFill, kFill, false, kPattern,
+       /*pathPerGlyph=*/true},
+      {"gradient_fill", R"svg(fill="url(#paint) red")svg", "", "", kFill, kFill, false, kGradient,
+       /*pathPerGlyph=*/true},
+      {"pattern_stroke", R"svg(fill="none" stroke="url(#paint) red" stroke-width="4")svg", "", "",
+       kStroke, kStroke, false, kPattern},
+      {"gradient_stroke", R"svg(fill="none" stroke="url(#paint) red" stroke-width="4")svg", "", "",
+       kStroke, kStroke, false, kGradient},
+      {"missing_fill", R"svg(fill="url(#missing) red")svg", "", "", R"svg(fill="red")svg",
+       R"svg(fill="red")svg", false, "", /*pathPerGlyph=*/true},
+      {"missing_stroke", R"svg(fill="none" stroke="url(#missing) red" stroke-width="4")svg", "", "",
+       R"svg(fill="none" stroke="red" stroke-width="4")svg",
+       R"svg(fill="none" stroke="red" stroke-width="4")svg"},
+  }};
+  for (const SpanStrokeCase& testCase : cases) {
+    ExpectSpanStrokesMatchOutlinePaths(testCase);
+  }
+}
+
 TEST_F(RendererRegressionTests, TextSpanWithTransparentStrokeIsNotPaintedWithTheTextPaintServer) {
   // A tspan whose own stroke is a fully transparent solid paints no stroke inside text stroked with
   // a gradient or a pattern: the text's paint server applies only where the span's computed stroke
