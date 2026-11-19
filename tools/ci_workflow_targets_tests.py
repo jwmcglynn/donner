@@ -91,74 +91,35 @@ class WorkflowTargetsTest(unittest.TestCase):
                     "Required PR checks must admit dependency branches as well as main",
                 )
 
-    def test_vm_and_native_metal_routes_preserve_capabilities(self):
+    def test_mixed_darwin_routes_preserve_native_metal_and_geode(self):
         resolver = runfiles.Create()
         source = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).read_text()
-        jobs = {m.group(1): m.group(2) for m in re.finditer(
-            r"(?m)^  ([A-Za-z0-9_-]+):\n((?:(?:    .*|[ \\t]*)\n)*)", source)}
-        for name in ("macos-self-hosted",):
-            with self.subTest(job=name):
-                self.assertIn("runs-on: [self-hosted, macOS-vm, ARM64]", jobs[name])
-                for command in lane_commands(name, "test"):
-                    self.assertIn("--//build_defs:metal_shader_validation=off", command)
-                self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", jobs[name])
-        native = jobs["macos-metal"]
-        self.assertIn("runs-on: [self-hosted, macOS, ARM64]", native)
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", native)
-        # Only pull requests that reach the Metal suites, or fall back to //..., run it.
-        self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "
-                      "needs.determine-targets.outputs.metal_affected == 'true')", native)
-        native_commands = lane_commands("macos-metal", "test")
-        self.assertEqual([command[-1] for command in native_commands], [
-            "//tools/ci:" + target for target in ("metal_full_validation", "metal_preflight",
-                                                  "metal_offline_compiler", "metal_native")])
-        for command in native_commands:
-            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", command)
-            self.assertNotIn("--//build_defs:metal_shader_validation=off", command)
-        self.assertNotIn("continue-on-error:", native)
-        self.assertIn("macos-metal", jobs["coverage-contract"].split("steps:", 1)[0])
-        commands = lane_commands("macos-self-hosted", "test", "build", expand=False)
-        self.assertGreaterEqual(len(commands), 5)
-        for command in commands:
-            self.assertIn("--config=macos-vm", command)
-            self.assertNotRegex(" ".join(command), r"--jobs|--local_resources")
-        # Local execution stays bounded by the VM's CPU and memory budget. --jobs sits above the
-        # CPU budget so cache lookups and downloads are not throttled to local concurrency.
-        bazelrc = Path(resolver.Rlocation("donner/.bazelrc")).read_text()
-        budget = re.findall(r"(?m)^build:macos-vm (.+)$", bazelrc)
-        self.assertEqual(budget[1:], ["--local_resources=cpu=6",
-                                      "--local_resources=memory=6144"])
-        jobs_flag = re.fullmatch(r"--jobs=(\d+)", budget[0])
-        self.assertIsNotNone(jobs_flag, budget)
-        self.assertGreater(int(jobs_flag.group(1)), 6)
-        manifest = json.loads(Path(resolver.Rlocation(
-            "donner/tools/ci/coverage_contract.json")).read_text())
-        for kind in ("shader-validation", "shader-memory-canary", "native-metal"):
-            self.assertEqual(manifest["lanes"]["macos"]["Build and test"][kind]["counterparts"][0]["job"],
-                             "macos-metal")
+        native = source.split("      - name: Test Linux and macOS with native platform transitions", 1)[1]
+        native = native.split("      - name:", 1)[0]
+        self.assertIn("if: needs.gatekeeper.outputs.unified_macos == 'true'", native)
+        self.assertIn("RUN_METAL: ${{ needs.determine-targets.outputs.metal_affected == 'true' || "
+                      "needs.determine-targets.outputs.fallback == 'true' }}", native)
+        self.assertIn('if [[ "$RUN_METAL" == true ]]; then', native)
+        self.assertIn("suites+=(//tools/ci:unified_metal_{full_validation,preflight,offline_compiler,native})", native)
+        self.assertIn("suites+=(//tools/ci:unified_editor_geode)", native)
+        self.assertIn('verify_unified_tests.py --ordinary "$ordinary" --linux "$linux" "$bep" "${suites[@]}"', native)
+        self.assertNotIn("runs-on: [self-hosted, macOS", source)
 
-    def test_vm_qualification_is_an_explicit_trusted_four_job_matrix(self):
-        source = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).read_text()
-        qualification = source.split("  macos-vm-qualification:\n", 1)[1].split("\n  macos-metal:", 1)[0]
-        self.assertIn("runs-on: [self-hosted, macOS-vm-qualification, ARM64]", qualification)
-        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", qualification)
-        self.assertIn("contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
-                      qualification)
-        self.assertIn("instance: [1, 2, 3, 4]", qualification)
-        self.assertIn("fail-fast: false", qualification)
-        [command] = lane_commands("macos-vm-qualification", "test")
-        self.assertIn("--nocache_test_results", command)
-        self.assertIn("--noskip_incompatible_explicit_targets", command)
-        self.assertEqual("//tools/ci:macos_vm_qualification", command[-1])
-        self.assertIn("--build_event_json_file=$RUNNER_TEMP/coverage-qualification.bep.json",
-                      command)
-        self.assertIn("vm-qualification-evidence-", qualification)
-        self.assertIn("run: python3 tools/ci/lane.py phase macos-vm-qualification "
-                      "require_executed", qualification)
-        self.assertEqual(
-            lanes.LANES["macos-vm-qualification"].phases["require_executed"].actions,
-            (lanes.RequireExecuted("qualification", 4,
-                                   "Expected four executed qualification tests"),))
+    def test_worker_qualification_uses_only_its_own_four_run_roots(self):
+        resolver = runfiles.Create()
+        source = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).read_text()
+        self.assertIn("WORKER_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, "
+                      "'ci:vm-qualification') }}", source)
+        block = source.split('if [[ "$WORKER_QUALIFICATION" == true ]]; then', 1)[1].split("\n          fi", 1)[0]
+        self.assertIn("suites+=(//tools/ci:unified_worker_qualification)", block)
+        self.assertIn("options+=(--runs_per_test='.*:ci_darwin_qualify_.*@4')", block)
+        suites = Path(resolver.Rlocation("donner/tools/ci/BUILD.bazel")).read_text()
+        original = suites.split('name = "macos_vm_qualification",', 1)[1].split("\n)", 1)[0]
+        mixed = suites.split('name = "unified_worker_qualification",', 1)[1].split("\n)", 1)[0]
+        labels = re.findall(r'"(//[^"]+)"', original)
+        self.assertEqual(len(labels), 4)
+        self.assertEqual({label.replace(":", ":ci_darwin_qualify_") for label in labels},
+                         set(re.findall(r'"(//[^"]+)"', mixed)))
 
     def test_native_suite_keeps_every_shader_validated_device_test(self):
         resolver = runfiles.Create()
