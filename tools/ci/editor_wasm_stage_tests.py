@@ -67,7 +67,8 @@ class EditorWasmStageTest(unittest.TestCase):
             "if status:\n"
             "    sys.exit(status)\n"
             "print(os.environ['QUERY_LABEL'] if sys.argv[1] == 'query' "
-            "else os.environ['PACKAGE_PATH'])\n",
+            "else os.environ.get('GRAPH_PATH', os.environ['PACKAGE_PATH']) "
+            "if sys.argv[-1] == '//tools/ci:hosted_editor_wasm_package' else os.environ['PACKAGE_PATH'])\n",
             encoding="utf-8",
         )
         cls.executables.write_python_entry("bazelisk", cls.executables.path / "bazelisk.py")
@@ -124,6 +125,10 @@ class EditorWasmStageTest(unittest.TestCase):
         (package / "editor.wasm").write_bytes(b"package fixture")
         (self.root / "font.woff2").write_bytes(b"linked font")
         (package / "fonts/font.woff2").symlink_to(self.root / "font.woff2")
+        self.assertEqual(self._run("snapshot", PACKAGE_PATH=str(package)).returncode, 0)
+        self.assertEqual(self._bazel_calls(), [["cquery", "--//build_defs:release_source_commit=" + SHA,
+                                                "--output=files", "//tools/ci:hosted_editor_wasm_package"]])
+        self.capture.write_text("")
         result = self._run("package", PACKAGE_PATH=str(package))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self._bazel_calls(), PACKAGE_QUERIES)
@@ -134,10 +139,23 @@ class EditorWasmStageTest(unittest.TestCase):
                                            "fonts/font.woff2": b"linked font"})
         self.assertFalse((handoff / "fonts/font.woff2").is_symlink())
 
+    def test_handoff_rejects_changed_bytes_at_the_same_output_path(self):
+        package = self.root / "release"
+        package.mkdir()
+        (package / "editor.wasm").write_bytes(b"tested module")
+        (package / "editor.js").write_bytes(b"tested glue")
+        self.assertEqual(self._run("snapshot", PACKAGE_PATH=str(package)).returncode, 0)
+        (package / "editor.js").write_bytes(b"untested glue")
+        result = self._run("package", PACKAGE_PATH=str(package))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differ from the browser-tested", result.stderr)
+
     def test_handoff_configuration_uses_the_selected_source_revision(self):
         package = self.root / "package"
         package.mkdir()
+        (package / "editor.wasm").write_bytes(b"module")
         for revision in ("a" * 40, "b" * 40):
+            self.assertEqual(self._run("snapshot", PACKAGE_PATH=str(package), GITHUB_SHA=revision).returncode, 0)
             result = self._run("package", PACKAGE_PATH=str(package), GITHUB_SHA=revision)
             self.assertEqual(result.returncode, 0, result.stderr)
             query = self._bazel_calls()[-1]
@@ -147,6 +165,9 @@ class EditorWasmStageTest(unittest.TestCase):
     def test_handoff_without_ci_context_keeps_the_local_configuration(self):
         package = self.root / "package"
         package.mkdir()
+        (package / "editor.wasm").write_bytes(b"module")
+        self.assertEqual(self._run("snapshot", PACKAGE_PATH=str(package), GITHUB_SHA=None).returncode, 0)
+        self.capture.write_text("")
         result = self._run("package", PACKAGE_PATH=str(package), GITHUB_SHA=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         local = [[word for word in call if not word.startswith("--//build_defs:release_source_commit=")]

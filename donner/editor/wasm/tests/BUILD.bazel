@@ -340,6 +340,7 @@ filegroup(
         "playwright.composited-firefox.config.js",
         "playwright.config.js",
         "playwright.editor-ci.config.js",
+        "playwright.quarantine-report.config.js",
         "prepare-browser-archives.js",
         "remote-webserver.mjs",
         "test-timing.cjs",
@@ -404,6 +405,14 @@ editor_browser_test(
     project = "firefox-composited-invariants",
     sources = [":editor_browser_composited_sources"],
     specs = ["composited-drag-invariants.spec.ts", "composited-invariants.spec.ts"],
+)
+
+editor_browser_test(
+    name = "firefox_quarantine_report",
+    project = "firefox-quarantine-report",
+    report_only = True,
+    sources = [":editor_browser_presentation_sources", ":editor_browser_smoke_sources"],
+    specs = ["browser-presentation-regression.spec.ts", "smoke.spec.ts"],
 )
 
 js_test(

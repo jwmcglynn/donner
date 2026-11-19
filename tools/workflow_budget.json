@@ -1,7 +1,7 @@
 {
   "tree": {
-    "lines": 5183,
-    "comment_lines": 559,
+    "lines": 5153,
+    "comment_lines": 548,
     "multiline_runs": 65,
     "longest_run": 194,
     "run_expressions": 12,
@@ -65,12 +65,12 @@
       "longest_if": 342
     },
     ".github/workflows/editor_wasm.yml": {
-      "lines": 340,
-      "comment_lines": 43,
+      "lines": 310,
+      "comment_lines": 32,
       "multiline_runs": 2,
       "longest_run": 3,
       "run_expressions": 0,
-      "longest_if": 137
+      "longest_if": 138
     },
     ".github/workflows/fuzz.yml": {
       "lines": 131,

@@ -360,7 +360,7 @@ _CACHE_HIT = ("", "A cache restore result only gates that cache's save step; a m
 STEP_OUTPUTS = {
     "steps.pr-meta.outputs.identical_tree": ("", "Changed trees use the full target planner setup."),
     **{"steps.%s.outputs.cache-hit" % step_id: _CACHE_HIT
-       for step_id in ("base-hashes", "bazel-cache", "npm-cache")},
+       for step_id in ("base-hashes", "bazel-cache")},
     "steps.browser_gpu_failure.outputs.run_probe": (
         "", "Gates the advisory browser GPU comparisons, which run only after a failure and "
             "cannot fail the job."),

@@ -686,4 +686,5 @@ forbidden_transitive_dep_test(
         "deps",
     ],
     target = "//donner/svg/renderer:renderer_geode",
+    visibility = ["//tools/ci:__pkg__"],
 )

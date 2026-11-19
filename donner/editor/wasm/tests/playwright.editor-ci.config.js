@@ -4,6 +4,7 @@ const { browserExecutablePaths } = require("./prepare-browser-archives.js");
 
 const name = process.env.DONNER_EDITOR_BROWSER_PROJECT;
 function sourceConfig() {
+  if (name === "firefox-quarantine-report") return require("./playwright.quarantine-report.config.js");
   if (name === "composited-chromium") return require("./playwright.composited-chromium.bazel.config.js");
   if (name === "firefox-composited-invariants") return require("./playwright.composited-firefox.bazel.config.js");
   if (name === "chromium-default") return base;
@@ -13,7 +14,8 @@ function sourceConfig() {
 const config = sourceConfig();
 function selectedProject() {
   if (!config.projects) return { name: "", use: config.use };
-  const selected = config.projects.find((project) => project.name === name);
+  const projectName = name === "firefox-quarantine-report" ? "firefox-geode-resize" : name;
+  const selected = config.projects.find((project) => project.name === projectName);
   if (!selected) throw new Error("Unknown editor browser project: " + name);
   if (selected.use.browserName !== "firefox" || selected.use.launchOptions?.env) return selected;
   return {
@@ -51,5 +53,7 @@ module.exports = {
       },
     },
   }],
-  reporter: [["list"], [require.resolve("./editor-browser-coverage.cjs")]],
+  reporter: name === "firefox-quarantine-report" ? [
+    ["list"], ["json", { outputFile: require("node:path").join(process.env.TEST_UNDECLARED_OUTPUTS_DIR, "quarantine-report.json") }],
+  ] : [["list"], [require.resolve("./editor-browser-coverage.cjs")]],
 };

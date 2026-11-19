@@ -13,31 +13,18 @@ from python.runfiles import runfiles
 from tools import test_timing
 from tools.test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 
-_GEODE_MODULE_TARGETS = ["//tools/ci:browser_bridge_link_probes",
-                         "//tools/ci:geode_wasm_browser_module"]
-# Each subcommand's exact commands, in the order the workflow step ran them. A changed flag,
-# configuration, target or order is a change to what CI runs and must update this table.
+_GRAPH = ["//tools/ci:hosted_editor_wasm_graph", "//tools/ci:hosted_editor_wasm_package"]
+_BUDGETS = "//tools/ci:hosted_wasm_budgets"
+_TEST = ["bazelisk", "test", "--test_output=errors", "--keep_going", "--test_keep_going",
+         "--nobuild_tests_only", "--noskip_incompatible_explicit_targets", "--test_tag_filters=",
+         "--flaky_test_attempts=1", "--local_resources=local_gpu=1", "--zip_undeclared_test_outputs",
+         "--remote_download_outputs=toplevel", "--remote_download_regex=.*(test[.]log|test[.]xml|outputs[.]zip)$",
+         "--nobuild_event_json_file_path_conversion"]
 _COMMANDS = {
-    "prefetch": [
-        ["bazelisk", "fetch", "--config=wasm-geode", *_GEODE_MODULE_TARGETS,
-         "//tools/ci:geode_wasm_browser_default_audit"],
-        ["bazelisk", "fetch", "--config=editor-wasm", "//tools/ci:editor_wasm_size_tests"],
-        ["bazelisk", "fetch", "--config=wasm-size", "//tools/ci:wasm_size_tests",
-         "//tools/ci:wasm_text_resource_tests"],
-        ["bazelisk", "fetch", "//tools/ci:editor_wasm_audits"],
-    ],
-    "build": [
-        ["bazelisk", "test", "--test_output=errors", "//tools/ci:editor_wasm_audits"],
-        ["bazelisk", "test", "--config=wasm-size", "--test_output=errors",
-         "//donner/svg/renderer/wasm:render_test", "//tools/ci:wasm_text_resource_tests"],
-        ["bazelisk", "test", "--config=wasm-size", "--test_output=errors",
-         "--test_arg=--payload-budget-mode=enforce", "//donner/svg/renderer/wasm:wasm_size_tests"],
-        ["bazelisk", "test", "--config=editor-wasm", "--test_output=errors",
-         "//tools/ci:editor_wasm_shipped_browser_audit"],
-        ["bazelisk", "test", "--config=editor-wasm", "--test_output=errors",
-         "--remote_download_outputs=all", "--test_arg=--payload-budget-mode=enforce",
-         "//tools/ci:editor_wasm_size_tests"],
-    ],
+    "prefetch": [["bazelisk", "fetch", *_GRAPH, _BUDGETS]],
+    "build": [[*_TEST, "--build_event_json_file=TEMP/editor-wasm-graph.bep.json", *_GRAPH, _BUDGETS]],
+    "quarantine": [[*_TEST, "--build_event_json_file=TEMP/editor-wasm-quarantine.bep.json",
+                    "--nocache_test_results", "//donner/editor/wasm/tests:hosted_firefox_quarantine_report"]],
     "prove-lockfile": [
         ["bazelisk", "build", "--config=editor-wasm", "--lockfile_mode=update",
          "//tools/ci:editor_wasm_package"],
@@ -47,11 +34,7 @@ _COMMANDS = {
          "--lockfile", "MODULE.bazel.lock"],
         ["cp", "MODULE.bazel.lock", "SNAPSHOT"],
     ],
-    "link-bridge": [
-        ["bazelisk", "test", "--config=wasm-geode", "--nobuild_tests_only",
-         "--noskip_incompatible_explicit_targets", "--test_output=errors",
-         *_GEODE_MODULE_TARGETS, "//tools/ci:geode_wasm_browser_default_audit"],
-    ],
+
 }
 
 
@@ -103,13 +86,13 @@ class EditorWasmLaneTest(unittest.TestCase):
         self.summary = self.work / "summary.md"
 
     def _expected(self, command):
-        return [[str(self.snapshot) if word == "SNAPSHOT" else word for word in call]
+        return [[str(self.snapshot) if word == "SNAPSHOT" else word.replace("=TEMP/", "=" + str(self.snapshot.parent) + "/") for word in call]
                 for call in _COMMANDS[command]]
 
     def _run(self, *args, fail_call=0, fail_status=0, budget_mode=None, source_revision=None):
         self.capture.write_text("", encoding="utf-8")
         self.summary.write_text("", encoding="utf-8")
-        env = dict(os.environ, CAPTURE=str(self.capture), FAIL_CALL=str(fail_call),
+        env = dict(os.environ, RUNNER_TEMP=str(self.snapshot.parent), CAPTURE=str(self.capture), FAIL_CALL=str(fail_call),
                    FAIL_STATUS=str(fail_status), GITHUB_STEP_SUMMARY=str(self.summary),
                    PATH=os.pathsep.join((str(self.executables.path / "bin"), str(self.host))))
         env.pop("GITHUB_SHA", None)
@@ -147,7 +130,7 @@ class EditorWasmLaneTest(unittest.TestCase):
             for command in ("prefetch", "build", "prove-lockfile"):
                 result, calls = self._run(*self._args(command), source_revision=revision)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                editor_calls = [call for call in calls if "--config=editor-wasm" in call]
+                editor_calls = [call for call in calls if call[0] == "bazelisk"]
                 self.assertGreater(len(editor_calls), 0, command)
                 for call in editor_calls:
                     flags = [word for word in call if word.startswith("--//build_defs:release_source_commit=")]
@@ -159,24 +142,12 @@ class EditorWasmLaneTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, revision)
             self.assertEqual(calls, [], revision)
 
-    def test_main_report_mode_only_changes_the_two_numeric_budget_commands(self):
+    def test_main_report_mode_only_changes_the_terminal_size_suite(self):
         result, calls = self._run("build", budget_mode="report")
         self.assertEqual(result.returncode, 0, result.stderr)
         expected = self._expected("build")
-        for call in expected:
-            if "--test_arg=--payload-budget-mode=enforce" in call:
-                call[call.index("--test_arg=--payload-budget-mode=enforce")] = (
-                    "--test_arg=--payload-budget-mode=report")
-                call[call.index("--test_output=errors")] = "--test_output=all"
+        expected[0][-1] = _BUDGETS + "_report"
         self.assertEqual(calls, expected)
-        budget_calls = [call for call in calls if "--test_arg=--payload-budget-mode=report" in call]
-        self.assertEqual(len(budget_calls), 2)
-        self.assertTrue(any("//donner/svg/renderer/wasm:wasm_size_tests" in call
-                            for call in budget_calls))
-        self.assertTrue(any("//tools/ci:editor_wasm_size_tests" in call for call in budget_calls))
-        pixel_calls = [call for call in calls if "//donner/svg/renderer/wasm:render_test" in call]
-        self.assertEqual(len(pixel_calls), 1)
-        self.assertFalse(any(word.startswith("--test_arg") for word in pixel_calls[0]))
 
     def test_explicit_enforcement_matches_local_pr_nightly_and_manual_defaults(self):
         default, default_calls = self._run("build")

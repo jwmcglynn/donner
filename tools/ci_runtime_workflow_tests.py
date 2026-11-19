@@ -83,10 +83,11 @@ EDITOR_WASM_SCRIPT_STEPS = (
     ("Prefetch Editor WASM dependencies", "tools/ci/editor_wasm_lane.sh prefetch"),
     ("Retry Editor WASM dependency prefetch", "tools/ci/editor_wasm_lane.sh prefetch"),
     ("Build and size-check Geode editor Wasm package", "tools/ci/editor_wasm_lane.sh build"),
+    ("Snapshot the browser-tested release files", "python3 tools/ci/editor_wasm_stage.py snapshot"),
     ("Prove the package's resolved module graph",
      'tools/ci/editor_wasm_lane.sh prove-lockfile "$RUNNER_TEMP/editor-wasm-module.lock"'),
     ("Stage package for handoff", "python3 tools/ci/editor_wasm_stage.py package"),
-    ("Link the browser GPU bridge", "tools/ci/editor_wasm_lane.sh link-bridge"),
+    ("Run quarantined Firefox cases", "tools/ci/editor_wasm_lane.sh quarantine"),
     ("Stage immutable Geode deployment candidate",
      "python3 tools/ci/editor_wasm_stage.py candidate"),
     ("Record deployment candidate digest", "python3 tools/ci/editor_wasm_stage.py record-digest"),
@@ -705,14 +706,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
         editor = self.editor_wasm
-        gate = ("          DONNER_BROWSER_QUARANTINE_REPORT_LANE: "
-                "${{ github.event_name == 'schedule' && '1' || '0' }}\n")
-        self.assertIn(gate, editor)
-        self.assertEqual(editor.count("DONNER_BROWSER_QUARANTINE_REPORT"), 1)
-        schedule_only = "        if: ${{ !cancelled() && github.event_name == 'schedule' }}\n"
-        self.assertEqual(editor.count(schedule_only), 2)
-        for step in ("Summarize quarantined cases", "Upload quarantined case evidence"):
-            self.assertIn("      - name: %s\n%s" % (step, schedule_only), editor, step)
+        gate = self._step_body(editor, "Run quarantined Firefox cases")
+        self.assertIn("github.event_name == 'schedule'", gate)
+        self.assertIn("steps.wasm_graph.outcome == 'success' || steps.wasm_graph.outcome == 'failure'", gate)
+        self.assertIn("continue-on-error: true", gate)
+        self.assertIn("run: tools/ci/editor_wasm_lane.sh quarantine", gate)
+        for name in ("Collect quarantine evidence", "Summarize quarantined cases", "Upload quarantined case evidence"):
+            self.assertIn("github.event_name == 'schedule'", self._step_body(editor, name))
         summary = self._step_body(editor, "Summarize quarantined cases")
         self.assertIn('|| echo "::warning::Could not summarize the quarantined cases"', summary)
         self.assertIn("if-no-files-found: warn",
@@ -976,15 +976,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}", self.editor_wasm)
         self.assertIn('push:\n    branches: ["main"]', self.editor_wasm)
         self.assertIn("uses: ./.github/actions/cache-bazel-actions", self.editor_wasm)
-        # npm downloads restore from main's cache; only main pushes save it.
-        self.assertIn("- name: Restore npm download cache", self.editor_wasm)
-        self.assertIn("- name: Save main npm download cache", self.editor_wasm)
+        self.assertNotIn("npm ci", self.editor_wasm)
+        self.assertNotIn("actions/setup-node@", self.editor_wasm)
+        self.assertIn("//tools/ci:hosted_editor_wasm_package", self.editor_wasm_lane)
         self.assertEqual(1, self.editor_wasm.count("uses: bazel-contrib/setup-bazel@"))
         setup_header = self.editor_wasm.split("uses: bazel-contrib/setup-bazel@", 1)[0]
         self.assertIn("Setup Bazel for native browser comparison", setup_header)
         self.assertLess(
             self.editor_wasm.index("uses: bazel-contrib/setup-bazel@"),
-            self.editor_wasm.index("- name: Serve Geode package and run browser suites"),
+            self.editor_wasm.index(SIZE_CHECK_STEP),
         )
 
     def test_nightly_consumers_compile_and_test_on_both_hosted_platforms(self):
@@ -1891,7 +1891,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertEqual(runs.get(name), [command])
         self.assertEqual([name for name in names if name in dict(EDITOR_WASM_SCRIPT_STEPS)],
                          [name for name, _ in EDITOR_WASM_SCRIPT_STEPS])
-        # Every other Bazel command of the job runs in tools/run-browser-ci.sh.
+        # The workflow delegates Bazel commands to the shared lane script.
         self.assertNotRegex(self.editor_wasm, r"bazelisk (?:fetch|build|test|query|cquery|run)\b")
         # The handoff step resolves the package label the candidate's provenance records.
         self.assertIn(
@@ -1910,8 +1910,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 "run: tools/ci/editor_wasm_lane.sh build",
                 "run: bazelisk test //tools/ci:editor_wasm_audits", 1),
             "second command": workflow.replace(
-                "        run: tools/ci/editor_wasm_lane.sh link-bridge\n",
-                "        run: tools/ci/editor_wasm_lane.sh link-bridge\n"
+                "        run: tools/ci/editor_wasm_lane.sh quarantine\n",
+                "        run: tools/ci/editor_wasm_lane.sh quarantine\n"
                 "        run: tools/ci/editor_wasm_lane.sh prefetch\n", 1),
             "proof and staging swapped": workflow.replace(
                 "run: " + prove, "run: python3 tools/ci/editor_wasm_stage.py package", 1).replace(
@@ -1950,80 +1950,27 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             prefetch.count("if: steps.editor-wasm-prefetch.outcome == 'failure'"),
         )
         fetch = self._lane_function("prefetch")
-        self.assertEqual(4, fetch.count("bazelisk fetch"))
+        self.assertEqual(1, fetch.count("bazelisk fetch"))
         self.assertNotRegex(fetch, r"bazelisk (?:build|test)")
 
         size_check = self._step_body(workflow, SIZE_CHECK_STEP.removeprefix("- name: "))
         self.assertNotIn("continue-on-error", size_check)
         build = self._size_check_phase()
-        self.assertEqual(5, build.count("bazelisk test"))
+        self.assertIn("graph_test ", build)
+        self.assertEqual(1, self._lane_function("graph_test").count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
-        self.assertNotIn("||", build)
-        self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
-        self.assertIn("//tools/ci:editor_wasm_size_tests", build)
-        self.assertIn("//tools/ci:wasm_size_tests //tools/ci:wasm_text_resource_tests", fetch)
-        self.assertIn("//donner/svg/renderer/wasm:render_test //tools/ci:wasm_text_resource_tests",
-                      build)
-        self.assertNotIn("--//donner/svg/renderer:text=true", fetch + build)
+        self.assertIn('"${graph_roots[@]}" "$budget_suite"', build)
+        self.assertIn("//tools/ci:hosted_editor_wasm_graph", self.editor_wasm_lane)
 
-    def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
-        """Both bridge probes, the standalone module and its default audit run on every PR.
-
-        The module is built explicitly: it is incompatible without Browser selection, and an
-        incompatible audit inside a test_suite is skipped rather than failed.
-        """
-        self._assert_editor_wasm_browser_bridge_link(self.editor_wasm, self.editor_wasm_lane)
-
-    def _assert_editor_wasm_browser_bridge_link(self, workflow, lane):
-        build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
-        step = self._step_body(build_job, "Link the browser GPU bridge")
-        self.assertIn("        run: tools/ci/editor_wasm_lane.sh link-bridge\n", step)
-        self.assertNotIn("continue-on-error", step)
-        link = self._lane_function("link_bridge", lane)
-        self.assertEqual(link.count("bazelisk "), 1)
-        self.assertIn("bazelisk test --config=wasm-geode --nobuild_tests_only", link)
-        self.assertIn("--noskip_incompatible_explicit_targets", link)
-        for target in ("browser_bridge_link_probes", "geode_wasm_browser_module",
-                       "geode_wasm_browser_default_audit"):
-            self.assertIn("//tools/ci:" + target, link)
-        self.assertNotIn("||", link)
-        module = 'name = "geode_wasm_browser_module"'
-        self.assertIn(module, self.ci_target_definitions)
-        definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
-        self.assertIn('"//donner/svg/renderer/wasm:donner_wasm_geode"', definition)
-        self.assertIn('"//donner/svg/renderer/wasm:geode_surface_renderer_link_probe"', definition)
-
-    def test_browser_bridge_step_stays_strict_with_later_evidence_recovery(self):
-        workflow = self.editor_wasm
-        lane = self.editor_wasm_lane
-        step = self._step_body(workflow, "Link the browser GPU bridge")
-        self.assertIn("continue-on-error: true", workflow)
-        self.assertNotIn("continue-on-error", step)
-        self._assert_editor_wasm_browser_bridge_link(workflow, lane)
-        link = lane.split("\nlink_bridge() {\n", 1)[1].split("\n}\n", 1)[0]
-        for defect in ("continue-on-error", "missing-module", "missing-audit", "masked-failure"):
-            with self.subTest(defect=defect):
-                changed_workflow, changed_lane = workflow, lane
-                if defect == "continue-on-error":
-                    changed_workflow = workflow.replace(
-                        step, "        continue-on-error: true\n" + step, 1)
-                elif defect == "masked-failure":
-                    changed_lane = lane.replace(
-                        link, link.replace("//tools/ci:geode_wasm_browser_default_audit",
-                                           "//tools/ci:geode_wasm_browser_default_audit || true"),
-                        1)
-                else:
-                    target = (
-                        "//tools/ci:geode_wasm_browser_module" if defect == "missing-module"
-                        else "//tools/ci:geode_wasm_browser_default_audit"
-                    )
-                    # A later mention cannot satisfy the owning lane function's contract.
-                    changed_lane = lane.replace(
-                        link, link.replace(target, "//tools/ci:unrelated_target"), 1)
-                    changed_lane += "\n# Later target mention: " + target + "\n"
-                self.assertNotEqual((changed_workflow, changed_lane), (workflow, lane))
-                with self.assertRaises(AssertionError):
-                    self._assert_editor_wasm_browser_bridge_link(changed_workflow, changed_lane)
+    def test_hosted_graph_requires_both_browser_bridge_link_roots(self):
+        graph = _rule_text(self.ci_target_definitions, "hosted_editor_wasm_graph")
+        self.assertIn("//donner/svg/renderer/wasm:hosted_geode_browser_default_audit_test", graph)
+        check = self.renderer_wasm_build.split('actual = "geode_browser_default_audit_test"', 1)[1].split("\n)", 1)[0]
+        for target in ("browser_bridge_link_probes", "geode_wasm_browser_module"):
+            self.assertIn("//tools/ci:" + target, check)
+        for target in ("browser_bridge_link_probe", "browser_bridge_pthreads_link_probe"):
+            self.assertIn("//donner/gpu/browser/link_probe:" + target, _rule_text(self.ci_target_definitions, "browser_bridge_link_probes"))
+        self.assertIn("--noskip_incompatible_explicit_targets", self._lane_function("graph_test"))
 
     def _size_check_phase(self):
         """The lane commands the size-check step runs: its one call's `build` function."""
@@ -2039,18 +1986,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "%s and ENFORCED_PAYLOAD_CEILINGS must change together" % PAYLOAD_SIZE_TEST,
         )
         self.assertNotIn("--test_arg", self.editor_wasm)
-        self.assertEqual(1, self.editor_wasm_lane.count("--test_arg"))
-        self.assertIn('local budget_args=("--test_arg=--payload-budget-mode=${budget_mode}")',
-                      self._size_check_phase())
-        self.assertIn('local budget_mode="${PAYLOAD_BUDGET_MODE:-enforce}"',
-                      self._size_check_phase())
-        self.assertIn('local budget_test_output="errors"', self._size_check_phase())
-        self.assertIn('enforce) ;;', self._size_check_phase())
-        self.assertIn('report) budget_test_output=all ;;', self._size_check_phase())
-        self.assertEqual(2, self._size_check_phase().count(
-            '--test_output="${budget_test_output}"'))
-        self.assertIn('*) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; return 2 ;;',
-                      self._size_check_phase())
+        self.assertNotIn("--test_arg", self.editor_wasm_lane)
+        self.assertIn('case "${PAYLOAD_BUDGET_MODE:-enforce}"', self.editor_wasm_lane)
+        self.assertIn("report) budget_suite+=_report", self.editor_wasm_lane)
+        self.assertIn("PAYLOAD_BUDGET_MODE must be enforce or report", self.editor_wasm_lane)
 
     def test_editor_wasm_payload_gate_detects_widened_or_repeated_ceilings(self):
         flag = "--max-wasm-raw-bytes"
@@ -2091,23 +2030,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_renderer_wasm_size_test_runs_in_the_size_check_step(self):
         """The step runs renderer size and pixel targets separately; prefetch retains their suite."""
-        step = self._size_check_phase()
-        self.assertIn("--config=wasm-size", step)
-        self.assertIn(RENDERER_SIZE_TEST, step)
-        self.assertIn("//donner/svg/renderer/wasm:render_test", step)
-        suite_name = 'name = "wasm_size_tests"'
-        self.assertIn(suite_name, self.ci_target_definitions)
-        suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]
-        self.assertIn(RENDERER_SIZE_TEST, suite)
-
-    def test_editor_wasm_size_check_step_runs_the_gated_size_test(self):
-        """The gate reads the ceilings of the target the workflow actually runs."""
-        step = self._size_check_phase()
-        self.assertIn("//tools/ci:editor_wasm_size_tests", step)
-        suite_name = 'name = "editor_wasm_size_tests"'
-        self.assertIn(suite_name, self.ci_target_definitions)
-        suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]
-        self.assertIn(PAYLOAD_SIZE_TEST, suite)
+        self.assertIn('budget_suite=//tools/ci:hosted_wasm_budgets', self.editor_wasm_lane)
+        self.assertIn('"//donner/svg/renderer/wasm:hosted_wasm_size_tests" + suffix', self.ci_target_definitions)
+        self.assertIn('"//donner/editor/wasm:hosted_wasm_geode_package_size_tests" + suffix', self.ci_target_definitions)
+        self.assertIn('for suffix in ["", "_report"]', self.ci_target_definitions)
 
     def _run_heartbeat_fixture(self, wrapper, log, env):
         return subprocess.run(

@@ -2332,10 +2332,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "if: github.ref == 'refs/heads/main' || github.event_name == 'push' && ", 1),
                 "saves an Actions cache outside main"),
             "setup-node cache": (wasm, files[wasm].replace(
-                "          package-manager-cache: false\n", "          cache: npm\n", 1),
+                "    steps:\n", "    steps:\n      - uses: actions/setup-node@v7\n        with:\n          cache: npm\n", 1),
                 "saves on every event"),
             "setup-node automatic cache": (wasm, files[wasm].replace(
-                "          package-manager-cache: false\n", "", 1), "saves on every event"),
+                "    steps:\n", "    steps:\n      - uses: actions/setup-node@v7\n", 1), "saves on every event"),
             "split expressions": (lint, files[lint].replace(
                 save_if + " && steps.bazel-cache.outputs.cache-hit != 'true'\n",
                 "if: ${{ %s }} && ${{ steps.bazel-cache.outputs.cache-hit }}\n"

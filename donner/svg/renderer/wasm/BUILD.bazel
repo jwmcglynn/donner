@@ -419,6 +419,7 @@ wasm_ci_test(
 
 wasm_ci_test(
     actual = "wasm_size_tests",
+    payload_budget = True,
     profile = "wasm-size",
 )
 

@@ -182,9 +182,22 @@ jobs:
         run: tools/ci/editor_wasm_lane.sh prefetch
 
       - name: Build and size-check Geode editor Wasm package
+        id: wasm_graph
         env:
           PAYLOAD_BUDGET_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'report' || 'enforce' }}
         run: tools/ci/editor_wasm_lane.sh build
+
+      - name: Collect Bazel browser evidence
+        if: ${{ !cancelled() && steps.wasm_graph.outcome != 'skipped' }}
+        env:
+          GRAPH_OUTCOME: ${{ steps.wasm_graph.outcome }}
+        run: |
+          args=()
+          if [[ "$GRAPH_OUTCOME" != success ]]; then args+=(--partial); fi
+          python3 tools/ci/editor_wasm_evidence.py "$RUNNER_TEMP/editor-wasm-graph.bep.json" "$RUNNER_TEMP/editor-wasm-browser-evidence" "${args[@]}"
+
+      - name: Snapshot the browser-tested release files
+        run: python3 tools/ci/editor_wasm_stage.py snapshot
 
       # Proves the generated MODULE.bazel.lock in error mode and snapshots it before later steps
       # can resolve more modules; the deployment candidate retains that snapshot and its digest.
@@ -203,53 +216,15 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      # Links both bridge probes and the standalone Geode module, then audits its browser bridge.
-      - name: Link the browser GPU bridge
-        run: tools/ci/editor_wasm_lane.sh link-bridge
+      - name: Run quarantined Firefox cases
+        if: ${{ !cancelled() && github.event_name == 'schedule' && (steps.wasm_graph.outcome == 'success' || steps.wasm_graph.outcome == 'failure') }}
+        continue-on-error: true
+        run: tools/ci/editor_wasm_lane.sh quarantine
 
-      # setup-node's own npm cache saves on every event, including pull
-      # requests. Keep its automatic caching off and restore the npm download
-      # cache explicitly; only main pushes save it.
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          package-manager-cache: false
-
-      - name: Restore npm download cache
-        id: npm-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('donner/editor/wasm/tests/package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Install Playwright
-        working-directory: donner/editor/wasm/tests
-        run: |
-          npm ci
-          npx playwright install chromium firefox webkit
-
-      - name: Save main npm download cache
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.npm
-          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
-
-      - name: Verify Geode-only package contracts
-        working-directory: donner/editor/wasm/tests
-        run: npm run test:selector
-
-      # Each browser project serves the staged package. The script archives every lane's
-      # result and gives scheduled runs an additional non-gating quarantine report.
-      - name: Serve Geode package and run browser suites
-        timeout-minutes: 120
-        env:
-          DONNER_WASM_PACKAGE_DIR: ${{ runner.temp }}/editor-wasm-package-geode
-          DONNER_BROWSER_QUARANTINE_REPORT_LANE: ${{ github.event_name == 'schedule' && '1' || '0' }}
-        run: bash tools/run-browser-ci.sh
+      - name: Collect quarantine evidence
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        continue-on-error: true
+        run: python3 tools/ci/editor_wasm_evidence.py "$RUNNER_TEMP/editor-wasm-quarantine.bep.json" "$RUNNER_TEMP/editor-wasm-browser-evidence" --quarantine --partial
 
       # The report-only lane never fails the job, so its outcome reaches the
       # reader through the job summary and its evidence through its own upload.
@@ -261,7 +236,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          node donner/editor/wasm/tests/quarantine-report-summary.mjs donner/editor/wasm/tests/playwright-failures/firefox-quarantine-report/quarantine-report.json >> "$GITHUB_STEP_SUMMARY" \
+          node donner/editor/wasm/tests/quarantine-report-summary.mjs "$RUNNER_TEMP/editor-wasm-browser-evidence/firefox-quarantine-report/quarantine-report.json" >> "$GITHUB_STEP_SUMMARY" \
             || echo "::warning::Could not summarize the quarantined cases"
 
       - name: Upload quarantined case evidence
@@ -269,17 +244,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-quarantine-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: donner/editor/wasm/tests/playwright-failures/firefox-quarantine-report
+          path: ${{ runner.temp }}/editor-wasm-browser-evidence/firefox-quarantine-report
           if-no-files-found: warn
           retention-days: 14
 
-      # run-browser-ci.sh copies each lane's Playwright output here as the lane
-      # ends. The live output directory cannot be uploaded instead: every lane
-      # shares it and Playwright empties it on start, so a passing lane wipes
-      # the evidence of the earlier lanes. Keep successful residency accounting too.
-      # The browser command has exited and archived every lane before these reads.
-      # Retry only evidence transport; keep uncertain uploads under distinct names.
-      # The final upload failure remains a job failure, including non-DNS errors.
+      # Each Bazel browser action owns its outputs. Keep the per-target archives and
+      # positive case counts together. Retry an evidence upload under a distinct name.
       - name: Upload Playwright evidence
         id: upload-playwright-evidence-1
         if: ${{ !cancelled() }}
@@ -287,7 +257,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}
-          path: donner/editor/wasm/tests/playwright-failures
+          path: ${{ runner.temp }}/editor-wasm-browser-evidence
           if-no-files-found: warn
           retention-days: 14
 
@@ -298,7 +268,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}-upload-2
-          path: donner/editor/wasm/tests/playwright-failures
+          path: ${{ runner.temp }}/editor-wasm-browser-evidence
           if-no-files-found: warn
           retention-days: 14
 
@@ -307,7 +277,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}-upload-3
-          path: donner/editor/wasm/tests/playwright-failures
+          path: ${{ runner.temp }}/editor-wasm-browser-evidence
           if-no-files-found: warn
           retention-days: 14
 

@@ -1412,23 +1412,35 @@ _wasm_ci_test = rule(
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
-def wasm_ci_test(actual, profile, required_outputs = []):
-    """Expose a configured manual Wasm check to normal affected-target selection once."""
+def wasm_ci_test(actual, profile, required_outputs = [], payload_budget = False):
+    """Configure one real Wasm test for affected CI and the hosted candidate suite."""
     source = native.existing_rule(actual)
+    options = {
+        "dep": ":" + actual,
+        "profile": profile,
+        "required_outputs": required_outputs,
+        "argument_files": source.get("data", []),
+        "size": source.get("size", "small"),
+    }
+    args = source.get("args", [])
     _wasm_ci_test(
         name = "graph_" + actual,
-        dep = ":" + actual,
-        profile = profile,
-        required_outputs = required_outputs,
-        fixed_args = source.get("args", []),
-        argument_files = source.get("data", []),
-        size = source.get("size", "small"),
+        fixed_args = args,
         tags = ["editor-wasm-check"],
         target_compatible_with = select({
             "//tools/ci:on_mixed_ci_darwin_gpu" if profile == "editor-wasm" else "//tools/ci:on_mixed_ci_linux": [],
             "//conditions:default": ["@platforms//:incompatible"],
         }),
+        **options
     )
+    for report in ([False, True] if payload_budget else [False]):
+        _wasm_ci_test(
+            name = "hosted_" + actual + ("_report" if report else ""),
+            fixed_args = list(args) + (["--payload-budget-mode=report"] if report else []),
+            tags = ["manual"],
+            target_compatible_with = ["@platforms//os:macos"],
+            **options
+        )
 
 def _finalize_ci_package(name, visibility):
     declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))
