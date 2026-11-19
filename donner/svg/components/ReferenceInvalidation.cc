@@ -2,6 +2,7 @@
 
 #include <unordered_set>
 #include <variant>
+#include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
@@ -94,26 +95,25 @@ void AddInheritingFilters(Registry& registry, std::unordered_set<Entity>& filter
   }
 }
 
-/// An element whose filter draws a changed element through `feImage` redraws its filter result.
-void InvalidateFeImageHosts(Registry& registry) {
-  if (registry.view<const FEImageComponent>().empty()) {
-    return;
-  }
-  const std::unordered_set<Entity> changed = CollectChangedSubtreeRoots(registry);
+/// The `<filter>` elements holding an `feImage` that references an element in \p changed.
+std::unordered_set<Entity> FiltersDrawingChanges(Registry& registry,
+                                                 const std::unordered_set<Entity>& changed) {
   std::unordered_set<Entity> filters;
   for (const auto& [entity, image] : registry.view<const FEImageComponent>().each()) {
     const Entity target = ResolveFragment(registry, image.href);
-    if (target != entt::null && changed.contains(target)) {
-      if (const Entity filter = OwningFilter(registry, entity); filter != entt::null) {
-        filters.insert(filter);
-      }
+    if (target == entt::null || !changed.contains(target)) {
+      continue;
+    }
+    if (const Entity filter = OwningFilter(registry, entity); filter != entt::null) {
+      filters.insert(filter);
     }
   }
-  if (filters.empty()) {
-    return;
-  }
-  AddInheritingFilters(registry, filters);
+  return filters;
+}
 
+/// The rendering instances whose filter is one of \p filters.
+std::vector<Entity> FilterHosts(const Registry& registry,
+                                const std::unordered_set<Entity>& filters) {
   std::vector<Entity> hosts;
   for (const auto& [entity, instance] : registry.view<const RenderingInstanceComponent>().each()) {
     const auto* reference = instance.resolvedFilter.has_value()
@@ -123,7 +123,21 @@ void InvalidateFeImageHosts(Registry& registry) {
       hosts.push_back(entity);
     }
   }
-  for (const Entity host : hosts) {
+  return hosts;
+}
+
+/// An element whose filter draws a changed element through `feImage` redraws its filter result.
+void InvalidateFeImageHosts(Registry& registry) {
+  if (registry.view<const FEImageComponent>().empty()) {
+    return;
+  }
+  std::unordered_set<Entity> filters =
+      FiltersDrawingChanges(registry, CollectChangedSubtreeRoots(registry));
+  if (filters.empty()) {
+    return;
+  }
+  AddInheritingFilters(registry, filters);
+  for (const Entity host : FilterHosts(registry, filters)) {
     registry.get_or_emplace<DirtyFlagsComponent>(host).mark(DirtyFlagsComponent::Filter |
                                                             DirtyFlagsComponent::RenderInstance);
   }
