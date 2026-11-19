@@ -1035,6 +1035,32 @@ TEST_F(GeodeFilterEngineTest, ParameterGrowthIsBoundedAfterEarlierExecutions) {
   }
 }
 
+// Every convolution uploads its whole kernel beside the parameter block, so a graph of maximum
+// kernels must stay within the parameter memory its preflight charged.
+TEST_F(GeodeFilterEngineTest, MaximumConvolveKernelsStayWithinPreflight) {
+  using namespace svg::components;
+  FilterNode node;
+  node.primitive = filter_primitive::ConvolveMatrix{
+      .orderX = kMaximumFilterConvolveOrder,
+      .orderY = kMaximumFilterConvolveOrder,
+      .kernelMatrix = std::vector<double>(kMaximumFilterKernelValues, 1.0)};
+  FilterGraph graph;
+  graph.nodes.resize(kMaximumFilterGraphNodes, node);
+  const uint64_t retainedBefore = engine_->retainedBufferBytes();
+  runGraph(graph, "");
+  // Every node ran the kernel rather than the transparent path of a refused one.
+  EXPECT_THAT(allocator_->requestedLabels,
+              testing::Not(testing::Contains(testing::Property(
+                  &RcString::str, testing::StrEq("FilterConvolveMatrixTransparent")))));
+  EXPECT_THAT(allocator_->requestedLabels,
+              testing::Contains(
+                  testing::Property(&RcString::str, testing::StrEq("FilterConvolveMatrixOutput"))));
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+}
+
 TEST_F(GeodeFilterEngineTest, Dpr2PlanChargesAllTileWorkUnderTheWasmMemoryCap) {
   using namespace svg::components;
   auto graph = MakeGraph(true);

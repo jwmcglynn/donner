@@ -23,7 +23,7 @@ PAYLOAD_MARKERS = {
     "slug_gradient": (b"struct GradientUniforms", b"donner_msl_member_radialFocalRadius"),
     "filter_blend": (b"fn blend_soft_light_channel", b"donner_msl_member_mode"),
     "gaussian": (b"struct BlurParams", b"donner_msl_member_stdDeviation"),
-    "convolve": (b"struct ConvolveMatrixParams", b"donner_msl_member_coefficients"),
+    "convolve": (b"struct ConvolveMatrixParams", b"donner_msl_binding_coefficients"),
     "filter_resolve": (b"const kTransferCount:", b"donner_msl_member_userX0"),
     "offset": (b"struct OffsetParams", b"donner_msl_member_shiftX"),
     "specular_lighting": (b"struct LightingParams", b"donner_msl_member_specularExponent"),

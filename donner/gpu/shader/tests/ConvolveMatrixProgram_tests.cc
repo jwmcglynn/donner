@@ -76,14 +76,21 @@ TEST(ConvolveMatrixProgramTests, GeneratedDescriptorsPreserveTheTypedInterface) 
     const ShaderModuleDescriptor descriptor = MakeShaderDescriptor(shader, kind, "ConvolveMatrix");
     EXPECT_EQ(descriptor.sourceKind, kind);
     ASSERT_TRUE(descriptor.bufferBindings.has_value());
-    ASSERT_EQ(descriptor.bufferBindings->size(), 1u);
+    ASSERT_EQ(descriptor.bufferBindings->size(), 2u);
     const auto& binding = descriptor.bufferBindings->front();
     EXPECT_EQ(binding.group, 0u);
     EXPECT_EQ(binding.binding, 2u);
     EXPECT_EQ(binding.stage, ShaderStage::Compute);
     EXPECT_EQ(binding.type, BindingType::ReadOnlyStorageBuffer);
-    EXPECT_EQ(binding.minSizeBytes, 148u);
+    EXPECT_EQ(binding.minSizeBytes, 48u);
     EXPECT_EQ(binding.runtimeArrayStrideBytes, 0u);
+    const auto& coefficients = descriptor.bufferBindings->back();
+    EXPECT_EQ(coefficients.group, 0u);
+    EXPECT_EQ(coefficients.binding, 3u);
+    EXPECT_EQ(coefficients.stage, ShaderStage::Compute);
+    EXPECT_EQ(coefficients.type, BindingType::ReadOnlyStorageBuffer);
+    EXPECT_EQ(coefficients.minSizeBytes, 4u);
+    EXPECT_EQ(coefficients.runtimeArrayStrideBytes, 4u);
     EXPECT_EQ(descriptor.sourceText.empty(), kind == ShaderSourceKind::Spirv);
     EXPECT_EQ(descriptor.spirvWords.empty(), kind != ShaderSourceKind::Spirv);
     ASSERT_EQ(descriptor.computeEntryPoints.size(), 1u);
@@ -117,13 +124,23 @@ TEST(ConvolveMatrixProgramTests, StorageLayoutMatchesTheUploadedParameterBlock) 
   ASSERT_NE(params, nullptr);
   EXPECT_EQ(params->type, BindingType::ReadOnlyStorageBuffer);
   EXPECT_EQ(params->minSizeBytes, sizeof(programs::ConvolveMatrixParams));
-  EXPECT_EQ(params->memberCount, 13u);
-  EXPECT_TRUE(
-      shader.matchesMember("params", "coefficients", 32, 100, ShaderScalarType::F32, 1, 25, 4));
-  const std::array<uint32_t, 13> offsets{0, 4, 8, 12, 16, 20, 24, 28, 32, 132, 136, 140, 144};
+  EXPECT_EQ(params->memberCount, 12u);
+  const std::array<uint32_t, 12> offsets{0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44};
   for (size_t index = 0; index < offsets.size(); ++index) {
     EXPECT_EQ(shader.members[params->firstMember + index].offsetBytes, offsets[index]);
   }
+}
+
+// The kernel has no fixed capacity: it is a runtime-sized array sized by each dispatch's binding.
+TEST(ConvolveMatrixProgramTests, CoefficientsAreARuntimeSizedFloatArray) {
+  const CompiledShaderView& shader = tests::ConvolveMatrixAllProjections();
+  const ShaderResource* coefficients = shader.resource("coefficients");
+  ASSERT_NE(coefficients, nullptr);
+  EXPECT_EQ(coefficients->type, BindingType::ReadOnlyStorageBuffer);
+  EXPECT_EQ(coefficients->runtimeArrayStrideBytes, sizeof(float));
+  EXPECT_EQ(coefficients->minSizeBytes, sizeof(float));
+  EXPECT_EQ(coefficients->runtimeArrayScalarType, ShaderScalarType::F32);
+  EXPECT_EQ(coefficients->runtimeArrayLanes, 1u);
 }
 
 }  // namespace

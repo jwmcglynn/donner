@@ -480,6 +480,56 @@ TEST_F(RendererGeodeTest, TiledBlurNearRasterEdgeMatchesBlurWithRoom) {
   }
 }
 
+// A kernel wider than 25 taps still widens the tile halo, so splitting the raster into tiles
+// leaves the result unchanged. The 27-tap rows need a 27-pixel halo on each side, and 64-pixel
+// tiles split the 200-pixel raster into columns 10 pixels wide.
+TEST_F(RendererGeodeTest, TiledLargeConvolveMatchesUntiledConvolve) {
+  using namespace components;
+  constexpr int kOrderX = 27;
+  constexpr int kOrderY = 3;
+  constexpr int kWidth = 200;
+  constexpr int kHeight = 48;
+  filter_primitive::ConvolveMatrix convolve{.orderX = kOrderX, .orderY = kOrderY};
+  for (int i = 0; i < kOrderX * kOrderY; ++i) {
+    // Integers from -1 to 3 that sum to a positive divisor and vary along both axes.
+    convolve.kernelMatrix.push_back(static_cast<double>((i * 3 + i / kOrderX) % 5) - 1.0);
+  }
+  convolve.edgeMode = filter_primitive::ConvolveMatrix::EdgeMode::None;
+  FilterGraph graph;
+  FilterNode node;
+  node.primitive = convolve;
+  graph.nodes.push_back(node);
+  const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device) {
+    RendererGeode renderer(device);
+    RenderViewport viewport;
+    viewport.size = Vector2d(kWidth, kHeight);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kWidth, kHeight}));
+    renderer.setPaint(solidFill(css::RGBA(46, 139, 87, 255)));
+    renderer.drawRect(Box2d({20, 8}, {110, 40}), StrokeParams{});
+    renderer.setPaint(solidFill(css::RGBA(220, 20, 60, 153)));
+    renderer.drawRect(Box2d({100, 2}, {180, 30}), StrokeParams{});
+    renderer.popFilterLayer();
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+
+  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(tiledDevice, testing::NotNull());
+  tiledDevice->filterEngine().setMaximumTileExtentForTesting(64);
+  const RendererBitmap tiled = render(tiledDevice);
+  ASSERT_THAT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u));
+  const RendererBitmap untiled = render(sharedDevice());
+  ASSERT_THAT(sharedDevice()->filterEngine().lastExecutionMemory().tileExecutions, testing::Eq(1u));
+  ASSERT_FALSE(untiled.empty());
+  // Premise: the kernel applied. Its whole footprint around this point lies inside the opaque
+  // square, so the result there is opaque rather than the transparent black of a refused kernel.
+  ASSERT_EQ(PixelAt(untiled, 65, 24)[3], 255u);
+  editor::tests::CompareBitmapToBitmap(tiled, untiled, "tiled_large_convolve",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // Under a skew the filter runs on a local raster aligned to the filter region and resampled from
 // the device capture. Moving the content by whole device pixels must move the result by the same
 // pixels and change nothing else, so the resample's weights cannot depend on where the capture

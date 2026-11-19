@@ -9,33 +9,32 @@
 
 namespace donner::gpu::shader::programs {
 
-/// Maximum number of tightly packed kernel coefficients in the parameter storage block.
-inline constexpr uint32_t kConvolveMatrixKernelCapacity = 25;
-
-/// Host storage layout consumed by the matrix-convolution program.
+/// Host storage layout consumed by the matrix-convolution program. The kernel coefficients are
+/// not part of this block: they are bound separately as the runtime-sized `coefficients` array,
+/// holding exactly `orderX * orderY` row-major values, so the kernel size is bounded by the host
+/// admission limits rather than by a fixed array in the shader.
 struct ConvolveMatrixParams {
-  int32_t orderX;          //!< Kernel width.
-  int32_t orderY;          //!< Kernel height.
-  int32_t targetX;         //!< Horizontal target within the kernel.
-  int32_t targetY;         //!< Vertical target within the kernel.
-  float divisor;           //!< Nonzero scale applied after accumulation.
-  float bias;              //!< Offset applied after division.
-  uint32_t edgeMode;       //!< Zero duplicates, one wraps, and two samples transparent black.
-  uint32_t preserveAlpha;  //!< One retains source alpha and convolves straight RGB.
-  float kernel[kConvolveMatrixKernelCapacity];  //!< Coefficients rotated when sampled.
-  int32_t wrapLeft = 0;                         //!< First column of the logical input image.
-  int32_t wrapTop = 0;                          //!< First row of the logical input image.
+  int32_t orderX;           //!< Kernel width.
+  int32_t orderY;           //!< Kernel height.
+  int32_t targetX;          //!< Horizontal target within the kernel.
+  int32_t targetY;          //!< Vertical target within the kernel.
+  float divisor;            //!< Nonzero scale applied after accumulation.
+  float bias;               //!< Offset applied after division.
+  uint32_t edgeMode;        //!< Zero duplicates, one wraps, and two samples transparent black.
+  uint32_t preserveAlpha;   //!< One retains source alpha and convolves straight RGB.
+  int32_t wrapLeft = 0;     //!< First column of the logical input image.
+  int32_t wrapTop = 0;      //!< First row of the logical input image.
   int32_t wrapWidth = -1;   //!< Width of the wrap domain. Negative selects the full texture.
   int32_t wrapHeight = -1;  //!< Height of the wrap domain. Negative selects the full texture.
 };
 
-static_assert(sizeof(ConvolveMatrixParams) == 148);
-static_assert(offsetof(ConvolveMatrixParams, kernel) == 32);
+static_assert(sizeof(ConvolveMatrixParams) == 48);
+static_assert(offsetof(ConvolveMatrixParams, wrapLeft) == 32);
 
 /**
  * Returns the WGSL projection and reflected interface for matrix convolution.
- * The host admits positive kernel orders whose product fits the coefficient array, targets inside
- * the kernel, and finite coefficients, bias and nonzero divisor. The shader rotates the row-major
+ * The host admits positive kernel orders, targets inside the kernel, finite coefficients, bias and
+ * a nonzero divisor, and binds `orderX * orderY` coefficients. The shader rotates the row-major
  * kernel by 180 degrees, supports duplicate/wrap/transparent edges and optionally preserves alpha.
  * @return Stable view into a process-lifetime artifact.
  */

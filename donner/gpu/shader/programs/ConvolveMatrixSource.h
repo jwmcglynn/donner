@@ -6,7 +6,7 @@
 
 namespace donner::gpu::shader::programs {
 
-/// Matrix convolution over a bounded coefficient array and sampled input image.
+/// Matrix convolution over a runtime-sized coefficient array and sampled input image.
 inline constexpr wgsl::SourceText kConvolveMatrixSource = R"wgsl(
 struct ConvolveMatrixParams {
   orderX: i32,
@@ -17,7 +17,6 @@ struct ConvolveMatrixParams {
   bias: f32,
   edgeMode: u32,
   preserveAlpha: u32,
-  coefficients: array<f32, 25>,
   wrapLeft: i32,
   wrapTop: i32,
   wrapWidth: i32,
@@ -27,6 +26,7 @@ struct ConvolveMatrixParams {
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
 @group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<storage, read> params: ConvolveMatrixParams;
+@group(0) @binding(3) var<storage, read> coefficients: array<f32>;
 
 fn sampleEdge(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
   if ((params.edgeMode == 0u)) {
@@ -63,12 +63,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let size = vec2<i32>(textureDimensions(inputTexture));
   var sumRgb: vec3<f32> = vec3<f32>(0f);
   var sumAlpha: f32 = 0f;
+  let lastCoefficient = ((params.orderX * params.orderY) - 1i);
   for (var j: i32 = 0i; (j < params.orderY); j = (j + 1i)) {
     for (var i: i32 = 0i; (i < params.orderX); i = (i + 1i)) {
       let sourceCoord = (coord + vec2<i32>((i - params.targetX), (j - params.targetY)));
       let source = sampleEdge(sourceCoord, size);
       let kernelIndex = ((((params.orderY - 1i) - j) * params.orderX) + ((params.orderX - 1i) - i));
-      let coefficient = params.coefficients[clamp(kernelIndex, 0i, 24i)];
+      let coefficient = coefficients[clamp(kernelIndex, 0i, lastCoefficient)];
       if (((params.preserveAlpha == 1u) && (source.w > 0f))) {
         sumRgb = (sumRgb + ((source.xyz / source.w) * coefficient));
       } else {

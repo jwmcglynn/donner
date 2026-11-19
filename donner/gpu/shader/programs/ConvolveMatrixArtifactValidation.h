@@ -13,14 +13,23 @@ consteval bool ValidateConvolveMatrixArtifact() {
   constexpr const ShaderResource* params = shader.resource("params");
   constexpr const ShaderResource* input = shader.resource("inputTexture");
   constexpr const ShaderResource* output = shader.resource("outputTexture");
+  constexpr const ShaderResource* coefficients = shader.resource("coefficients");
+  static_assert(shader.resources.size() == 4);
   static_assert(params != nullptr);
   static_assert(input != nullptr);
   static_assert(output != nullptr);
+  static_assert(coefficients != nullptr);
   static_assert(params->type == BindingType::ReadOnlyStorageBuffer);
   static_assert(input->type == BindingType::SampledTexture2dUnfilterableFloat);
   static_assert(output->type == BindingType::WriteOnlyStorageTexture2d);
   static_assert(params->minSizeBytes == sizeof(ConvolveMatrixParams));
   static_assert(params->alignmentBytes == alignof(ConvolveMatrixParams));
+  static_assert(params->memberCount == 12);
+  static_assert(coefficients->type == BindingType::ReadOnlyStorageBuffer);
+  static_assert(coefficients->runtimeArrayStrideBytes == sizeof(float));
+  static_assert(coefficients->minSizeBytes == sizeof(float));
+  static_assert(coefficients->runtimeArrayScalarType == ShaderScalarType::F32);
+  static_assert(coefficients->runtimeArrayLanes == 1);
   static_assert(
       shader.entryPoints.size() == 1 && shader.entryPoints.front().stage == ShaderStage::Compute,
       "The filter artifact requires exactly one compute entry");
@@ -43,10 +52,6 @@ consteval bool ValidateConvolveMatrixArtifact() {
   static_assert(
       shader.matchesMember("params", "preserveAlpha", offsetof(ConvolveMatrixParams, preserveAlpha),
                            sizeof(ConvolveMatrixParams::preserveAlpha), ShaderScalarType::U32));
-  static_assert(shader.matchesMember("params", "coefficients",
-                                     offsetof(ConvolveMatrixParams, kernel),
-                                     sizeof(ConvolveMatrixParams::kernel), ShaderScalarType::F32, 1,
-                                     kConvolveMatrixKernelCapacity, sizeof(float)));
   static_assert(shader.matchesMember("params", "wrapLeft", offsetof(ConvolveMatrixParams, wrapLeft),
                                      sizeof(ConvolveMatrixParams::wrapLeft),
                                      ShaderScalarType::I32));
