@@ -5330,8 +5330,8 @@ TEST_F(RendererGeodeTest, ManyStopGradientBetweenBatchedFillsKeepsPaintOrder) {
 /// The frame's gradient stops are charged under the CPU renderer's per-frame cap. Past it the draw
 /// is refused and so is the rest of the frame, on Geode as on tiny-skia: the same document under
 /// the same lowered cap renders the same pixels and the same verdict on both. The 3-stop gradient
-/// draws through the fill batch and the 20-stop ones through the gradient pipeline, so both
-/// charge.
+/// draws through the fill batch and the 20-stop linear and radial ones through the gradient
+/// pipeline, so all of them charge.
 TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
   std::string twentyStops;
   for (int i = 0; i < 20; ++i) {
@@ -5343,8 +5343,8 @@ TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
   const std::string source = GradientTestDocument(
       R"svg(<linearGradient id="small"><stop stop-color="red"/><stop offset="0.5" stop-color="lime"/><stop offset="1" stop-color="blue"/></linearGradient>)svg"
       R"svg(<linearGradient id="a">)svg" +
-          twentyStops + R"svg(</linearGradient><linearGradient id="b" x1="1" x2="0">)svg" +
-          twentyStops + "</linearGradient>",
+          twentyStops + R"svg(</linearGradient><radialGradient id="b">)svg" + twentyStops +
+          "</radialGradient>",
       R"svg(<rect width="32" height="48" fill="url(#small)"/>)svg"
       R"svg(<rect x="32" width="32" height="48" fill="url(#a)"/>)svg"
       R"svg(<rect x="64" width="32" height="48" fill="url(#b)"/>)svg"
@@ -5370,6 +5370,29 @@ TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
     EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
     editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
                                          "gradient_stop_budget_" + std::to_string(limit),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A resident many-stop gradient keeps its stop ramp across frames, and a stop edit replaces it:
+/// each frame matches tiny-skia's rendering of the document as it stands.
+TEST_F(RendererGeodeTest, ManyStopGradientStopEditReplacesTheResidentRamp) {
+  const std::string source = ManyStopGradientDocument(20, /*radial=*/false);
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+  RendererGeode renderer = createRenderer();
+  for (int frame = 0; frame < 3; ++frame) {
+    SCOPED_TRACE(frame);
+    if (frame == 2) {
+      // Stop 18 sits past the 16 the draw parameters carry inline.
+      std::optional<SVGElement> stop = document->querySelector("stop:nth-child(19)");
+      ASSERT_TRUE(stop.has_value());
+      stop->setAttribute("stop-color", "#00ff00");
+    }
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderWithTinySkia(*document),
+                                         "many_stop_edit_frame_" + std::to_string(frame),
                                          editor::tests::PixelmatchIdentityParams());
   }
 }

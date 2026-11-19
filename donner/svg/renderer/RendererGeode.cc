@@ -861,6 +861,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   params.stops = std::span<const geode::RadialGradientParams::Stop>(stopsStorage);
 
   ResolvedRadialGradient out;
+  out.stopCount = stopsStorage.size();
   out.gradient = std::move(params);
   return out;
 }
@@ -5866,6 +5867,56 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                            residentSlot, gradientResidentSlot, gradientStopsCharged);
   }
 
+  /// Draws \p linear over \p drawPath, charging its stops to the frame unless
+  /// \p stopsCharged says the caller already did. A charge past the frame's cap
+  /// refuses the draw.
+  void drawLinearGradient(const Path& drawPath, const geode::LinearGradientParams& linear,
+                          FillRule rule, const geode::EncodedPath* precomputedEncoded,
+                          geode::GeodeResidentGradientSlot* gradientResidentSlot,
+                          bool stopsCharged) {
+    if (!stopsCharged && !reserveGradientStops(linear.stops.size())) {
+      return;
+    }
+    syncTransform();
+    if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
+      encoder->fillPathLinearGradientResident(*gradientResidentSlot, *precomputedEncoded, linear,
+                                              rule, currentFrameIndex);
+    } else {
+      encoder->fillPathLinearGradient(drawPath, linear, rule, precomputedEncoded);
+    }
+  }
+
+  /// Draws a resolved radial gradient over \p drawPath, or the single color a
+  /// zero radius collapses it to, charging its stops to the frame unless
+  /// \p stopsCharged says the caller already did.
+  /// @return False when the radial gradient is unusable and the caller should
+  ///   paint the reference's fallback instead; true when it was drawn or the
+  ///   frame's cap refused it.
+  bool drawRadialGradient(const Path& drawPath, const ResolvedRadialGradient& radial, FillRule rule,
+                          const geode::EncodedPath* precomputedEncoded,
+                          geode::GeodeResidentSlot* residentSlot,
+                          geode::GeodeResidentGradientSlot* gradientResidentSlot,
+                          bool stopsCharged) {
+    if (!radial.gradient.has_value() && !radial.solidFallback.has_value()) {
+      return false;
+    }
+    if (!stopsCharged && !reserveGradientStops(radial.stopCount)) {
+      return true;
+    }
+    syncTransform();
+    if (radial.solidFallback.has_value()) {
+      // SVG2 degenerate radial (r=0): paint the last stop color as a
+      // solid fill so the element remains visible.
+      emitSolidFill(drawPath, *radial.solidFallback, rule, precomputedEncoded, residentSlot);
+    } else if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
+      encoder->fillPathRadialGradientResident(*gradientResidentSlot, *precomputedEncoded,
+                                              *radial.gradient, rule, currentFrameIndex);
+    } else {
+      encoder->fillPathRadialGradient(drawPath, *radial.gradient, rule, precomputedEncoded);
+    }
+    return true;
+  }
+
   /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
   /// computed from `geometryPath` while the GPU draw uses `drawPath`. This
   /// is required for stroked outlines: SVG specifies that the
@@ -5905,52 +5956,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       auto linear = resolveLinearGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
                                                 opacity, gradientStopScratch);
       if (linear.has_value()) {
-        if (!gradientStopsCharged && !reserveGradientStops(linear->stops.size())) {
-          return;
-        }
-        syncTransform();
-        if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
-          encoder->fillPathLinearGradientResident(*gradientResidentSlot, *precomputedEncoded,
-                                                  *linear, rule, currentFrameIndex);
-        } else {
-          encoder->fillPathLinearGradient(drawPath, *linear, rule, precomputedEncoded);
-        }
+        drawLinearGradient(drawPath, *linear, rule, precomputedEncoded, gradientResidentSlot,
+                           gradientStopsCharged);
         return;
       }
 
       auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
                                                 opacity, gradientStopScratch);
-      if (radial.has_value()) {
-        if ((radial->gradient.has_value() || radial->solidFallback.has_value()) &&
-            !gradientStopsCharged && !reserveGradientStops(radial->stopCount)) {
-          return;
-        }
-        if (radial->gradient.has_value()) {
-          syncTransform();
-          if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
-            encoder->fillPathRadialGradientResident(*gradientResidentSlot, *precomputedEncoded,
-                                                    *radial->gradient, rule, currentFrameIndex);
-          } else {
-            encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule, precomputedEncoded);
-          }
-          return;
-        }
-        if (radial->solidFallback.has_value()) {
-          // SVG2 degenerate radial (r=0): paint the last stop color as a
-          // solid fill so the element remains visible.
-          syncTransform();
-          emitSolidFill(drawPath, *radial->solidFallback, rule, precomputedEncoded, residentSlot);
-          return;
-        }
-        // Recognized as radial but otherwise unusable (empty stops, focal
-        // circle containing outer, singular transform, degenerate
-        // objectBoundingBox frame). Fall through to the paint-server
-        // fallback below - per SVG2, a gradient paint server that can't
-        // be instantiated on a given element should use the reference's
-        // fallback color (e.g., `stroke="url(#lg) green"` paints green on
-        // a zero-height horizontal line where the objectBoundingBox
-        // gradient can't be applied).
+      if (radial.has_value() &&
+          drawRadialGradient(drawPath, *radial, rule, precomputedEncoded, residentSlot,
+                             gradientResidentSlot, gradientStopsCharged)) {
+        return;
       }
+      // Recognized as radial but otherwise unusable (empty stops, focal
+      // circle containing outer, singular transform, degenerate
+      // objectBoundingBox frame). Fall through to the paint-server
+      // fallback below - per SVG2, a gradient paint server that can't
+      // be instantiated on a given element should use the reference's
+      // fallback color (e.g., `stroke="url(#lg) green"` paints green on
+      // a zero-height horizontal line where the objectBoundingBox
+      // gradient can't be applied).
 
       // Neither linear nor radial - could be a pattern, a sweep gradient
       // (not yet supported by the donner SVG parser), a malformed gradient
