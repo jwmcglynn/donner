@@ -6,7 +6,6 @@ using the latest LLVM toolchain on Linux (`--config=latest_llvm`, which
 `--config=re` pulls in transitively).
 """
 
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
@@ -45,5 +44,3 @@ cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
-
-ci_darwin_targets()

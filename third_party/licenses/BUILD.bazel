@@ -14,7 +14,6 @@ Keep the variant lists below in sync with
 `tools/generate_build_report.py`'s `_DEPENDENCY_VARIANTS`.
 """
 
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_license//rules:license.bzl", "license")
 load(
     "//build_defs:licenses.bzl",
@@ -430,5 +429,3 @@ filegroup(
     srcs = [":notice_release_editor"],
     output_group = "notice",
 )
-
-ci_darwin_targets()

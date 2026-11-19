@@ -1,6 +1,6 @@
 import unittest
 
-from darwin_selection import root_query, variant
+from darwin_selection import darwin_variants, root_query, variant
 
 
 class DarwinSelectionTests(unittest.TestCase):
@@ -17,6 +17,13 @@ class DarwinSelectionTests(unittest.TestCase):
         self.assertIn("package_group|toolchain_type", query)
         self.assertEqual(variant("//pkg:npm+target"), "//pkg:ci_darwin_npm+target")
         self.assertEqual(variant("//:a"), "//:ci_darwin_a")
+
+    def test_third_party_targets_are_dependencies_only_on_darwin(self):
+        vendor = ["//third_party:notice", "//third_party/google_fonts:catalog"]
+        self.assertEqual(list(darwin_variants(vendor)), [])
+        roots = [*vendor, "//donner/svg:renderer", "//third_party_tools:check"]
+        self.assertEqual(list(darwin_variants(roots)),
+                         ["//donner/svg:ci_darwin_renderer", "//third_party_tools:ci_darwin_check"])
 
     def test_empty_or_external_selection_fails_closed(self):
         with self.assertRaises(ValueError):

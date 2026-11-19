@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
@@ -11,5 +10,3 @@ cc_library(
     includes = ["."],
     visibility = ["//visibility:public"],
 )
-
-ci_darwin_targets()

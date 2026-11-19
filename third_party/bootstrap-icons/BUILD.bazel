@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("//build_defs:packaged_resources.bzl", "packaged_resources")
 
 packaged_resources(
@@ -30,5 +29,3 @@ exports_files([
     "icons/union.svg",
     "icons/unlock.svg",
 ])
-
-ci_darwin_targets()

@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 """resvg test suite: reference SVG renderings used by Donner's image-comparison tests.
 
 Vendored from https://github.com/linebender/resvg-test-suite at commit
@@ -464,5 +463,3 @@ filegroup(
         allow_empty = True,
     ),
 )
-
-ci_darwin_targets()

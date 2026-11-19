@@ -19,6 +19,11 @@ def root_query(fallback, affected):
             f"union attr(tags, '{manual}', $expanded))")
 
 
+def darwin_variants(labels):
+    """Vendor code enters the Darwin configuration through its consuming targets."""
+    return (variant(label) for label in labels if not label.startswith(("//third_party:", "//third_party/")))
+
+
 def variant(label):
     if label.startswith("//") and ":" in label:
         package, name = label.split(":", 1)
@@ -31,7 +36,7 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["query"]:
         print(root_query(os.environ["TARGETS_FALLBACK"] == "true", os.environ["TARGETS_AFFECTED"]))
     elif sys.argv[1:] == ["variants"]:
-        for line in sys.stdin:
-            print(variant(line.rstrip("\n")))
+        for label in darwin_variants(line.rstrip("\n") for line in sys.stdin):
+            print(label)
     else:
         sys.exit("usage: darwin_selection.py query|variants")

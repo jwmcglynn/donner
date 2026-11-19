@@ -1,4 +1,3 @@
-load("//build_defs:ci_darwin.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_test")
 load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 
@@ -65,5 +64,3 @@ cc_test(
         "@tiny-skia-cpp//src:tiny_skia_filter_scalar",
     ],
 )
-
-ci_darwin_targets()
