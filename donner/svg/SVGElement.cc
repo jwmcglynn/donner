@@ -384,6 +384,20 @@ bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAcc
   return true;
 }
 
+/**
+ * Remove the presentation attribute \p name from \p element: its declaration when the attribute
+ * is a property in the element's style, otherwise a reset of the element state it set.
+ */
+void RemovePresentationAttribute(SVGElement& element, const ElementAnchor& handle,
+                                 DocumentWriteAccess& access,
+                                 const xml::XMLQualifiedNameRef& name) {
+  // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
+  if (name.namespacePrefix.empty() &&
+      !RemovePresentationDeclaration(handle, access, element.type(), name.name)) {
+    [[maybe_unused]] auto trySetResult = element.trySetPresentationAttribute(name.name, "initial");
+  }
+}
+
 std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entity) {
   if (entity == entt::null) {
     return std::nullopt;
@@ -943,12 +957,7 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   } else if (RemoveLineCoordinateAttribute(handle_, name) ||
              RemoveConvolveOrderAttribute(handle_, name)) {
   } else {
-    // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
-    // Only parse empty namespaces for now.
-    if (name.namespacePrefix.empty() &&
-        !RemovePresentationDeclaration(handle_, access, type(), name.name)) {
-      [[maybe_unused]] auto trySetResult = trySetPresentationAttribute(name.name, "initial");
-    }
+    RemovePresentationAttribute(*this, handle_, access, name);
     markNeedsFullStyleRecompute(handle_);
     // Ignore return result, since it's fine if the attribute doesn't exist.
   }
