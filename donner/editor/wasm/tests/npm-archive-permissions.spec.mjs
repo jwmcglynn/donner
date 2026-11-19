@@ -17,7 +17,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
 const helper = resolve(process.env.TEST_SRCDIR ?? process.cwd(), process.argv[2]);
-const { normalizePermissions, prepareOutputDirectory } = await import(pathToFileURL(helper));
+const { normalizePermissions, permissionUpdate, prepareOutputDirectory } = await import(pathToFileURL(helper));
 
 function fixture(run) {
   const root = mkdtempSync(join(tmpdir(), "npm-permission-test-"));
@@ -105,16 +105,14 @@ test("normalized foreign output must be empty to extract in place", () =>
     assert.equal(readFileSync(join(output, "keep"), "utf8"), "preserved");
   }));
 
-test("normalization removes special bits without dropping executable bits", () =>
-  fixture((root) => {
-    const file = join(root, "tool");
-    writeFileSync(file, "#!/bin/sh\n");
-    chmodSync(file, 0o6755);
-    chmodSync(root, 0o1755);
-    normalizePermissions(root);
-    assert.equal(lstatSync(root).mode & 0o7777, 0o755);
-    assert.equal(lstatSync(file).mode & 0o7777, 0o755);
-  }));
+test("normalization removes special bits without dropping executable bits", () => {
+  // Hardened workers prohibit creating set-ID files. Exercise the same chmod decision with mode values.
+  for (const special of [0o4000, 0o2000, 0o1000, 0o6000]) {
+    assert.equal(permissionUpdate(special | 0o755, 0o444), 0o755);
+    assert.equal(permissionUpdate(special | 0o700, 0o555), 0o755);
+  }
+  assert.equal(permissionUpdate(0o755, 0o444), undefined);
+});
 
 test("adoption preserves nonempty directories and rejects symlink outputs", () =>
   fixture((root) => {

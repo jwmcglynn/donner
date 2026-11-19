@@ -57,7 +57,7 @@ diff --git a/npm/private/npm_package_extract.mjs b/npm/private/npm_package_extra
 new file mode 100644
 --- /dev/null
 +++ b/npm/private/npm_package_extract.mjs
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,63 @@
 +import { spawnSync } from "node:child_process";
 +import { accessSync, chmodSync, constants, lstatSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync } from "node:fs";
 +import { dirname, join } from "node:path";
@@ -70,7 +70,7 @@ new file mode 100644
 +  if (!stat) return;
 +  if (!stat.isDirectory()) throw new Error("Expected a directory for the declared npm output");
 +  if (uid === undefined || stat.uid === uid) return;
-+  if (hasNormalizedMode(stat.mode, 0o555) && canWriteDirectory(output)) {
++  if (permissionUpdate(stat.mode, 0o555) === undefined && canWriteDirectory(output)) {
 +    if (readdirSync(output).length) throw new Error("Expected an empty declared npm output");
 +    return;
 +  }
@@ -93,8 +93,9 @@ new file mode 100644
 +  }
 +}
 +
-+function hasNormalizedMode(mode, required) {
-+  return (mode & 0o7777) === ((mode & 0o777) | required);
++export function permissionUpdate(mode, required) {
++  const desired = (mode & 0o777) | required;
++  return (mode & 0o7777) === desired ? undefined : desired;
 +}
 +
 +// Some npm archives give directories file-like modes (for example 0666).
@@ -103,11 +104,11 @@ new file mode 100644
 +export function normalizePermissions(path) {
 +  const stat = lstatSync(path);
 +  if (stat.isSymbolicLink()) return;
++  if (!stat.isDirectory() && !stat.isFile()) return;
++  const mode = permissionUpdate(stat.mode, stat.isDirectory() ? 0o555 : 0o444);
++  if (mode !== undefined) chmodSync(path, mode);
 +  if (stat.isDirectory()) {
-+    if (!hasNormalizedMode(stat.mode, 0o555)) chmodSync(path, (stat.mode & 0o777) | 0o555);
 +    for (const entry of readdirSync(path)) normalizePermissions(join(path, entry));
-+  } else if (stat.isFile() && !hasNormalizedMode(stat.mode, 0o444)) {
-+    chmodSync(path, (stat.mode & 0o777) | 0o444);
 +  }
 +}
 +
