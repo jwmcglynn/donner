@@ -2040,21 +2040,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             prefetch.count("if: steps.editor-wasm-prefetch.outcome == 'failure'"),
         )
         fetch = self._lane_function("prefetch")
-        self.assertEqual(5, fetch.count("bazelisk fetch"))
+        self.assertEqual(4, fetch.count("bazelisk fetch"))
         self.assertNotRegex(fetch, r"bazelisk (?:build|test)")
 
         size_check = self._step_body(workflow, SIZE_CHECK_STEP.removeprefix("- name: "))
         self.assertNotIn("continue-on-error", size_check)
         build = self._size_check_phase()
-        self.assertEqual(6, build.count("bazelisk test"))
+        self.assertEqual(5, build.count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
         self.assertNotIn("||", build)
         self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
-        self.assertIn("bazelisk fetch --config=wasm-size --//donner/svg/renderer:text=true "
-                      "//tools/ci:wasm_text_resource_tests", fetch)
-        self.assertIn("bazelisk test --config=wasm-size --//donner/svg/renderer:text=true "
-                      "--test_output=errors //tools/ci:wasm_text_resource_tests", build)
+        self.assertIn("//tools/ci:wasm_size_tests //tools/ci:wasm_text_resource_tests", fetch)
+        self.assertIn("//donner/svg/renderer/wasm:render_test //tools/ci:wasm_text_resource_tests",
+                      build)
+        self.assertNotIn("--//donner/svg/renderer:text=true", fetch + build)
 
     def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
         """Both bridge probes, the standalone module and its default audit run on every PR.

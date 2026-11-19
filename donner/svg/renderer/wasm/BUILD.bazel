@@ -7,7 +7,7 @@ load("//build_defs:licenses.bzl", "donner_notice_file")
 load("//donner/editor/wasm:web_package.bzl", "web_package")
 load("//tools/http:serve_http.bzl", "serve_http")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
-load(":geode_browser_test_transition.bzl", "geode_browser_config_probe", "geode_browser_test_package")
+load(":geode_browser_test_transition.bzl", "geode_browser_config_probe", "geode_browser_test_package", "text_enabled_test_package")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -165,14 +165,23 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
-# Run with --config=wasm-size --//donner/svg/renderer:text=true.
+text_enabled_test_package(
+    name = "_render_text_test_page",
+    testonly = True,
+    package = ":test_page",
+    tags = ["manual"],
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    visibility = ["//visibility:private"],
+)
+
+# Run with --config=wasm-size. The page selects its text resources locally.
 py_test(
     name = "render_text_test",
     size = "small",
     srcs = ["render_text_test.py"],
     data = [
         "render_text_test_driver.mjs",
-        ":test_page",
+        ":_render_text_test_page",
         "@rules_nodejs//nodejs:current_node_runtime",
     ],
     env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},

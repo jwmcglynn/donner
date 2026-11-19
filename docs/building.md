@@ -318,6 +318,10 @@ action writes nothing and the `try-import` is a silent no-op. The self-hosted ru
 so each self-hosted macOS lane deletes the key file and the fragment in a last step that runs
 whatever the job's outcome.
 
+The Editor WASM lane runs the standalone renderer pixel and font-resource tests together under
+`--config=wasm-size`. The font test enables text on its test-page dependency. The pixel test and
+the shipped renderer size gate still use the text-off module.
+
 The hosted and VM macOS jobs build and test the planner's selected roots in one Bazel
 invocation. Non-test products are built, and the test-tag filters select which tests run.
 Browser tests still run serially in their own phase; the native Metal job owns shader validation.
