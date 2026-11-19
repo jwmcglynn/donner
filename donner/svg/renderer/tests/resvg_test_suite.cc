@@ -402,22 +402,18 @@ INSTANTIATE_TEST_SUITE_P(
                 {"negative-subregion.svg", ResvgV049Reference()},
                 {"with-subregion-1.svg", ResvgV049Reference()},
                 {"with-subregion-2.svg", ResvgV049Reference()},
-                // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
-                // compositing alpha deltas vs resvg that white-blending masked. Each
-                // threshold is the measured minimal passing hundredth at the
-                // existing pixel allowance (PR #1285, see README_pixelmatch_2.md).
                 {"everything-via-xlink-href.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-xlink-filter-bounds.png")
+                     .withReason("Inherited filter bounds match the independently clipped input")},
                 {"some-attributes-via-xlink-href.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-xlink-filter-bounds.png")
+                     .withReason("Inherited filter bounds match the independently clipped input")},
                 {"with-region-and-subregion.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-filter-input-and-subregion.png")
+                     .withReason("Independent input clipping and primitive output subregion")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"complex-order-and-xlink-href.svg",
                  Params::WithGoldenOverride(
@@ -697,17 +693,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintServersStop, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "paint-servers/stop",
-                {
-                    {"no-stop-color.svg",
-                     Params::WithThreshold(0.03f, kDefaultMismatchedPixels,
-                                           "OKLab sensitivity to gradient edge coverage")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintServersStop, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("paint-servers/stop")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintServersStopColor, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("paint-servers/stop-color")),
@@ -1084,19 +1073,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"not-UTF-8-encoding.svg",
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                               "and update the encoding declaration")},
-                {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-                 Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
-                {"preserveAspectRatio=none.svg",
-                 Params::WithThreshold(0.13f, 1000, "Viewport edge AA")},
-                {"preserveAspectRatio=xMaxYMax.svg",
-                 Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
-                {"preserveAspectRatio=xMidYMid.svg",
-                 Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
-                {"preserveAspectRatio=xMinYMin.svg",
-                 Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                       "Has anti-aliasing artifacts.")},
-                {"proportional-viewBox.svg", Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                                                   "Has anti-aliasing artifacts.")},
 
                 {"funcIRI-with-quotes.svg", Params{}},
                 {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
@@ -1437,8 +1413,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"complex-graphemes-and-coordinates-list.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-complex-graphemes-and-coordinates-list.png")
+                         .setCanvasSize(800, 800)
                          .onlyTextFull()
-                         .withReason("Simple text can't compose combining marks")},
+                         .withReason("The composed Cyrillic cluster uses its first absolute y")},
                     {"complex-graphemes.svg",
                      Params().onlyTextFull().withReason("Combining mark needs HarfBuzz")},
                     {"compound-emojis-and-coordinates-list.svg",
@@ -1510,31 +1487,38 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/text-decoration",
                 {
-                    // 0.12 covers both CPU text configurations: simple text counts 100
-                    // at 0.11 while full text counts 103, and all three cases count 68
-                    // at 0.12 (PR #1285).
                     {"all-types-inline-comma-separated.svg",
-                     Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-all-types-inline-no-decoration.png")
+                         .withReason("Malformed decoration list leaves the text "
+                                     "undecorated")
+                         .setCanvasSize(800, 800)},
                     {"all-types-inline-no-spaces.svg",
-                     Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-all-types-inline-no-decoration.png")
+                         .withReason("Adjacent keywords without spaces leave the "
+                                     "text undecorated")
+                         .setCanvasSize(800, 800)},
                     {"all-types-inline.svg",
-                     Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-all-types-inline-bands.png")
+                         .withReason("Literal bands preserve multiline decoration "
+                                     "offsets and paint order")
+                         .setCanvasSize(800, 800)},
                     {"indirect.svg", Params::WithGoldenOverride(
                                          "donner/svg/renderer/testdata/golden/resvg-indirect.png")},
                     {"tspan-decoration.svg",
-                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                     Params::WithThreshold(0.09f, kDefaultMismatchedPixels,
+                                           "Archived nested underline and glyph coverage differ")},
                     {"underline-with-rotate-list-4.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "Minor shading diffs")},
+                     Params::WithThreshold(0.03f, kDefaultMismatchedPixels,
+                                           "Reference has a wider horizontal fill "
+                                           "gradient across rotated glyphs")},
 
-                    // Each decoration takes the paint of the element that declared it (SVG 2
-                    // section 11.11). Without per-origin paint the line-through takes the span's
-                    // green and the case differs by 1589 px; a 1 px text shift reaches 2270 px.
-                    {"indirect-with-multiple-colors.svg",
-                     Params().withMaxPixelsDifferent(395).withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the x=100 "
-                         "crosshair; analytic residual 382 px, supersampled 2 px")},
-                    // The reference is resvg v0.49.0's 300x300 rendering; the superseded underline
-                    // was twice the font's 0.05em underline thickness.
+                    {"indirect-with-multiple-colors.svg", Params().setCanvasSize(800, 800)},
+                    // The reference is resvg v0.49.0's 300x300 rendering; the
+                    // superseded underline was twice the font's 0.05em underline
+                    // thickness.
                     {"with-textLength-on-a-single-character.svg", Params().setCanvasSize(300, 300)},
                 })),
             ValuesIn(ActiveComparisonModes())),

@@ -24,6 +24,17 @@ From the suite root:
   tests/filters/feImage/svg.png
   SHA256: 62fd05f566585e73a3537a729f0b7fc874e397e70310f7e4f7d44d6aee268614
 
+The 500x500 no-stop-color PNG is a resvg v0.49.0 release CLI rendering of the
+unchanged SVG, under the MIT notice in LICENSE-resvg-MIT. Both stops default to
+black. The gradient spans device x=50 to x=450, so the first pixel center has
+alpha round(255 * 399.5 / 400) = 255. The archived image alternates 254 and 255
+in that column. The pinned render agrees with the analytic alpha at every
+pixel center in the 400x400 gradient rectangle.
+
+  resvg --width 500 --height 500 tests/paint-servers/stop/no-stop-color.svg \
+    tests/paint-servers/stop/no-stop-color.png
+  SHA256: 2fee9cdcbd440a978df83acf035b88a970b9e3ed348a9d687366ef67fa4383ee
+
 The zero-text-length reference was regenerated at its original 500x500 size with the
 resvg 0.49.0 release CLI and the bundled NotoSans-Regular.ttf. SVG2 applies anchoring
 from compressed pen extents after textLength adjustment, which moves this fixture's
@@ -376,6 +387,25 @@ At the top-left boundary the replacement samples the wrapped input.
 
   tests/filters/feConvolveMatrix/edgeMode=wrap.png
   SHA256: d44d434e3420f50fff8fbbe82f408ac38ab8c06647f44925f58118802202f43b
+
+The 800x800 text-decoration reference uses the unchanged
+`tests/text/text-decoration/indirect-with-multiple-colors.svg` fixture. At that
+size its half-unit crosshair is two full pixels wide. The independent scene in
+`reference-sources/indirect-with-multiple-colors.svg` authors the underline
+and line-through bands separately from the glyphs. Each band's position and
+thickness come from the Noto Sans Regular OpenType metrics at 48 units. HarfBuzz
+advances for "Te xt" set its horizontal extents. The scene retains the glyphs,
+crosshair, frame and origin-specific paint order, including the second underline.
+
+  resvg --skip-system-fonts --use-font-file fonts/NotoSans-Regular.ttf \
+    --width 800 --height 800 reference-sources/indirect-with-multiple-colors.svg \
+    tests/text/text-decoration/indirect-with-multiple-colors.png
+
+This command uses resvg 0.49.0, revision
+66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba, under the notice in LICENSE-resvg-MIT.
+
+  tests/text/text-decoration/indirect-with-multiple-colors.png
+  SHA256: 7bd303c5bf23cfd972d8238a9d1d81b59560bdd8433a070b2875128875885f95
 
 fonts/NotoSansArabic-Regular.ttf is not part of the resvg corpus. text/direction/rtl lists
 "Noto Sans Arabic" first, and its reference draws the Arabic in that face, which neither the

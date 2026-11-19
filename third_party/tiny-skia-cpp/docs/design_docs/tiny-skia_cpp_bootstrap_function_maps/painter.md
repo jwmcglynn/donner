@@ -20,10 +20,35 @@ Legend: `☐` Not started, `🧩` Stub only, `🟡` Implemented/tested (Rust com
 | `treat_as_hairline` | `treatAsHairline()` | 🟢 | Line-by-line audited: Zero-width, non-AA, fastLen + ave logic matches Rust. Validated in audit 2026-03-02. |
 | `PixmapMut::fill_rect` | `fillRect()` | 🟢 | Line-by-line audited: Identity fast path and transform delegation match Rust. Validated in audit 2026-03-02. |
 | `PixmapMut::fill_path` | `fillPath()` | 🟢 | Line-by-line audited: Identity path with tiling and transform path match Rust. Validated in audit 2026-03-02. |
-| `PixmapMut::stroke_path` | `strokePath()` | 🟢 | Line-by-line audited: Dash, hairline detect, thick stroke via fill match Rust. Validated in audit 2026-03-02. |
+| `PixmapMut::stroke_path` | `strokePath()` | 🟢 | Line-by-line audited: Dash, hairline detect, thick stroke via fill match Rust. Validated in audit 2026-03-02. Donner addition: native and scalar tests verify exact coverage for [eligible rectangle strokes](#rectangular-stroke-coverage). |
 | `PixmapMut::stroke_hairline` | `strokeHairline()` | 🟢 | Line-by-line audited: Dispatch to scan::hairline{_aa}::strokePath matches Rust. Validated in audit 2026-03-02. |
 | `PixmapMut::draw_pixmap` | `drawPixmap()` | 🟢 | Line-by-line audited: Pattern shader + fillRect composition matches Rust. Validated in audit 2026-03-02. |
 | `PixmapMut::apply_mask` | `applyMask()` | 🟢 | Line-by-line audited: LoadMaskU8 → LoadDestination → DestinationIn → Store pipeline matches Rust. Validated in audit 2026-03-02. |
+
+### Rectangular stroke coverage
+
+`Painter::strokePath()` uses exact pixel-area coverage for a single closed,
+axis-aligned rectangle with an undashed antialiased miter stroke. The miter
+limit must reach the right-angle join. The transform must be finite and
+limited to positive scale and translation, and the inner rectangle must
+remain nonempty. Hairlines, other joins, unsupported transforms and tiled
+destinations follow the existing painter.
+
+The normal stroker checks and charges the outline budget before this route
+runs. The painter clips the outer and inner bounds to the destination and
+partitions them into constant-coverage blocks. It subtracts inner area
+from outer area, rounds the result once and gives the existing blitter one
+coverage value per pixel. The blitter applies the paint, clip mask and
+blend mode.
+
+- [x] Apply exact coverage to eligible rectangle strokes while preserving the
+  existing outline budget and fallback path.
+- [x] Validate corner and edge coverage, reversed traversal, offscreen clipping,
+  translucent painting, reflected and hairline fallback, and over-budget rejection
+  in `//src/tiny_skia/tests:tiny_skia_core_tests` (native and scalar).
+- [x] Compare the six viewport fixtures at ordinary limits in Donner's
+  `resvg_test_suite_default_text`, `resvg_test_suite_max`, and `resvg_test_suite_geode`
+  targets.
 
 ### `third_party/tiny-skia/src/pipeline/blitter.rs` — Paint-aware factory
 | Rust function/item | C++ function/item | Status | Evidence / Notes |

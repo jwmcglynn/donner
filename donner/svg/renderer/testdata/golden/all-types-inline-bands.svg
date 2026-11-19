@@ -1,0 +1,16 @@
+<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
+     font-family="Noto Sans" font-size="48">
+    <title>All types inline</title>
+
+    <path id="crosshair" d="M 20 100 L 180 100 M 100 20 L 100 180"
+          stroke="gray" stroke-width="0.5"/>
+
+    <rect x="50.00000000" y="103.60000000" width="92.16000000" height="2.40000000" fill="black"/><path d="M49.50000000 103.10000000H142.66000000V106.50000000H49.50000000Z M50.50000000 104.10000000H141.66000000V105.50000000H50.50000000Z" fill="green" fill-rule="evenodd"/>
+<rect x="50.00000000" y="51.08800000" width="92.16000000" height="2.40000000" fill="black"/><path d="M49.50000000 50.58800000H142.66000000V53.98800000H49.50000000Z M50.50000000 51.58800000H141.66000000V52.98800000H50.50000000Z" fill="green" fill-rule="evenodd"/>
+<text id="text1" x="50" y="100" stroke="green">Text</text>
+<rect x="50.00000000" y="80.94400000" width="92.16000000" height="2.40000000" fill="black"/><path d="M49.50000000 80.44400000H142.66000000V83.84400000H49.50000000Z M50.50000000 81.44400000H141.66000000V82.84400000H50.50000000Z" fill="green" fill-rule="evenodd"/>
+
+
+    <!-- image frame -->
+    <rect id="frame" x="1" y="1" width="198" height="198" fill="none" stroke="black"/>
+</svg>
