@@ -406,6 +406,7 @@ py_test(
         "gatekeeper.py",
         "github_rate_limit.py",
         "//:.github/actions/pr-trust/action.yml",
+        "//:.github/actions/pr-trust/classify.sh",
         "//:.github/workflows/main.yml",
     ],
     deps = [
@@ -829,6 +830,18 @@ py_test(
     srcs = ["cmake_cache_tests.py"],
     data = ["cmake_cache.py"],
     deps = ["@rules_python//python/runfiles"],
+)
+
+config_setting(
+    name = "on_mixed_ci_linux",
+    values = {"platforms": "//tools/ci:linux_ci"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "on_mixed_ci_darwin_gpu",
+    values = {"platforms": "//tools/ci:remote_macos_aarch64_gpu"},
+    visibility = ["//visibility:public"],
 )
 
 platform(

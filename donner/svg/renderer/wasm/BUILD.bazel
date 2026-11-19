@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets", "wasm_ci_test")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
@@ -405,6 +405,30 @@ js_test(
     entry_point = "renderer-resources.spec.mjs",
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
+)
+
+wasm_ci_test(
+    actual = "render_test",
+    profile = "wasm-size",
+)
+
+wasm_ci_test(
+    actual = "render_text_test",
+    profile = "wasm-size",
+)
+
+wasm_ci_test(
+    actual = "wasm_size_tests",
+    profile = "wasm-size",
+)
+
+wasm_ci_test(
+    actual = "geode_browser_default_audit_test",
+    profile = "wasm-geode",
+    required_outputs = [
+        "//tools/ci:browser_bridge_link_probes",
+        "//tools/ci:geode_wasm_browser_module",
+    ],
 )
 
 ci_darwin_targets()

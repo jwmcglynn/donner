@@ -118,6 +118,7 @@ exports_files(
         "codecov.yml",
         ".github/actions/apt-install/action.yml",
         ".github/actions/pr-trust/action.yml",
+        ".github/actions/pr-trust/classify.sh",
         ".github/actions/re-turnstile/action.yml",
         ".github/actions/re-turnstile/admission.py",
         ".github/actions/re-turnstile/turnstile.py",

@@ -7,6 +7,16 @@ description: >-
   is neither. main.yml's self-hosted routing and the BuildBuddy remote-cache
   wiring both consume these outputs, so the two decisions cannot drift apart.
 
+inputs:
+  selfhosted_linux_runner:
+    description: "Repository switch for trusted Linux execution."
+    required: false
+    default: "false"
+  unified_re_canary:
+    description: "An explicit false selects the hosted macOS fallback."
+    required: false
+    default: ""
+
 outputs:
   trusted_pr:
     description: '"true" only for a trusted maintainer pull request.'
@@ -14,6 +24,12 @@ outputs:
   unified_re_default:
     description: 'Schedule the dual-platform canary by default on trusted PRs based on this policy.'
     value: ${{ steps.classify.outputs.trusted_pr }}
+  use_self_hosted_linux:
+    description: 'Run this pull request on the trusted Linux runner.'
+    value: ${{ steps.route.outputs.use_self_hosted_linux }}
+  unified_macos:
+    description: 'Run Darwin actions in the trusted Linux-coordinated graph.'
+    value: ${{ steps.route.outputs.unified_macos }}
   renovate_pr:
     description: '"true" only for a same-repository Renovate pull request.'
     value: ${{ steps.classify.outputs.renovate_pr }}
@@ -28,78 +44,41 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         REPOSITORY: ${{ github.repository }}
         TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: bash "$GITHUB_ACTION_PATH/classify.sh"
+
+    - id: route
+      shell: bash
+      env:
+        TRUSTED_PR: ${{ steps.classify.outputs.trusted_pr }}
+        SELFHOSTED_LINUX_RUNNER: ${{ inputs.selfhosted_linux_runner }}
+        UNIFIED_RE_SELECTED: ${{ inputs.unified_re_canary != 'false' && (steps.classify.outputs.trusted_pr == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')) }}
       run: |
         set -euo pipefail
-
-        is_renovate="$(
+        hosted_macos_label="$(
           python3 - <<'PY'
         import json
         import os
 
         event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-        paths = [
-            ("sender", "login"),
-            ("pull_request", "user", "login"),
-            ("head_commit", "author", "username"),
-            ("head_commit", "author", "name"),
-            ("head_commit", "author", "email"),
-            ("head_commit", "committer", "username"),
-            ("head_commit", "committer", "name"),
-            ("head_commit", "committer", "email"),
-            ("pusher", "name"),
-            ("pusher", "email"),
-        ]
-
-        values = []
-        for path in paths:
-            value = event
-            for key in path:
-                if not isinstance(value, dict):
-                    value = None
-                    break
-                value = value.get(key)
-            if value:
-                values.append(str(value))
-
-        print("true" if any("renovate" in value.lower() for value in values) else "false")
+        labels = (event.get("pull_request") or {}).get("labels") or []
+        print("true" if isinstance(labels, list) and any(
+            isinstance(label, dict) and label.get("name") == "ci:hosted-macos"
+            for label in labels
+        ) else "false")
         PY
         )"
 
-        pr_fields="$(
-          python3 - <<'PY'
-        import json
-        import os
-
-        event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-        pr = event.get("pull_request") or {}
-        fields = (
-            (pr.get("user") or {}).get("login", ""),
-            ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
-            ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
-        )
-        print("\x1f".join(fields))
-        PY
-        )"
-        IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo <<< "$pr_fields"
-
-        same_repository=false
-        if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
-              "$pr_head_repo" == "$REPOSITORY" && "$pr_base_repo" == "$REPOSITORY" ]]; then
-          same_repository=true
+        use_linux=false
+        use_macos=false
+        if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+          use_linux=true
+        fi
+        # An operator PR can select hosted macOS for this run without changing Linux routing.
+        if [[ "$use_linux" == "true" && "$UNIFIED_RE_SELECTED" == "true" &&
+              "$hosted_macos_label" != "true" ]]; then
+          use_macos=true
         fi
 
-        trusted_pr=false
-        if [[ "$same_repository" == "true" &&
-              "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" &&
-              "$pr_author" == "jwmcglynn" && "$is_renovate" != "true" ]]; then
-          trusted_pr=true
-        fi
-
-        renovate_pr=false
-        if [[ "$same_repository" == "true" && "$is_renovate" == "true" ]]; then
-          renovate_pr=true
-        fi
-
-        echo "trusted_pr=$trusted_pr" >> "$GITHUB_OUTPUT"
-        echo "renovate_pr=$renovate_pr" >> "$GITHUB_OUTPUT"
-        echo "pr_trust event=$EVENT_NAME trusted_pr=$trusted_pr renovate_pr=$renovate_pr pr_author=$pr_author head_repo=$pr_head_repo"
+        echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
+        echo "unified_macos=$use_macos" >> "$GITHUB_OUTPUT"
+        echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"

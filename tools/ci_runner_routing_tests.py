@@ -45,7 +45,8 @@ class CiRunnerRoutingTest(unittest.TestCase):
         return textwrap.dedent(section.split("        run: |\n", 1)[1])
 
     def _trust_script(self):
-        return textwrap.dedent(self.trust_action.split("      run: |\n", 1)[1])
+        self.assertIn('run: bash "$GITHUB_ACTION_PATH/classify.sh"', self.trust_action)
+        return _workflow_text(".github/actions/pr-trust/classify.sh")
 
     @staticmethod
     def _outputs(path):
@@ -83,10 +84,17 @@ class CiRunnerRoutingTest(unittest.TestCase):
                                     text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             trust = self._outputs(trust_path)
-            result = subprocess.run(["bash", "-c", self._routing_script()],
-                                    env=dict(env, TRUSTED_PR=trust["trusted_pr"] if trust_value is None else trust_value),
-                                    text=True, capture_output=True, check=False)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            shared = self.trust_action.split("    - id: route\n", 1)[1]
+            shared = textwrap.dedent(shared.split("      run: |\n", 1)[1])
+            routing_env = dict(env, TRUSTED_PR=trust["trusted_pr"] if trust_value is None else trust_value)
+            results = []
+            for script in (self._routing_script(), shared):
+                output_path.write_text("")
+                result = subprocess.run(["bash", "-c", script], env=routing_env,
+                                        text=True, capture_output=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                results.append(self._outputs(output_path))
+            self.assertEqual(*results)
             return {**trust, **self._outputs(output_path)}
 
     def test_operator_pr_uses_self_hosted_lanes_when_enabled(self):

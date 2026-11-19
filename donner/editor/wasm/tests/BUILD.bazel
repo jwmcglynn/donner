@@ -314,6 +314,7 @@ filegroup(
         "composited-probe-evidence.mjs",
         "composited-probe.ts",
         "flat-capture-retake.mjs",
+        "drag-ordering.ts",
         "gesture-streams.ts",
         "sample-thumbnail-settle.ts",
         "test-timing.cjs",
@@ -442,6 +443,37 @@ js_test(
     copy_data_to_bin = False,
     data = ["surface-probe-requests.mjs"],
     entry_point = "surface-probe-requests.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_run_binary(
+    name = "composited_drag_controls_node",
+    testonly = True,
+    srcs = [
+        "composited-drag-controls_tests.ts",
+        "composited-pixel-classifier.mjs",
+        "composited-probe-evidence.mjs",
+        "composited-probe.ts",
+        "drag-ordering.ts",
+    ],
+    outs = ["composited-drag-controls.cjs"],
+    args = [
+        "composited-drag-controls_tests.ts",
+        "--bundle",
+        "--platform=node",
+        "--external:@playwright/test",
+        "--outfile=composited-drag-controls.cjs",
+    ],
+    chdir = package_name(),
+    tool = ":esbuild",
+)
+
+js_test(
+    name = "composited_drag_controls_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [":node_modules/@playwright/test"],
+    entry_point = ":composited_drag_controls_node",
     node_options = ["--test"],
 )
 

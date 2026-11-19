@@ -1,7 +1,7 @@
 {
   "tree": {
-    "lines": 5314,
-    "comment_lines": 568,
+    "lines": 5293,
+    "comment_lines": 566,
     "multiline_runs": 68,
     "longest_run": 194,
     "run_expressions": 12,
@@ -66,7 +66,7 @@
     },
     ".github/workflows/editor_wasm.yml": {
       "lines": 342,
-      "comment_lines": 51,
+      "comment_lines": 50,
       "multiline_runs": 2,
       "longest_run": 3,
       "run_expressions": 0,
@@ -162,7 +162,7 @@
     },
     ".github/workflows/sanitizers-pr.yml": {
       "lines": 130,
-      "comment_lines": 35,
+      "comment_lines": 34,
       "multiline_runs": 0,
       "longest_run": 0,
       "run_expressions": 0,
@@ -209,10 +209,10 @@
       "longest_if": 177
     },
     ".github/actions/pr-trust/action.yml": {
-      "lines": 105,
+      "lines": 84,
       "comment_lines": 0,
       "multiline_runs": 1,
-      "longest_run": 74,
+      "longest_run": 29,
       "run_expressions": 0,
       "longest_if": 0
     },

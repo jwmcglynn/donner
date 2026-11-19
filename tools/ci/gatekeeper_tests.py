@@ -167,6 +167,9 @@ class GatekeeperTest(unittest.TestCase):
             (Path(self.script).parent / "github_rate_limit.py").read_bytes())
         action.write_bytes(Path(runfiles.Create().Rlocation(
             "donner/.github/actions/pr-trust/action.yml")).read_bytes())
+        classifier = action.with_name("classify.sh")
+        classifier.write_bytes(Path(runfiles.Create().Rlocation(
+            "donner/.github/actions/pr-trust/classify.sh")).read_bytes())
         originals = (helper.read_bytes(), action.read_bytes())
         self.repo.rename(trusted / "pr-input")
         self.repo = trusted / "pr-input"
@@ -186,7 +189,9 @@ class GatekeeperTest(unittest.TestCase):
         self.assertFalse((self.repo / "INJECTED").exists(), "PR helper executed before trust")
         self.assertEqual(originals, (helper.read_bytes(), action.read_bytes()))
         self.assertEqual("docs_only=false\n", output.read_text())
-        trust_body = textwrap.dedent(action.read_text().split("      run: |\n", 1)[1])
+        trust_body = 'bash "$GITHUB_ACTION_PATH/classify.sh"'
+        self.assertIn("run: " + trust_body, action.read_text())
+        env["GITHUB_ACTION_PATH"] = str(action.parent)
         self._run_fixture_shell(trust_body, env, trusted)
         self.assertIn("trusted_pr=false\n", output.read_text())
         env.update(TRUSTED_PR="false", SELFHOSTED_LINUX_RUNNER="true",
