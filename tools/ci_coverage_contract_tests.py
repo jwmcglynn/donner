@@ -35,20 +35,15 @@ def _ran(tests=None):
 _SKIPPED = {"outcome": "skipped"}
 
 # The receipts of a trusted pull request whose lanes ran every phase the manifest names.
-_COMPLETE = {
-    "linux-self-hosted": _receipt("linux-self-hosted", {
-        "build": _ran(), "test": dict(_ran(), deterministic_soak_executed=True)}),
-    "macos-self-hosted": _receipt("macos-self-hosted", {
-        "test": _ran(), "geode_test": _ran(6),
-        "browser_preflight": _ran(), "browser_test": _ran(2)}),
-    "macos-metal": _receipt("macos-metal", {
-        "metal_profile": _ran(), "metal_preflight": _ran(), "metal_native": _ran(10)}),
-    "macos-browser": _receipt("macos-browser", {
-        "browser_preflight": _ran(), "browser_test": _ran(2)}),
-}
+_COUNTS = {"darwin-build": 42, "darwin-test": 20, "metal-profile": 1, "metal-preflight": 6,
+           "metal-native": 10, "metal-compiler": 1, "browser-archive": 1, "headless-browser": 5,
+           "desktop-browser": 2, "geode": 6}
+_COMPLETE = {"linux-self-hosted": _receipt("linux-self-hosted", {
+    "build": _SKIPPED, "test": _SKIPPED,
+    "unified": dict(_ran(500), deterministic_soak_executed=True, classes=_COUNTS)})}
 
 _EVERYTHING = {"always": True, "browser_affected": True, "metal_affected": True,
-               "self_hosted_macos": True}
+               "unified_macos": True}
 
 
 class CoverageContractTest(unittest.TestCase):
@@ -65,7 +60,7 @@ class CoverageContractTest(unittest.TestCase):
         for step in (_SKIPPED, _ran(0)):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
-                receipts["linux-self-hosted"]["steps"]["test"] = step
+                receipts["linux-self-hosted"]["steps"]["unified"] = step
                 problems, _ = self._check(receipts)
                 self.assertIn(
                     "linux / Test / deterministic-wrapper",
@@ -96,57 +91,38 @@ class CoverageContractTest(unittest.TestCase):
                                 for line in excepted), exception)
 
     def test_an_intentionally_empty_selection_is_not_a_gap(self):
-        # When bazel-diff proves that no target is affected, the selection builds and tests
-        # nothing: the change-based steps run and find no tests, and the browser and native
-        # Metal lanes it gates skip. The fixed-suite steps still run their tests.
         receipts = copy.deepcopy(_COMPLETE)
-        for job, steps in (("linux-self-hosted", ("build", "test")),
-                           ("macos-self-hosted", ("test", "browser_preflight",
-                                                  "browser_test"))):
-            for step in steps:
-                receipts[job]["steps"][step] = _ran(0)
-        receipts["linux-self-hosted"]["steps"]["test"]["deterministic_soak_executed"] = True
-        del receipts["macos-browser"], receipts["macos-metal"]
-        nothing = {"always": True, "fallback": False, "browser_affected": False,
-                   "metal_affected": False, "self_hosted_macos": True}
-        problems, _ = self._check(receipts, nothing)
-        self.assertEqual([], problems)
+        receipts["linux-self-hosted"]["steps"]["unified"]["classes"] = {
+            "darwin-build": 0, "darwin-test": 0, "geode": 6}
+        nothing = {"always": True, "unified_macos": True}
+        self.assertEqual([], self._check(receipts, nothing)[0])
 
-    def test_skipped_self_hosted_shader_validation_fails(self):
-        # Main runs no shader validation, so the self-hosted real-GPU steps are the only gate.
-        for step, entry in (("metal_profile", "shader-validation"),
-                            ("metal_preflight", "shader-memory-canary")):
-            with self.subTest(step=step):
+    def test_missing_metal_profile_preflight_or_compiler_fails(self):
+        for cls, name in (("metal-profile", "shader-validation"), ("metal-preflight", "shader-memory-canary"),
+                          ("metal-compiler", "offline-metal-compiler")):
+            with self.subTest(cls=cls):
                 receipts = copy.deepcopy(_COMPLETE)
-                receipts["macos-metal"]["steps"][step] = _SKIPPED
+                del receipts["linux-self-hosted"]["steps"]["unified"]["classes"][cls]
                 problems, _ = self._check(receipts)
-                self.assertEqual(problems, [
-                    "macos / Build and test / %s is required on this pull request but did not run; "
-                    "expected an executed macos-metal / %s" % (entry, step)])
+                self.assertEqual(len(problems), 1)
+                self.assertIn("macos / Build and test / " + name, problems[0])
 
     def test_unaffected_pull_request_expects_no_native_metal_receipt(self):
-        # The native Metal job runs only when the pull request reaches its suites. Its skip on
-        # any other trusted pull request is expected, so its classes are not selected.
         receipts = copy.deepcopy(_COMPLETE)
-        del receipts["macos-metal"]
-        problems, _ = self._check(receipts, dict(_EVERYTHING, metal_affected=False))
-        self.assertEqual([], problems)
-        # A pull request that reaches them, or falls back to //..., still requires every step.
+        counts = receipts["linux-self-hosted"]["steps"]["unified"]["classes"]
+        for name in ("metal-profile", "metal-preflight", "metal-native", "metal-compiler"):
+            del counts[name]
+        self.assertEqual([], self._check(receipts, dict(_EVERYTHING, metal_affected=False))[0])
         for selection in (_EVERYTHING, dict(_EVERYTHING, metal_affected=False, fallback=True)):
-            with self.subTest(selection=selection):
-                problems, _ = self._check(receipts, selection)
-                self.assertEqual(3, len(problems), problems)
-                for name in ("shader-validation", "shader-memory-canary", "native-metal"):
-                    self.assertTrue(any("macos / Build and test / %s is required" % name in problem
-                                        for problem in problems), problems)
+            self.assertEqual(4, len(self._check(receipts, selection)[0]))
 
     def test_native_metal_suite_cannot_be_skipped_or_empty(self):
-        for result in (_SKIPPED, _ran(0)):
-            with self.subTest(result=result):
-                receipts = copy.deepcopy(_COMPLETE)
-                receipts["macos-metal"]["steps"]["metal_native"] = result
-                problems, _ = self._check(receipts)
-                self.assertTrue(any("native-metal" in problem for problem in problems), problems)
+        receipts = copy.deepcopy(_COMPLETE)
+        counts = receipts["linux-self-hosted"]["steps"]["unified"]["classes"]
+        counts["metal-native"] = 0
+        self.assertTrue(any("native-metal" in p for p in self._check(receipts)[0]))
+        del counts["metal-native"]
+        self.assertTrue(any("native-metal" in p for p in self._check(receipts)[0]))
 
     def test_x86_gaps_are_visible_without_a_hosted_receipt(self):
         problems, excepted = self._check(_COMPLETE)
@@ -160,14 +136,11 @@ class CoverageContractTest(unittest.TestCase):
 
 
     def test_each_browser_partition_requires_its_own_receipt(self):
-        for job in ("macos-self-hosted", "macos-browser"):
-            for step in ("browser_preflight", "browser_test"):
-                with self.subTest(job=job, step=step):
-                    receipts = copy.deepcopy(_COMPLETE)
-                    receipts[job]["steps"][step] = _SKIPPED
-                    problems, _ = self._check(receipts)
-                    self.assertEqual(1, len(problems), problems)
-                    self.assertIn(job + " / " + step, problems[0])
+        for cls, gaps in (("headless-browser", 1), ("desktop-browser", 1), ("browser-archive", 2)):
+            with self.subTest(cls=cls):
+                receipts = copy.deepcopy(_COMPLETE)
+                del receipts["linux-self-hosted"]["steps"]["unified"]["classes"][cls]
+                self.assertEqual(gaps, len(self._check(receipts)[0]))
 
     def test_hosted_configuration_gap_is_a_reported_exception(self):
         # No pull request lane reruns tests under main's hosted macOS configuration: main's
@@ -202,38 +175,33 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_a_counterpart_must_report_its_minimum_test_count(self):
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["macos-self-hosted"]["steps"]["geode_test"] = _ran(0)
+        receipts["linux-self-hosted"]["steps"]["unified"]["classes"]["geode"] = 0
         problems, _ = self._check(receipts)
         self.assertEqual(1, len(problems), problems)
         self.assertIn("macos / Test (Geode editor lane) / geode", problems[0])
 
-    def test_a_failed_counterpart_still_counts_as_executed(self):
-        # The failing job already fails the run; the contract asks only whether it ran.
-        receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux-self-hosted"]["steps"]["test"]["outcome"] = "failure"
-        self.assertEqual([], self._check(receipts)[0])
+    def test_a_linux_failure_still_counts_as_executed_without_certifying_darwin(self):
+        receipts = {"linux-self-hosted": _receipt("linux-self-hosted", {
+            "build": _ran(), "test": {"outcome":"failure", "deterministic_soak_executed":True}})}
+        self.assertEqual([], self._check(receipts, {"always":True})[0])
+        self.assertTrue(self._check(receipts, _EVERYTHING)[0])
 
     def test_unselected_classes_need_no_counterpart(self):
         receipts = copy.deepcopy(_COMPLETE)
-        del receipts["macos-browser"]
-        self.assertEqual([], self._check(receipts, {"always": True, "self_hosted_macos": True})[0])
-        # A //... fallback selects every class, including both desktop-browser classes.
-        self.assertEqual(2, len(self._check(receipts, {"always": True, "fallback": True,
-                                                       "self_hosted_macos": True})[0]))
+        del receipts["linux-self-hosted"]["steps"]["unified"]["classes"]["desktop-browser"]
+        self.assertEqual([], self._check(receipts, {"always": True, "unified_macos": True})[0])
+        self.assertEqual(1, len(self._check(receipts, {"always": True, "fallback": True,
+                                                       "unified_macos": True})[0]))
 
     def test_hosted_macos_routing_still_checks_linux(self):
-        # With the ci:hosted-macos label (or the macOS runner disabled), main's hosted macOS job
-        # ran on the pull request itself, so the macOS lane needs no counterparts. Linux still
-        # ran on the self-hosted lane, whose native test phase remains required.
-        receipts = {job: receipt for job, receipt in copy.deepcopy(_COMPLETE).items()
-                    if job.startswith("linux")}
-        selection = dict(_EVERYTHING, self_hosted_macos=False)
+        receipts = {"linux-self-hosted": _receipt("linux-self-hosted", {
+            "build": _ran(), "test": dict(_ran(5), deterministic_soak_executed=True)})}
+        selection = dict(_EVERYTHING, unified_macos=False)
         problems, excepted = self._check(receipts, selection)
         self.assertEqual([], problems)
         self.assertFalse(any(line.startswith("macos /") for line in excepted))
         receipts["linux-self-hosted"]["steps"]["test"] = _SKIPPED
         self.assertEqual(3, len(self._check(receipts, selection)[0]))
-        # A fallback does not change routing.
         self.assertEqual(3, len(self._check(receipts, dict(selection, fallback=True))[0]))
 
     def test_bep_counts_separate_executed_from_cached_results(self):
@@ -267,10 +235,10 @@ class CoverageContractTest(unittest.TestCase):
     def test_selection_comes_from_the_needs_context(self):
         needs = {"determine-targets": {"result": "success", "outputs": {
                      "fallback": "false", "browser_affected": "true", "metal_affected": "true"}},
-                 "gatekeeper": {"outputs": {"use_self_hosted_macos": "true"}}}
+                 "gatekeeper": {"outputs": {"unified_macos": "true"}}}
         self.assertEqual(contract.selection_from_needs(needs), {
             "always": True, "fallback": False, "browser_affected": True,
-            "metal_affected": True, "self_hosted_macos": True})
+            "metal_affected": True, "unified_macos": True})
         # A skipped job sets no outputs, which read as false everywhere but `always`.
         skipped = {job: {"result": "skipped", "outputs": {}}
                    for job in ("determine-targets", "gatekeeper")}
@@ -294,7 +262,7 @@ class CoverageContractTest(unittest.TestCase):
         steps = {"build": {"outcome": "success"}, "test": {"outcome": "success"},
                  "geode_test": {"outcome": "skipped"}}
         needs = {"determine-targets": {"outputs": {"fallback": "true"}},
-                 "gatekeeper": {"outputs": {"use_self_hosted_macos": "true"}}}
+                 "gatekeeper": {"outputs": {"unified_macos": "true"}}}
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
                 os.environ, {"RUNNER_TEMP": directory, "STEPS_JSON": json.dumps(steps),
                              "NEEDS_JSON": json.dumps(needs)}):

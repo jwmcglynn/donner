@@ -54,7 +54,7 @@ jobs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
       use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
-      use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
+      unified_macos: ${{ steps.runner_gate.outputs.unified_macos }}
       # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
       unified_re_default: ${{ steps.pr_trust.outputs.unified_re_default }}
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
@@ -107,7 +107,7 @@ jobs:
         env:
           TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
-          SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
+          UNIFIED_RE_SELECTED: ${{ vars.UNIFIED_RE_CANARY != 'false' && (steps.pr_trust.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary')) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -132,13 +132,13 @@ jobs:
             use_linux=true
           fi
           # An operator PR can select hosted macOS for this run without changing Linux routing.
-          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
+          if [[ "$use_linux" == "true" && "$UNIFIED_RE_SELECTED" == "true" &&
                 "$hosted_macos_label" != "true" ]]; then
             use_macos=true
           fi
 
           echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
-          echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
+          echo "unified_macos=$use_macos" >> "$GITHUB_OUTPUT"
           echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
   determine-targets:
@@ -473,12 +473,11 @@ jobs:
 
       - name: Test Linux and macOS with native platform transitions
         id: unified
-        if: github.event_name == 'pull_request' && vars.UNIFIED_RE_CANARY != 'false' && (needs.gatekeeper.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary'))
+        if: needs.gatekeeper.outputs.unified_macos == 'true'
         timeout-minutes: ${{ needs.determine-targets.outputs.affected == '//tools/ci:no_affected_targets' && 10 || (needs.determine-targets.outputs.fallback == 'true' && 150 || 90) }}
         env:
           WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
-          RUN_DARWIN: ${{ needs.gatekeeper.outputs.use_self_hosted_macos }}
-          RUN_METAL: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true') }}
+          RUN_METAL: ${{ needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true' }}
           RUN_BROWSER: ${{ needs.determine-targets.outputs.browser_affected == 'true' || needs.determine-targets.outputs.fallback == 'true' }}
           WORKER_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
           BROWSER_DIAGNOSTIC: ${{ contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe') }}
@@ -502,24 +501,20 @@ jobs:
             bazelisk query --nokeep_going --output=streamed_jsonproto --proto:rule_inputs_and_outputs=false \
               --proto:output_rule_attrs=tags --noproto:default_values --query_file="$ordinary.query" > "$linux.jsonl"
             python3 tools/ci_remote_gpu_targets.py --native-linux-patterns < "$linux.jsonl" > "$linux"
-            if [[ "$RUN_DARWIN" == true ]]; then
-              python3 tools/ci/darwin_selection.py variants < "$linux.jsonl" > "$ordinary"
-            fi
+            python3 tools/ci/darwin_selection.py variants < "$linux.jsonl" > "$ordinary"
           fi
           suites+=(//tools/ci:deterministic_fuzzer_soak)
           if [[ "$WGPU_REFERENCE" == true ]]; then suites+=(//tools/ci:linux_wgpu_resvg_reference); fi
-          if [[ "$RUN_DARWIN" == true ]]; then
-            suites+=(//tools/ci:unified_editor_geode)
-            if [[ "$RUN_BROWSER" == true ]]; then
-              suites+=(//tools/ci:unified_mac_browser_archive)
-            fi
-            if [[ "$WORKER_QUALIFICATION" == true ]]; then
-              suites+=(//tools/ci:unified_worker_qualification)
-              options+=(--runs_per_test='.*:ci_darwin_qualify_.*@4')
-            fi
-            if [[ "$BROWSER_DIAGNOSTIC" == true ]]; then
-              suites+=(//tools/ci:unified_browser_diagnostic)
-            fi
+          suites+=(//tools/ci:unified_editor_geode)
+          if [[ "$RUN_BROWSER" == true ]]; then
+            suites+=(//tools/ci:unified_mac_browser_archive)
+          fi
+          if [[ "$WORKER_QUALIFICATION" == true ]]; then
+            suites+=(//tools/ci:unified_worker_qualification)
+            options+=(--runs_per_test='.*:ci_darwin_qualify_.*@4')
+          fi
+          if [[ "$BROWSER_DIAGNOSTIC" == true ]]; then
+            suites+=(//tools/ci:unified_browser_diagnostic)
           fi
           patterns="$RUNNER_TEMP/native-target-patterns.txt"
           { printf '%s\n' "${suites[@]}"; cat "$ordinary" "$linux"; } > "$patterns"
@@ -626,87 +621,10 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-  # Advisory macOS shadow lane: the selection built and tested for macOS from a self-hosted Linux
-  # runner, every action on a remote macOS executor. Opt-in, never gating, after this run's Linux
-  # lane, one at a time; "Remote macOS shadow lane" in docs/building.md describes it.
-  macos-remote-shadow-turnstile:
-    runs-on: ubuntu-24.04
-    needs: [gatekeeper, determine-targets, linux-self-hosted]
-    if: ${{ !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') }}
-    # Advisory like the lane: a crash or timeout here never fails the run.
-    continue-on-error: true
-    timeout-minutes: 40
-    outputs:
-      admitted: ${{ steps.wait.outputs.admitted }}
-    steps:
-      - name: Checkout turnstile action
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Wait for the macOS remote shadow lane
-        id: wait
-        uses: ./.github/actions/re-turnstile
-        with:
-          lane: macos-remote-shadow
-          pool: macos-remote-shadow
-          pool-workflows: main.yml pr_base_change.yml
-          pool-upstream: linux-self-hosted macos-remote-shadow-turnstile
-          upstream-grace-minutes: "5"
-          capacity: "1"
-          token: ${{ github.token }}
-          timeout-minutes: "30"
-          timeout-result: skip
-
-  macos-remote-shadow:
-    runs-on: [self-hosted, linux, arm64]
-    needs: [gatekeeper, determine-targets, linux-self-hosted, macos-remote-shadow-turnstile]
-    if: ${{ !cancelled() && (needs.linux-self-hosted.result == 'success' || needs.linux-self-hosted.result == 'failure') && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:macos-remote-shadow') || vars.MACOS_REMOTE_SHADOW_LANE == 'true') && needs.macos-remote-shadow-turnstile.outputs.admitted == 'true' }}
-    # Never fails the run, even when the runner or the job itself fails.
-    continue-on-error: true
-    # The lane's --budget-minutes in tools/ci/lanes.py stays below this with room to report.
-    timeout-minutes: 90
-    env:
-      # The planner's selection, which tools/ci/lane.py reads.
-      TARGETS_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
-      TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Build and test for macOS on the remote executor
-        id: shadow
-        continue-on-error: true
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-remote-shadow shadow
-
-      # Derived files only; consoles, build event and execution logs stay on the runner.
-      - name: Upload shadow lane summary
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-remote-shadow-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/macos-remote-shadow/report.md
-            ${{ runner.temp }}/macos-remote-shadow/shadow-summary.json
-            ${{ runner.temp }}/macos-remote-shadow/*/profile.gz
-          retention-days: 14
-          if-no-files-found: ignore
-
-      # Staged by the lane; the lane step continues on error, so its outcome decides.
-      - name: Upload failed test logs and outputs
-        if: ${{ !cancelled() && steps.shadow.outcome == 'failure' }}
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: macos-remote-shadow-test-failures-${{ github.run_attempt }}
-          testlogs: ${{ runner.temp }}/macos-remote-shadow/test-artifacts
-
   macos:
     runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.unified_macos != 'true' }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
     # runs allowed to write bind it, so other runs never receive that key.
     environment:
@@ -965,423 +883,6 @@ jobs:
 
   # Desktop-session browser cases have one native owner; headless cases run in the VM.
 
-  macos-browser:
-    runs-on: [self-hosted, macOS, ARM64]
-    needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
-    timeout-minutes: 60
-    environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
-      deployment: false
-    env:
-      MIN_FREE_DISK_GIB: "30"
-      # The planner's selection, which tools/ci/lane.py reads.
-      TARGETS_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
-      TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Check runner disk space
-        shell: bash
-        run: tools/ci_check_runner_disk.sh
-
-      - name: Select pinned Xcode
-        id: xcode
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh
-
-      - name: Configure BuildBuddy remote cache
-        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
-          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
-          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
-          download-outputs: minimal
-
-      - name: Prepare self-hosted macOS toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
-          test -x /opt/homebrew/bin/bazelisk
-          test -x /opt/homebrew/bin/bazel
-          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
-
-      - name: Refresh Xcode toolchain configuration
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-browser refresh_xcode
-
-      - name: Qualify pinned Chromium archive
-        id: browser_preflight
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-browser browser_preflight
-
-      - name: Test (browser targets)
-        id: browser_test
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-browser browser_test
-
-      - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.browser_test.outcome == 'failure')
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Record coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        shell: bash
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: python3 tools/ci_coverage_contract.py receipt macos-browser
-
-      - name: Upload coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-receipt-macos-browser
-          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 3
-
-      - name: Remove BuildBuddy credentials
-        if: always()
-        shell: bash
-        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
-
-  macos-self-hosted:
-    runs-on: [self-hosted, macOS-vm, ARM64]
-    needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
-    # Bound at 60 min so healthy affected-target runs have buffer while a stuck
-    # run still fails instead of tailing for hours.
-    timeout-minutes: 60
-    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes. This job only runs for trusted maintainer
-    # pull requests, so it binds the buildbuddy-write environment exactly as the
-    # `macos` job does for them.
-    environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
-      deployment: false
-    env:
-      # Free space, in GiB, required on every filesystem this job writes. It
-      # bounds the job's working set: infrastructure PRs and full-graph
-      # fallbacks build and test all of //... with locally executed actions.
-      # This is
-      # intended to cover such a run with margin.
-      MIN_FREE_DISK_GIB: "30"
-      # The planner's selection, which tools/ci/lane.py reads.
-      TARGETS_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
-      TARGETS_AFFECTED: ${{ needs.determine-targets.outputs.affected }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # Before Bazel, so a full disk fails in seconds with a clear error instead of
-      # minutes to an hour in as a Bazel ENOSPC, a job timeout or a lost runner
-      # connection, which read like failures of the change under test.
-      - name: Check runner disk space
-        shell: bash
-        run: tools/ci_check_runner_disk.sh
-
-      # When this lane selects the same approved tuple as a hosted lane, their
-      # action keys match. Missing all approved versions, ambiguous discovery or
-      # an unexpected build fails here rather than selecting another toolchain.
-      - name: Select pinned Xcode
-        id: xcode
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh
-
-      # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the selected approved tuple's partition (docs/building.md). The action fails
-      # rather than writing to another partition when this runner has none. It
-      # runs before "Prepare self-hosted macOS toolchain", the first step that
-      # touches Bazel.
-      - name: Configure BuildBuddy remote cache
-        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
-          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
-          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
-          download-outputs: minimal
-
-      - name: Prepare self-hosted macOS toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
-          test -x /opt/homebrew/bin/bazelisk
-          test -x /opt/homebrew/bin/bazel
-          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
-
-      - name: Refresh Xcode toolchain configuration
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted refresh_xcode
-
-      - name: Build and test
-        id: test
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted test
-
-      # Browser tests share the GPU with native replays and need their own serial phase.
-      # Headed-browser tests need a desktop session; the required native desktop browser job runs them.
-
-      - name: Qualify pinned Chromium archive
-        id: browser_preflight
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted browser_preflight
-
-      - name: Test (browser targets)
-        id: browser_test
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted browser_test
-
-      - name: Test (Geode editor lane)
-        id: geode_test
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted geode_test
-
-      - name: Diagnose Chromium context lifecycle
-        id: browser_context_diagnostic
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.trusted_pr == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe') }}
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-self-hosted browser_context_diagnostic
-
-      - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure' || steps.browser_context_diagnostic.outcome == 'failure')
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-      # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
-      - name: Record coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        shell: bash
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: python3 tools/ci_coverage_contract.py receipt macos-self-hosted
-
-      - name: Upload coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-receipt-macos-self-hosted
-          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 3
-
-      # Remove the BuildBuddy key and its workspace helper, whatever the outcome.
-      - name: Remove BuildBuddy credentials
-        if: always()
-        shell: bash
-        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
-
-  macos-vm-qualification:
-    runs-on: [self-hosted, macOS-vm-qualification, ARM64]
-    needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        instance: [1, 2, 3, 4]
-    timeout-minutes: 60
-    env:
-      MIN_FREE_DISK_GIB: "30"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Check runner disk space
-        run: tools/ci_check_runner_disk.sh
-
-      - name: Select pinned Xcode
-        id: xcode
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh
-
-      - name: Refresh Xcode toolchain configuration
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-vm-qualification refresh_xcode
-
-      - name: Qualify concurrent VM workload
-        id: qualification
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-vm-qualification qualification
-
-      - name: Record VM qualification execution evidence
-        if: always()
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: python3 tools/ci_coverage_contract.py receipt macos-vm-qualification
-
-      - name: Require four executed qualification tests
-        if: success()
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-vm-qualification require_executed
-
-      - name: Retain VM qualification execution evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: vm-qualification-evidence-${{ matrix.instance }}
-          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Bazel test failure artifacts
-        if: failure()
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: bazel-test-failure-${{ github.job }}-${{ matrix.instance }}
-
-  macos-metal:
-    runs-on: [self-hosted, macOS, ARM64]
-    needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.metal_affected == 'true') }}
-    # Bound at 60 min so healthy affected-target runs have buffer while a stuck
-    # run still fails instead of tailing for hours.
-    timeout-minutes: 60
-    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes. This job only runs for trusted maintainer
-    # pull requests, so it binds the buildbuddy-write environment exactly as the
-    # `macos` job does for them.
-    environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
-      deployment: false
-    env:
-      # Free space, in GiB, required on every filesystem this job writes. It
-      # bounds the job's working set: infrastructure PRs and full-graph
-      # fallbacks build and test all of //... with locally executed actions.
-      # This is
-      # intended to cover such a run with margin.
-      MIN_FREE_DISK_GIB: "30"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # Before Bazel, so a full disk fails in seconds with a clear error instead of
-      # minutes to an hour in as a Bazel ENOSPC, a job timeout or a lost runner
-      # connection, which read like failures of the change under test.
-      - name: Check runner disk space
-        shell: bash
-        run: tools/ci_check_runner_disk.sh
-
-      # Select an approved tuple from tools/ci_macos_xcode.txt. Action keys match
-      # hosted lanes on that tuple; missing all approved versions or invalid
-      # discovery/build identity fails closed.
-      - name: Select pinned Xcode
-        id: xcode
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh
-
-      # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the selected approved tuple's partition (docs/building.md). The action fails
-      # rather than writing to another partition when this runner has none. It
-      # runs before "Prepare self-hosted macOS toolchain", the first step that
-      # touches Bazel.
-      - name: Configure BuildBuddy remote cache
-        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
-          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
-          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
-          download-outputs: minimal
-
-      - name: Prepare self-hosted macOS toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
-          test -x /opt/homebrew/bin/bazelisk
-          test -x /opt/homebrew/bin/bazel
-          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
-
-      - name: Refresh Xcode toolchain configuration
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-metal refresh_xcode
-
-      - name: Ensure offline Metal compiler
-        id: metal_setup
-        timeout-minutes: 12
-        run: python3 tools/ci_metal_toolchain.py --install-missing
-
-      - name: Report Metal component status
-        if: ${{ failure() && steps.metal_setup.outcome == 'failure' }}
-        timeout-minutes: 2
-        run: python3 tools/ci_metal_toolchain.py --describe
-
-      # The only shader-validation gate in CI: the hosted image's virtual GPU cannot run it,
-      # so main runs none. The capability probe and native suites are mandatory whenever this job runs.
-      - name: Require full Metal shader validation
-        id: metal_profile
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-metal metal_profile
-
-      - name: Metal validation preflight
-        id: metal_preflight
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-metal metal_preflight
-
-      - name: Validate offline Metal compiler
-        id: metal_compiler
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-metal metal_compiler
-
-      - name: Test remaining native Metal suite
-        id: metal_native
-        shell: bash
-        run: python3 tools/ci/lane.py phase macos-metal metal_native
-
-      - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_compiler.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.metal_native.outcome == 'failure')
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-      # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
-      - name: Record coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        shell: bash
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-        run: python3 tools/ci_coverage_contract.py receipt macos-metal
-
-      - name: Upload coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-receipt-macos-metal
-          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 3
-
-      # Remove the BuildBuddy key and its workspace helper, whatever the outcome.
-      - name: Remove BuildBuddy credentials
-        if: always()
-        shell: bash
-        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
-
   coverage-contract:
     # Fails a trusted pull request whose lanes skipped a phase or test class that main's hosted
     # lanes run. tools/ci/coverage_contract.json declares each main-hosted phase, the classes of
@@ -1391,12 +892,12 @@ jobs:
     # manifest that names its owner; the exceptions are printed on every run. Untrusted pull
     # requests and main pushes run main's hosted lanes themselves, so this runs when the
     # self-hosted Linux lane replaced hosted Linux; when hosted macOS ran (the ci:hosted-macos
-    # label or a disabled macOS runner), the macOS lane needs no counterparts. It runs no build:
+    # label or a disabled mixed graph), the macOS lane needs no counterparts. It runs no build:
     # it reads receipts on a self-hosted Linux runner, so a trusted pull request gains no hosted
     # job. Hosted main also retains browser and Geode build event files for consistent
     # reporting across the different execution venues.
     runs-on: [self-hosted, linux, arm64]
-    needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-metal, macos-browser]
+    needs: [gatekeeper, determine-targets, linux, linux-self-hosted]
     if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 10
     steps:

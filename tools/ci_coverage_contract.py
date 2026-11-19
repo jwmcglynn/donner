@@ -29,13 +29,13 @@ import sys
 CONDITIONS = ("always", "browser_affected", "metal_affected")
 # Routing outputs that say a lane's hosted job was replaced by self-hosted jobs on this pull
 # request. A fallback does not change routing.
-ROUTES = ("always", "self_hosted_macos")
+ROUTES = ("always", "unified_macos")
 # Where each selection comes from in the contract job's `needs` context: (job, output).
 SELECTION_SOURCES = {
     "fallback": ("determine-targets", "fallback"),
     "browser_affected": ("determine-targets", "browser_affected"),
     "metal_affected": ("determine-targets", "metal_affected"),
-    "self_hosted_macos": ("gatekeeper", "use_self_hosted_macos"),
+    "unified_macos": ("gatekeeper", "unified_macos"),
 }
 MANIFEST = "tools/ci/coverage_contract.json"
 # Step outcomes that mean the step ran its command (it may have failed; the job reports that).
@@ -47,17 +47,21 @@ def _problem_list(prefix, items):
     return ["%s %s" % (prefix, item) for item in items]
 
 
+def _counterpart_problem(where, counterpart):
+    keys = set(counterpart)
+    if not {"job", "step"} <= keys or keys - {"job", "step", "min_tests", "requires_soak", "class"}:
+        return "%s has a malformed counterpart %r" % (where, counterpart)
+    if "class" in counterpart and (counterpart["job"], counterpart["step"]) != ("linux-self-hosted", "unified"):
+        return "%s has a class outside the verified mixed graph" % where
+    if not isinstance(counterpart.get("requires_soak", False), bool):
+        return "%s counterpart requires_soak must be a boolean" % where
+    if type(counterpart.get("min_tests", 0)) is not int:
+        return "%s counterpart min_tests must be an integer" % where
+    return None
+
+
 def _counterpart_problems(where, counterparts):
-    problems = []
-    for counterpart in counterparts:
-        keys = set(counterpart)
-        if not {"job", "step"} <= keys or keys - {"job", "step", "min_tests", "requires_soak"}:
-            problems.append("%s has a malformed counterpart %r" % (where, counterpart))
-        elif not isinstance(counterpart.get("requires_soak", False), bool):
-            problems.append("%s counterpart requires_soak must be a boolean" % where)
-        elif not isinstance(counterpart.get("min_tests", 0), int):
-            problems.append("%s counterpart min_tests must be an integer" % where)
-    return problems
+    return [issue for counterpart in counterparts if (issue := _counterpart_problem(where, counterpart))]
 
 
 def _exception_problems(where, exception):
@@ -127,6 +131,13 @@ def bep_counts(path):
     return {"tests": len(summaries), "executed": len(executed & summaries)}
 
 
+def _darwin_classes(context):
+    counts = json.loads(context.get("outputs", {}).get("darwin_classes", "{}"))
+    if not isinstance(counts, dict) or not all(type(n) is int and n >= 0 for n in counts.values()):
+        raise ValueError("Invalid verified Darwin class counts")
+    return counts
+
+
 def make_receipt(job, steps_context, bep_directory):
     """A receipt for one job from its `steps` context: each step's outcome and, where the step
     wrote coverage-<id>.bep.json in `bep_directory`, its test counts."""
@@ -136,6 +147,8 @@ def make_receipt(job, steps_context, bep_directory):
         bep = Path(bep_directory) / ("coverage-%s.bep.json" % step)
         if entry["outcome"] in EXECUTED and bep.is_file():
             entry.update(bep_counts(bep))
+        if job == "linux-self-hosted" and step == "unified" and entry["outcome"] == "success":
+            entry["classes"] = _darwin_classes(context)
         if context.get("outputs", {}).get("deterministic_soak_executed") == "true":
             entry["deterministic_soak_executed"] = True
         steps[step] = entry
@@ -166,6 +179,9 @@ def _counterpart_ran(counterpart, receipts):
         return False
     if counterpart.get("requires_soak") and step.get("deterministic_soak_executed") is not True:
         return False
+    if "class" in counterpart:
+        count = step.get("classes", {}).get(counterpart["class"])
+        return count is not None and count >= counterpart.get("min_tests", 0)
     return step.get("tests", 0) >= counterpart.get("min_tests", 0)
 
 
