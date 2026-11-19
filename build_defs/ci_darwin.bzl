@@ -91,7 +91,9 @@ def declare_darwin_variants(ci):
                 testonly = True,
             )
         run = "shard_count" in source and _runs_in_native_lane(tags)
-        gpu = "resources:local_gpu:1" in tags or "launches-browser" in tags
-        profile = "desktop" if "requires_desktop_session" in tags else "ordinary"
+        # Size checks and browser journeys consume the same Darwin-configured editor package.
+        editor_package = native.package_name() == "donner/editor/wasm" and "editor-wasm-check" in tags
+        gpu = "resources:local_gpu:1" in tags or "launches-browser" in tags or editor_package
+        profile = "desktop" if "requires_desktop_session" in tags or editor_package else "ordinary"
         # Filtered tests still compile under bazel test --nobuild_tests_only.
         _variant(ci, name, source, profile, run, gpu, "ci_darwin_", ["external", "no-cache"] if name in special.get("fresh", []) else [])

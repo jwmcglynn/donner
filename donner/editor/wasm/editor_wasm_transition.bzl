@@ -2,64 +2,15 @@
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 
-def _append_once(values, value):
-    result = list(values)
-    if value not in result:
-        result.append(value)
-    return result
+load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUTS", "wasm_profile_options")
 
 def _editor_wasm_geode_transition_impl(settings, attr):
-    return {
-        "//donner/svg/renderer/geode:browser_backend": attr.browser_backend,
-        "//build_defs:disable_perf_opt_transition": True,
-        "//donner/editor/wasm:enable_wasm": True,
-        "//donner/svg/renderer/wasm:enable_wasm": True,
-        "//donner/svg/renderer:renderer_backend": "geode",
-        "//donner/svg/renderer:text": True,
-        "//donner/svg/renderer:text_full": True,
-        "//donner/svg/renderer/geode:enable_geode": True,
-        "//command_line_option:compilation_mode": "opt",
-        "//command_line_option:copt": _append_once(
-            _append_once(
-                settings["//command_line_option:copt"],
-                "-pthread",
-            ),
-            "-Oz",
-        ),
-        "//command_line_option:cxxopt": _append_once(
-            settings["//command_line_option:cxxopt"],
-            "-fconstexpr-steps=10000000",
-        ),
-        "//command_line_option:linkopt": _append_once(
-            _append_once(
-                settings["//command_line_option:linkopt"],
-                "-pthread",
-            ),
-            "-Oz",
-        ),
-    }
+    return wasm_profile_options(settings, "editor-wasm", attr.browser_backend)
 
 _editor_wasm_geode_transition = transition(
     implementation = _editor_wasm_geode_transition_impl,
-    inputs = [
-        "//command_line_option:copt",
-        "//command_line_option:cxxopt",
-        "//command_line_option:linkopt",
-    ],
-    outputs = [
-        "//build_defs:disable_perf_opt_transition",
-        "//donner/editor/wasm:enable_wasm",
-        "//donner/svg/renderer/wasm:enable_wasm",
-        "//donner/svg/renderer:renderer_backend",
-        "//donner/svg/renderer:text",
-        "//donner/svg/renderer:text_full",
-        "//donner/svg/renderer/geode:enable_geode",
-        "//donner/svg/renderer/geode:browser_backend",
-        "//command_line_option:compilation_mode",
-        "//command_line_option:copt",
-        "//command_line_option:cxxopt",
-        "//command_line_option:linkopt",
-    ],
+    inputs = WASM_OPTION_INPUTS,
+    outputs = WASM_OPTION_OUTPUTS,
 )
 
 def _editor_wasm_geode_transitioned_target_impl(ctx):

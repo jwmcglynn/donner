@@ -148,12 +148,21 @@ def editor_browser_cases(log):
 QUALIFY = "//tools/ci:unified_worker_qualification"
 
 
+# Only the side that owns each configured artifact must pass. The other platform skips it.
+WASM_CHECKS = {
+    "//donner/editor/wasm:ci_darwin_graph_wasm_geode_package_size_tests",
+    "//donner/editor/wasm:ci_darwin_graph_wasm_shipped_browser_dependency_audit_test",
+} | {"//donner/svg/renderer/wasm:graph_" + name for name in (
+    "render_test", "render_text_test", "wasm_size_tests", "geode_browser_default_audit_test",
+)}
+
+
 def _ordinary_built(evidence, selected):
     missing = {label for label in selected if evidence.targets.get(label) not in ("built", "incompatible")}
     compatible = {label for label in selected if evidence.targets.get(label) == "built"}
-    missing.update(selected & NATIVE_BROWSER - compatible)
+    missing.update((selected & (NATIVE_BROWSER | WASM_CHECKS)) - compatible)
     if missing:
-        raise ValueError(f"Darwin target did not finish: {sorted(missing)}")
+        raise ValueError(f"Selected target did not finish: {sorted(missing)}")
     return compatible
 
 

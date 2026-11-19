@@ -831,6 +831,18 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+config_setting(
+    name = "on_mixed_ci_linux",
+    values = {"platforms": "//tools/ci:linux_ci"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "on_mixed_ci_darwin_gpu",
+    values = {"platforms": "//tools/ci:remote_macos_aarch64_gpu"},
+    visibility = ["//visibility:public"],
+)
+
 platform(
     name = "linux_ci",
     constraint_values = ["@platforms//os:linux", "@platforms//cpu:aarch64"],

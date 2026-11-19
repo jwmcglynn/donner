@@ -5,6 +5,7 @@ Helper rules, such as for building fuzzers.
 load("@bazel_features//:features.bzl", "bazel_features")
 load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
 load("//build_defs:ci_xcode.bzl", "ci_xcode_identity")
+load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUTS", "wasm_profile_options")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
@@ -217,6 +218,11 @@ def _donner_transitioned_executable_impl(ctx):
     forwarded_runfiles = ctx.runfiles(
         root_symlinks = root_symlinks,
     ).merge(dep_default_info.default_runfiles).merge(dep_default_info.data_runfiles)
+
+    if getattr(ctx.attr, "required_outputs", []):
+        forwarded_runfiles = forwarded_runfiles.merge(ctx.runfiles(transitive_files = depset(
+            transitive = [target[DefaultInfo].files for target in ctx.attr.required_outputs],
+        )))
 
     # Do not forward the transitioned executable as a plain symlink. Native
     # binaries encode their own target basename in a runfiles-relative rpath
@@ -1382,6 +1388,47 @@ ci_platform_build = rule(
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     },
 )
+
+def _ci_wasm_options(settings, attr):
+    return wasm_profile_options(settings, attr.profile)
+
+_ci_wasm_transition = transition(
+    implementation = _ci_wasm_options,
+    inputs = WASM_OPTION_INPUTS,
+    outputs = WASM_OPTION_OUTPUTS,
+)
+
+_wasm_ci_test = rule(
+    implementation = _donner_transitioned_executable_impl,
+    test = True,
+    cfg = _ci_wasm_transition,
+    attrs = {
+        "argument_files": attr.label_list(allow_files = True),
+        "fixed_args": attr.string_list(),
+        "dep": attr.label(mandatory = True, executable = True, cfg = "target"),
+        "profile": attr.string(mandatory = True, values = ["editor-wasm", "wasm-size", "wasm-geode"]),
+        "required_outputs": attr.label_list(allow_files = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
+    } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
+)
+
+def wasm_ci_test(actual, profile, required_outputs = []):
+    """Expose a configured manual Wasm check to normal affected-target selection once."""
+    source = native.existing_rule(actual)
+    _wasm_ci_test(
+        name = "graph_" + actual,
+        dep = ":" + actual,
+        profile = profile,
+        required_outputs = required_outputs,
+        fixed_args = source.get("args", []),
+        argument_files = source.get("data", []),
+        size = source.get("size", "small"),
+        tags = ["editor-wasm-check"],
+        target_compatible_with = select({
+            "//tools/ci:on_mixed_ci_darwin_gpu" if profile == "editor-wasm" else "//tools/ci:on_mixed_ci_linux": [],
+            "//conditions:default": ["@platforms//:incompatible"],
+        }),
+    )
 
 def _finalize_ci_package(name, visibility):
     declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))

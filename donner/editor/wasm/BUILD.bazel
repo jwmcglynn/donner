@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets", "wasm_ci_test")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
@@ -496,6 +496,16 @@ py_test(
         "package_web_files_test.py",
     ],
     imports = ["."],
+)
+
+wasm_ci_test(
+    actual = "wasm_shipped_browser_dependency_audit_test",
+    profile = "editor-wasm",
+)
+
+wasm_ci_test(
+    actual = "wasm_geode_package_size_tests",
+    profile = "editor-wasm",
 )
 
 ci_darwin_targets()

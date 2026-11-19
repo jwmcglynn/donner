@@ -186,7 +186,7 @@ class GatekeeperTest(unittest.TestCase):
         self.assertFalse((self.repo / "INJECTED").exists(), "PR helper executed before trust")
         self.assertEqual(originals, (helper.read_bytes(), action.read_bytes()))
         self.assertEqual("docs_only=false\n", output.read_text())
-        trust_body = textwrap.dedent(action.read_text().split("      run: |\n", 1)[1])
+        trust_body = textwrap.dedent(action.read_text().split("      run: |\n", 1)[1].split("\n    - id: ", 1)[0])
         self._run_fixture_shell(trust_body, env, trusted)
         self.assertIn("trusted_pr=false\n", output.read_text())
         env.update(TRUSTED_PR="false", SELFHOSTED_LINUX_RUNNER="true",

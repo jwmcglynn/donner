@@ -104,6 +104,14 @@ class UnifiedTest(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "did not finish"):
                 verify(list(events()) + extra, [SUITE, METAL], [label])
 
+    def test_selected_wasm_payload_check_cannot_be_platform_skipped(self):
+        linux = "//donner/svg/renderer/wasm:graph_wasm_size_tests"
+        darwin = "//donner/editor/wasm:ci_darwin_graph_wasm_geode_package_size_tests"
+        for label, kwargs in [(linux, {"linux": [linux]}), (darwin, {"ordinary": [darwin]})]:
+            skip = {"id": {"targetCompleted": {"label": label}}, "aborted": {"reason": "SKIPPED"}}
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "did not finish"):
+                verify(list(events()) + [skip], [SUITE, METAL], **kwargs)
+
     def test_kernel_log_must_match_its_platform_and_declared_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
