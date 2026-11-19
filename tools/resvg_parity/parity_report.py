@@ -8,14 +8,18 @@ import ast
 from collections import Counter
 from collections.abc import Callable
 import csv
+import hashlib
 from dataclasses import dataclass
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 from typing import Iterable, Sequence, TextIO
+from xml.parsers import expat
 
 
 SCHEMA_VERSION = 1
@@ -587,16 +591,17 @@ def _required_features_from_params(expression: str, category: str) -> tuple[set[
     for _, _, arguments in require_calls:
         if not arguments:
             raise ParityReportError("requireFeature is missing its feature argument")
-        feature = arguments[0]
-        if "TextFull" in feature:
-            required_features.add("text-full")
-            only_text_full = True
-        elif "Text" in feature:
-            required_features.add("text")
-        elif "FilterEffects" in feature:
-            required_features.add("filter-effects")
-        else:
-            required_features.add(_normalize_cpp_expression(feature))
+        features = {
+            "RendererBackendFeature::Text": "text",
+            "RendererBackendFeature::TextFull": "text-full",
+            "RendererBackendFeature::FilterEffects": "filter-effects",
+            "RendererBackendFeature::AsciiSnapshot": "ascii-snapshot",
+        }
+        feature = features.get(_normalize_cpp_expression(arguments[0]))
+        if feature is None:
+            raise ParityReportError(f"unknown required feature: {arguments[0]!r}")
+        required_features.add(feature)
+        only_text_full |= feature == "text-full"
 
     return required_features, only_text_full, bool(require_calls)
 
@@ -789,6 +794,328 @@ def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[
     }
 
 
+# The normal Bazel corpus wrappers select these backend/text combinations.
+# Text and TextFull are deliberately false in GeodeSupportsFeature for this harness.
+CORPUS_LANES = {
+    "default_text": ("tiny-golden", frozenset({"text", "filter-effects", "ascii-snapshot"})),
+    "max": ("tiny-golden", frozenset({"text", "text-full", "filter-effects", "ascii-snapshot"})),
+    "geode": ("geode-golden", frozenset({"filter-effects", "ascii-snapshot"})),
+}
+DEFAULT_THRESHOLD = 0.02
+DEFAULT_MAX_PIXELS = 100
+
+
+def _number(expression: str, *, integer: bool = False) -> int | float | None:
+    constants = {"kDefaultThreshold": DEFAULT_THRESHOLD,
+                 "kDefaultMismatchedPixels": DEFAULT_MAX_PIXELS}
+    if expression in constants:
+        return constants[expression]
+    try:
+        return int(expression) if integer else float(expression.removesuffix("f"))
+    except ValueError:
+        # Raw C++ expressions are still reportable. Strict policies reject unresolved effective
+        # settings; the static inventory never guesses the runtime value.
+        return None
+
+
+def _pixel_budget(expression: str) -> int | float | None:
+    return _number(expression, integer=True)
+
+
+_ARGUMENT_SETTINGS = {
+    "WithThreshold": (("threshold", _number), ("max_pixels", _pixel_budget)),
+    "WithMaxPixels": (("max_pixels", _pixel_budget),),
+    "WithGoldenOverride": (("shared_golden", _parse_cpp_string_expression), ("threshold", _number)),
+    "withGeodeGoldenOverride": (("geode_golden", _parse_cpp_string_expression),),
+    "withMaxPixelsDifferent": (("max_pixels", _pixel_budget),),
+    "withSimpleTextMaxPixels": (("simple_max_pixels", _pixel_budget),),
+    "withGeodeMaxPixelsDifferent": (("geode_max_pixels", _pixel_budget),),
+}
+_CONSTANT_SETTINGS = {
+    "includeAntiAliasingDifferences": {"include_antialiasing": True},
+    "ResvgV049Reference": {"canvas_size": [300, 300]},
+}
+_SETTING_CALLS = {*_ARGUMENT_SETTINGS, *_CONSTANT_SETTINGS, "setCanvasSize"}
+
+
+def _settings_for_call(name: str, args: list[str]) -> dict[str, object]:
+    if name == "setCanvasSize":
+        return {"canvas_size": [_pixel_budget(arg) for arg in args]}
+    if name in _CONSTANT_SETTINGS:
+        return _CONSTANT_SETTINGS[name]
+    return {field: convert(arg) for (field, convert), arg in zip(_ARGUMENT_SETTINGS[name], args)}
+
+
+def _check_numeric_settings(settings: dict[str, object], expression: str) -> None:
+    threshold = settings["threshold"]
+    budget = settings["max_pixels"]
+    canvas = settings["canvas_size"]
+    if ((threshold is not None and (not math.isfinite(threshold) or not 0 <= threshold <= 1))
+            or (budget is not None and budget < 0)
+            or len(canvas) != 2 or any(value is not None and value <= 0 for value in canvas)):
+        raise ParityReportError(f"invalid numeric comparison settings: {expression!r}")
+
+
+def _settings_from_params(expression: str) -> dict[str, object]:
+    settings = {
+        "threshold": DEFAULT_THRESHOLD,
+        "max_pixels": DEFAULT_MAX_PIXELS,
+        "simple_max_pixels": -1,
+        "geode_max_pixels": -1,
+        "shared_golden": None,
+        "geode_golden": None,
+        "include_antialiasing": False,
+        "canvas_size": [500, 500],
+    }
+    for _, name, args in sorted(_iter_named_calls(expression, _SETTING_CALLS)):
+        settings.update(_settings_for_call(name, args))
+    _check_numeric_settings(settings, expression)
+    return settings
+
+
+def _lane_state(case: dict[str, object], backend: str, missing: list[str]) -> str:
+    if case["registration"] != "active":
+        return "unregistered"
+    if case["primary_state"] == "skip":
+        return "skip"
+    if backend in case["disabled_backends"]:
+        return "backend-disabled"
+    if missing:
+        return "capability-gated"
+    return case["primary_state"]
+
+
+def _lane_budget(config: dict[str, object], lane: str) -> int | None:
+    max_pixels = config["max_pixels"]
+    simple_pixels = config["simple_max_pixels"]
+    geode_pixels = config["geode_max_pixels"]
+    if lane != "max" and (simple_pixels is None or simple_pixels >= 0):
+        max_pixels = simple_pixels
+    if lane == "geode" and (geode_pixels is None or geode_pixels >= 0):
+        max_pixels = geode_pixels
+    return max_pixels
+
+
+def _lane_reference(path: str, config: dict[str, object], geode: bool) -> dict[str, str]:
+    golden = (config["geode_golden"] if geode else None) or config["shared_golden"]
+    if golden:
+        return {
+            "path": golden,
+            "provenance_catalog": "donner/svg/renderer/testdata/golden/README.md",
+        }
+    return {
+        "path": (TESTS_ROOT / path).with_suffix(".png").as_posix(),
+        "provenance_catalog": "third_party/resvg-test-suite/BUILD.bazel",
+    }
+
+
+def _case_lanes(case: dict[str, object]) -> dict[str, object]:
+    config = _settings_from_params(case["raw_params_expression"])
+    lanes = {}
+    for lane, (mode, capabilities) in CORPUS_LANES.items():
+        geode = lane == "geode"
+        missing = sorted(set(case["backend_requirements"]) - capabilities)
+        lanes[lane] = {
+            "mode": mode,
+            "text_configuration": "full" if lane == "max" else "simple",
+            "configured_state": _lane_state(case, "geode" if geode else "tiny-skia", missing),
+            "missing_features": missing,
+            "settings": {
+                "canvas_size": config["canvas_size"],
+                "include_antialiasing": config["include_antialiasing"],
+                "max_pixels": _lane_budget(config, lane),
+                "threshold": config["threshold"],
+                "reference": _lane_reference(case["path"], config, geode),
+            },
+            "observed": "unobserved",
+        }
+    return lanes
+
+
+def _runtime_name(case: dict[str, object], lane: str) -> tuple[str, str]:
+    stem = re.sub(r"[^0-9A-Za-z]", "_", Path(case["path"]).stem)
+    if lane == "geode":
+        stem += "_GeodeGolden"
+    if (case["primary_state"] == "skip"
+            or (lane != "max" and _contains_call(case["raw_params_expression"], {"onlyTextFull"}))):
+        stem = "DISABLED_" + stem
+    return (f"{case['suite_name']}/ImageComparisonTestFixture", "ResvgTest/" + stem)
+
+
+def _test_outcome(
+    attributes: dict[str, str], children: set[str], filename: str
+) -> tuple[tuple[str, str], str]:
+    suite, name = attributes.get("classname"), attributes.get("name")
+    if not suite or not name:
+        raise ParityReportError(f"unnamed testcase in {filename}")
+    status, result = attributes.get("status"), attributes.get("result")
+    if children & {"failure", "error"}:
+        return (suite, name), "failed"
+    if status == "run" and "skipped" in children:
+        return (suite, name), "skipped"
+    outcome = {
+        ("notrun", "suppressed"): "suppressed",
+        ("run", "skipped"): "skipped",
+        ("run", "completed"): "passed",
+    }.get((status, result))
+    if outcome is None:
+        raise ParityReportError(f"unknown execution status for {suite}/{name}")
+    return (suite, name), outcome
+
+
+class _TestXmlResults:
+    """Collect testcase tags and direct status markers without loading XML entities or text."""
+
+    def __init__(self, filename: str) -> None:
+        self.filename = filename
+        self.root = None
+        self.depth = 0
+        self.case_depth = 0
+        self.attributes = None
+        self.children = set()
+        self.results = []
+
+    def start(self, name: str, attributes: dict[str, str]) -> None:
+        self.depth += 1
+        if self.depth == 1:
+            self.root = name
+        if name == "testcase":
+            if self.attributes is not None:
+                raise ParityReportError(f"nested testcase in {self.filename}")
+            self.case_depth = self.depth
+            self.attributes = attributes
+            self.children.clear()
+        elif self.attributes is not None and self.depth == self.case_depth + 1:
+            self.children.add(name)
+
+    def end(self, name: str) -> None:
+        if name == "testcase":
+            self.results.append(_test_outcome(self.attributes, self.children, self.filename))
+            self.attributes = None
+        self.depth -= 1
+
+
+def _reject_xml_declaration(*_args) -> None:
+    raise ParityReportError("DTD and entity declarations are not accepted in corpus test XML")
+
+
+def _parse_test_xml(data: bytes, filename: str) -> list[tuple[tuple[str, str], str]]:
+    result = _TestXmlResults(filename)
+    parser = expat.ParserCreate()
+    parser.StartElementHandler = result.start
+    parser.EndElementHandler = result.end
+    parser.StartDoctypeDeclHandler = _reject_xml_declaration
+    parser.EntityDeclHandler = _reject_xml_declaration
+    parser.ExternalEntityRefHandler = lambda *_args: 0
+    parser.Parse(data, True)
+    if result.root not in {"testsuites", "testsuite"}:
+        raise ParityReportError(f"not GoogleTest XML: {filename}")
+    return result.results
+
+
+def _read_test_xml(path: Path) -> tuple[list[tuple[tuple[str, str], str]], str]:
+    limit = 8 * 1024 * 1024
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(limit + 1)
+        if len(data) > limit:
+            raise ParityReportError(f"unexpected XML document: {path.name}")
+        records = _parse_test_xml(data, path.name)
+    except (OSError, expat.ExpatError) as error:
+        raise ParityReportError(f"cannot read corpus test XML {path.name}: {error}") from error
+    return records, hashlib.sha256(data).hexdigest()
+
+
+def _execution_summary(report: dict[str, object]) -> dict[str, object]:
+    summary = {}
+    for lane in CORPUS_LANES:
+        entries = [case["lanes"][lane] for case in report["cases"]]
+        counts = Counter(
+            (entry["configured_state"], entry["observed"]) for entry in entries
+        )
+        states = {}
+        for (configured, observed), count in sorted(counts.items()):
+            states.setdefault(configured, {})[observed] = count
+        summary[lane] = states
+    return summary
+
+
+def _execution_keys(report: dict[str, object], lane: str) -> dict[tuple[str, str], dict[str, object]]:
+    keys = {}
+    for case in report["cases"]:
+        if case["registration"] != "active":
+            continue
+        name = _runtime_name(case, lane)
+        if name in keys:
+            raise ParityReportError(f"{lane}: ambiguous testcase {name}")
+        keys[name] = case["lanes"][lane]
+    return keys
+
+
+def _settings_unresolved(settings: dict[str, object]) -> bool:
+    return (settings["threshold"] is None or settings["max_pixels"] is None
+            or None in settings["canvas_size"])
+
+
+def _check_observation(lane: str, keys: dict, observations: dict, name: tuple, outcome: str) -> None:
+    if name not in keys:
+        raise ParityReportError(f"{lane}: unexpected runtime testcase {name}")
+    if name in observations:
+        raise ParityReportError(f"{lane}: duplicate runtime testcase {name}")
+    if outcome != "passed":
+        return
+    entry = keys[name]
+    state = entry["configured_state"]
+    if state not in {"compare", "render-only"}:
+        raise ParityReportError(f"{lane}: passed testcase contradicts the static gate {name}")
+    if state == "compare" and _settings_unresolved(entry["settings"]):
+        raise ParityReportError(f"{lane}: unresolved comparison settings for {name}")
+
+
+def _read_observations(lane: str, keys: dict, inputs: Path) -> tuple[dict, list[str]]:
+    files = sorted(inputs.glob("*.xml")) if inputs.is_dir() else [inputs]
+    if not files:
+        raise ParityReportError(f"{lane}: no GoogleTest XML receipts")
+    evidence = []
+    observations = {}
+    for file in files:
+        records, digest = _read_test_xml(file)
+        evidence.append(digest)
+        for name, outcome in records:
+            _check_observation(lane, keys, observations, name, outcome)
+            observations[name] = outcome
+    if not observations:
+        raise ParityReportError(f"{lane}: zero runtime test records")
+    return observations, evidence
+
+
+def add_execution(
+    report: dict[str, object], lane: str, revision: str, inputs: Path
+) -> None:
+    """Join caller-attested testcase statuses to one configured lane."""
+    if lane not in CORPUS_LANES:
+        raise ParityReportError(f"unknown corpus lane: {lane!r}")
+    expected_revision = report["source"]["revision"] or report["source"].get("caller_revision")
+    if expected_revision != revision or not revision:
+        raise ParityReportError(f"{lane}: receipt revision must match the report source revision")
+    receipts = report.setdefault("execution_receipts", {})
+    if lane in receipts:
+        raise ParityReportError(f"repeated corpus lane: {lane}")
+
+    keys = _execution_keys(report, lane)
+    observations, evidence = _read_observations(lane, keys, inputs)
+    for name, outcome in observations.items():
+        keys[name]["observed"] = outcome
+        keys[name]["observation_binding"] = "caller-attested"
+    receipts[lane] = {
+        "asserted_revision": revision,
+        "binding": "caller-attested",
+        "kind": "google-test-status",
+        "xml_sha256": evidence,
+    }
+    report["lane_summary"] = _execution_summary(report)
+
+
 def build_report(source: str, tests_root: Path) -> dict[str, object]:
     """Join parsed source registrations to the vendored SVG corpus."""
 
@@ -804,20 +1131,28 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
         pixel_budget_sources += _pixel_budget_source_count(registration)
         cases.extend(_registration_cases(registration, vendored[registration.category]))
     cases.sort(key=lambda item: str(item["path"]))
+    for case in cases:
+        case["lanes"] = _case_lanes(case)
 
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "source": {
+            "normal_lanes": {name: {"mode": mode, "capabilities": sorted(capabilities)}
+                             for name, (mode, capabilities) in CORPUS_LANES.items()},
             "active_mode_union": list(ACTIVE_MODE_UNION),
             "disabled_categories": [
                 item.category for item in registrations if item.registration == "disabled"
             ],
             "registration_source": REGISTRATION_SOURCE.as_posix(),
+            "revision": None,
+            "registration_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
             "tests_root": TESTS_ROOT.as_posix(),
         },
         "summary": _summary(cases, pixel_budget_sources),
         "cases": cases,
     }
+    report["lane_summary"] = _execution_summary(report)
+    return report
 
 
 UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
@@ -1035,6 +1370,235 @@ def reference_budget_violations(report: dict[str, object]) -> list[str]:
     return sorted(violations)
 
 
+EXCEPTION_POLICIES = Path("tools/resvg_parity/exception_policies.json")
+REFERENCE_KINDS = {"shared_golden", "geode_golden"}
+NUMERIC_KINDS = {"threshold", "simple_text_threshold", "geode_threshold"}
+
+
+def _scoped_exception_kinds(case: dict[str, object]) -> set[str]:
+    """The row-specific exceptions that need a reviewed decision in the catalog."""
+    if case["registration"] != "active":
+        return {"unregistered"}
+    if case["primary_state"] == "skip":
+        return {"skip"}
+    if case["primary_state"] == "render-only":
+        return set()
+    kinds = set(case["exception_types"]) & (NUMERIC_KINDS | REFERENCE_KINDS)
+    if any(
+        lane["settings"]["threshold"] != DEFAULT_THRESHOLD
+        for lane in case["lanes"].values()
+        if lane["configured_state"] == "compare"
+    ):
+        kinds.add("threshold")
+    return kinds
+
+
+DEFINED_MARKER_CASES = {
+    "filters/feTile/complex-transform.svg": (
+        "known-renderer-divergence", "https://www.w3.org/TR/filter-effects-1/#feTileElement",
+    ),
+    "filters/feTurbulence/stitchTiles=stitch.svg": (
+        "known-renderer-divergence",
+        "https://www.w3.org/TR/filter-effects-1/#element-attrdef-feturbulence-stitchtiles",
+    ),
+    **{
+        f"filters/feConvolveMatrix/{stem}.svg": (
+            "defined-input-no-reference", "https://www.w3.org/TR/filter-effects-1/#feConvolveMatrixElement",
+        )
+        for stem in ("bias=-0.5", "bias=0.5", "bias=9999", "edgeMode=wrap-with-matrix-larger-than-target")
+    },
+    **{
+        f"filters/filter/in={stem}.svg": (
+            "defined-input-no-reference", "https://www.w3.org/TR/filter-effects-1/#attr-valuedef-in-fillpaint",
+        )
+        for stem in ("FillPaint", "FillPaint-on-g-without-children", "FillPaint-with-gradient",
+                     "FillPaint-with-pattern", "FillPaint-with-target-on-g", "StrokePaint")
+    },
+}
+
+
+def _marker_policy(path: str) -> dict[str, object]:
+    classification = "upstream-no-reference"
+    evidence = [UB_MARKER_REFERENCE.as_posix(), "docs/design_docs/0021-resvg_feature_gaps.md"]
+    provenance = "Upstream UB-marker image. The marker does not classify the SVG's normative behavior."
+    if path in SPEC_UB_ALLOWLIST:
+        classification = "implementation-resource-limit"
+        evidence = [
+            REGISTRATION_SOURCE.as_posix(),
+            "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement",
+        ]
+        provenance = "Archived image records an implementation-dependent blur resource limit."
+    elif path in DEFINED_MARKER_CASES:
+        classification, specification = DEFINED_MARKER_CASES[path]
+        evidence.append(specification)
+        if classification == "known-renderer-divergence":
+            evidence.append("docs/spec_audit/filters_generators_lighting.md")
+    return {
+        "classification": classification,
+        "disposition": "Retain no-crash execution while the case lacks a qualified pixel reference.",
+        "evidence": evidence,
+        "reference_provenance": provenance,
+        "removal_criteria": (
+            "Verify the fixture against the governing specification and qualify an independent "
+            "reference before enabling its pixel comparison. Keep any required no-crash coverage."
+        ),
+    }
+
+
+def _capability_policy(case: dict[str, object]) -> dict[str, object] | None:
+    has_explicit_gate = bool({"text_full_gate", "backend_gate"} & set(case["exception_types"]))
+    still_gated = any(lane["configured_state"] == "capability-gated"
+                      for lane in case["lanes"].values())
+    if not has_explicit_gate and not still_gated:
+        return None
+    if (has_explicit_gate and not (case["reason"] or case["backend_requirement_reason"])
+            and case["path"] != "text/text-anchor/on-tspan-with-arabic.svg"):
+        raise ParityReportError(f"{case['path']}: explicit capability gate needs a source reason")
+    return {
+        "classification": "backend-capability",
+        "disposition": "Apply the renderer harness's declared capability requirements.",
+        "evidence": [
+            REGISTRATION_SOURCE.as_posix(),
+            "donner/svg/renderer/tests/RendererTestBackendGeode.cc",
+            "donner/svg/renderer/tests/RendererTestBackendTinySkia.cc",
+        ],
+        "owning_issue": "https://github.com/jwmcglynn/donner/issues/1166",
+        "removal_criteria": (
+            "Remove a gate after enabling the feature in that normal renderer configuration "
+            "and validating the formerly gated comparisons without increasing their limits."
+        ),
+    }
+
+
+def _named_policies(case: dict[str, object]) -> list[dict[str, object]]:
+    policies = []
+    render_only = case["render_only_kind"]
+    if render_only == "undefined-behavior":
+        policies.append(_marker_policy(case["path"]))
+    elif render_only == "deprecated-in-svg2":
+        policies.append({
+            "classification": render_only,
+            "disposition": "Retain no-crash coverage for this deliberately excluded legacy feature.",
+            "evidence": ["docs/design_docs/0021-resvg_feature_gaps.md"],
+            "removal_criteria": (
+                "Replace the render-only policy after explicitly adopting the feature and qualifying "
+                "its independent pixel reference, or replacing it with a supported SVG 2 fixture."
+            ),
+        })
+    capability = _capability_policy(case)
+    if capability:
+        policies.append(capability)
+    return policies
+
+
+def _validate_policy_metadata(rule: dict[str, object], rule_id: str) -> None:
+    required = ("classification", "disposition", "removal_criteria", "reference_provenance")
+    if any(not isinstance(rule.get(key), str) or not rule[key].strip() for key in required):
+        raise ParityReportError(f"{rule_id}: incomplete exception disposition")
+    evidence = rule.get("evidence")
+    if not isinstance(evidence, list) or not evidence or any(
+        not isinstance(item, str) or not item.strip() for item in evidence
+    ):
+        raise ParityReportError(f"{rule_id}: exception policy lacks evidence")
+
+
+def _index_policies(document: dict[str, object]) -> dict[str, dict[str, object]]:
+    indexed = {}
+    ids = set()
+    for rule in document["rules"]:
+        rule_id = rule["id"]
+        if not rule_id or rule_id in ids:
+            raise ParityReportError(f"missing or repeated exception rule id: {rule_id!r}")
+        ids.add(rule_id)
+        _validate_policy_metadata(rule, rule_id)
+        for path in rule["paths"]:
+            if path in indexed:
+                raise ParityReportError(f"{path}: overlapping exception policies")
+            indexed[path] = rule
+    return indexed
+
+
+def _validate_scoped_policy(case: dict[str, object], rule: dict[str, object], kinds: set[str]) -> None:
+    path = case["path"]
+    allowed = set(rule["kinds"])
+    if kinds != allowed:
+        raise ParityReportError(f"{path}: policy does not cover exception kinds {sorted(kinds)}")
+    expected_refs = rule.get("references_by_fixture", {}).get(path, rule.get("references", {}))
+    max_threshold, max_pixels = rule.get("bounds_by_fixture", {}).get(
+        path, (rule.get("max_threshold"), rule.get("max_pixels"))
+    )
+    if kinds != {"skip"} and (
+        type(max_threshold) not in {float, int} or not math.isfinite(max_threshold)
+        or not 0 <= max_threshold <= 1 or type(max_pixels) is not int or max_pixels < 0
+    ):
+        raise ParityReportError(f"{path}: invalid comparison bounds in policy")
+    config = _settings_from_params(case["raw_params_expression"])
+    actual_refs = {key: config[key] for key in REFERENCE_KINDS if config[key] is not None}
+    if actual_refs != expected_refs:
+        raise ParityReportError(f"{path}: unreviewed CPU or Geode reference")
+    for lane, entry in case["lanes"].items():
+        if entry["configured_state"] != "compare":
+            continue
+        setting = entry["settings"]
+        if _settings_unresolved(setting):
+            raise ParityReportError(f"{path} ({lane}): unresolved comparison settings")
+        if setting["threshold"] > max_threshold or setting["max_pixels"] > max_pixels:
+            raise ParityReportError(f"{path} ({lane}): comparison exceeds the reviewed bounds")
+
+
+def _check_dash_seam(case: dict[str, object]) -> None:
+    path = case["path"]
+    ordinary = (TESTS_ROOT / path).with_suffix(".png").as_posix()
+    for lane, entry in case["lanes"].items():
+        setting = entry["settings"]
+        if (entry["configured_state"] != "compare" or setting["threshold"] != 0
+                or setting["max_pixels"] != 0 or setting["reference"]["path"] != ordinary):
+            raise ParityReportError(f"{path} ({lane}): preserve the exact dash seam comparison")
+
+
+def _check_catalog_case(case: dict[str, object]) -> None:
+    path = case["path"]
+    if path == "painting/stroke-dasharray/n-0.svg":
+        _check_dash_seam(case)
+    if case["primary_state"] == "render-only" and not case["render_only_kind"]:
+        raise ParityReportError(f"{path}: render-only case needs a named policy")
+    if case["disabled_backends"]:
+        raise ParityReportError(f"{path}: unexplained explicit backend disable")
+    if case["primary_state"] != "compare" and not case["reason"]:
+        raise ParityReportError(f"{path}: exceptional state needs a source reason")
+
+
+def _scoped_policy(
+    case: dict[str, object], rule: dict[str, object] | None
+) -> dict[str, object] | None:
+    path = case["path"]
+    kinds = _scoped_exception_kinds(case)
+    if not kinds:
+        if rule:
+            raise ParityReportError(f"{path}: remove retired exception policy {rule['id']}")
+        return None
+    if rule is None:
+        raise ParityReportError(f"{path}: unexplained exceptions {sorted(kinds)}")
+    _validate_scoped_policy(case, rule, kinds)
+    fields = {"id", "classification", "disposition", "evidence", "owning_issue",
+              "reference_provenance", "removal_criteria"}
+    return {**{key: value for key, value in rule.items() if key in fields}, "kinds": sorted(kinds)}
+
+
+def add_exception_policies(report: dict[str, object], document: dict[str, object]) -> None:
+    indexed = _index_policies(document)
+    for case in report["cases"]:
+        _check_catalog_case(case)
+        policies = _named_policies(case)
+        scoped = _scoped_policy(case, indexed.pop(case["path"], None))
+        if scoped:
+            policies.append(scoped)
+        if policies:
+            case["policies"] = policies
+    if indexed:
+        raise ParityReportError("policies name absent fixtures: " + ", ".join(sorted(indexed)))
+
+
 def generate_report(repo_root: Path) -> dict[str, object]:
     source_path = repo_root / REGISTRATION_SOURCE
     if not source_path.is_file():
@@ -1043,7 +1607,14 @@ def generate_report(repo_root: Path) -> dict[str, object]:
         source = source_path.read_text(encoding="utf-8")
     except OSError as error:
         raise ParityReportError(f"cannot read registration source: {error}") from error
-    return build_report(source, repo_root / TESTS_ROOT)
+    report = build_report(source, repo_root / TESTS_ROOT)
+    policy_path = repo_root / EXCEPTION_POLICIES
+    if policy_path.is_file():
+        try:
+            add_exception_policies(report, json.loads(policy_path.read_text(encoding="utf-8")))
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ParityReportError(f"invalid exception policy catalog: {error}") from error
+    return report
 
 
 RESULTS_CSV = Path("third_party/resvg-test-suite/results.csv")
@@ -1197,6 +1768,181 @@ def _write_json(report: dict[str, object], output: Path | None, stdout: TextIO) 
         raise ParityReportError(f"cannot write report to {output}: {error}") from error
 
 
+RENDERER_TEST_ROOT = Path("donner/svg/renderer/tests")
+
+
+def _check_reference_defaults(header: str, registry: str) -> None:
+    thresholds = re.findall(r"kDefaultThreshold\s*=\s*([0-9.]+)f\s*;", header)
+    budgets = re.findall(r"kDefaultMismatchedPixels\s*=\s*(\d+)\s*;", header)
+    if (thresholds != [str(DEFAULT_THRESHOLD)] or budgets != [str(DEFAULT_MAX_PIXELS)]
+            or not re.search(r"bool includeAntiAliasing\s*=\s*false;", header)):
+        raise ParityReportError("C++ comparison defaults differ from parity report")
+    if not re.search(r"\btest\.params\.setCanvasSize\(500,\s*500\);", registry):
+        raise ParityReportError("C++ corpus default canvas differs from parity report")
+    if not re.search(
+        r"ImageComparisonParams ResvgV049Reference\(\)\s*\{\s*return "
+        r"ImageComparisonParams\(\)\.setCanvasSize\(300,\s*300\);\s*\}",
+        registry,
+    ):
+        raise ParityReportError("resvg v0.49 reference canvas differs from parity report")
+
+
+_FEATURE_NAMES = {
+    "Text": "text",
+    "TextFull": "text-full",
+    "FilterEffects": "filter-effects",
+    "AsciiSnapshot": "ascii-snapshot",
+}
+
+
+def _backend_function(source: str, name: str) -> str:
+    start = source.index("{", source.index(f"bool {name}("))
+    return source[start:_find_matching(source, start, "{", "}")]
+
+
+def _check_geode_capabilities(source: str) -> None:
+    body = _backend_function(source, "GeodeSupportsFeature")
+    features = re.findall(r"case RendererBackendFeature::(\w+):\s*return (true|false);", body)
+    if {name for name, _ in features} != set(_FEATURE_NAMES) or len(features) != len(_FEATURE_NAMES):
+        raise ParityReportError("Geode capability implementation differs from parity report")
+    enabled = {_FEATURE_NAMES[name] for name, value in features if value == "true"}
+    if enabled != CORPUS_LANES["geode"][1]:
+        raise ParityReportError("Geode capability values differ from parity report")
+
+
+def _check_tiny_capabilities(source: str) -> None:
+    body = _backend_function(source, "TinySkiaSupportsFeature")
+    leaves = set(re.findall(r"case RendererBackendFeature::(\w+):", body))
+    if leaves != set(_FEATURE_NAMES) or not re.search(
+        r"case RendererBackendFeature::AsciiSnapshot:\s*return true;", body
+    ):
+        raise ParityReportError("TinySkia capability implementation differs from parity report")
+    macros = {"DONNER_TEXT_ENABLED": "Text", "DONNER_TEXT_FULL": "TextFull",
+              "DONNER_FILTERS_ENABLED": "FilterEffects"}
+    for macro, feature in macros.items():
+        gate = (
+            rf"#ifdef\s+{macro}\s+case RendererBackendFeature::{feature}:\s*return true;"
+            rf"\s+#else\s+case RendererBackendFeature::{feature}:\s*return false;\s+#endif"
+        )
+        if not re.search(gate, body):
+            raise ParityReportError(f"TinySkia capability {feature} differs from parity report")
+
+
+def _check_corpus_wrappers(source: str) -> None:
+    build = re.sub(r"(?m)^\s*#.*$", "", source)
+    start = build.index("named_variants = [", build.index('name = "resvg_test_suite"'))
+    start = build.index("[", start)
+    variants = build[start:_find_matching(build, start, "[", "]")]
+    wrapper_modes = {}
+    for block in re.findall(r"\{([^}]+)\}", variants):
+        config = dict(re.findall(r'"(\w+)"\s*:\s*"([^"]+)"', block))
+        wrapper_modes[config["name"]] = (config["backend"], config["text"], config["text_full"])
+    expected = {
+        "default_text": ("tiny_skia", "true", "false"),
+        "max": ("tiny_skia", "true", "true"),
+        "geode": ("geode", "true", "false"),
+    }
+    if wrapper_modes != expected:
+        raise ParityReportError("Bazel corpus wrappers differ from parity report")
+
+
+def check_renderer_contract(repo_root: Path) -> None:
+    """Fail CI if the normal wrapper matrix or C++ defaults drift from the static report."""
+    def read(file: str) -> str:
+        return (repo_root / RENDERER_TEST_ROOT / file).read_text(encoding="utf-8")
+
+    _check_reference_defaults(_mask_comments(read("ImageComparisonTestFixture.h")),
+                              _mask_comments(read("resvg_test_suite.cc")))
+    _check_geode_capabilities(_mask_comments(read("RendererTestBackendGeode.cc")))
+    _check_tiny_capabilities(_mask_comments(read("RendererTestBackendTinySkia.cc")))
+    _check_corpus_wrappers(read("BUILD.bazel"))
+
+
+FEATURE_GAP_DOC = Path("docs/design_docs/0021-resvg_feature_gaps.md")
+INVENTORY_START = "<!-- BEGIN RESVG INVENTORY -->"
+INVENTORY_END = "<!-- END RESVG INVENTORY -->"
+
+
+def inventory_markdown(report: dict[str, object]) -> str:
+    """Render the compact static inventory checked into the feature-gap document."""
+    summary = report["summary"]
+    comparison_exceptions = sum(
+        case["primary_state"] == "compare" and bool(_scoped_exception_kinds(case))
+        for case in report["cases"]
+    )
+    lines = [
+        INVENTORY_START,
+        "",
+        "| Registered SVG fixtures | Count |",
+        "| --- | ---: |",
+        f"| Total | {summary['total_cases']:,} |",
+        f"| Pixel comparisons | {summary['compare_cases']:,} |",
+        f"| Comparisons with a numeric setting or custom golden | {comparison_exceptions:,} |",
+        f"| Render-only, undefined-behavior registration | {summary['render_only_undefined_behavior_cases']:,} |",
+        f"| Render-only, legacy feature | {summary['render_only_deprecated_in_svg2_cases']:,} |",
+        f"| Explicit skips | {summary['skip_cases']:,} |",
+        f"| Fixtures in disabled categories | {summary['disabled_cases']:,} |",
+        "",
+        "| Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for lane in CORPUS_LANES:
+        state_counts = {
+            state: sum(counts.values()) for state, counts in report["lane_summary"][lane].items()
+        }
+        values = [state_counts.get(state, 0) for state in (
+            "compare", "render-only", "capability-gated", "skip"
+        )]
+        lines.append(f"| `{lane}` | " + " | ".join(f"{n:,}" for n in values) + " |")
+    return "\n".join([*lines, "", INVENTORY_END])
+
+
+def check_inventory_doc(report: dict[str, object], text: str) -> None:
+    if text.count(INVENTORY_START) != 1 or text.count(INVENTORY_END) != 1:
+        raise ParityReportError("feature-gap document needs one generated inventory block")
+    if inventory_markdown(report) not in text:
+        raise ParityReportError("feature-gap document inventory is stale; regenerate its block")
+
+
+REPORT_INPUT_PATHS = (
+    REGISTRATION_SOURCE.as_posix(),
+    RESULTS_CSV.as_posix(),
+    EXCEPTION_POLICIES.as_posix(),
+    FEATURE_GAP_DOC.as_posix(),
+    UB_MARKER_REFERENCE.as_posix(),
+    f":(glob){TESTS_ROOT.as_posix()}/**/*.svg",
+    f":(glob){TESTS_ROOT.as_posix()}/**/*.png",
+    f"{RENDERER_TEST_ROOT.as_posix()}/BUILD.bazel",
+    f"{RENDERER_TEST_ROOT.as_posix()}/ImageComparisonTestFixture.h",
+    f"{RENDERER_TEST_ROOT.as_posix()}/RendererTestBackendGeode.cc",
+    f"{RENDERER_TEST_ROOT.as_posix()}/RendererTestBackendTinySkia.cc",
+    "docs/design_docs/0009-resvg_test_suite_bugs.md",
+    "third_party/resvg-test-suite/BUILD.bazel",
+    "donner/svg/renderer/testdata/golden/README.md",
+    ":(glob)donner/svg/renderer/testdata/golden/**/*.png",
+    ":(glob)donner/svg/renderer/testdata/golden/**/*.svg",
+    ":(glob)tools/resvg_parity/**/*.py",
+)
+
+
+def _checkout_revision(repo_root: Path) -> tuple[str | None, bool, bool]:
+    if not (repo_root / ".git").exists():
+        return None, False, False
+    try:
+        def git(*args: str) -> str:
+            return subprocess.check_output(
+                ["git", "-C", str(repo_root), *args], text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+
+        head = git("rev-parse", "HEAD")
+        tracked_dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
+        # Do not apply the ignore rules here. The corpus scanner still sees ignored fixtures.
+        untracked_inputs = bool(git("ls-files", "--others", "-z", "--", *REPORT_INPUT_PATHS))
+        return head, tracked_dirty, untracked_inputs
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ParityReportError("cannot identify the report checkout revision") from error
+
+
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1212,16 +1958,77 @@ def _argument_parser() -> argparse.ArgumentParser:
         help=f"compare Donner's passes with {HEAD_TO_HEAD_ENGINE}'s in {RESULTS_CSV} instead of "
         "writing the per-case ledger",
     )
+    parser.add_argument(
+        "--revision", help="caller assertion for a source archive or dirty tree; clean checkouts use HEAD",
+    )
+    doc = parser.add_mutually_exclusive_group()
+    doc.add_argument("--check-doc", action="store_true",
+                     help="check that the feature-gap document inventory matches the source")
+    doc.add_argument("--inventory-markdown", action="store_true",
+                     help="print the generated feature-gap inventory block")
+    parser.add_argument(
+        "--execution", action="append", default=[], metavar="REVISION:LANE=PATH",
+        help="import caller-attested GoogleTest statuses for one normal corpus lane",
+    )
     return parser
+
+
+def _validate_cli(args: argparse.Namespace) -> None:
+    if args.revision is not None and not re.fullmatch(r"[0-9a-f]{40}", args.revision):
+        raise ParityReportError("--revision requires a full lowercase Git commit SHA")
+    if args.head_to_head and (args.revision or args.execution or args.check_doc or args.inventory_markdown):
+        raise ParityReportError("inventory and execution options require the per-case report")
+    if args.inventory_markdown and args.output:
+        raise ParityReportError("--inventory-markdown writes to stdout")
+
+
+def _import_execution_argument(report: dict[str, object], receipt: str) -> None:
+    revision_lane, separator, path = receipt.partition("=")
+    revision, colon, lane = revision_lane.partition(":")
+    if not (separator and colon and path and lane and revision):
+        raise ParityReportError("--execution expects REVISION:LANE=PATH")
+    add_execution(report, lane, revision, Path(path))
+
+
+def _report_from_cli(args: argparse.Namespace, repo_root: Path) -> dict[str, object]:
+    if args.head_to_head:
+        return generate_head_to_head(repo_root)
+    report = generate_report(repo_root)
+    checkout_revision, tracked_dirty, untracked_inputs = _checkout_revision(repo_root)
+    if checkout_revision and args.revision and args.revision != checkout_revision:
+        raise ParityReportError("--revision differs from the checkout HEAD")
+    report["source"].update({
+        "checkout_head": checkout_revision,
+        "tracked_tree_dirty": tracked_dirty,
+        "untracked_report_inputs": untracked_inputs,
+        "revision": checkout_revision if not tracked_dirty and not untracked_inputs else None,
+        "caller_revision": args.revision,
+    })
+    for receipt in args.execution:
+        _import_execution_argument(report, receipt)
+    return report
+
+
+def _check_feature_gap_doc(repo_root: Path, report: dict[str, object]) -> None:
+    try:
+        text = (repo_root / FEATURE_GAP_DOC).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read feature-gap document: {error}") from error
+    check_inventory_doc(report, text)
 
 
 def main(argv: Sequence[str] | None = None, stdout: TextIO = sys.stdout) -> int:
     args = _argument_parser().parse_args(argv)
     try:
+        _validate_cli(args)
         repo_root = args.repo_root.resolve()
-        report = (generate_head_to_head(repo_root) if args.head_to_head
-                  else generate_report(repo_root))
-        _write_json(report, args.output, stdout)
+        report = _report_from_cli(args, repo_root)
+        if args.check_doc:
+            _check_feature_gap_doc(repo_root, report)
+        if args.inventory_markdown:
+            stdout.write(inventory_markdown(report) + "\n")
+        elif not args.check_doc or args.output:
+            _write_json(report, args.output, stdout)
     except ParityReportError as error:
         print(f"parity_report: error: {error}", file=sys.stderr)
         return 1

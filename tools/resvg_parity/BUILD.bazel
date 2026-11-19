@@ -4,6 +4,9 @@ py_binary(
     name = "parity_report",
     srcs = ["parity_report.py"],
     data = [
+        ":exception_policies.json",
+        "//:docs/design_docs/0021-resvg_feature_gaps.md",
+        "//donner/svg/renderer/tests:resvg_test_policy_sources",
         "//donner/svg/renderer/tests:resvg_test_registration_source",
         "//third_party/resvg-test-suite:results.csv",
         "//third_party/resvg-test-suite:tests",
@@ -21,6 +24,9 @@ py_test(
         "parity_report_tests.py",
     ],
     data = [
+        ":exception_policies.json",
+        "//:docs/design_docs/0021-resvg_feature_gaps.md",
+        "//donner/svg/renderer/tests:resvg_test_policy_sources",
         "//donner/svg/renderer/tests:resvg_test_registration_source",
         "//third_party/resvg-test-suite:resources/ub.png",
         "//third_party/resvg-test-suite:results.csv",

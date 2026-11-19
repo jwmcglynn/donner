@@ -14,6 +14,7 @@ from pathlib import Path
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 import parity_report
 
@@ -693,6 +694,219 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(stdout.getvalue())["summary"]["total_cases"], 1)
 
+    def test_effective_lanes_apply_backend_and_text_budget_precedence(self) -> None:
+        self.fixture.add_case("painting/stroke/example.svg")
+        self.fixture.add_case("text/sample/a.svg")
+        source = _registration(
+            "PaintingStroke", '"painting/stroke", {'
+            '{"example.svg", Params::WithGoldenOverride("cpu.png", 0.1f)'
+            '.withGeodeGoldenOverride("gpu.png").withMaxPixelsDifferent(20)'
+            '.withSimpleTextMaxPixels(30).withGeodeMaxPixelsDifferent(80)'
+            '.setCanvasSize(800, 600).includeAntiAliasingDifferences()}}'
+        ) + _registration("TextSample", '"text/sample"')
+        report = parity_report.build_report(source, self.fixture.tests_root)
+        paint, text = report["cases"]
+        expected = [("default_text", 30, "cpu.png"), ("max", 20, "cpu.png"),
+                    ("geode", 80, "gpu.png")]
+        for lane, budget, golden in expected:
+            setting = paint["lanes"][lane]["settings"]
+            self.assertEqual(setting["max_pixels"], budget)
+            self.assertEqual(setting["reference"]["path"], golden)
+            self.assertEqual(setting["threshold"], 0.1)
+            self.assertEqual(setting["canvas_size"], [800, 600])
+            self.assertTrue(setting["include_antialiasing"])
+        self.assertEqual(text["lanes"]["geode"]["configured_state"], "capability-gated")
+        self.assertEqual(text["lanes"]["geode"]["missing_features"], ["text"])
+        self.assertEqual(text["lanes"]["geode"]["observed"], "unobserved")
+
+    def test_google_test_receipt_distinguishes_pass_failure_suppression_and_unobserved(self) -> None:
+        rows = ("a.svg", "b.svg", "c.svg", "d.svg")
+        for row in rows:
+            self.fixture.add_case("text/sample/" + row)
+        report = parity_report.build_report(
+            _registration("TextSample", '"text/sample", {'
+                          '{"c.svg", Params::Skip("unsupported")}}'), self.fixture.tests_root
+        )
+        receipt = self.fixture.root / "shard.xml"
+        receipt.write_text(
+            "<testsuites><testsuite>"
+            '<testcase classname="TextSample/ImageComparisonTestFixture" '
+            'name="ResvgTest/a" status="run" result="completed"/>'
+            '<testcase classname="TextSample/ImageComparisonTestFixture" '
+            'name="ResvgTest/b" status="run" result="completed"><failure/></testcase>'
+            '<testcase classname="TextSample/ImageComparisonTestFixture" '
+            'name="ResvgTest/DISABLED_c" status="notrun" result="suppressed"/>'
+            "</testsuite></testsuites>", encoding="utf-8",
+        )
+        revision = "a" * 40
+        report["source"]["revision"] = revision
+        with self.assertRaisesRegex(parity_report.ParityReportError, "receipt revision"):
+            parity_report.add_execution(report, "max", "b" * 40, receipt)
+        parity_report.add_execution(report, "max", revision, receipt)
+        self.assertEqual(
+            [row["lanes"]["max"]["observed"] for row in report["cases"]],
+            ["passed", "failed", "suppressed", "unobserved"],
+        )
+        self.assertNotIn("shard.xml", json.dumps(report["execution_receipts"]))
+        self.assertEqual(report["execution_receipts"]["max"]["binding"], "caller-attested")
+        self.assertEqual(report["execution_receipts"]["max"]["kind"], "google-test-status")
+
+    def test_unknown_or_duplicate_executions_cannot_be_reported_as_passes(self) -> None:
+        self.fixture.add_case("text/sample/a.svg")
+        report = parity_report.build_report(
+            _registration("TextSample", '"text/sample"'), self.fixture.tests_root
+        )
+        report["source"]["revision"] = "a" * 40
+        receipt = self.fixture.root / "shard.xml"
+        for rows, match in [
+            ('<testcase classname="Foreign" name="Other" status="run" result="completed"/>',
+             "unexpected runtime testcase"),
+            ('<testcase classname="TextSample/ImageComparisonTestFixture" '
+             'name="ResvgTest/a_GeodeGolden" status="run" result="completed"/>',
+             "contradicts the static gate"),
+            ('<testcase classname="TextSample/ImageComparisonTestFixture" '
+             'name="ResvgTest/a_GeodeGolden" status="run" result="skipped"><skipped/></testcase>' * 2,
+             "duplicate runtime testcase"),
+        ]:
+            receipt.write_text("<testsuites>" + rows + "</testsuites>", encoding="utf-8")
+            with self.assertRaisesRegex(parity_report.ParityReportError, match):
+                parity_report.add_execution(report, "geode", "a" * 40, receipt)
+
+    def test_strict_exception_policy_rejects_unlisted_or_widened_settings(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"a.svg", Params::WithThreshold(0.3f, 100, "edge sweep")}}'),
+            self.fixture.tests_root,
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "unexplained exceptions"):
+            parity_report.add_exception_policies(report, {"rules": []})
+        rule = {
+            "id": "edge-sweep",
+            "paths": ["painting/fill/a.svg"],
+            "kinds": ["threshold"],
+            "classification": "reference-rasterization",
+            "disposition": "Retain limited coverage difference.",
+            "evidence": ["public-source"],
+            "removal_criteria": "Qualify a matched coverage reference.",
+            "reference_provenance": "Adjacent original.",
+            "max_threshold": 0.2,
+            "max_pixels": 100,
+        }
+        with self.assertRaisesRegex(parity_report.ParityReportError, "exceeds the reviewed bounds"):
+            parity_report.add_exception_policies(report, {"rules": [rule]})
+        rule["max_threshold"] = float("nan")
+        with self.assertRaisesRegex(parity_report.ParityReportError, "invalid comparison bounds"):
+            parity_report.add_exception_policies(report, {"rules": [rule]})
+        rule["max_threshold"] = 0.3
+        parity_report.add_exception_policies(report, {"rules": [rule]})
+        self.assertEqual(report["cases"][0]["policies"][0]["id"], "edge-sweep")
+
+    def test_negative_tier_budget_uses_native_fallback(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"a.svg", Params().withMaxPixelsDifferent(120)'
+                          '.withSimpleTextMaxPixels(-2).withGeodeMaxPixelsDifferent(-3)}}'),
+            self.fixture.tests_root,
+        )
+        for mode in report["cases"][0]["lanes"].values():
+            self.assertEqual(mode["settings"]["max_pixels"], 120)
+
+    def test_scoped_policy_rejects_swapped_cpu_and_geode_references(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"a.svg", Params::WithGoldenOverride("geode.png")'
+                          '.withGeodeGoldenOverride("cpu.png")}}'), self.fixture.tests_root,
+        )
+        rule = {
+            "id": "outline",
+            "paths": ["painting/fill/a.svg"],
+            "kinds": ["shared_golden", "geode_golden"],
+            "classification": "reference-disagreement",
+            "disposition": "Preserve qualified backend coverage.",
+            "evidence": ["public-source"],
+            "removal_criteria": "Qualify one common comparison image.",
+            "reference_provenance": "Independent geometry with per-backend coverage.",
+            "references": {"shared_golden": "cpu.png", "geode_golden": "geode.png"},
+            "max_threshold": 0.02,
+            "max_pixels": 100,
+        }
+        with self.assertRaisesRegex(parity_report.ParityReportError, "unreviewed CPU or Geode"):
+            parity_report.add_exception_policies(report, {"rules": [rule]})
+
+    def test_xml_dtd_is_rejected_before_reading_receipt_status(self) -> None:
+        receipt = self.fixture.root / "unsafe.xml"
+        receipt.write_bytes(
+            ('<?xml version="1.0" encoding="UTF-16"?>'
+             '<!DOCTYPE testsuites [<!ENTITY completion "completed">]>'
+             '<testsuites><testcase classname="TextSample/ImageComparisonTestFixture" '
+             'name="ResvgTest/a" status="run" result="&completion;"/></testsuites>').encode("utf-16")
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "DTD and entity declarations"):
+            parity_report._read_test_xml(receipt)
+
+    def test_empty_xml_does_not_register_an_observation(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill"'), self.fixture.tests_root
+        )
+        report["source"]["revision"] = "a" * 40
+        receipt = self.fixture.root / "empty.xml"
+        receipt.write_text("<testsuites/>", encoding="utf-8")
+        with self.assertRaisesRegex(parity_report.ParityReportError, "zero runtime test records"):
+            parity_report.add_execution(report, "max", "a" * 40, receipt)
+        self.assertEqual(report["execution_receipts"], {})
+        self.assertEqual(report["cases"][0]["lanes"]["max"]["observed"], "unobserved")
+
+    def test_renderer_contract_detects_a_resvg_helper_canvas_change(self) -> None:
+        root = parity_report._default_repo_root()
+        dst = self.fixture.root / parity_report.RENDERER_TEST_ROOT
+        dst.mkdir(parents=True)
+        for name in (
+            "BUILD.bazel", "ImageComparisonTestFixture.h", "RendererTestBackendGeode.cc",
+            "RendererTestBackendTinySkia.cc", "resvg_test_suite.cc",
+        ):
+            original = (root / parity_report.RENDERER_TEST_ROOT / name).read_text(encoding="utf-8")
+            (dst / name).write_text(original, encoding="utf-8")
+        parity_report.check_renderer_contract(self.fixture.root)
+        source = dst / "resvg_test_suite.cc"
+        original = source.read_text(encoding="utf-8")
+        self.assertIn("return ImageComparisonParams().setCanvasSize(300, 300);", original)
+        source.write_text(original.replace(
+            "return ImageComparisonParams().setCanvasSize(300, 300);",
+            "return ImageComparisonParams().setCanvasSize(400, 400);",
+        ), encoding="utf-8")
+        with self.assertRaisesRegex(parity_report.ParityReportError, "reference canvas differs"):
+            parity_report.check_renderer_contract(self.fixture.root)
+
+    def test_untracked_report_inputs_keep_the_checkout_revision_unbound(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        root = self.fixture.root
+        (root / ".git").mkdir()
+        registry = root / parity_report.REGISTRATION_SOURCE
+        registry.parent.mkdir(parents=True)
+        registry.write_text(_registration("PaintingFill", '"painting/fill"'), encoding="utf-8")
+
+        revision = "a" * 40
+        for listing in ("", "third_party/resvg-test-suite/tests/painting/fill/a.svg\0"):
+            stdout = io.StringIO()
+            with patch.object(
+                parity_report.subprocess, "check_output", side_effect=[revision, "", listing]
+            ) as git:
+                self.assertEqual(parity_report.main(["--repo-root", str(root)], stdout=stdout), 0)
+            command = git.call_args_list[-1].args[0]
+            self.assertIn("--others", command)
+            self.assertNotIn("--exclude-standard", command)
+            self.assertIn(f":(glob){parity_report.TESTS_ROOT.as_posix()}/**/*.svg", command)
+            self.assertIn(parity_report.EXCEPTION_POLICIES.as_posix(), command)
+            source = json.loads(stdout.getvalue())["source"]
+            self.assertEqual(source["checkout_head"], revision)
+            self.assertFalse(source["tracked_tree_dirty"])
+            self.assertEqual(source["untracked_report_inputs"], bool(listing))
+            self.assertEqual(source["revision"], None if listing else revision)
+
     def _head_to_head_fixture(self) -> dict[str, object]:
         for filename in ("both.svg", "budget.svg", "golden.svg", "gated.svg", "unknown.svg",
                          "skip.svg", "ub.svg", "neither.svg"):
@@ -821,6 +1035,27 @@ class ParityReportTests(unittest.TestCase):
 
 
 class RealTreeParityReportTests(unittest.TestCase):
+    def test_exception_catalog_and_feature_gap_doc_match_live_registrations(self) -> None:
+        root = parity_report._default_repo_root()
+        self.assertTrue((root / parity_report.EXCEPTION_POLICIES).is_file())
+        self.assertTrue((root / parity_report.FEATURE_GAP_DOC).is_file())
+        report = parity_report.generate_report(root)
+        text = (root / parity_report.FEATURE_GAP_DOC).read_text(encoding="utf-8")
+        parity_report.check_inventory_doc(report, text)
+        parity_report.check_renderer_contract(root)
+        by_path = {c["path"]: c for c in report["cases"]}
+        tile = by_path["filters/feTile/complex-transform.svg"]
+        self.assertEqual(tile["render_only_kind"], "undefined-behavior")
+        self.assertEqual(tile["policies"][0]["classification"], "known-renderer-divergence")
+        blur = by_path["filters/feGaussianBlur/huge-stdDeviation.svg"]
+        self.assertEqual(blur["policies"][0]["classification"], "implementation-resource-limit")
+        with self.assertRaisesRegex(parity_report.ParityReportError, "stale"):
+            parity_report.check_inventory_doc(report, text.replace("| Total |", "| Fixtures |"))
+        self.assertEqual(sum(
+            row["lanes"]["geode"]["configured_state"] == "capability-gated"
+            for row in report["cases"]
+        ), report["lane_summary"]["geode"]["capability-gated"]["unobserved"])
+
     def test_current_corpus_is_fully_registered_and_consistently_reported(self) -> None:
         repo_root = parity_report._default_repo_root()
         self.assertTrue(
