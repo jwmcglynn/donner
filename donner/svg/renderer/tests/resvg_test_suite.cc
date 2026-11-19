@@ -636,9 +636,10 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-patternTransform.svg",
                      Params::UndefinedBehavior("Invalid patternTransform")},
                     {"out-of-order-referencing.svg",
-                     Params::WithThreshold(0.6f, kDefaultMismatchedPixels,
-                                           "Nested tile coverage: the reference disagrees on fully "
-                                           "covered and empty interior pixels")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-nested-rectangles.png",
+                         kDefaultThreshold,
+                         "Explicit tiles preserve fractional periods and clip nested content")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
                     // The references resample a rasterized tile, blurring the tile-edge strokes;
                     // testdata/golden/README.md has the exact coverage these goldens hold.
@@ -657,12 +658,10 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "donner-pattern-self-recursive.png")
                          .withReason(
                              "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
-                    // The reference resamples a rasterized pattern tile, so only the tile's thin
-                    // border lines and the glyph tops the tile clips differ; glyph edges match.
                     {"text-child.svg",
-                     Params::WithThreshold(0.5f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to pattern tile resampling at "
-                                           "fractional tile edges")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-skewed-text-tiles.png",
+                         kDefaultThreshold, "Text and border clipped to each tile before skewing")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
