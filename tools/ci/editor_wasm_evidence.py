@@ -13,6 +13,7 @@ from verify_unified_tests import BROWSER_PACKAGE, EDITOR_BROWSER, editor_browser
 PACKAGE = "//donner/editor/wasm/tests:"
 HOSTED = {PACKAGE + "hosted_" + label.removeprefix(BROWSER_PACKAGE) for label in EDITOR_BROWSER}
 QUARANTINE = PACKAGE + "hosted_firefox_quarantine_report"
+RESIDENCY = {PACKAGE + "hosted_chromium_editor_startup_test", PACKAGE + "hosted_firefox_editor_compatibility_test"}
 BUDGETS = {"//donner/svg/renderer/wasm:hosted_wasm_size_tests_report",
            "//donner/editor/wasm:hosted_wasm_geode_package_size_tests_report"}
 
@@ -45,11 +46,13 @@ def report_budget(outputs, root, label):
             print(row)
 
 
-def stage_archive(uri, root, label, directory):
+def stage_archive(uri, root, label, directory, require_accounting):
     archive = declared_file(uri, root, label, ("test.outputs", "outputs.zip"))
     shutil.copyfile(archive, directory / "outputs.zip")
-    if label == QUARANTINE:
-        with ZipFile(archive) as contents:
+    with ZipFile(archive) as contents:
+        if require_accounting and not any(name.endswith("/gpu-residency-accounting.json") for name in contents.namelist()):
+            raise ValueError(f"Missing GPU residency accounting for {label}")
+        if label == QUARANTINE:
             report = contents.getinfo("quarantine-report.json")
             if report.file_size > 16 * 1024 * 1024:
                 raise ValueError("Oversized quarantine report")
@@ -60,11 +63,14 @@ def stage_browser(label, status, outputs, root, destination, complete):
     name = "firefox-quarantine-report" if label == QUARANTINE else label.split(":")[1].removeprefix("hosted_")
     directory = destination / name
     directory.mkdir(parents=True, exist_ok=True)
-    archive = outputs.get("test.outputs/outputs.zip")
-    if archive:
-        stage_archive(archive, root, label, directory)
     if not complete and status != "PASSED" and "test.log" in outputs:
         shutil.copyfile(declared_file(outputs["test.log"], root, label, ("test.log",)), directory / "test.log")
+    # Bazel names the output with double underscores in BEP and a slash on disk.
+    archive = outputs.get("test.outputs__outputs.zip") or outputs.get("test.outputs/outputs.zip")
+    if archive:
+        stage_archive(archive, root, label, directory, complete and label in RESIDENCY)
+    elif (complete and label in RESIDENCY) or label == QUARANTINE:
+        raise ValueError(f"Missing declared browser output archive for {label}")
     if complete and label != QUARANTINE:
         if status != "PASSED":
             raise ValueError(f"Hosted browser target did not pass: {label}")
@@ -86,7 +92,7 @@ def stage(stream, root, destination, *, quarantine=False, complete=True):
             raise ValueError(f"Repeated hosted browser result: {label}")
         seen.add(label)
         stage_browser(label, status, outputs, root, destination, complete)
-    if complete and seen != selected:
+    if (complete or quarantine) and seen != selected:
         raise ValueError(f"Missing hosted browser evidence: {sorted(selected - seen)}")
 
 
@@ -97,7 +103,7 @@ if __name__ == "__main__":
     parser.add_argument("--quarantine", action="store_true")
     parser.add_argument("--partial", action="store_true")
     args = parser.parse_args()
-    if args.bep.exists() or not args.partial:
+    if args.quarantine or not args.partial or args.bep.exists():
         with args.bep.open(encoding="utf-8") as events:
             stage(events, Path("bazel-out").resolve(strict=True), args.destination,
                   quarantine=args.quarantine, complete=not args.partial)

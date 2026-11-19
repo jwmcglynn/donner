@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from zipfile import ZipFile
 
-from editor_wasm_evidence import HOSTED, QUARANTINE, stage
+from editor_wasm_evidence import HOSTED, QUARANTINE, RESIDENCY, stage
 
 
 class HostedEvidenceTest(unittest.TestCase):
@@ -23,11 +23,12 @@ class HostedEvidenceTest(unittest.TestCase):
         (logs / "test.log").write_text("Editor browser cases passed: 3\n")
         archive = archives / "outputs.zip"
         with ZipFile(archive, "w") as output:
+            output.writestr("playwright/fixture/gpu-residency-accounting.json", b"{}")
             output.writestr("quarantine-report.json", b'{"suites":[]}')
         return {"id": {"testResult": {"label": label}}, "testResult": {
             "status": status, "testActionOutput": [
                 {"name": "test.log", "uri": (logs / "test.log").as_uri()},
-                {"name": "test.outputs/outputs.zip", "uri": archive.as_uri()},
+                {"name": "test.outputs__outputs.zip", "uri": archive.as_uri()},
             ]}}
 
     def test_all_projects_have_separate_outputs_and_case_counts(self):
@@ -51,6 +52,22 @@ class HostedEvidenceTest(unittest.TestCase):
         event["testResult"]["testActionOutput"] = event["testResult"]["testActionOutput"][:1]
         stage([json.dumps(event)], self.root, self.destination, complete=False)
         self.assertEqual(len(list(self.destination.glob("*/test.log"))), 1)
+
+    def test_webgpu_accounting_cannot_be_replaced_by_a_case_count(self):
+        label = sorted(RESIDENCY)[0]
+        event = self.event(label)
+        event["testResult"]["testActionOutput"] = event["testResult"]["testActionOutput"][:1]
+        with self.assertRaisesRegex(ValueError, "Missing declared browser output archive"):
+            stage([json.dumps(event)], self.root, self.destination)
+
+    def test_missing_quarantine_output_reports_failure_after_retaining_log(self):
+        event = self.event(QUARANTINE, "FAILED")
+        event["testResult"]["testActionOutput"] = event["testResult"]["testActionOutput"][:1]
+        with self.assertRaisesRegex(ValueError, "Missing declared browser output archive"):
+            stage([json.dumps(event)], self.root, self.destination, quarantine=True, complete=False)
+        self.assertTrue((self.destination / "firefox-quarantine-report/test.log").is_file())
+        with self.assertRaisesRegex(ValueError, "Missing hosted browser evidence"):
+            stage([], self.root, self.destination, quarantine=True, complete=False)
 
     def test_rejects_another_targets_local_output(self):
         first, other = sorted(HOSTED)[:2]
