@@ -1128,11 +1128,11 @@ def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
     return findings
 
 
-def check_tracked_tree(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
+def check_tracked_tree(files: dict[str, str], scopes: RustScopes, tracked=None) -> list[Finding]:
     """Apply the per-file rules and require every test-oracle boundary file to exist."""
     findings = check(files, scopes)
     for path in REQUIRED_ARCHIVE_SITES:
-        if path not in files:
+        if path not in (files if tracked is None else tracked):
             findings.extend(_archive_finding(path, "required Linux test-oracle boundary file is missing"))
     return findings
 
@@ -1145,10 +1145,10 @@ def git_tracked_files(repo_root: Path) -> list[str]:
     return sorted(p for p in output.split("\0") if p)
 
 
-def collect_scannable_files(repo_root: Path) -> dict[str, str]:
+def collect_scannable_files(repo_root: Path, paths=None) -> dict[str, str]:
     """Reads tracked files the verifier inspects (Rust sources + build graph)."""
     files: dict[str, str] = {}
-    for path in git_tracked_files(repo_root):
+    for path in (git_tracked_files(repo_root) if paths is None else paths):
         if not (is_rust_source_path(path) or is_build_graph_path(path)):
             continue
         try:
@@ -1211,11 +1211,14 @@ def main() -> int:
         ),
     )
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help="Repository root to scan.")
+    parser.add_argument("paths", nargs="*", help="Changed paths, including deletions.")
     args = parser.parse_args()
 
     blocking = parse_blocking(args.blocking)
     scopes = load_rust_scopes(args.root / ALLOWLIST_RELPATH)
-    findings = check_tracked_tree(collect_scannable_files(args.root), scopes)
+    tracked = set(git_tracked_files(args.root))
+    selected = tracked.intersection(args.paths) if args.paths else tracked
+    findings = check_tracked_tree(collect_scannable_files(args.root, selected), scopes, tracked)
     print(format_report(findings, blocking), end="")
 
     blocked = sorted({f.category for f in findings} & set(blocking))

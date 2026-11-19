@@ -888,8 +888,15 @@ def main(argv: List[str]) -> int:
             "file under the working directory."
         ),
     )
+    parser.add_argument("--allowlist-only", action="store_true", help="Check that exempted paths still exist.")
     args = parser.parse_args(argv[1:])
 
+    if args.allowlist_only:
+        return int(bool(_report_invalid_xml_scan_list_entries()))
+    return _check_requested_paths(args)
+
+
+def _check_requested_paths(args) -> int:
     inputs = [Path(p) for p in args.paths] if args.paths else [Path("donner"), Path("examples")]
     files = _iter_source_files(inputs)
     if not files:

@@ -18,7 +18,7 @@ class LintBracesTests(unittest.TestCase):
             return subprocess.run(
                 [str(REPO_ROOT / "tools" / "lint.sh"), str(path)],
                 cwd=REPO_ROOT,
-                env=os.environ.copy(),
+                env={**os.environ, "DONNER_LINT_BASE_REF": "HEAD"},
                 capture_output=True,
                 text=True,
                 check=False,

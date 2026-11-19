@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# lint_lane.sh - the Lint workflow's checks, in the workflow's order, as one command.
+# lint_lane.sh - run changed-file CI checks or a complete local lint audit.
 #
-# These checks read the whole tracked tree, git history or build graph, so they run here rather
-# than as tests reachable from `bazel test //...`:
+# CI uses --changed BASE. With no arguments, the complete audit runs these checks:
 #
 #   - tools/lint.sh: banned patterns, the pinned clang-format over every tracked C++ file, and
 #     changed-method complexity
@@ -16,7 +15,7 @@
 #   - tools/ci/fuzz_lane_coverage.py: a Fuzz workflow phase soaks every fuzzer (a Bazel query)
 #   - build_defs/check_local_gpu_tags.py: GPU test scheduling tags in every tracked BUILD file
 #
-# Usage: tools/ci/lint_lane.sh
+# Usage: tools/ci/lint_lane.sh [--changed BASE]
 # Each check is a `::group::` in the Actions log and a row in the job summary; the first failing
 # check ends the lane with its exit status.
 
@@ -25,8 +24,14 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "${script_dir}/../.."
 
+if [[ $# -eq 2 && "$1" == "--changed" ]]; then
+  source "tools/ci/lane.sh"
+  lane_begin "Changed-file lint"
+  exec python3 -m tools.ci.lint_changes run "$2"
+fi
+
 if [[ $# -ne 0 ]]; then
-  sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '3,/^# check ends/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 fi
 

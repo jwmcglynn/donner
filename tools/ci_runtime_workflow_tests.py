@@ -269,37 +269,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 if any(word in argv for argv in self._phase_commands(lane, phase)
                        + self._expanded_commands(lane, phase))}
 
-    def test_self_hosted_lint_isolates_both_nested_bazel_commands(self):
-        job = self._job_body("lint-self-hosted", self.lint)
-        step = self._step_body(job, "Isolate nested Bazel invocations")
-        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
-        with tempfile.TemporaryDirectory(prefix="lint wrapper ") as directory:
-            root = Path(directory)
-            binary = root / "bazelisk"
-            binary.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
-            binary.chmod(0o755)
-            path_file = root / "github-path"
-            result = subprocess.run(
-                ["bash", "-c", script], capture_output=True, text=True, check=False,
-                env={**os.environ, "RUNNER_TEMP": directory, "GITHUB_PATH": str(path_file),
-                     "PATH": directory + os.pathsep + os.environ["PATH"]})
-            self.assertEqual(0, result.returncode, result.stderr)
-            wrapper = Path(path_file.read_text().strip())
-            for name in ("bazel", "bazelisk"):
-                result = subprocess.run([str(wrapper / name), "query", "target with spaces"],
-                                        capture_output=True, text=True, check=False)
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(["--nohome_rc", "--nosystem_rc", "query", "target with spaces"],
-                                 result.stdout.splitlines())
-
-    def test_self_hosted_lint_runs_on_documentation_prs_without_the_generator(self):
-        job = self._job_body("lint-self-hosted", self.lint)
-        condition = next(line for line in job.splitlines() if line.startswith("    if:"))
-        self.assertNotIn("docs_only", condition)
-        self.assertNotIn("actions/cache", job)
-        self.assertIn("fetch-depth: 0", job)
-        self.assertIn("run: tools/ci/lint_lane.sh", job)
-        # The CMake Build workflow owns generator validation.
+    def test_lint_runs_changed_files_on_a_shallow_hosted_checkout(self):
+        job = self._job_body("lint", self.lint)
+        self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertNotIn("self-hosted", self.lint)
+        self.assertEqual(self.lint.count("uses: actions/checkout@"), 1)
+        self.assertIn("fetch-depth: 2", job)
+        self.assertIn("persist-credentials: false", job)
+        self.assertIn('run: tools/ci/lint_lane.sh --changed "$LINT_BASE"', job)
+        self.assertIn("LINT_BASE: ${{ steps.changes.outputs.base }}", job)
+        self.assertNotIn("docs_only", job)
         self.assertIsNone(re.search(r"(?m)^ +run: .*gen_cmakelists\.py", self.lint))
 
     @staticmethod

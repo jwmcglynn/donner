@@ -48,6 +48,13 @@ collect_sources() {
   find "${find_args[@]}"
 }
 
+selected_base=""
+if [[ "${1:-}" == --changed-cpp ]]; then
+  selected_base="$2"
+  shift 2
+  [[ "$selected_base" =~ ^[0-9a-f]{40}$ && $# -gt 0 ]] || exit 2
+fi
+
 lint_explicit_roots=$#
 roots=("$@")
 if [[ ${#roots[@]} -eq 0 ]]; then
@@ -74,11 +81,22 @@ if [[ ${#sources[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# A whole-tree run also rejects allowlist entries for files that no longer exist.
+# Formatting covers every tracked first-party C++ file. The banned-pattern policy covers
+# the same source directories and exclusions as a full-tree run.
+banned=("${sources[@]}")
+if [[ -n "$selected_base" ]]; then
+  banned=()
+  for path in "${sources[@]}"; do
+    case "$path" in
+      */render_test.cc|*/wasm_reproducer.cc) ;;
+      donner/*|examples/*|tools/*) banned+=("$path") ;;
+    esac
+  done
+fi
 if [[ ${lint_explicit_roots} -eq 0 ]]; then
-  python3 "${kChecker}" --require-allowlisted-files "${sources[@]}"
-else
-  python3 "${kChecker}" "${sources[@]}"
+  python3 "${kChecker}" --require-allowlisted-files -- "${sources[@]}"
+elif [[ ${#banned[@]} -gt 0 ]]; then
+  python3 "${kChecker}" -- "${banned[@]}"
 fi
 
 # The pinned clang-format (//tools/format:clang_format) is the repository's formatting baseline;
@@ -107,30 +125,36 @@ if ! command -v "${formatter[0]:-}" >/dev/null 2>&1; then
   exit 1
 fi
 "${formatter[@]}" --dry-run --Werror --style="file:${repo_root}/.clang-format" \
-  "${format_sources[@]}"
+  -- "${format_sources[@]}"
 
 # CodeFactor evaluates complexity only on changed methods. Mirror that locally without making
 # existing repository debt block every lint run. The target branch can be overridden for stacked
 # work with DONNER_LINT_BASE_REF; GitHub pull-request jobs supply GITHUB_BASE_REF; ordinary local
 # branches compare to origin/main. Never use the feature branch's upstream, because an already
 # pushed regression would then disappear from the next lint run.
-complexity_base_ref="${DONNER_LINT_BASE_REF:-}"
-if [[ -z "${complexity_base_ref}" && -n "${GITHUB_BASE_REF:-}" ]]; then
-  complexity_base_ref="origin/${GITHUB_BASE_REF}"
-fi
-if [[ -z "${complexity_base_ref}" ]]; then
-  complexity_base_ref="origin/main"
-fi
-if ! complexity_target_commit=$(git rev-parse --verify --quiet "${complexity_base_ref}^{commit}"); then
-  echo "lint.sh: cannot resolve complexity baseline '${complexity_base_ref}'" >&2
-  echo "lint.sh: fetch the target branch or set DONNER_LINT_BASE_REF to its local ref" >&2
-  exit 1
-fi
-# File selection and grandfathered complexity must use the same immutable ancestor. The target
-# may advance independently after a pull-request merge checkout was created.
-if ! complexity_base_ref=$(git merge-base "${complexity_target_commit}" HEAD); then
-  echo "lint.sh: complexity target has no common ancestor with HEAD" >&2
-  exit 1
+if [[ -n "$selected_base" ]]; then
+  # CI compared two immutable trees. They need not share locally available history.
+  complexity_base_ref="$selected_base"
+else
+  complexity_base_ref="${DONNER_LINT_BASE_REF:-}"
+  if [[ -z "${complexity_base_ref}" && -n "${GITHUB_BASE_REF:-}" ]]; then
+    complexity_base_ref="origin/${GITHUB_BASE_REF}"
+  fi
+  if [[ -z "${complexity_base_ref}" ]]; then
+    complexity_base_ref="origin/main"
+  fi
+  if ! complexity_target_commit=$(git rev-parse --verify --quiet "${complexity_base_ref}^{commit}"); then
+    echo "lint.sh: cannot resolve complexity baseline '${complexity_base_ref}'" >&2
+    echo "lint.sh: fetch the target branch or set DONNER_LINT_BASE_REF to its local ref" >&2
+    exit 1
+  fi
+  # File selection and grandfathered complexity must use the same immutable ancestor. The target
+  # may advance independently after a pull-request merge checkout was created.
+  if ! complexity_base_ref=$(git merge-base "${complexity_target_commit}" HEAD); then
+    echo "lint.sh: complexity target has no common ancestor with HEAD" >&2
+    exit 1
+  fi
+
 fi
 
 # Vendored code under third_party/ keeps its upstream style; the full-tree scan above skips it too.
@@ -156,8 +180,10 @@ if [[ ${#complexity_sources[@]} -gt 0 ]]; then
   python3 "${kChecker}" \
     --check-method-complexity \
     --complexity-baseline-ref "${complexity_base_ref}" \
-    "${complexity_sources[@]}"
+    -- "${complexity_sources[@]}"
 fi
+
+[[ -z "$selected_base" ]] || exit 0
 
 # Mirror the Python XML and complexity failures before the external review gate.
 python_sources=()

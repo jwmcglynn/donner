@@ -115,7 +115,7 @@ def main():
     args = parser.parse_args()
     root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
     baseline_ref = subprocess.check_output(
-        ["git", "rev-parse", "--verify", args.base_ref + "^{commit}"], text=True).strip()
+        ["git", "rev-parse", "--verify", args.base_ref + "^{tree}"], text=True).strip()
     count = 0
     for path in args.paths:
         relative = path.resolve().relative_to(root)
