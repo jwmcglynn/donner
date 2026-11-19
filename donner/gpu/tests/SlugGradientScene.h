@@ -39,22 +39,30 @@ struct Stop {
   float offset;
   std::array<float, 4> color;
 };
+/// True for the cases whose stops alternate between distant colors.
+inline bool HasManyStops(Case testCase) {
+  return testCase == Case::ManyStops || testCase == Case::RampStops ||
+         testCase == Case::WrappedRampStops;
+}
+inline uint32_t StopCount(Case testCase) {
+  switch (testCase) {
+    case Case::ManyStops: return 16u;
+    case Case::RampStops: return 17u;
+    case Case::WrappedRampStops: return 1500u;
+    case Case::SingleStop: return 1u;
+    default: return 2u;
+  }
+}
 inline std::vector<Stop> Stops(Case testCase) {
   if (testCase == Case::EmptyStops) {
     return {};
   }
-  const bool manyStops = testCase == Case::ManyStops || testCase == Case::RampStops ||
-                         testCase == Case::WrappedRampStops;
-  const uint32_t count = testCase == Case::ManyStops          ? 16u
-                         : testCase == Case::RampStops        ? 17u
-                         : testCase == Case::WrappedRampStops ? 1500u
-                         : testCase == Case::SingleStop       ? 1u
-                                                              : 2u;
+  const uint32_t count = StopCount(testCase);
   std::vector<Stop> result;
   for (uint32_t i = 0; i < count; ++i) {
     const float t = count > 1 ? float(i) / float(count - 1) : 0.0f;
     const float alpha = testCase == Case::TransparentStops ? 0.25f + 0.5f * t : 1.0f;
-    const float channel = manyStops ? float((i * 37) % 160) : 64.0f * t;
+    const float channel = HasManyStops(testCase) ? float((i * 37) % 160) : 64.0f * t;
     result.push_back(
         {t, {(32 + channel) / 255, (64 + channel) / 255, (96 + channel) / 255, alpha}});
   }
@@ -95,10 +103,7 @@ inline void ConfigureRadial(shader::programs::SlugGradientParams& p, Case testCa
 }
 inline void ConfigurePaint(shader::programs::SlugGradientParams& p, Case testCase) {
   p.row0[0] = p.row1[1] = 1;
-  p.endGrad[0] = testCase == Case::ManyStops || testCase == Case::RampStops ||
-                         testCase == Case::WrappedRampStops
-                     ? 6.0f
-                     : 8.0f;
+  p.endGrad[0] = HasManyStops(testCase) ? 6.0f : 8.0f;
   if (testCase == Case::Reflect || testCase == Case::Repeat) {
     p.spreadMode = testCase == Case::Reflect ? 1u : 2u;
     p.endGrad[0] = 2;

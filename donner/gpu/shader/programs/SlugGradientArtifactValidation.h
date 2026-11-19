@@ -191,8 +191,9 @@ consteval bool ValidateSlugGradientArtifact() {
   static_assert(shader.resource("clipMaskTexture") &&
                 shader.resource("clipMaskTexture")->type ==
                     BindingType::SampledTexture2dUnfilterableFloat);
-  static_assert(shader.resource("stopRamp") && shader.resource("stopRamp")->type ==
-                                                   BindingType::SampledTexture2dUnfilterableFloat);
+  static_assert(shader.resource("stopRamp") != nullptr);
+  static_assert(shader.resource("stopRamp")->type ==
+                BindingType::SampledTexture2dUnfilterableFloat);
   return true;
 }
 }  // namespace donner::gpu::shader::programs

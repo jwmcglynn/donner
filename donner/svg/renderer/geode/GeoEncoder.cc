@@ -883,6 +883,12 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   gpu::Result<gpu::BindGroup> createResidentGradientBindGroup(GeodeResidentGradientSlot& slot,
                                                               const gpu::TextureView& stopRamp);
 
+  /// The bind group a resident draw of `slot` with uniform `u` binds: the slot's cached group,
+  /// built on first use, or for a gradient with more stops than `u` carries inline, a group made
+  /// for this draw around its uploaded stop ramp. Null when that upload fails.
+  const gpu::BindGroup* residentGradientBindGroup(GeodeResidentGradientSlot& slot,
+                                                  const GradientUniforms& u);
+
   /// Resident gradient draw: ensure geometry residence, rewrite only the
   /// gradient uniform when it changed, reuse the cached bind group, and
   /// record the draw. Steady-state (unchanged) frame: zero writes, zero
@@ -904,6 +910,18 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// Radial variant of @ref buildLinearGradientUniforms.
   void buildRadialGradientUniforms(GradientUniforms& u, const RadialGradientParams& params,
                                    FillRule rule);
+
+  /// Admit one scene-batch instance painted with \p paint. A slot's paint block holds
+  /// `kMaxGradientStops` stops, so a gradient with more has no batched form and is refused before
+  /// admission: the caller draws it through the gradient pipeline, which reads its stops from a
+  /// stop ramp.
+  bool admitSceneInstance(const EncodedPath& encoded, const ScenePaint& paint) {
+    const size_t gradientStops =
+        paint.linearGradient != nullptr   ? paint.linearGradient->stops.size()
+        : paint.radialGradient != nullptr ? paint.radialGradient->stops.size()
+                                          : 0u;
+    return gradientStops <= kMaxGradientStops && admitResidentInstance(encoded);
+  }
 
   /// Arena-path gradient submit (used as the fallback when a resident slot
   /// is gated off by a clip or a same-frame repeat).
@@ -2590,16 +2608,7 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
                                            const GeodeRecordSlab::Slot* recordSlotOverride,
                                            std::vector<uint8_t>* overrideRecordCache,
                                            SceneRecordState* recordState, bool publishPaint) {
-  // A slot's paint block holds `kMaxGradientStops` stops. A gradient with more has no batched
-  // form: the caller draws it through the gradient pipeline, which reads them from a stop ramp.
-  const size_t gradientStops = paint.linearGradient != nullptr ? paint.linearGradient->stops.size()
-                               : paint.radialGradient != nullptr
-                                   ? paint.radialGradient->stops.size()
-                                   : 0u;
-  if (publishPaint && gradientStops > kMaxGradientStops) {
-    return false;
-  }
-  if (publishPaint && !impl_->admitResidentInstance(encoded)) {
+  if (publishPaint && !impl_->admitSceneInstance(encoded, paint)) {
     return false;
   }
   if (encoded.empty()) {
@@ -3191,6 +3200,27 @@ gpu::Result<gpu::BindGroup> GeoEncoder::Impl::createResidentGradientBindGroup(
        gpu::BindGroupEntry{GradientBinding("stopRamp"), gpu::TextureViewBinding{stopRamp}}}});
 }
 
+const gpu::BindGroup* GeoEncoder::Impl::residentGradientBindGroup(GeodeResidentGradientSlot& slot,
+                                                                  const GradientUniforms& u) {
+  if (u.stopCount <= kMaxGradientStops) {
+    if (!slot.bindGroup.isValid()) {
+      buildResidentGradientBindGroup(slot);
+    }
+    return &slot.bindGroup;
+  }
+  // A gradient with more stops than the uniform carries inline uploads its ramp for this draw, so
+  // it binds a group made for the draw; the cached group binds the placeholder ramp.
+  const gpu::TextureView* stopRamp = gradientStopRampView(u);
+  if (stopRamp == nullptr) {
+    return nullptr;
+  }
+  gpu::Result<gpu::BindGroup> created = createResidentGradientBindGroup(slot, *stopRamp);
+  if (created.hasError()) {
+    return nullptr;
+  }
+  return &transientResources.retain(std::move(created).result());
+}
+
 void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
   // The cached group serves gradients whose stops fit the uniform, so it binds the placeholder
   // ramp.
@@ -3242,21 +3272,9 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
 
   publishGradientUniform(slot, u);
 
-  // A gradient with more stops than the uniform carries inline uploads its ramp for this draw, so
-  // it binds a group made for the draw; the cached group binds the placeholder ramp.
-  const gpu::BindGroup* bindGroup = &slot.bindGroup;
-  if (u.stopCount > kMaxGradientStops) {
-    const gpu::TextureView* stopRamp = gradientStopRampView(u);
-    if (stopRamp == nullptr) {
-      return false;
-    }
-    gpu::Result<gpu::BindGroup> created = createResidentGradientBindGroup(slot, *stopRamp);
-    if (created.hasError()) {
-      return false;
-    }
-    bindGroup = &transientResources.retain(std::move(created).result());
-  } else if (!slot.bindGroup.isValid()) {
-    buildResidentGradientBindGroup(slot);
+  const gpu::BindGroup* bindGroup = residentGradientBindGroup(slot, u);
+  if (bindGroup == nullptr) {
+    return false;
   }
 
   recordGeometryDebugDraw(encoded);
