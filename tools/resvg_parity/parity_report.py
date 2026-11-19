@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import csv
 import hashlib
 from dataclasses import dataclass
@@ -1363,7 +1363,7 @@ def _ratchet_message(
 
 def _ratchet_violations(
     report: dict[str, object],
-    allowlist: dict[str, dict[str, float]],
+    allowlist: Mapping[str, Mapping[str, float]],
     setting: str,
     limit: float,
     allowlist_name: str,
@@ -1396,7 +1396,7 @@ def _ratchet_violations(
 
 
 def pixel_budget_ratchet_violations(
-    report: dict[str, object], allowlist: dict[str, dict[str, int]] = PIXEL_BUDGET_ALLOWLIST
+    report: dict[str, object], allowlist: Mapping[str, Mapping[str, int]] = PIXEL_BUDGET_ALLOWLIST
 ) -> list[str]:
     """Return comparing lanes whose mismatched-pixel budget breaks PIXEL_BUDGET_ALLOWLIST."""
 
@@ -1405,7 +1405,7 @@ def pixel_budget_ratchet_violations(
 
 
 def threshold_ratchet_violations(
-    report: dict[str, object], allowlist: dict[str, dict[str, float]] = THRESHOLD_ALLOWLIST
+    report: dict[str, object], allowlist: Mapping[str, Mapping[str, float]] = THRESHOLD_ALLOWLIST
 ) -> list[str]:
     """Return comparing lanes whose per-pixel color threshold breaks THRESHOLD_ALLOWLIST."""
 
@@ -1461,6 +1461,7 @@ def skip_ratchet_violations(
 
 GOLDEN_ROOT = Path("donner/svg/renderer/testdata/golden")
 GOLDEN_README = GOLDEN_ROOT / "README.md"
+GOLDEN_DIGEST_HEADING = "## Registered golden digests"
 _SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
 
 
@@ -1475,8 +1476,25 @@ def referenced_goldens(report: dict[str, object]) -> list[str]:
     return sorted(paths)
 
 
-def _golden_digest_violation(golden: str, repo_root: Path, rows: list[str]) -> str | None:
+def _golden_table_rows(readme: str) -> tuple[list[str], list[str]]:
+    """Return the digest section's table rows and every table row in the README."""
+
+    lines = readme.splitlines()
+    if lines.count(GOLDEN_DIGEST_HEADING) != 1:
+        raise ParityReportError(f"{GOLDEN_README} needs one {GOLDEN_DIGEST_HEADING!r} section")
+    start = lines.index(GOLDEN_DIGEST_HEADING) + 1
+    end = next((index for index in range(start, len(lines)) if lines[index].startswith("## ")),
+               len(lines))
+    rows = [line for line in lines if line.lstrip().startswith("|")]
+    return [line for line in lines[start:end] if line.lstrip().startswith("|")], rows
+
+
+def _golden_digest_violation(
+    golden: str, repo_root: Path, digest_rows: list[str], rows: list[str]
+) -> str | None:
     path = Path(golden)
+    if ".." in path.parts or "." in path.parts or path.is_absolute():
+        return f"{golden}: golden path is not a normalized repository path"
     if GOLDEN_ROOT not in path.parents:
         return f"{golden}: golden is outside {GOLDEN_ROOT}"
     try:
@@ -1484,29 +1502,29 @@ def _golden_digest_violation(golden: str, repo_root: Path, rows: list[str]) -> s
     except OSError:
         return f"{golden}: referenced golden file is missing"
     token = f"`{path.relative_to(GOLDEN_ROOT).as_posix()}`"
-    naming = [row for row in rows if token in row]
-    if not naming:
-        return f"{golden}: no {GOLDEN_README} table row names it with its SHA-256 {digest}"
-    if any(digest not in _SHA256.findall(row) for row in naming):
+    if not any(token in row and digest in _SHA256.findall(row) for row in digest_rows):
+        return (f"{golden}: no row in the {GOLDEN_README} {GOLDEN_DIGEST_HEADING!r} table names "
+                f"it with its SHA-256 {digest}")
+    if any(token in row and digest not in _SHA256.findall(row) for row in rows):
         return f"{golden}: a {GOLDEN_README} row names it without its current SHA-256 {digest}"
     return None
 
 
 def golden_documentation_violations(report: dict[str, object], repo_root: Path) -> list[str]:
-    """Return referenced goldens that the golden README does not name with their SHA-256.
+    """Return referenced goldens that the golden README does not list with their SHA-256.
 
-    A golden is documented by a Markdown table row in the README that names its path relative to
-    the golden directory in backticks, such as `geode/name.png` in backticks, and gives the
-    committed file's SHA-256. Every table row that names a referenced golden must carry that
-    digest, so a regenerated file cannot keep a stale entry.
+    Each referenced golden needs a row in the README's digest table that names its path relative
+    to the golden directory in backticks, such as `geode/name.png` in backticks, and gives the
+    committed file's SHA-256. Any other table row in the README that names the golden must carry
+    the same digest, so a regenerated file cannot keep a stale entry anywhere.
     """
 
     try:
         readme = (repo_root / GOLDEN_README).read_text(encoding="utf-8")
     except OSError as error:
         raise ParityReportError(f"cannot read golden README: {error}") from error
-    rows = [line for line in readme.splitlines() if line.lstrip().startswith("|")]
-    violations = (_golden_digest_violation(golden, repo_root, rows)
+    digest_rows, rows = _golden_table_rows(readme)
+    violations = (_golden_digest_violation(golden, repo_root, digest_rows, rows)
                   for golden in referenced_goldens(report))
     return [violation for violation in violations if violation]
 

@@ -483,19 +483,26 @@ class ParityReportTests(unittest.TestCase):
         )
 
     def test_explicit_capability_gate_needs_a_source_reason(self) -> None:
-        self.fixture.add_case("text/sample/gated.svg")
-        report = parity_report.build_report(
-            _registration(
-                "TextSample",
-                '"text/sample", {'
-                '{"gated.svg", Params().requireFeature(RendererBackendFeature::TextFull)}}',
-            ),
-            self.fixture.tests_root,
-        )
+        # The arabic row once had a hard-coded exemption; it must fail like any other row.
+        for category, filename in (("text/sample", "gated.svg"),
+                                   ("text/text-anchor", "on-tspan-with-arabic.svg")):
+            fixture = Fixture()
+            self.addCleanup(fixture.close)
+            fixture.add_case(f"{category}/{filename}")
+            report = parity_report.build_report(
+                _registration(
+                    "TextGated",
+                    f'"{category}", {{'
+                    f'{{"{filename}", Params().requireFeature(RendererBackendFeature::TextFull)}}}}',
+                ),
+                fixture.tests_root,
+            )
 
-        with self.assertRaisesRegex(parity_report.ParityReportError,
-                                    "explicit capability gate needs a source reason"):
-            parity_report.add_exception_policies(report, {"rules": []})
+            with self.subTest(path=f"{category}/{filename}"), self.assertRaisesRegex(
+                parity_report.ParityReportError,
+                f"{category}/{filename}: explicit capability gate needs a source reason",
+            ):
+                parity_report.add_exception_policies(report, {"rules": []})
 
     def _ratchet_report(self) -> dict[str, object]:
         for name in ("new.svg", "grown.svg", "shrunk.svg", "kept.svg", "fixed.svg", "geode.svg"):
@@ -621,53 +628,77 @@ class ParityReportTests(unittest.TestCase):
         self.assertIn("Donner-rendered golden", parity_report.SKIP_RULE)
         self.assertIn("README_resvg_test_suite.md", parity_report.SKIP_RULE)
 
-    def test_goldens_must_be_named_in_the_readme_with_their_digest(self) -> None:
+    def test_goldens_must_be_listed_in_the_digest_table_with_their_digest(self) -> None:
         golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
         (golden_root / "geode").mkdir(parents=True)
         files = {"listed.png": b"listed", "geode/listed.png": b"geode listed",
-                 "stale.png": b"regenerated", "unlisted.png": b"unlisted"}
+                 "elsewhere.png": b"elsewhere", "stale.png": b"regenerated",
+                 "unlisted.png": b"unlisted"}
         for name, data in files.items():
             (golden_root / name).write_bytes(data)
+        (self.fixture.root / parity_report.GOLDEN_ROOT.parent / "escape.png").write_bytes(b"x")
 
         def digest(name: str) -> str:
             return hashlib.sha256(files[name]).hexdigest()
 
         (golden_root / "README.md").write_text(
             "Prose naming `unlisted.png` with " + digest("unlisted.png") + " is not a table row.\n\n"
-            "| Golden | SHA-256 |\n| --- | --- |\n"
+            "## Another section\n\n| Golden | SHA-256 |\n| --- | --- |\n"
+            f"| `elsewhere.png` | `{digest('elsewhere.png')}` |\n"
+            f"| `stale.png` | `{hashlib.sha256(b'original').hexdigest()}` |\n\n"
+            f"{parity_report.GOLDEN_DIGEST_HEADING}\n\n| Golden | SHA-256 |\n| --- | --- |\n"
             f"| `listed.png` | `{digest('listed.png')}` |\n"
             f"| `geode/listed.png` | `{digest('geode/listed.png')}` |\n"
-            f"| `stale.png` | `{hashlib.sha256(b'original').hexdigest()}` |\n",
+            f"| `stale.png` | `{digest('stale.png')}` |\n\n"
+            "## A later section\n\n"
+            f"| `unlisted.png` | `{digest('unlisted.png')}` |\n",
             encoding="utf-8",
         )
-        for name in ("a.svg", "b.svg", "c.svg", "d.svg"):
+        names = ("a.svg", "b.svg", "c.svg", "d.svg", "e.svg", "f.svg")
+        for name in names:
             self.fixture.add_case(f"painting/fill/{name}")
         prefix = parity_report.GOLDEN_ROOT.as_posix()
+        goldens = ("listed.png", "stale.png", "unlisted.png", "missing.png", "elsewhere.png",
+                   "../escape.png")
+        overrides = "".join(
+            f'{{"{name}", Params::WithGoldenOverride("{prefix}/{golden}", 0.02f, "r")'
+            + ('.withGeodeGoldenOverride("' + prefix + '/geode/listed.png")' if name == "a.svg"
+               else "")
+            + "},"
+            for name, golden in zip(names, goldens)
+        )
         report = parity_report.build_report(
-            _registration(
-                "PaintingFill",
-                '"painting/fill", {'
-                f'{{"a.svg", Params::WithGoldenOverride("{prefix}/listed.png", 0.02f, "r")'
-                f'.withGeodeGoldenOverride("{prefix}/geode/listed.png")}},'
-                f'{{"b.svg", Params::WithGoldenOverride("{prefix}/stale.png", 0.02f, "r")}},'
-                f'{{"c.svg", Params::WithGoldenOverride("{prefix}/unlisted.png", 0.02f, "r")}},'
-                f'{{"d.svg", Params::WithGoldenOverride("{prefix}/missing.png", 0.02f, "r")}}'
-                '}',
-            ),
+            _registration("PaintingFill", '"painting/fill", {' + overrides + "}"),
             self.fixture.tests_root,
         )
         readme = parity_report.GOLDEN_README
+        section = repr(parity_report.GOLDEN_DIGEST_HEADING)
 
         self.assertEqual(
             parity_report.golden_documentation_violations(report, self.fixture.root),
             [
+                f"{prefix}/../escape.png: golden path is not a normalized repository path",
+                f"{prefix}/elsewhere.png: no row in the {readme} {section} table names it with "
+                "its SHA-256 " + digest("elsewhere.png"),
                 f"{prefix}/missing.png: referenced golden file is missing",
                 f"{prefix}/stale.png: a {readme} row names it without its current SHA-256 "
                 + digest("stale.png"),
-                f"{prefix}/unlisted.png: no {readme} table row names it with its SHA-256 "
-                + digest("unlisted.png"),
+                f"{prefix}/unlisted.png: no row in the {readme} {section} table names it with "
+                "its SHA-256 " + digest("unlisted.png"),
             ],
         )
+
+    def test_golden_readme_needs_one_digest_section(self) -> None:
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        golden_root.mkdir(parents=True)
+        (golden_root / "README.md").write_text("| `a.png` | `x` |\n", encoding="utf-8")
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill"'), self.fixture.tests_root
+        )
+
+        with self.assertRaisesRegex(parity_report.ParityReportError, "needs one"):
+            parity_report.golden_documentation_violations(report, self.fixture.root)
 
     def test_reference_budgets_follow_the_evidence_rule(self) -> None:
         gen = "Reference rasterizer generation: crosshair; "
