@@ -162,13 +162,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - id: pr-meta
+        name: Extract SHA for hash caching
+        shell: bash
+        run: tools/ci/determine_targets.sh pr-meta
+
       - name: Setup Java
+        if: steps.pr-meta.outputs.identical_tree != 'true'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Setup Bazel
+        if: steps.pr-meta.outputs.identical_tree != 'true'
         uses: bazel-contrib/setup-bazel@0.19.1
         with:
           bazelisk-cache: true
@@ -177,13 +184,9 @@ jobs:
           cache-save: false
 
       - name: Download bazel-diff
+        if: steps.pr-meta.outputs.identical_tree != 'true'
         shell: bash
         run: tools/ci/fetch_bazel_diff.sh
-
-      - id: pr-meta
-        name: Extract SHA for hash caching
-        shell: bash
-        run: tools/ci/determine_targets.sh pr-meta
 
       # Base hashes are a pure function of (bazel-diff version, base SHA), and
       # generating them is roughly half of this job's bazel-diff wall time.
@@ -192,7 +195,7 @@ jobs:
       # on main are visible to all PR branches. Only main writes this cache.
       - name: Restore bazel-diff base hashes
         id: base-hashes
-        if: steps.pr-meta.outputs.base_sha != ''
+        if: steps.pr-meta.outputs.identical_tree != 'true' && steps.pr-meta.outputs.base_sha != ''
         uses: actions/cache/restore@v6
         with:
           path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json

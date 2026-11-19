@@ -603,8 +603,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn('cd "$head_dir"', script.split(query, 1)[0].rsplit("if ", 1)[1])
         failed = script.split('echo "Browser target query failed', 1)[1].split("fi\n", 1)[0]
         self.assertIn('echo "browser_affected=true" >> "$GITHUB_OUTPUT"', failed)
-        # The query's two results, its failure, and a proven empty selection.
-        self.assertEqual(script.count("browser_affected="), 4)
+        # The query's two results, its failure, and both proven empty selections.
+        self.assertEqual(script.count("browser_affected="), 5)
         # Dependency manifests reach Bazel through module extensions, which bazel-diff cannot
         # attribute, so a change to any of them adds every browser test to the selection.
         manifests = script.split("browser_inputs_changed=false\n", 1)[1].split("esac", 1)[0]

@@ -57,10 +57,32 @@ generate_hashes() {
     "$2"
 }
 
+read_pr_event() {
+  eval "$(
+    python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
+  )"
+}
+
+# Only an identical base, PR head and actual build checkout prove there is no source delta.
+# An unavailable Git object, base drift or a full-suite override takes the normal planning path.
+identical_pr_tree() {
+  local base_tree head_tree checkout_tree
+  [[ -n "$BASE_SHA" && -n "$HEAD_SHA" && "$FORCE_FULL_TEST" == "false" ]] || return 1
+  base_tree=$(git rev-parse --verify "${BASE_SHA}^{tree}") || return 1
+  head_tree=$(git rev-parse --verify "${HEAD_SHA}^{tree}") || return 1
+  [[ -n "$base_tree" && "$base_tree" == "$head_tree" ]] || return 1
+  checkout_tree=$(git rev-parse --verify 'HEAD^{tree}') || return 1
+  [[ "$base_tree" == "$checkout_tree" ]]
+}
+
 pr_meta() {
   base_sha=""
   if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-    base_sha="$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')"
+    read_pr_event
+    base_sha="$BASE_SHA"
+    if identical_pr_tree; then
+      echo "identical_tree=true" >> "$GITHUB_OUTPUT"
+    fi
   elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
     # Pre-warm the cache for future PRs whose base is this main commit.
     base_sha="$GITHUB_SHA"
@@ -104,9 +126,7 @@ determine() {
     exit 0
   fi
 
-  eval "$(
-    python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
-  )"
+  read_pr_event
 
   if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
     echo "Missing PR base/head SHA; falling back to //...."
@@ -126,6 +146,15 @@ determine() {
   fi
 
   echo "full_test=false" >> "$GITHUB_OUTPUT"
+
+  if identical_pr_tree; then
+    echo "Identical source trees; no affected build or test targets."
+    echo "browser_affected=false" >> "$GITHUB_OUTPUT"
+    echo "metal_affected=false" >> "$GITHUB_OUTPUT"
+    echo "fallback=false" >> "$GITHUB_OUTPUT"
+    echo "affected=//tools/ci:no_affected_targets" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
 
   # Diff from the merge-base, not the base tip. The event payload's
   # base.sha is the base branch's CURRENT tip, so a two-dot diff

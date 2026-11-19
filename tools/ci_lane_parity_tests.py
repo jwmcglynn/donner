@@ -246,9 +246,9 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "fd5d740341fdc576"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7b92e4c03e6e4cce"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "4c74c44b7a2797b2"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9cde4a1e41b56a52"),
 }
 
 SHARED_STEP_ALLOWLIST = {
@@ -438,6 +438,7 @@ _CACHE_HIT = ("", "A cache restore result only gates that cache's save step; a m
                   "such step.")
 
 STEP_OUTPUTS = {
+    "steps.pr-meta.outputs.identical_tree": ("", "Changed trees use the full target planner setup."),
     **{"steps.%s.outputs.cache-hit" % step_id: _CACHE_HIT
        for step_id in ("base-hashes", "bazel-cache", "ccache", "cmake-deps", "npm-cache")},
     "steps.browser_gpu_failure.outputs.run_probe": (
