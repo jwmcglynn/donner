@@ -958,6 +958,8 @@ class ParityReportTests(unittest.TestCase):
             "donner_only": 2,
             "donner_only_by_engine_result": {"failed": 1, "unknown": 1},
             "donner_pass": 5,
+            "donner_pixel_pass": 5,
+            "donner_render_pass": 0,
             "donner_strict_pass": 3,
             "engine_pass": 6,
             "gap": 3,
@@ -975,6 +977,25 @@ class ParityReportTests(unittest.TestCase):
              "state": "undefined-behavior"},
             {"path": "painting/stroke/off.svg", "reason": None, "state": "disabled"},
         ])
+
+    def test_render_credit_requires_an_active_reviewed_contract_and_backend(self) -> None:
+        base = {"registration": "active", "primary_state": "render-only",
+                "render_only_kind": "undefined-behavior", "comparison_modes": ["tiny-golden"],
+                "exception_types": [], "reason": "upstream UB marker"}
+        path = "structure/svg/funcIRI-with-invalid-characters.svg"
+        other = "painting/fill/rgb-int-int-int.svg"
+        results = {path: 0, other: 1}
+        for overrides, expected in [
+            ({}, 1), ({"registration": "disabled"}, 0), ({"comparison_modes": []}, 0),
+            ({"render_only_kind": "deprecated-in-svg2"}, 0), ({"primary_state": "skip"}, 0),
+        ]:
+            with self.subTest(overrides=overrides):
+                report = {"cases": [dict(base, path=path) | overrides,
+                                    dict(base, path=other)]}
+                score = parity_report.build_head_to_head(report, results)
+                self.assertEqual(score["summary"]["donner_pass"], expected)
+                self.assertEqual(score["summary"]["donner_strict_pass"], 0)
+                self.assertEqual([row["path"] for row in score["gap"]], [other])
 
     def test_head_to_head_fails_closed_when_results_and_corpus_disagree(self) -> None:
         report = self._head_to_head_fixture()
@@ -1118,7 +1139,9 @@ class RealTreeParityReportTests(unittest.TestCase):
 
         summary = head_to_head["summary"]
         self.assertEqual(summary["total_cases"], report["summary"]["total_cases"])
-        self.assertEqual(summary["donner_pass"], report["summary"]["compare_cases"])
+        self.assertEqual(summary["donner_pixel_pass"], report["summary"]["compare_cases"])
+        self.assertEqual(summary["donner_pass"],
+                         summary["donner_pixel_pass"] + summary["donner_render_pass"])
         self.assertEqual(summary["both_pass"] + summary["donner_only"], summary["donner_pass"])
         self.assertEqual(summary["both_pass"] + summary["gap"], summary["engine_pass"])
         self.assertEqual(summary["margin"], summary["donner_pass"] - summary["engine_pass"])
@@ -1130,8 +1153,12 @@ class RealTreeParityReportTests(unittest.TestCase):
             {"engine_result": "failed", "path": "structure/style/important.svg"},
             head_to_head["donner_only"],
         )
-        self.assertIn("filters/feGaussianBlur/huge-stdDeviation.svg",
-                      [row["path"] for row in head_to_head["gap"]])
+        self.assertEqual(
+            {row["path"] for row in head_to_head["render_passes"]},
+            {"filters/feGaussianBlur/huge-stdDeviation.svg",
+             "structure/svg/funcIRI-with-invalid-characters.svg"},
+        )
+        self.assertEqual(summary["donner_render_pass"], 2)
         self.assertGreater(summary["engine_pass"], 1000)
 
     def test_live_render_only_rows_use_a_named_bucket(self) -> None:

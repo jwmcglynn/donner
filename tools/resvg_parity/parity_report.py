@@ -1676,16 +1676,23 @@ def _gap_state(case: dict[str, object]) -> str:
     return str(case["render_only_kind"] or case["primary_state"])
 
 
+# These reviewed corpus contracts award completion with a nonempty snapshot. Other fixtures
+# in the same registration bucket can have defined output but no usable upstream reference.
+RENDER_PASS_CONTRACTS = {
+    "filters/feGaussianBlur/huge-stdDeviation.svg": "Upstream explicitly requires no crash.",
+    "structure/svg/funcIRI-with-invalid-characters.svg":
+        "Render the digit-leading ID fixture whose upstream PNG is the UB marker.",
+}
+
+
 def build_head_to_head(
     report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE
 ) -> dict[str, object]:
-    """Compare Donner's compared cases with one engine's recorded passes on the same corpus.
+    """Compare configured Donner outcomes with an engine's published results.
 
-    A Donner pass is an active case that compares against its reference, by default or within a
-    recorded budget on at least one backend, so the count assumes the comparison tests are green.
-    Skipped, render-only and disabled cases are not passes. A strict pass also carries no pixel
-    budget or golden override.
-    The engine's passes are its `passed` rows; `unknown` and `crashed` rows are not passes.
+    The score assumes green corpus runs. It includes pixel comparisons and explicitly
+    credited render-only contracts. Strict passes count only pixel comparisons without
+    a numerical budget or a custom golden. The engine score uses its recorded passes.
     """
 
     cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
@@ -1698,10 +1705,17 @@ def build_head_to_head(
             f"{len(extra)} results without a case {extra[:5]}"
         )
 
-    donner_passes = {path for path, case in cases.items() if _gap_state(case) == "compare"}
+    pixel_passes = {path for path, case in cases.items() if _gap_state(case) == "compare"}
+    render_passes = {
+        path for path in RENDER_PASS_CONTRACTS
+        if path in cases and cases[path]["primary_state"] == "render-only"
+        and _gap_state(cases[path]) == "undefined-behavior"
+        and cases[path]["comparison_modes"]
+    }
+    donner_passes = pixel_passes | render_passes
     engine_passes = {path for path, code in engine_results.items() if code == 1}
     strict_passes = {
-        path for path in donner_passes
+        path for path in pixel_passes
         if not set(cases[path]["exception_types"]) & _LOOSENING_EXCEPTIONS
     }
     donner_only = sorted(donner_passes - engine_passes)
@@ -1723,6 +1737,8 @@ def build_head_to_head(
             "donner_only": len(donner_only),
             "donner_only_by_engine_result": dict(Counter(map(engine_result, donner_only))),
             "donner_pass": len(donner_passes),
+            "donner_pixel_pass": len(pixel_passes),
+            "donner_render_pass": len(render_passes),
             "donner_strict_pass": len(strict_passes),
             "engine_pass": len(engine_passes),
             "gap": len(gap),
@@ -1730,6 +1746,9 @@ def build_head_to_head(
             "margin": len(donner_passes) - len(engine_passes),
             "total_cases": len(cases),
         },
+        "render_passes": [
+            {"path": path, "contract": RENDER_PASS_CONTRACTS[path]} for path in sorted(render_passes)
+        ],
         "donner_only": [{"engine_result": engine_result(path), "path": path}
                         for path in donner_only],
         "gap": [
