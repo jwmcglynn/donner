@@ -71,12 +71,12 @@ const std::vector<ComparisonMode>& ActiveComparisonModes();
 static constexpr int kDefaultMismatchedPixels = 100;
 
 /**
- * @brief Default threshold for pixel differences in image comparisons.
+ * @brief Default per-pixel color difference threshold for image comparisons.
  *
- * For most tests, a threshold of 0.01 (1%) is sufficient. Some specific tests might require a
- * larger threshold due to subtle anti-aliasing differences. For example:
- * - `a_transform_007` might need up to 0.05.
- * - `e_line_001` might need up to 0.02.
+ * Every comparison uses 0.02 unless its params set another value. A pixel whose color difference
+ * exceeds the threshold counts toward \ref kDefaultMismatchedPixels. In the resvg suite, a
+ * threshold above 0.05 must be recorded in `THRESHOLD_ALLOWLIST` in
+ * `tools/resvg_parity/parity_report.py`, which may only shrink.
  */
 static constexpr float kDefaultThreshold = 0.02f;
 
@@ -134,6 +134,13 @@ struct ImageComparisonParams {
 
   /**
    * @brief Creates parameters to skip a test.
+   *
+   * A skipped test does not render, so it loses regression, no-crash and sanitizer coverage. In
+   * the resvg suite a skip is only for an unimplemented feature with an issue number,
+   * `Not impl: <feature> (#<issue>)`, and every skip must be listed in `SKIP_ALLOWLIST` in
+   * `tools/resvg_parity/parity_report.py`, which needs maintainer approval to grow. Reference
+   * disagreements, harness mismatches and API-policy differences compare against a
+   * Donner-rendered golden with a recorded justification instead (\ref WithGoldenOverride).
    * @param reason Human-readable explanation, shown in the skip message.
    * @return ImageComparisonParams configured to skip.
    */
@@ -149,8 +156,8 @@ struct ImageComparisonParams {
    *
    * For tests whose output the specification leaves undefined or implementation-defined, or
    * whose resvg reference is the UB marker image. Rendering still has to complete, which keeps
-   * no-crash and sanitizer coverage. Bugs, missing features, reference disagreements and harness
-   * mismatches use \ref Skip instead.
+   * no-crash and sanitizer coverage. Reference disagreements, harness mismatches and API-policy
+   * differences use \ref WithGoldenOverride with a reason; unimplemented features use \ref Skip.
    * @param reason Human-readable explanation, shown in the test log.
    * @return ImageComparisonParams configured to render without comparing.
    */
@@ -200,6 +207,10 @@ struct ImageComparisonParams {
 
   /**
    * @brief Creates parameters with an overridden golden image filename.
+   *
+   * In the resvg suite every golden override needs a reason (here, or through \ref withReason or
+   * \ref withGeodeGoldenOverride), and the golden needs a row with its SHA-256 in
+   * `donner/svg/renderer/testdata/golden/README.md`; `parity_report_tests` checks both.
    *
    * @param filename The filename to use for the golden image.
    * @param threshold Optional per-pixel difference threshold to use with the override.
