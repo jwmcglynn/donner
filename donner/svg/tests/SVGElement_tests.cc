@@ -1789,6 +1789,24 @@ auto ComputedTargetValue(SVGDocument& document, Member member) {
   return (target->getComputedStyle().*member).get();
 }
 
+/// Matches an optional value equal to \p expected, which may be empty.
+template <typename T>
+testing::Matcher<const std::optional<T>&> OptionalEq(const std::optional<T>& expected) {
+  if (expected.has_value()) {
+    return Optional(testing::Eq(*expected));
+  }
+  return testing::Eq(std::nullopt);
+}
+
+/// Expects the computed \p member of `#t` in \p edited to equal that in \p expected, naming the
+/// property on failure.
+template <typename Member>
+void ExpectSameComputedValue(SVGDocument& edited, SVGDocument& expected, Member member) {
+  SCOPED_TRACE(testing::Message() << "property " << (PropertyRegistry().*member).name);
+  EXPECT_THAT(ComputedTargetValue(edited, member),
+              OptionalEq(ComputedTargetValue(expected, member)));
+}
+
 // Removing a presentation attribute leaves the computed style of a document authored without it:
 // an inherited property inherits again, a non-inherited one takes its initial value, and a
 // stylesheet rule or `style` declaration of the same property stays in effect.
@@ -1804,13 +1822,10 @@ TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascad
     SVGDocument edited = parseSVG(SvgOf(item.authored));
     (void(ComputedTargetValue(edited, members)), ...);
     std::optional<SVGElement> target = edited.querySelector("#t");
-    ASSERT_TRUE(target.has_value());
+    ASSERT_THAT(target, Optional(testing::_));
     target->removeAttribute(item.attribute);
     SVGDocument expected = parseSVG(SvgOf(item.fresh));
-    const auto expectSame = [&](auto member) {
-      EXPECT_EQ(ComputedTargetValue(edited, member), ComputedTargetValue(expected, member));
-    };
-    (expectSame(members), ...);
+    (ExpectSameComputedValue(edited, expected, members), ...);
   };
   for (const Case& item :
        {Case{"inherited", "<g fill='red'><rect id='t' fill='blue'/></g>",
@@ -1885,13 +1900,12 @@ TEST_F(SVGElementTests, RemovingAnAttributeRematchesAttributeSelectors) {
     SVGDocument edited = parseSVG(SvgOf(rule + item.authored));
     ComputeFrameStyles(edited);
     std::optional<SVGElement> target = edited.querySelector("#t");
-    ASSERT_TRUE(target.has_value());
+    ASSERT_THAT(target, Optional(testing::_));
     target->removeAttribute(item.attribute);
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
     components::StyleSystem().computeAllStyles(edited.registry(), disabledSink);
     SVGDocument expected = parseSVG(SvgOf(rule + item.fresh));
-    EXPECT_EQ(ComputedTargetValue(edited, &PropertyRegistry::stroke),
-              ComputedTargetValue(expected, &PropertyRegistry::stroke));
+    ExpectSameComputedValue(edited, expected, &PropertyRegistry::stroke);
   }
 }
 
@@ -1908,7 +1922,7 @@ TEST_F(SVGElementTests, RemovingAnUnsetPresentationAttributeIsANoOp) {
   rect.removeAttribute("fill");
   rect.removeAttribute("text-decoration");
   EXPECT_EQ(rect.entityHandle().all_of<components::StyleComponent>(), hadStyle);
-  EXPECT_EQ(rect.entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+  EXPECT_THAT(rect.entityHandle().try_get<components::DirtyFlagsComponent>(), testing::IsNull());
   EXPECT_FALSE(
       document_.registry().ctx().get<components::RenderTreeState>().needsFullStyleRecompute);
 }
@@ -1917,19 +1931,19 @@ TEST_F(SVGElementTests, RemovingAnUnsetPresentationAttributeIsANoOp) {
 TEST_F(SVGElementTests, PresentationAttributeSetAndRemoveRoundTrip) {
   SVGDocument document = parseSVG(SvgOf("<g fill='red'><rect id='t' fill='blue'/></g>"));
   std::optional<SVGElement> maybeTarget = document.querySelector("#t");
-  ASSERT_TRUE(maybeTarget.has_value());
+  ASSERT_THAT(maybeTarget, Optional(testing::_));
   SVGElement target = *maybeTarget;
   const auto fill = [&]() { return ComputedTargetValue(document, &PropertyRegistry::fill); };
   const PaintServer red = PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)));
   const PaintServer blue = PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)));
 
   target.removeAttribute("fill");
-  EXPECT_EQ(fill(), red);
+  EXPECT_THAT(fill(), Optional(red));
   target.setAttribute("fill", "blue");
-  EXPECT_EQ(fill(), blue);
+  EXPECT_THAT(fill(), Optional(blue));
 
   target.removeAttribute("fill");
-  EXPECT_EQ(fill(), red);
+  EXPECT_THAT(fill(), Optional(red));
 }
 
 TEST_F(SVGElementTests, RemoveAttributeId) {

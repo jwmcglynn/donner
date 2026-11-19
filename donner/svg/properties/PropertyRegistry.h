@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <ostream>
 #include <span>
 #include <string_view>
 
@@ -735,6 +736,16 @@ public:
     NotSet,    //!< The attribute writes properties here, but declared none of them.
     NotStored  //!< The attribute's state is not stored here, such as `transform` or `cx`.
   };
+
+  /// Prints a \ref PresentationAttributeClear by name, for test diagnostics.
+  friend std::ostream& operator<<(std::ostream& os, PresentationAttributeClear value) {
+    switch (value) {
+      case PresentationAttributeClear::Cleared: return os << "Cleared";
+      case PresentationAttributeClear::NotSet: return os << "NotSet";
+      case PresentationAttributeClear::NotStored: return os << "NotStored";
+    }
+    return os;
+  }
 
   /**
    * Remove the declarations a presentation attribute contributed, so the properties it writes

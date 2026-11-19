@@ -153,7 +153,7 @@ TEST(PropertyRegistry, ClearPresentationAttributeRemovesOnlyItsDeclaration) {
   ASSERT_THAT(registry.parsePresentationAttribute("color", "red"), ParseResultIs(true));
   ASSERT_TRUE(registry.parseStyle("color: lime"));
   EXPECT_EQ(registry.clearPresentationAttribute("color"), Clear::NotSet);
-  EXPECT_EQ(registry.color.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
+  EXPECT_THAT(registry.color.get(), Optional(css::Color(css::RGBA::RGB(0, 255, 0))));
 
   ASSERT_THAT(registry.parsePresentationAttribute("flood-color", "red"), ParseResultIs(true));
   EXPECT_EQ(registry.clearPresentationAttribute("flood-color"), Clear::Cleared);
@@ -161,7 +161,7 @@ TEST(PropertyRegistry, ClearPresentationAttributeRemovesOnlyItsDeclaration) {
   ASSERT_THAT(registry.parsePresentationAttribute("flood-color", "red"), ParseResultIs(true));
   ASSERT_TRUE(registry.parseStyle("flood-color: lime"));
   EXPECT_EQ(registry.clearPresentationAttribute("flood-color"), Clear::Cleared);
-  EXPECT_EQ(registry.floodColor.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
+  EXPECT_THAT(registry.floodColor.get(), Optional(css::Color(css::RGBA::RGB(0, 255, 0))));
 
   EXPECT_EQ(registry.clearPresentationAttribute("transform"), Clear::NotStored);
   EXPECT_EQ(registry.clearPresentationAttribute("cx"), Clear::NotStored);

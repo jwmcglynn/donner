@@ -5855,7 +5855,7 @@ TEST_F(RendererRegressionTests, RemovedFillPresentationAttributeInheritsAgain) {
       Vector2i(16, 16));
   (void)RenderDocumentWithActiveBackend(document);
   std::optional<SVGElement> target = document.querySelector("#t");
-  ASSERT_TRUE(target.has_value());
+  ASSERT_THAT(target, testing::Optional(testing::_));
   target->removeAttribute("fill");
 
   SVGDocument fresh = instantiateSubtree(
