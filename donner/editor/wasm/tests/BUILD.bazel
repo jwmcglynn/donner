@@ -1378,11 +1378,13 @@ js_test(
     copy_data_to_bin = False,
     data = [
         ":node_modules/espree",
+        "//donner/editor/wasm:browser-file-dialogs.release.json",
         "//donner/editor/wasm:minified_static_javascript",
         "//donner/editor/wasm:static_javascript_sources",
     ],
     entry_point = "static-javascript-package.spec.mjs",
     env = {
+        "DIALOG_RELEASE_DIGESTS": "$(rootpath //donner/editor/wasm:browser-file-dialogs.release.json)",
         "MINIFIED_SCRIPTS": "$(rootpaths //donner/editor/wasm:minified_static_javascript)",
         "ORIGINAL_SCRIPTS": "$(rootpaths //donner/editor/wasm:static_javascript_sources)",
     },

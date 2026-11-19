@@ -215,6 +215,11 @@ wasm_cc_binary(
     }),
 )
 
+exports_files(
+    ["browser-file-dialogs.release.json"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
 _STATIC_JAVASCRIPT = [
     "browser-file-dialogs.js",
     "catalog-fonts.js",

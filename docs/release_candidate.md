@@ -41,6 +41,12 @@ and in the release body; the record cannot contain its own hash.
   editor role also requires that clean exact-source checkout. `docs-provenance` is retained by
   the docs build beside its Pages artifact
   and is never published. `bcr-entry` is described [below](#ReleaseCandidateRegistryEntry).
+  The editor dialog script in both `site/` and `deploy/` must match the digest recorded in the
+  selected source's `donner/editor/wasm/browser-file-dialogs.release.json`. Its source digest
+  identifies the input and the packaged digest identifies the exact bytes produced by the pinned
+  minifier. The Bazel static JavaScript package test checks both. When either changes, update
+  the record from those two files. Historical raw and known pre-record minified packages retain
+  their exact-byte checks.
 - `evidence`: exactly `ci`, `coverage`, `fuzz`, and `sanitizers`. Each names a successful
   exact-source run ID and attempt, its retained evidence-file SHA-256, and successful/skipped
   **workflow job** counts. The verifier gets those counts from GitHub's attempt-specific jobs API;
