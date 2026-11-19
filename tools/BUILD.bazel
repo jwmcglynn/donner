@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load(":native_delivery_fixture.bzl", "native_delivery_fixture")
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
@@ -470,6 +471,7 @@ py_test(
         "//:BUILD.bazel",
         "//:docs_files",
         "//:github_action_definitions",
+        "//build_defs:macos_app_bundle.bzl",
         "//build_defs:rules.bzl",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:lanes.py",
@@ -1343,3 +1345,5 @@ genrule(
     tools = [":docs_selector_fixture"],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
+
+ci_darwin_targets()

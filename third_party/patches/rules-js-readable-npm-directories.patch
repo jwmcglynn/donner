@@ -57,11 +57,46 @@ diff --git a/npm/private/npm_package_extract.mjs b/npm/private/npm_package_extra
 new file mode 100644
 --- /dev/null
 +++ b/npm/private/npm_package_extract.mjs
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,63 @@
 +import { spawnSync } from "node:child_process";
-+import { chmodSync, lstatSync, readdirSync, realpathSync } from "node:fs";
-+import { join } from "node:path";
++import { accessSync, chmodSync, constants, lstatSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync } from "node:fs";
++import { dirname, join } from "node:path";
 +import { fileURLToPath } from "node:url";
++
++// Some executors create the declared directory under their own UID. An action
++// can replace the empty directory but cannot change its POSIX mode.
++export function prepareOutputDirectory(output, uid = process.getuid?.()) {
++  const stat = lstatSync(output, { throwIfNoEntry: false });
++  if (!stat) return;
++  if (!stat.isDirectory()) throw new Error("Expected a directory for the declared npm output");
++  if (uid === undefined || stat.uid === uid) return;
++  if (permissionUpdate(stat.mode, 0o555) === undefined && canWriteDirectory(output)) {
++    if (readdirSync(output).length) throw new Error("Expected an empty declared npm output");
++    return;
++  }
++  const owned = mkdtempSync(join(dirname(output), ".npm-extract-"));
++  try {
++    renameSync(owned, output);
++  } catch (error) {
++    rmdirSync(owned);
++    throw error;
++  }
++}
++
++function canWriteDirectory(path) {
++  try {
++    accessSync(path, constants.W_OK | constants.X_OK);
++    return true;
++  } catch (error) {
++    if (error.code === "EACCES" || error.code === "EPERM") return false;
++    throw error;
++  }
++}
++
++export function permissionUpdate(mode, required) {
++  const desired = (mode & 0o777) | required;
++  return (mode & 0o7777) === desired ? undefined : desired;
++}
 +
 +// Some npm archives give directories file-like modes (for example 0666).
 +// Restore read/traverse access before the declared tree is uploaded, without
@@ -69,17 +104,18 @@ new file mode 100644
 +export function normalizePermissions(path) {
 +  const stat = lstatSync(path);
 +  if (stat.isSymbolicLink()) return;
++  if (!stat.isDirectory() && !stat.isFile()) return;
++  const mode = permissionUpdate(stat.mode, stat.isDirectory() ? 0o555 : 0o444);
++  if (mode !== undefined) chmodSync(path, mode);
 +  if (stat.isDirectory()) {
-+    chmodSync(path, (stat.mode & 0o777) | 0o555);
 +    for (const entry of readdirSync(path)) normalizePermissions(join(path, entry));
-+  } else if (stat.isFile()) {
-+    chmodSync(path, (stat.mode & 0o777) | 0o444);
 +  }
 +}
 +
 +// Node canonicalizes an ES-module entry point even when Bazel invokes a symlink.
 +if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
 +  const [tar, output, ...args] = process.argv.slice(2);
++  prepareOutputDirectory(output);
 +  const result = spawnSync(tar, args, { stdio: "inherit" });
 +  if (result.error) console.error(result.error.message);
 +  if (result.status !== 0) process.exit(result.status ?? 1);

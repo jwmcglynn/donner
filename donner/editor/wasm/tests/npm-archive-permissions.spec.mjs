@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -16,7 +17,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
 const helper = resolve(process.env.TEST_SRCDIR ?? process.cwd(), process.argv[2]);
-const { normalizePermissions } = await import(pathToFileURL(helper));
+const { normalizePermissions, permissionUpdate, prepareOutputDirectory } = await import(pathToFileURL(helper));
 
 function fixture(run) {
   const root = mkdtempSync(join(tmpdir(), "npm-permission-test-"));
@@ -67,6 +68,66 @@ test("symlinks remain unchanged and external targets are never opened", () =>
     for (const name of ["outside", "broken", "cycle"]) {
       assert.equal(lstatSync(join(packageRoot, name)).isSymbolicLink(), true);
     }
+  }));
+
+test("foreign-owned declared empty directory is replaced before extraction", () =>
+  fixture((root) => {
+    const output = join(root, "pkg");
+    mkdirSync(output);
+    chmodSync(output, 0o700);
+    const before = lstatSync(output);
+    prepareOutputDirectory(output, before.uid);
+    assert.equal(lstatSync(output).ino, before.ino);
+    prepareOutputDirectory(output, before.uid + 1);
+    assert.notEqual(lstatSync(output).ino, before.ino);
+    assert.deepEqual(readdirSync(root), ["pkg"]);
+    normalizePermissions(output);
+    assert.equal(mode(output) & 0o555, 0o555);
+  }));
+
+test("already-normalized foreign output keeps its existing inode", () =>
+  fixture((root) => {
+    const output = join(root, "pkg");
+    mkdirSync(output);
+    chmodSync(output, 0o755);
+    const before = lstatSync(output);
+    prepareOutputDirectory(output, before.uid + 1);
+    assert.equal(lstatSync(output).ino, before.ino);
+  }));
+
+test("normalized foreign output must be empty to extract in place", () =>
+  fixture((root) => {
+    const output = join(root, "pkg");
+    mkdirSync(output);
+    chmodSync(output, 0o777);
+    writeFileSync(join(output, "keep"), "preserved");
+    assert.throws(() => prepareOutputDirectory(output, lstatSync(output).uid + 1), /empty/);
+    assert.equal(readFileSync(join(output, "keep"), "utf8"), "preserved");
+  }));
+
+test("normalization removes special bits without dropping executable bits", () => {
+  // Hardened workers prohibit creating set-ID files. Exercise the same chmod decision with mode values.
+  for (const special of [0o4000, 0o2000, 0o1000, 0o6000]) {
+    assert.equal(permissionUpdate(special | 0o755, 0o444), 0o755);
+    assert.equal(permissionUpdate(special | 0o700, 0o555), 0o755);
+  }
+  assert.equal(permissionUpdate(0o755, 0o444), undefined);
+});
+
+test("adoption preserves nonempty directories and rejects symlink outputs", () =>
+  fixture((root) => {
+    const output = join(root, "pkg");
+    mkdirSync(output);
+    const sentinel = join(output, "keep");
+    writeFileSync(sentinel, "preserved");
+    chmodSync(output, 0o700);
+    assert.throws(() => prepareOutputDirectory(output, lstatSync(output).uid + 1));
+    assert.equal(readFileSync(sentinel, "utf8"), "preserved");
+    assert.deepEqual(readdirSync(root), ["pkg"]);
+    const link = join(root, "link");
+    symlinkSync(output, link);
+    assert.throws(() => prepareOutputDirectory(link), /Expected a directory/);
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
   }));
 
 test("CLI extracts through both direct and symlinked input paths", () =>

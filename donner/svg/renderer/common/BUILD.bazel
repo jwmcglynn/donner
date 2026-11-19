@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
@@ -10,3 +11,5 @@ cc_library(
         "//donner/svg/components",
     ],
 )
+
+ci_darwin_targets()

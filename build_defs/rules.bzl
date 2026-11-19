@@ -2,6 +2,8 @@
 Helper rules, such as for building fuzzers.
 """
 
+load("@bazel_features//:features.bzl", "bazel_features")
+load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
@@ -318,7 +320,8 @@ exec "$impl" {fixed_args} "$@"
     # Without this, the variant targets silently drop the impl's `env` (e.g.
     # the resvg suite's per-case watchdog override) - the symlinked binary
     # would run with a bare environment.
-    if getattr(ctx.attr, "metal_validation", False):
+    profile = getattr(ctx.attr, "darwin_profile", "")
+    if getattr(ctx.attr, "metal_validation", False) or profile:
         environment = dep_target[RunEnvironmentInfo] if RunEnvironmentInfo in dep_target else None
         fixed = {
             "DONNER_AUTOMATED_LANE": "1",
@@ -326,6 +329,9 @@ exec "$impl" {fixed_args} "$@"
             "HOME": "",
             "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
         }
+        if profile:
+            fixed["DONNER_CI_MACOS_LANE"] = "native-desktop-browser" if profile == "desktop" else "self-hosted-vm"
+            fixed["MTL_SHADER_VALIDATION_TEXTURE_USAGE"] = "0"
         providers.append(RunEnvironmentInfo(
             environment = (environment.environment if environment else {}) | fixed,
             inherited_environment = [k for k in environment.inherited_environment if k not in fixed] if environment else [],
@@ -654,6 +660,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
       tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
+    ci_darwin_targets()
     cc_binary(
         name = name,
         srcs = srcs,
@@ -743,6 +750,7 @@ def donner_cc_test(
         opted-in Geode variants.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
+    ci_darwin_targets()
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
 
@@ -850,6 +858,7 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       visibility: Visibility.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
+    ci_darwin_targets()
 
     package_path = native.package_name().split("/")
     if len(package_path) == 0:
@@ -1001,6 +1010,7 @@ def donner_cc_fuzzer(
                       exclude it. Time budget is controlled by
                       `--//build_defs:fuzz_soak` (see build_defs/BUILD.bazel).
     """
+    ci_darwin_targets()
     if per_input_timeout_seconds <= 0:
         fail("per_input_timeout_seconds must be positive")
 
@@ -1245,6 +1255,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
       optimization_level: Native speed level, O2 by default or O3 for measured kernels.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
+    ci_darwin_targets()
     compat = {}
     if target_compatible_with != None:
         compat["target_compatible_with"] = target_compatible_with
@@ -1299,17 +1310,30 @@ _CI_ACTION_ENVS = ["//command_line_option:action_env", "//command_line_option:ho
 _CI_PLATFORM_OPTIONS = [
     "//command_line_option:platforms",
     "//command_line_option:host_platform",
+    "//command_line_option:extra_execution_platforms",
     "//build_defs:llvm_latest",
     "//build_defs:metal_shader_validation",
+    "//donner/svg/renderer:renderer_backend",
+    "//donner/svg/renderer/geode:enable_geode",
 ] + _CI_ACTION_ENVS
 
 def _ci_test_platform(settings, attr):
     options = dict(settings)
     options["//command_line_option:platforms"] = [str(attr.target_platform)]
+    if attr.darwin_profile == "geode":
+        options["//donner/svg/renderer:renderer_backend"] = "geode"
+        options["//donner/svg/renderer/geode:enable_geode"] = True
+    if attr.darwin_profile in ["ordinary", "geode"]:
+        options["//build_defs:metal_shader_validation"] = "off"
     if attr.metal_validation:
         options["//build_defs:metal_shader_validation"] = "on"
     if attr.darwin:
-        options["//command_line_option:host_platform"] = str(Label("//tools/ci:remote_macos_aarch64"))
+        darwin = str(Label("//tools/ci:remote_macos_aarch64"))
+        options["//command_line_option:host_platform"] = darwin
+        # Toolchains such as rules_js package their execution-platform runtime into the test.
+        # Prefer Darwin on this configuration so the packaged Node executable runs on its TestRunner.
+        platforms = "//command_line_option:extra_execution_platforms"
+        options[platforms] = [darwin] + [p for p in settings[platforms] if str(p).lstrip("@") != darwin.lstrip("@")]
         options["//build_defs:llvm_latest"] = "0"
         for key in _CI_ACTION_ENVS:
             options[key] = [v for v in settings[key] if v.split("=", 1)[0] != "PATH"] + [_CI_DARWIN_PATH]
@@ -1327,9 +1351,56 @@ ci_platform_test = rule(
     cfg = _ci_test_transition,
     attrs = {
         "darwin": attr.bool(),
+        "darwin_profile": attr.string(values = ["", "ordinary", "desktop", "geode"]),
+        "data": attr.label_list(allow_files = True),
         "metal_validation": attr.bool(),
         "dep": attr.label(mandatory = True, executable = True, cfg = "target"),
         "target_platform": attr.label(mandatory = True),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
+
+def _ci_platform_build_impl(ctx):
+    return [DefaultInfo(files = ctx.attr.dep[DefaultInfo].files)]
+
+ci_platform_build = rule(
+    implementation = _ci_platform_build_impl,
+    cfg = _ci_test_transition,
+    attrs = {
+        "darwin": attr.bool(),
+        "darwin_profile": attr.string(values = ["ordinary", "desktop", "geode"]),
+        "dep": attr.label(mandatory = True, allow_files = True),
+        "metal_validation": attr.bool(),
+        "target_platform": attr.label(mandatory = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
+    },
+)
+
+def _finalize_ci_package(name, visibility):
+    declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))
+
+# Consumer builds also support Bazel 7. Only the root CI workspace needs finalizers.
+_ci_package_finalizer = bazel_features.globals.macro(
+    implementation = _finalize_ci_package,
+    finalizer = True,
+) if bazel_features.globals.macro else None
+
+def ci_darwin_targets():
+    """Register native CI variants once, including raw rules declared later in the package."""
+    if not _ci_package_finalizer or Label("//:BUILD.bazel").workspace_name:
+        return
+    package = native.package_name()
+    if native.repository_name() not in ["@", "@@"] or package == "third_party" or package.startswith("third_party/"):
+        return
+    marker = "_donner_ci_package_registered"
+    registered = native.existing_rule(marker)
+    if registered != None:
+        if registered["kind"] != "filegroup" or "ci-package-registration" not in registered["tags"]:
+            fail("Reserved CI registration name collides with //%s:%s" % (package, marker))
+        return
+    native.filegroup(
+        name = marker,
+        tags = ["ci-package-registration", "manual"],
+        visibility = ["//visibility:private"],
+    )
+    _ci_package_finalizer(name = "ci")

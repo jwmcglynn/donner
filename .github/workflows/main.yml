@@ -472,10 +472,15 @@ jobs:
             -print -exec rm -rf {} + 2>/dev/null || true
 
       - name: Test Linux and macOS with native platform transitions
+        id: unified
         if: github.event_name == 'pull_request' && vars.UNIFIED_RE_CANARY != 'false' && (needs.gatekeeper.outputs.unified_re_default == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:native-platform-canary'))
-        timeout-minutes: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true') && 45 || 10 }}
+        timeout-minutes: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && 90 || 10 }}
         env:
+          RUN_DARWIN: ${{ needs.gatekeeper.outputs.use_self_hosted_macos }}
           RUN_METAL: ${{ needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true') }}
+          RUN_BROWSER: ${{ needs.determine-targets.outputs.browser_affected == 'true' || needs.determine-targets.outputs.fallback == 'true' }}
+          WORKER_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
+          BROWSER_DIAGNOSTIC: ${{ contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -485,10 +490,45 @@ jobs:
           if [[ "$RUN_METAL" == true ]]; then
             suites+=(//tools/ci:unified_metal_{full_validation,preflight,offline_compiler,native})
           fi
+          options=()
+          ordinary="$RUNNER_TEMP/darwin-targets.txt"
+          : > "$ordinary"
+          if [[ "$RUN_DARWIN" == true ]]; then
+            suites+=(//tools/ci:unified_editor_geode)
+            if [[ "$TARGETS_AFFECTED" != //tools/ci:no_affected_targets ]]; then
+              python3 tools/ci/darwin_selection.py query > "$ordinary.query"
+              bazelisk query --nokeep_going --query_file="$ordinary.query" | python3 tools/ci/darwin_selection.py variants > "$ordinary"
+            fi
+            if [[ "$RUN_BROWSER" == true ]]; then
+              suites+=(//tools/ci:unified_mac_browser_archive)
+            fi
+            if [[ "$WORKER_QUALIFICATION" == true ]]; then
+              suites+=(//tools/ci:unified_worker_qualification)
+              options+=(--runs_per_test='.*:ci_darwin_qualify_.*@4')
+            fi
+            if [[ "$BROWSER_DIAGNOSTIC" == true ]]; then
+              suites+=(//tools/ci:unified_browser_diagnostic)
+            fi
+          fi
+          patterns="$RUNNER_TEMP/native-target-patterns.txt"
+          { printf '%s\n' "${suites[@]}"; cat "$ordinary"; } > "$patterns"
           bep="$RUNNER_TEMP/platform-canary.bep.json"
-          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=all \
-            --keep_going --noskip_incompatible_explicit_targets --build_event_json_file="$bep" "${suites[@]}"
-          python3 tools/ci/verify_unified_tests.py "$bep" "${suites[@]}"
+          env "$remote_identity" bazelisk test --config=ci --config=ci-platforms --repo_env=CC="$coordinator_cc" --test_output=errors \
+            --remote_download_outputs=minimal --remote_download_regex='.*(test[.]log|test[.]xml|outputs[.]zip)$' \
+            --keep_going --nobuild_tests_only --skip_incompatible_explicit_targets --build_event_json_file="$bep" "${options[@]}" --target_pattern_file="$patterns"
+          python3 tools/ci/verify_unified_tests.py --ordinary "$ordinary" "$bep" "${suites[@]}"
+
+      - name: Stage failed mixed-platform test outputs
+        if: failure() && steps.unified.outcome == 'failure'
+        shell: bash
+        run: python3 tools/ci/verify_unified_tests.py --stage-failed "$RUNNER_TEMP/unified" "$RUNNER_TEMP/platform-canary.bep.json"
+
+      - name: Upload mixed-platform test failure artifacts
+        if: failure() && steps.unified.outcome == 'failure'
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-unified-${{ github.run_attempt }}
+          testlogs: ${{ runner.temp }}/unified/test-artifacts/mixed
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash

@@ -355,6 +355,22 @@ determine() {
     -fh "$work_dir/head-hashes.json" \
     -o "$work_dir/affected.txt"
 
+  if grep -q ':ci_darwin_' "$work_dir/affected.txt"; then
+    (
+      cd "$head_dir"
+      bazelisk query --nokeep_going 'kind("ci_platform_(test|build) rule", attr(tags, "ci-darwin-(test|build)", //...))'
+    ) > "$work_dir/darwin-variants.txt"
+    python3 - "$work_dir/affected.txt" "$work_dir/darwin-variants.txt" <<'PYTHON'
+from pathlib import Path
+import sys
+
+affected, variants = map(Path, sys.argv[1:])
+generated = set(variants.read_text().splitlines())
+affected.write_text("".join(line for line in affected.read_text().splitlines(keepends=True)
+                            if line.rstrip("\n") not in generated))
+PYTHON
+  fi
+
   affected="$(
     python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$work_dir/affected.txt"
   )"

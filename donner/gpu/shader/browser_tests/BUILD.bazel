@@ -4,6 +4,7 @@ These tests live outside //donner/gpu/shader so that the production shader packa
 development-only rule set, which a module depending on Donner cannot see.
 """
 
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 
@@ -97,3 +98,5 @@ configured_dependency_audit_test(
     required = ["//donner/gpu/shader:slug_endpoint_wgsl_fixture"],
     target = "//donner/gpu/shader/browser_tests:slug_endpoint_chromium_tests",
 )
+
+ci_darwin_targets()

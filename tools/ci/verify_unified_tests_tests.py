@@ -2,11 +2,12 @@
 
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 from python.runfiles import runfiles
 
-from verify_unified_tests import _collect, verify
+from verify_unified_tests import KERNELS, report_kernels, verify
 
 
 SUITE = "//tools/ci:dual_platform_canary"
@@ -16,11 +17,11 @@ LABELS = ["//tools/ci:ci_linux_kernel_test", "//tools/ci:ci_macos_kernel_test",
 COLOR = "//donner/gpu/metal/tests:metal_color_matrix_tests_ci_metal"
 
 
-def events():
+def events(extra=COLOR, synthetic_extra=True):
     expansions = [{"suiteLabel": SUITE, "testLabels": LABELS},
-                  {"suiteLabel": METAL, "testLabels": [COLOR]}]
+                  {"suiteLabel": METAL, "testLabels": [extra]}]
     yield {"expanded": {"testSuiteExpansions": expansions}}
-    for label in [*LABELS, COLOR]:
+    for label in LABELS + ([extra] if synthetic_extra else []):
         shards = [{"label": label, "configuration": {"id": "abc"}, "shard": shard, "run": 1}
                   for shard in range(1, 3 if label == COLOR else 2)]
         identity = {"label": label, "configuration": {"id": "abc"}}
@@ -50,19 +51,58 @@ class UnifiedTest(unittest.TestCase):
             event = json.loads(line)
             if next(iter(event["id"].values())).get("label") == label:
                 records.append(event)
+        roots = list(events(extra=label, synthetic_extra=False))
         with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
-            _collect(records)  # The recorded results came from the cache.
+            verify(roots + records, [SUITE, METAL])  # The recorded results came from the cache.
         for event in records:
             if "testResult" in event:
                 event["testResult"].update(cachedLocally=False, executionInfo={"strategy": "remote"})
-        self.assertEqual(len(_collect(records)[1]), 5)
+        verify(roots + records, [SUITE, METAL])
         # Repeating shard 2 cannot satisfy a missing shard 5.
         for event in records:
             identity = event["id"].get("testResult", {})
             if identity.get("shard") == 5:
                 identity["shard"] = 2
         with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
-            _collect(records)
+            verify(roots + records, [SUITE, METAL])
+
+    def test_ordinary_test_can_reuse_cache(self):
+        label = "//pkg:ci_darwin_example"
+        shard = {"label": label, "configuration": {"id": "darwin"}, "shard": 1, "run": 1}
+        records = list(events()) + [
+            {"id": {"targetConfigured": {"label": label}}, "configured": {"testSize": "SMALL"}},
+            {"id": {"targetCompleted": {"label": label}}, "completed": {"success": True},
+             "children": [{"testResult": shard}]},
+            {"id": {"testSummary": {"label": label, "configuration": {"id": "darwin"}}},
+             "testSummary": {"overallStatus": "PASSED", "runCount": 1}},
+            {"id": {"testResult": shard}, "testResult": {"status": "PASSED", "cachedLocally": True}},
+        ]
+        verify(records, [SUITE, METAL], [label])
+        with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
+            verify(records[:-1], [SUITE, METAL], [label])
+
+    def test_missing_build_and_incompatible_headed_browser_fail(self):
+        label = "//donner/editor/wasm/tests:ci_darwin_animation_preview_browser_test"
+        skipped = {"id": {"targetCompleted": {"label": label}}, "aborted": {"reason": "SKIPPED"}}
+        for extra in [[], [skipped]]:
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "did not finish"):
+                verify(list(events()) + extra, [SUITE, METAL], [label])
+
+    def test_kernel_log_must_match_its_platform_and_declared_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            locations = {}
+            for label, kernel in KERNELS.items():
+                path = root / "config/testlogs/tools/ci" / label.split(":")[1] / "test.log"
+                path.parent.mkdir(parents=True)
+                path.write_text(f"test worker: {kernel}\n")
+                locations[label] = path.as_uri()
+            report_kernels(locations, root)
+            path.write_text("test worker: Linux x86_64\n")
+            with self.assertRaisesRegex(ValueError, "architecture evidence"):
+                report_kernels(locations, root)
+            with self.assertRaisesRegex(ValueError, "log location"):
+                report_kernels(locations, path.parent)
 
     def test_shortened_canary_cannot_pass(self):
         records = list(events())

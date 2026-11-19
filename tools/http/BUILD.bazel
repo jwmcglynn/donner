@@ -1,5 +1,8 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 py_binary(
     name = "simple_webserver",
     srcs = ["simple_webserver.py"],
     visibility = ["//visibility:public"],
 )
+
+ci_darwin_targets()

@@ -1,5 +1,5 @@
 load("//build_defs:ci_metal.bzl", "metal_ci_suites")
-load("//build_defs:rules.bzl", "ci_platform_test")
+load("//build_defs:rules.bzl", "ci_darwin_targets", "ci_platform_test")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -333,12 +333,19 @@ alias(
 )
 
 py_test(
+    name = "darwin_selection_tests",
+    size = "small",
+    srcs = ["darwin_selection.py", "darwin_selection_tests.py"],
+    imports = ["."],
+)
+
+py_test(
     name = "verify_unified_tests_tests",
     size = "small",
     srcs = ["verify_unified_tests.py", "verify_unified_tests_tests.py"],
     data = ["//tools:testdata/macos_remote_shadow_build_events.json"],
     imports = ["."],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [":macos_remote_shadow", "@rules_python//python/runfiles"],
 )
 
 py_test(
@@ -844,7 +851,7 @@ sh_binary(
     darwin = os == "macos",
     args = kernel,
     exec_compatible_with = ["@platforms//os:" + os],
-    tags = ["manual", "external"],
+    tags = ["external", "manual", "no-cache"],
     target_platform = ":" + os + "_ci",
 ) for os, kernel in [("linux", ["Linux", "aarch64"]), ("macos", ["Darwin", "arm64"])]]
 
@@ -865,3 +872,41 @@ metal_ci_suites([
     "metal_offline_compiler",
     "metal_native",
 ])
+
+test_suite(
+    name = "unified_worker_qualification",
+    tags = ["manual"],
+    tests = [
+        "//donner/base:ci_darwin_qualify_base_tests",
+        "//donner/gpu/metal/tests:ci_darwin_qualify_metal_buffer_bounds_tests",
+        "//donner/gpu/metal/tests:ci_darwin_qualify_metal_color_matrix_tests",
+        "//donner/gpu/metal/tests:ci_darwin_qualify_metal_queue_writes_tests",
+    ],
+)
+
+test_suite(
+    name = "unified_mac_browser_archive",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm/tests:ci_darwin_mac_browser_archive_tests"],
+)
+
+test_suite(
+    name = "unified_browser_diagnostic",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm/tests:ci_darwin_diagnostic_chromium_context_lifecycle_diagnostic"],
+)
+
+test_suite(
+    name = "unified_editor_geode",
+    tags = ["manual"],
+    tests = [
+        "//donner/editor/tests:ci_darwin_geode_async_renderer_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_editor_window_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_gl_rnr_replay_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_layer_thumbnail_golden_tests_geode",
+        "//donner/editor/tests:ci_darwin_geode_rnr_replay_tests_geode",
+        "//donner/svg/compositor:ci_darwin_geode_compositor_geode_splash_tests",
+    ],
+)
+
+ci_darwin_targets()

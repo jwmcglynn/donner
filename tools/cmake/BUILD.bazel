@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
 py_library(
@@ -27,3 +28,5 @@ py_test(
     env = {"BAZEL_WORKSPACE_TEST": "1"},
     deps = [":gen_cmakelists_lib"],
 )
+
+ci_darwin_targets()

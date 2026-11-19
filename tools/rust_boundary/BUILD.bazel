@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 # The lexical verifier scans tracked files outside Bazel, including the vendored
@@ -26,3 +27,5 @@ py_test(
     ],
     deps = [":rust_scopes"],
 )
+
+ci_darwin_targets()

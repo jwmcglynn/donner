@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load(":clang_format_check.bzl", "clang_format_check_compatible_with")
@@ -120,3 +121,5 @@ py_test(
         "@rules_python//python/runfiles",
     ],
 )
+
+ci_darwin_targets()

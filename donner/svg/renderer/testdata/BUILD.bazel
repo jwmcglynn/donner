@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 filegroup(
     name = "testdata",
     srcs = glob([
@@ -30,3 +31,5 @@ filegroup(
     ],
     visibility = ["//donner/svg/renderer/tests:__pkg__"],
 )
+
+ci_darwin_targets()

@@ -1,3 +1,4 @@
+load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
@@ -405,3 +406,5 @@ js_test(
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
 )
+
+ci_darwin_targets()
