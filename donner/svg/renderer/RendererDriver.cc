@@ -1313,6 +1313,13 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
 int ContentLastDrawOrder(Registry& registry,
                          const components::RenderingInstanceComponent& instance);
 
+/// Advances @p view to @p entity, or to its end when @p entity is not in it.
+void SeekToEntity(RenderingInstanceView& view, Entity entity) {
+  while (!view.done() && view.currentEntity() != entity) {
+    view.advance();
+  }
+}
+
 /// Snapshot main-pass render instances in draw order, leaving out offscreen feImage shadow
 /// instances (see \ref collectOffscreenFeImageShadowEntities). Filter preparation can reorder
 /// rendering instance storage, so traversals iterate this snapshot rather than a live view.
@@ -1328,22 +1335,23 @@ std::vector<Entity> CollectMainEntities(
       collectOffscreenFeImageShadowEntities(registry);
   std::vector<Entity> entities;
   RenderingInstanceView view(registry);
-  while (range && !view.done() && view.currentEntity() != range->first) {
-    view.advance();
+  if (range) {
+    SeekToEntity(view, range->first);
   }
   bool reachedLast = false;
-  // Draw order through which the range's instances draw content after `range->second`.
-  std::optional<int> contentLastDrawOrder;
+  // Draw order through which the range's instances draw content. Set by the first instance, so it
+  // has a value once `range->second` is reached.
+  int contentLastDrawOrder = std::numeric_limits<int>::min();
   while (!view.done()) {
     const Entity entity = view.currentEntity();
     const components::RenderingInstanceComponent& instance = view.get();
-    if (reachedLast && (!contentLastDrawOrder || instance.drawOrder > *contentLastDrawOrder)) {
+    if (reachedLast && instance.drawOrder > contentLastDrawOrder) {
       break;
     }
-    reachedLast = reachedLast || (range && entity == range->second);
     if (range) {
-      contentLastDrawOrder = std::max(contentLastDrawOrder.value_or(instance.drawOrder),
-                                      ContentLastDrawOrder(registry, instance));
+      reachedLast = reachedLast || entity == range->second;
+      contentLastDrawOrder =
+          std::max(contentLastDrawOrder, ContentLastDrawOrder(registry, instance));
     }
     if (feImageShadowEntities.count(entity) == 0) {
       entities.push_back(entity);
