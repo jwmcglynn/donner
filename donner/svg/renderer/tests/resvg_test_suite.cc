@@ -701,11 +701,8 @@ INSTANTIATE_TEST_SUITE_P(
                                            "invalid negative focal radius: no paint (#1186)")},
                 {"fr=0.5.svg",
                  Params::UndefinedBehavior("reference is the resvg UB marker image; coincident "
-                                           "start/end circles: transparent per SVG 2 (#1186)")},
-                {"fr=0.7.svg",
-                 Params::Skip("Reference disagreement: containing start circle is transparent per "
-                              "SVG 2; reference paints a reversed gradient "
-                              "(ReferenceContractRadialContainingStartCircleDoesNotPaint, #1186)")},
+                                           "start/end circles paint nothing today, an open "
+                                           "question in svgwg issue 648 (#1186)")},
                 {"invalid-gradientTransform.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; singular transform: no paint "

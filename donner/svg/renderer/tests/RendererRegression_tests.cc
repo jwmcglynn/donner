@@ -410,14 +410,153 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialSingleStopNegativeRadiiDo
   EXPECT_THAT(PixelAt(valid, 32, 32), testing::ElementsAre(0, 0, 255, 255));
 }
 
-TEST_F(RendererRegressionTests, ReferenceContractRadialContainingStartCircleDoesNotPaint) {
+/// Fills the 64x64 canvas with a userSpaceOnUse radial gradient whose start circle is
+/// (\p fx, 32, \p fr) and end circle (\p cx, 32, \p r), plus \p stops and \p spreadMethod.
+RendererBitmap RenderUserSpaceRadial(double fx, double fr, double cx, double r,
+                                     std::string_view spreadMethod, std::string_view stops) {
+  std::ostringstream body;
+  body.precision(17);
+  body << R"svg(<radialGradient id="g" gradientUnits="userSpaceOnUse" fx=")svg" << fx
+       << R"svg(" fy="32" fr=")svg" << fr << R"svg(" cx=")svg" << cx << R"svg(" cy="32" r=")svg"
+       << r << R"svg(" spreadMethod=")svg" << spreadMethod << R"svg(">)svg" << stops
+       << R"svg(</radialGradient><rect width="64" height="64" fill="url(#g)"/>)svg";
+  return RenderReferenceContract(body.str());
+}
+
+// HTML canvas `createRadialGradient` (which SVG 2 `fr` follows) paints the circle at every
+// interpolation parameter with a positive radius, so a start circle that contains the end circle
+// covers the whole plane: t = (fr - distance) / (fr - r) for concentric circles. The expected image
+// evaluates that formula at every pixel center, independently of either rasterizer.
+TEST_F(RendererRegressionTests, RadialContainingStartCirclePaintsCanvasTwoPointGradient) {
+  constexpr int kSize = 64;
+  constexpr double kCenter = 32.0;
+  constexpr double kStartRadius = 24.0;
+  constexpr double kEndRadius = 8.0;
+  const auto actual = RenderUserSpaceRadial(
+      kCenter, kStartRadius, kCenter, kEndRadius, "pad",
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg");
+
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(kSize, kSize);
+  expected.rowBytes = static_cast<std::size_t>(kSize) * 4u;
+  expected.alphaType = AlphaType::Unpremultiplied;
+  expected.pixels.reserve(expected.rowBytes * kSize);
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      const double distance = std::hypot(x + 0.5 - kCenter, y + 0.5 - kCenter);
+      // Pad: the last stop inside the end circle, the first stop outside the start circle.
+      const double t =
+          std::clamp((kStartRadius - distance) / (kStartRadius - kEndRadius), 0.0, 1.0);
+      expected.pixels.push_back(static_cast<uint8_t>(std::lround(255.0 * (1.0 - t))));
+      expected.pixels.push_back(0);
+      expected.pixels.push_back(static_cast<uint8_t>(std::lround(255.0 * t)));
+      expected.pixels.push_back(255);
+    }
+  }
+  editor::tests::CompareBitmapToBitmap(actual, expected, "radial_containing_start_circle_formula",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// The circles that cover a point are nested when the start circle contains the end circle, so each
+// point lies on exactly one circle of non-negative radius. Swapping the two circles and mirroring
+// the stops (t -> 1 - t) therefore yields the same image through the well-established case where
+// the start circle lies inside the end circle. Hard stops keep the image piecewise constant, and
+// every color boundary (integer or half-integer t) is a circle with an integer center and radius,
+// at least 0.5 in squared distance from any pixel center, so the comparison is exact.
+TEST_F(RendererRegressionTests, RadialContainingStartCircleMatchesSwappedCircles) {
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="0.5" stop-color="red"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="blue"/><stop offset="1" stop-color="blue"/>)svg";
+  constexpr std::string_view kMirroredStops =
+      R"svg(<stop stop-color="blue"/><stop offset="0.5" stop-color="blue"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="red"/><stop offset="1" stop-color="red"/>)svg";
+  // Start circle radius 24 at x = startX, end circle radius 8 at x = 32.
+  for (double startX : {32.0, 36.0}) {
+    for (std::string_view spreadMethod : {"pad", "reflect", "repeat"}) {
+      SCOPED_TRACE(testing::Message() << "startX=" << startX << " spreadMethod=" << spreadMethod);
+      const auto swapped = RenderUserSpaceRadial(32, 8, startX, 24, spreadMethod, kMirroredStops);
+      AssertVisibleFixture(swapped, "radial_swapped_circles_visible");
+      editor::tests::CompareBitmapToBitmap(
+          RenderUserSpaceRadial(startX, 24, 32, 8, spreadMethod, kStops), swapped,
+          "radial_containing_start_circle", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+// Pins current behavior, not a settled rule. The SVG 2 note and the canvas rule paint nothing for
+// identical circles, but svgwg issue 648 and the WPT test radialgradient-fully-overlapping.svg
+// expect the gradient drawn. Change this test together with the resvg fr=0.5 row once that is
+// decided.
+TEST_F(RendererRegressionTests, RadialCoincidentCirclesCurrentlyPaintNothing) {
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
-  for (std::string_view attribute : {R"(fr="0.5")", R"(fr="0.75")"}) {
-    SCOPED_TRACE(attribute);
-    ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "contained_circle_no_paint");
+  AssertVisibleFixture(expected, "radial_coincident_sibling_visible");
+  editor::tests::CompareBitmapToBitmap(RenderReferenceRadial(R"(fr="0.5")"), expected,
+                                       "radial_coincident_circles_no_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Concentric circles whose radii differ by 2^-13 are coincident at tiny-skia's 2^-12 tolerance for
+// concentric radii, so both backends must drop the draw alike. A radius difference of 0.5 is the
+// visible control.
+TEST_F(RendererRegressionTests, RadialNearlyCoincidentConcentricCirclesPaintNothingOnEveryBackend) {
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg";
+  AssertVisibleFixture(RenderUserSpaceRadial(32, 8, 32, 8.5, "pad", kStops),
+                       "radial_concentric_control_visible");
+  const auto actual = RenderUserSpaceRadial(32, 8, 32, 8.0 + 1.0 / 8192.0, "pad", kStops);
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  RendererBitmap transparent = actual;
+  std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+  editor::tests::CompareBitmapToBitmap(actual, transparent, "radial_nearly_coincident_no_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A zero focal radius is an ordinary radial gradient however small the end circle is: tiny-skia
+// treats a start radius within 2^-15 as a plain radial gradient, never as coincident circles. With
+// end radii of 2^-13 and 2^-11, every pixel center lies outside the end circle, so pad fills the
+// rect with the last stop.
+TEST_F(RendererRegressionTests, RadialTinyEndCircleWithZeroFocalRadiusPadsToLastStop) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect width="64" height="64" fill="blue"/>)svg");
+  AssertVisibleFixture(expected, "radial_tiny_end_circle_expected_visible");
+  for (double radius : {1.0 / 8192.0, 1.0 / 2048.0}) {
+    SCOPED_TRACE(testing::Message() << "r=" << radius);
+    editor::tests::CompareBitmapToBitmap(
+        RenderUserSpaceRadial(
+            32, 0, 32, radius, "pad",
+            R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg"),
+        expected, "radial_tiny_end_circle_last_stop", editor::tests::PixelmatchIdentityParams());
   }
-  ExpectBitmapsDiffer(RenderReferenceRadial(R"(fr="0.25")"), expected, "nonempty_annulus_control");
+}
+
+// Internal tangency: the start circle (40, 32, 24) touches the end circle (32, 32, 16) at (16, 32).
+// Every canvas circle passes through that point, so they cover only the half-plane x > 16; the
+// canvas rule leaves x < 16 unpainted. Each point is on exactly one circle, so the swapped circles
+// with mirrored stops give the same image (see RadialContainingStartCircleMatchesSwappedCircles).
+TEST_F(RendererRegressionTests, RadialInternallyTangentCirclesPaintOneHalfPlane) {
+  const auto ramp = RenderUserSpaceRadial(
+      40, 24, 32, 16, "pad",
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg");
+  EXPECT_THAT(PixelAt(ramp, 8, 32), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(ramp, 2, 60), testing::ElementsAre(0, 0, 0, 0));
+  // Inside the end circle, t = 1.97 pads to the last stop.
+  EXPECT_THAT(PixelAt(ramp, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+  // Outside the start circle on the painted side, t = -0.77 pads to the first stop.
+  EXPECT_THAT(PixelAt(ramp, 60, 5), testing::ElementsAre(255, 0, 0, 255));
+
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="0.5" stop-color="red"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="blue"/><stop offset="1" stop-color="blue"/>)svg";
+  constexpr std::string_view kMirroredStops =
+      R"svg(<stop stop-color="blue"/><stop offset="0.5" stop-color="blue"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="red"/><stop offset="1" stop-color="red"/>)svg";
+  // Pad only: with reflect or repeat, the color bands crowd together near the tangent point.
+  const auto swapped = RenderUserSpaceRadial(32, 16, 40, 24, "pad", kMirroredStops);
+  AssertVisibleFixture(swapped, "radial_tangent_swapped_visible");
+  editor::tests::CompareBitmapToBitmap(RenderUserSpaceRadial(40, 24, 32, 16, "pad", kStops),
+                                       swapped, "radial_internally_tangent",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractSingularRadialTransformDoesNotPaint) {

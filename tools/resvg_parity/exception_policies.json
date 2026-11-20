@@ -98,23 +98,6 @@
       }
     },
     {
-      "id": "radial-containing-circle",
-      "paths": [
-        "paint-servers/radialGradient/fr=0.7.svg"
-      ],
-      "kinds": [
-        "skip"
-      ],
-      "classification": "reference-disagreement",
-      "disposition": "Keep the containing-circle no-paint invariant.",
-      "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "https://github.com/jwmcglynn/donner/issues/1186"
-      ],
-      "removal_criteria": "Enable the comparison when an independent transparent-scene reference matches SVG 2.",
-      "reference_provenance": "Vendored image paints a reversed gradient in place of transparent output."
-    },
-    {
       "id": "no-size",
       "paths": [
         "structure/svg/no-size.svg"

@@ -1436,7 +1436,6 @@ def threshold_ratchet_violations(
 # no-crash and sanitizer coverage. This list may only shrink; a new entry needs maintainer
 # approval in the pull request that adds it.
 SKIP_ALLOWLIST = frozenset({
-    "paint-servers/radialGradient/fr=0.7.svg",
     "structure/svg/not-UTF-8-encoding.svg",
     "text/textPath/with-filter.svg",
     "text/tspan/with-filter.svg",
